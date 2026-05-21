@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2013,7 +2016,7 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_215();
+static int64_t __fn_216();
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2062,9 +2065,9 @@ static bool map_eq_(int64_t, int64_t, int64_t);
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t x_213 = (int64_t)__effect_args[0];
-    int64_t k_214 = __k;
-    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_214, (int64_t)((x_213) + (INT64_C(10))));
+    int64_t x_214 = (int64_t)__effect_args[0];
+    int64_t k_215 = __k;
+    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_215, (int64_t)((x_214) + (INT64_C(10))));
     return (int64_t)__t2;
 }
 
@@ -2105,7 +2108,7 @@ static int64_t __dispatch_0(void *__ctx_void, int64_t __k_int, int64_t __resume_
     return 0;
 }
 
-static int64_t __fn_215() {
+static int64_t __fn_216() {
         TurEffectCaptureCtx __cap_0;
         __cap_0.has_pending_effect = false;
         __cap_0.eff_name = NULL;
@@ -2373,15 +2376,15 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         int64_t __t6;
         {
-            void *__t7 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)__fn_215);
-            void * fut_217 = __t7;
-            (void)fut_217;
+            void *__t7 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)__fn_216);
+            void * fut_218 = __t7;
+            (void)fut_218;
             int64_t __t8;
             {
-                int64_t __t9 = tur_await_future((TurFuture*)(intptr_t)fut_217);
-                int64_t result_218 = __t9;
-                (void)result_218;
-                printf("%lld\n", (long long)(result_218));
+                int64_t __t9 = tur_await_future((TurFuture*)(intptr_t)fut_218);
+                int64_t result_219 = __t9;
+                (void)result_219;
+                printf("%lld\n", (long long)(result_219));
                 int64_t __t10;
                 __t10 = INT64_C(0);
                 __t8 = __t10;

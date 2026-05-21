@@ -35,12 +35,20 @@ future follow-on.
 (ok 42)        ;; ok result
 (err 99)       ;; err result
 ```
+```sweet-exp
+ok(42)         ;; ok result
+err(99)        ;; err result
+```
 
 ### Predicates
 
 ```turmeric
 (ok?  r)       ;; => bool
 (err? r)       ;; => bool
+```
+```sweet-exp
+ok?(r)         ;; => bool
+err?(r)        ;; => bool
 ```
 
 ### Extractors
@@ -51,6 +59,10 @@ These are unsafe -- check `ok?` / `err?` first:
 (ok-val  r)    ;; => int  (undefined behaviour if r is err)
 (err-val r)    ;; => int  (undefined behaviour if r is ok)
 ```
+```sweet-exp
+ok-val(r)      ;; => int  (undefined behaviour if r is err)
+err-val(r)     ;; => int  (undefined behaviour if r is ok)
+```
 
 ### Unwrapping
 
@@ -60,6 +72,13 @@ These are unsafe -- check `ok?` / `err?` first:
 (result-expect     r "message")  ;; ok value, or abort() printing "message"
 (result-must       r)            ;; ok value, or panic "result-must: called on err"
 (result-must-msg   r "msg")      ;; ok value, or panic with "msg"
+```
+```sweet-exp
+result-unwrap(r)               ;; ok value, or abort() with message to stderr
+result-unwrap-or(r default)    ;; ok value, or default
+result-expect(r "message")     ;; ok value, or abort() printing "message"
+result-must(r)                 ;; ok value, or panic "result-must: called on err"
+result-must-msg(r "msg")       ;; ok value, or panic with "msg"
 ```
 
 > **Note:** `result-unwrap` and `result-expect` call `abort()` directly (not via
@@ -75,11 +94,24 @@ These are unsafe -- check `ok?` / `err?` first:
 (result-or       r alt)          ;; r if ok, else alt
 (result-or-else  r f)            ;; r if ok, else (f err-value)
 ```
+```sweet-exp
+result-map(r f)                ;; apply f to ok value; propagate err unchanged
+result-map-err(r f)            ;; apply f to err value; propagate ok unchanged
+result-flat-map(r f)           ;; f receives ok value and returns a new result
+result-or(r alt)               ;; r if ok, else alt
+result-or-else(r f)            ;; r if ok, else f(err-value)
+```
 
 ### Equality
 
 ```turmeric
 (result-eq? r1 r2 ok-cmp err-cmp)
+;; ok-cmp  -- fn [a b :int] :bool  used when both are ok
+;; err-cmp -- fn [a b :int] :bool  used when both are err
+;; => bool; false if variants differ
+```
+```sweet-exp
+result-eq?(r1 r2 ok-cmp err-cmp)
 ;; ok-cmp  -- fn [a b :int] :bool  used when both are ok
 ;; err-cmp -- fn [a b :int] :bool  used when both are err
 ;; => bool; false if variants differ
@@ -91,12 +123,20 @@ The `Eq` typeclass instance uses `=` for both sides:
 (eq? (ok 1) (ok 1))   ;; => true
 (eq? (ok 1) (err 1))  ;; => false
 ```
+```sweet-exp
+eq?(ok(1) ok(1))    ;; => true
+eq?(ok(1) err(1))   ;; => false
+```
 
 ### Option interop
 
 ```turmeric
 (ok-or   opt err-val)    ;; some(v) -> ok(v), none -> err(err-val)
 (err-context r "prefix") ;; prepend "prefix: " to the err string; ok passes through
+```
+```sweet-exp
+ok-or(opt err-val)       ;; some(v) -> ok(v), none -> err(err-val)
+err-context(r "prefix")  ;; prepend "prefix: " to the err string; ok passes through
 ```
 
 ### Collection utilities
@@ -107,11 +147,20 @@ The `Eq` typeclass instance uses `=` for both sides:
 (result-partition-ok  pair)  ;; -> vec of ok values from the pair
 (result-partition-err pair)  ;; -> vec of err values from the pair
 ```
+```sweet-exp
+result-collect(vec)          ;; (vec result) -> result<vec, E>; first err wins
+result-partition(vec)        ;; -> pair; separate ok and err elements
+result-partition-ok(pair)    ;; -> vec of ok values from the pair
+result-partition-err(pair)   ;; -> vec of err values from the pair
+```
 
 ### Memory
 
 ```turmeric
 (result-free r)    ;; free the heap struct (does not free the contained value)
+```
+```sweet-exp
+result-free(r)     ;; free the heap struct (does not free the contained value)
 ```
 
 ### Typeclass instances
@@ -140,11 +189,18 @@ An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
 (some 42)    ;; some option
 (none)       ;; none option (NULL)
 ```
+```sweet-exp
+some(42)     ;; some option
+none()       ;; none option (NULL)
+```
 
 ### Predicates
 
 ```turmeric
 (some? o)    ;; => bool
+```
+```sweet-exp
+some?(o)     ;; => bool
 ```
 
 ### Unwrapping
@@ -153,6 +209,11 @@ An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
 (option-unwrap o)            ;; value, or exit(1) with message to stderr
 (option-must   o)            ;; value, or panic "option-must: called on none"
 (option-expect o "message")  ;; value, or panic with "message"
+```
+```sweet-exp
+option-unwrap(o)             ;; value, or exit(1) with message to stderr
+option-must(o)               ;; value, or panic "option-must: called on none"
+option-expect(o "message")   ;; value, or panic with "message"
 ```
 
 > **Note:** `option-unwrap` calls `exit(1)` directly. Prefer `option-must` /
@@ -163,11 +224,19 @@ An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
 ```turmeric
 (ok-or opt err-val)    ;; some(v) -> ok(v), none -> err(err-val)
 ```
+```sweet-exp
+ok-or(opt err-val)     ;; some(v) -> ok(v), none -> err(err-val)
+```
 
 ### Equality
 
 ```turmeric
 (option-eq? o1 o2 cmp-fn)
+;; cmp-fn -- fn [a b :int] :bool
+;; => true if both none, or both some with cmp-fn returning true
+```
+```sweet-exp
+option-eq?(o1 o2 cmp-fn)
 ;; cmp-fn -- fn [a b :int] :bool
 ;; => true if both none, or both some with cmp-fn returning true
 ```
@@ -178,6 +247,9 @@ The `Eq` typeclass instance uses `=` for the contained value.
 
 ```turmeric
 (option-free o)    ;; free the heap struct
+```
+```sweet-exp
+option-free(o)     ;; free the heap struct
 ```
 
 ### Typeclass instances
@@ -197,6 +269,9 @@ The `Eq` typeclass instance uses `=` for the contained value.
 
 ```turmeric
 (panic "something went wrong")
+```
+```sweet-exp
+panic("something went wrong")
 ```
 
 This prints `panic: something went wrong` to stderr and calls `abort()`.
@@ -224,6 +299,13 @@ These macros unwrap an **option** value, panicking on `none`:
 (must-msg! (some 42) "expected value")  ;; => 42
 (must-msg! (none)    "expected value")  ;; panic: expected value
 ```
+```sweet-exp
+must!(some(42))                         ;; => 42
+must!(none())                           ;; panic: option-must: called on none
+
+must-msg!(some(42) "expected value")    ;; => 42
+must-msg!(none()   "expected value")    ;; panic: expected value
+```
 
 > `must!` expands to `(option-must expr)`. `must-msg!` expands to
 > `(option-expect expr msg)`. For `result` values use `result-must` /
@@ -241,6 +323,12 @@ These are the underlying functions used by `must!` and `must-msg!`:
 (option-expect (some 42) "want value")  ;; => 42
 (option-expect (none)    "want value")  ;; panic: want value
 ```
+```sweet-exp
+option-must(some(42))               ;; => 42
+option-must(none())                 ;; panic: option-must: called on none
+option-expect(some(42) "want value") ;; => 42
+option-expect(none()   "want value") ;; panic: want value
+```
 
 ---
 
@@ -251,6 +339,9 @@ Explicitly discard a result or option value to silence unused-value warnings
 
 ```turmeric
 (ignore! (some-fn-returning-result))
+```
+```sweet-exp
+ignore!(some-fn-returning-result())
 ```
 
 `ignore!` expands to `(do expr nil)` -- the expression is evaluated for its side
@@ -279,6 +370,13 @@ condition holds:
 (assert-msg! (= x 1) "x must be 1")
 ;; panics with "x must be 1" if x != 1
 ```
+```sweet-exp
+assert!({x = 1})
+;; panics with "Assertion failed" if x != 1
+
+assert-msg!({x = 1} "x must be 1")
+;; panics with "x must be 1" if x != 1
+```
 
 ### `require!` and `require-msg!`
 
@@ -294,6 +392,16 @@ Precondition check at function entry:
   (require-msg! (>= n 0) "sqrt: n must be non-negative")
   ...)
 ```
+```sweet-exp
+defn sqrt [n :int] :int
+  require!({n >= 0})
+  ...
+;; panics with "Precondition failed" if n < 0
+
+defn sqrt [n :int] :int
+  require-msg!({n >= 0} "sqrt: n must be non-negative")
+  ...
+```
 
 ### `ensure!` and `ensure-msg!`
 
@@ -306,6 +414,13 @@ Postcondition check before returning from a function:
     result))
 ;; panics with "Postcondition failed" if the result is somehow negative
 ```
+```sweet-exp
+defn abs [n :int] :int
+  let [result if({n < 0} {0 - n} n)]
+    ensure!({result >= 0})
+    result
+;; panics with "Postcondition failed" if the result is somehow negative
+```
 
 ### `invariant!` and `invariant-msg!`
 
@@ -316,6 +431,12 @@ Structural invariant check -- passes the value to a predicate function:
 ;; panics with "Invariant failed" if (non-empty? my-list) is false
 
 (invariant-msg! my-list non-empty? "list must not be empty")
+```
+```sweet-exp
+invariant!(my-list non-empty?)
+;; panics with "Invariant failed" if non-empty?(my-list) is false
+
+invariant-msg!(my-list non-empty? "list must not be empty")
 ```
 
 ---

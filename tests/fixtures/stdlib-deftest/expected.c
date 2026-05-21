@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2013,8 +2016,8 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_219();
-static int64_t __fn_221();
+static int64_t __fn_220();
+static int64_t __fn_222();
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2064,7 +2067,7 @@ static bool assert_true(int64_t);
 static int64_t register_test(const char *, void *);
 static int64_t run_tests_();
 
-static int64_t __fn_219() {
+static int64_t __fn_220() {
         int64_t __t0;
         if (((((INT64_C(1)) + (INT64_C(1)))) == (INT64_C(2)))) {
             __t0 = INT64_C(1);
@@ -2077,7 +2080,7 @@ static int64_t __fn_219() {
         return __t1;
 }
 
-static int64_t __fn_221() {
+static int64_t __fn_222() {
         int64_t __t2;
         if (((INT64_C(42)) == (INT64_C(42)))) {
             __t2 = INT64_C(1);
@@ -2359,8 +2362,8 @@ static int64_t run_tests_() {
 }
 
 int main() {
-        (void)(register_test("addition", (void *)(intptr_t)(__fn_219)));
-        (void)(register_test("equality", (void *)(intptr_t)(__fn_221)));
+        (void)(register_test("addition", (void *)(intptr_t)(__fn_220)));
+        (void)(register_test("equality", (void *)(intptr_t)(__fn_222)));
         int64_t __t6;
         __t6 = run_tests_();
         return (int)__t6;

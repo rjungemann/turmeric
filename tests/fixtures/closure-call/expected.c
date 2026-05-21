@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2013,7 +2016,7 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_214(void *);
+static int64_t __fn_215(void *);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2060,10 +2063,10 @@ static int64_t count(void *);
 static void * merge(void *, void *);
 static bool map_eq_(int64_t, int64_t, int64_t);
 
-struct __env_216 { int64_t __fn; int64_t x; };
-static int64_t __fn_214(void * __env_p_217) {
-        struct __env_216 *__env___env_216 = (struct __env_216 *)__env_p_217;
-        return ((__env___env_216->x) + (INT64_C(1)));
+struct __env_217 { int64_t __fn; int64_t x; };
+static int64_t __fn_215(void * __env_p_218) {
+        struct __env_217 *__env___env_217 = (struct __env_217 *)__env_p_218;
+        return ((__env___env_217->x) + (INT64_C(1)));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -2311,16 +2314,16 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 int main() {
         {
-            int64_t x_213 = INT64_C(10);
-            (void)x_213;
+            int64_t x_214 = INT64_C(10);
+            (void)x_214;
             {
-                struct __env_216 *__t0 = (struct __env_216 *)malloc(sizeof(struct __env_216));
-                __t0->__fn = (int64_t)(intptr_t)__fn_214;
-                __t0->x = x_213;
+                struct __env_217 *__t0 = (struct __env_217 *)malloc(sizeof(struct __env_217));
+                __t0->__fn = (int64_t)(intptr_t)__fn_215;
+                __t0->x = x_214;
                 void *__t1 = __t0;
-                void * f_219 = __t1;
-                (void)f_219;
-                printf("%lld\n", (long long)(__fn_214(f_219)));
+                void * f_220 = __t1;
+                (void)f_220;
+                printf("%lld\n", (long long)(__fn_215(f_220)));
             }
         }
         return (int)0;

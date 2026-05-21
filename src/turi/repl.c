@@ -37,6 +37,12 @@
 #  include <editline/readline.h>
 #endif
 
+#ifdef TURI_HAVE_EDITLINE
+/* E11: tab-completion — current REPL environment for the completion generator.
+ * Updated whenever the env is recreated (e.g. after :reset). */
+static TuriEnv *g_completion_env = NULL;
+#endif
+
 /* Compiler internals (CMake adds src/ to the include path) */
 #include "arena.h"
 #include "buf.h"
@@ -72,6 +78,52 @@ static int paren_balance(const char *s) {
     }
     return depth;
 }
+
+/* -------------------------------------------------------------------------
+ * E11: Tab-completion generator (editline only)
+ * ---------------------------------------------------------------------- */
+
+#ifdef TURI_HAVE_EDITLINE
+/* Known REPL meta-commands for colon-prefix completion. */
+static const char *const k_meta_cmds[] = {
+    ":help", ":quit", ":q",
+    ":type", ":doc", ":reload", ":reset",
+    ":tutorial", ":next", ":prev", ":hint", ":skip",
+    ":quit-tutorial", ":tutorial-progress",
+    NULL
+};
+
+/* readline/editline generator: called with state=0 on first call for a
+ * given prefix, then state>0 for subsequent calls.  Returns a malloc'd
+ * match string or NULL when the list is exhausted. */
+static char *tur_completion_generator(const char *text, int state) {
+    static int meta_idx;
+    static EnvBinding *cur_binding;
+    size_t tlen = strlen(text);
+
+    if (state == 0) {
+        meta_idx   = 0;
+        cur_binding = g_completion_env ? g_completion_env->globals : NULL;
+    }
+
+    if (text[0] == ':') {
+        /* Complete meta-commands */
+        while (k_meta_cmds[meta_idx]) {
+            const char *m = k_meta_cmds[meta_idx++];
+            if (strncmp(m, text, tlen) == 0) return strdup(m);
+        }
+        return NULL;
+    }
+
+    /* Complete environment bindings */
+    while (cur_binding) {
+        const char *name = cur_binding->name;
+        cur_binding = cur_binding->next;
+        if (strncmp(name, text, tlen) == 0) return strdup(name);
+    }
+    return NULL;
+}
+#endif /* TURI_HAVE_EDITLINE */
 
 /* -------------------------------------------------------------------------
  * Line input abstraction (editline when available, fgets fallback)
@@ -216,6 +268,82 @@ cleanup:
  * :doc <sym>  — print a brief description for known builtins / env bindings
  * ---------------------------------------------------------------------- */
 
+const char *turi_doc_lookup_builtin(const char *sym) {
+    static const struct { const char *name; const char *doc; } docs[] = {
+        /* Arithmetic */
+        {"+",        "(+ a b ...) -- add numbers"},
+        {"-",        "(- a b ...) -- subtract numbers"},
+        {"*",        "(* a b ...) -- multiply numbers"},
+        {"/",        "(/ a b) -- divide numbers"},
+        {"mod",      "(mod a b) -- integer remainder"},
+        /* Comparison */
+        {"=",        "(= a b) -- equality"},
+        {"!=",       "(!= a b) -- inequality"},
+        {"<",        "(< a b) -- less-than"},
+        {">",        "(> a b) -- greater-than"},
+        {"<=",       "(<= a b) -- less-than-or-equal"},
+        {">=",       "(>= a b) -- greater-than-or-equal"},
+        /* Logic */
+        {"not",      "(not b) -- boolean negation"},
+        {"and",      "(and a b ...) -- short-circuit logical and"},
+        {"or",       "(or a b ...) -- short-circuit logical or"},
+        /* I/O */
+        {"println",  "(println x) -- print value with trailing newline"},
+        {"print",    "(print x) -- print value without trailing newline"},
+        /* Core special forms */
+        {"let",      "(let [x v ...] body) -- bind local variables in scope of body"},
+        {"if",       "(if cond then else) -- conditional: evaluates then or else branch"},
+        {"do",       "(do e1 e2 ...) -- evaluate expressions in sequence, return last"},
+        {"defn",     "(defn name [p1 :T1 ...] :Ret body) -- define a named function"},
+        {"fn",       "(fn [p1 :T1 ...] :Ret body) -- anonymous function (lambda)"},
+        {"def",      "(def name value) -- bind name to value at top level"},
+        {"while",    "(while cond body) -- loop while cond is true"},
+        {"set!",     "(set! var value) -- mutate an existing variable binding"},
+        {"quote",    "(quote x) -- return x unevaluated; shorthand: 'x"},
+        {"return",   "(return value) -- early return from a function"},
+        {"defer",    "(defer body) -- run body when current scope exits"},
+        /* Pattern matching and data */
+        {"match",    "(match val (Pattern body) ...) -- destructure and branch on value"},
+        {"defstruct","(defstruct Name [field :Type ...]) -- define a named product type"},
+        {"defdata",  "(defdata Name (Ctor) (Ctor :T) ...) -- define an algebraic data type"},
+        {"defgadt",  "(defgadt Name [a] (Ctor :T) ...) -- define a generalized ADT"},
+        {"deftype",  "(deftype Alias ActualType) -- define a type alias"},
+        /* Macros */
+        {"defmacro", "(defmacro name [args] body) -- define a syntax macro"},
+        {"when",     "(when cond body ...) -- execute body if cond is true, else nil"},
+        {"unless",   "(unless cond body ...) -- execute body if cond is false, else nil"},
+        {"cond",     "(cond (test expr) ... (else expr)) -- multi-branch conditional"},
+        {"for",      "(for [x seq] body) -- iterate over a sequence"},
+        /* Modules */
+        {"defmodule","(defmodule Name (export ...) body ...) -- define a module"},
+        {"import",   "(import module/name :as alias) -- import a module (inside defmodule)"},
+        /* Typeclasses */
+        {"defclass", "(defclass Name [param] (method :Type) ...) -- define a typeclass"},
+        {"definstance","(definstance ClassName TypeName method-impls ...) -- implement a typeclass"},
+        /* Effects */
+        {"defeffect","(defeffect Name (op :Type) ...) -- define an algebraic effect"},
+        {"perform",  "(perform effect/op args ...) -- perform an effect operation"},
+        {"handle",   "(handle expr (effect/op args k) body ...) -- handle effects"},
+        {"resume",   "(resume k value) -- resume a delimited continuation"},
+        /* Async */
+        {"async",    "(async body) -- create an async computation"},
+        {"await",    "(await future) -- wait for an async computation to complete"},
+        /* Error handling */
+        {"try",      "(try body (catch err handler)) -- catch runtime errors"},
+        {"catch",    "catch -- error handler clause in (try ...)"},
+        {"throw",    "(throw msg) -- raise a runtime error"},
+        /* Dynamic vars */
+        {"defdynamic","(defdynamic *name* :Type init) -- define a dynamic (thread-local) variable"},
+        {"let-dyn",  "(let-dyn [*name* val] body) -- bind dynamic variable within scope"},
+        {NULL, NULL}
+    };
+    for (int i = 0; docs[i].name; i++) {
+        if (strcmp(sym, docs[i].name) == 0)
+            return docs[i].doc;
+    }
+    return NULL;
+}
+
 static void cmd_doc(TuriEnv *env, const char *sym) {
     /* Check if the symbol is bound in the env */
     TuriValue v = turi_env_get(env, sym);
@@ -226,37 +354,10 @@ static void cmd_doc(TuriEnv *env, const char *sym) {
         return;
     }
 
-    /* Recognise common builtins with a short description */
-    struct { const char *name; const char *doc; } docs[] = {
-        {"+",        "(+ a b ...) → add numbers"},
-        {"-",        "(- a b ...) → subtract numbers"},
-        {"*",        "( * a b ...) → multiply numbers"},
-        {"/",        "(/ a b) → divide numbers"},
-        {"mod",      "(mod a b) → integer remainder"},
-        {"=",        "(= a b) → equality"},
-        {"<",        "(< a b) → less-than"},
-        {">",        "(> a b) → greater-than"},
-        {"<=",       "(<= a b) → less-than-or-equal"},
-        {">=",       "(>= a b) → greater-than-or-equal"},
-        {"not",      "(not b) → boolean negation"},
-        {"and",      "(and a b ...) → short-circuit and"},
-        {"or",       "(or a b ...) → short-circuit or"},
-        {"println",  "(println x) → print with newline"},
-        {"let",      "(let [x v ...] body) → local bindings"},
-        {"if",       "(if cond then else) → conditional"},
-        {"do",       "(do e ...) → sequence"},
-        {"defn",     "(defn name [params] body) → define a function"},
-        {"fn",       "(fn [params] body) → anonymous function"},
-        {"def",      "(def name value) → top-level binding"},
-        {"while",    "(while cond body) → loop"},
-        {"set!",     "(set! var value) → mutate a variable"},
-        {NULL, NULL}
-    };
-    for (int i = 0; docs[i].name; i++) {
-        if (strcmp(sym, docs[i].name) == 0) {
-            printf("%s\n", docs[i].doc);
-            return;
-        }
+    const char *d = turi_doc_lookup_builtin(sym);
+    if (d) {
+        printf("%s\n", d);
+        return;
     }
 
     printf("no documentation for '%s'\n", sym);
@@ -284,6 +385,60 @@ static void cmd_reload(TuriEnv *env, const char *path) {
  * Help text
  * ---------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------
+ * 2h: detect type-level definition forms to show a sentinel instead of nil
+ * ---------------------------------------------------------------------- */
+
+/* Scan src for a type-level definition like (defstruct Foo ...).
+ * Returns true and writes kind + name if found, false otherwise. */
+static bool detect_type_form(const char *src,
+                              char *kind, size_t ksz,
+                              char *name, size_t nsz) {
+    /* Skip leading whitespace and optional opening paren */
+    while (*src == ' ' || *src == '\t' || *src == '\n' || *src == '\r') src++;
+    if (*src == '(') src++;
+    while (*src == ' ' || *src == '\t') src++;
+
+    static const struct { const char *kw; const char *kind; } forms[] = {
+        {"defstruct ",    "struct-type"},
+        {"defdata ",      "adt-type"},
+        {"defgadt ",      "adt-type"},
+        {"deftype ",      "type-alias"},
+        {"defmacro ",     "macro"},
+        {"defeffect ",    "effect"},
+        {"defclass ",     "typeclass"},
+        {"definstance ",  "instance"},
+        {NULL, NULL}
+    };
+
+    for (int i = 0; forms[i].kw; i++) {
+        size_t klen = strlen(forms[i].kw);
+        if (strncmp(src, forms[i].kw, klen) != 0) continue;
+
+        snprintf(kind, ksz, "%s", forms[i].kind);
+        const char *p = src + klen;
+        while (*p == ' ' || *p == '\t') p++;
+
+        if (strcmp(forms[i].kind, "instance") == 0) {
+            /* (definstance Typeclass Type ...) — include both names */
+            char tc[32] = {0}, ty[32] = {0};
+            int ti = 0;
+            while (*p && *p != ' ' && *p != ')' && ti < 31) tc[ti++] = *p++;
+            while (*p == ' ') p++;
+            int yi = 0;
+            while (*p && *p != ' ' && *p != ')' && yi < 31) ty[yi++] = *p++;
+            snprintf(name, nsz, "%s/%s", tc, ty);
+        } else {
+            size_t ni = 0;
+            while (*p && *p != ' ' && *p != ')' && *p != ']' && *p != '[' && ni < nsz - 1)
+                name[ni++] = *p++;
+            name[ni] = '\0';
+        }
+        return name[0] != '\0';
+    }
+    return false;
+}
+
 static void print_help(void) {
     printf(
         "Meta-commands:\n"
@@ -292,6 +447,7 @@ static void print_help(void) {
         "  :type <expr>        print inferred type without evaluating\n"
         "  :doc  <sym>         print documentation for a symbol or builtin\n"
         "  :reload <file>      evaluate a .tur file into the current session\n"
+        "  :reset              clear session and start fresh\n"
         "\n"
         "Tutorial commands:\n"
         "  :tutorial              list available tutorials\n"
@@ -539,7 +695,22 @@ int turi_repl_run(void) {
         fprintf(stderr, "tur repl: failed to initialize tutorial state\n");
     }
 
-    printf("Turmeric v0.x.0  (type :help for help, :quit to exit)\n");
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+    if (use_color) {
+        printf(COL_BOOL
+               "\xe2\x96\x84\xe2\x96\x96           \xe2\x96\x98  \n"
+               "\xe2\x96\x90 \xe2\x96\x8c\xe2\x96\x8c\xe2\x96\x9b\xe2\x96\x98\xe2\x96\x9b\xe2\x96\x9b\xe2\x96\x8c\xe2\x96\x88\xe2\x96\x8c\xe2\x96\x9b\xe2\x96\x98\xe2\x96\x8c\xe2\x96\x9b\xe2\x96\x98\n"
+               "\xe2\x96\x90 \xe2\x96\x99\xe2\x96\x8c\xe2\x96\x8c \xe2\x96\x8c\xe2\x96\x8c\xe2\x96\x8c\xe2\x96\x99\xe2\x96\x96\xe2\x96\x8c \xe2\x96\x8c\xe2\x96\x99\xe2\x96\x96\n"
+               COL_RESET "\n");
+    } else {
+        printf("\xe2\x96\x84\xe2\x96\x96           \xe2\x96\x98  \n"
+               "\xe2\x96\x90 \xe2\x96\x8c\xe2\x96\x8c\xe2\x96\x9b\xe2\x96\x98\xe2\x96\x9b\xe2\x96\x9b\xe2\x96\x8c\xe2\x96\x88\xe2\x96\x8c\xe2\x96\x9b\xe2\x96\x98\xe2\x96\x8c\xe2\x96\x9b\xe2\x96\x98\n"
+               "\xe2\x96\x90 \xe2\x96\x99\xe2\x96\x8c\xe2\x96\x8c \xe2\x96\x8c\xe2\x96\x8c\xe2\x96\x8c\xe2\x96\x99\xe2\x96\x96\xe2\x96\x8c \xe2\x96\x8c\xe2\x96\x99\xe2\x96\x96\n"
+               "\n");
+    }
+    printf("Turmeric v" TUR_VERSION "  (type :help for help, :quit to exit)\n");
     fflush(stdout);
 
     TuriEnv *env = turi_env_new();
@@ -554,11 +725,29 @@ int turi_repl_run(void) {
     using_history();
     stifle_history(1000);
     if (hist_path) read_history(hist_path);
+    /* E11: install tab-completion generator.
+     * editline declares rl_completion_entry_function as Function* (int ret)
+     * but actual calling convention is char* — suppress the type mismatch. */
+    g_completion_env = env;
+#  if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wincompatible-function-pointer-types"
+#  elif defined(__GNUC__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+#  endif
+    rl_completion_entry_function = tur_completion_generator;
+#  if defined(__clang__)
+#    pragma clang diagnostic pop
+#  elif defined(__GNUC__)
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
     Buf multi;
     buf_init(&multi);
     int balance = 0;
+    bool in_sweet_form = false; /* 2e: accumulating sweet-exp continuation */
 
     for (;;) {
         const char *prompt = (multi.len == 0) ? "turmeric> " : "..        ";
@@ -567,9 +756,9 @@ int turi_repl_run(void) {
         if (!line) {
             /* EOF (Ctrl-D) */
             if (multi.len > 0) {
-                /* Discard incomplete multi-line expression */
                 multi.len = 0;
                 balance = 0;
+                in_sweet_form = false;
                 printf("\n");
                 continue;
             }
@@ -577,8 +766,20 @@ int turi_repl_run(void) {
             break;
         }
 
-        /* Empty line while in multi-line mode cancels the expression */
+        /* Empty line in multi-line mode:
+         * sweet-exp → terminates the form and evaluates;
+         * s-expr    → cancels the incomplete expression. */
         if (line[0] == '\0' && multi.len > 0) {
+            if (in_sweet_form) {
+                /* Blank line terminates the sweet-exp form */
+                in_sweet_form = false;
+                balance = 0;
+                /* fall through to evaluation below */
+                buf_putc(&multi, '\0');
+                free(line);
+                line = NULL;
+                goto repl_do_eval;
+            }
             printf("(cancelled)\n");
             multi.len = 0;
             balance = 0;
@@ -594,6 +795,20 @@ int turi_repl_run(void) {
             }
             if (strcmp(line, ":help") == 0) {
                 print_help();
+                free(line);
+                continue;
+            }
+            /* 2d: :reset — clear session and restart with a fresh environment */
+            if (strcmp(line, ":reset") == 0) {
+                turi_env_free(env);
+                env = turi_env_new();
+                balance = 0;
+                multi.len = 0;
+                in_sweet_form = false;
+#ifdef TURI_HAVE_EDITLINE
+                g_completion_env = env;
+#endif
+                printf(";; session cleared\n");
                 free(line);
                 continue;
             }
@@ -700,22 +915,42 @@ int turi_repl_run(void) {
             }
         }
 
-        /* Accumulate line and update balance (use `line` which is NUL-terminated) */
-        balance += paren_balance(line);
-        if (multi.len > 0) buf_putc(&multi, '\n');
-        buf_puts(&multi, line);
-        free(line);
+        /* Accumulate line and update balance. */
+        if (line) {
+            /* 2e: sweet-exp continuation detection.
+             * If in sweet mode and the first token doesn't start with '(',
+             * we enter sweet continuation: indented lines continue the form,
+             * and a blank line (handled above) terminates it. */
+            if (env->reader_type == READER_SWEET && multi.len == 0
+                    && line[0] != '(' && line[0] != '\0') {
+                in_sweet_form = true;
+            }
+
+            if (in_sweet_form) {
+                /* Inside a sweet-exp form: keep accumulating unconditionally;
+                 * termination is via blank line (handled above). */
+                if (multi.len > 0) buf_putc(&multi, '\n');
+                buf_puts(&multi, line);
+                free(line);
+                continue; /* show '..' prompt again */
+            }
+
+            balance += paren_balance(line);
+            if (multi.len > 0) buf_putc(&multi, '\n');
+            buf_puts(&multi, line);
+            free(line);
+        }
 
         /* If balanced (or over-closed), evaluate */
         if (balance <= 0) {
             balance = 0;
 
-            buf_putc(&multi, '\0');
+            if (line) buf_putc(&multi, '\0'); /* already NUL-terminated when line==NULL */
+            repl_do_eval:;
 
             /* Check if we're in tutorial mode and this input matches the current step */
             if (g_tutorial_state && g_tutorial_state->in_tutorial) {
                 if (check_tutorial_step(env, multi.data)) {
-                    /* Tutorial step was completed, result was already printed */
                     multi.len = 0;
                     continue;
                 }
@@ -734,7 +969,25 @@ int turi_repl_run(void) {
                         fprintf(stderr, "error: %s\n", msg);
                 }
             } else {
-                repl_print_value(result, use_color);
+                /* 2h: for type-level forms that return nil, show a sentinel */
+                bool type_sentinel = false;
+                if (result.tag == TURI_NIL) {
+                    char kind[32] = {0}, name[64] = {0};
+                    if (detect_type_form(multi.data, kind, sizeof(kind),
+                                         name, sizeof(name))) {
+                        if (use_color)
+                            printf(COL_NIL "=> #<%s %s>" COL_RESET "\n", kind, name);
+                        else
+                            printf("=> #<%s %s>\n", kind, name);
+                        type_sentinel = true;
+                    }
+                }
+                if (!type_sentinel) {
+                    repl_print_value(result, use_color);
+                    /* 2f: bind _ to last non-nil result */
+                    if (result.tag != TURI_NIL)
+                        turi_env_set(env, "_", result);
+                }
             }
             fflush(stdout);
 

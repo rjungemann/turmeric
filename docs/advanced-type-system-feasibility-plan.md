@@ -1,6 +1,6 @@
 # Advanced Type System Features — Feasibility Plan for Turmeric
 
-> **Status:** In Progress — v3 features complete (including Session Types SS0--SS8 and Dynamic Vars DV0--DV4); v4 work (Contract Types, Sized Types) not started  
+> **Status:** v3 and v4 complete — Session Types SS0--SS8, Dynamic Vars DV0--DV4, Contract Types CT0--CT4, and Sized Types SZ0--SZ3 all shipped; v5+ (Dependent Types, Refinement Types) deferred  
 > **Target:** v3 or later  
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete  
 > **Related:** [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md), [higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md), [gadts-plan.md](archive/gadts-plan.md)
@@ -37,7 +37,7 @@ This document explores **type system features not yet considered** for Turmeric 
 | [Refinement Types](#6-refinement-types) | Medium | High | ⏸ Deferred |
 | [Intersection & Union Types](#7-intersection--union-types) | High | Medium | ✅ IT0–IT4 substantially complete (`-Xunion-types`, `-Xintersection-types`) |
 | [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | ✅ ET0–ET4 complete (`-Xeffect-types`); LC0–LC3, MS0–MS4 complete |
-| [Sized Types](#9-sized-types) | Medium | Medium-High | 📋 Draft — Not Started |
+| [Sized Types](#9-sized-types) | Medium | Medium-High | ✅ SZ0–SZ3 complete (`-Xgadt`) |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ CT0–CT4 complete (`-Xcontracts`) |
 
 ---
@@ -368,6 +368,20 @@ defn printf [fmt : (Fmt args), a1 : args.0, a2 : args.1, ...] : unit
 | Codegen changes | High | Proof erasure, dependent function emission |
 | C emission | Medium | Lambda lifting for dependent functions |
 | Error messages | High | Dependent type mismatches are complex |
+
+### Revised Assessment (post-v4 infrastructure)
+
+The shipping of GADTs (G0–G4) and Sized Types (SZ0–SZ3) has substantially reduced the net-new work:
+
+| Phase | Original status | With current infrastructure |
+|---|---|---|
+| DT0 (type-level naturals + Vec) | New work | ~80% done — `StaticInt`, `SizedVec`, size normalization, and inference constructors from SZ0–SZ1 are exactly this; `Succ`/`Zero` constructor forms are what remains |
+| DT1 (dependent pattern matching) | New work | ~50% done — GADT pattern matching already refines index types in `match` arms; the per-arm narrowing machinery exists |
+| DT2 (proof terms: `Equal`, `LessThan`) | New work | Still new — Contract Types prove predicates exist at runtime, but compile-time proof terms with eliminators are separate |
+| DT3 (Pi types) | New work | Still the core hard piece — types that refer to value-level binders require dependent unification; nothing in the elaborator handles this |
+| DT4 (dependent typeclasses) | New work | Still complex, but robust dictionary-passing infrastructure reduces the implementation surface |
+
+**Revised complexity: Very High → High-to-Very High.** GADTs and Sized Types cover the parts of dependent types that users most commonly reach for. Pi types remain a genuine elaborator research problem and are the primary remaining blocker.
 
 ### Prior Art
 
@@ -911,6 +925,21 @@ defn velocity [distance : Meters, time : Seconds] : MetersPerSecond
 | C emission | Medium | Runtime check code |
 | Error messages | High | Refinement mismatch explanations |
 
+### Revised Assessment (post-v4 infrastructure)
+
+Contract Types (CT0–CT4), Union/Intersection Types (IT0–IT4), and Sized Types (SZ0–SZ3) have collectively covered ~60–70% of the scaffolding:
+
+| Phase | Original status | With current infrastructure |
+|---|---|---|
+| RT0 (syntax + predicate storage) | New work | Essentially done — Contract Types use identical syntax (`{ x : T | p x }`) and the same predicate storage in the type representation |
+| RT1 (subtyping: `T { p }` ≤ `T`) | New work | Partially done — union/intersection subtyping handles the structural part; predicate entailment (is `p` stronger than `q`?) still needs the SMT layer |
+| RT2 (refinement propagation) | New work | Partially done — CT3 already eliminates provable contracts at compile time; bidirectional propagation (inferring result predicates from argument predicates) is still needed |
+| RT3 (runtime check insertion) | New work | Done — CT1 already does this with configurable failure handling (`--keep-contracts`, `set-contract-handler!`, `with-contract-handler`) |
+| RT4 (stdlib integration, FFI boundaries) | New work | ~90% done via CT4 |
+| C emission concern | ⚠️ Fair | ✅ Resolved — Contract Types already generate runtime-check C99 cleanly |
+
+**Revised complexity: High (C99 ⚠️) → Medium-High (C99 ✅).** The remaining work is almost entirely scoped to SMT integration and bidirectional predicate propagation — a well-defined, separable problem rather than a full-stack implementation. This makes Refinement Types the better near-term candidate of the two deferred features.
+
 ### Prior Art
 
 - **Liquid Haskell:** Refinement types for Haskell
@@ -1340,17 +1369,17 @@ defn add [a : (BitVec n), b : (BitVec n)] : (BitVec (n + 1))
 
 ### Recommendation
 
-**✅ ACCEPT — Medium complexity, good fit for systems programming and embedded DSLs.**
+**✅ IMPLEMENTED — SZ0–SZ3 complete (gated behind `-Xgadt`).**
 
 Sized types provide:
 1. Memory layout control
-2. Stack allocation opportunities
-3. Type-safe array operations
-4. Embedded DSL support
+2. Stack allocation opportunities (alloca for n≤64, heap fallback for n>64)
+3. Type-safe array, matrix, and bit-vector operations
+4. Embedded DSL support and FFI layout verification
 
-**Implementation priority:** Medium (after Linear Types)
+`stdlib/sized.tur` (SZ0–SZ1): `StaticInt`, `Size`, `SizedVec`, size predicates, normalization, assertions, and inference constructors. `stdlib/sized-buf.tur` (SZ2): flat `SizedBuf` with stack (`sized-buf-with-stack`) and adaptive allocation (`sized-buf-compute`). `stdlib/sized-matrix.tur` and `stdlib/sized-bits.tur` (SZ3): `SizedMatrix` (row-major flat layout) and `SizedBitVec` (packed bits), plus FFI opaque-pointer size annotation pattern.
 
-**Note:** Start with simple static sizes, then add size arithmetic and inference.
+See [guides/sized-types-guide.md](guides/sized-types-guide.md) for the user guide.
 
 ---
 
@@ -1514,10 +1543,10 @@ See [contract-types-plan.md](contract-types-plan.md) for full implementation det
 | [Intersection & Union](#7-intersection--union-types) | Medium | High | ✅ Good | ✅ Good | Medium | **✅ IT0–IT4 substantially complete** |
 | [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **✅ SS0–SS8 complete** |
 | [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **✅ ET0–ET4 complete; LC0–LC3, MS0–MS4 complete** |
-| [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **📋 Draft — Not Started** |
+| [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **✅ SZ0–SZ3 complete (`-Xgadt`)** |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **✅ IMPLEMENTED — CT0–CT4 complete (`-Xcontract-types`)** |
-| [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
-| [Refinement Types](#6-refinement-types) | Very High | Medium | ⚠️ Fair | ✅ Good | Low | **⏸ Deferred** |
+| [Dependent Types](#2-dependent-types) | High-to-Very High (revised) | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
+| [Refinement Types](#6-refinement-types) | Medium-High (revised) | Medium | ✅ Good (revised) | ✅ Good | Low | **⏸ Deferred** |
 
 ---
 
@@ -1556,14 +1585,14 @@ See [contract-types-plan.md](contract-types-plan.md) for full implementation det
 
 See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [session-types-plan.md](session-types-plan.md).
 
-### Phase 3: Sized Types (v4)
+### Phase 3: Contract Types & Sized Types (v4) — ✅ Complete
 
-**Priority:** Medium
+**Status:** Both features shipped.
 
 | Feature | Phases | Duration | Dependencies | Status |
 |---|---|---|---|---|
-| Contract Types | CT0–CT4 | 6-8 weeks | None | **✅ Complete (`-Xcontract-types`)** |
-| Sized Types | SZ0–SZ3 | 6-8 weeks | None | 📋 Not Started |
+| Contract Types | CT0–CT4 | — | None | **✅ Complete (`-Xcontract-types`)** |
+| Sized Types | SZ0–SZ3 | — | None | **✅ Complete (`-Xgadt`)** |
 
 **Note:** The stdlib already has `assert!`/`require!`/`ensure!` macros. CT0 can build on these.
 
@@ -1573,12 +1602,12 @@ See [contract-types-plan.md](contract-types-plan.md).
 
 **Priority:** Low
 
-| Feature | Reason for Deferral |
-|---|---|
-| Dependent Types | Very high complexity, unclear demand |
-| Refinement Types | High complexity, limited C99 fit |
+| Feature | Reason for Deferral | Revised blocker |
+|---|---|---|
+| Dependent Types | Very high complexity, unclear demand | Pi types (DT3) — dependent unification in elaborator; DT0–DT1 now largely covered by GADTs + Sized Types |
+| Refinement Types | High complexity, limited C99 fit | SMT integration (RT1–RT2) — RT0, RT3–RT4 now largely covered by Contract Types; C99 fit concern resolved |
 
-**Rationale:** These features have high complexity and unclear immediate value. They should be reconsidered when:
+**Rationale:** These features remain deferred, but post-v4 infrastructure has materially reduced both. Refinement Types in particular are now the better near-term candidate: the remaining gap is the SMT/predicate-entailment layer, while Dependent Types still require a fundamental elaborator extension (Pi types) that nothing in the current stack bootstraps. Reconsider when:
 1. There is strong user demand
 2. The other features are stable
 3. There are clear use cases that cannot be addressed otherwise
@@ -1599,8 +1628,8 @@ All advanced type system features should be gated behind feature flags:
 | GADTs | `-Xgadt` | Off | ✅ Implemented (G0–G4) |
 | Session Types | `-Xsessions` | Off | ✅ Implemented (SS0–SS8; binary + multi-party) |
 | Effect Types | `-Xeffect-types` | Off | ✅ Implemented (ET0–ET4, LC0–LC3, MS0–MS4) |
-| Contract Types | `-Xcontracts` | Off | 📋 Not implemented yet |
-| Sized Types | `-Xsized-types` | Off | 📋 Not implemented yet |
+| Contract Types | `-Xcontracts` | Off | ✅ Implemented |
+| Sized Types | `-Xgadt` | Off | ✅ Implemented (SZ0–SZ3; via GADT infrastructure) |
 
 ---
 
@@ -1885,9 +1914,9 @@ v3 (In Progress)
 v3.5 (complete)
 └── Session Types (SS5-SS8)             ✅ complete (-Xsessions, multi-party)
 
-v4 (Planned)
-├── Contract Types (CT0-CT4)            📋 not started
-└── Sized Types (SZ0-SZ3)              📋 not started
+v4 (Complete)
+├── Contract Types (CT0-CT4)            ✅ complete (-Xcontracts)
+└── Sized Types (SZ0-SZ3)              ✅ complete (-Xgadt)
 
 v5+ (Deferred)
 ├── Dependent Types
@@ -1925,4 +1954,4 @@ v5+ (Deferred)
 
 ---
 
-*Last updated: 2026-05-19 (SS0–SS8 complete; DV0–DV4 complete)*
+*Last updated: 2026-05-20 (SZ0–SZ3 complete; CT0–CT4 complete; all v4 features shipped; Dependent Types and Refinement Types complexity revised against v4 infrastructure)*

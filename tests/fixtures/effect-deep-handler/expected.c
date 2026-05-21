@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2062,14 +2065,14 @@ static int64_t three_steps();
 
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_216 = __k;
+    int64_t k_217 = __k;
     int64_t __t6;
-    bool __t7 = tur_effect_cont_valid(k_216);
+    bool __t7 = tur_effect_cont_valid(k_217);
     if (__t7) {
-        int64_t __t8 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)INT64_C(1));
+        int64_t __t8 = tur_effect_cont_resume((int64_t)(intptr_t)k_217, (int64_t)INT64_C(1));
         __t6 = __t8;
     } else {
-        int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)INT64_C(0));
+        int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_217, (int64_t)INT64_C(0));
         __t6 = __t9;
     }
     return (int64_t)__t6;
@@ -2356,21 +2359,30 @@ static int64_t three_steps() {
         int64_t __t0;
         {
             int64_t __t1 = tur_effect_perform("Step", NULL, 0);
-            int64_t a_213 = __t1;
-            (void)a_213;
+            int64_t a_214 = __t1;
+            (void)a_214;
             int64_t __t2 = tur_effect_perform("Step", NULL, 0);
-            int64_t b_214 = __t2;
-            (void)b_214;
+            int64_t b_215 = __t2;
+            (void)b_215;
             int64_t __t3 = tur_effect_perform("Step", NULL, 0);
-            int64_t c_215 = __t3;
-            (void)c_215;
-            __t0 = ((a_213) + (((b_214) + (c_215))));
+            int64_t c_216 = __t3;
+            (void)c_216;
+            __t0 = ((a_214) + (((b_215) + (c_216))));
         }
         return __t0;
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     TurEffectCaptureCtx __cap_4;
     __cap_4.has_pending_effect = false;
     __cap_4.eff_name = NULL;

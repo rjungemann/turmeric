@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2327,23 +2330,23 @@ static int64_t test_rc_auto_drop_multiple() {
             *__t1 = INT64_C(10);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * x_213 = __t2;
-            (void)x_213;
+            RcControlBlock * x_214 = __t2;
+            (void)x_214;
             int64_t *__t3 = (int64_t *)malloc(sizeof(int64_t));
             *__t3 = INT64_C(20);
             RcControlBlock *__t4 = rc_cb_alloc(0, 3, NULL);
             __t4->value = __t3;
-            RcControlBlock * y_214 = __t4;
-            (void)y_214;
+            RcControlBlock * y_215 = __t4;
+            (void)y_215;
             tur_frame __frame_5;
             tur_frame_init(&__frame_5, NULL);
-            struct __defer_env_6 __t8 = {.x = x_213};
+            struct __defer_env_6 __t8 = {.x = x_214};
             tur_frame_push_defer(&__frame_5, __defer_7, &__t8);
-            struct __defer_env_9 __t11 = {.y = y_214};
+            struct __defer_env_9 __t11 = {.y = y_215};
             tur_frame_push_defer(&__frame_5, __defer_10, &__t11);
             int64_t __t12;
-            int64_t __t13 = rc_strong_count(x_213);
-            int64_t __t14 = rc_strong_count(y_214);
+            int64_t __t13 = rc_strong_count(x_214);
+            int64_t __t14 = rc_strong_count(y_215);
             __t12 = ((__t13) + (__t14));
             tur_frame_fire_lifo(&__frame_5);
             __t0 = __t12;
@@ -2352,6 +2355,15 @@ static int64_t test_rc_auto_drop_multiple() {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     return 0;
 }

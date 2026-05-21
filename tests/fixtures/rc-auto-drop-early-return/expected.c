@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2319,21 +2322,21 @@ static int64_t rc_auto_drop_early_return(bool flag) {
             *__t1 = INT64_C(42);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * x_215 = __t2;
-            (void)x_215;
+            RcControlBlock * x_216 = __t2;
+            (void)x_216;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             int64_t __t4;
             int64_t __t5;
             if (flag) {
                 tur_frame_fire_chain(&__frame_3);
-                                int64_t __t6 = rc_strong_count(x_215);
+                                int64_t __t6 = rc_strong_count(x_216);
 return __t6;
             } else {
                 __t5 = INT64_C(0);
             }
             __t4 = __t5;
-            struct __defer_env_7 __t9 = {.x = x_215};
+            struct __defer_env_7 __t9 = {.x = x_216};
             tur_frame_push_defer(&__frame_3, __defer_8, &__t9);
             tur_frame_fire_lifo(&__frame_3);
             __t0 = __t4;

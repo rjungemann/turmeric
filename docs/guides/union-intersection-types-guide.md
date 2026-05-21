@@ -51,6 +51,19 @@ emits a tagged-union C struct at runtime.
     (b : bool) (println (if b "true" "false"))))
 ```
 
+```sweet-exp
+;; Named union type
+deftype IntOrString []
+  (int | cstr)
+
+;; Inline in a function signature
+defn print-value [x : (int | cstr | bool)] : unit
+  match x
+    (i : int)  println(i)
+    (s : cstr) println(s)
+    (b : bool) println(if b "true" "false")
+```
+
 Nested unions are flattened: `(int | (cstr | bool))` becomes `(int | cstr | bool)`.
 
 ### Pattern Matching on Union Types
@@ -63,6 +76,13 @@ all union members:
   (match x
     (n : int)  (str "number: " n)
     (s : cstr) (str "string: " s)))
+```
+
+```sweet-exp
+defn describe [x : (int | cstr)] : cstr
+  match x
+    (n : int)  str("number: " n)
+    (s : cstr) str("string: " s)
 ```
 
 Omitting any member is a compile-time error (`TUR_E0301`).
@@ -79,6 +99,13 @@ handled implicitly at call sites and return positions:
 (accepts-union "hello")  ;; cstr widens to (int | cstr)
 ```
 
+```sweet-exp
+defn accepts-union [x : (int | cstr)] : unit ...
+
+accepts-union(42)       ;; int widens to (int | cstr)
+accepts-union("hello")  ;; cstr widens to (int | cstr)
+```
+
 ### Typeclass Methods on Unions
 
 When `x : (int | cstr)`, typeclass methods implemented by **all** union members may be
@@ -93,6 +120,16 @@ called directly without a `match`. Methods not in the intersection require an ex
 (match x
   (n : int)  (+ n 1)
   (s : cstr) ...)
+```
+
+```sweet-exp
+;; Show is implemented by both int and cstr
+show(x)   ;; ok -- in the instance intersection
+
+;; Arithmetic is only on int; requires narrowing
+match x
+  (n : int)  {n + 1}
+  (s : cstr) ...
 ```
 
 ---
@@ -114,6 +151,16 @@ The primary use is combining a concrete type with typeclass constraints.
   (file/write (serialize x) "output.bin"))
 ```
 
+```sweet-exp
+;; Named intersection type
+deftype ReadWrite []
+  (Readable & Writable)
+
+;; Inline in a function signature
+defn save [x : (int & Serializable)] : unit
+  file/write(serialize(x) "output.bin")
+```
+
 ### Subtyping
 
 From a value of intersection type you can project either member:
@@ -133,6 +180,14 @@ Intersection is most useful when one side is a typeclass:
   (serialize x))
 ```
 
+```sweet-exp
+defclass Serializable [a]
+  serialize [x : a] : cstr
+
+defn serialize-int [x : (int & Serializable)] : cstr
+  serialize(x)
+```
+
 The value is an `int` with a `Serializable` dictionary attached. The elaborator
 resolves the instance at the intersection type site.
 
@@ -143,6 +198,11 @@ Intersections of known-disjoint concrete types are rejected statically (`TUR_E03
 ```turmeric
 ;; Compile error: int and cstr are disjoint
 (defn bad [x : (int & cstr)] : unit ...)
+```
+
+```sweet-exp
+;; Compile error: int and cstr are disjoint
+defn bad [x : (int & cstr)] : unit ...
 ```
 
 Intersections involving typeclasses or type variables that cannot be determined disjoint
@@ -164,6 +224,15 @@ union or intersection flag is active.
 (debug-print true)    ;; ok
 ```
 
+```sweet-exp
+defn debug-print [x : any] : unit
+  println(x)
+
+debug-print(42)      ;; ok
+debug-print("hello") ;; ok
+debug-print(true)    ;; ok
+```
+
 `any`-typed values are represented as `int64_t` at codegen level. Pointer-sized payloads
 (`cstr`, struct, ADT) require a boxing wrapper -- this is deferred (see below).
 
@@ -183,6 +252,16 @@ Union types and `any` enable a gradual typing path:
 ;; Narrow gradually as types become known
 (defn typed-print [x : (int | cstr)] : unit
   (debug-print x))
+```
+
+```sweet-exp
+;; Start untyped
+defn debug-print [x : any] : unit
+  println(x)
+
+;; Narrow gradually as types become known
+defn typed-print [x : (int | cstr)] : unit
+  debug-print(x)
 ```
 
 ---
@@ -232,6 +311,18 @@ conditions do not narrow the elaborated type:
 (match x
   (n : int)  (+ n 1)
   (s : cstr) ...)
+```
+
+```sweet-exp
+;; Does not narrow -- elaboration error inside the branch
+if {type-of(x) = "int"}
+  {x + 1}   ;; error: (int | cstr) is not int
+  ...
+
+;; Correct: use match
+match x
+  (n : int)  {n + 1}
+  (s : cstr) ...
 ```
 
 ### Intersection is Constraint-Only

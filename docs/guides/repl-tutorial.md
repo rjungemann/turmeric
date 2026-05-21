@@ -43,6 +43,9 @@ Type this:
 ```turmeric
 (+ 1 2)
 ```
+```sweet-exp
+{1 + 2}
+```
 
 Expected output:
 
@@ -70,6 +73,9 @@ Type this:
 ```turmeric
 (println "Hello, Turmeric!")
 ```
+```sweet-exp
+println("Hello, Turmeric!")
+```
 
 Expected output:
 
@@ -81,6 +87,9 @@ Then try:
 
 ```turmeric
 (= 1 1)
+```
+```sweet-exp
+{1 = 1}
 ```
 
 Expected output:
@@ -106,6 +115,9 @@ Type this:
 
 ```turmeric
 (let [x 10 y 20] (+ x y))
+```
+```sweet-exp
+let [x 10 y 20] {x + y}
 ```
 
 Expected output:
@@ -137,11 +149,18 @@ Type this:
 ```turmeric
 (defn square [x :int] :int (* x x))
 ```
+```sweet-exp
+defn square [x :int] :int
+  {x * x}
+```
 
 Then call it:
 
 ```turmeric
 (square 9)
+```
+```sweet-exp
+square(9)
 ```
 
 Expected output:
@@ -174,11 +193,18 @@ Type this:
 (defn abs [n :int] :int
   (if (< n 0) (- 0 n) n))
 ```
+```sweet-exp
+defn abs [n :int] :int
+  if {n < 0} {0 - n} n
+```
 
 Then:
 
 ```turmeric
 (abs -5)
+```
+```sweet-exp
+abs(-5)
 ```
 
 Expected output:
@@ -195,9 +221,19 @@ Now try a multi-branch form:
         (< n 0) -1
         :else   0))
 ```
+```sweet-exp
+defn sign [n :int] :int
+  cond
+    {n > 0}  1
+    {n < 0}  -1
+    :else    0
+```
 
 ```turmeric
 (sign -3)
+```
+```sweet-exp
+sign(-3)
 ```
 
 Expected output:
@@ -226,11 +262,18 @@ Type this:
 (defn factorial [n :int] :int
   (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
+```sweet-exp
+defn factorial [n :int] :int
+  if {n <= 1} 1 {n * factorial({n - 1})}
+```
 
 Then:
 
 ```turmeric
 (factorial 10)
+```
+```sweet-exp
+factorial(10)
 ```
 
 Expected output:
@@ -257,6 +300,9 @@ Type this:
 ```turmeric
 (when true (println "yes"))
 ```
+```sweet-exp
+when true println("yes")
+```
 
 Expected output:
 
@@ -268,6 +314,9 @@ Then:
 
 ```turmeric
 (unless false (println "also yes"))
+```
+```sweet-exp
+unless false println("also yes")
 ```
 
 Expected output:
@@ -296,6 +345,9 @@ Type this:
 ```turmeric
 (option-some? (option-some 42))
 ```
+```sweet-exp
+option-some?(option-some(42))
+```
 
 Expected output:
 
@@ -308,6 +360,9 @@ Then:
 ```turmeric
 (option-none? (option-none))
 ```
+```sweet-exp
+option-none?(option-none())
+```
 
 Expected output:
 
@@ -319,6 +374,9 @@ Then:
 
 ```turmeric
 (option-some? (option-none))
+```
+```sweet-exp
+option-some?(option-none())
 ```
 
 Expected output:
@@ -347,6 +405,9 @@ Type this:
 ```turmeric
 (option-unwrap (option-some 99))
 ```
+```sweet-exp
+option-unwrap(option-some(99))
+```
 
 Expected output:
 
@@ -358,6 +419,9 @@ Then:
 
 ```turmeric
 (option-unwrap-or (option-none) -1)
+```
+```sweet-exp
+option-unwrap-or(option-none() -1)
 ```
 
 Expected output:
@@ -372,9 +436,16 @@ Now define a division function that never crashes:
 (defn safe-div [a :int b :int]
   (if (= b 0) (option-none) (option-some (/ a b))))
 ```
+```sweet-exp
+defn safe-div [a :int b :int]
+  if {b = 0} option-none() option-some({a / b})
+```
 
 ```turmeric
 (option-unwrap (safe-div 10 2))
+```
+```sweet-exp
+option-unwrap(safe-div(10 2))
 ```
 
 Expected output:
@@ -385,6 +456,9 @@ Expected output:
 
 ```turmeric
 (option-unwrap-or (safe-div 10 0) -1)
+```
+```sweet-exp
+option-unwrap-or(safe-div(10 0) -1)
 ```
 
 Expected output:
@@ -414,6 +488,9 @@ Type this:
 ```turmeric
 (ok? (ok 100))
 ```
+```sweet-exp
+ok?(ok(100))
+```
 
 Expected output:
 
@@ -426,6 +503,9 @@ Then:
 ```turmeric
 (err? (ok 100))
 ```
+```sweet-exp
+err?(ok(100))
+```
 
 Expected output:
 
@@ -437,6 +517,9 @@ Then:
 
 ```turmeric
 (result-unwrap-or (err 0) -1)
+```
+```sweet-exp
+result-unwrap-or(err(0) -1)
 ```
 
 Expected output:
@@ -468,9 +551,19 @@ Type this:
         (err? r) (println "err!")
         :else    (println "unknown")))
 ```
+```sweet-exp
+defn describe-result [r]
+  cond
+    ok?(r)  println("ok!")
+    err?(r) println("err!")
+    :else   println("unknown")
+```
 
 ```turmeric
 (describe-result (ok 1))
+```
+```sweet-exp
+describe-result(ok(1))
 ```
 
 Expected output:
@@ -487,9 +580,19 @@ Then:
         (option-none? o) (println "none!")
         :else            (println "unknown")))
 ```
+```sweet-exp
+defn describe-option [o]
+  cond
+    option-some?(o) println("some!")
+    option-none?(o) println("none!")
+    :else           println("unknown")
+```
 
 ```turmeric
 (describe-option (option-none))
+```
+```sweet-exp
+describe-option(option-none())
 ```
 
 Expected output:
@@ -524,6 +627,14 @@ Type this:
   (println (vec-len v))
   (println (vec-get v 1)))
 ```
+```sweet-exp
+let [v vec-new()]
+  vec-push!(v 10)
+  vec-push!(v 20)
+  vec-push!(v 30)
+  println(vec-len(v))
+  println(vec-get(v 1))
+```
 
 Expected output:
 
@@ -550,6 +661,9 @@ Type this:
 
 ```turmeric
 (for i 0 5 (println i))
+```
+```sweet-exp
+for i 0 5 println(i)
 ```
 
 Expected output:
@@ -586,6 +700,10 @@ Type this:
 (let [add5 (fn [x :int] :int (+ x 5))]
   (add5 10))
 ```
+```sweet-exp
+let [add5 fn([x :int] :int {x + 5})]
+  add5(10)
+```
 
 Expected output:
 
@@ -598,9 +716,17 @@ Then define a function that returns a closure:
 ```turmeric
 (defn make-adder [n :int] (fn [x :int] :int (+ x n)))
 ```
+```sweet-exp
+defn make-adder [n :int]
+  fn [x :int] :int {x + n}
+```
 
 ```turmeric
 (let [add3 (make-adder 3)] (add3 7))
+```
+```sweet-exp
+let [add3 make-adder(3)]
+  add3(7)
 ```
 
 Expected output:
@@ -629,9 +755,16 @@ Type this:
 ```turmeric
 (defn apply-twice [f x :int] :int (f (f x)))
 ```
+```sweet-exp
+defn apply-twice [f x :int] :int
+  f(f(x))
+```
 
 ```turmeric
 (apply-twice (fn [x :int] :int (* x 2)) 3)
+```
+```sweet-exp
+apply-twice(fn([x :int] :int {x * 2}) 3)
 ```
 
 Expected output:
@@ -660,6 +793,9 @@ Type this:
 ```turmeric
 (defstruct Point [x :int y :int])
 ```
+```sweet-exp
+defstruct Point [x :int y :int]
+```
 
 Then construct an instance and read its fields:
 
@@ -667,6 +803,11 @@ Then construct an instance and read its fields:
 (let [p (Point 3 4)]
   (println (Point-x p))
   (println (Point-y p)))
+```
+```sweet-exp
+let [p Point(3 4)]
+  println(Point-x(p))
+  println(Point-y(p))
 ```
 
 Expected output:
@@ -702,6 +843,9 @@ Type this:
 ```turmeric
 (defeffect Log [msg :cstr] :void)
 ```
+```sweet-exp
+defeffect Log [msg :cstr] :void
+```
 
 Then define a function that performs it:
 
@@ -710,11 +854,19 @@ Then define a function that performs it:
   (perform (Log "starting"))
   (perform (Log "done")))
 ```
+```sweet-exp
+defn do-work [] :void
+  perform(Log("starting"))
+  perform(Log("done"))
+```
 
 Now call it without a handler:
 
 ```turmeric
 (do-work)
+```
+```sweet-exp
+do-work()
 ```
 
 Expected output:
@@ -745,6 +897,13 @@ Type this:
 (handle (do-work)
   (Log [msg] k)
     (do (println msg) (resume k (nil-value))))
+```
+```sweet-exp
+handle do-work()
+  (Log [msg] k)
+    do
+      println(msg)
+      resume(k nil-value())
 ```
 
 Expected output:
@@ -780,6 +939,13 @@ Type this:
   (Log [msg] k)
     (do (println (str-concat "[LOG] " msg)) (resume k (nil-value))))
 ```
+```sweet-exp
+handle do-work()
+  (Log [msg] k)
+    do
+      println(str-concat("[LOG] " msg))
+      resume(k nil-value())
+```
 
 Expected output:
 
@@ -808,15 +974,26 @@ Type this:
 ```turmeric
 (defeffect Ask [] :int)
 ```
+```sweet-exp
+defeffect Ask [] :int
+```
 
 ```turmeric
 (defn use-ask [] :int
   (+ 1 (perform (Ask))))
 ```
+```sweet-exp
+defn use-ask [] :int
+  {1 + perform(Ask())}
+```
 
 ```turmeric
 (handle (use-ask)
   (Ask [] k) (resume k 41))
+```
+```sweet-exp
+handle use-ask()
+  (Ask [] k) resume(k 41)
 ```
 
 Expected output:
@@ -849,10 +1026,14 @@ directory:
 (defn greet [name :cstr] :void
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
+```sweet-exp
+defn greet [name :cstr] :void
+  println(str-concat("Hello, " str-concat(name "!")))
+```
 
 Then in the REPL:
 
-```turmeric
+```turmeric no-check
 :reload hello.tur
 ```
 
@@ -866,6 +1047,9 @@ Now call the function:
 
 ```turmeric
 (greet "world")
+```
+```sweet-exp
+greet("world")
 ```
 
 Expected output:

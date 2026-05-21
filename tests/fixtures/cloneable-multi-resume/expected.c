@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2370,10 +2373,10 @@ int main() {
         {
             tur_cloneable_cont *__t1 = tur_cloneable_cont_alloc(__cont_fn_0, NULL, NULL, NULL);
             int64_t __t2 = k_identity((int64_t)(intptr_t)__t1);
-            int64_t k_215 = __t2;
-            (void)k_215;
-            printf("%lld\n", (long long)(tur_cloneable_cont_resume(tur_cloneable_cont_clone(k_215), INT64_C(10))));
-            printf("%lld\n", (long long)(tur_cloneable_cont_resume(k_215, INT64_C(20))));
+            int64_t k_216 = __t2;
+            (void)k_216;
+            printf("%lld\n", (long long)(tur_cloneable_cont_resume(tur_cloneable_cont_clone(k_216), INT64_C(10))));
+            printf("%lld\n", (long long)(tur_cloneable_cont_resume(k_216, INT64_C(20))));
         }
         int64_t __t3;
         __t3 = INT64_C(0);

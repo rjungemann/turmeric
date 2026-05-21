@@ -107,3 +107,38 @@
 ;; Phase E1: Eq instance for str -- wires eq? to str-eq?
 (definstance Eq [str]
   (eq? [x y] (str-eq? x y)))
+
+;;; str->int -- parse a NUL-terminated :cstr to int64 (decimal).
+;;;
+;;; Parameters:
+;;;   s -- :cstr string to parse
+;;;
+;;; Returns:
+;;;   Parsed integer value, or 0 if s is NULL or non-numeric.
+;;;
+;;; Example:
+;;;   (str->int "42")  ; => 42
+;;;
+;;; Since: Phase B1
+(defn str->int [s :cstr] :int
+  ```c
+  return s ? (int64_t)atoll((const char *)(intptr_t)s) : 0;
+  ```)
+
+;;; cstr->parse-int -- parse a raw int (cstr pointer stored as int64) to int64.
+;;;
+;;; Parameters:
+;;;   s -- raw :int holding a char* pointer
+;;;
+;;; Returns:
+;;;   Parsed integer value, or 0 if pointer is NULL.
+;;;
+;;; Example:
+;;;   (cstr->parse-int some-int-ptr)  ; => parsed int
+;;;
+;;; Since: Phase B1
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
+  ```)

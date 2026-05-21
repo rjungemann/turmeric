@@ -55,6 +55,10 @@ exactly what the C side of the equation looks like.
 (extern-c function-name [arg-types...] return-type)
 ```
 
+```sweet-exp
+extern-c function-name [arg-types...] return-type
+```
+
 `extern-c` declares that a C function (or global) with the given name is
 available at link time. The elaborator trusts the signature entirely — there
 is no validation against an actual header file.
@@ -75,6 +79,22 @@ is no validation against an actual header file.
 (extern-c rand  [^]       :int)
 (extern-c srand [^int]    :void)
 (extern-c time  [^ptr]    :ptr)
+```
+
+```sweet-exp
+;; libc file I/O (stdlib/io.tur)
+extern-c fopen  [^cstr ^cstr] :ptr
+extern-c fclose [^ptr]        :int
+extern-c fread  [^ptr ^int ^int ^ptr] :int
+
+;; libc memory (stdlib/io.tur)
+extern-c malloc [^ptr size]  :ptr
+extern-c free   [^ptr p]     :void
+
+;; libc RNG (stdlib/random.tur)
+extern-c rand  [^]       :int
+extern-c srand [^int]    :void
+extern-c time  [^ptr]    :ptr
 ```
 
 **Type annotation reference:**
@@ -106,14 +126,24 @@ arguments. The elaborator does not validate the variadic portion:
 (printf "count=%lld\n" count)   ;; extra args pass through unchecked
 ```
 
+```sweet-exp
+extern-c printf [^cstr] :int
+printf("count=%lld\n" count)   ;; extra args pass through unchecked
+```
+
 **Globals and zero-argument functions:**
 
 Use an empty arg list `[^]` for globals that are accessed as function calls
 or zero-argument functions:
 
 ```turmeric
-(extern-c stderr [^] :ptr)   ;; FILE* stderr — accessed as (stderr)
+(extern-c stderr [^] :ptr)   ;; FILE* stderr -- accessed as (stderr)
 (extern-c rand   [^] :int)   ;; int rand(void)
+```
+
+```sweet-exp
+extern-c stderr [^] :ptr   ;; FILE* stderr -- accessed as stderr()
+extern-c rand   [^] :int   ;; int rand(void)
 ```
 
 ### 2.2 Inline C blocks — Arbitrary C inside a Turmeric expression
@@ -122,6 +152,18 @@ Surround C source with triple backticks and an optional `c` tag:
 
 ```turmeric
 (defn file-size [f]
+  ```
+  FILE* file = (FILE*)f;
+  long pos = ftell(file);
+  fseek(file, 0, SEEK_END);
+  long size = ftell(file);
+  fseek(file, pos, SEEK_SET);
+  return (int)size;
+  ```)
+```
+
+```sweet-exp
+defn file-size [f]
   ```
   FILE* file = (FILE*)f;
   long pos = ftell(file);
@@ -164,7 +206,7 @@ The stdlib uses **capability structs** to wrap C APIs behind a Turmeric-visible
 interface. This pattern keeps the unsafe pointer juggling isolated:
 
 ```turmeric
-;; stdlib/random.tur — capability struct wrapping libc rand()
+;; stdlib/random.tur -- capability struct wrapping libc rand()
 (defn Real-Random []
   ```
   typedef struct Random Random;
@@ -193,7 +235,39 @@ interface. This pattern keeps the unsafe pointer juggling isolated:
 
 (defn Real-Random-free [rng]
   ```c free(rng); ```)
-```sh
+```
+
+```sweet-exp
+;; stdlib/random.tur -- capability struct wrapping libc rand()
+defn Real-Random []
+  ```
+  typedef struct Random Random;
+  struct Random {
+      int (*next_int)(int min, int max);
+      int (*next_float)(void);
+  };
+
+  static int random_next_int(int min, int max) {
+      static int seeded = 0;
+      if (!seeded) { srand((unsigned int)time(NULL)); seeded = 1; }
+      return min + rand() % (max - min + 1);
+  }
+
+  static int random_next_float(void) {
+      static int seeded = 0;
+      if (!seeded) { srand((unsigned int)time(NULL)); seeded = 1; }
+      return rand() % 10000;
+  }
+
+  Random* rng = (Random*)malloc(sizeof(Random));
+  rng->next_int  = random_next_int;
+  rng->next_float = random_next_float;
+  return (void*)rng;
+  ```)
+
+defn Real-Random-free [rng]
+  ```c free(rng); ```)
+```
 
 The struct is returned as `:ptr` (opaque `void *`) and freed explicitly. This
 is intentionally manual — `rc<T>` and `weak<T>` cannot track arbitrary C heap
@@ -319,6 +393,13 @@ corresponding `*-free` function (see `Real-Random-free` above).
   )  ;; free fires here, even if an exception is thrown
 ```
 
+```sweet-exp
+let [buf malloc(1024)]
+  defer free(buf)
+  ;; ... use buf ...
+  ;; free fires here, even if an exception is thrown
+```
+
 ---
 
 ## 5. The `defer` System
@@ -332,6 +413,13 @@ the runtime.
   (defer (fclose f))
   ;; ... read from f ...
   )   ;; fclose(f) called here
+```
+
+```sweet-exp
+let [f fopen("data.bin" "rb")]
+  defer fclose(f)
+  ;; ... read from f ...
+  ;; fclose(f) called here
 ```
 
 **Maximum defers per frame:** `TUR_FRAME_MAX_DEFERS` = 32. Exceeding this at
@@ -358,6 +446,13 @@ Exceptions are non-resumable and use `setjmp`/`longjmp`:
   (throw 42)
   (catch [e :int] (println e))
   (finally (println "always")))
+```
+
+```sweet-exp
+try
+  throw(42)
+  catch [e :int] println(e)
+  finally println("always")
 ```
 
 Generated C for the `try` block calls `setjmp`. The `throw` form calls
@@ -531,6 +626,37 @@ void  vec2_free(Vec2 *v);
     (defer (vec2_free a))
     (let [len (vec2-len a)]
       (println len))))   ;; prints 5.0
+```
+
+```sweet-exp
+;; Declare the functions we need
+extern-c vec2_alloc [^float ^float] :ptr
+extern-c vec2_free  [^ptr]          :void
+
+;; vec2_add and vec2_len operate on struct values, which we pass through
+;; inline C since struct-by-value is not in the type system yet
+defn vec2-add [a b]
+  ```
+  #include "libmath.h"
+  Vec2 *pa = (Vec2 *)a;
+  Vec2 *pb = (Vec2 *)b;
+  Vec2 *result = (Vec2 *)malloc(sizeof(Vec2));
+  *result = vec2_add(*pa, *pb);
+  return (void *)result;
+  ```)
+
+defn vec2-len [v]
+  ```c
+  #include "libmath.h"
+  Vec2 *pv = (Vec2 *)v;
+  return vec2_len(*pv);
+  ```)
+
+defn demo []
+  let [a vec2_alloc(3.0 4.0)]
+    defer vec2_free(a)
+    let [len vec2-len(a)]
+      println(len)   ;; prints 5.0
 ```
 
 Build with:

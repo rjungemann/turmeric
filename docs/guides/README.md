@@ -2,6 +2,44 @@
 
 User-facing documentation for Turmeric features, tutorials, and best practices.
 
+Code examples are available in both standard S-expression syntax (`turmeric`) and
+sweet-expression syntax (`sweet-exp`). Use the toggle above each paired example to
+switch between them.
+
+## Authoring paired examples
+
+Write two consecutive fenced blocks -- a `turmeric` block immediately followed (no
+prose between) by a `sweet-exp` block. `genguides.py` detects the pair and renders
+a toggle widget automatically. A lone `turmeric` block with no `sweet-exp` sibling
+renders as a plain code block; all existing blocks remain valid.
+
+The second (sweet-exp) variant always opens with `#lang sweet-exp` when the snippet
+is a complete runnable program; inline snippets omit the directive. Do not use the
+invalid `#lang turmeric/sweet-exp` or mix `#lang turmeric/neoteric` into sweet-exp
+labelled examples -- the correct directive is `#lang sweet-exp` in every case.
+
+Example:
+
+````markdown
+```turmeric
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+```
+```sweet-exp
+defn use-ask [] :int
+  {1 + perform(Ask())}
+```
+````
+
+Note: all guide content must be ASCII-only. Use `--` (double hyphen), never em dashes.
+
+## Coverage
+
+Run `just check-guides` to verify all pairs and see current coverage. As of the last
+update, paired guides include: `quickstart.md`, `repl-tutorial.md`,
+`effects-system-guide.md`. Remaining guides are being converted incrementally --
+see the task plan for progress.
+
 ## Getting Started
 
 - **[quickstart.md](quickstart.md)** — Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
@@ -30,6 +68,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 
 ## Language Features
 
+- **[structs-guide.md](structs-guide.md)** — Struct types: `defstruct`, field access, ownership kinds, typeclasses, RC, linear fields
 - **[hkt-guide.md](hkt-guide.md)** — Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** — Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[module-system-guide.md](module-system-guide.md)** — Module system, namespacing, exports
@@ -39,6 +78,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[gadts-guide.md](gadts-guide.md)** — GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** — GADTs cookbook: practical patterns and recipes
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** — Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
+- **[sized-types-guide.md](sized-types-guide.md)** — Sized types: compile-time size tracking, stack allocation, `SizedBuf`, `SizedMatrix`, `SizedBitVec` (`-Xsized-types`)
 
 ## Type Safety
 
@@ -58,6 +98,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[custom-effects-tutorial.md](custom-effects-tutorial.md)** — Writing custom effects
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** — Building the snake game example
 - **[web-continuations-tutorial.md](web-continuations-tutorial.md)** — Multi-page web forms using serializable continuations (guestbook example)
+- **[web-emscripten-tutorial.md](web-emscripten-tutorial.md)** — Compile Turmeric to WebAssembly with Emscripten and run it in a browser
 
 ### EAVT Database (multi-chapter)
 
@@ -89,7 +130,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
-- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md)
+- Type system → [structs-guide.md](structs-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md)
 - Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
 - Package management → [package-management-guide.md](package-management-guide.md)

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2062,18 +2065,18 @@ static int64_t use_both();
 
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_214 = __k;
-    int64_t __t7 = tur_effect_cont_resume((int64_t)(intptr_t)k_214, (int64_t)INT64_C(41));
+    int64_t k_215 = __k;
+    int64_t __t7 = tur_effect_cont_resume((int64_t)(intptr_t)k_215, (int64_t)INT64_C(41));
     return (int64_t)__t7;
 }
 
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t x_215 = (int64_t)__effect_args[0];
-    int64_t k_216 = __k;
-    printf("%lld\n", (long long)(x_215));
+    int64_t x_216 = (int64_t)__effect_args[0];
+    int64_t k_217 = __k;
+    printf("%lld\n", (long long)(x_216));
     int64_t __t8;
-    int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)0);
+    int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_217, (int64_t)0);
     __t8 = __t9;
     return (int64_t)__t8;
 }
@@ -2361,20 +2364,29 @@ static int64_t use_both() {
         int64_t __t0;
         {
             int64_t __t1 = tur_effect_perform("Ask", NULL, 0);
-            int64_t result_213 = ((INT64_C(1)) + (__t1));
-            (void)result_213;
+            int64_t result_214 = ((INT64_C(1)) + (__t1));
+            (void)result_214;
             int64_t __t2[1];
-            __t2[0] = (int64_t)result_213;
+            __t2[0] = (int64_t)result_214;
             tur_effect_perform("Tell", __t2, 1);
             int64_t __t3;
-            __t3 = result_213;
+            __t3 = result_214;
             __t0 = __t3;
         }
         return __t0;
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     TurEffectCaptureCtx __cap_4;
     __cap_4.has_pending_effect = false;
     __cap_4.eff_name = NULL;

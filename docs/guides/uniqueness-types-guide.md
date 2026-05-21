@@ -50,6 +50,17 @@ explicit in the source language.
     (println v)))     ;; OK: sort! returned
 ```
 
+```sweet-exp
+;; sort! requires exclusive access -- no other reference may exist
+defn sort! [^unique v : (vec int)] : unit
+  in-place-quicksort(v)
+
+defn example [] : unit
+  let [v vec-new(10)]
+    sort!(v)         ;; ownership transferred into sort!
+    println(v)       ;; OK: sort! returned
+```
+
 ### Pipeline of unique operations
 
 ```turmeric
@@ -61,6 +72,17 @@ explicit in the source language.
     (buf-write "header")
     (buf-write "body")
     (buf-write "footer")))
+```
+
+```sweet-exp
+;; Each step hands off ownership to the next
+defn buf-write [^unique buf : Buffer data : cstr] : ^unique Buffer ...
+
+defn pipeline [^unique buf : Buffer] : ^unique Buffer
+  -> buf
+    buf-write("header")
+    buf-write("body")
+    buf-write("footer")
 ```
 
 ---
@@ -80,6 +102,16 @@ value is a compile-time error.
     (modify x)))  ;; ERROR TUR-E0200: 'x' is not unique (aliased by 'y')
 ```
 
+```sweet-exp
+defn modify [^unique ^mut x : int] : unit
+  set!(x {x + 1})
+
+defn bad [] : unit
+  let [x 42
+       y x]       ;; alias created
+    modify(x)     ;; ERROR TUR-E0200: 'x' is not unique (aliased by 'y')
+```
+
 Passing a `^unique` value to a function **transfers ownership** -- the source
 binding is consumed, just like a move.
 
@@ -96,6 +128,12 @@ transfer equivalent of `&mut T` borrows.
   n)
 ```
 
+```sweet-exp
+defn increment! [^unique ^mut n : int] : ^unique int
+  set!(n {n + 1})
+  n
+```
+
 Rules:
 
 - A `^unique ^mut` parameter may mutate the value in place and return a new `^unique T`.
@@ -110,6 +148,10 @@ would introduce aliases:
 
 ```turmeric
 (rc/new my-unique-val)  ;; ERROR TUR-E0202: cannot wrap unique value in rc<T>
+```
+
+```sweet-exp
+rc/new(my-unique-val)  ;; ERROR TUR-E0202: cannot wrap unique value in rc<T>
 ```
 
 ---

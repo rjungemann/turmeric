@@ -1,6 +1,12 @@
-; gc-mixed: mix of live and dead objects — GC collects only zombies.
+; gc-mixed: mix of live and dead objects -- GC collects only zombies.
 ; x stays alive (strong_count=1), y becomes a zombie.
-; After gc!, x's strong_count should still be 1, y's upgrade should return NULL.
+; After gc!, x's strong_count should still be 1, y's upgrade should return none.
+(defn some? [o :ptr<void>] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  return opt != NULL && opt->is_some;
+  ```)
+
 (defn main [] :int
   (gc-enable!)
   (let [x (rc/of 10)
@@ -8,8 +14,8 @@
     (let [wy (weak y)]
       (rc/drop y)
       (gc!)
-      (println (rc/strong-count x))
+      (println (rc/strong-count x))          ; expected: 1
       (let [uy (upgrade wy)]
-        (println (rc/strong-count uy)))
+        (println (if (some? uy) 1 0)))        ; expected: 0 -- y was collected
       (rc/drop x)
       0)))

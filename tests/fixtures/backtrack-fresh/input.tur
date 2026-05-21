@@ -33,7 +33,8 @@
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
-  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, 0);
+  int64_t unbound = INT64_MIN; /* sentinel: unbound logic variable, distinct from any valid value */
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, unbound);
   ```)
 
 (defn bt-print [xs]
@@ -47,5 +48,7 @@
   ```)
 
 (defn main []
-  (let [k 99]
-    (bt-print (fresh (fn [x] (let [_ k] (mplus (mreturn x) (mreturn (+ x k)))))))))
+  ;; A fresh variable must not equal 0 (it uses INT64_MIN as unbound sentinel).
+  ;; Capture zero to force a fat-closure (required by fresh's calling convention).
+  (let [zero 0]
+    (bt-print (fresh (fn [x] (let [_ zero] (mreturn (if (= x 0) 0 1))))))))

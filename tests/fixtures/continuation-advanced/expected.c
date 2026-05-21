@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2013,12 +2016,12 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_219(int64_t);
-static int64_t __fn_222(int64_t);
-static int64_t __fn_225(int64_t);
-static int64_t __fn_229(void *, int64_t);
-static int64_t __fn_235(int64_t);
-static int64_t __fn_241(void *, int64_t);
+static int64_t __fn_220(int64_t);
+static int64_t __fn_223(int64_t);
+static int64_t __fn_226(int64_t);
+static int64_t __fn_230(void *, int64_t);
+static int64_t __fn_236(int64_t);
+static int64_t __fn_242(void *, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2071,32 +2074,32 @@ static int64_t test_shift_ignores_k();
 static int64_t test_reset_no_shift();
 static int64_t test_deeply_nested_shift();
 
-static int64_t __fn_219(int64_t v) {
+static int64_t __fn_220(int64_t v) {
         return ((v) * (INT64_C(2)));
 }
 
-static int64_t __fn_222(int64_t v) {
+static int64_t __fn_223(int64_t v) {
         return ((v) + (INT64_C(100)));
 }
 
-static int64_t __fn_225(int64_t v) {
+static int64_t __fn_226(int64_t v) {
         return ((v) * (INT64_C(2)));
 }
 
-struct __env_231 { int64_t __fn; int64_t x; };
-static int64_t __fn_229(void * __env_p_232, int64_t v) {
-        struct __env_231 *__env___env_231 = (struct __env_231 *)__env_p_232;
-        return ((__env___env_231->x) + (v));
+struct __env_232 { int64_t __fn; int64_t x; };
+static int64_t __fn_230(void * __env_p_233, int64_t v) {
+        struct __env_232 *__env___env_232 = (struct __env_232 *)__env_p_233;
+        return ((__env___env_232->x) + (v));
 }
 
-static int64_t __fn_235(int64_t v) {
+static int64_t __fn_236(int64_t v) {
         return INT64_C(42);
 }
 
-struct __env_243 { int64_t __fn; int64_t a; int64_t b; int64_t c; };
-static int64_t __fn_241(void * __env_p_244, int64_t v) {
-        struct __env_243 *__env___env_243 = (struct __env_243 *)__env_p_244;
-        return ((__env___env_243->a) + (((__env___env_243->b) + (((__env___env_243->c) + (v))))));
+struct __env_244 { int64_t __fn; int64_t a; int64_t b; int64_t c; };
+static int64_t __fn_242(void * __env_p_245, int64_t v) {
+        struct __env_244 *__env___env_244 = (struct __env_244 *)__env_p_245;
+        return ((__env___env_244->a) + (((__env___env_244->b) + (((__env___env_244->c) + (v))))));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -2343,33 +2346,33 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 }
 
 static int64_t test_nested_reset() {
-        int64_t __t0 = __fn_219(INT64_C(5));
+        int64_t __t0 = __fn_220(INT64_C(5));
         return ((INT64_C(1)) + (((INT64_C(10)) + (__t0))));
 }
 
 static int64_t test_shift_return_different() {
-        int64_t __t1 = __fn_222(INT64_C(7));
+        int64_t __t1 = __fn_223(INT64_C(7));
         return __t1;
 }
 
 static int64_t test_multiple_shifts() {
         int64_t __t2;
         {
-            int64_t __t3 = __fn_225(INT64_C(3));
-            int64_t x_227 = __t3;
-            (void)x_227;
-            struct __env_231 *__t5 = (struct __env_231 *)malloc(sizeof(struct __env_231));
-            __t5->__fn = (int64_t)(intptr_t)__fn_229;
-            __t5->x = x_227;
+            int64_t __t3 = __fn_226(INT64_C(3));
+            int64_t x_228 = __t3;
+            (void)x_228;
+            struct __env_232 *__t5 = (struct __env_232 *)malloc(sizeof(struct __env_232));
+            __t5->__fn = (int64_t)(intptr_t)__fn_230;
+            __t5->x = x_228;
             void *__t6 = __t5;
-            int64_t __t4 = __fn_229(__t6, INT64_C(4));
+            int64_t __t4 = __fn_230(__t6, INT64_C(4));
             __t2 = __t4;
         }
         return __t2;
 }
 
 static int64_t test_shift_ignores_k() {
-        int64_t __t7 = __fn_235(INT64_C(10));
+        int64_t __t7 = __fn_236(INT64_C(10));
         return __t7;
 }
 
@@ -2380,25 +2383,34 @@ static int64_t test_reset_no_shift() {
 static int64_t test_deeply_nested_shift() {
         int64_t __t8;
         {
-            int64_t a_237 = INT64_C(1);
-            (void)a_237;
-            int64_t b_238 = INT64_C(2);
-            (void)b_238;
-            int64_t c_239 = INT64_C(3);
-            (void)c_239;
-            struct __env_243 *__t10 = (struct __env_243 *)malloc(sizeof(struct __env_243));
-            __t10->__fn = (int64_t)(intptr_t)__fn_241;
-            __t10->a = a_237;
-            __t10->b = b_238;
-            __t10->c = c_239;
+            int64_t a_238 = INT64_C(1);
+            (void)a_238;
+            int64_t b_239 = INT64_C(2);
+            (void)b_239;
+            int64_t c_240 = INT64_C(3);
+            (void)c_240;
+            struct __env_244 *__t10 = (struct __env_244 *)malloc(sizeof(struct __env_244));
+            __t10->__fn = (int64_t)(intptr_t)__fn_242;
+            __t10->a = a_238;
+            __t10->b = b_239;
+            __t10->c = c_240;
             void *__t11 = __t10;
-            int64_t __t9 = __fn_241(__t11, INT64_C(10));
+            int64_t __t9 = __fn_242(__t11, INT64_C(10));
             __t8 = __t9;
         }
         return __t8;
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     return 0;
 }

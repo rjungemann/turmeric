@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2343,22 +2346,22 @@ static void str_free(void * s) {
 int main() {
         int64_t __t0;
         {
-            void * a_222 = str_from_cstr("abc");
-            (void)a_222;
+            void * a_223 = str_from_cstr("abc");
+            (void)a_223;
             int64_t __t1;
             {
-                void * b_223 = str_from_cstr("abc");
-                (void)b_223;
+                void * b_224 = str_from_cstr("abc");
+                (void)b_224;
                 int64_t __t2;
                 {
-                    void * c_224 = str_from_cstr("abd");
-                    (void)c_224;
-                    printf("%lld\n", (long long)(str_len((void *)(intptr_t)(a_222))));
-                    puts((str_eq_((void *)(intptr_t)(a_222), (void *)(intptr_t)(b_223))) ? "true" : "false");
-                    puts((str_eq_((void *)(intptr_t)(a_222), (void *)(intptr_t)(c_224))) ? "true" : "false");
-                    str_free((void *)(intptr_t)(a_222));
-                    str_free((void *)(intptr_t)(b_223));
-                    str_free((void *)(intptr_t)(c_224));
+                    void * c_225 = str_from_cstr("abd");
+                    (void)c_225;
+                    printf("%lld\n", (long long)(str_len((void *)(intptr_t)(a_223))));
+                    puts((str_eq_((void *)(intptr_t)(a_223), (void *)(intptr_t)(b_224))) ? "true" : "false");
+                    puts((str_eq_((void *)(intptr_t)(a_223), (void *)(intptr_t)(c_225))) ? "true" : "false");
+                    str_free((void *)(intptr_t)(a_223));
+                    str_free((void *)(intptr_t)(b_224));
+                    str_free((void *)(intptr_t)(c_225));
                     int64_t __t3;
                     __t3 = INT64_C(0);
                     __t2 = __t3;

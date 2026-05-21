@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2304,13 +2307,13 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_216 = __k;
+    int64_t k_217 = __k;
     return 0;
 }
 
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_215 = __k;
+    int64_t k_216 = __k;
     return 0;
 }
 
@@ -2318,9 +2321,9 @@ static void __handle_body_3(void);
 static void __handle_body_3(void) {
     int64_t __t5;
     {
-        int64_t y_214 = INT64_C(99);
-        (void)y_214;
-        printf("%lld\n", (long long)(y_214));
+        int64_t y_215 = INT64_C(99);
+        (void)y_215;
+        printf("%lld\n", (long long)(y_215));
         int64_t __t6;
         __t6 = INT64_C(0);
         __t5 = __t6;
@@ -2361,8 +2364,8 @@ static void __handle_body_0(void);
 static void __handle_body_0(void) {
     int64_t __t2;
     {
-        int64_t x_213 = INT64_C(42);
-        (void)x_213;
+        int64_t x_214 = INT64_C(42);
+        (void)x_214;
         TurEffectCaptureCtx __cap_3;
         __cap_3.has_pending_effect = false;
         __cap_3.eff_name = NULL;

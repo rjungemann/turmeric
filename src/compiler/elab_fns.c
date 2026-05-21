@@ -1168,6 +1168,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     Expr *out = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
     out->as.fn_def_.fn = fd;
+
+    /* Nested defn: if not at file scope, register for file-scope emission
+     * and return nil — the function is lifted to file scope, callable by
+     * its name from this point on via the global binding. */
+    if (e->scope != &e->global) {
+        elab_register_file_def(e, out);
+        return e_nil(e, call->span);
+    }
     return out;
 }
 

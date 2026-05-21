@@ -29,6 +29,22 @@ Turmeric's `async`/`await` syntax enables direct-style asynchronous programming 
 (println (await fut))  ; => 3
 ```
 
+```sweet-exp
+;; Define an async function
+async
+  def data await(read-file("data.txt"))
+  def result await(process-data(data))
+  println(result)
+
+;; Type: returns a Future<T>
+def fut
+  async
+    {1 + await(fetch(2))}
+
+;; Block until completion
+println(await(fut))  ; => 3
+```
+
 ## Core Concepts
 
 ### Fibers
@@ -84,6 +100,19 @@ A **fiber** is a user-space thread (lightweight thread) that:
 ;; The scheduler later resumes k with the result of (fetch 2)
 ```
 
+```sweet-exp
+;; Surface syntax
+async {1 + await(fetch(2))}
+
+;; Desugars to (conceptually)
+reset
+  fn []
+    {1 + shift k
+      fiber-suspend(fetch(2) k)}
+
+;; The scheduler later resumes k with the result of fetch(2)
+```
+
 ### Comparison to Threads
 
 | Feature | Threads (Phase 19) | Async/Await (Phase 20) |
@@ -105,6 +134,13 @@ A **fiber** is a user-space thread (lightweight thread) that:
   (process a b))
 ```
 
+```sweet-exp
+async
+  def a await(fetch-a())
+  def b await(fetch-b())
+  process(a b)
+```
+
 ### Concurrent Operations
 
 ```turmeric
@@ -115,6 +151,16 @@ A **fiber** is a user-space thread (lightweight thread) that:
         a     (await fut-a)
         b     (await fut-b)]
     (process a b)))
+```
+
+```sweet-exp
+;; Fork two concurrent operations; wait for both
+async
+  let [fut-a async(fetch-a())
+       fut-b async(fetch-b())
+       a     await(fut-a)
+       b     await(fut-b)]
+    process(a b)
 ```
 
 ### Error Handling
@@ -131,6 +177,16 @@ Effects-based try/catch works within async blocks (see [Effects System Guide](ef
         (FileNotFound _) -> (continue k "default")))))
 ```
 
+```sweet-exp
+async
+  try-with
+    fn []
+      await(fetch-file("missing.txt"))
+    fn [e k]
+      match e
+        (FileNotFound _) -> continue(k "default")
+```
+
 ## I/O Bindings
 
 Turmeric doesn't provide built-in async I/O primitives. Import via FFI:
@@ -142,6 +198,15 @@ Turmeric doesn't provide built-in async I/O primitives. Import via FFI:
 
 (async
   (println (await (read-file "data.txt"))))
+```
+
+```sweet-exp
+;; Example: libuv or custom C bindings
+defn read-file [path]
+  with-future-from-ffi("libuv_read" path)
+
+async
+  println(await(read-file("data.txt")))
 ```
 
 ## See Also

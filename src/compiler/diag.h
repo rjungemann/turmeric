@@ -80,6 +80,8 @@ typedef enum DiagCode {
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
     /* LC0: Linear continuation warnings */
     TUR_W0035_UNSAFE_MULTISHOT_CONT,   /* ^unsafe-multishot continuation -- ownership not tracked */
+    /* U6: inline-C outside Unsafe annotation */
+    TUR_W0036_INLINE_C_MISSING_UNSAFE, /* inline-C block in function not annotated #{Unsafe} */
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

@@ -44,6 +44,16 @@ A cloneable continuation can be resumed multiple times:
   body)
 ```
 
+```sweet-exp
+;; Surface syntax (sugar)
+cloneable-reset
+  fn []
+    body
+
+cloneable-shift [k]
+  body
+```
+
 ### The Clone Trait
 
 Every type captured by a cloneable continuation must implement `Clone`:
@@ -59,6 +69,23 @@ Every type captured by a cloneable continuation must implement `Clone`:
 
 (instance Clone (Vector a) [Clone a]
   (clone [x] (map clone x)))
+```
+
+```sweet-exp
+;; Clone primitives (copy semantics)
+instance Clone int64
+  clone [x] x
+instance Clone bool
+  clone [x] x
+
+;; Clone derived types (deep copy)
+instance Clone (Pair a b) [Clone a, Clone b]
+  clone [x]
+    Pair(clone(x.first) clone(x.second))
+
+instance Clone (Vector a) [Clone a]
+  clone [x]
+    map(clone x)
 ```
 
 **Key invariant:** Before a cloneable continuation is resumed, all values in its environment must be cloned. This means:
@@ -90,6 +117,27 @@ Multi-shot continuations are modeled as the **backtracking monad**:
   (fn [] [(fn [] x)]))
 ```
 
+```sweet-exp
+;; A computation that yields zero or more results
+defalias Backtrack<a> (-> ((list (-> a))))
+
+;; Monadic operations
+defn mzero [] : (Backtrack a)
+  []
+
+defn mplus [fs gs : (Backtrack a)] : (Backtrack a)
+  fn []
+    append(fs() gs())
+
+defn bind [f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b)
+  fn []
+    flat-map(fn [k] {f(k()) ()} xs())
+
+defn return [x : a] : (Backtrack a)
+  fn []
+    [fn [] x]
+```
+
 ## Example: Parsing with Backtracking
 
 A backtracking parser tries multiple production rules:
@@ -119,6 +167,33 @@ A backtracking parser tries multiple production rules:
       (def rest (parse-many (parse-plus rest)))
       (return rest))
     (parse-term input)))
+```
+
+```sweet-exp
+;; Token parser
+defn parse-token [t input]
+  if {car(input) = t}
+    return(cdr(input))
+    mzero
+
+;; Choice: try parseA, then parseB if parseA fails
+defn <|> [parseA parseB input]
+  mplus(parseA(input) parseB(input))
+
+;; Sequence: parseA then parseB
+defn >> [parseA parseB input]
+  bind(fn [rest] parseB(rest)
+       parseA(input))
+
+;; Grammar:
+;; expr := term ('+' term)*
+defn parse-expr [input]
+  <|>
+    do-backtrack
+      def rest parse-term(input)
+      def rest parse-many(parse-plus(rest))
+      return(rest)
+    parse-term(input)
 ```
 
 ## Example: Logic Programming with miniKanren
@@ -155,6 +230,37 @@ Relational queries that work in multiple directions:
   (appendo [1 2] [3 4] x))
 ```
 
+```sweet-exp
+;; Unification: make two values equal
+defn unify [x y subst]
+  cond
+    ==(x y)  return(subst)
+    lvar?(x)  ext-s(x y subst)
+    lvar?(y)  ext-s(y x subst)
+    and(pair?(x) pair?(y))
+      bind(fn [s] unify(cdr(x) cdr(y) s)
+           unify(car(x) car(y) subst))
+    :else  mzero
+
+;; Relation: append(x, y, z) :- z = x ++ y
+defn appendo [x y z]
+  <|>
+    ;; Base case: x = [], z = y
+    bind(fn [s] unify(y z s)  unify(x [] {}))
+    ;; Recursive: x = [h|t], z = [h|r], append(t, y, r)
+    bind
+      fn [s]
+        let [h lvar('h)
+             t lvar('t)
+             r lvar('r)]
+          appendo(t y r)
+      unify(x cons(lvar('h) lvar('t)) {})
+
+;; Query: (appendo [1 2] [3 4] X) => X = [1 2 3 4]
+run 1 [x]
+  appendo([1 2] [3 4] x)
+```
+
 ## Example: Constraint Solving (Sudoku)
 
 ```turmeric
@@ -188,6 +294,38 @@ Relational queries that work in multiple directions:
   (sudoku initial-grid))
 ```
 
+```sweet-exp
+defn sudoku [grid]
+  ;; grid is a 9x9 array with some cells filled (1-9), others unbound (lvar)
+
+  ;; For each cell, either it's already bound or we bind it to 1-9
+  defn choose-domain [cell]
+    if lvar?(cell)
+      choice-point([1 2 3 4 5 6 7 8 9])
+      return(cell)
+
+  defn all-different [xs]
+    ;; Constraint: all values in xs must be distinct
+    bind
+      fn [vs]
+        if distinct?(vs)
+          return(vs)
+          mzero
+      map-backtrack(choose-domain xs)
+
+  ;; Run constraints: rows, columns, 3x3 boxes all distinct
+  do-backtrack
+    def filled map(choose-domain grid)
+    map(all-different rows(filled))
+    map(all-different cols(filled))
+    map(all-different boxes(filled))
+    return(filled)
+
+;; Solve and get first 10 solutions
+run 10 [solution]
+  sudoku(initial-grid)
+```
+
 ## Integration with Turmeric's Ownership Model
 
 ### Challenge: Capturing Mutable State
@@ -200,6 +338,14 @@ Turmeric's `ref<T>` assumes linear consumption (move semantics). Cloneable conti
   (fn []
     (let [r (ref 42)]
       (choice-point [1 2]))))  ; captures r; next backtrack tries to use r again
+```
+
+```sweet-exp
+;; ERROR: re-executing code will consume the ref twice
+cloneable-reset
+  fn []
+    let [r ref(42)]
+      choice-point([1 2])  ; captures r; next backtrack tries to use r again
 ```
 
 **Solution:** Capture immutable data or use `rc<T>` for shared ownership:
@@ -218,6 +364,20 @@ Turmeric's `ref<T>` assumes linear consumption (move semantics). Cloneable conti
       (choice-point [1 2]))))
 ```
 
+```sweet-exp
+;; OK: captured value is immutable
+cloneable-reset
+  fn []
+    let [x 42]  ; immutable
+      choice-point([1 2])
+
+;; OK: shared ownership doesn't consume on re-entry
+cloneable-reset
+  fn []
+    let [r rc(42)]
+      choice-point([1 2])
+```
+
 ### Defer and Cloneable Continuations
 
 When a cloneable continuation captures state across a `defer` boundary, each clone must re-run the deferred cleanup on entry:
@@ -231,6 +391,17 @@ When a cloneable continuation captures state across a `defer` boundary, each clo
       (fn [f]
         (let [data (read f)]
           (choice-point (parse data)))))))
+```
+
+```sweet-exp
+;; When backtracking re-enters this block,
+;; the file is re-opened in the cloned continuation
+cloneable-reset
+  fn []
+    defer-with-close open-file("data.txt")
+      fn [f]
+        let [data read(f)]
+          choice-point(parse(data))
 ```
 
 This is safe but can be expensive. Prefer immutable snapshots where possible.
@@ -259,6 +430,26 @@ This is safe but can be expensive. Prefer immutable snapshots where possible.
 (constraint pred)
 ```
 
+```sweet-exp
+;; Delimit a cloneable computation
+cloneable-reset body
+
+;; Capture continuation for backtracking
+cloneable-shift [k] body
+
+;; Choice point: try multiple values
+choice-point([v1 v2 ...])
+
+;; Run a backtracking computation, collect N solutions
+run n [vars] body
+
+;; Run all solutions
+run* [vars] body
+
+;; Constraint: succeed if predicate holds
+constraint pred
+```
+
 ### Monadic Interface
 
 ```turmeric
@@ -272,6 +463,19 @@ This is safe but can be expensive. Prefer immutable snapshots where possible.
   (def x (goal1))
   (def y (goal2 x))
   (return (list x y)))
+```
+
+```sweet-exp
+return(x)           ; succeed with one value
+mzero()             ; fail (zero solutions)
+mplus(fs gs)        ; choice between fs and gs
+bind(f xs)          ; flatMap: sequence computations
+
+;; Syntactic sugar
+do-backtrack
+  def x goal1()
+  def y goal2(x)
+  return(list(x y))
 ```
 
 ## Performance Considerations

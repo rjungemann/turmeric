@@ -29,8 +29,9 @@ check_line() {
     fi
 }
 
-check_line "cancel-task rejects future"      "cancelled"
+check_line "cancel-task rejects future"          "cancelled"
 check_line "task-cancelled? is false by default" "false"
+check_line "async-race returns winner (42)"      "42"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

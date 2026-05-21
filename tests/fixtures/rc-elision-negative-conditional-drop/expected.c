@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2318,27 +2321,27 @@ int main() {
             *__t1 = INT64_C(9);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * r_213 = __t2;
-            (void)r_213;
+            RcControlBlock * r_214 = __t2;
+            (void)r_214;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            struct __defer_env_4 __t6 = {.r = r_213};
+            struct __defer_env_4 __t6 = {.r = r_214};
             tur_frame_push_defer(&__frame_3, __defer_5, &__t6);
             int64_t __t7;
             int64_t __t8;
             {
-                rc_strong_increment(r_213);
-                RcControlBlock * c_214 = r_213;
-                (void)c_214;
+                rc_strong_increment(r_214);
+                RcControlBlock * c_215 = r_214;
+                (void)c_215;
                 int64_t __t9;
                 {
-                    rc_strong_decrement(c_214);
+                    rc_strong_decrement(c_215);
                     rc_free_queue_drain();
                     int64_t __t10;
                     __t10 = INT64_C(0);
-                    int64_t ignored_215 = __t10;
-                    (void)ignored_215;
-                    __t9 = ignored_215;
+                    int64_t ignored_216 = __t10;
+                    (void)ignored_216;
+                    __t9 = ignored_216;
                 }
                 int64_t __t11;
                 __t11 = INT64_C(0);

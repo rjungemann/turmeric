@@ -456,16 +456,12 @@ TuriValue turi_task_spawn(TuriEnv *env, const char *src) {
     if (cl.tag != TURI_CLOSURE)
         return turi_error("turi_task_spawn: src must evaluate to a function");
 
-    /* Build a wrapped call: "(await (async src))" won't work without Expr.
-     * Fallback: create a resolved future immediately with the closure result.
-     * Full implementation requires the eval fiber spawn from eval.c internals.
-     * Use a simple helper string: "(async (fn [] :int 0))" is a placeholder.
-     * The real spawn is done from within eval.c for the EX_ASYNC case.
-     * This C-API version just calls the closure synchronously and wraps. */
-    snprintf(buf, sizeof(buf), "%s", "(async (fn [] :void nil))");
+    /* Synchronous fallback: turi_task_spawn cannot yet spawn a real async fiber
+     * without access to the eval.c internals (EX_ASYNC path). Warn and resolve
+     * the closure result immediately as a completed future. */
+    fprintf(stderr, "warning: turi_task_spawn is running synchronously (not yet integrated with async fiber scheduler)\n");
     (void)buf;
 
-    /* Synchronous fallback: resolve immediately. */
     TuriValue result = turi_eval(env, src);
     TuriFuture *f = turi_future_new(env);
     if (turi_is_error(result))
@@ -553,7 +549,8 @@ static TuriValue native_with_timeout(TuriEnv *env, TuriValue *args, uint32_t n,
         if (turi_is_error(task->result)) return task->result;
         return turi_error("async task rejected");
     }
-    /* Timer fired first: throw a catchable "timeout" exception. */
+    /* Timer fired first: cancel the timed-out task, then throw timeout. */
+    turi_task_cancel(env, task);
     turi_native_throw(env, "timeout");
     return turi_nil();
 }
@@ -748,6 +745,52 @@ static TuriValue native_await_val(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_await_future(env, args[0].as_future);
 }
 
+/* async-race : (fa :Future, fb :Future) -> value
+ * Waits for whichever future resolves first; cancels the other. */
+static TuriValue native_async_race(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)ud;
+    if (n != 2 || args[0].tag != TURI_FUTURE || args[1].tag != TURI_FUTURE)
+        return turi_error("async-race: expected (fa :future, fb :future)");
+    TuriFuture *fa = args[0].as_future;
+    TuriFuture *fb = args[1].as_future;
+
+    /* Run scheduler until one of the futures resolves. */
+    while (fa->state == TURI_FUTURE_PENDING && fb->state == TURI_FUTURE_PENDING) {
+        fire_timers(env);
+        TuriFiber *fiber = sched_dequeue(env);
+        if (fiber) {
+            env->current_fiber = fiber;
+            fiber->state = TURI_FIBER_RUNNING;
+            g_pending_async_fiber = fiber;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+            swapcontext(&env->sched_ctx, &fiber->ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+            env->current_fiber = NULL;
+        } else {
+            poll_io(env, 5);
+            fire_timers(env);
+        }
+    }
+
+    /* Cancel the loser and return the winner's result. */
+    if (fa->state != TURI_FUTURE_PENDING) {
+        turi_task_cancel(env, fb);
+        if (fa->state == TURI_FUTURE_RESOLVED) return fa->result;
+        if (turi_is_error(fa->result)) return fa->result;
+        return turi_error("async-race: task a rejected");
+    } else {
+        turi_task_cancel(env, fa);
+        if (fb->state == TURI_FUTURE_RESOLVED) return fb->result;
+        if (turi_is_error(fb->result)) return fb->result;
+        return turi_error("async-race: task b rejected");
+    }
+}
+
 /* -------------------------------------------------------------------------
  * Registration
  * ---------------------------------------------------------------------- */
@@ -764,6 +807,7 @@ void turi_async_register_builtins(TuriEnv *env) {
     turi_env_register_native(env, "write-async",      native_write_async,    NULL);
     turi_env_register_native(env, "async-all2",       native_async_all2,     NULL);
     turi_env_register_native(env, "await-val",        native_await_val,      NULL);
+    turi_env_register_native(env, "async-race",       native_async_race,     NULL);
 }
 
 /* -------------------------------------------------------------------------

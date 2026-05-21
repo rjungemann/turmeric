@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2309,17 +2312,17 @@ static int64_t add1(int64_t x) {
 
 int main() {
         {
-            int64_t x_215 = INT64_C(5);
-            (void)x_215;
-            printf("%lld\n", (long long)(add1(x_215)));
-            printf("%lld\n", (long long)(x_215));
+            int64_t x_216 = INT64_C(5);
+            (void)x_216;
+            printf("%lld\n", (long long)(add1(x_216)));
+            printf("%lld\n", (long long)(x_216));
         }
         {
             void * __t0 = malloc(sizeof(int64_t));
             *((int64_t *)__t0) = INT64_C(9);
-            void * r_216 = __t0;
-            (void)r_216;
-            free(r_216);
+            void * r_217 = __t0;
+            (void)r_217;
+            free(r_217);
         }
         int64_t __t1;
         __t1 = INT64_C(0);

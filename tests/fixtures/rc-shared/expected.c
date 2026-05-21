@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2318,27 +2321,27 @@ int main() {
             *__t1 = INT64_C(10);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * a_213 = __t2;
-            (void)a_213;
-            rc_strong_increment(a_213);
-            RcControlBlock * b_214 = a_213;
-            (void)b_214;
-            rc_strong_increment(a_213);
-            RcControlBlock * c_215 = a_213;
-            (void)c_215;
+            RcControlBlock * a_214 = __t2;
+            (void)a_214;
+            rc_strong_increment(a_214);
+            RcControlBlock * b_215 = a_214;
+            (void)b_215;
+            rc_strong_increment(a_214);
+            RcControlBlock * c_216 = a_214;
+            (void)c_216;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            int64_t __t4 = rc_strong_count(a_213);
+            int64_t __t4 = rc_strong_count(a_214);
             printf("%lld\n", (long long)(__t4));
-            rc_strong_decrement(b_214);
+            rc_strong_decrement(b_215);
             rc_free_queue_drain();
-            int64_t __t5 = rc_strong_count(a_213);
+            int64_t __t5 = rc_strong_count(a_214);
             printf("%lld\n", (long long)(__t5));
-            rc_strong_decrement(c_215);
+            rc_strong_decrement(c_216);
             rc_free_queue_drain();
-            int64_t __t6 = rc_strong_count(a_213);
+            int64_t __t6 = rc_strong_count(a_214);
             printf("%lld\n", (long long)(__t6));
-            struct __defer_env_7 __t9 = {.a = a_213};
+            struct __defer_env_7 __t9 = {.a = a_214};
             tur_frame_push_defer(&__frame_3, __defer_8, &__t9);
             int64_t __t10;
             __t10 = INT64_C(0);

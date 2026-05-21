@@ -55,6 +55,7 @@ bool expr_is_divergent(const Expr *e) {
         case EX_RETURN:
         case EX_PANIC:
         case EX_PANIC_WITH:
+        case EX_THROW:
         case EX_DISCONTINUE:
             return true;
         case EX_DO:
@@ -84,6 +85,7 @@ bool expr_contains_return_or_throw(const Expr *e) {
         case EX_RETURN:
         case EX_PANIC:
         case EX_PANIC_WITH:
+        case EX_THROW:
             return true;
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
@@ -472,6 +474,10 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     if (b->type.kind == TY_FN) {
         return raw_name_for_binding(b);
     }
+    /* Phase M6: If c_export_name is set, use it directly (bypasses mangling and id suffix). */
+    if (b->c_export_name) {
+        return strdup(b->c_export_name);
+    }
     /* `<name>_<id>` with non-id-safe chars mangled to underscores. We append
      * the unique id so different bindings with the same source name don't
      * collide in C. */
@@ -795,10 +801,9 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
             break;
         case BS_TRANSMUTE:
-            /* transmute: type-punning with compile-time size check
-             * For v1, we assume sizes match and emit a simple cast
-             * Emit: (int64_t)arg0 */
-            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+            /* transmute: bitwise reinterpretation; size equality verified at
+             * elaboration time. Cast through the result type. */
+            buf_printf(&out, "((%s)%s)", type_c_name(e->type), arg_strs[0]);
             break;
         /* Phase U3: Unsafe primitives - unchecked array ops */
         case BS_ARRAY_GET_UNCHECKED:

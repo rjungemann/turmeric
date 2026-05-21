@@ -1,0 +1,18 @@
+;; args-defaults -- test that missing options with defaults are injected.
+
+(load "stdlib/args.tur")
+
+(defn cstr->int [s :cstr] :int
+  ```c
+  return (int64_t)(intptr_t)s;
+  ```)
+
+(defn main [] :void
+  (let [spec (args/spec-new)]
+    (args/spec-option spec "--count" "int" (cstr->int "42"))
+    (let [res (args/parse spec *args*)]
+      (println (args/get-int res "count"))
+      (args/result-free res))
+    (args/spec-free spec)))
+
+(main)

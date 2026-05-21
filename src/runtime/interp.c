@@ -85,6 +85,8 @@ void env_bind_macro(Env *e, const Symbol *name, MacroDef *macro) {
     e->count++;
 }
 
+static Form *quasiquote_expand(Env *macro_env, Form *f);
+
 /* Evaluate a Form in an environment */
 Form *interp_eval(Env *e, Form *f) {
     switch (f->tag) {
@@ -105,10 +107,12 @@ Form *interp_eval(Env *e, Form *f) {
             return f;
         }
         case F_QUASIQUOTE:
+            /* Phase 6: expand the quasiquoted form and evaluate the result */
+            return interp_eval(e, quasiquote_expand(e, f->as.list.items[0]));
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
-            /* Phase 6: quasiquote not yet implemented */
-            return f;
+            /* unquote/unquote-splicing outside quasiquote: evaluate inner form */
+            return interp_eval(e, f->as.list.items[0]);
         case F_SYM: {
             /* Look up symbol in environment */
             Form *value = env_lookup(e, f->as.sym);
@@ -147,6 +151,8 @@ Form *interp_eval(Env *e, Form *f) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations evaluate to themselves */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals are resolved at elab time */
+        case F_READER_COND:
             /* Vectors, maps, sets, C blocks, and type annotations evaluate to themselves */
             return f;
     }
@@ -209,7 +215,9 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations are passed through in quasiquote */
         case F_CONTRACT_TYPE:
-            return f; /* C blocks and type annotations are passed through */
+        /* INT-1: Reader conditionals are passed through in quasiquote */
+        case F_READER_COND:
+            return f;
         case F_QUASIQUOTE:
             /* This is the main case: expand the quasiquoted form */
             return quasiquote_expand(macro_env, f->as.list.items[0]);
@@ -238,6 +246,8 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations don't expand */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals don't expand */
+        case F_READER_COND:
             /* Atoms, quote forms, and type annotations don't expand */
             return f;
         case F_QUASIQUOTE:

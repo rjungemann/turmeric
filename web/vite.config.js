@@ -4,6 +4,16 @@
 import { defineConfig } from 'vite';
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { resolve } from 'path';
+import { readFileSync } from 'fs';
+
+const turmericVersion = readFileSync(resolve(__dirname, '../VERSION'), 'utf-8').trim();
+
+function injectVersion() {
+  return {
+    name: 'inject-version',
+    transformIndexHtml: (html) => html.replaceAll('%TURMERIC_VERSION%', turmericVersion),
+  };
+}
 
 export default defineConfig({
   base: '/',
@@ -30,5 +40,5 @@ export default defineConfig({
     port: 3000,
     host: true,
   },
-  plugins: [cloudflare()],
+  plugins: [injectVersion(), cloudflare()],
 });

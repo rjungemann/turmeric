@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2371,21 +2374,21 @@ static int64_t result_expect(void * r, const char * msg) {
 int main() {
         int64_t __t0;
         {
-            void * r1_233 = ok(INT64_C(42));
-            (void)r1_233;
+            void * r1_234 = ok(INT64_C(42));
+            (void)r1_234;
             int64_t __t1;
             {
-                void * r2_234 = err(INT64_C(7));
-                (void)r2_234;
-                puts((ok_((void *)(intptr_t)(r1_233))) ? "true" : "false");
-                puts((ok_((void *)(intptr_t)(r2_234))) ? "true" : "false");
-                puts((err_((void *)(intptr_t)(r1_233))) ? "true" : "false");
-                puts((err_((void *)(intptr_t)(r2_234))) ? "true" : "false");
-                printf("%lld\n", (long long)(ok_val((void *)(intptr_t)(r1_233))));
-                printf("%lld\n", (long long)(err_val((void *)(intptr_t)(r2_234))));
-                printf("%lld\n", (long long)(result_unwrap((void *)(intptr_t)(r1_233))));
-                printf("%lld\n", (long long)(result_unwrap_or((void *)(intptr_t)(r2_234), INT64_C(99))));
-                printf("%lld\n", (long long)(result_expect((void *)(intptr_t)(r1_233), "should not abort")));
+                void * r2_235 = err(INT64_C(7));
+                (void)r2_235;
+                puts((ok_((void *)(intptr_t)(r1_234))) ? "true" : "false");
+                puts((ok_((void *)(intptr_t)(r2_235))) ? "true" : "false");
+                puts((err_((void *)(intptr_t)(r1_234))) ? "true" : "false");
+                puts((err_((void *)(intptr_t)(r2_235))) ? "true" : "false");
+                printf("%lld\n", (long long)(ok_val((void *)(intptr_t)(r1_234))));
+                printf("%lld\n", (long long)(err_val((void *)(intptr_t)(r2_235))));
+                printf("%lld\n", (long long)(result_unwrap((void *)(intptr_t)(r1_234))));
+                printf("%lld\n", (long long)(result_unwrap_or((void *)(intptr_t)(r2_235), INT64_C(99))));
+                printf("%lld\n", (long long)(result_expect((void *)(intptr_t)(r1_234), "should not abort")));
                 int64_t __t2;
                 __t2 = INT64_C(0);
                 __t1 = __t2;

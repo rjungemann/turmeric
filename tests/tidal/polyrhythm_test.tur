@@ -141,9 +141,9 @@
 ;; ============================================================
 
 (defn test-polymeter-zero []
-  ;; Polymeter with zero ratio
-  ;; TODO: update to use (catch-unwind ...) to test that polymeter 0.0 panics
-  false)
+  (let [panicked (catch-unwind (fn [] (polymeter 0.0 (cycle 1 2))))]
+    (assert (panic? panicked) "polymeter 0.0 should panic")
+    true))
 
 (defn test-polymeter-negative []
   ;; Polymeter with negative ratio

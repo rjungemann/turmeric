@@ -1,0 +1,117 @@
+; Phase SZ3: FFI integration -- sized types map to C array and struct layouts.
+;
+; Demonstrates how SizedBuf and SizedMatrix serve as the Turmeric-side
+; representation of fixed-size C arrays and structs, with size annotations
+; carried through the type system.
+;
+; Pattern:
+;   - A C function that returns a struct pointer is wrapped by a Turmeric
+;     defn marked #{Unsafe} whose return type is :int (opaque pointer).
+;   - Size information is extracted via sized-buf-size / sized-matrix-size.
+;   - size-assert-eq! / require-msg! enforce the expected shape at the
+;     Turmeric call site before the pointer is passed further into C code.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-eval [s :Size] :int
+  (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
+            (Mul a b) (* (size-eval a) (size-eval b))))
+
+; ===== Simulated C structs =====
+
+; ffi-point-new: wraps a C struct { int64_t x; int64_t y; } (2-element array layout)
+(defn ffi-point-new [x y] #{Unsafe} :int
+  ```c
+  int64_t *pt = (int64_t *)malloc(2 * sizeof(int64_t));
+  pt[0] = x;
+  pt[1] = y;
+  return (int64_t)(intptr_t)pt;
+  ```)
+
+(defn ffi-point-free [pt] #{Unsafe} :nil
+  ```c
+  free((void*)(intptr_t)pt);
+  ```)
+
+(defn ffi-point-x [pt] #{Unsafe} :int
+  ```c return ((int64_t *)(intptr_t)pt)[0]; ```)
+
+(defn ffi-point-y [pt] #{Unsafe} :int
+  ```c return ((int64_t *)(intptr_t)pt)[1]; ```)
+
+; ffi-point-size: size annotation -- a point is always 2 elements
+(defn ffi-point-size [] :Size (Static 2))
+
+; ffi-array-new: wraps C int64_t[n] with an explicit size annotation
+(defn ffi-array-new [n] #{Unsafe} :int
+  ```c
+  struct { int64_t len; int64_t *data; } *a = malloc(sizeof(*a));
+  a->len  = n;
+  a->data = (int64_t *)calloc((size_t)n, sizeof(int64_t));
+  return (int64_t)(intptr_t)a;
+  ```)
+
+(defn ffi-array-free [a] #{Unsafe} :nil
+  ```c
+  struct { int64_t len; int64_t *data; } *arr = (void*)(intptr_t)a;
+  free(arr->data); free(arr);
+  ```)
+
+(defn ffi-array-len [a] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t len; int64_t *data; } *)(intptr_t)a)->len;
+  ```)
+
+(defn ffi-array-size [a] #{Unsafe} :Size
+  ```c
+  return ctor_Static(((struct { int64_t len; int64_t *data; } *)(intptr_t)a)->len);
+  ```)
+
+(defn ffi-array-get [a i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; int64_t *data; } *arr = (void*)(intptr_t)a;
+  return arr->data[i];
+  ```)
+
+(defn ffi-array-set! [a i v] #{Unsafe} :int
+  ```c
+  struct { int64_t len; int64_t *data; } *arr = (void*)(intptr_t)a;
+  arr->data[i] = v; return a;
+  ```)
+
+; ffi-struct-field-count: returns number of fields in a fixed-layout struct
+; (demonstrated as a compile-time constant carried as a Size)
+(defn ffi-struct-field-count [n] :Size (Static n))
+
+; ===== Demonstration =====
+
+(defn main [] :int
+  ; Point struct: 2 fields, size annotation is Static 2
+  (let [pt (unsafe (ffi-point-new 10 20))]
+    (println (unsafe (ffi-point-x pt)))
+    (println (unsafe (ffi-point-y pt)))
+    ; Size annotation: ffi-point-size = Static 2
+    (println (size-eval (ffi-point-size)))
+    (unsafe (ffi-point-free pt)))
+
+  ; Fixed-size C array with size annotation
+  (let [arr (unsafe (ffi-array-new 5))]
+    (unsafe (ffi-array-set! arr 0 100))
+    (unsafe (ffi-array-set! arr 4 200))
+    (println (unsafe (ffi-array-len arr)))
+    (println (size-eval (unsafe (ffi-array-size arr))))
+    (println (unsafe (ffi-array-get arr 0)))
+    (println (unsafe (ffi-array-get arr 4)))
+    ; Verify size annotation matches static expectation
+    (require-msg!
+      (= (size-eval (unsafe (ffi-array-size arr))) 5)
+      "ffi: unexpected array size")
+    (println 1)
+    (unsafe (ffi-array-free arr)))
+
+  ; Struct field count annotation
+  (println (size-eval (ffi-struct-field-count 3)))
+  0)

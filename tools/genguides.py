@@ -79,6 +79,48 @@ SIDEBAR_TOGGLE_JS = '''\
     });
   </script>'''
 
+SYNTAX_TOGGLE_JS = '''\
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>'''
+
 TURMERIC_HIGHLIGHT_JS = '''\
   <script>
   (function(){
@@ -139,7 +181,7 @@ TURMERIC_HIGHLIGHT_JS = '''\
       }
       return out;
     }
-    document.querySelectorAll('pre code.language-turmeric').forEach(function(el){
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
       el.innerHTML=hl(el.textContent);
     });
   })();
@@ -165,7 +207,49 @@ GUIDE_CSS = '''\
     .hl-string  { color:#D9735A; }
     .hl-number  { color:#A8C98A; }
     .hl-keyword { color:#EFA030; font-weight:bold; }
-    .hl-type    { color:#7AC4B8; }'''
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-card); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"JetBrains Mono","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--faint); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--cream); }
+    .seg-btn.active { color:var(--gold); background:var(--highlight); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }'''
+
+
+def inject_syntax_toggles(body_html: str) -> str:
+    """Wrap adjacent turmeric+sweet-exp block pairs in a syntax-toggle widget."""
+    pattern = re.compile(
+        r'(<pre><code class="language-turmeric">.*?</code></pre>)'
+        r'(\s*)'
+        r'(<pre><code class="language-sweet-exp">.*?</code></pre>)',
+        re.DOTALL,
+    )
+
+    def wrap_pair(m: re.Match) -> str:
+        tur_block = m.group(1)
+        sweet_block = m.group(3)
+        return (
+            '<div class="code-card code-toggle">'
+            '<div class="code-card-bar">'
+            '<div class="code-syntax-toggle" role="tablist">'
+            '<button class="seg-btn active" data-syntax="turmeric"'
+            ' role="tab" aria-selected="true">turmeric</button>'
+            '<button class="seg-btn" data-syntax="sweet-exp"'
+            ' role="tab" aria-selected="false">sweet-exp</button>'
+            '</div>'
+            '</div>'
+            '<div class="code-card-body">'
+            f'<div class="code-version turmeric-version" role="tabpanel">{tur_block}</div>'
+            f'<div class="code-version sweet-exp-version" role="tabpanel"'
+            f' style="display:none">{sweet_block}</div>'
+            '</div>'
+            '</div>'
+        )
+
+    return pattern.sub(wrap_pair, body_html)
 
 
 def toc_tokens_to_sidebar(tokens: list) -> str:
@@ -204,6 +288,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
                             extension_configs={'toc': {'permalink': False}})
     body_html = conv.convert(text)
+    body_html = inject_syntax_toggles(body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     fm_title = meta.get('title', '').strip() if meta else ''
@@ -247,6 +332,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/{stem}.md</code>
   </footer>
 {TURMERIC_HIGHLIGHT_JS}
+{SYNTAX_TOGGLE_JS}
 </body>
 </html>
 '''

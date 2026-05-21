@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2303,26 +2306,35 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     {
-        int64_t i_212 = INT64_C(1);
-        (void)i_212;
+        int64_t i_213 = INT64_C(1);
+        (void)i_213;
         while (1) {
-            if (!(((i_212) <= (INT64_C(100))))) break;
-            if (((INT64_C(0)) == (((i_212) % (INT64_C(15)))))) {
+            if (!(((i_213) <= (INT64_C(100))))) break;
+            if (((INT64_C(0)) == (((i_213) % (INT64_C(15)))))) {
                 puts("fizzbuzz");
             } else {
-                if (((INT64_C(0)) == (((i_212) % (INT64_C(3)))))) {
+                if (((INT64_C(0)) == (((i_213) % (INT64_C(3)))))) {
                     puts("fizz");
                 } else {
-                    if (((INT64_C(0)) == (((i_212) % (INT64_C(5)))))) {
+                    if (((INT64_C(0)) == (((i_213) % (INT64_C(5)))))) {
                         puts("buzz");
                     } else {
-                        printf("%lld\n", (long long)(i_212));
+                        printf("%lld\n", (long long)(i_213));
                     }
                 }
             }
-            i_212 = ((i_212) + (INT64_C(1)));
+            i_213 = ((i_213) + (INT64_C(1)));
         }
     }
     return 0;

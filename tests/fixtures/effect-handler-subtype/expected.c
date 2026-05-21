@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2314,11 +2317,11 @@ static int64_t compute() {
 
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * s_214 = (const char *)__effect_args[0];
-    int64_t k_215 = __k;
-    puts(s_214);
+    const char * s_215 = (const char *)__effect_args[0];
+    int64_t k_216 = __k;
+    puts(s_215);
     int64_t __t5;
-    int64_t __t6 = tur_effect_cont_resume((int64_t)(intptr_t)k_215, (int64_t)0);
+    int64_t __t6 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)0);
     __t5 = __t6;
     return (int64_t)__t5;
 }
@@ -2378,9 +2381,9 @@ int main() {
             __fiber_3->effect_handler_chain = &__eff_frame_3;
             int64_t __t7 = (int64_t)__dispatch_3(&__cap_3, (int64_t)(intptr_t)__fiber_3, 0);
             if (__fiber_3->done) { free(__fiber_3->stack); free(__fiber_3); }
-            int64_t r_216 = __t7;
-            (void)r_216;
-            printf("%lld\n", (long long)(r_216));
+            int64_t r_217 = __t7;
+            (void)r_217;
+            printf("%lld\n", (long long)(r_217));
             int64_t __t8;
             __t8 = INT64_C(0);
             __t2 = __t8;

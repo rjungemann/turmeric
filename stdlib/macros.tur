@@ -5,7 +5,7 @@
 ;; below remain visible globally just like in pre-module code.
 
 (defmodule tur/macros
-  (export cond when unless must! must-msg! ignore! do-m for doc
+  (export cond when unless must! must-msg! ignore! do-m for doc as->
           assert! assert-msg! require! require-msg!
           ensure! ensure-msg! invariant! invariant-msg!
           curry with-resource must-use)
@@ -399,4 +399,46 @@
 ;;; Since: ST3
 (defmacro must-use [expr]
   (list let (vec (quote ^relevant) (quote __must_use_val) expr) __must_use_val))
+
+;;; as-> -- thread a value through a pipeline of transformations, naming it at each step.
+;;;
+;;; Parameters:
+;;;   expr -- the initial value
+;;;   name -- the symbol to bind to the threaded value
+;;;   & forms -- alternating transformation/name pairs; the last form is the final expression
+;;;
+;;; Returns:
+;;;   The result of the final expression after threading through all transformations.
+;;;
+;;; Example:
+;;;   (as-> 42 x
+;;;     (* x 2) y
+;;;     (+ y 10))  ; => 94
+;;;
+;;; Since: Phase M8
+(defmacro as-> [expr name & forms]
+  (if (empty? forms)
+    expr
+    (let [next-form (first forms)
+          next-name (if (< (count forms) 2) name (second forms))
+          remaining-forms (if (< (count forms) 2) (rest forms) (rest (rest forms)))]
+      `(let [~next-name ~next-form]
+         (as-> ~next-name ~next-name ~@remaining-forms)))))
+
+;;; dot -- transform (. thing method args...) into (.method thing args...).
+;;;
+;;; Parameters:
+;;;   thing  -- the object or value on which the method is called
+;;;   method -- the method name
+;;;   & args -- arguments to pass to the method
+;;;
+;;; Returns:
+;;;   The transformed expression (.method thing args...).
+;;;
+;;; Example:
+;;;   (. my-vec push 42)  ; => (.push my-vec 42)
+;;;
+;;; Since: Phase M8
+(defmacro dot [thing method & args]
+  (cons (list '. method) (cons thing args)))
 )

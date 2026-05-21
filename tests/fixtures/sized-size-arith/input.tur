@@ -1,0 +1,36 @@
+; Phase SZ0: Size -- arithmetic expressions over compile-time sizes.
+; Exercises size-static, size-add, size-mul, and size-eval.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-static [n :int] :Size (Static n))
+(defn size-add [s1 :Size s2 :Size] :Size (Add s1 s2))
+(defn size-mul [s1 :Size s2 :Size] :Size (Mul s1 s2))
+
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)   n
+    (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
+    (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
+
+(defn main [] :int
+  ; literal: 0, 1, 8
+  (println (size-eval (size-static 0)))
+  (println (size-eval (size-static 1)))
+  (println (size-eval (size-static 8)))
+  ; add: 3 + 4 = 7
+  (println (size-eval (size-add (size-static 3) (size-static 4))))
+  ; mul: 3 * 4 = 12
+  (println (size-eval (size-mul (size-static 3) (size-static 4))))
+  ; compound: 2 + (3 * 4) = 14
+  (println (size-eval (size-add (size-static 2) (size-mul (size-static 3) (size-static 4)))))
+  ; compound: (2 + 3) * 4 = 20
+  (println (size-eval (size-mul (size-add (size-static 2) (size-static 3)) (size-static 4))))
+  ; deeply nested: (1 + 2) * (3 + 4) = 21
+  (println (size-eval (size-mul
+              (size-add (size-static 1) (size-static 2))
+              (size-add (size-static 3) (size-static 4)))))
+  0)

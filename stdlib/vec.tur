@@ -476,3 +476,71 @@
     snprintf(buf + off, (int)(total + 1) - off, "]");
     return (const char *)(intptr_t)buf;
     ```))
+;;; vec-sort! -- sort the elements of a vec in ascending order (in-place).
+;;;
+;;; Parameters:
+;;;   v -- vec pointer (as :int / int64_t)
+;;;
+;;; Returns:
+;;;   :nil
+;;;
+;;; Example:
+;;;   (vec-sort! my-vec)
+;;;
+;;; Since: Phase B2
+(defn vec-sort! [v] :nil
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (!vec || vec->len < 2) return;
+  static int cmp_i64(const void *a, const void *b) {
+      int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+      return (x > y) - (x < y);
+  }
+  qsort(vec->data, vec->len, sizeof(int64_t), cmp_i64);
+  ```)
+
+;;; vec-set! -- write val to the element at index i (bounds-checked).
+;;;
+;;; Parameters:
+;;;   v   -- vec pointer (as :int / int64_t)
+;;;   i   -- zero-based index
+;;;   val -- value to write
+;;;
+;;; Returns:
+;;;   :nil
+;;;
+;;; Example:
+;;;   (vec-set! my-vec 0 42)
+;;;
+;;; Since: Phase B1
+(defn vec-set! [v :int i :int val :int] #{Unsafe} :nil
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (vec && i >= 0 && (size_t)i < vec->len) vec->data[i] = val;
+  ```)
+
+;;; vec-new-filled -- create a vec of size n with all elements initialised to val.
+;;;
+;;; Parameters:
+;;;   n   -- number of elements
+;;;   val -- initial value for every element
+;;;
+;;; Returns:
+;;;   Pointer to the new vec.
+;;;
+;;; Example:
+;;;   (vec-new-filled 10 0)  ; => vec of ten zeros
+;;;
+;;; Since: Phase B1
+(defn vec-new-filled [n :int val :int] #{Unsafe} :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+  v->len = (size_t)n;
+  v->cap = (size_t)n;
+  v->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
+  for (size_t i = 0; i < (size_t)n; i++) v->data[i] = val;
+  return (int64_t)(intptr_t)v;
+  ```)

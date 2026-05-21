@@ -4,6 +4,7 @@
 #include "io.h"
 #include "timer_wheel.h"
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -538,16 +539,19 @@ static void scheduler_mt_poll_io(TurSchedulerMT *s, int timeout_ms) {
 /* The full integration would require modifying threadpool.tur to use the scheduler */
 
 TurSchedulerMT *tur_scheduler_mt_from_threadpool(void *threadpool) {
-    /* In a full integration, ThreadPoolBlock would contain a TurSchedulerMT pointer */
-    /* For now, return the current scheduler */
+    /* SCH-003: ThreadPool-to-scheduler mapping not yet integrated. */
     (void)threadpool;
-    return tur_current_scheduler_mt;
+    fprintf(stderr, "tur_scheduler_mt_from_threadpool: not yet integrated (SCH-003)\n");
+    abort();
+    return NULL;
 }
 
 void tur_scheduler_mt_set_for_threadpool(void *threadpool, TurSchedulerMT *s) {
-    /* In a full integration, we would store s in threadpool */
+    /* SCH-003: ThreadPool-to-scheduler mapping not yet integrated. */
     (void)threadpool;
-    tur_current_scheduler_mt = s;
+    (void)s;
+    fprintf(stderr, "tur_scheduler_mt_set_for_threadpool: not yet integrated (SCH-003)\n");
+    abort();
 }
 
 /* SCH-006: Performance metrics implementation */

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2312,25 +2315,25 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 int main() {
         {
-            int64_t x_213 = INT64_C(1);
-            (void)x_213;
-            int64_t y_214 = x_213;
-            (void)y_214;
-            printf("%lld\n", (long long)(x_213));
-            printf("%lld\n", (long long)(y_214));
+            int64_t x_214 = INT64_C(1);
+            (void)x_214;
+            int64_t y_215 = x_214;
+            (void)y_215;
+            printf("%lld\n", (long long)(x_214));
+            printf("%lld\n", (long long)(y_215));
         }
         {
             void * __t0 = malloc(sizeof(int64_t));
             *((int64_t *)__t0) = INT64_C(4);
-            void * r_215 = __t0;
-            (void)r_215;
-            void * s_216 = r_215;
-            (void)s_216;
+            void * r_216 = __t0;
+            (void)r_216;
+            void * s_217 = r_216;
+            (void)s_217;
             tur_frame __frame_1;
             tur_frame_init(&__frame_1, NULL);
-            int64_t __t2 = *((int64_t *)s_216);
+            int64_t __t2 = *((int64_t *)s_217);
             printf("%lld\n", (long long)(__t2));
-            struct __defer_env_3 __t5 = {.s = s_216};
+            struct __defer_env_3 __t5 = {.s = s_217};
             tur_frame_push_defer(&__frame_1, __defer_4, &__t5);
             tur_frame_fire_lifo(&__frame_1);
         }

@@ -1,0 +1,60 @@
+;; Phase TCO: tail call optimization tests.
+;;
+;; These functions would overflow the call stack without TCO at large N.
+;; Expected stdout (for N=100000):
+;;   100000
+;;   5000050000
+;;   done
+;;   120
+;;   0
+
+;; --- Test 1: self-tail-recursive counter ---------------------------------
+(defn count-down [n :int] :int
+  (if (<= n 0)
+    0
+    (count-down (- n 1))))
+
+(println (count-down 100000))
+
+;; --- Test 2: accumulator tail recursion (sum 1..N) -----------------------
+(defn sum-tc [n :int acc :int] :int
+  (if (<= n 0)
+    acc
+    (sum-tc (- n 1) (+ acc n))))
+
+(println (sum-tc 100000 0))
+
+;; --- Test 3: mutual tail recursion (even?/odd? with if) -----------------
+;; Uses if instead of match to avoid literal pattern matching (not yet in
+;; interpreter; see interpreter-features-plan.md §1.1).
+
+(defn even? [n :int] :bool
+  (if (= n 0)
+    true
+    (odd? (- n 1))))
+
+(defn odd? [n :int] :bool
+  (if (= n 0)
+    false
+    (even? (- n 1))))
+
+;; 1000 is even
+(println (if (even? 1000) "done" "wrong"))
+
+;; --- Test 4: tail call through let binding -------------------------------
+(defn fact-tc [n :int acc :int] :int
+  (if (<= n 1)
+    acc
+    (let [next-acc (* n acc)]
+      (fact-tc (- n 1) next-acc))))
+
+(println (fact-tc 5 1))
+
+;; --- Test 5: tail call through do block ----------------------------------
+(defn count-zero [n :int] :int
+  (do
+    (if (= n 0)
+      0
+      (count-zero (- n 1)))))
+
+(println (count-zero 100000))

@@ -33,6 +33,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,6 +74,31 @@
 #include "../passes/effect_check.h"
 
 /* -------------------------------------------------------------------------
+ * Tail-call trampoline types (eval.c-internal only; never exposed in headers)
+ * ---------------------------------------------------------------------- */
+
+/* Internal-only tag for tail-call bounce values.  Never stored in TuriEnv
+ * or returned from turi_eval().  eval_apply consumes all bounces. */
+#define TURI_TAG_TCO ((TuriTag)0x7F)
+
+typedef struct TcoFrame {
+    TuriClosure *cl;
+    TuriValue    args[64]; /* MAX_EVAL_ARGS */
+    uint32_t     n_args;
+} TcoFrame;
+
+static inline TuriValue tco_bounce(TuriClosure *cl, TuriValue *args, uint32_t n) {
+    TcoFrame *tc = (TcoFrame *)malloc(sizeof(TcoFrame));
+    tc->cl = cl;
+    tc->n_args = n;
+    memcpy(tc->args, args, n * sizeof(TuriValue));
+    TuriValue v;
+    v.tag = TURI_TAG_TCO;
+    v.as_ref = tc;
+    return v;
+}
+
+/* -------------------------------------------------------------------------
  * Internal closure representation
  * The public value.h declares TuriClosure as an opaque struct; here we
  * define it properly.
@@ -92,6 +118,9 @@ struct TuriClosure {
     bool            skip_env_param;
 };
 
+/* Forward declaration — defined after TuriStruct is fully defined below. */
+static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
+
 /* Register a native C function as a global binding in env.
  * Declared in eval.h; implemented here because TuriClosure is internal. */
 void turi_env_register_native(TuriEnv *env, const char *name,
@@ -104,6 +133,12 @@ void turi_env_register_native(TuriEnv *env, const char *name,
     turi_env_set(env, name, turi_closure(cl));
 }
 
+/* Register eval-layer native builtins (struct-aware predicates, etc.).
+ * Called from turi_env_new after async builtins are registered. */
+void turi_eval_register_builtins(TuriEnv *env) {
+    turi_env_register_native(env, "panic?", native_panic_pred, NULL);
+}
+
 /* -------------------------------------------------------------------------
  * Phase S7: Async fiber thunk
  * ---------------------------------------------------------------------- */
@@ -114,6 +149,7 @@ _Thread_local TuriFiber *g_pending_async_fiber;
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args);
+static TuriValue eval_body_tco(TuriEnv *env, EvalFrame *frame, const Expr *e);
 
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
@@ -314,6 +350,15 @@ static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fi
 
 static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
     return make_struct_val_def(name, n, fields, NULL);
+}
+
+/* panic? : (val) -> bool — true if val is the (panic) struct from catch-unwind */
+static TuriValue native_panic_pred(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n != 1) return turi_bool(false);
+    TuriValue v = args[0];
+    if (v.tag != TURI_STRUCT || !v.as_struct || !v.as_struct->name) return turi_bool(false);
+    return turi_bool(strcmp(v.as_struct->name, "panic") == 0);
 }
 
 /* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
@@ -2062,100 +2107,342 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
 }
 
 /* -------------------------------------------------------------------------
+ * eval_body_tco: tail-call-optimised body evaluator.
+ *
+ * Called from eval_apply for the function body in tail position.  Traverses
+ * control-flow expressions (if / do / let / match) without growing the C
+ * stack, and returns a TURI_TAG_TCO bounce for tail calls instead of
+ * recursing into eval_apply.  eval_apply's trampoline loop consumes bounces.
+ *
+ * Rules:
+ *  - EX_IF:    evaluate condition normally; loop on the taken branch.
+ *  - EX_DO:    evaluate all items; the absolute last item is the tail.
+ *              If the last item is EX_DEFER, evaluate it normally and return.
+ *  - EX_LET:   bind variables normally; loop on the body.
+ *  - EX_MATCH: find the matching arm; loop on the arm body.
+ *  - EX_CALL:  evaluate fn + args normally; return a TCO bounce.
+ *  - everything else: fall through to eval_expr (non-tail).
+ * ---------------------------------------------------------------------- */
+static TuriValue eval_body_tco(TuriEnv *env, EvalFrame *frame, const Expr *e) {
+restart:
+    if (!e)              return turi_nil();
+    if (env->returning)  return env->return_value;
+    if (env->throwing)   return env->throw_value;
+
+    switch (e->kind) {
+
+    /* --- if: tail on both branches --------------------------------------- */
+    case EX_IF: {
+        TuriValue cond = eval_expr(env, frame, e->as.if_.cond);
+        if (turi_is_error(cond) || env->returning || env->throwing) return cond;
+        if (turi_is_truthy(cond)) {
+            e = e->as.if_.then_; goto restart;
+        } else if (e->as.if_.else_or_null) {
+            e = e->as.if_.else_or_null; goto restart;
+        }
+        return turi_nil();
+    }
+
+    /* --- do / program: tail on last non-defer item ----------------------- */
+    case EX_DO:
+    case EX_PROGRAM: {
+        Expr   **items = (e->kind == EX_PROGRAM) ? e->as.program.items
+                                                  : e->as.do_.items;
+        uint32_t n     = (e->kind == EX_PROGRAM) ? e->as.program.n
+                                                  : e->as.do_.n;
+        if (n == 0) return turi_nil();
+        /* Evaluate all items except the last non-defer one. */
+        uint32_t tail_idx = n - 1;
+        /* Scan back to find the last non-DEFER item. */
+        while (tail_idx > 0 && items[tail_idx]->kind == EX_DEFER)
+            tail_idx--;
+        /* Evaluate items before the tail. */
+        for (uint32_t i = 0; i < tail_idx; i++) {
+            TuriValue v = eval_expr(env, frame, items[i]);
+            if (turi_is_error(v) || env->returning || env->throwing) return v;
+        }
+        if (tail_idx + 1 < n) {
+            /* Trailing EX_DEFER items exist after the tail expression.
+             * Evaluate the tail normally (no TCO) so defers fire correctly. */
+            TuriValue result = eval_expr(env, frame, items[tail_idx]);
+            if (turi_is_error(result) || env->returning || env->throwing)
+                return result;
+            for (uint32_t i = tail_idx + 1; i < n; i++)
+                eval_expr(env, frame, items[i]);
+            return result;
+        }
+        e = items[tail_idx];
+        goto restart;
+    }
+
+    /* --- let: bind variables, tail on body ------------------------------- */
+    case EX_LET: {
+        EvalFrame *new_frame = eval_frame_new(frame);
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
+            if (turi_is_error(v)) { return v; }
+            if (env->throwing)   { return env->throw_value; }
+            if (env->returning)  { return env->return_value; }
+            frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name, v);
+        }
+        /* Move into let scope and loop on the body.
+         * RC-cleanup defers for let bindings are no-ops in the interpreter
+         * so firing them early (via the trampoline's defer mark) is harmless. */
+        frame = new_frame;
+        e     = e->as.let_.body;
+        goto restart;
+    }
+
+    /* --- match: find arm, tail on arm body ------------------------------ */
+    case EX_MATCH: {
+        TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
+        if (turi_is_error(val) || env->returning || env->throwing) return val;
+
+        MatchArm  *arms   = e->as.match_.arms;
+        uint32_t   n_arms = e->as.match_.n_arms;
+
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            MatchArm    *arm = &arms[ai];
+            MatchPattern *pat = &arm->pattern;
+            bool matched = false;
+            EvalFrame *arm_frame = NULL;
+
+            if (pat->is_wildcard) {
+                matched   = true;
+                arm_frame = eval_frame_new(frame);
+            } else if (pat->is_var && pat->union_member_idx >= 0) {
+                bool tag_ok = false;
+                if (pat->n_bindings >= 1 && pat->bindings[0]) {
+                    TypeKind tk = pat->bindings[0]->type.kind;
+                    switch (tk) {
+                    case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                        tag_ok = (val.tag == TURI_INT); break;
+                    case TY_BOOL: tag_ok = (val.tag == TURI_BOOL); break;
+                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                        tag_ok = (val.tag == TURI_FLOAT); break;
+                    case TY_CSTR: tag_ok = (val.tag == TURI_CSTR); break;
+                    case TY_NIL:  tag_ok = (val.tag == TURI_NIL); break;
+                    default:
+                        tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE);
+                        break;
+                    }
+                } else {
+                    tag_ok = true;
+                }
+                if (tag_ok) {
+                    matched   = true;
+                    arm_frame = eval_frame_new(frame);
+                    if (pat->var_sym)
+                        frame_bind(arm_frame, pat->var_sym->name, val);
+                }
+            } else if (pat->is_literal) {
+                switch (pat->lit_kind) {
+                case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
+                case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
+                case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
+                case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
+                                         strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
+                case F_NIL:   matched = (val.tag == TURI_NIL); break;
+                default: break;
+                }
+                if (matched) arm_frame = eval_frame_new(frame);
+            } else if (pat->is_literal) {
+                switch (pat->lit_kind) {
+                case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
+                case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
+                case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
+                case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
+                                         strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
+                case F_NIL:   matched = (val.tag == TURI_NIL); break;
+                default: break;
+                }
+                if (matched) arm_frame = eval_frame_new(frame);
+            } else if (pat->is_var) {
+                matched   = true;
+                arm_frame = eval_frame_new(frame);
+                frame_bind(arm_frame, pat->var_sym->name, val);
+            } else {
+                CtorDef *ctor = pat->ctor;
+                if (ctor && val.tag == TURI_STRUCT &&
+                    strcmp(val.as_struct->name, ctor->name) == 0) {
+                    matched   = true;
+                    arm_frame = eval_frame_new(frame);
+                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                        Binding *b = pat->bindings[bi];
+                        if (b && bi < val.as_struct->n_fields)
+                            frame_bind(arm_frame, b->name->name,
+                                       val.as_struct->fields[bi]);
+                    }
+                }
+            }
+
+            if (matched) {
+                if (arm->guard) {
+                    TuriValue gv = eval_expr(env, arm_frame, arm->guard);
+                    if (turi_is_error(gv) || env->returning || env->throwing) {
+                        return gv;
+                    }
+                    if (gv.tag != TURI_BOOL || !gv.as_bool) {
+                        continue; /* guard failed */
+                    }
+                }
+                frame = arm_frame;
+                e     = arm->body;
+                goto restart;
+            }
+        }
+        return turi_error("eval: match: no arm matched");
+    }
+
+    /* --- call: return a TCO bounce instead of recursing into eval_apply -- */
+    case EX_CALL: {
+        TuriValue fn_val;
+        if (e->as.call_.fn_binding) {
+            fn_val = eval_lookup(env, frame, e->as.call_.fn_binding->name->name);
+        } else if (e->as.call_.fn_expr) {
+            fn_val = eval_expr(env, frame, e->as.call_.fn_expr);
+        } else {
+            return turi_error("eval: call with no function");
+        }
+        if (turi_is_error(fn_val) || env->returning || env->throwing) return fn_val;
+        if (fn_val.tag != TURI_CLOSURE)
+            return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
+
+        TuriClosure *tcl = fn_val.as_closure;
+
+        TuriValue tco_args[64]; /* MAX_EVAL_ARGS */
+        uint32_t  n_args = e->as.call_.n_args;
+        if (n_args > 64)
+            return turi_errorf("eval: too many call arguments (%u)", n_args);
+        for (uint32_t i = 0; i < n_args; i++) {
+            tco_args[i] = eval_expr(env, frame, e->as.call_.args[i]);
+            if (turi_is_error(tco_args[i]) || env->returning || env->throwing)
+                return tco_args[i];
+        }
+
+        /* Native functions can't participate in the trampoline -- call directly. */
+        if (tcl->native)
+            return tcl->native(env, tco_args, n_args, tcl->native_ud);
+
+        return tco_bounce(tcl, tco_args, n_args);
+    }
+
+    /* --- everything else: evaluate normally (non-tail) ------------------- */
+    default:
+        return eval_expr(env, frame, e);
+    }
+}
+
+/* -------------------------------------------------------------------------
  * Function application
  * ---------------------------------------------------------------------- */
 
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
-    /* Phase S7: native function dispatch */
-    if (cl->native) {
-        return cl->native(env, args, n_args, cl->native_ud);
-    }
+    /* TCO trampoline: loops instead of growing the C call stack for tail calls.
+     * Work area for args copied across iterations. */
+    TuriValue args_buf[64]; /* MAX_EVAL_ARGS */
+    if (args && n_args > 0 && args != args_buf)
+        memcpy(args_buf, args, n_args * sizeof(TuriValue));
+    args = args_buf;
 
-    FnDef *fn = (FnDef *)cl->fn;
-    /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
-    uint32_t param_offset = cl->skip_env_param ? 1u : 0u;
-    uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
-    if (effective_params != n_args) {
-        return turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
-                           fn->binding ? fn->binding->name->name : "<fn>",
-                           (unsigned)effective_params, (unsigned)n_args);
-    }
+    for (;;) {
+        /* Phase S7: native function dispatch -- no TCO for natives. */
+        if (cl->native)
+            return cl->native(env, args, n_args, cl->native_ud);
 
-    /* If the function body is inline-C, check if a native override was registered
-     * under the function's binding name. This allows the worker to override
-     * stdlib functions whose inline-C bodies would otherwise return nil. */
-    if (fn->body && fn->body->kind == EX_INLINE_C && fn->binding) {
-        const char *fname = fn->binding->name->name;
-        TuriValue native_v = turi_env_get(env, fname);
-        if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
-            native_v.as_closure->native) {
-            return native_v.as_closure->native(env, args, n_args,
-                                               native_v.as_closure->native_ud);
+        FnDef *fn = (FnDef *)cl->fn;
+        /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
+        uint32_t param_offset    = cl->skip_env_param ? 1u : 0u;
+        uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
+        if (effective_params != n_args) {
+            return turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
+                               fn->binding ? fn->binding->name->name : "<fn>",
+                               (unsigned)effective_params, (unsigned)n_args);
         }
-    }
 
-    /* Try the inline-C pattern executor for all inline-C functions. */
-    if (fn->body && fn->body->kind == EX_INLINE_C) {
-        InlineC *ic = fn->body->as.inline_c_.inline_c;
-        const char *body = ic->code.p;
-        size_t blen = (size_t)ic->code.len;
-        /* Build a null-terminated copy of the body for strstr/pattern matching. */
-        char *body_copy = NULL;
-        if (body && blen > 0) {
-            body_copy = (char*)malloc(blen + 1);
-            if (body_copy) { memcpy(body_copy, body, blen); body_copy[blen] = '\0'; }
+        /* Native override for inline-C functions (registered by worker/stdlib). */
+        if (fn->body && fn->body->kind == EX_INLINE_C && fn->binding) {
+            const char *fname = fn->binding->name->name;
+            TuriValue native_v = turi_env_get(env, fname);
+            if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
+                native_v.as_closure->native) {
+                return native_v.as_closure->native(env, args, n_args,
+                                                   native_v.as_closure->native_ud);
+            }
         }
-        if (body_copy) {
-            TuriValue inline_result;
-            bool handled = try_exec_simple_inline_c(env, body_copy, blen,
-                                                     args, n_args, fn,
-                                                     param_offset, &inline_result);
-            free(body_copy);
-            if (handled) return inline_result;
+
+        /* Inline-C pattern executor. */
+        if (fn->body && fn->body->kind == EX_INLINE_C) {
+            InlineC *ic = fn->body->as.inline_c_.inline_c;
+            const char *body = ic->code.p;
+            size_t blen = (size_t)ic->code.len;
+            char *body_copy = NULL;
+            if (body && blen > 0) {
+                body_copy = (char*)malloc(blen + 1);
+                if (body_copy) { memcpy(body_copy, body, blen); body_copy[blen] = '\0'; }
+            }
+            if (body_copy) {
+                TuriValue inline_result;
+                bool handled = try_exec_simple_inline_c(env, body_copy, blen,
+                                                         args, n_args, fn,
+                                                         param_offset, &inline_result);
+                free(body_copy);
+                if (handled) return inline_result;
+            }
         }
+
+        /* Build call frame on top of the captured environment. */
+        EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
+        for (uint32_t i = 0; i < n_args; i++)
+            frame_bind(call_frame, fn->params[param_offset + i]->name->name, args[i]);
+
+        /* Mark defer stack; defers registered in this call fire before we
+         * either return a value or jump to the next tail-call iteration. */
+        DeferItem *defer_mark   = (DeferItem *)env->defer_stack;
+        bool       was_returning = env->returning;
+        bool       was_no_unwind = env->in_no_unwind;
+        env->returning    = false;
+        env->in_no_unwind = fn->binding && fn->binding->no_unwind;
+
+        /* Evaluate body with TCO support. */
+        TuriValue result = eval_body_tco(env, call_frame, fn->body);
+
+        env->in_no_unwind = was_no_unwind;
+
+        /* Fire defers accumulated in this call iteration (LIFO). */
+        fire_defers_to_mark_reversed(env, defer_mark, NULL);
+
+        /* --- Trampoline: bounce to next tail call -------------------------- */
+        if (result.tag == TURI_TAG_TCO) {
+            TcoFrame *tc = (TcoFrame *)result.as_ref;
+            cl     = tc->cl;
+            n_args = tc->n_args;
+            memcpy(args_buf, tc->args, n_args * sizeof(TuriValue));
+            free(tc);
+            /* env->returning was cleared at start of this iteration; clear
+             * again in case the TCO body set it (shouldn't happen, but safe). */
+            env->returning = false;
+            continue; /* loop -- no C stack growth */
+        }
+
+        /* --- Normal return ------------------------------------------------ */
+        TuriValue ret;
+        if (env->returning) {
+            ret            = env->return_value;
+            env->returning = was_returning;
+        } else if (env->throwing) {
+            ret = env->throw_value;
+        } else {
+            ret = result;
+        }
+
+        /* Do NOT free call_frame: closures may have captured it.  The
+         * interpreter runs in a short-lived worker process; leaking is fine. */
+        (void)call_frame;
+        return ret;
     }
-
-    /* Build call frame on top of the captured environment */
-    EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
-    for (uint32_t i = 0; i < n_args; i++) {
-        frame_bind(call_frame, fn->params[param_offset + i]->name->name, args[i]);
-    }
-
-    /* Mark the defer stack; defers registered during this call fire on exit. */
-    DeferItem *defer_mark = (DeferItem *)env->defer_stack;
-
-    /* Evaluate the body; handle early-return and throw signals. */
-    bool was_returning   = env->returning;
-    bool was_no_unwind   = env->in_no_unwind;
-    env->returning       = false;
-    env->in_no_unwind    = fn->binding && fn->binding->no_unwind;
-
-    TuriValue result = eval_expr(env, call_frame, fn->body);
-
-    env->in_no_unwind = was_no_unwind;
-
-    /* Fire defers in outer-first (reversed) order to match compiled
-     * tur_frame_fire_chain semantics on early-return and normal exit. */
-    fire_defers_to_mark_reversed(env, defer_mark, NULL);
-
-    TuriValue ret;
-    if (env->returning) {
-        ret = env->return_value;
-        env->returning = was_returning; /* restore caller's return state */
-    } else if (env->throwing) {
-        /* Throw propagates through function calls; leave env->throwing set. */
-        ret = env->throw_value;
-    } else {
-        ret = result;
-    }
-
-    /* Do NOT free call_frame here: closures created in this call may have
-     * captured it.  Since the interpreter runs in a short-lived worker process
-     * (one fixture per fork), leaking call frames is acceptable — the process
-     * exits immediately after each fixture evaluation. */
-    (void)call_frame;
-    return ret;
 }
 
 /* -------------------------------------------------------------------------
@@ -2297,6 +2584,24 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         uint32_t  n = e->as.builtin.n;
         if (n > MAX_EVAL_ARGS)
             return turi_errorf("eval: too many builtin arguments (%u)", n);
+
+        /* and/or must short-circuit before evaluating remaining args. */
+        if (e->as.builtin.spec->shape == BS_AND_SC) {
+            for (uint32_t i = 0; i < n; i++) {
+                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
+                if (turi_is_error(v) || env->returning || env->throwing) return v;
+                if (!turi_is_truthy(v)) return turi_bool(false);
+            }
+            return turi_bool(true);
+        }
+        if (e->as.builtin.spec->shape == BS_OR_SC) {
+            for (uint32_t i = 0; i < n; i++) {
+                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
+                if (turi_is_error(v) || env->returning || env->throwing) return v;
+                if (turi_is_truthy(v)) return turi_bool(true);
+            }
+            return turi_bool(false);
+        }
 
         for (uint32_t i = 0; i < n; i++) {
             args[i] = eval_expr(env, frame, e->as.builtin.args[i]);
@@ -2569,6 +2874,17 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     if (pat->var_sym)
                         frame_bind(arm_frame, pat->var_sym->name, val);
                 }
+            } else if (pat->is_literal) {
+                switch (pat->lit_kind) {
+                case F_INT:   matched = (val.tag == TURI_INT   && val.as_int   == pat->lit_int);   break;
+                case F_BOOL:  matched = (val.tag == TURI_BOOL  && val.as_bool  == pat->lit_bool);  break;
+                case F_FLOAT: matched = (val.tag == TURI_FLOAT && val.as_float == pat->lit_float); break;
+                case F_STR:   matched = (val.tag == TURI_CSTR  && val.as_cstr  && pat->lit_cstr &&
+                                         strcmp(val.as_cstr, pat->lit_cstr) == 0);                break;
+                case F_NIL:   matched = (val.tag == TURI_NIL); break;
+                default: break;
+                }
+                if (matched) arm_frame = eval_frame_new(frame);
             } else if (pat->is_var) {
                 matched   = true;
                 arm_frame = eval_frame_new(frame);
@@ -2748,12 +3064,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (env->sandboxed)
             return turi_error("eval: inline-C not allowed in sandboxed environment");
-        /* In non-sandboxed interpreter mode, silently return nil.
-         * Inline-C functions that return void (like contract checks) will
-         * appear to succeed; those that return values will produce nil.
-         * This lets programs using stdlib functions with inline-C bodies
-         * run through the interpreter even without native C execution. */
-        return turi_nil();
+        return turi_error("eval: inline-C not supported in interpreter mode "
+                          "(function uses native C implementation)");
 
     /* --- Phase S7: async / await ----------------------------------------- */
 
@@ -3065,7 +3377,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_nil();
     }
 
-    /* --- Phase R2: panic terminates the program ---------------------------- */
+    /* --- Phase R2: panic terminates the program (or unwinds to catch-unwind) */
     case EX_PANIC: {
         TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
         const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
@@ -3075,6 +3387,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             fflush(stderr);
             fflush(stdout);
             abort();
+        }
+        /* If a catch-unwind boundary is active, longjmp to it. */
+        if (env->catch_jmp && !env->in_no_unwind) {
+            strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
+            env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+            env->panicking = true;
+            longjmp(*env->catch_jmp, 1);
         }
         env->panicking = true;
         if (env->in_no_unwind) {
@@ -3098,12 +3417,58 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             fflush(stdout);
             abort();
         }
+        /* If a catch-unwind boundary is active, longjmp to it. */
+        if (env->catch_jmp && !env->in_no_unwind) {
+            strncpy(env->catch_panic_msg, "typed panic", sizeof(env->catch_panic_msg) - 1);
+            env->panicking = true;
+            longjmp(*env->catch_jmp, 1);
+        }
         env->panicking = true;
         fprintf(stderr, "panic at\n");
         fflush(stderr);
         fire_defers_to_mark_reversed(env, NULL, NULL);
         fflush(stdout);
         exit(1);
+    }
+
+    /* --- Phase R2: catch-unwind — catch interpreter panics at a boundary --- */
+    case EX_CATCH_UNWIND: {
+        /* Evaluate the thunk expression to get a closure value. */
+        TuriValue thunk_val = eval_expr(env, frame, e->as.catch_unwind_.thunk);
+        if (turi_is_error(thunk_val) || env->returning || env->throwing) return thunk_val;
+        if (thunk_val.tag != TURI_CLOSURE)
+            return turi_error("eval: catch-unwind: thunk must be a closure");
+
+        /* Save env state that may be clobbered by longjmp. */
+        jmp_buf  jb;
+        jmp_buf *prev_jmp       = env->catch_jmp;
+        bool     prev_returning = env->returning;
+        bool     prev_throwing  = env->throwing;
+        TuriValue prev_throw    = env->throw_value;
+        TuriValue prev_ret      = env->return_value;
+        bool     prev_panicking = env->panicking;
+        env->catch_jmp = &jb;
+
+        TuriValue result;
+        if (setjmp(jb) == 0) {
+            /* Normal execution path — call the thunk with no arguments. */
+            result = eval_apply(env, thunk_val.as_closure, NULL, 0);
+            env->catch_jmp = prev_jmp;
+            if (turi_is_error(result) || env->returning || env->throwing)
+                return result;
+            /* Wrap successful result in (ok value). */
+            return make_struct_val("ok", 1, &result);
+        } else {
+            /* A panic was caught — restore env and return (panic). */
+            env->catch_jmp    = prev_jmp;
+            env->panicking    = false;
+            env->returning    = prev_returning;
+            env->throwing     = prev_throwing;
+            env->throw_value  = prev_throw;
+            env->return_value = prev_ret;
+            (void)prev_panicking;
+            return make_struct_val("panic", 0, NULL);
+        }
     }
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
@@ -3193,15 +3558,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Phase 5: ref<T> — transparent in interpreter --------------------- */
     case EX_REF:
         return eval_expr(env, frame, e->as.ref_.expr);
-    case EX_REF_PRED:
-        return turi_bool(true); /* assume refs are valid */
+    case EX_REF_PRED: {
+        TuriValue _rpv = eval_expr(env, frame, e->as.ref_pred_.expr);
+        if (turi_is_error(_rpv) || env->returning || env->throwing) return _rpv;
+        return turi_bool(_rpv.tag != TURI_NIL);
+    }
 
     /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
     case EX_WEAK:
         return eval_expr(env, frame, e->as.weak_.expr);
-    case EX_WEAK_UPGRADE:
-        /* Simplified: always succeeds; return some(value) as struct */
-        return eval_expr(env, frame, e->as.weak_upgrade_.expr);
+    case EX_WEAK_UPGRADE: {
+        TuriValue _wuv = eval_expr(env, frame, e->as.weak_upgrade_.expr);
+        if (turi_is_error(_wuv) || env->returning || env->throwing) return _wuv;
+        /* In the interpreter all weak refs are always valid; wrap in some(value). */
+        return make_struct_val("some", 1, &_wuv);
+    }
     case EX_WEAK_PRED:
         return turi_bool(true);
 
@@ -3248,13 +3619,15 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_cstr(tname);
     }
 
-    /* serial-reset: without serial-shift inside, just evaluate body and return. */
+    /* serial-reset: Phase 21 not yet implemented in interpreter. */
     case EX_SERIAL_RESET:
-        return eval_expr(env, frame, e->as.serial_reset_.body);
+        return turi_errorf("eval: EX_SERIAL_RESET (Phase 21 serial-shift/reset) is not yet "
+                           "implemented in the interpreter");
 
-    /* --- Everything else — silently return nil --------------------------- */
+    /* --- Everything else — unimplemented expression kind ------------------ */
     default:
-        return turi_nil();
+        return turi_errorf("eval: unhandled expression kind %d "
+                           "(not yet implemented in interpreter)", (int)e->kind);
     }
 }
 

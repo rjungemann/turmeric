@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2304,7 +2307,7 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_215 = __k;
+    int64_t k_216 = __k;
     return 0;
 }
 
@@ -2312,16 +2315,16 @@ static void __handle_body_0(void);
 static void __handle_body_0(void) {
     int64_t __t2;
     {
-        void * arr_213 = malloc(INT64_C(16));
-        (void)arr_213;
-        memset(arr_213, INT64_C(0), INT64_C(16));
+        void * arr_214 = malloc(INT64_C(16));
+        (void)arr_214;
+        memset(arr_214, INT64_C(0), INT64_C(16));
         int64_t __t3;
         int64_t __t4;
         {
-            void * p_214 = (&(arr_213));
-            (void)p_214;
-            *((int64_t *)p_214) = INT64_C(42);
-            (void)(array_get((void *)(intptr_t)(p_214), INT64_C(0)));
+            void * p_215 = (&(arr_214));
+            (void)p_215;
+            *((int64_t *)p_215) = INT64_C(42);
+            (void)(array_get((void *)(intptr_t)(p_215), INT64_C(0)));
             puts("array-get succeeded");
             int64_t __t5;
             __t5 = INT64_C(0);

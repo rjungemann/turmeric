@@ -10,6 +10,8 @@ extern bool g_unsafe_warn_nested;
 extern bool g_unsafe_require_safety;
 extern bool g_unsafe_stats_enabled;
 extern bool g_lint_unsafe_enabled;
+/* U6: warn on inline-C outside #{Unsafe}-annotated functions */
+extern bool g_lint_inline_c_unsafe;
 
 /* Phase R5: panic strategy */
 extern bool g_panic_abort;
@@ -69,3 +71,6 @@ extern bool g_sessions_enabled;
 
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 extern bool g_dynvar_enabled;
+
+/* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
+extern bool g_interpret_mode;

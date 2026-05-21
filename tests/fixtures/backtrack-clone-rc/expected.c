@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2331,20 +2334,20 @@ int main() {
             *__t1 = INT64_C(42);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * r_217 = __t2;
-            (void)r_217;
-            int64_t __t3 = rc_strong_count(r_217);
+            RcControlBlock * r_218 = __t2;
+            (void)r_218;
+            int64_t __t3 = rc_strong_count(r_218);
             printf("%lld\n", (long long)(__t3));
             {
-                int64_t r2_218 = ((int64_t (*)(RcControlBlock *))(intptr_t)(dict_Clone_T_singleton.clone))(r_217);
-                (void)r2_218;
-                int64_t __t4 = rc_strong_count(r_217);
+                int64_t r2_219 = ((int64_t (*)(RcControlBlock *))(intptr_t)(dict_Clone_T_singleton.clone))(r_218);
+                (void)r2_219;
+                int64_t __t4 = rc_strong_count(r_218);
                 printf("%lld\n", (long long)(__t4));
-                rc_drop_raw(r2_218);
-                int64_t __t5 = rc_strong_count(r_217);
+                rc_drop_raw(r2_219);
+                int64_t __t5 = rc_strong_count(r_218);
                 printf("%lld\n", (long long)(__t5));
             }
-            rc_strong_decrement(r_217);
+            rc_strong_decrement(r_218);
             rc_free_queue_drain();
             int64_t __t6;
             __t6 = INT64_C(0);

@@ -305,6 +305,13 @@ Expr *elab_form(Elab *e, Form *f) {
             }
         case F_CBLOCK: {
             /* Phase 2: inline C code block ```c ... ``` */
+            /* U6: warn if inline-C appears outside an #{Unsafe}-annotated function */
+            if (g_lint_inline_c_unsafe && e->unsafe_depth == 0) {
+                diag_emit_with_code(DIAG_WARNING, f->span,
+                    TUR_W0036_INLINE_C_MISSING_UNSAFE,
+                    "inline-C block in function not annotated #{Unsafe}; "
+                    "add #{Unsafe} to the function or wrap the call site in (unsafe ...)");
+            }
             /* For now, we don't support captures, so the InlineC has no captures */
             InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
             ic->code = f->as.cblock;
@@ -333,6 +340,21 @@ Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "contract type '{ var : T | pred }' is only valid as a parameter or return type annotation");
             return NULL;
+        /* INT-1: Reader conditional -- pick :tur or :turi branch based on g_interpret_mode */
+        case F_READER_COND: {
+            Form *tur_form = NULL, *turi_form = NULL;
+            for (uint32_t i = 0; i + 1 < f->as.list.len; i += 2) {
+                Form *key = f->as.list.items[i];
+                Form *val = f->as.list.items[i + 1];
+                if (key->tag == F_KEYWORD && strcmp(key->as.sym->name, "tur") == 0)
+                    tur_form = val;
+                else if (key->tag == F_KEYWORD && strcmp(key->as.sym->name, "turi") == 0)
+                    turi_form = val;
+            }
+            Form *chosen = g_interpret_mode ? turi_form : tur_form;
+            if (!chosen) return e_nil(e, f->span);
+            return elab_form(e, chosen);
+        }
     }
     return NULL;
 }
@@ -638,6 +660,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         scope_free(&e.global);
         free(e.struct_defs);
         free(e.adt_defs);
+        free(e.forward_type_syms);
         free(e.handled_effect_names);
         free(e.macros);
         return NULL;
@@ -749,6 +772,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     scope_free(&e.global);
     free(e.struct_defs);
     free(e.adt_defs);
+    free(e.forward_type_syms);
     free(e.handled_effect_names);
     free(e.macros);
     free(e.loaded_modules); /* Phase M2 */

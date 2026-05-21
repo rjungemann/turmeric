@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2431,15 +2434,15 @@ static void join_timeout_thread(void * t) {
 int main() {
         int64_t __t0;
         {
-            void * tg_227 = tg_new();
-            (void)tg_227;
+            void * tg_228 = tg_new();
+            (void)tg_228;
             {
-                void * timeout_228 = spawn_timeout_thread((void *)(intptr_t)(tg_227), INT64_C(100));
-                (void)timeout_228;
-                tg_wait((void *)(intptr_t)(tg_227));
-                join_timeout_thread((void *)(intptr_t)(timeout_228));
+                void * timeout_229 = spawn_timeout_thread((void *)(intptr_t)(tg_228), INT64_C(100));
+                (void)timeout_229;
+                tg_wait((void *)(intptr_t)(tg_228));
+                join_timeout_thread((void *)(intptr_t)(timeout_229));
                 puts("timed out");
-                tg_free((void *)(intptr_t)(tg_227));
+                tg_free((void *)(intptr_t)(tg_228));
             }
             int64_t __t1;
             __t1 = INT64_C(0);

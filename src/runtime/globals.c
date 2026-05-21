@@ -10,6 +10,8 @@ bool g_unsafe_warn_nested = false;
 bool g_unsafe_require_safety = false;
 bool g_unsafe_stats_enabled = false;
 bool g_lint_unsafe_enabled = false;
+/* U6: warn on inline-C outside #{Unsafe}-annotated functions */
+bool g_lint_inline_c_unsafe = false;
 
 /* Phase R5: Panic strategy configuration */
 bool g_panic_abort = false;
@@ -71,3 +73,6 @@ bool g_sessions_enabled = false;
 
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 bool g_dynvar_enabled = false;
+
+/* INT-2: --interpret mode — true when running tur --interpret. */
+bool g_interpret_mode = false;

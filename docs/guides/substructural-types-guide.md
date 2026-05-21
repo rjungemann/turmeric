@@ -43,6 +43,16 @@ dropping the resource unintentionally and aliasing it are errors.
     (close-file fh)))
 ```
 
+```sweet-exp
+defn open-file  [path : cstr]             : ^linear FileHandle
+defn close-file [^linear fh : FileHandle] : unit
+
+defn copy-file [src dst : cstr] : unit
+  let [fh open-file(src)]
+    ;; fh must be consumed exactly once
+    close-file(fh)
+```
+
 Under `-Xsubstructural`, `ref<T>` bindings are automatically inferred as `^linear`
 unless another annotation is present. You must explicitly `(drop! r)` or consume
 the ref -- it will not be silently freed.
@@ -70,6 +80,24 @@ appropriate for one-shot tokens, single-use callbacks, or initialization keys.
   (initialize k))
 ```
 
+```sweet-exp
+defn initialize [^affine key : EncryptionKey] : unit
+  ...
+
+;; OK: use once
+let [^affine k generate-key()]
+  initialize(k)
+
+;; OK: discard without use (weakening allowed)
+let [^affine k generate-key()]
+  0
+
+;; ERROR TUR-E0150: affine value used more than once
+let [^affine k generate-key()]
+  initialize(k)
+  initialize(k)
+```
+
 ### `^relevant` -- use at least once
 
 Use `^relevant` for values that must be observed but may be inspected multiple times.
@@ -84,6 +112,16 @@ must not be silently discarded.
 ;; ERROR TUR-E0151: relevant value dropped without use
 (let [^relevant msg "important event"]
   0)
+```
+
+```sweet-exp
+defn log-and-store [^relevant msg : str] : unit
+  log(msg)     ;; first use (duplication OK)
+  store(msg)   ;; second use
+
+;; ERROR TUR-E0151: relevant value dropped without use
+let [^relevant msg "important event"]
+  0
 ```
 
 ---
@@ -106,6 +144,17 @@ The bound value must be used at least once before its scope exits.
   0)
 ```
 
+```sweet-exp
+;; Under -Xsubstructural:
+let [r must-use(acquire-resource())]
+  process(r)   ;; OK -- ^relevant allows duplication
+  process(r)
+
+;; ERROR TUR-E0151: relevant value 'r' dropped without use
+let [r must-use(acquire-resource())]
+  0
+```
+
 ### `(with-resource [name init] body...)`
 
 Scoped resource binding -- equivalent to `(let [name init] body...)`.
@@ -117,6 +166,12 @@ as `^linear` and must be explicitly consumed (via `(drop! name)` or a consuming 
 ;; Under -Xsubstructural:
 (with-resource [r (ref 42)]
   (drop! r))    ;; must consume the linear ref
+```
+
+```sweet-exp
+;; Under -Xsubstructural:
+with-resource [r ref(42)]
+  drop!(r)    ;; must consume the linear ref
 ```
 
 ---
@@ -150,6 +205,12 @@ annotation -- but you must explicitly consume the ref.
   0)
 ```
 
+```sweet-exp
+defn consume [r :ref] :int
+  drop!(r)
+  0
+```
+
 ### Affine vs. move semantics
 
 Turmeric's ownership model is affine by default for move types (`CK_UNIQUE`):
@@ -167,6 +228,14 @@ A `^linear` value bound inside a match arm must be consumed within that arm.
   (some v) (let [^linear r (ref v)]
              (drop! r))   ;; must consume before arm exits
   none     0)
+```
+
+```sweet-exp
+match opt
+  (some v)
+    let [^linear r ref(v)]
+      drop!(r)   ;; must consume before arm exits
+  none  0
 ```
 
 ---

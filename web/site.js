@@ -131,6 +131,7 @@ document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
 
     toggle.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn === e.target);
+      btn.setAttribute('aria-selected', btn === e.target ? 'true' : 'false');
     });
 
     // Update filename using data attributes on the filename element
@@ -144,5 +145,14 @@ document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
     card.querySelectorAll('.code-version').forEach(v => {
       v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
     });
+  });
+
+  // Arrow-key navigation within the tablist
+  toggle.addEventListener('keydown', (e) => {
+    const btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+    const idx = btns.indexOf(document.activeElement);
+    if (idx === -1) return;
+    if (e.key === 'ArrowRight') { btns[(idx + 1) % btns.length].focus(); e.preventDefault(); }
+    if (e.key === 'ArrowLeft')  { btns[(idx - 1 + btns.length) % btns.length].focus(); e.preventDefault(); }
   });
 });

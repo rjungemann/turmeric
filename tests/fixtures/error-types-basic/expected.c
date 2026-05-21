@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2391,24 +2394,24 @@ static void PermissionError_free(void * err) {
 
 int main() {
         {
-            void * ve_237 = ValidationError_("must be positive", "age");
-            (void)ve_237;
-            puts(ValidationError_message((void *)(intptr_t)(ve_237)));
-            puts(ValidationError_field((void *)(intptr_t)(ve_237)));
-            ValidationError_free((void *)(intptr_t)(ve_237));
+            void * ve_238 = ValidationError_("must be positive", "age");
+            (void)ve_238;
+            puts(ValidationError_message((void *)(intptr_t)(ve_238)));
+            puts(ValidationError_field((void *)(intptr_t)(ve_238)));
+            ValidationError_free((void *)(intptr_t)(ve_238));
         }
         {
-            void * ne_238 = NotFoundError_("config.toml");
-            (void)ne_238;
-            puts(NotFoundError_what((void *)(intptr_t)(ne_238)));
-            NotFoundError_free((void *)(intptr_t)(ne_238));
+            void * ne_239 = NotFoundError_("config.toml");
+            (void)ne_239;
+            puts(NotFoundError_what((void *)(intptr_t)(ne_239)));
+            NotFoundError_free((void *)(intptr_t)(ne_239));
         }
         {
-            void * pe_239 = PermissionError_("read denied", "/etc/shadow");
-            (void)pe_239;
-            puts(PermissionError_message((void *)(intptr_t)(pe_239)));
-            puts(PermissionError_path((void *)(intptr_t)(pe_239)));
-            PermissionError_free((void *)(intptr_t)(pe_239));
+            void * pe_240 = PermissionError_("read denied", "/etc/shadow");
+            (void)pe_240;
+            puts(PermissionError_message((void *)(intptr_t)(pe_240)));
+            puts(PermissionError_path((void *)(intptr_t)(pe_240)));
+            PermissionError_free((void *)(intptr_t)(pe_240));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

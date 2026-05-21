@@ -1,0 +1,141 @@
+;; stdlib/math.tur -- thin wrappers around libm functions.
+;;
+;; All functions forward to libc/libm and require no capabilities beyond
+;; the implicit Unsafe of their inline-C bodies.
+
+;;; sqrt -- square root of a float (double precision).
+;;;
+;;; Parameters:
+;;;   x -- non-negative float value
+;;;
+;;; Returns:
+;;;   The square root of x.
+;;;
+;;; Example:
+;;;   (sqrt 4.0)  ; => 2.0
+;;;
+;;; Since: Phase B1
+(defn sqrt [x :float] :float
+  ```c
+  double sqrt(double);
+  return sqrt(x);
+  ```)
+
+;;; fabs -- absolute value of a float.
+;;;
+;;; Parameters:
+;;;   x -- float value
+;;;
+;;; Returns:
+;;;   The absolute value of x.
+;;;
+;;; Example:
+;;;   (fabs -3.0)  ; => 3.0
+;;;
+;;; Since: Phase B1
+(defn fabs [x :float] :float
+  ```c
+  double fabs(double);
+  return fabs(x);
+  ```)
+
+;;; floor -- largest integer not greater than x.
+;;;
+;;; Parameters:
+;;;   x -- float value
+;;;
+;;; Returns:
+;;;   Floor of x as a float.
+;;;
+;;; Example:
+;;;   (floor 3.7)  ; => 3.0
+;;;
+;;; Since: Phase B1
+(defn floor [x :float] :float
+  ```c
+  double floor(double);
+  return floor(x);
+  ```)
+
+;;; ceil -- smallest integer not less than x.
+;;;
+;;; Parameters:
+;;;   x -- float value
+;;;
+;;; Returns:
+;;;   Ceiling of x as a float.
+;;;
+;;; Example:
+;;;   (ceil 3.2)  ; => 4.0
+;;;
+;;; Since: Phase B1
+(defn ceil [x :float] :float
+  ```c
+  double ceil(double);
+  return ceil(x);
+  ```)
+
+;;; pow -- x raised to the power y.
+;;;
+;;; Parameters:
+;;;   x -- base value
+;;;   y -- exponent
+;;;
+;;; Returns:
+;;;   x^y as a float.
+;;;
+;;; Example:
+;;;   (pow 2.0 10.0)  ; => 1024.0
+;;;
+;;; Since: Phase B1
+(defn pow [x :float y :float] :float
+  ```c
+  double pow(double, double);
+  return pow(x, y);
+  ```)
+
+;;; int->float -- convert an integer to a float via numeric cast.
+;;;
+;;; Parameters:
+;;;   n -- integer value
+;;;
+;;; Returns:
+;;;   The integer converted to a double-precision float.
+;;;
+;;; Example:
+;;;   (int->float 42)  ; => 42.0
+;;;
+;;; Since: Phase B1
+(defn int->float [n :int] :float
+  ```c
+  return (double)n;
+  ```)
+
+;;; float->int -- truncate a float to an integer.
+;;;
+;;; Parameters:
+;;;   x -- float value
+;;;
+;;; Returns:
+;;;   The float truncated toward zero as an int.
+;;;
+;;; Example:
+;;;   (float->int 3.9)  ; => 3
+;;;
+;;; Since: Phase B1
+(defn float->int [x :float] :int
+  ```c
+  return (int64_t)x;
+  ```)
+
+;;; printf-float6 -- print a float to stdout with 6 decimal places followed by a
+;;; newline; mirrors the output format of the C benchmarks.
+;;;
+;;; Parameters:
+;;;   x -- float value to print
+;;;
+;;; Since: Phase B1
+(defn printf-float6 [x :float] :nil
+  ```c
+  printf("%.6f\n", x);
+  ```)

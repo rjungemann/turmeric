@@ -1,0 +1,21 @@
+; Phase SZ3: Compile-time type error when passing int where Size is expected.
+;
+; sized-matrix-assert-shape! expects (Size) arguments.
+; Passing a plain int literal triggers TUR-E0001.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-eval [s :Size] :int
+  (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
+            (Mul a b) (* (size-eval a) (size-eval b))))
+
+(defn sized-matrix-assert-shape! [m er :Size ec :Size] #{Unsafe} :nil
+  (require-msg! (= 1 1) "ok"))
+
+(defn main [] :int
+  ; ERROR: 3 and 4 are int, not Size -- should produce TUR-E0001
+  (unsafe (sized-matrix-assert-shape! 0 3 4))
+  0)

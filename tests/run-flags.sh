@@ -405,6 +405,356 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# E1: --help / -h (Tier 1)
+# ---------------------------------------------------------------------------
+
+# tur --help: should print usage and exit 0
+out=$("$TUR" --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-global" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "usage:"; then
+    fail "help-global" "output did not contain 'usage:'"
+else
+    pass "help-global"
+fi
+
+# tur -h: same as --help
+out=$("$TUR" -h 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-short" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "usage:"; then
+    fail "help-short" "output did not contain 'usage:'"
+else
+    pass "help-short"
+fi
+
+# tur build --help: should print subcommand help and exit 0
+out=$("$TUR" build --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-build" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur build"; then
+    fail "help-build" "output did not mention 'tur build'"
+else
+    pass "help-build"
+fi
+
+# tur run --help: should print subcommand help and exit 0
+out=$("$TUR" run --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-run" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur run"; then
+    fail "help-run" "output did not mention 'tur run'"
+else
+    pass "help-run"
+fi
+
+# tur check --help: should print subcommand help and exit 0
+out=$("$TUR" check --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-check" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur check"; then
+    fail "help-check" "output did not mention 'tur check'"
+else
+    pass "help-check"
+fi
+
+# tur eval --help: should print subcommand help and exit 0
+out=$("$TUR" eval --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-eval" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur eval"; then
+    fail "help-eval" "output did not mention 'tur eval'"
+else
+    pass "help-eval"
+fi
+
+# tur format --help: should print subcommand help and exit 0
+out=$("$TUR" format --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-format" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur format"; then
+    fail "help-format" "output did not mention 'tur format'"
+else
+    pass "help-format"
+fi
+
+# tur test --help: should print subcommand help and exit 0
+out=$("$TUR" test --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-test" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur test"; then
+    fail "help-test" "output did not mention 'tur test'"
+else
+    pass "help-test"
+fi
+
+# tur repl --help: should print subcommand help and exit 0
+out=$("$TUR" repl --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-repl" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur repl"; then
+    fail "help-repl" "output did not mention 'tur repl'"
+else
+    pass "help-repl"
+fi
+
+# ---------------------------------------------------------------------------
+# E2: --version / -V (Tier 1)
+# ---------------------------------------------------------------------------
+
+# tur --version: should print "turmeric <version>" and exit 0
+out=$("$TUR" --version 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "version-long" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "^turmeric "; then
+    fail "version-long" "output '$out' did not start with 'turmeric '"
+else
+    pass "version-long"
+fi
+
+# tur -V: same as --version
+out=$("$TUR" -V 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "version-short" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "^turmeric "; then
+    fail "version-short" "output '$out' did not start with 'turmeric '"
+else
+    pass "version-short"
+fi
+
+# ---------------------------------------------------------------------------
+# E3: tur eval (Tier 1)
+# ---------------------------------------------------------------------------
+
+# tur eval: evaluate an arithmetic expression
+out=$("$TUR" eval "(+ 1 2)" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "eval-basic" "expected exit 0, got $rc; output: $out"
+elif [ "$out" != "3" ]; then
+    fail "eval-basic" "expected '3', got '$out'"
+else
+    pass "eval-basic"
+fi
+
+# tur eval: evaluate a comparison (builtin)
+out=$("$TUR" eval "(< 1 2)" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "eval-bool" "expected exit 0, got $rc; output: $out"
+elif [ "$out" != "true" ]; then
+    fail "eval-bool" "expected 'true', got '$out'"
+else
+    pass "eval-bool"
+fi
+
+# tur eval: nil result prints nothing
+out=$("$TUR" eval "(def x 42)" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "eval-nil-silent" "expected exit 0, got $rc; output: $out"
+else
+    pass "eval-nil-silent"
+fi
+
+# tur eval: parse error exits nonzero
+out=$("$TUR" eval "(+ 1" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "eval-error" "expected nonzero exit for bad syntax, got 0"
+else
+    pass "eval-error"
+fi
+
+# tur eval --file: run a .tur file through the interpreter
+TMP_TUR=$(mktemp /tmp/tur_eval_test_XXXXXX.tur)
+echo '(def x 42) (+ x 1)' > "$TMP_TUR"
+out=$("$TUR" eval --file "$TMP_TUR" 2>&1); rc=$?
+rm -f "$TMP_TUR"
+if [ $rc -ne 0 ]; then
+    fail "eval-file" "expected exit 0, got $rc; output: $out"
+else
+    pass "eval-file"
+fi
+
+# ---------------------------------------------------------------------------
+# E4: Nonzero exit codes on errors (Tier 1 verification)
+# ---------------------------------------------------------------------------
+
+# tur check on a bad file exits nonzero
+TMP_BAD=$(mktemp /tmp/tur_bad_XXXXXX.tur)
+echo '(+ 1 "not-an-int")' > "$TMP_BAD"
+"$TUR" check "$TMP_BAD" >/dev/null 2>&1; rc=$?
+rm -f "$TMP_BAD"
+if [ $rc -eq 0 ]; then
+    fail "exit-code-check-error" "expected nonzero exit for type error, got 0"
+else
+    pass "exit-code-check-error"
+fi
+
+# tur check on a nonexistent file exits nonzero
+"$TUR" check /nonexistent/file.tur >/dev/null 2>&1; rc=$?
+if [ $rc -eq 0 ]; then
+    fail "exit-code-file-not-found" "expected nonzero exit for missing file, got 0"
+else
+    pass "exit-code-file-not-found"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 2: tur doc <sym>  (2a)
+# ---------------------------------------------------------------------------
+
+# tur doc +: should print arithmetic doc and exit 0
+out=$("$TUR" doc "+" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-builtin-plus" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "+"; then
+    fail "doc-builtin-plus" "output '$out' did not contain '+'"
+else
+    pass "doc-builtin-plus"
+fi
+
+# tur doc let: should print let doc and exit 0
+out=$("$TUR" doc "let" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-builtin-let" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "let"; then
+    fail "doc-builtin-let" "output '$out' did not contain 'let'"
+else
+    pass "doc-builtin-let"
+fi
+
+# tur doc defstruct: should print defstruct doc and exit 0
+out=$("$TUR" doc "defstruct" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-builtin-defstruct" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "defstruct"; then
+    fail "doc-builtin-defstruct" "output '$out' did not contain 'defstruct'"
+else
+    pass "doc-builtin-defstruct"
+fi
+
+# tur doc unknown: should print error message and exit nonzero
+out=$("$TUR" doc "this-symbol-does-not-exist-xyz" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "doc-unknown-sym" "expected nonzero exit for unknown symbol, got 0"
+else
+    pass "doc-unknown-sym"
+fi
+
+# tur doc --help: should print usage and exit 0
+out=$("$TUR" doc --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-help" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur doc"; then
+    fail "doc-help" "output '$out' did not mention 'tur doc'"
+else
+    pass "doc-help"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 2: tur run -  (2b — stdin mode)
+# ---------------------------------------------------------------------------
+
+# tur run -: compile and run source from stdin
+out=$(echo '(println (+ 40 2))' | "$TUR" run - 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "run-stdin" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "42"; then
+    fail "run-stdin" "expected '42' in output, got '$out'"
+else
+    pass "run-stdin"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 3: tur explain subcommand  (E13)
+# ---------------------------------------------------------------------------
+
+# tur explain --help: should print usage and exit 0
+out=$("$TUR" explain --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "explain-help" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur explain"; then
+    fail "explain-help" "output '$out' did not mention 'tur explain'"
+else
+    pass "explain-help"
+fi
+
+# tur explain <snippet>: compile a bad snippet and exit nonzero
+out=$("$TUR" explain '(+ 1 "x")' 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "explain-snippet-error" "expected nonzero exit for type error snippet, got 0"
+else
+    pass "explain-snippet-error"
+fi
+
+# tur explain <good snippet>: no errors, exit 0
+out=$("$TUR" explain '(+ 1 2)' 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "explain-snippet-ok" "expected exit 0 for valid snippet, got $rc; output: $out"
+else
+    pass "explain-snippet-ok"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 3: tur format --diff  (E12)
+# ---------------------------------------------------------------------------
+
+# tur format --diff on already-formatted file: exit 0, no output
+TMP_FMT=$(mktemp /tmp/tur_fmt_XXXXXX.tur)
+printf '(+ 1 2)\n' > "$TMP_FMT"
+out=$("$TUR" format --diff "$TMP_FMT" 2>&1); rc=$?
+rm -f "$TMP_FMT"
+if [ $rc -ne 0 ]; then
+    fail "format-diff-clean" "expected exit 0 for already-formatted file, got $rc; output: $out"
+else
+    pass "format-diff-clean"
+fi
+
+# tur format --diff on unformatted file: exit 1 and print diff
+TMP_UGLY=$(mktemp /tmp/tur_ugly_XXXXXX.tur)
+printf '(+   1   2)\n' > "$TMP_UGLY"
+out=$("$TUR" format --diff "$TMP_UGLY" 2>&1); rc=$?
+rm -f "$TMP_UGLY"
+if [ $rc -eq 0 ]; then
+    fail "format-diff-changed" "expected exit 1 for unformatted file, got 0"
+elif ! echo "$out" | grep -q "^[-+]"; then
+    fail "format-diff-changed" "expected diff output, got '$out'"
+else
+    pass "format-diff-changed"
+fi
+
+# tur format --help: should mention --diff
+out=$("$TUR" format --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "format-help-diff" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q -- "--diff"; then
+    fail "format-help-diff" "format --help did not mention --diff"
+else
+    pass "format-help-diff"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 3: --json output flag  (E14)
+# ---------------------------------------------------------------------------
+
+# tur --json doc +: should print JSON with name and doc fields
+out=$("$TUR" --json doc "+" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "json-doc" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q '"name"'; then
+    fail "json-doc" "expected JSON with 'name' field, got '$out'"
+elif ! echo "$out" | grep -q '"doc"'; then
+    fail "json-doc" "expected JSON with 'doc' field, got '$out'"
+else
+    pass "json-doc"
+fi
+
+# tur --json doc unknown: exit 1 even in JSON mode
+out=$("$TUR" --json doc "no-such-sym-xyz" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "json-doc-unknown" "expected nonzero exit for unknown sym in JSON mode, got 0"
+else
+    pass "json-doc-unknown"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

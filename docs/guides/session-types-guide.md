@@ -1,3 +1,9 @@
+---
+title: Session Types Guide
+category: Other
+description: Model protocols as types, whether the protocol has two participants, or more
+---
+
 # Session Types Guide
 
 Turmeric supports session types -- a type discipline that statically verifies
@@ -6,20 +12,22 @@ the `-Xsessions` compiler flag.
 
 ## Table of Contents
 
-1. [Binary Session Types (SS0-SS4)](#binary-session-types-ss0-ss4)
-   - [make-session, send, recv, close](#make-session-send-recv-close)
-   - [Choice: choose-left, choose-right, offer](#choice-choose-left-choose-right-offer)
-   - [Recursive protocols: Rec](#recursive-protocols-rec)
-   - [Timeouts](#timeouts)
-   - [Duality](#duality)
-   - [Effect integration](#effect-integration)
-2. [Multi-Party Session Types (SS5-SS8)](#multi-party-session-types-ss5-ss8)
-   - [defprotocol](#defprotocol)
-   - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
-   - [Three or more roles](#three-or-more-roles)
-   - [Projection algorithm](#projection-algorithm)
-3. [Error Codes](#error-codes)
-4. [Getting More Help](#getting-more-help)
+- [Session Types Guide](#session-types-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Binary Session Types (SS0-SS4)](#binary-session-types-ss0-ss4)
+    - [make-session, send, recv, close](#make-session-send-recv-close)
+    - [Choice: choose-left, choose-right, offer](#choice-choose-left-choose-right-offer)
+    - [Recursive protocols: Rec](#recursive-protocols-rec)
+    - [Timeouts](#timeouts)
+    - [Duality](#duality)
+    - [Effect integration](#effect-integration)
+  - [Multi-Party Session Types (SS5-SS8)](#multi-party-session-types-ss5-ss8)
+    - [defprotocol](#defprotocol)
+    - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
+    - [Three or more roles](#three-or-more-roles)
+    - [Projection algorithm](#projection-algorithm)
+  - [Error Codes](#error-codes)
+  - [Getting More Help](#getting-more-help)
 
 ---
 
@@ -36,6 +44,12 @@ channel runs a _protocol_ `P`; the other end runs the _dual_ protocol `dual(P)`.
   ...)
 ```
 
+```sweet-exp
+;; Allocate a two-ended channel for the protocol Send<int, Close>.
+let [[a b] make-session((Send int Close))]
+  ...
+```
+
 The pair `[a b]` gives both endpoints. Endpoint `a` has type
 `Session[Send int Close]`; endpoint `b` has the dual type
 `Session[Recv int Close]`.
@@ -47,11 +61,21 @@ The pair `[a b]` gives both endpoints. Endpoint `a` has type
   (close a))
 ```
 
+```sweet-exp
+let [a send(a 42)]  ; a advances from Send<int,Close> to Close
+  close(a)
+```
+
 **recv** -- advance the receiver side by one message; returns `[value new-ch]`:
 
 ```turmeric
 (let [[v b] (recv b)]  ; v = 42, b advances from Recv<int,Close> to Close
   (close b))
+```
+
+```sweet-exp
+let [[v b] recv(b)]  ; v = 42, b advances from Recv<int,Close> to Close
+  close(b)
 ```
 
 **close** -- consume the channel after the protocol ends (type `Close`).
@@ -76,6 +100,21 @@ the receiver uses `offer` and pattern-matches on `Left`/`Right`:
     (close ch))
 ```
 
+```sweet-exp
+;; Sender side: Choose<Send int Close, Close>
+let [ch choose-left(ch)]  ; picks the Left branch
+  let [ch send(ch 7)]
+    close(ch)
+
+;; Receiver side: Branch<Recv int Close, Close>
+match offer(ch)
+  (Left ch)
+    let [[n ch] recv(ch)]
+      close(ch)
+  (Right ch)
+    close(ch)
+```
+
 ### Recursive protocols: Rec
 
 `Rec` introduces a recursive protocol variable `self` that unrolls on each
@@ -93,6 +132,18 @@ loop iteration:
       (close ch)))
 ```
 
+```sweet-exp
+;; Server: repeat (recv int, send int) until client closes
+defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+  match offer(ch)
+    (Left ch)
+      let [[n ch] recv(ch)]
+        let [ch send(ch n)]
+          echo-server(ch)
+    (Right ch)
+      close(ch)
+```
+
 See `stdlib/session.tur` for the `echo-server-loop` and `echo-client-call`
 helpers that wrap this pattern.
 
@@ -104,6 +155,16 @@ helpers that wrap this pattern.
 (match (recv-timeout ch 500)  ; 500 ms deadline
   (Left [v ch]) (do (println v) (close ch))
   (Right ch)    (do (println "timed out") (close ch)))
+```
+
+```sweet-exp
+match recv-timeout(ch 500)  ; 500 ms deadline
+  (Left [v ch]) do
+                  println(v)
+                  close(ch)
+  (Right ch)    do
+                  println("timed out")
+                  close(ch)
 ```
 
 ### Duality
@@ -138,6 +199,16 @@ consumed exactly once along every code path:
     0))
 ```
 
+```sweet-exp
+defeffect Log [msg :cstr] :nil
+
+defn logged-send [^linear ch :(Session (Send int Close)) val :int] :int
+  perform(Log("before send"))
+  let [ch send(ch val)]
+    close(ch)
+    0
+```
+
 See `tests/fixtures/session-effects/` for a complete example.
 
 ---
@@ -158,6 +229,12 @@ Declare a global protocol with `defprotocol`:
   (-> B A int))   ; B replies with an int to A
 ```
 
+```sweet-exp
+defprotocol Ping [A B]
+  (-> A B int)    ; A sends an int to B
+  (-> B A int)    ; B replies with an int to A
+```
+
 The role list `[A B]` names each participant. Each `(-> From To type)` line
 is one message transfer.
 
@@ -170,6 +247,11 @@ After declaring a protocol, allocate role endpoints with `make-protocol`:
   ...)
 ```
 
+```sweet-exp
+let [[ra rb] make-protocol(Ping)]
+  ...
+```
+
 `ra` has type `(Role Ping A)` and `rb` has type `(Role Ping B)`. Each role
 endpoint is linear -- it must be consumed exactly once.
 
@@ -180,6 +262,11 @@ endpoint is linear -- it must be consumed exactly once.
   ...)
 ```
 
+```sweet-exp
+let [ra send-to(ra B 42)]  ; A sends 42 to B; ra advances in protocol
+  ...
+```
+
 **recv-from** -- receive a message from a named role peer; returns `[value new-ch]`:
 
 ```turmeric
@@ -187,10 +274,19 @@ endpoint is linear -- it must be consumed exactly once.
   ...)
 ```
 
+```sweet-exp
+let [[v rb] recv-from(rb A)]  ; B receives from A; v = 42
+  ...
+```
+
 **close** -- close the role endpoint after the protocol is complete:
 
 ```turmeric
 (close ra)
+```
+
+```sweet-exp
+close(ra)
 ```
 
 Full two-role ping example:
@@ -219,6 +315,30 @@ Full two-role ping example:
   0)
 ```
 
+```sweet-exp
+defprotocol Ping [A B]
+  (-> A B int)
+  (-> B A int)
+
+defn role-a [^linear ch :(Role Ping A)] :nil
+  let [ch send-to(ch B 42)]
+    let [[v ch] recv-from(ch B)]
+      println(v)
+      close(ch)
+
+defn role-b [^linear ch :(Role Ping B)] :nil
+  let [[v ch] recv-from(ch A)]
+    let [ch send-to(ch A v)]
+      close(ch)
+
+defn main [] :int
+  let [[ra rb] make-protocol(Ping)]
+    let [t spawn(fn [] role-b(rb))]
+      role-a(ra)
+      join(t)
+  0
+```
+
 ### Three or more roles
 
 `defprotocol` and `make-protocol` support any number of roles (N >= 2). For
@@ -237,6 +357,21 @@ a three-role pipeline:
         (join ta)
         (join tb))))
   0)
+```
+
+```sweet-exp
+defprotocol Pipeline [A B C]
+  (-> A B int)   ; A sends to B
+  (-> B C int)   ; B forwards to C
+
+defn main [] :int
+  let [[ra rb rc] make-protocol(Pipeline)]
+    let [ta spawn(fn [] role-a(ra))]
+      let [tb spawn(fn [] role-b(rb))]
+        role-c(rc)
+        join(ta)
+        join(tb)
+  0
 ```
 
 The runtime uses a shared router so all N role endpoints communicate through

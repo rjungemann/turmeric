@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2322,11 +2325,11 @@ struct __HEnv_2 {
 static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
     __HEnv_2 *__henv_2 = (__HEnv_2 *)__env;
-    const char * s_217 = (const char *)__effect_args[0];
-    int64_t k_218 = __k;
-    puts(s_217);
+    const char * s_218 = (const char *)__effect_args[0];
+    int64_t k_219 = __k;
+    puts(s_218);
     int64_t __t4;
-    int64_t __t5 = tur_effect_cont_resume((int64_t)(intptr_t)k_218, (int64_t)0);
+    int64_t __t5 = tur_effect_cont_resume((int64_t)(intptr_t)k_219, (int64_t)0);
     __t4 = __t5;
     return (int64_t)__t4;
 }
@@ -2373,10 +2376,10 @@ static int64_t __dispatch_2(void *__ctx_void, int64_t __k_int, int64_t __resume_
 int main() {
         int64_t __t1;
         {
-            Printer cap_216 = (Printer){.print_line = (int64_t)(intptr_t)do_write_line};
-            (void)cap_216;
+            Printer cap_217 = (Printer){.print_line = (int64_t)(intptr_t)do_write_line};
+            (void)cap_217;
             __HEnv_2 *__henv_2 = (__HEnv_2 *)malloc(sizeof(__HEnv_2));
-            __henv_2->cap = cap_216;
+            __henv_2->cap = cap_217;
             TurEffectCaptureCtx __cap_2;
             __cap_2.has_pending_effect = false;
             __cap_2.eff_name = NULL;
@@ -2395,7 +2398,7 @@ int main() {
             __fiber_2->effect_handler_chain = &__eff_frame_2;
             int64_t __t7 = (int64_t)__dispatch_2(&__cap_2, (int64_t)(intptr_t)__fiber_2, 0);
             /* Phase 19D: write-back env captures to outer locals */
-            cap_216 = __henv_2->cap;
+            cap_217 = __henv_2->cap;
             if (__fiber_2->done) { free(__fiber_2->stack); free(__fiber_2); }
             if (__fiber_2->done) { free(__henv_2); }
             __t1 = __t7;

@@ -44,6 +44,13 @@ Turmeric declares typeclasses with `defclass`. Higher-kinded type constructor pa
   (duplicate [wa]     :int))
 ```
 
+```sweet-exp
+defclass Comonad [^w]
+  extract   [wa]     :int
+  extend    [wa fn]  :int
+  duplicate [wa]     :int
+```
+
 Because Turmeric v1 represents all container values as `int64_t` (holding heap pointers), every method returns `:int`. The `fn` argument to `extend` is a Turmeric closure: `(fn [wa] ...)`.
 
 The implementation lives in [`stdlib/comonad.tur`](../../stdlib/comonad.tur), which also provides Identity and Pair comonad instances as examples.
@@ -55,6 +62,12 @@ The implementation lives in [`stdlib/comonad.tur`](../../stdlib/comonad.tur), wh
 Before tackling 2D grids, it helps to understand the simpler 1D case. A **Zipper** is a list with a cursor:
 
 ```turmeric
+left  = [prev, prev-prev, ...]   -- nearest first
+focus = current element
+right = [next, next-next, ...]   -- nearest first
+```
+
+```sweet-exp
 left  = [prev, prev-prev, ...]   -- nearest first
 focus = current element
 right = [next, next-next, ...]   -- nearest first
@@ -92,7 +105,33 @@ The Comonad instance for Zipper:
                 (do
                   (print-row z2)           ;; ..#.#.#..
                   0)))))))))
-```text
+```
+
+```sweet-exp
+defn ca-rule [z] :int
+  ```
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *p = (Zip *)(intptr_t)z;
+  int64_t l = p->left_len  > 0 ? p->left[0]  : 0;
+  int64_t r = p->right_len > 0 ? p->right[0] : 0;
+  return (l + p->focus + r) & 1;   /* XOR of three neighbours */
+  ```)
+
+defn main [] :int
+  let [arr zap-array(9)]
+    do
+      zap-set(arr 4 1)
+      let [z0 zipper-from-array(arr 9 4)]
+        do
+          print-row(z0)                   ;; ....#....
+          let [z1 .extend(z0 ca-rule)]
+            do
+              print-row(z1)               ;; ...###...
+              let [z2 .extend(z1 ca-rule)]
+                do
+                  print-row(z2)           ;; ..#.#.#..
+                  0
+```
 
 One `(.extend z ca-rule)` call steps the entire automaton forward.
 
@@ -137,6 +176,27 @@ Index formula: `data[y * width + x]`.
 (defn grid-print [g] :int ...)
 ```
 
+```sweet-exp
+;; Allocate a zero-filled grid; focus starts at (0, 0).
+defn grid-new [width height] :int ...
+
+;; Get / set a value by (x, y); out-of-bounds returns 0 / is a no-op.
+defn grid-get [g x y] :int ...
+defn grid-set [g x y val] :int ...
+
+;; Return the value at the current focus.
+defn grid-focus [g] :int ...
+
+;; Deep-copy the grid (new data array, same cx/cy).
+defn grid-clone [g] :int ...
+
+;; Count live Moore 8-neighbours at (cx, cy).
+defn grid-count-neighbors [g] :int ...
+
+;; Print '#' / '.' ASCII, one row per line.
+defn grid-print [g] :int ...
+```
+
 ### The Comonad instance
 
 ```turmeric
@@ -164,6 +224,33 @@ Index formula: `data[y * width + x]`.
   (extract   [wa]    (grid-focus wa))
   (extend    [wa fn] (__gridctx_extend wa fn))
   (duplicate [wa]    (__gridctx_extend wa (fn [g] g))))
+```
+
+```sweet-exp
+defn __gridctx_extend [g fn] :int
+  ```
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *src = (GCtx *)(intptr_t)g;
+  int64_t w = src->width, h = src->height;
+  int64_t *out_data = malloc((size_t)(w * h) * sizeof(int64_t));
+  GCtx tmp;
+  tmp.data = src->data; tmp.width = w; tmp.height = h;
+  for (int64_t y = 0; y < h; y++) {
+    for (int64_t x = 0; x < w; x++) {
+      tmp.cx = x; tmp.cy = y;
+      out_data[y * w + x] = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)&tmp);
+    }
+  }
+  GCtx *out = malloc(sizeof(GCtx));
+  out->data = out_data; out->width = w; out->height = h;
+  out->cx = src->cx; out->cy = src->cy;
+  return (int64_t)(intptr_t)out;
+  ```)
+
+definstance Comonad [gridctx]
+  extract   [wa]    grid-focus(wa)
+  extend    [wa fn] __gridctx_extend(wa fn)
+  duplicate [wa]    __gridctx_extend(wa fn [g] g)
 ```
 
 Notice: `tmp` is a stack-allocated scratch struct that shares `src->data`. Because `fn` is called synchronously and never stores the pointer, this is safe. Each call gets a fresh `(cx, cy)`.
@@ -197,7 +284,30 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
   if (n == 3)         return 1;   /* reproduction    */
   return 0;
   ```)
-```turmeric
+```
+
+```sweet-exp
+defn conway-rule [g] :int
+  ```
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  int64_t alive = p->data[p->cy * p->width + p->cx];
+  int n = 0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      if (dx == 0 && dy == 0) continue;
+      int nx = (int)p->cx + dx, ny = (int)p->cy + dy;
+      if (nx >= 0 && nx < (int)p->width && ny >= 0 && ny < (int)p->height)
+        if (p->data[ny * p->width + nx]) n++;
+    }
+  }
+  if (alive && n < 2) return 0;   /* underpopulation */
+  if (alive && n > 3) return 0;   /* overpopulation  */
+  if (alive)          return 1;   /* survival        */
+  if (n == 3)         return 1;   /* reproduction    */
+  return 0;
+  ```)
+```
 
 A full generation step is then just:
 
@@ -222,8 +332,24 @@ That's it — the Comonad abstracts away all index management.
         (grid-print g1)                   ;; .....  ..#..  ..#..  ..#..  .....
         (let [g2 (.extend g1 conway-rule)]
           (do
-            (grid-print g2)               ;; same as g0 — period 2
+            (grid-print g2)               ;; same as g0 -- period 2
             0))))))
+```
+
+```sweet-exp
+let [g0 grid-new(5 5)]
+  do
+    grid-set(g0 1 2 1)
+    grid-set(g0 2 2 1)
+    grid-set(g0 3 2 1)
+    grid-print(g0)                       ;; .....  .....  .###.  .....  .....
+    let [g1 .extend(g0 conway-rule)]
+      do
+        grid-print(g1)                   ;; .....  ..#..  ..#..  ..#..  .....
+        let [g2 .extend(g1 conway-rule)]
+          do
+            grid-print(g2)               ;; same as g0 -- period 2
+            0
 ```
 
 ---

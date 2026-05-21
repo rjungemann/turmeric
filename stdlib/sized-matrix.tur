@@ -1,0 +1,342 @@
+;; Phase SZ3: SizedMatrix -- row-major 2D matrix with sized type annotations.
+;;
+;; SizedMatrix wraps a flat int64_t array with row and col counts.
+;; C struct layout:
+;;   struct { int64_t rows; int64_t cols; int64_t *data; }
+;; where data holds rows*cols elements in row-major order:
+;;   element at (r, c) is data[r * cols + c]
+;;
+;; All operations require (unsafe ...) at the call site.
+;; This file requires stdlib/sized.tur to be loaded first.
+
+;; ===== Allocation =====
+
+;;; sized-matrix-new -- allocate a rows x cols matrix (uninitialized).
+;;;
+;;; Parameters:
+;;;   rows -- number of rows
+;;;   cols -- number of columns
+;;;
+;;; Returns:
+;;;   Opaque pointer to the new SizedMatrix.
+;;;
+;;; Example:
+;;;   (let [m (unsafe (sized-matrix-new 3 4))] ...)
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-new [rows cols] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
+  m->rows = rows;
+  m->cols = cols;
+  int64_t n = rows * cols;
+  m->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
+  return (int64_t)(intptr_t)m;
+  ```)
+
+;;; sized-matrix-new-zeroed -- allocate a rows x cols matrix, all zero.
+;;;
+;;; Parameters:
+;;;   rows -- number of rows
+;;;   cols -- number of columns
+;;;
+;;; Returns:
+;;;   Opaque pointer to the new SizedMatrix with all elements set to 0.
+;;;
+;;; Example:
+;;;   (let [m (unsafe (sized-matrix-new-zeroed 3 4))] ...)
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-new-zeroed [rows cols] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
+  m->rows = rows;
+  m->cols = cols;
+  int64_t n = rows * cols;
+  m->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
+  return (int64_t)(intptr_t)m;
+  ```)
+
+;;; sized-matrix-free -- free a heap-allocated SizedMatrix and its data.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer from sized-matrix-new or sized-matrix-new-zeroed
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (unsafe (sized-matrix-free m))
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-free [m] #{Unsafe} :nil
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (mat->data) free(mat->data);
+  free(mat);
+  ```)
+
+;; ===== Shape accessors =====
+
+;;; sized-matrix-rows -- number of rows in the matrix.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;
+;;; Returns:
+;;;   Row count as :int.
+;;;
+;;; Example:
+;;;   (sized-matrix-rows m)  ; => 3
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-rows [m] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->rows;
+  ```)
+
+;;; sized-matrix-cols -- number of columns in the matrix.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;
+;;; Returns:
+;;;   Column count as :int.
+;;;
+;;; Example:
+;;;   (sized-matrix-cols m)  ; => 4
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-cols [m] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->cols;
+  ```)
+
+;;; sized-matrix-size -- return the total element count as a Size expression.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;
+;;; Returns:
+;;;   A (Static n) where n = rows * cols.
+;;;
+;;; Example:
+;;;   (size-eval (unsafe (sized-matrix-size m)))  ; => rows*cols
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-size [m] #{Unsafe} :Size
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  return ctor_Static(mat->rows * mat->cols);
+  ```)
+
+;;; sized-matrix-row-size -- return the number of columns as a Size expression.
+;;;
+;;; Useful for checking that a row vector has the right width.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;
+;;; Returns:
+;;;   A (Static cols).
+;;;
+;;; Example:
+;;;   (size-eval (unsafe (sized-matrix-row-size m)))  ; => cols
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-row-size [m] #{Unsafe} :Size
+  ```c
+  return ctor_Static(((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->cols);
+  ```)
+
+;;; sized-matrix-col-size -- return the number of rows as a Size expression.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;
+;;; Returns:
+;;;   A (Static rows).
+;;;
+;;; Example:
+;;;   (size-eval (unsafe (sized-matrix-col-size m)))  ; => rows
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-col-size [m] #{Unsafe} :Size
+  ```c
+  return ctor_Static(((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->rows);
+  ```)
+
+;; ===== Element access =====
+
+;;; sized-matrix-get -- bounds-checked element read at (r, c).
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;   r -- zero-based row index
+;;;   c -- zero-based column index
+;;;
+;;; Returns:
+;;;   The int64 value at row r, column c.
+;;;
+;;; Example:
+;;;   (sized-matrix-get m 1 2)  ; => element at row 1 col 2
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-get [m r c] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols)
+    return mat->data[r * mat->cols + c];
+  fprintf(stderr, "sized-matrix-get: index out of bounds (%lld,%lld) in %lldx%lld\n",
+          (long long)r, (long long)c, (long long)mat->rows, (long long)mat->cols);
+  exit(1);
+  return 0;
+  ```)
+
+;;; sized-matrix-set! -- bounds-checked element write at (r, c).
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;   r -- zero-based row index
+;;;   c -- zero-based column index
+;;;   v -- value to store
+;;;
+;;; Returns:
+;;;   The same matrix pointer m (for chaining).
+;;;
+;;; Example:
+;;;   (sized-matrix-set! m 0 0 42)
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-set! [m r c v] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols) {
+    mat->data[r * mat->cols + c] = v;
+    return m;
+  }
+  fprintf(stderr, "sized-matrix-set!: index out of bounds (%lld,%lld) in %lldx%lld\n",
+          (long long)r, (long long)c, (long long)mat->rows, (long long)mat->cols);
+  exit(1);
+  return m;
+  ```)
+
+;; ===== Bulk operations =====
+
+;;; sized-matrix-fill! -- set every element to v; returns the same matrix.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;   v -- value to store in every element
+;;;
+;;; Returns:
+;;;   The same matrix pointer m.
+;;;
+;;; Example:
+;;;   (sized-matrix-fill! m 0)  ; zero-fill
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-fill! [m v] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  int64_t n = mat->rows * mat->cols;
+  for (int64_t i = 0; i < n; i++) mat->data[i] = v;
+  return m;
+  ```)
+
+;;; sized-matrix-row-sum -- sum all elements in row r.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;   r -- zero-based row index
+;;;
+;;; Returns:
+;;;   Integer sum of all elements in row r.
+;;;
+;;; Example:
+;;;   (sized-matrix-row-sum m 0)  ; => sum of first row
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-row-sum [m r] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (r < 0 || r >= mat->rows) {
+    fprintf(stderr, "sized-matrix-row-sum: row %lld out of bounds\n", (long long)r);
+    exit(1);
+  }
+  int64_t s = 0;
+  for (int64_t c = 0; c < mat->cols; c++) s += mat->data[r * mat->cols + c];
+  return s;
+  ```)
+
+;;; sized-matrix-col-sum -- sum all elements in column c.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;   c -- zero-based column index
+;;;
+;;; Returns:
+;;;   Integer sum of all elements in column c.
+;;;
+;;; Example:
+;;;   (sized-matrix-col-sum m 0)  ; => sum of first column
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-col-sum [m c] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (c < 0 || c >= mat->cols) {
+    fprintf(stderr, "sized-matrix-col-sum: col %lld out of bounds\n", (long long)c);
+    exit(1);
+  }
+  int64_t s = 0;
+  for (int64_t r = 0; r < mat->rows; r++) s += mat->data[r * mat->cols + c];
+  return s;
+  ```)
+
+;;; sized-matrix-total-sum -- sum all elements in the matrix.
+;;;
+;;; Parameters:
+;;;   m -- SizedMatrix pointer
+;;;
+;;; Returns:
+;;;   Integer sum of all elements.
+;;;
+;;; Example:
+;;;   (sized-matrix-total-sum m)
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-total-sum [m] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  int64_t s = 0;
+  int64_t n = mat->rows * mat->cols;
+  for (int64_t i = 0; i < n; i++) s += mat->data[i];
+  return s;
+  ```)
+
+;; ===== Shape assertions =====
+
+;;; sized-matrix-assert-shape! -- panic if the matrix does not have the expected shape.
+;;;
+;;; Parameters:
+;;;   m            -- SizedMatrix pointer
+;;;   expected-rows -- expected row count as a (Size)
+;;;   expected-cols -- expected column count as a (Size)
+;;;
+;;; Returns:
+;;;   nil on success; panics with a descriptive message on shape mismatch.
+;;;
+;;; Example:
+;;;   (unsafe (sized-matrix-assert-shape! m (Static 3) (Static 4)))
+;;;
+;;; Since: Phase SZ3
+(defn sized-matrix-assert-shape! [m expected-rows expected-cols] #{Unsafe} :nil
+  (let [actual-rows (sized-matrix-rows m)]
+    (let [actual-cols (sized-matrix-cols m)]
+      (require-msg!
+        (= actual-rows (size-eval expected-rows))
+        "sized-matrix-assert-shape!: row count mismatch")
+      (require-msg!
+        (= actual-cols (size-eval expected-cols))
+        "sized-matrix-assert-shape!: col count mismatch"))))

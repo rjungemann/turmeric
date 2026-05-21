@@ -34,6 +34,14 @@ reconfigure:
 test: build
     ctest --output-on-failure --progress --test-dir build
 
+# Run only the compiled-fixture test suite (tur tests).
+test-tur: build
+    bash tests/run.sh
+
+# Run the interpreter fixture test suite (turi tests).
+test-turi: build
+    bash tests/run-turi.sh
+
 test-tsan: tsan
     TUR_TSAN=1 ctest --output-on-failure --test-dir build
 
@@ -159,6 +167,10 @@ rebuild: clean configure build
 # Documentation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Documentation
+# ---------------------------------------------------------------------------
+
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup,
 # and web/public/doc-names.json for the web REPL search bar.
@@ -168,6 +180,11 @@ docs: guides
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
     python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+
+
+# Check that every turmeric+sweet-exp toggle pair in the guides is valid.
+check-guides:
+    python3 tools/check-guide-pairs.py docs/guides/
 
 # ---------------------------------------------------------------------------
 # WebAssembly & Web REPL targets
@@ -252,3 +269,69 @@ bump-major:
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"
+
+# ---------------------------------------------------------------------------
+# Performance comparison
+# ---------------------------------------------------------------------------
+
+PERF := "performance-comparison"
+
+# Build a release binary (needed by perf tasks that invoke Turmeric benchmarks).
+perf-build:
+    cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    cmake --build build-rel -j --config Release
+
+# Validate correctness of all benchmark implementations (small inputs).
+perf-validate:
+    cd {{PERF}} && python3 scripts/validate_correctness.py
+
+# Regenerate golden reference output files (run once after adding benchmarks).
+perf-golden:
+    cd {{PERF}} && python3 scripts/validate_correctness.py --golden
+
+# Print language runtime versions and hardware details.
+perf-env:
+    cd {{PERF}} && bash scripts/check_environment.sh
+
+# Run all benchmark categories at small input size.
+perf-run:
+    cd {{PERF}} && bash scripts/run_all.sh
+
+# Run all benchmark categories at the given size: small | medium | large.
+perf-run-size size:
+    cd {{PERF}} && bash scripts/run_all.sh all {{size}}
+
+# Run a single category (e.g. `just perf-run-cat numerical`).
+perf-run-cat category:
+    cd {{PERF}} && bash scripts/run_all.sh {{category}}
+
+# Run a single category at a given size.
+perf-run-cat-size category size:
+    cd {{PERF}} && bash scripts/run_all.sh {{category}} {{size}}
+
+# Aggregate and normalize raw results (trimmed mean, C-relative speedups).
+perf-aggregate:
+    cd {{PERF}} && python3 scripts/aggregate_results.py
+
+# Check reproducibility: compute CV for each benchmark group, flag CV > 10%.
+perf-reproducibility:
+    cd {{PERF}} && python3 scripts/check_reproducibility.py
+
+# Identify outlier runs and compute speedup rankings.
+perf-analyze:
+    cd {{PERF}} && python3 scripts/analyze_results.py --print-summary
+
+# Generate analysis markdown documents (comparison, by-category, by-language, conclusions).
+perf-docs:
+    cd {{PERF}} && python3 scripts/generate_analysis.py
+
+# Generate ASCII charts and analysis/report.html.
+perf-viz:
+    cd {{PERF}} && python3 scripts/visualize_results.py
+
+# Open the HTML report in the default browser.
+perf-open:
+    open {{PERF}}/analysis/report.html
+
+# Full pipeline: run benchmarks → aggregate → analyze → generate docs → open report.
+perf: perf-run perf-aggregate perf-analyze perf-docs perf-viz perf-open

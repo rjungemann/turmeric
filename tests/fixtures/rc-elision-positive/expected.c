@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2325,23 +2328,23 @@ int main() {
             *__t0 = INT64_C(42);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * orig_213 = __t1;
-            (void)orig_213;
+            RcControlBlock * orig_214 = __t1;
+            (void)orig_214;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
             {
-                rc_strong_increment(orig_213);
-                RcControlBlock * cloned_214 = orig_213;
-                (void)cloned_214;
+                rc_strong_increment(orig_214);
+                RcControlBlock * cloned_215 = orig_214;
+                (void)cloned_215;
                 tur_frame __frame_3;
                 tur_frame_init(&__frame_3, &__frame_2);
-                int64_t __t4 = rc_strong_count(cloned_214);
+                int64_t __t4 = rc_strong_count(cloned_215);
                 printf("%lld\n", (long long)(__t4));
-                struct __defer_env_5 __t7 = {.cloned = cloned_214};
+                struct __defer_env_5 __t7 = {.cloned = cloned_215};
                 tur_frame_push_defer(&__frame_3, __defer_6, &__t7);
                 tur_frame_fire_lifo(&__frame_3);
             }
-            struct __defer_env_8 __t10 = {.orig = orig_213};
+            struct __defer_env_8 __t10 = {.orig = orig_214};
             tur_frame_push_defer(&__frame_2, __defer_9, &__t10);
             tur_frame_fire_lifo(&__frame_2);
         }

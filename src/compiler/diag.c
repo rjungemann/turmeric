@@ -128,6 +128,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0034_ROW_VAR_GENERALISED:        return "TUR-W0034";
         /* LC0: Linear continuation warnings */
         case TUR_W0035_UNSAFE_MULTISHOT_CONT:      return "TUR-W0035";
+        /* U6: inline-C outside Unsafe annotation */
+        case TUR_W0036_INLINE_C_MISSING_UNSAFE:    return "TUR-W0036";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -211,6 +213,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
     /* LC0: Linear continuation warnings */
     if (strcmp(s, "TUR-W0035") == 0) return TUR_W0035_UNSAFE_MULTISHOT_CONT;
+    /* U6: inline-C outside Unsafe annotation */
+    if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -630,6 +634,22 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: if you intend exactly-once semantics, use ^linear k instead.\n"
       "If you need multi-shot, ensure all captured bindings are copyable (CK_COPY)\n"
       "or reference-counted.\n",
+    },
+    /* U6: inline-C outside Unsafe annotation */
+    { TUR_W0036_INLINE_C_MISSING_UNSAFE,
+      "TUR-W0036: Inline-C block in function not annotated #{Unsafe}\n"
+      "\n"
+      "A ```c ... ``` inline-C block appears in a function that does not declare the\n"
+      "#{Unsafe} effect. Inline C bypasses the type system, the borrow checker, and\n"
+      "all other safety guarantees -- it is inherently unsafe code.\n"
+      "\n"
+      "Fix: annotate the enclosing function with #{Unsafe}:\n"
+      "  (defn my-fn [] #{Unsafe} :int\n"
+      "    ```c return 42; ```)\n"
+      "\n"
+      "Alternatively, wrap the inline-C call site in (unsafe ...) if the function\n"
+      "is a safe abstraction over an unsafe implementation:\n"
+      "  (defn safe-fn [] :int (unsafe (raw-c-helper)))\n",
     },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,

@@ -1,0 +1,33 @@
+; Phase SZ0: StaticInt -- compile-time integer annotation.
+; Exercises static-int, static-int-val, static-int-add, and static-int-mul.
+
+(defgadt StaticInt []
+  (SInt (int) : (StaticInt)))
+
+(defn static-int [n :int] :StaticInt
+  (SInt n))
+
+(defn static-int-val [si :StaticInt] :int
+  (match si
+    (SInt n) n))
+
+(defn static-int-add [a :StaticInt b :StaticInt] :StaticInt
+  (SInt (+ (static-int-val a) (static-int-val b))))
+
+(defn static-int-mul [a :StaticInt b :StaticInt] :StaticInt
+  (SInt (* (static-int-val a) (static-int-val b))))
+
+(defn main [] :int
+  ; round-trip: wrap then unwrap
+  (println (static-int-val (static-int 0)))
+  (println (static-int-val (static-int 1)))
+  (println (static-int-val (static-int 42)))
+  ; addition: 3 + 4 = 7
+  (println (static-int-val (static-int-add (static-int 3) (static-int 4))))
+  ; multiplication: 3 * 4 = 12
+  (println (static-int-val (static-int-mul (static-int 3) (static-int 4))))
+  ; chained: (2 + 3) * 4 = 20
+  (println (static-int-val (static-int-mul
+              (static-int-add (static-int 2) (static-int 3))
+              (static-int 4))))
+  0)

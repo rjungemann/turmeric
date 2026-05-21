@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2343,15 +2346,15 @@ static int64_t test_return_with_defer() {
 static int64_t test_return_in_nested_scope() {
         int64_t __t2;
         {
-            int64_t x_217 = INT64_C(1);
-            (void)x_217;
+            int64_t x_218 = INT64_C(1);
+            (void)x_218;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             tur_frame_push_defer(&__frame_3, __defer_4, NULL);
             int64_t __t5;
             {
-                int64_t y_218 = INT64_C(2);
-                (void)y_218;
+                int64_t y_219 = INT64_C(2);
+                (void)y_219;
                 tur_frame __frame_6;
                 tur_frame_init(&__frame_6, &__frame_3);
                 tur_frame_push_defer(&__frame_6, __defer_7, NULL);
@@ -2387,27 +2390,27 @@ static int64_t test_return_in_if() {
 int main() {
         puts("Testing early return with defers...");
         {
-            int64_t r1_219 = test_return_no_defer();
-            (void)r1_219;
-            printf("%lld\n", (long long)(r1_219));
+            int64_t r1_220 = test_return_no_defer();
+            (void)r1_220;
+            printf("%lld\n", (long long)(r1_220));
         }
         puts("test-return-with-defer:");
         {
-            int64_t r2_220 = test_return_with_defer();
-            (void)r2_220;
-            printf("%lld\n", (long long)(r2_220));
+            int64_t r2_221 = test_return_with_defer();
+            (void)r2_221;
+            printf("%lld\n", (long long)(r2_221));
         }
         puts("test-return-in-nested-scope:");
         {
-            int64_t r3_221 = test_return_in_nested_scope();
-            (void)r3_221;
-            printf("%lld\n", (long long)(r3_221));
+            int64_t r3_222 = test_return_in_nested_scope();
+            (void)r3_222;
+            printf("%lld\n", (long long)(r3_222));
         }
         puts("test-return-in-if:");
         {
-            int64_t r4_222 = test_return_in_if();
-            (void)r4_222;
-            printf("%lld\n", (long long)(r4_222));
+            int64_t r4_223 = test_return_in_if();
+            (void)r4_223;
+            printf("%lld\n", (long long)(r4_223));
         }
         int64_t __t14;
         __t14 = INT64_C(0);

@@ -1,6 +1,6 @@
 ---
 title: Tidal API Reference
-category: Tidal
+category: Music
 description: Complete API documentation for all modules in the TidalCycles-inspired pattern library for Turmeric
 ---
 
@@ -485,6 +485,10 @@ The main module re-exports all functions from submodules:
 
 ```turmeric
 (import tidal)  ;; Imports all tidal/* modules
+```
+
+```sweet-exp
+import tidal  ;; Imports all tidal/* modules
 ```
 
 ### Convenience Functions

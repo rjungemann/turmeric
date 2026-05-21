@@ -1,0 +1,9 @@
+;; U6: inline-C block in function not annotated #{Unsafe} should warn
+(defn raw-add [a :int b :int] :int
+  ```c
+  return a + b;
+  ```)
+
+(defn main [] :int
+  (println (raw-add 1 2))
+  0)

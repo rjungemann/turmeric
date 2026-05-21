@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2350,21 +2353,21 @@ static void fiber_free_fn(void * f) {
 int main() {
         int64_t __t0;
         {
-            void * sched_226 = scheduler_new_fn();
-            (void)sched_226;
+            void * sched_227 = scheduler_new_fn();
+            (void)sched_227;
             int64_t __t1;
             {
-                void * fa_227 = fiber_new_fn((void *)(intptr_t)(fiber_a), INT64_C(0));
-                (void)fa_227;
+                void * fa_228 = fiber_new_fn((void *)(intptr_t)(fiber_a), INT64_C(0));
+                (void)fa_228;
                 int64_t __t2;
                 {
-                    void * fb_228 = fiber_new_fn((void *)(intptr_t)(fiber_b), INT64_C(0));
-                    (void)fb_228;
-                    scheduler_spawn_fn((void *)(intptr_t)(sched_226), (void *)(intptr_t)(fa_227));
-                    scheduler_spawn_fn((void *)(intptr_t)(sched_226), (void *)(intptr_t)(fb_228));
-                    scheduler_run_to_completion_fn((void *)(intptr_t)(sched_226));
-                    fiber_free_fn((void *)(intptr_t)(fa_227));
-                    fiber_free_fn((void *)(intptr_t)(fb_228));
+                    void * fb_229 = fiber_new_fn((void *)(intptr_t)(fiber_b), INT64_C(0));
+                    (void)fb_229;
+                    scheduler_spawn_fn((void *)(intptr_t)(sched_227), (void *)(intptr_t)(fa_228));
+                    scheduler_spawn_fn((void *)(intptr_t)(sched_227), (void *)(intptr_t)(fb_229));
+                    scheduler_run_to_completion_fn((void *)(intptr_t)(sched_227));
+                    fiber_free_fn((void *)(intptr_t)(fa_228));
+                    fiber_free_fn((void *)(intptr_t)(fb_229));
                     printf("%lld\n", (long long)(INT64_C(42)));
                     int64_t __t3;
                     __t3 = INT64_C(0);

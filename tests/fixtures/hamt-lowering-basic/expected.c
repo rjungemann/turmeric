@@ -351,6 +351,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -462,6 +463,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -485,6 +487,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2280,30 +2283,30 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         int64_t __t0;
         {
-            void * m_213 = map_new();
-            (void)m_213;
-            printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m_213))));
+            void * m_214 = map_new();
+            (void)m_214;
+            printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m_214))));
             int64_t __t1;
             int64_t __t2;
             {
-                void * m2_214 = hamt_set((void *)(intptr_t)(m_213), hamt_hash_ptr("key1"), "key1", "value1");
-                (void)m2_214;
-                printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m2_214))));
-                puts((hamt_has_((void *)(intptr_t)(m2_214), hamt_hash_ptr("key1"), "key1")) ? "true" : "false");
+                void * m2_215 = hamt_set((void *)(intptr_t)(m_214), hamt_hash_ptr("key1"), "key1", "value1");
+                (void)m2_215;
+                printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m2_215))));
+                puts((hamt_has_((void *)(intptr_t)(m2_215), hamt_hash_ptr("key1"), "key1")) ? "true" : "false");
                 int64_t __t3;
                 int64_t __t4;
                 {
-                    void * m3_215 = hamt_set((void *)(intptr_t)(m2_214), hamt_hash_ptr("key2"), "key2", "value2");
-                    (void)m3_215;
-                    printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m3_215))));
+                    void * m3_216 = hamt_set((void *)(intptr_t)(m2_215), hamt_hash_ptr("key2"), "key2", "value2");
+                    (void)m3_216;
+                    printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m3_216))));
                     int64_t __t5;
                     int64_t __t6;
                     {
-                        void * m4_216 = hamt_del((void *)(intptr_t)(m3_215), hamt_hash_ptr("key1"), "key1");
-                        (void)m4_216;
-                        printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m4_216))));
-                        puts((hamt_has_((void *)(intptr_t)(m4_216), hamt_hash_ptr("key1"), "key1")) ? "true" : "false");
-                        puts((hamt_has_((void *)(intptr_t)(m4_216), hamt_hash_ptr("key2"), "key2")) ? "true" : "false");
+                        void * m4_217 = hamt_del((void *)(intptr_t)(m3_216), hamt_hash_ptr("key1"), "key1");
+                        (void)m4_217;
+                        printf("%lld\n", (long long)(hamt_count((void *)(intptr_t)(m4_217))));
+                        puts((hamt_has_((void *)(intptr_t)(m4_217), hamt_hash_ptr("key1"), "key1")) ? "true" : "false");
+                        puts((hamt_has_((void *)(intptr_t)(m4_217), hamt_hash_ptr("key2"), "key2")) ? "true" : "false");
                         int64_t __t7;
                         __t7 = INT64_C(0);
                         __t6 = __t7;

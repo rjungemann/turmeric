@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2485,119 +2488,119 @@ static void * make_unsettled() {
 
 int main() {
         {
-            void * f1_244 = future_of(INT64_C(42));
-            (void)f1_244;
-            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_244))));
-            future_free((void *)(intptr_t)(f1_244));
+            void * f1_245 = future_of(INT64_C(42));
+            (void)f1_245;
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_245))));
+            future_free((void *)(intptr_t)(f1_245));
         }
         {
-            void * f2_245 = future_error_of(INT64_C(-1));
-            (void)f2_245;
-            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_245))));
-            future_free((void *)(intptr_t)(f2_245));
+            void * f2_246 = future_error_of(INT64_C(-1));
+            (void)f2_246;
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_246))));
+            future_free((void *)(intptr_t)(f2_246));
         }
         {
-            void * f3_246 = future_of(INT64_C(10));
-            (void)f3_246;
+            void * f3_247 = future_of(INT64_C(10));
+            (void)f3_247;
             {
-                void * f3m_247 = future_map((void *)(intptr_t)(f3_246), (void *)(intptr_t)(double_fn));
-                (void)f3m_247;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_247))));
-                future_free((void *)(intptr_t)(f3_246));
-                future_free((void *)(intptr_t)(f3m_247));
+                void * f3m_248 = future_map((void *)(intptr_t)(f3_247), (void *)(intptr_t)(double_fn));
+                (void)f3m_248;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_248))));
+                future_free((void *)(intptr_t)(f3_247));
+                future_free((void *)(intptr_t)(f3m_248));
             }
         }
         {
-            void * f4_248 = future_error_of(INT64_C(-5));
-            (void)f4_248;
+            void * f4_249 = future_error_of(INT64_C(-5));
+            (void)f4_249;
             {
-                void * f4m_249 = future_map((void *)(intptr_t)(f4_248), (void *)(intptr_t)(double_fn));
-                (void)f4m_249;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_249))));
-                future_free((void *)(intptr_t)(f4_248));
-                future_free((void *)(intptr_t)(f4m_249));
+                void * f4m_250 = future_map((void *)(intptr_t)(f4_249), (void *)(intptr_t)(double_fn));
+                (void)f4m_250;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_250))));
+                future_free((void *)(intptr_t)(f4_249));
+                future_free((void *)(intptr_t)(f4m_250));
             }
         }
         {
-            void * f5_250 = future_of(INT64_C(7));
-            (void)f5_250;
+            void * f5_251 = future_of(INT64_C(7));
+            (void)f5_251;
             {
-                void * f5t_251 = future_then((void *)(intptr_t)(f5_250), (void *)(intptr_t)(times10_fn));
-                (void)f5t_251;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_251))));
-                future_free((void *)(intptr_t)(f5_250));
-                future_free((void *)(intptr_t)(f5t_251));
+                void * f5t_252 = future_then((void *)(intptr_t)(f5_251), (void *)(intptr_t)(times10_fn));
+                (void)f5t_252;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_252))));
+                future_free((void *)(intptr_t)(f5_251));
+                future_free((void *)(intptr_t)(f5t_252));
             }
         }
         {
-            void * f6_252 = future_error_of(INT64_C(-3));
-            (void)f6_252;
+            void * f6_253 = future_error_of(INT64_C(-3));
+            (void)f6_253;
             {
-                void * f6t_253 = future_then((void *)(intptr_t)(f6_252), (void *)(intptr_t)(times10_fn));
-                (void)f6t_253;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_253))));
-                future_free((void *)(intptr_t)(f6_252));
-                future_free((void *)(intptr_t)(f6t_253));
+                void * f6t_254 = future_then((void *)(intptr_t)(f6_253), (void *)(intptr_t)(times10_fn));
+                (void)f6t_254;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_254))));
+                future_free((void *)(intptr_t)(f6_253));
+                future_free((void *)(intptr_t)(f6t_254));
             }
         }
         {
-            void * fa_254 = future_of(INT64_C(100));
-            (void)fa_254;
+            void * fa_255 = future_of(INT64_C(100));
+            (void)fa_255;
             {
-                void * fb_255 = future_of(INT64_C(200));
-                (void)fb_255;
+                void * fb_256 = future_of(INT64_C(200));
+                (void)fb_256;
                 {
-                    void * fall_256 = future_all2((void *)(intptr_t)(fa_254), (void *)(intptr_t)(fb_255));
-                    (void)fall_256;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_256))));
-                    future_free((void *)(intptr_t)(fa_254));
-                    future_free((void *)(intptr_t)(fb_255));
-                    future_free((void *)(intptr_t)(fall_256));
+                    void * fall_257 = future_all2((void *)(intptr_t)(fa_255), (void *)(intptr_t)(fb_256));
+                    (void)fall_257;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_257))));
+                    future_free((void *)(intptr_t)(fa_255));
+                    future_free((void *)(intptr_t)(fb_256));
+                    future_free((void *)(intptr_t)(fall_257));
                 }
             }
         }
         {
-            void * fa2_257 = future_of(INT64_C(100));
-            (void)fa2_257;
+            void * fa2_258 = future_of(INT64_C(100));
+            (void)fa2_258;
             {
-                void * fb2_258 = future_error_of(INT64_C(-7));
-                (void)fb2_258;
+                void * fb2_259 = future_error_of(INT64_C(-7));
+                (void)fb2_259;
                 {
-                    void * fall2_259 = future_all2((void *)(intptr_t)(fa2_257), (void *)(intptr_t)(fb2_258));
-                    (void)fall2_259;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_259))));
-                    future_free((void *)(intptr_t)(fa2_257));
-                    future_free((void *)(intptr_t)(fb2_258));
-                    future_free((void *)(intptr_t)(fall2_259));
+                    void * fall2_260 = future_all2((void *)(intptr_t)(fa2_258), (void *)(intptr_t)(fb2_259));
+                    (void)fall2_260;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_260))));
+                    future_free((void *)(intptr_t)(fa2_258));
+                    future_free((void *)(intptr_t)(fb2_259));
+                    future_free((void *)(intptr_t)(fall2_260));
                 }
             }
         }
         {
-            void * fa3_260 = future_of(INT64_C(55));
-            (void)fa3_260;
+            void * fa3_261 = future_of(INT64_C(55));
+            (void)fa3_261;
             {
-                void * fb3_261 = future_error_of(INT64_C(-8));
-                (void)fb3_261;
+                void * fb3_262 = future_error_of(INT64_C(-8));
+                (void)fb3_262;
                 {
-                    void * fany_262 = future_any2((void *)(intptr_t)(fa3_260), (void *)(intptr_t)(fb3_261));
-                    (void)fany_262;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_262))));
-                    future_free((void *)(intptr_t)(fa3_260));
-                    future_free((void *)(intptr_t)(fb3_261));
-                    future_free((void *)(intptr_t)(fany_262));
+                    void * fany_263 = future_any2((void *)(intptr_t)(fa3_261), (void *)(intptr_t)(fb3_262));
+                    (void)fany_263;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_263))));
+                    future_free((void *)(intptr_t)(fa3_261));
+                    future_free((void *)(intptr_t)(fb3_262));
+                    future_free((void *)(intptr_t)(fany_263));
                 }
             }
         }
         {
-            void * fc_263 = make_unsettled();
-            (void)fc_263;
-            future_cancel((void *)(intptr_t)(fc_263));
-            if (future_cancelled_((void *)(intptr_t)(fc_263))) {
+            void * fc_264 = make_unsettled();
+            (void)fc_264;
+            future_cancel((void *)(intptr_t)(fc_264));
+            if (future_cancelled_((void *)(intptr_t)(fc_264))) {
                 puts("cancelled");
             } else {
                 puts("FAIL");
             }
-            future_free((void *)(intptr_t)(fc_263));
+            future_free((void *)(intptr_t)(fc_264));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

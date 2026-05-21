@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2316,13 +2319,13 @@ static int64_t ask_and_log() {
         int64_t __t2;
         {
             int64_t __t3 = tur_effect_perform("Ask", NULL, 0);
-            int64_t n_216 = __t3;
-            (void)n_216;
+            int64_t n_217 = __t3;
+            (void)n_217;
             int64_t __t4[1];
             __t4[0] = (int64_t)"asked";
             tur_effect_perform("Log", __t4, 1);
             int64_t __t5;
-            __t5 = n_216;
+            __t5 = n_217;
             __t2 = __t5;
         }
         __t1 = __t2;
@@ -2335,11 +2338,11 @@ static int64_t add(int64_t x, int64_t y) {
 
 static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_219 = (const char *)__effect_args[0];
-    int64_t k_220 = __k;
-    puts(msg_219);
+    const char * msg_220 = (const char *)__effect_args[0];
+    int64_t k_221 = __k;
+    puts(msg_220);
     int64_t __t8;
-    int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_220, (int64_t)INT64_C(0));
+    int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_221, (int64_t)INT64_C(0));
     __t8 = __t9;
     return (int64_t)__t8;
 }
@@ -2383,19 +2386,19 @@ static int64_t __dispatch_6(void *__ctx_void, int64_t __k_int, int64_t __resume_
 
 static int64_t __effect_handler_13(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_13(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_222 = (const char *)__effect_args[0];
-    int64_t k_223 = __k;
-    puts(msg_222);
+    const char * msg_223 = (const char *)__effect_args[0];
+    int64_t k_224 = __k;
+    puts(msg_223);
     int64_t __t14;
-    int64_t __t15 = tur_effect_cont_resume((int64_t)(intptr_t)k_223, (int64_t)INT64_C(0));
+    int64_t __t15 = tur_effect_cont_resume((int64_t)(intptr_t)k_224, (int64_t)INT64_C(0));
     __t14 = __t15;
     return (int64_t)__t14;
 }
 
 static int64_t __effect_handler_17(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_17(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_221 = __k;
-    int64_t __t18 = tur_effect_cont_resume((int64_t)(intptr_t)k_221, (int64_t)INT64_C(42));
+    int64_t k_222 = __k;
+    int64_t __t18 = tur_effect_cont_resume((int64_t)(intptr_t)k_222, (int64_t)INT64_C(42));
     return (int64_t)__t18;
 }
 
@@ -2523,9 +2526,9 @@ int main() {
             __fiber_12->effect_handler_chain = &__eff_frame_12;
             int64_t __t20 = (int64_t)__dispatch_12(&__cap_12, (int64_t)(intptr_t)__fiber_12, 0);
             if (__fiber_12->done) { free(__fiber_12->stack); free(__fiber_12); }
-            int64_t result_224 = __t20;
-            (void)result_224;
-            printf("%lld\n", (long long)(result_224));
+            int64_t result_225 = __t20;
+            (void)result_225;
+            printf("%lld\n", (long long)(result_225));
         }
         printf("%lld\n", (long long)(add(INT64_C(3), INT64_C(4))));
         int64_t __t21;

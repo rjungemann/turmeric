@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2311,13 +2314,13 @@ static int64_t compute() {
 int main() {
         {
             void *__t0 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)compute);
-            void * fut_214 = __t0;
-            (void)fut_214;
+            void * fut_215 = __t0;
+            (void)fut_215;
             {
-                int64_t __t1 = tur_await_future((TurFuture*)(intptr_t)fut_214);
-                int64_t result_215 = __t1;
-                (void)result_215;
-                printf("%lld\n", (long long)(result_215));
+                int64_t __t1 = tur_await_future((TurFuture*)(intptr_t)fut_215);
+                int64_t result_216 = __t1;
+                (void)result_216;
+                printf("%lld\n", (long long)(result_216));
             }
         }
         return 0;

@@ -18,12 +18,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/wait.h>
@@ -54,6 +56,25 @@
 #include "pkg.h"
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
+
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+
+/* E14: structured JSON output global — set by --json flag.
+ * When true: tur doc prints JSON; tur test prints JSON; tur check uses JSON diag. */
+static bool use_json_output = false;
+
+/* Escape a string for JSON output (handles backslash, double-quote, newline). */
+static void json_escape(const char *s, char *out, size_t cap) {
+    size_t i = 0;
+    while (*s && i + 4 < cap) {
+        if (*s == '\\' || *s == '"') { out[i++] = '\\'; out[i++] = *s++; }
+        else if (*s == '\n')          { out[i++] = '\\'; out[i++] = 'n'; s++; }
+        else                          { out[i++] = *s++; }
+    }
+    out[i] = '\0';
+}
 
 /* Extract basename from a path. */
 static const char *basename_of(const char *path) {
@@ -264,6 +285,9 @@ static int compile_to_c(const char *path, Buf *out_c,
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
         "stdlib/safe.tur",
+        /* stdlib/args.tur is NOT auto-loaded to avoid injecting ~400 lines of args
+         * parser stubs into every compiled program.  Load it explicitly with
+         * (load "stdlib/args.tur") when args/spec-* functions are needed. */
         /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
         "stdlib/contract.tur",
         /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
@@ -899,7 +923,7 @@ static int cmd_run(int argc, char **argv) {
         } else if (strcmp(argv[i], "--") == 0) {
             passthrough_start = i + 1;
             break;
-        } else if (argv[i][0] != '-') {
+        } else if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
             if (!explicit_file) explicit_file = argv[i];
         }
     }
@@ -935,6 +959,40 @@ static int cmd_run(int argc, char **argv) {
 
     /* Single-file mode: explicit file provided, skip project lookup. */
     if (explicit_file) {
+        /* E6: treat "-" as stdin -- buffer it into a temp .tur file first. */
+        if (strcmp(explicit_file, "-") == 0) {
+            char src_tmp[] = "/tmp/tur-stdin-XXXXXX.tur";
+            int src_fd = mkstemps(src_tmp, 4);
+            if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+            char ibuf[4096]; size_t nr;
+            int ok = 1;
+            while ((nr = fread(ibuf, 1, sizeof(ibuf), stdin)) > 0)
+                if ((size_t)write(src_fd, ibuf, nr) != nr) { ok = 0; break; }
+            close(src_fd);
+            if (!ok) {
+                unlink(src_tmp);
+                fprintf(stderr, "tur: error reading stdin\n");
+                return 2;
+            }
+            char out_path[] = "/tmp/tur-run-XXXXXX";
+            int out_fd = mkstemp(out_path);
+            if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+            close(out_fd);
+            int brc = cmd_build(src_tmp, out_path, spice_inc_dirs, n_spice_inc_dirs);
+            unlink(src_tmp);
+            if (brc != 0) { unlink(out_path); free(spice_inc_dirs); return brc; }
+            Buf run_cmd; buf_init(&run_cmd);
+            buf_printf(&run_cmd, "'%s'", out_path);
+            if (passthrough_start >= 0)
+                for (int i = passthrough_start; i < argc; i++)
+                    buf_printf(&run_cmd, " '%s'", argv[i]);
+            buf_putc(&run_cmd, '\0');
+            int sys = system(run_cmd.data);
+            buf_free(&run_cmd);
+            unlink(out_path);
+            free(spice_inc_dirs);
+            return decode_exit_status(sys);
+        }
         RUN_ENTRY(explicit_file);
     }
 
@@ -1188,10 +1246,28 @@ static int cmd_test(const char *dir) {
         }
     }
 
-    putchar('\n');
-    printf("%d tests, %d passed, %d failed\n", n_files, passed, failed);
-    for (int i = 0; i < failed; i++) {
-        printf("FAIL %s\n", failed_files[i]);
+    if (use_json_output) {
+        printf("{\"total\":%d,\"passed\":%d,\"failed\":%d,\"tests\":[",
+               n_files, passed, failed);
+        bool first = true;
+        for (int i = 0; i < n_files; i++) {
+            bool is_fail = false;
+            for (int j = 0; j < failed; j++) {
+                if (failed_files[j] == tur_files[i]) { is_fail = true; break; }
+            }
+            if (!first) printf(",");
+            first = false;
+            char esc[1024];
+            json_escape(tur_files[i], esc, sizeof(esc));
+            printf("{\"file\":\"%s\",\"status\":\"%s\"}", esc, is_fail ? "fail" : "pass");
+        }
+        printf("]}\n");
+    } else {
+        putchar('\n');
+        printf("%d tests, %d passed, %d failed\n", n_files, passed, failed);
+        for (int i = 0; i < failed; i++) {
+            printf("FAIL %s\n", failed_files[i]);
+        }
     }
 
     free(failed_files);
@@ -1362,10 +1438,11 @@ static int is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
-/* tur format [--check] [file]
+/* tur format [--check|--diff] [file]
  * Read source from file (or stdin if no file given), format it, and write to
- * stdout.  With --check, exit 1 if the file is not already formatted. */
-static int cmd_format(const char *path, bool check_only) {
+ * stdout.  --check: exit 1 if file is not already formatted (no output).
+ * --diff: print unified diff if file would change; exit 1 if changed. */
+static int cmd_format(const char *path, bool check_only, bool diff_mode) {
     char  *src = NULL;
     size_t len = 0;
 
@@ -1428,6 +1505,34 @@ static int cmd_format(const char *path, bool check_only) {
                 if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
                 rc = 1;
             }
+        } else if (diff_mode) {
+            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+            if (!same) {
+                /* Write original and formatted to temp files, run diff -u. */
+                char orig_tmp[] = "/tmp/tur-fmt-orig-XXXXXX";
+                int orig_fd = mkstemp(orig_tmp);
+                if (orig_fd >= 0) {
+                    ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
+                    close(orig_fd);
+                }
+                char new_tmp[] = "/tmp/tur-fmt-new-XXXXXX";
+                int new_fd = mkstemp(new_tmp);
+                if (new_fd >= 0) {
+                    ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
+                    close(new_fd);
+                }
+                const char *label = path ? path : "<stdin>";
+                char diff_cmd[8192];
+                /* -L flag supported by both GNU diff and BSD diff (macOS) */
+                snprintf(diff_cmd, sizeof(diff_cmd),
+                         "diff -u -L '%s' -L '%s' '%s' '%s'",
+                         label, label, orig_tmp, new_tmp);
+                int diff_rc = system(diff_cmd);
+                unlink(orig_tmp);
+                unlink(new_tmp);
+                /* diff exits 1 when files differ, 0 when same */
+                if (diff_rc != 0) rc = 1;
+            }
         } else {
             buf_to_file(&out, stdout);
         }
@@ -1440,7 +1545,154 @@ static int cmd_format(const char *path, bool check_only) {
     return rc;
 }
 
+static void wk_register_stdlib_natives(TuriEnv *env);
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
+/* Phase INT-1: run a .tur file through the tree-walking interpreter.
+ * extra_argv/extra_argc are the arguments after the file path, exposed
+ * to the script as *args* (a cons-cell list of C-string pointers). */
+static int cmd_eval(const char *path, bool use_color,
+                    char **extra_argv, int extra_argc) {
+    g_interpret_mode = true;
+    turi_init(use_color);
+    TuriEnv *env = turi_env_new();
+    if (!env) {
+        fprintf(stderr, "tur: failed to create interpreter environment\n");
+        return 1;
+    }
+    /* Preload macros.tur so that and/or/when/cond/for etc. are available.
+     * This is the minimum stdlib needed for any real Turmeric program to work. */
+    {
+        TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
+        (void)sv;
+    }
+    /* Inject typed stubs so the elaborator knows the signatures of native
+     * functions used by benchmark scripts.  The native shims registered below
+     * replace these no-op closures at runtime. */
+    {
+        TuriValue sv = turi_eval(env,
+            /* list operations */
+            "(defn nil-value [] :int 0)\n"
+            "(defn cons [v :int n :int] :int 0)\n"
+            "(defn head [lst :int] :int 0)\n"
+            "(defn tail [lst :int] :int 0)\n"
+            /* vec operations */
+            "(defn vec-new-filled [n :int v :int] :int 0)\n"
+            "(defn vec-get [v :int i :int] :int 0)\n"
+            "(defn vec-set! [v :int i :int x :int] :nil nil)\n"
+            "(defn vec-free [v :int] :nil nil)\n"
+            /* numeric helpers */
+            "(defn cstr->parse-int [s :int] :int 0)\n"
+            "(defn bit-shr [x :int n :int] :int 0)\n"
+            "(defn bit-xor [x :int y :int] :int 0)\n"
+            "(defn println-float [x :float d :int] :nil nil)\n"
+            "(defn int->unit-float [x :int] :float 0.0)\n"
+            "(defn tur-sqrt [x :float] :float 0.0)\n"
+            "(defn int->float [x :int] :float 0.0)\n"
+            /* HAMT operations for hash_map benchmark */
+            "(defn hamt-new [] :int 0)\n"
+            "(defn hamt-free [m :int] :nil nil)\n"
+            "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
+            "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
+            "(defn hamt-hash-ptr [p :int] :int 0)\n"
+            /* I/O benchmark helpers (file_read.tur, file_write.tur) */
+            "(defn write-temp-file [path :cstr n :int] :nil nil)\n"
+            "(defn io-fopen-read [path :cstr] :int 0)\n"
+            "(defn io-fread-chunk [fp :int buf :int] :int 0)\n"
+            "(defn io-fclose [fp :int] :nil nil)\n"
+            "(defn io-remove [path :cstr] :nil nil)\n"
+            "(defn io-buf-new [] :int 0)\n"
+            "(defn io-buf-free [buf :int] :nil nil)\n"
+            "(defn io-alloc [n :int v :int] :int 0)\n"
+            "(defn io-free [buf :int] :nil nil)\n"
+            "(defn io-fopen-write [path :cstr] :int 0)\n"
+            "(defn io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int 0)\n"
+            /* Whole-benchmark natives (random_access, thread_ring, nbody, ray_tracing) */
+            "(defn random-access-bench [size :int reads :int] :int 0)\n"
+            "(defn run-ring [n :int m :int] :nil nil)\n"
+            "(defn run-nbody [n :int steps :int] :nil nil)\n"
+            "(defn run-raytracer [w :int h :int] :int 0)\n"
+        );
+        (void)sv;
+    }
+    /* Register native overrides for stdlib inline-C functions. */
+    wk_register_stdlib_natives(env);
+    /* Build *args* as a cons-cell list of C-string pointers. */
+    {
+        typedef struct { int64_t value; int64_t next; } TurCons;
+        int64_t args_list = 0;
+        for (int i = extra_argc - 1; i >= 0; i--) {
+            TurCons *c = (TurCons *)malloc(sizeof(TurCons));
+            c->value = (int64_t)(intptr_t)extra_argv[i];
+            c->next  = args_list;
+            args_list = (int64_t)(intptr_t)c;
+        }
+        TuriValue args_val = {0};
+        args_val.tag    = TURI_INT;
+        args_val.as_int = args_list;
+        turi_env_set(env, "*args*", args_val);
+    }
+    /* Set module_base_dir so (import ...) resolves relative to the script. */
+    {
+        const char *slash = strrchr(path, '/');
+        if (slash) {
+            size_t dlen = (size_t)(slash - path);
+            char *dpath = (char *)malloc(dlen + 1);
+            memcpy(dpath, path, dlen);
+            dpath[dlen] = '\0';
+            env->module_base_dir = dpath;
+        }
+    }
+    TuriValue result = turi_eval_file(env, path);
+    int rc = 0;
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        /* parse/elaboration errors are already printed by the diagnostic system */
+        if (msg && strcmp(msg, "parse error") != 0 &&
+                   strcmp(msg, "elaboration error") != 0) {
+            fprintf(stderr, "tur: %s\n", msg);
+        }
+        rc = 1;
+    } else {
+        TuriValue main_fn = turi_env_get(env, "main");
+        if (main_fn.tag == TURI_CLOSURE) {
+            TuriValue r = turi_call(env, main_fn, NULL, 0);
+            if (r.tag == TURI_ERROR) rc = 1;
+            else if (r.tag == TURI_INT) rc = (int)r.as_int;
+        }
+        turi_run_pending_defers(env);
+    }
+    turi_env_free(env);
+    return rc;
+}
+
+/* E3: tur eval '<expr>' — evaluate an inline expression and print result. */
+static int cmd_eval_expr(const char *expr, bool use_color) {
+    g_interpret_mode = true;
+    turi_init(use_color);
+    TuriEnv *env = turi_env_new();
+    if (!env) {
+        fprintf(stderr, "tur: failed to create interpreter environment\n");
+        return 1;
+    }
+    TuriValue result = turi_eval(env, expr);
+    int rc = 0;
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        if (msg && strcmp(msg, "parse error") != 0 &&
+                   strcmp(msg, "elaboration error") != 0) {
+            fprintf(stderr, "tur: %s\n", msg);
+        }
+        rc = 1;
+    } else if (result.tag != TURI_NIL) {
+        char repr[512];
+        turi_value_repr(repr, sizeof(repr), result);
+        printf("%s\n", repr);
+    }
+    turi_env_free(env);
+    return rc;
+}
+
 static int cmd_repl(void) {
     return turi_repl_run();
 }
@@ -1489,6 +1741,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--lint-unsafe-doc")   == 0) { g_lint_unsafe_enabled = true; }
         else if (strcmp(tok, "--require-unsafe-docs")== 0) { g_lint_unsafe_enabled = true; g_unsafe_require_safety = true; }
         else if (strcmp(tok, "--lint-unsafe-nested")== 0) { g_lint_unsafe_enabled = true; }
+        else if (strcmp(tok, "--lint-inline-c-unsafe") == 0) g_lint_inline_c_unsafe = true;
         tok = strtok(NULL, " \t");
     }
 }
@@ -2365,6 +2618,413 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* nil-value: return 0 (empty list sentinel) */
+static TuriValue native_nil_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(0);
+}
+/* cons: allocate a new cons cell {value, next} and return pointer as int64 */
+static TuriValue native_cons(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t value = (n > 0) ? a[0].as_int : 0;
+    int64_t next  = (n > 1) ? a[1].as_int : 0;
+    int64_t *cell = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!cell) return turi_nil();
+    cell[0] = value; cell[1] = next;
+    return turi_int((int64_t)(intptr_t)cell);
+}
+/* tail: return the next pointer field of the first cons cell */
+static TuriValue native_list_tail(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(cell[1]);
+}
+/* list-nil?: true if the cons-cell pointer is 0 (empty list) */
+static TuriValue native_list_nil_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_BOOL;
+    rv.as_bool = (n == 0 || a[0].as_int == 0);
+    return rv;
+}
+/* head: return the value field of the first cons cell */
+static TuriValue native_list_head(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_nil();
+    int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(cell[0]);
+}
+/* cstr->parse-int: parse a raw int (cstr pointer as int64) to int64 */
+static TuriValue native_cstr_parse_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *s = (const char *)(intptr_t)a[0].as_int;
+    return turi_int(s ? (int64_t)atoll(s) : 0);
+}
+/* bit-shr: logical (unsigned) right shift */
+static TuriValue native_bit_shr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_int((int64_t)((uint64_t)a[0].as_int >> (unsigned)a[1].as_int));
+}
+/* bit-xor: bitwise XOR of two integers */
+static TuriValue native_bit_xor(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_int(a[0].as_int ^ a[1].as_int);
+}
+/* println-float: print float with given decimal places */
+static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0;
+    int d = (n > 1) ? (int)a[1].as_int : 6;
+    if (d < 0) d = 0;
+    if (d > 17) d = 17;
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df\n", d);
+    printf(fmt, x);
+    return turi_nil();
+}
+/* vec-new-filled: allocate a vec of size sz filled with init */
+static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t sz  = (n > 0) ? a[0].as_int : 0;
+    int64_t val = (n > 1) ? a[1].as_int : 0;
+    if (sz < 0) sz = 0;
+    int64_t *v = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!v) return turi_nil();
+    int64_t *data = sz > 0 ? (int64_t *)malloc((size_t)sz * sizeof(int64_t)) : NULL;
+    for (int64_t i = 0; i < sz; i++) data[i] = val;
+    v[0] = (int64_t)(intptr_t)data; v[1] = sz; v[2] = sz;
+    TuriValue ret = {0}; ret.tag = TURI_INT; ret.as_int = (int64_t)(intptr_t)v;
+    return ret;
+}
+/* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
+static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? (double)(uint64_t)a[0].as_int / 9007199254740992.0 : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+/* tur-sqrt: square root via libm */
+static TuriValue native_tur_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (n > 0 ? (double)a[0].as_int : 0.0);
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = sqrt(x); return rv;
+}
+/* int->float: cast int64 to double */
+static TuriValue native_int_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? (double)a[0].as_int : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+
+/* -------------------------------------------------------------------------
+ * I/O benchmark native helpers (file_read.tur, file_write.tur).
+ *
+ * These replace the inline-C helper definitions in the turmeric/ benchmark
+ * files so the shared turi/ symlinks work under tur --interpret.
+ * ---------------------------------------------------------------------- */
+
+/* Helper: extract a C-string from a TuriValue (TURI_CSTR or TURI_INT ptr). */
+static const char *tv_to_cstr(TuriValue v) {
+    if (v.tag == TURI_CSTR) return v.as_cstr;
+    return (const char *)(intptr_t)v.as_int;
+}
+
+/* write-temp-file [path :cstr n :int] :nil -- write n bytes to path. */
+static TuriValue native_write_temp_file(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    const char *path = tv_to_cstr(a[0]);
+    int64_t bytes = a[1].as_int;
+    if (!path || bytes <= 0) return turi_nil();
+    char buf[4096];
+    memset(buf, 0xCD, sizeof(buf));
+    FILE *f = fopen(path, "wb");
+    if (!f) return turi_nil();
+    int64_t rem = bytes;
+    while (rem > 0) {
+        int64_t chunk = rem < 4096 ? rem : 4096;
+        fwrite(buf, 1, (size_t)chunk, f);
+        rem -= chunk;
+    }
+    fclose(f);
+    return turi_nil();
+}
+
+/* io-fopen-read [path :cstr] :int -- fopen "rb", return FILE* as int64. */
+static TuriValue native_io_fopen_read(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *path = (n >= 1) ? tv_to_cstr(a[0]) : NULL;
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    return turi_int((int64_t)(intptr_t)f);
+}
+
+/* io-fread-chunk [fp :int buf :int] :int -- fread up to 4096 bytes; return bytes read. */
+static TuriValue native_io_fread_chunk(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    FILE *fp  = (FILE *)(intptr_t)a[0].as_int;
+    void *buf = (void *)(intptr_t)a[1].as_int;
+    if (!fp || !buf) return turi_int(0);
+    return turi_int((int64_t)fread(buf, 1, 4096, fp));
+}
+
+/* io-fclose [fp :int] :nil -- fclose a FILE*. */
+static TuriValue native_io_fclose(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) fclose((FILE *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* io-remove [path :cstr] :nil -- remove a file. */
+static TuriValue native_io_remove(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *path = (n >= 1) ? tv_to_cstr(a[0]) : NULL;
+    if (path) remove(path);
+    return turi_nil();
+}
+
+/* io-buf-new [] :int -- malloc 4096 bytes; return pointer as int64. */
+static TuriValue native_io_buf_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)malloc(4096));
+}
+
+/* io-buf-free [buf :int] :nil -- free a buffer. */
+static TuriValue native_io_buf_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* io-alloc [n :int v :int] :int -- malloc n bytes filled with byte v. */
+static TuriValue native_io_alloc(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    size_t sz  = (n > 0 && a[0].as_int > 0) ? (size_t)a[0].as_int : 0;
+    int    val = (n > 1) ? (int)a[1].as_int : 0;
+    void *buf = sz ? malloc(sz) : NULL;
+    if (buf) memset(buf, val, sz);
+    return turi_int((int64_t)(intptr_t)buf);
+}
+
+/* io-free [buf :int] :nil -- free an io-alloc'd buffer. */
+static TuriValue native_io_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* io-fopen-write [path :cstr] :int -- fopen "wb", return FILE* as int64. */
+static TuriValue native_io_fopen_write(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *path = (n >= 1) ? tv_to_cstr(a[0]) : NULL;
+    FILE *f = path ? fopen(path, "wb") : NULL;
+    return turi_int((int64_t)(intptr_t)f);
+}
+
+/* io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int -- fwrite; return bytes. */
+static TuriValue native_io_fwrite_chunk(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_int(0);
+    FILE *fp    = (FILE *)(intptr_t)a[0].as_int;
+    char *buf   = (char *)(intptr_t)a[1].as_int;
+    int64_t off = a[2].as_int;
+    int64_t len = a[3].as_int;
+    if (!fp || !buf || len <= 0) return turi_int(0);
+    return turi_int((int64_t)fwrite(buf + off, 1, (size_t)len, fp));
+}
+
+/* -------------------------------------------------------------------------
+ * Whole-benchmark native implementations for benchmarks whose logic is
+ * written entirely in inline-C (legitimate platform I/O or concurrency tests).
+ * ---------------------------------------------------------------------- */
+
+/* random-access-bench [file_size :int n_reads :int] :int */
+static TuriValue native_random_access_bench(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t file_size = a[0].as_int;
+    int64_t n_reads   = a[1].as_int;
+    const char *path  = "/tmp/bench_io_random_tur.bin";
+    char wbuf[4096];
+    FILE *fw = fopen(path, "wb");
+    if (!fw) return turi_int(-1);
+    int64_t rem = file_size;
+    int seq = 0;
+    while (rem > 0) {
+        int64_t chunk = rem < 4096 ? rem : 4096;
+        for (int64_t i = 0; i < chunk; i++) wbuf[i] = (char)(seq++ & 0xFF);
+        fwrite(wbuf, 1, (size_t)chunk, fw);
+        rem -= chunk;
+    }
+    fclose(fw);
+    FILE *fr = fopen(path, "rb");
+    if (!fr) return turi_int(-1);
+    uint64_t state = 12345678ULL;
+    int64_t  checksum = 0;
+    unsigned char byte;
+    for (int64_t i = 0; i < n_reads; i++) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        int64_t offset = (int64_t)(state >> 1) % file_size;
+        fseek(fr, (long)offset, SEEK_SET);
+        if (fread(&byte, 1, 1, fr)) checksum += byte;
+    }
+    fclose(fr);
+    remove(path);
+    return turi_int(checksum);
+}
+
+/* ring_worker_nat: pthread worker for the thread-ring benchmark. */
+typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+    int             ready;
+    int64_t         token;
+} TRSlot_nat;
+typedef struct { TRSlot_nat *ring; int id; int n; } TRArg_nat;
+static void *ring_worker_nat(void *vp) {
+    TRArg_nat *a = (TRArg_nat *)vp;
+    TRSlot_nat *me   = &a->ring[a->id];
+    TRSlot_nat *next = &a->ring[(a->id + 1) % a->n];
+    while (1) {
+        pthread_mutex_lock(&me->mu);
+        while (!me->ready) pthread_cond_wait(&me->cv, &me->mu);
+        int64_t tok = me->token; me->ready = 0;
+        pthread_mutex_unlock(&me->mu);
+        int64_t out = tok > 0 ? tok - 1 : tok;
+        pthread_mutex_lock(&next->mu);
+        next->token = out; next->ready = 1;
+        pthread_cond_signal(&next->cv);
+        pthread_mutex_unlock(&next->mu);
+        if (tok <= 0) return NULL;
+    }
+}
+
+/* run-ring [n_threads :int messages :int] :nil */
+static TuriValue native_run_ring(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    int n_threads = (int)a[0].as_int;
+    int messages  = (int)a[1].as_int;
+    if (n_threads <= 0) return turi_nil();
+    TRSlot_nat *ring = (TRSlot_nat *)calloc((size_t)n_threads, sizeof(TRSlot_nat));
+    for (int i = 0; i < n_threads; i++) {
+        pthread_mutex_init(&ring[i].mu, NULL);
+        pthread_cond_init(&ring[i].cv, NULL);
+    }
+    TRArg_nat *targs = (TRArg_nat *)malloc((size_t)n_threads * sizeof(TRArg_nat));
+    for (int i = 0; i < n_threads; i++) {
+        targs[i].ring = ring; targs[i].id = i; targs[i].n = n_threads;
+    }
+    pthread_t *threads = (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
+    for (int i = 0; i < n_threads; i++)
+        pthread_create(&threads[i], NULL, ring_worker_nat, &targs[i]);
+    pthread_mutex_lock(&ring[0].mu);
+    ring[0].token = messages; ring[0].ready = 1;
+    pthread_cond_signal(&ring[0].cv);
+    pthread_mutex_unlock(&ring[0].mu);
+    for (int i = 0; i < n_threads; i++) pthread_join(threads[i], NULL);
+    printf("done\n");
+    free(threads); free(targs); free(ring);
+    return turi_nil();
+}
+
+/* run-nbody [n_bodies :int steps :int] :nil */
+static TuriValue native_run_nbody(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    int n_bodies = (int)a[0].as_int;
+    int steps    = (int)a[1].as_int;
+    if (n_bodies <= 0) return turi_nil();
+    typedef struct { double x,y,z,vx,vy,vz,mass; } NBody_nat;
+    NBody_nat *b = (NBody_nat *)calloc((size_t)n_bodies, sizeof(NBody_nat));
+    uint64_t state = 42;
+    for (int i = 0; i < n_bodies; i++) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        b[i].x = (double)(int64_t)(state >> 32) / 1e8;
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        b[i].y = (double)(int64_t)(state >> 32) / 1e8;
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        b[i].z = (double)(int64_t)(state >> 32) / 1e8;
+        b[i].vx = b[i].vy = b[i].vz = 0.0;
+        b[i].mass = 1.0 + (i % 5) * 0.5;
+    }
+    for (int s = 0; s < steps; s++) {
+        for (int i = 0; i < n_bodies; i++)
+            for (int j = i + 1; j < n_bodies; j++) {
+                double dx = b[j].x-b[i].x, dy = b[j].y-b[i].y, dz = b[j].z-b[i].z;
+                double dist = sqrt(dx*dx+dy*dy+dz*dz) + 1e-10;
+                double f = b[i].mass * b[j].mass / (dist*dist*dist);
+                b[i].vx+=f*dx; b[i].vy+=f*dy; b[i].vz+=f*dz;
+                b[j].vx-=f*dx; b[j].vy-=f*dy; b[j].vz-=f*dz;
+            }
+        for (int i = 0; i < n_bodies; i++) {
+            b[i].x += b[i].vx; b[i].y += b[i].vy; b[i].z += b[i].vz;
+        }
+    }
+    double ke = 0;
+    for (int i = 0; i < n_bodies; i++)
+        ke += 0.5 * b[i].mass * (b[i].vx*b[i].vx + b[i].vy*b[i].vy + b[i].vz*b[i].vz);
+    printf("%.4f\n", ke);
+    free(b);
+    return turi_nil();
+}
+
+/* run-raytracer [width :int height :int] :int */
+static TuriValue native_run_raytracer(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t width  = a[0].as_int;
+    int64_t height = a[1].as_int;
+    typedef struct { double x, y, z; } RT_Vec3;
+    typedef struct { RT_Vec3 center; double radius; } RT_Sphere;
+#define RT_ADD(a,b) ((RT_Vec3){(a).x+(b).x,(a).y+(b).y,(a).z+(b).z})
+#define RT_SUB(a,b) ((RT_Vec3){(a).x-(b).x,(a).y-(b).y,(a).z-(b).z})
+#define RT_SCALE(v,s) ((RT_Vec3){(v).x*(s),(v).y*(s),(v).z*(s)})
+#define RT_DOT(a,b) ((a).x*(b).x+(a).y*(b).y+(a).z*(b).z)
+    RT_Sphere spheres[] = {{{0,0,-5},1.0}, {{2,0,-7},1.5}, {{-3,0,-6},0.8}};
+    RT_Vec3 lraw = {1, 1, -1};
+    double llen = sqrt(RT_DOT(lraw, lraw)) + 1e-15;
+    RT_Vec3 light = RT_SCALE(lraw, 1.0 / llen);
+    RT_Vec3 origin = {0, 0, 0};
+    int64_t checksum = 0;
+    for (int64_t y = 0; y < height; y++) {
+        for (int64_t x = 0; x < width; x++) {
+            double u = ((double)x / width) * 2 - 1;
+            double v = ((double)y / height) * 2 - 1;
+            RT_Vec3 dv = {u, v, -1};
+            double dlen = sqrt(RT_DOT(dv, dv)) + 1e-15;
+            RT_Vec3 dir = RT_SCALE(dv, 1.0 / dlen);
+            double best = 1e18; int bi = -1;
+            for (int i = 0; i < 3; i++) {
+                RT_Vec3 oc = RT_SUB(origin, spheres[i].center);
+                double aa = RT_DOT(dir, dir), b2 = RT_DOT(oc, dir);
+                double c = RT_DOT(oc, oc) - spheres[i].radius * spheres[i].radius;
+                double d = b2*b2 - aa*c;
+                if (d >= 0) {
+                    double t = (-b2 - sqrt(d)) / aa;
+                    if (t > 0.001 && t < best) { best = t; bi = i; }
+                }
+            }
+            if (bi >= 0) {
+                RT_Vec3 hp = RT_ADD(origin, RT_SCALE(dir, best));
+                RT_Vec3 nv = RT_SUB(hp, spheres[bi].center);
+                double nlen2 = sqrt(RT_DOT(nv, nv)) + 1e-15;
+                RT_Vec3 norm = RT_SCALE(nv, 1.0 / nlen2);
+                double diff = RT_DOT(norm, light);
+                if (diff < 0) diff = 0;
+                checksum += (int64_t)(diff * 255);
+            }
+        }
+    }
+#undef RT_ADD
+#undef RT_SUB
+#undef RT_SCALE
+#undef RT_DOT
+    return turi_int(checksum);
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
@@ -2439,6 +3099,44 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "result-partition",native_result_partition, NULL);
     turi_env_register_native(env, "result-partition-ok", native_result_partition_ok, NULL);
     turi_env_register_native(env, "result-partition-err", native_result_partition_err, NULL);
+    /* List operations for benchmark arg parsing and list_ops benchmark */
+    turi_env_register_native(env, "nil-value",         native_nil_value,       NULL);
+    turi_env_register_native(env, "cons",              native_cons,            NULL);
+    turi_env_register_native(env, "list-nil?",         native_list_nil_pred,   NULL);
+    turi_env_register_native(env, "head",              native_list_head,       NULL);
+    turi_env_register_native(env, "tail",              native_list_tail,       NULL);
+    /* Benchmark micro-helpers */
+    turi_env_register_native(env, "cstr->parse-int",  native_cstr_parse_int,  NULL);
+    turi_env_register_native(env, "bit-shr",           native_bit_shr,         NULL);
+    turi_env_register_native(env, "bit-xor",           native_bit_xor,         NULL);
+    turi_env_register_native(env, "println-float",     native_println_float,   NULL);
+    turi_env_register_native(env, "vec-new-filled",    native_vec_new_filled,  NULL);
+    turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
+    turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
+    turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
+    /* HAMT operations for hash_map benchmark (int-typed wrappers) */
+    turi_env_register_native(env, "hamt-new",          native_tur_hamt_new,    NULL);
+    turi_env_register_native(env, "hamt-free",         native_tur_hamt_free,   NULL);
+    turi_env_register_native(env, "hamt-set",          native_tur_hamt_set,    NULL);
+    turi_env_register_native(env, "hamt-get",          native_tur_hamt_get,    NULL);
+    turi_env_register_native(env, "hamt-hash-ptr",     native_tur_hamt_hash_ptr, NULL);
+    /* I/O benchmark helpers */
+    turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
+    turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);
+    turi_env_register_native(env, "io-fread-chunk",    native_io_fread_chunk,  NULL);
+    turi_env_register_native(env, "io-fclose",         native_io_fclose,       NULL);
+    turi_env_register_native(env, "io-remove",         native_io_remove,       NULL);
+    turi_env_register_native(env, "io-buf-new",        native_io_buf_new,      NULL);
+    turi_env_register_native(env, "io-buf-free",       native_io_buf_free,     NULL);
+    turi_env_register_native(env, "io-alloc",          native_io_alloc,        NULL);
+    turi_env_register_native(env, "io-free",           native_io_free,         NULL);
+    turi_env_register_native(env, "io-fopen-write",    native_io_fopen_write,  NULL);
+    turi_env_register_native(env, "io-fwrite-chunk",   native_io_fwrite_chunk, NULL);
+    /* Whole-benchmark natives */
+    turi_env_register_native(env, "random-access-bench", native_random_access_bench, NULL);
+    turi_env_register_native(env, "run-ring",          native_run_ring,        NULL);
+    turi_env_register_native(env, "run-nbody",         native_run_nbody,       NULL);
+    turi_env_register_native(env, "run-raytracer",     native_run_raytracer,   NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -2654,6 +3352,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
 
         wk_apply_flags(flags_str);
         if (timeout_secs > 0) alarm((unsigned)timeout_secs);
+        g_interpret_mode = true;
 
         TuriEnv *env = turi_env_new();
         /* Pre-load stdlib files so the elaborator has all standard definitions.
@@ -3044,9 +3743,13 @@ static int usage(void) {
         "  tur run <input.tur>               build + execute a single file\n"
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
+        "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
+        "  tur eval '<expr>'                 evaluate an inline expression\n"
+        "  tur doc <symbol>                  print documentation for a builtin or special form\n"
+        "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
-        "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
+        "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
         "  tur init [--bin|--lib] <name>     create a new project\n"
@@ -3062,6 +3765,7 @@ static int usage(void) {
         "\n"
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
+        "  --json                           structured JSON output (tur doc, tur test, tur check)\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
         "  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)\n"
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
@@ -3087,6 +3791,138 @@ static int usage(void) {
         "  --keep-contracts                 retain contract checks in release builds (CT3)\n"
         "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n");
     return 64;
+}
+
+/* E1: per-subcommand help strings */
+static int usage_build(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur build <file.tur> [-o <out>]   build a single file\n"
+        "  tur build <dir> [-o <out>]        build all .tur files in directory\n"
+        "\n"
+        "flags:\n"
+        "  -o <out>   output file path\n"
+        "  -I <dir>   add include directory\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_run(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur run <file.tur> [-- <args...>]   build and execute a single file\n"
+        "  tur run - [-- <args...>]            read source from stdin, build and execute\n"
+        "\n"
+        "flags:\n"
+        "  --release   optimized build\n"
+        "  --offline   skip dependency fetch\n"
+        "  --          pass remaining arguments to the program\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_check(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur check <file.tur>   type-check only, no codegen\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_eval(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur eval '<expr>'          evaluate an inline expression and print the result\n"
+        "  tur eval --file <file.tur> run a .tur file through the interpreter\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_doc(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur doc <symbol>          print documentation for a builtin or special form\n"
+        "  tur doc --json <symbol>   print documentation as JSON\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+/* E5: tur doc <symbol> -- print documentation for a builtin or special form. */
+static int cmd_doc_cli(const char *sym) {
+    const char *d = turi_doc_lookup_builtin(sym);
+    if (d) {
+        if (use_json_output) {
+            char esc_sym[128], esc_doc[512];
+            json_escape(sym, esc_sym, sizeof(esc_sym));
+            json_escape(d,   esc_doc, sizeof(esc_doc));
+            printf("{\"name\":\"%s\",\"doc\":\"%s\"}\n", esc_sym, esc_doc);
+        } else {
+            printf("%s\n", d);
+        }
+        return 0;
+    }
+    if (use_json_output)
+        fprintf(stderr, "{\"error\":\"no documentation for '%s'\"}\n", sym);
+    else
+        fprintf(stderr, "no documentation for '%s'\n", sym);
+    return 1;
+}
+
+static int usage_format(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur format [file.tur]          format a source file (stdin if no file given)\n"
+        "  tur format --check [file.tur]  exit 1 if formatting would change the file\n"
+        "  tur format --diff [file.tur]   print unified diff of formatting changes\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_test(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur test <dir>   run all .tur test files in a directory\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_repl(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur repl   start the interactive REPL\n"
+        "\n"
+        "REPL commands:\n"
+        "  :help           print help\n"
+        "  :quit / :q      exit the REPL\n"
+        "  :doc <sym>      look up documentation for a symbol\n"
+        "  :type <expr>    print the inferred type of an expression\n"
+        "  :reload <file>  reload a source file\n"
+        "  :reset          clear session and start fresh\n"
+        "  :tutorial       start the interactive tutorial\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_explain(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur explain <TUR-E####>    print explanation for a diagnostic code\n"
+        "  tur explain '<snippet>'   compile a snippet and explain errors\n"
+        "\n"
+        "examples:\n"
+        "  tur explain TUR-E0042\n"
+        "  tur explain '(+ 1 \"x\")'\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
 }
 
 /* Phase 8: Handle --no-color flag */
@@ -3260,7 +4096,14 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "--json-diagnostics") == 0) {
             use_json_diagnostics = true;
-            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--json") == 0) {
+            /* E14: structured JSON output — implies --json-diagnostics for check */
+            use_json_output = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -3306,6 +4149,13 @@ int main(int argc, char **argv) {
             g_lint_unsafe_enabled = true;
             g_unsafe_stats_enabled = true;
             /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--lint-inline-c-unsafe") == 0) {
+            g_lint_inline_c_unsafe = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -3464,6 +4314,7 @@ int main(int argc, char **argv) {
     
         /* Initialize diagnostics - use color unless --no-color or --json-diagnostics specified */
         /* JSON output disables color */
+        if (use_json_output) use_json_diagnostics = true;
         diag_init(!no_color && !use_json_diagnostics && stderr_is_tty());
         diag_set_json_output(use_json_diagnostics);
     
@@ -3475,6 +4326,18 @@ int main(int argc, char **argv) {
         return cmd_explain(explain_code);
     }
     
+    /* E2: --version / -V */
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("turmeric " TUR_VERSION "\n");
+        return 0;
+    }
+
+    /* E1: --help / -h at top level */
+    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        usage();
+        return 0;
+    }
+
     if (argc < 2) return usage();
     const char *cmd = argv[1];
 
@@ -3485,16 +4348,18 @@ int main(int argc, char **argv) {
             return cmd_emit_c_to_dir(out_dir, argv + 4, argc - 4);
         }
         /* tur emit-c <file> -- single file to stdout (legacy) */
-        if (argc != 3) return usage();
+        if (argc != 3) return usage_build();
         return cmd_emit_c(argv[2]);
     }
     if (strcmp(cmd, "emit-h") == 0) {
-        if (argc != 3) return usage();
+        if (argc != 3) return usage_build();
         return cmd_emit_h(argv[2]);
     }
     if (strcmp(cmd, "check") == 0) {
         /* Phase 8: tur check subcommand - type-check only, no codegen */
-        if (argc != 3) return usage();
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_check();
+        if (argc != 3) return usage_check();
         Buf out;
         buf_init(&out);
         int rc = compile_to_c(argv[2], &out, NULL, 0);
@@ -3509,7 +4374,9 @@ int main(int argc, char **argv) {
         int     build_inc_cap = 4;
         char  **build_inc = (char **)malloc((size_t)build_inc_cap * sizeof(char *));
         for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(build_inc); return usage_build();
+            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc) {
                 if (n_build_inc >= build_inc_cap) {
@@ -3544,33 +4411,89 @@ int main(int argc, char **argv) {
         return rc;
     }
     if (strcmp(cmd, "run") == 0) {
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--") == 0) break;
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+                return usage_run();
+        }
         return cmd_run(argc, argv);
     }
     if (strcmp(cmd, "repl") == 0) {
         /* Phase S0: interactive REPL */
+        if (argc >= 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_repl();
         return cmd_repl();
     }
     /* Tier 3: persistent fixture worker for the test suite. */
     if (strcmp(cmd, "worker") == 0) {
         return cmd_worker();
     }
-    if (strcmp(cmd, "format") == 0) {
-        bool check_only = false;
-        const char *fmt_input = NULL;
+    if (strcmp(cmd, "--interpret") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "tur: --interpret requires a file argument\n");
+            return usage();
+        }
+        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3);
+    }
+    /* E3: tur eval '<expr>' or tur eval --file <file> */
+    if (strcmp(cmd, "eval") == 0) {
+        if (argc < 3) return usage_eval();
+        bool is_file = false;
+        const char *src = NULL;
         for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "--check") == 0) {
-                check_only = true;
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+                return usage_eval();
+            if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
+                is_file = true;
+                src = argv[++i];
             } else if (argv[i][0] != '-') {
-                if (fmt_input) return usage();
-                fmt_input = argv[i];
-            } else {
-                return usage();
+                src = argv[i];
             }
         }
-        return cmd_format(fmt_input, check_only);
+        if (!src) return usage_eval();
+        bool use_color = !no_color && stderr_is_tty();
+        if (is_file)
+            return cmd_eval(src, use_color, NULL, 0);
+        return cmd_eval_expr(src, use_color);
+    }
+    /* E5: tur doc <symbol> */
+    if (strcmp(cmd, "doc") == 0) {
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_doc();
+        if (argc != 3) return usage_doc();
+        return cmd_doc_cli(argv[2]);
+    }
+    /* E13: tur explain — first-class subcommand wrapping --explain */
+    if (strcmp(cmd, "explain") == 0) {
+        if (argc < 3 || (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0)))
+            return usage_explain();
+        return cmd_explain(argv[2]);
+    }
+    if (strcmp(cmd, "format") == 0) {
+        bool check_only = false;
+        bool diff_mode  = false;
+        const char *fmt_input = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+                return usage_format();
+            if (strcmp(argv[i], "--check") == 0) {
+                check_only = true;
+            } else if (strcmp(argv[i], "--diff") == 0) {
+                diff_mode = true;
+            } else if (argv[i][0] != '-') {
+                if (fmt_input) return usage_format();
+                fmt_input = argv[i];
+            } else {
+                return usage_format();
+            }
+        }
+        if (check_only && diff_mode) return usage_format();
+        return cmd_format(fmt_input, check_only, diff_mode);
     }
     if (strcmp(cmd, "test") == 0) {
-        if (argc != 3) return usage();
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_test();
+        if (argc != 3) return usage_test();
         return cmd_test(argv[2]);
     }
     /* Phase PKG-1: Spice package manager commands */

@@ -1,0 +1,14 @@
+{
+  "small": {
+    "iterations": 1000
+  },
+  "medium": {
+    "iterations": 100000
+  },
+  "large": {
+    "iterations": 10000000
+  },
+  "turi": {
+    "iterations": 400
+  }
+}

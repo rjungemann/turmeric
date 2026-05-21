@@ -185,6 +185,14 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             }
             buf_puts(b, " }");
             break;
+        case F_READER_COND:
+            buf_puts(b, "#?(");
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (i) buf_putc(b, ' ');
+                fmt_form_flat(b, f->as.list.items[i]);
+            }
+            buf_putc(b, ')');
+            break;
     }
 }
 
@@ -752,6 +760,9 @@ static void fmt_form(FmtState *s, const Form *f) {
         }
         case F_LIST:
             fmt_list(s, f);
+            break;
+        case F_READER_COND:
+            fmt_emit_inline(s, f);
             break;
     }
 }

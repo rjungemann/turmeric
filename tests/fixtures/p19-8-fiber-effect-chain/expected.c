@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2330,8 +2333,8 @@ static void fiber_yield_fn(int64_t v) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_225 = __k;
-    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_225, (int64_t)INT64_C(20));
+    int64_t k_226 = __k;
+    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_226, (int64_t)INT64_C(20));
     return (int64_t)__t2;
 }
 
@@ -2390,16 +2393,16 @@ static void fiber1_body() {
             __fiber_0->effect_handler_chain = &__eff_frame_0;
             int64_t __t4 = (int64_t)__dispatch_0(&__cap_0, (int64_t)(intptr_t)__fiber_0, 0);
             if (__fiber_0->done) { free(__fiber_0->stack); free(__fiber_0); }
-            int64_t r_226 = __t4;
-            (void)r_226;
-            fiber_yield_fn(r_226);
+            int64_t r_227 = __t4;
+            (void)r_227;
+            fiber_yield_fn(r_227);
         }
 }
 
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_227 = __k;
-    int64_t __t7 = tur_effect_cont_resume((int64_t)(intptr_t)k_227, (int64_t)INT64_C(30));
+    int64_t k_228 = __k;
+    int64_t __t7 = tur_effect_cont_resume((int64_t)(intptr_t)k_228, (int64_t)INT64_C(30));
     return (int64_t)__t7;
 }
 
@@ -2458,16 +2461,16 @@ static void fiber2_body() {
             __fiber_5->effect_handler_chain = &__eff_frame_5;
             int64_t __t9 = (int64_t)__dispatch_5(&__cap_5, (int64_t)(intptr_t)__fiber_5, 0);
             if (__fiber_5->done) { free(__fiber_5->stack); free(__fiber_5); }
-            int64_t r_228 = __t9;
-            (void)r_228;
-            fiber_yield_fn(r_228);
+            int64_t r_229 = __t9;
+            (void)r_229;
+            fiber_yield_fn(r_229);
         }
 }
 
 static int64_t __effect_handler_18(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_18(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_233 = __k;
-    int64_t __t19 = tur_effect_cont_resume((int64_t)(intptr_t)k_233, (int64_t)INT64_C(99));
+    int64_t k_234 = __k;
+    int64_t __t19 = tur_effect_cont_resume((int64_t)(intptr_t)k_234, (int64_t)INT64_C(99));
     return (int64_t)__t19;
 }
 
@@ -2509,23 +2512,23 @@ static int64_t __dispatch_17(void *__ctx_void, int64_t __k_int, int64_t __resume
 int main() {
         int64_t __t10;
         {
-            void * f1_229 = fiber_new_fn((void *)(intptr_t)(fiber1_body), INT64_C(0));
-            (void)f1_229;
+            void * f1_230 = fiber_new_fn((void *)(intptr_t)(fiber1_body), INT64_C(0));
+            (void)f1_230;
             int64_t __t11;
             {
-                int64_t v1_230 = fiber_resume_fn((void *)(intptr_t)(f1_229), INT64_C(0));
-                (void)v1_230;
-                fiber_free_fn((void *)(intptr_t)(f1_229));
+                int64_t v1_231 = fiber_resume_fn((void *)(intptr_t)(f1_230), INT64_C(0));
+                (void)v1_231;
+                fiber_free_fn((void *)(intptr_t)(f1_230));
                 int64_t __t12;
                 int64_t __t13;
                 {
-                    void * f2_231 = fiber_new_fn((void *)(intptr_t)(fiber2_body), INT64_C(0));
-                    (void)f2_231;
+                    void * f2_232 = fiber_new_fn((void *)(intptr_t)(fiber2_body), INT64_C(0));
+                    (void)f2_232;
                     int64_t __t14;
                     {
-                        int64_t v2_232 = fiber_resume_fn((void *)(intptr_t)(f2_231), INT64_C(0));
-                        (void)v2_232;
-                        fiber_free_fn((void *)(intptr_t)(f2_231));
+                        int64_t v2_233 = fiber_resume_fn((void *)(intptr_t)(f2_232), INT64_C(0));
+                        (void)v2_233;
+                        fiber_free_fn((void *)(intptr_t)(f2_232));
                         int64_t __t15;
                         int64_t __t16;
                         {
@@ -2547,11 +2550,11 @@ int main() {
                             __fiber_17->effect_handler_chain = &__eff_frame_17;
                             int64_t __t21 = (int64_t)__dispatch_17(&__cap_17, (int64_t)(intptr_t)__fiber_17, 0);
                             if (__fiber_17->done) { free(__fiber_17->stack); free(__fiber_17); }
-                            int64_t mv_234 = __t21;
-                            (void)mv_234;
-                            printf("%lld\n", (long long)(v1_230));
-                            printf("%lld\n", (long long)(v2_232));
-                            printf("%lld\n", (long long)(mv_234));
+                            int64_t mv_235 = __t21;
+                            (void)mv_235;
+                            printf("%lld\n", (long long)(v1_231));
+                            printf("%lld\n", (long long)(v2_233));
+                            printf("%lld\n", (long long)(mv_235));
                             int64_t __t22;
                             __t22 = INT64_C(0);
                             __t16 = __t22;

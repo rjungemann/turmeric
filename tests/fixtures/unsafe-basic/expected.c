@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2319,7 +2322,7 @@ struct __HEnv_5 {
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
     __HEnv_5 *__henv_5 = (__HEnv_5 *)__env;
-    int64_t k_216 = __k;
+    int64_t k_217 = __k;
     return 0;
 }
 
@@ -2328,8 +2331,8 @@ static void __handle_body_5(void) {
     TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)tur_current_fiber->eff_ctx;
     __HEnv_5 *__henv_5 = (__HEnv_5 *)__cap->body_env;
     {
-        const void * b_215 = &__henv_5->p;
-        (void)b_215;
+        const void * b_216 = &__henv_5->p;
+        (void)b_216;
         printf("%lld\n", (long long)(INT64_C(1)));
     }
     tur_current_fiber->result = 0;
@@ -2371,16 +2374,16 @@ int main() {
             *__t1 = INT64_C(42);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * r_213 = __t2;
-            (void)r_213;
+            RcControlBlock * r_214 = __t2;
+            (void)r_214;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             {
-                void *__t4 = rc_get_value(r_213);
-                void * p_214 = __t4;
-                (void)p_214;
+                void *__t4 = rc_get_value(r_214);
+                void * p_215 = __t4;
+                (void)p_215;
                 __HEnv_5 *__henv_5 = (__HEnv_5 *)malloc(sizeof(__HEnv_5));
-                __henv_5->p = p_214;
+                __henv_5->p = p_215;
                 TurEffectCaptureCtx __cap_5;
                 __cap_5.has_pending_effect = false;
                 __cap_5.eff_name = NULL;
@@ -2399,11 +2402,11 @@ int main() {
                 __fiber_5->effect_handler_chain = &__eff_frame_5;
                 __dispatch_5(&__cap_5, (int64_t)(intptr_t)__fiber_5, 0);
                 /* Phase 19D: write-back env captures to outer locals */
-                p_214 = __henv_5->p;
+                p_215 = __henv_5->p;
                 if (__fiber_5->done) { free(__fiber_5->stack); free(__fiber_5); }
                 if (__fiber_5->done) { free(__henv_5); }
             }
-            struct __defer_env_8 __t10 = {.r = r_213};
+            struct __defer_env_8 __t10 = {.r = r_214};
             tur_frame_push_defer(&__frame_3, __defer_9, &__t10);
             int64_t __t11;
             __t11 = INT64_C(0);

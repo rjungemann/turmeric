@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2322,18 +2325,18 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 int main() {
         {
-            IoError io_err_216 = (IoError){.message = "file not found", .errno_val = INT64_C(2)};
-            (void)io_err_216;
+            IoError io_err_217 = (IoError){.message = "file not found", .errno_val = INT64_C(2)};
+            (void)io_err_217;
             puts("IoError created");
         }
         {
-            ParseError parse_err_217 = (ParseError){.message = "syntax error", .line = INT64_C(10), .col = INT64_C(5), .file = "test.tur"};
-            (void)parse_err_217;
+            ParseError parse_err_218 = (ParseError){.message = "syntax error", .line = INT64_C(10), .col = INT64_C(5), .file = "test.tur"};
+            (void)parse_err_218;
             puts("ParseError created");
         }
         {
-            Error err_218 = (Error){.message = "base error", .cause = INT64_C(0)};
-            (void)err_218;
+            Error err_219 = (Error){.message = "base error", .cause = INT64_C(0)};
+            (void)err_219;
             puts("Error created");
         }
         int64_t __t0;
