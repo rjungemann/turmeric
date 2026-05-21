@@ -908,7 +908,7 @@ static int cmd_run(int argc, char **argv) {
         } else if (strcmp(argv[i], "--") == 0) {
             passthrough_start = i + 1;
             break;
-        } else if (argv[i][0] != '-') {
+        } else if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
             if (!explicit_file) explicit_file = argv[i];
         }
     }
@@ -944,6 +944,40 @@ static int cmd_run(int argc, char **argv) {
 
     /* Single-file mode: explicit file provided, skip project lookup. */
     if (explicit_file) {
+        /* E6: treat "-" as stdin -- buffer it into a temp .tur file first. */
+        if (strcmp(explicit_file, "-") == 0) {
+            char src_tmp[] = "/tmp/tur-stdin-XXXXXX.tur";
+            int src_fd = mkstemps(src_tmp, 4);
+            if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+            char ibuf[4096]; size_t nr;
+            int ok = 1;
+            while ((nr = fread(ibuf, 1, sizeof(ibuf), stdin)) > 0)
+                if ((size_t)write(src_fd, ibuf, nr) != nr) { ok = 0; break; }
+            close(src_fd);
+            if (!ok) {
+                unlink(src_tmp);
+                fprintf(stderr, "tur: error reading stdin\n");
+                return 2;
+            }
+            char out_path[] = "/tmp/tur-run-XXXXXX";
+            int out_fd = mkstemp(out_path);
+            if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+            close(out_fd);
+            int brc = cmd_build(src_tmp, out_path, spice_inc_dirs, n_spice_inc_dirs);
+            unlink(src_tmp);
+            if (brc != 0) { unlink(out_path); free(spice_inc_dirs); return brc; }
+            Buf run_cmd; buf_init(&run_cmd);
+            buf_printf(&run_cmd, "'%s'", out_path);
+            if (passthrough_start >= 0)
+                for (int i = passthrough_start; i < argc; i++)
+                    buf_printf(&run_cmd, " '%s'", argv[i]);
+            buf_putc(&run_cmd, '\0');
+            int sys = system(run_cmd.data);
+            buf_free(&run_cmd);
+            unlink(out_path);
+            free(spice_inc_dirs);
+            return decode_exit_status(sys);
+        }
         RUN_ENTRY(explicit_file);
     }
 
@@ -3648,6 +3682,8 @@ static int usage(void) {
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
         "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
+        "  tur eval '<expr>'                 evaluate an inline expression\n"
+        "  tur doc <symbol>                  print documentation for a builtin or special form\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
@@ -3712,6 +3748,7 @@ static int usage_run(void) {
     fprintf(stderr,
         "usage:\n"
         "  tur run <file.tur> [-- <args...>]   build and execute a single file\n"
+        "  tur run - [-- <args...>]            read source from stdin, build and execute\n"
         "\n"
         "flags:\n"
         "  --release   optimized build\n"
@@ -3739,6 +3776,26 @@ static int usage_eval(void) {
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
+}
+
+static int usage_doc(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur doc <symbol>   print documentation for a builtin or special form\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+/* E5: tur doc <symbol> -- print documentation for a builtin or special form. */
+static int cmd_doc_cli(const char *sym) {
+    const char *d = turi_doc_lookup_builtin(sym);
+    if (d) {
+        printf("%s\n", d);
+        return 0;
+    }
+    fprintf(stderr, "no documentation for '%s'\n", sym);
+    return 1;
 }
 
 static int usage_format(void) {
@@ -4192,18 +4249,18 @@ int main(int argc, char **argv) {
             return cmd_emit_c_to_dir(out_dir, argv + 4, argc - 4);
         }
         /* tur emit-c <file> -- single file to stdout (legacy) */
-        if (argc != 3) return usage();
+        if (argc != 3) return usage_build();
         return cmd_emit_c(argv[2]);
     }
     if (strcmp(cmd, "emit-h") == 0) {
-        if (argc != 3) return usage();
+        if (argc != 3) return usage_build();
         return cmd_emit_h(argv[2]);
     }
     if (strcmp(cmd, "check") == 0) {
         /* Phase 8: tur check subcommand - type-check only, no codegen */
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_check();
-        if (argc != 3) return usage();
+        if (argc != 3) return usage_check();
         Buf out;
         buf_init(&out);
         int rc = compile_to_c(argv[2], &out, NULL, 0);
@@ -4300,6 +4357,13 @@ int main(int argc, char **argv) {
             return cmd_eval(src, use_color, NULL, 0);
         return cmd_eval_expr(src, use_color);
     }
+    /* E5: tur doc <symbol> */
+    if (strcmp(cmd, "doc") == 0) {
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_doc();
+        if (argc != 3) return usage_doc();
+        return cmd_doc_cli(argv[2]);
+    }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;
         const char *fmt_input = NULL;
@@ -4320,7 +4384,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "test") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_test();
-        if (argc != 3) return usage();
+        if (argc != 3) return usage_test();
         return cmd_test(argv[2]);
     }
     /* Phase PKG-1: Spice package manager commands */

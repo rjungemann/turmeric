@@ -597,6 +597,72 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Tier 2: tur doc <sym>  (2a)
+# ---------------------------------------------------------------------------
+
+# tur doc +: should print arithmetic doc and exit 0
+out=$("$TUR" doc "+" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-builtin-plus" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "+"; then
+    fail "doc-builtin-plus" "output '$out' did not contain '+'"
+else
+    pass "doc-builtin-plus"
+fi
+
+# tur doc let: should print let doc and exit 0
+out=$("$TUR" doc "let" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-builtin-let" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "let"; then
+    fail "doc-builtin-let" "output '$out' did not contain 'let'"
+else
+    pass "doc-builtin-let"
+fi
+
+# tur doc defstruct: should print defstruct doc and exit 0
+out=$("$TUR" doc "defstruct" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-builtin-defstruct" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "defstruct"; then
+    fail "doc-builtin-defstruct" "output '$out' did not contain 'defstruct'"
+else
+    pass "doc-builtin-defstruct"
+fi
+
+# tur doc unknown: should print error message and exit nonzero
+out=$("$TUR" doc "this-symbol-does-not-exist-xyz" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "doc-unknown-sym" "expected nonzero exit for unknown symbol, got 0"
+else
+    pass "doc-unknown-sym"
+fi
+
+# tur doc --help: should print usage and exit 0
+out=$("$TUR" doc --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "doc-help" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur doc"; then
+    fail "doc-help" "output '$out' did not mention 'tur doc'"
+else
+    pass "doc-help"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 2: tur run -  (2b — stdin mode)
+# ---------------------------------------------------------------------------
+
+# tur run -: compile and run source from stdin
+out=$(echo '(println (+ 40 2))' | "$TUR" run - 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "run-stdin" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q "42"; then
+    fail "run-stdin" "expected '42' in output, got '$out'"
+else
+    pass "run-stdin"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo
