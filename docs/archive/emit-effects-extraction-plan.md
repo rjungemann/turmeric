@@ -1,9 +1,10 @@
 # emit_effects.c Extraction Plan (EE0--EE4)
 
-> **Status:** Not started. Supersedes the `emit_effects.c` row of
+> **Status:** EE0--EE3 complete (2026-05-21). EE4 deferred per recommendation.
+> Supersedes the `emit_effects.c` row of
 > [source-layout-plan.md](source-layout-plan.md) §3a.
 >
-> **Last updated:** 2026-05-18
+> **Last updated:** 2026-05-21
 
 ---
 
@@ -201,14 +202,14 @@ target is met for the part of it that is genuinely a win.
 
 ## Verification checklist
 
-- [ ] `just build` clean after EE0 (empty file links).
-- [ ] `just test` green after **each** of EE1, EE2, EE3 -- never batch.
-- [ ] No case body is edited during the move; only relocated and wrapped in a
+- [x] `just build` clean after EE0 (empty file links).
+- [x] `just test` green after **each** of EE1, EE2, EE3 -- never batch.
+- [x] No case body is edited during the move; only relocated and wrapped in a
       function signature. Diff each extracted case against its original.
-- [ ] `emit_internal.h` declares every `emit_effects_*` function; no implicit
+- [x] `emit_internal.h` declares every `emit_effects_*` function; no implicit
       declarations (build with `-Werror=implicit-function-declaration`).
-- [ ] No new non-`static` symbol leaks beyond the `emit_effects_*` prefix.
-- [ ] The 13 dispatch arms left in `emit_value` cover exactly the 13 cases
+- [x] No new non-`static` symbol leaks beyond the `emit_effects_*` prefix.
+- [x] The 13 dispatch arms left in `emit_value` cover exactly the 13 cases
       listed above -- grep `case EX_` before and after to confirm the switch
       stays exhaustive.
 

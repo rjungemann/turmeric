@@ -1512,13 +1512,13 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
                 char orig_tmp[] = "/tmp/tur-fmt-orig-XXXXXX";
                 int orig_fd = mkstemp(orig_tmp);
                 if (orig_fd >= 0) {
-                    (void)write(orig_fd, src, len);
+                    ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
                     close(orig_fd);
                 }
                 char new_tmp[] = "/tmp/tur-fmt-new-XXXXXX";
                 int new_fd = mkstemp(new_tmp);
                 if (new_fd >= 0) {
-                    (void)write(new_fd, out.data, out.len);
+                    ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
                     close(new_fd);
                 }
                 const char *label = path ? path : "<stdin>";
