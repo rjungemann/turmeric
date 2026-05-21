@@ -1,0 +1,63 @@
+; Phase SZ0: SizedVec -- phantom-typed list annotated with a size.
+; Exercises sized-vec-nil, sized-vec-cons, sized-vec-len, sized-vec-head-or,
+; sized-vec-tail, sized-vec-sum, and sized-vec-size.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)   n
+    (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
+    (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
+
+(defgadt SizedVec [n a]
+  (SVNil : (SizedVec Size int))
+  (SVCons int (SizedVec Size int) : (SizedVec Size int)))
+
+(defn sized-vec-nil [] :SizedVec (SVNil))
+(defn sized-vec-cons [x :int xs :SizedVec] :SizedVec (SVCons x xs))
+
+(defn sized-vec-len [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (sized-vec-len xs))))
+
+(defn sized-vec-head-or [dflt :int v :SizedVec] :int
+  (match v
+    (SVNil)      dflt
+    (SVCons x _) x))
+
+(defn sized-vec-tail [v :SizedVec] :SizedVec
+  (match v
+    (SVNil)       (SVNil)
+    (SVCons _ xs) xs))
+
+(defn sized-vec-sum [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons x xs) (+ x (sized-vec-sum xs))))
+
+(defn sized-vec-size [v :SizedVec] :Size
+  (Static (sized-vec-len v)))
+
+(defn main [] :int
+  ; empty vec: len = 0
+  (println (sized-vec-len (sized-vec-nil)))
+  ; empty vec: head-or = 99
+  (println (sized-vec-head-or 99 (sized-vec-nil)))
+  ; empty vec: sum = 0
+  (println (sized-vec-sum (sized-vec-nil)))
+  ; [1,2,3]: len = 3
+  (println (sized-vec-len (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil))))))
+  ; [1,2,3]: head = 1
+  (println (sized-vec-head-or 99 (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil))))))
+  ; [1,2,3]: sum = 6
+  (println (sized-vec-sum (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil))))))
+  ; tail of [1,2,3] has len 2
+  (println (sized-vec-len (sized-vec-tail (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil)))))))
+  ; sized-vec-size evaluates to 3
+  (println (size-eval (sized-vec-size (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil)))))))
+  0)

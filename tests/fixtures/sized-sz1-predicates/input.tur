@@ -1,0 +1,75 @@
+; Phase SZ1: Size arithmetic type checking -- predicates and normalization.
+; Exercises size-eq?, size-le?, size-lt?, size-ge?, size-gt?,
+; size-normalize, and size-simplify.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-static [n :int] :Size (Static n))
+(defn size-add [s1 :Size s2 :Size] :Size (Add s1 s2))
+(defn size-mul [s1 :Size s2 :Size] :Size (Mul s1 s2))
+
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)   n
+    (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
+    (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
+
+(defn size-eq? [s1 :Size s2 :Size] :bool (= (size-eval s1) (size-eval s2)))
+(defn size-le? [s1 :Size s2 :Size] :bool (<= (size-eval s1) (size-eval s2)))
+(defn size-lt? [s1 :Size s2 :Size] :bool (< (size-eval s1) (size-eval s2)))
+(defn size-ge? [s1 :Size s2 :Size] :bool (>= (size-eval s1) (size-eval s2)))
+(defn size-gt? [s1 :Size s2 :Size] :bool (> (size-eval s1) (size-eval s2)))
+
+(defn size-normalize [s :Size] :Size (Static (size-eval s)))
+
+(defn size-simplify [s :Size] :Size
+  (match s
+    (Static n)  (Static n)
+    (Add s1 s2)
+      (let [n1 (size-eval s1)]
+        (let [n2 (size-eval s2)]
+          (if (= n1 0) (Static n2)
+            (if (= n2 0) (Static n1)
+              (Static (+ n1 n2))))))
+    (Mul s1 s2)
+      (let [n1 (size-eval s1)]
+        (let [n2 (size-eval s2)]
+          (if (= n1 0) (Static 0)
+            (if (= n2 0) (Static 0)
+              (if (= n1 1) (Static n2)
+                (if (= n2 1) (Static n1)
+                  (Static (* n1 n2))))))))))
+
+(defn main [] :int
+  ; size-eq?: equal expressions
+  (println (size-eq? (size-static 4) (size-add (size-static 1) (size-static 3))))
+  ; size-eq?: unequal
+  (println (size-eq? (size-static 4) (size-static 5)))
+  ; size-le?: true and false
+  (println (size-le? (size-static 3) (size-static 4)))
+  (println (size-le? (size-static 4) (size-static 4)))
+  (println (size-le? (size-static 5) (size-static 4)))
+  ; size-lt?: true and false
+  (println (size-lt? (size-static 3) (size-static 4)))
+  (println (size-lt? (size-static 4) (size-static 4)))
+  ; size-ge? and size-gt?
+  (println (size-ge? (size-static 5) (size-static 5)))
+  (println (size-gt? (size-static 6) (size-static 5)))
+  ; size-normalize: compound expression folds to Static
+  (println (size-eval (size-normalize (size-add (size-static 2) (size-mul (size-static 3) (size-static 4))))))
+  ; size-simplify: identity law 0+s = s
+  (println (size-eval (size-simplify (size-add (size-static 0) (size-static 7)))))
+  ; size-simplify: identity law s+0 = s
+  (println (size-eval (size-simplify (size-add (size-static 9) (size-static 0)))))
+  ; size-simplify: identity law 1*s = s
+  (println (size-eval (size-simplify (size-mul (size-static 1) (size-static 9)))))
+  ; size-simplify: identity law s*1 = s
+  (println (size-eval (size-simplify (size-mul (size-static 6) (size-static 1)))))
+  ; size-simplify: zero law 0*s = 0
+  (println (size-eval (size-simplify (size-mul (size-static 0) (size-static 42)))))
+  ; size-simplify: constant folding
+  (println (size-eval (size-simplify (size-add (size-static 3) (size-static 4)))))
+  0)

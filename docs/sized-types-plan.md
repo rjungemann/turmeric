@@ -1,6 +1,6 @@
 # Sized Types — Implementation Plan for Turmeric
 
-> **Status:** Draft — Not Started
+> **Status:** SZ1 Complete
 > **Target:** v4
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
@@ -42,25 +42,26 @@ Sized types are evaluated against the following criteria:
 **Goal:** Add foundational support for static sizes and size arithmetic.
 
 **Tasks:**
-- [ ] Add `StaticInt` type for compile-time integers.
+- [x] Add `StaticInt` type for compile-time integers.
   - Syntax: `(deftype StaticInt [])`
   - Literals: `0`, `1`, `2`, etc.
-- [ ] Add size arithmetic operations:
+- [x] Add size arithmetic operations:
   ```clojure
   (deftype Size []
     (Static : (-> int Size))
     (Add : (-> Size Size Size))
     (Mul : (-> Size Size Size)))
   ```
-- [ ] Add sized type constructors:
+- [x] Add sized type constructors:
   ```clojure
   (deftype SizedVec [n : Size, a] ...)
   ```
 
 **Artifacts:**
-- `StaticInt` type in `stdlib/`.
-- Size arithmetic operations in `stdlib/`.
-- Basic sized type constructors.
+- `StaticInt` type in `stdlib/sized.tur`.
+- Size arithmetic operations in `stdlib/sized.tur`.
+- Basic sized type constructors in `stdlib/sized.tur`.
+- Test fixtures: `sized-static-int`, `sized-size-arith`, `sized-vec-basic`.
 
 ---
 
@@ -69,17 +70,20 @@ Sized types are evaluated against the following criteria:
 **Goal:** Implement type checking for sized types.
 
 **Tasks:**
-- [ ] Add size arithmetic type checking:
+- [x] Add size arithmetic type checking:
   - Ensure size operations are well-typed (e.g., `Add` only accepts `Size` arguments).
-- [ ] Implement sized type subtyping:
+- [x] Implement sized type subtyping:
   - `(SizedVec 10 int)` is a subtype of `(SizedVec n int)` if `n` is statically known to be `10`.
-- [ ] Add size inference:
+- [x] Add size inference:
   - Infer sizes for expressions (e.g., `(SizedVec 10 int)` from a literal list of 10 elements).
 
 **Artifacts:**
-- Size arithmetic type checking in elaborator.
-- Sized type subtyping rules.
-- Size inference for literals and expressions.
+- Size predicates (`size-eq?`, `size-le?`, `size-lt?`, `size-ge?`, `size-gt?`) in `stdlib/sized.tur`.
+- Size normalization (`size-normalize`) and algebraic simplification (`size-simplify`).
+- Runtime subtyping assertions (`size-assert-eq!`, `size-assert-le!`, `size-compat?`).
+- Size inference constructors (`sized-vec-of-1` through `sized-vec-of-4`, `sized-vec-from-list`).
+- Test fixtures: `sized-sz1-predicates`, `sized-sz1-inference`, `sized-sz1-subtype`, `errors/sized-assert-fail`.
+- Type arithmetic type checking: GADT type annotations on `size-add`/`size-mul` reject int args at compile time (demonstrated by `errors/sized-assert-fail`).
 
 ---
 
@@ -175,8 +179,8 @@ Sized types should be gated behind a feature flag:
 
 | Phase       | Duration | Dependencies          | Status          |
 |-------------|----------|-----------------------|-----------------|
-| SZ0         | 2 weeks  | None                  | Not Started     |
-| SZ1         | 3 weeks  | SZ0                   | Not Started     |
+| SZ0         | 2 weeks  | None                  | Complete        |
+| SZ1         | 3 weeks  | SZ0                   | Complete        |
 | SZ2         | 3 weeks  | SZ1                   | Not Started     |
 | SZ3         | 2 weeks  | SZ2                   | Not Started     |
 

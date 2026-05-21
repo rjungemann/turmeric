@@ -1,0 +1,85 @@
+; Phase SZ1: Size inference -- fixed-arity constructors and list conversion.
+; Exercises sized-vec-of-1 through sized-vec-of-4 and sized-vec-from-list.
+; The "inference" is that the size is known from the constructor's arity at
+; the construction site, without requiring an explicit size annotation.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n a]
+  (SVNil : (SizedVec Size int))
+  (SVCons int (SizedVec Size int) : (SizedVec Size int)))
+
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)   n
+    (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
+    (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
+
+(defn sized-vec-len [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (sized-vec-len xs))))
+
+(defn sized-vec-sum [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons x xs) (+ x (sized-vec-sum xs))))
+
+(defn sized-vec-size [v :SizedVec] :Size (Static (sized-vec-len v)))
+
+(defn sized-vec-of-1 [a :int] :SizedVec (SVCons a (SVNil)))
+(defn sized-vec-of-2 [a :int b :int] :SizedVec (SVCons a (SVCons b (SVNil))))
+(defn sized-vec-of-3 [a :int b :int c :int] :SizedVec (SVCons a (SVCons b (SVCons c (SVNil)))))
+(defn sized-vec-of-4 [a :int b :int c :int d :int] :SizedVec
+  (SVCons a (SVCons b (SVCons c (SVCons d (SVNil))))))
+
+(defn sized-vec-from-list [lst] #{Unsafe} :SizedVec
+  ```c
+  struct __sz_cons { int64_t value; int64_t next; };
+  int64_t count = 0;
+  int64_t cur = lst;
+  while (cur != 0) { count++; cur = ((struct __sz_cons *)(intptr_t)cur)->next; }
+  int64_t *vals = count ? (int64_t *)malloc((size_t)count * sizeof(int64_t)) : NULL;
+  cur = lst;
+  for (int64_t i = 0; i < count; i++) {
+    struct __sz_cons *cell = (struct __sz_cons *)(intptr_t)cur;
+    vals[i] = cell->value;
+    cur = cell->next;
+  }
+  int64_t result = ctor_SVNil();
+  for (int64_t i = count - 1; i >= 0; i--) {
+    result = ctor_SVCons(vals[i], result);
+  }
+  if (vals) free(vals);
+  return result;
+  ```)
+
+;; Minimal cons list helpers
+(defn my-nil [] :int ```c return 0; ```)
+(defn my-cons [v :int next :int] :int
+  ```c
+  struct { int64_t value; int64_t next; } *c = malloc(sizeof(*c));
+  c->value = v; c->next = next;
+  return (int64_t)(intptr_t)c;
+  ```)
+
+(defn main [] :int
+  ; Fixed-arity constructors: size is known from arity
+  (println (sized-vec-len (sized-vec-of-1 99)))
+  (println (sized-vec-sum (sized-vec-of-1 99)))
+  (println (sized-vec-len (sized-vec-of-2 10 20)))
+  (println (sized-vec-sum (sized-vec-of-2 10 20)))
+  (println (sized-vec-len (sized-vec-of-3 1 2 3)))
+  (println (sized-vec-sum (sized-vec-of-3 1 2 3)))
+  (println (sized-vec-len (sized-vec-of-4 1 2 3 4)))
+  (println (sized-vec-sum (sized-vec-of-4 1 2 3 4)))
+  ; sized-vec-from-list: size inferred from cons list length
+  (println (sized-vec-len (unsafe (sized-vec-from-list (my-nil)))))
+  (println (sized-vec-len (unsafe (sized-vec-from-list (my-cons 7 (my-nil))))))
+  (println (sized-vec-sum (unsafe (sized-vec-from-list (my-cons 10 (my-cons 20 (my-cons 30 (my-nil))))))))
+  ; sized-vec-size returns the inferred size as a Size expression
+  (println (size-eval (sized-vec-size (sized-vec-of-3 5 6 7))))
+  0)
