@@ -405,6 +405,198 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# E1: --help / -h (Tier 1)
+# ---------------------------------------------------------------------------
+
+# tur --help: should print usage and exit 0
+out=$("$TUR" --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-global" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "usage:"; then
+    fail "help-global" "output did not contain 'usage:'"
+else
+    pass "help-global"
+fi
+
+# tur -h: same as --help
+out=$("$TUR" -h 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-short" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "usage:"; then
+    fail "help-short" "output did not contain 'usage:'"
+else
+    pass "help-short"
+fi
+
+# tur build --help: should print subcommand help and exit 0
+out=$("$TUR" build --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-build" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur build"; then
+    fail "help-build" "output did not mention 'tur build'"
+else
+    pass "help-build"
+fi
+
+# tur run --help: should print subcommand help and exit 0
+out=$("$TUR" run --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-run" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur run"; then
+    fail "help-run" "output did not mention 'tur run'"
+else
+    pass "help-run"
+fi
+
+# tur check --help: should print subcommand help and exit 0
+out=$("$TUR" check --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-check" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur check"; then
+    fail "help-check" "output did not mention 'tur check'"
+else
+    pass "help-check"
+fi
+
+# tur eval --help: should print subcommand help and exit 0
+out=$("$TUR" eval --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-eval" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur eval"; then
+    fail "help-eval" "output did not mention 'tur eval'"
+else
+    pass "help-eval"
+fi
+
+# tur format --help: should print subcommand help and exit 0
+out=$("$TUR" format --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-format" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur format"; then
+    fail "help-format" "output did not mention 'tur format'"
+else
+    pass "help-format"
+fi
+
+# tur test --help: should print subcommand help and exit 0
+out=$("$TUR" test --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-test" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur test"; then
+    fail "help-test" "output did not mention 'tur test'"
+else
+    pass "help-test"
+fi
+
+# tur repl --help: should print subcommand help and exit 0
+out=$("$TUR" repl --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "help-repl" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur repl"; then
+    fail "help-repl" "output did not mention 'tur repl'"
+else
+    pass "help-repl"
+fi
+
+# ---------------------------------------------------------------------------
+# E2: --version / -V (Tier 1)
+# ---------------------------------------------------------------------------
+
+# tur --version: should print "turmeric <version>" and exit 0
+out=$("$TUR" --version 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "version-long" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "^turmeric "; then
+    fail "version-long" "output '$out' did not start with 'turmeric '"
+else
+    pass "version-long"
+fi
+
+# tur -V: same as --version
+out=$("$TUR" -V 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "version-short" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "^turmeric "; then
+    fail "version-short" "output '$out' did not start with 'turmeric '"
+else
+    pass "version-short"
+fi
+
+# ---------------------------------------------------------------------------
+# E3: tur eval (Tier 1)
+# ---------------------------------------------------------------------------
+
+# tur eval: evaluate an arithmetic expression
+out=$("$TUR" eval "(+ 1 2)" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "eval-basic" "expected exit 0, got $rc; output: $out"
+elif [ "$out" != "3" ]; then
+    fail "eval-basic" "expected '3', got '$out'"
+else
+    pass "eval-basic"
+fi
+
+# tur eval: evaluate a comparison (builtin)
+out=$("$TUR" eval "(< 1 2)" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "eval-bool" "expected exit 0, got $rc; output: $out"
+elif [ "$out" != "true" ]; then
+    fail "eval-bool" "expected 'true', got '$out'"
+else
+    pass "eval-bool"
+fi
+
+# tur eval: nil result prints nothing
+out=$("$TUR" eval "(def x 42)" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "eval-nil-silent" "expected exit 0, got $rc; output: $out"
+else
+    pass "eval-nil-silent"
+fi
+
+# tur eval: parse error exits nonzero
+out=$("$TUR" eval "(+ 1" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "eval-error" "expected nonzero exit for bad syntax, got 0"
+else
+    pass "eval-error"
+fi
+
+# tur eval --file: run a .tur file through the interpreter
+TMP_TUR=$(mktemp /tmp/tur_eval_test_XXXXXX.tur)
+echo '(def x 42) (+ x 1)' > "$TMP_TUR"
+out=$("$TUR" eval --file "$TMP_TUR" 2>&1); rc=$?
+rm -f "$TMP_TUR"
+if [ $rc -ne 0 ]; then
+    fail "eval-file" "expected exit 0, got $rc; output: $out"
+else
+    pass "eval-file"
+fi
+
+# ---------------------------------------------------------------------------
+# E4: Nonzero exit codes on errors (Tier 1 verification)
+# ---------------------------------------------------------------------------
+
+# tur check on a bad file exits nonzero
+TMP_BAD=$(mktemp /tmp/tur_bad_XXXXXX.tur)
+echo '(+ 1 "not-an-int")' > "$TMP_BAD"
+"$TUR" check "$TMP_BAD" >/dev/null 2>&1; rc=$?
+rm -f "$TMP_BAD"
+if [ $rc -eq 0 ]; then
+    fail "exit-code-check-error" "expected nonzero exit for type error, got 0"
+else
+    pass "exit-code-check-error"
+fi
+
+# tur check on a nonexistent file exits nonzero
+"$TUR" check /nonexistent/file.tur >/dev/null 2>&1; rc=$?
+if [ $rc -eq 0 ]; then
+    fail "exit-code-file-not-found" "expected nonzero exit for missing file, got 0"
+else
+    pass "exit-code-file-not-found"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

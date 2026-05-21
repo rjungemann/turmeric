@@ -169,6 +169,11 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_core PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 
+# Inject version string from VERSION file at compile time (E2)
+file(READ "${CMAKE_SOURCE_DIR}/VERSION" _TUR_VERSION_RAW)
+string(STRIP "${_TUR_VERSION_RAW}" _TUR_VERSION_STR)
+target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
+
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
 # ---------------------------------------------------------------------------
@@ -205,6 +210,9 @@ if(HAVE_EDITLINE)
     target_link_libraries(tur PRIVATE ${LIBEDIT_LIB})
     target_compile_definitions(tur PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
+
+# E2: inject version into tur executable (main.c reads TUR_VERSION)
+target_compile_definitions(tur PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 
 # Ensure the compiler binary ends up at build/tur (same path the test scripts
 # and games expect).

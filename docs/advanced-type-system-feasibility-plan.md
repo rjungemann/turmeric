@@ -1,6 +1,6 @@
 # Advanced Type System Features — Feasibility Plan for Turmeric
 
-> **Status:** In Progress — v3 features complete (including Session Types SS0--SS8 and Dynamic Vars DV0--DV4); v4 work (Contract Types, Sized Types) not started  
+> **Status:** v3 and v4 complete — Session Types SS0--SS8, Dynamic Vars DV0--DV4, Contract Types CT0--CT4, and Sized Types SZ0--SZ3 all shipped; v5+ (Dependent Types, Refinement Types) deferred  
 > **Target:** v3 or later  
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete  
 > **Related:** [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md), [higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md), [gadts-plan.md](archive/gadts-plan.md)
@@ -37,7 +37,7 @@ This document explores **type system features not yet considered** for Turmeric 
 | [Refinement Types](#6-refinement-types) | Medium | High | ⏸ Deferred |
 | [Intersection & Union Types](#7-intersection--union-types) | High | Medium | ✅ IT0–IT4 substantially complete (`-Xunion-types`, `-Xintersection-types`) |
 | [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | ✅ ET0–ET4 complete (`-Xeffect-types`); LC0–LC3, MS0–MS4 complete |
-| [Sized Types](#9-sized-types) | Medium | Medium-High | 📋 Draft — Not Started |
+| [Sized Types](#9-sized-types) | Medium | Medium-High | ✅ SZ0–SZ3 complete (`-Xgadt`) |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ CT0–CT4 complete (`-Xcontracts`) |
 
 ---
@@ -1340,17 +1340,17 @@ defn add [a : (BitVec n), b : (BitVec n)] : (BitVec (n + 1))
 
 ### Recommendation
 
-**✅ ACCEPT — Medium complexity, good fit for systems programming and embedded DSLs.**
+**✅ IMPLEMENTED — SZ0–SZ3 complete (gated behind `-Xgadt`).**
 
 Sized types provide:
 1. Memory layout control
-2. Stack allocation opportunities
-3. Type-safe array operations
-4. Embedded DSL support
+2. Stack allocation opportunities (alloca for n≤64, heap fallback for n>64)
+3. Type-safe array, matrix, and bit-vector operations
+4. Embedded DSL support and FFI layout verification
 
-**Implementation priority:** Medium (after Linear Types)
+`stdlib/sized.tur` (SZ0–SZ1): `StaticInt`, `Size`, `SizedVec`, size predicates, normalization, assertions, and inference constructors. `stdlib/sized-buf.tur` (SZ2): flat `SizedBuf` with stack (`sized-buf-with-stack`) and adaptive allocation (`sized-buf-compute`). `stdlib/sized-matrix.tur` and `stdlib/sized-bits.tur` (SZ3): `SizedMatrix` (row-major flat layout) and `SizedBitVec` (packed bits), plus FFI opaque-pointer size annotation pattern.
 
-**Note:** Start with simple static sizes, then add size arithmetic and inference.
+See [guides/sized-types-guide.md](guides/sized-types-guide.md) for the user guide.
 
 ---
 
@@ -1514,7 +1514,7 @@ See [contract-types-plan.md](contract-types-plan.md) for full implementation det
 | [Intersection & Union](#7-intersection--union-types) | Medium | High | ✅ Good | ✅ Good | Medium | **✅ IT0–IT4 substantially complete** |
 | [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **✅ SS0–SS8 complete** |
 | [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **✅ ET0–ET4 complete; LC0–LC3, MS0–MS4 complete** |
-| [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **📋 Draft — Not Started** |
+| [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **✅ SZ0–SZ3 complete (`-Xgadt`)** |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **✅ IMPLEMENTED — CT0–CT4 complete (`-Xcontract-types`)** |
 | [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
 | [Refinement Types](#6-refinement-types) | Very High | Medium | ⚠️ Fair | ✅ Good | Low | **⏸ Deferred** |
@@ -1556,14 +1556,14 @@ See [contract-types-plan.md](contract-types-plan.md) for full implementation det
 
 See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [session-types-plan.md](session-types-plan.md).
 
-### Phase 3: Sized Types (v4)
+### Phase 3: Contract Types & Sized Types (v4) — ✅ Complete
 
-**Priority:** Medium
+**Status:** Both features shipped.
 
 | Feature | Phases | Duration | Dependencies | Status |
 |---|---|---|---|---|
-| Contract Types | CT0–CT4 | 6-8 weeks | None | **✅ Complete (`-Xcontract-types`)** |
-| Sized Types | SZ0–SZ3 | 6-8 weeks | None | 📋 Not Started |
+| Contract Types | CT0–CT4 | — | None | **✅ Complete (`-Xcontract-types`)** |
+| Sized Types | SZ0–SZ3 | — | None | **✅ Complete (`-Xgadt`)** |
 
 **Note:** The stdlib already has `assert!`/`require!`/`ensure!` macros. CT0 can build on these.
 
@@ -1599,8 +1599,8 @@ All advanced type system features should be gated behind feature flags:
 | GADTs | `-Xgadt` | Off | ✅ Implemented (G0–G4) |
 | Session Types | `-Xsessions` | Off | ✅ Implemented (SS0–SS8; binary + multi-party) |
 | Effect Types | `-Xeffect-types` | Off | ✅ Implemented (ET0–ET4, LC0–LC3, MS0–MS4) |
-| Contract Types | `-Xcontracts` | Off | 📋 Not implemented yet |
-| Sized Types | `-Xsized-types` | Off | 📋 Not implemented yet |
+| Contract Types | `-Xcontracts` | Off | ✅ Implemented |
+| Sized Types | `-Xgadt` | Off | ✅ Implemented (SZ0–SZ3; via GADT infrastructure) |
 
 ---
 
@@ -1885,9 +1885,9 @@ v3 (In Progress)
 v3.5 (complete)
 └── Session Types (SS5-SS8)             ✅ complete (-Xsessions, multi-party)
 
-v4 (Planned)
-├── Contract Types (CT0-CT4)            📋 not started
-└── Sized Types (SZ0-SZ3)              📋 not started
+v4 (Complete)
+├── Contract Types (CT0-CT4)            ✅ complete (-Xcontracts)
+└── Sized Types (SZ0-SZ3)              ✅ complete (-Xgadt)
 
 v5+ (Deferred)
 ├── Dependent Types
@@ -1925,4 +1925,4 @@ v5+ (Deferred)
 
 ---
 
-*Last updated: 2026-05-19 (SS0–SS8 complete; DV0–DV4 complete)*
+*Last updated: 2026-05-20 (SZ0–SZ3 complete; CT0–CT4 complete; all v4 features shipped)*

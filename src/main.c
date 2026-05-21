@@ -57,6 +57,10 @@
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+
 /* Extract basename from a path. */
 static const char *basename_of(const char *path) {
     const char *s = strrchr(path, '/');
@@ -1561,6 +1565,33 @@ static int cmd_eval(const char *path, bool use_color,
             else if (r.tag == TURI_INT) rc = (int)r.as_int;
         }
         turi_run_pending_defers(env);
+    }
+    turi_env_free(env);
+    return rc;
+}
+
+/* E3: tur eval '<expr>' — evaluate an inline expression and print result. */
+static int cmd_eval_expr(const char *expr, bool use_color) {
+    g_interpret_mode = true;
+    turi_init(use_color);
+    TuriEnv *env = turi_env_new();
+    if (!env) {
+        fprintf(stderr, "tur: failed to create interpreter environment\n");
+        return 1;
+    }
+    TuriValue result = turi_eval(env, expr);
+    int rc = 0;
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        if (msg && strcmp(msg, "parse error") != 0 &&
+                   strcmp(msg, "elaboration error") != 0) {
+            fprintf(stderr, "tur: %s\n", msg);
+        }
+        rc = 1;
+    } else if (result.tag != TURI_NIL) {
+        char repr[512];
+        turi_value_repr(repr, sizeof(repr), result);
+        printf("%s\n", repr);
     }
     turi_env_free(env);
     return rc;
@@ -3662,6 +3693,90 @@ static int usage(void) {
     return 64;
 }
 
+/* E1: per-subcommand help strings */
+static int usage_build(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur build <file.tur> [-o <out>]   build a single file\n"
+        "  tur build <dir> [-o <out>]        build all .tur files in directory\n"
+        "\n"
+        "flags:\n"
+        "  -o <out>   output file path\n"
+        "  -I <dir>   add include directory\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_run(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur run <file.tur> [-- <args...>]   build and execute a single file\n"
+        "\n"
+        "flags:\n"
+        "  --release   optimized build\n"
+        "  --offline   skip dependency fetch\n"
+        "  --          pass remaining arguments to the program\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_check(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur check <file.tur>   type-check only, no codegen\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_eval(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur eval '<expr>'          evaluate an inline expression and print the result\n"
+        "  tur eval --file <file.tur> run a .tur file through the interpreter\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_format(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur format [file.tur]          format a source file (stdin if no file given)\n"
+        "  tur format --check [file.tur]  exit 1 if formatting would change the file\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_test(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur test <dir>   run all .tur test files in a directory\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_repl(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur repl   start the interactive REPL\n"
+        "\n"
+        "REPL commands:\n"
+        "  :help           print help\n"
+        "  :quit / :q      exit the REPL\n"
+        "  :doc <sym>      look up documentation for a symbol\n"
+        "  :type <expr>    print the inferred type of an expression\n"
+        "  :reload <file>  reload a source file\n"
+        "  :tutorial       start the interactive tutorial\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
 /* Phase 8: Handle --no-color flag */
 static bool parse_no_color(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -4055,6 +4170,18 @@ int main(int argc, char **argv) {
         return cmd_explain(explain_code);
     }
     
+    /* E2: --version / -V */
+    if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("turmeric " TUR_VERSION "\n");
+        return 0;
+    }
+
+    /* E1: --help / -h at top level */
+    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        usage();
+        return 0;
+    }
+
     if (argc < 2) return usage();
     const char *cmd = argv[1];
 
@@ -4074,6 +4201,8 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "check") == 0) {
         /* Phase 8: tur check subcommand - type-check only, no codegen */
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_check();
         if (argc != 3) return usage();
         Buf out;
         buf_init(&out);
@@ -4089,7 +4218,9 @@ int main(int argc, char **argv) {
         int     build_inc_cap = 4;
         char  **build_inc = (char **)malloc((size_t)build_inc_cap * sizeof(char *));
         for (int i = 2; i < argc; i++) {
-            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(build_inc); return usage_build();
+            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc) {
                 if (n_build_inc >= build_inc_cap) {
@@ -4124,10 +4255,17 @@ int main(int argc, char **argv) {
         return rc;
     }
     if (strcmp(cmd, "run") == 0) {
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--") == 0) break;
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+                return usage_run();
+        }
         return cmd_run(argc, argv);
     }
     if (strcmp(cmd, "repl") == 0) {
         /* Phase S0: interactive REPL */
+        if (argc >= 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_repl();
         return cmd_repl();
     }
     /* Tier 3: persistent fixture worker for the test suite. */
@@ -4141,10 +4279,33 @@ int main(int argc, char **argv) {
         }
         return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3);
     }
+    /* E3: tur eval '<expr>' or tur eval --file <file> */
+    if (strcmp(cmd, "eval") == 0) {
+        if (argc < 3) return usage_eval();
+        bool is_file = false;
+        const char *src = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+                return usage_eval();
+            if (strcmp(argv[i], "--file") == 0 && i + 1 < argc) {
+                is_file = true;
+                src = argv[++i];
+            } else if (argv[i][0] != '-') {
+                src = argv[i];
+            }
+        }
+        if (!src) return usage_eval();
+        bool use_color = !no_color && stderr_is_tty();
+        if (is_file)
+            return cmd_eval(src, use_color, NULL, 0);
+        return cmd_eval_expr(src, use_color);
+    }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;
         const char *fmt_input = NULL;
         for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+                return usage_format();
             if (strcmp(argv[i], "--check") == 0) {
                 check_only = true;
             } else if (argv[i][0] != '-') {
@@ -4157,6 +4318,8 @@ int main(int argc, char **argv) {
         return cmd_format(fmt_input, check_only);
     }
     if (strcmp(cmd, "test") == 0) {
+        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+            return usage_test();
         if (argc != 3) return usage();
         return cmd_test(argv[2]);
     }
