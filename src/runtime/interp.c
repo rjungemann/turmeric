@@ -85,6 +85,8 @@ void env_bind_macro(Env *e, const Symbol *name, MacroDef *macro) {
     e->count++;
 }
 
+static Form *quasiquote_expand(Env *macro_env, Form *f);
+
 /* Evaluate a Form in an environment */
 Form *interp_eval(Env *e, Form *f) {
     switch (f->tag) {
@@ -105,10 +107,12 @@ Form *interp_eval(Env *e, Form *f) {
             return f;
         }
         case F_QUASIQUOTE:
+            /* Phase 6: expand the quasiquoted form and evaluate the result */
+            return interp_eval(e, quasiquote_expand(e, f->as.list.items[0]));
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
-            /* Phase 6: quasiquote not yet implemented */
-            return f;
+            /* unquote/unquote-splicing outside quasiquote: evaluate inner form */
+            return interp_eval(e, f->as.list.items[0]);
         case F_SYM: {
             /* Look up symbol in environment */
             Form *value = env_lookup(e, f->as.sym);

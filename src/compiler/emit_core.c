@@ -55,6 +55,7 @@ bool expr_is_divergent(const Expr *e) {
         case EX_RETURN:
         case EX_PANIC:
         case EX_PANIC_WITH:
+        case EX_THROW:
         case EX_DISCONTINUE:
             return true;
         case EX_DO:
@@ -84,6 +85,7 @@ bool expr_contains_return_or_throw(const Expr *e) {
         case EX_RETURN:
         case EX_PANIC:
         case EX_PANIC_WITH:
+        case EX_THROW:
             return true;
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++) {

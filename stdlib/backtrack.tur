@@ -210,7 +210,10 @@
 (defn guard [pred :bool] :int
   (if pred (mreturn 0) (mzero)))
 
-;;; fresh -- apply a fat closure to a fresh variable placeholder (0).
+;;; fresh -- apply a fat closure to a fresh (unbound) logic variable.
+;;;
+;;; The fresh variable is represented by the sentinel INT64_MIN, which is
+;;; outside the practical range of logic values and distinct from 0.
 ;;;
 ;;; f MUST be a fat closure.
 ;;;
@@ -218,14 +221,13 @@
 ;;;   f -- fat closure of type (a -> Backtrack b)
 ;;;
 ;;; Returns:
-;;;   The result of applying f to the placeholder 0 (:int).
-;; fresh f — apply fat-closure f to a fresh variable (0 placeholder).
-;; f MUST be a fat closure.
+;;;   The result of applying f to the unbound sentinel (:int).
 (defn fresh [f] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
-  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, 0);
+  int64_t unbound = INT64_MIN; /* sentinel: unbound logic variable, distinct from any valid value */
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, unbound);
   ```)
 
 ;;; once -- keep only the first result from a backtrack computation.

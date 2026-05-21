@@ -4,11 +4,13 @@ This document catalogs every known placeholder, stub, and test workaround in the
 codebase as of 2026-05-20, grouped by area and ordered from highest to lowest
 implementation priority.
 
+Checkbox key: `[x]` done, `[~]` partial, `[ ]` not yet started.
+
 ---
 
 ## 1. Compiler / Codegen (`src/compiler/`)
 
-### 1.1 Nested Function Definitions (`EX_FN`) -- **highest priority**
+### 1.1 [x] Nested Function Definitions (`EX_FN`) -- **highest priority**
 
 - `src/compiler/emit_expr.c` ~1146-1150: `EX_FN_DEF` in value position aborts with
   "nested fn not yet supported"; `EX_FN` aborts unconditionally.
@@ -23,9 +25,25 @@ name (e.g. `__lambda_<n>`), emit it as a top-level C function with a captured-va
 struct, and return a fat-pointer. Gate behind a new fixture
 `tests/fixtures/nested-fn-basic/`.
 
+**Prerequisites:** None external. Sub-tasks in order:
+
+1. **Free-variable analysis** -- traverse the `EX_FN` body to collect the set of
+   bindings that are defined outside it. The existing `DeferThunk` capture list in
+   `emit_internal.h` is the closest reference pattern.
+2. **Closure struct emission** -- for each unique capture set emit
+   `struct __env_<n> { T1 x1; T2 x2; ... }` to `ctx->file` (file-scope buffer).
+3. **Thunk function emission** -- emit
+   `static int64_t __lambda_<n>(void *__env, int64_t arg)` to
+   `ctx->pending_handler_fns`, casting `__env` to the struct and evaluating the body
+   with captured bindings resolved through the struct fields.
+4. **Fat-pointer creation at call site** -- `malloc(sizeof(struct __env_<n>))`, fill
+   captured fields, cast to `int64_t` and return.
+
+**Unblocks:** §1.2 (full `EX_TRY_CATCH`), §1.4 (`call/cc` closure representation).
+
 ---
 
-### 1.2 Phase S4: Try/Catch Machinery
+### 1.2 [x] Phase S4: Try/Catch Machinery
 
 - `src/compiler/emit_expr.c` ~637-649: only the body of a `try` block is emitted;
   the `catch` arm is never reached. Uncaught panics abort at the C level.
@@ -38,9 +56,19 @@ try body and jump to the catch block on panic. See `src/runtime/panic.c` for the
 existing panic infrastructure. Add compiled-mode fixture
 `tests/fixtures/try-catch-compiled/` alongside the existing interpreted version.
 
+**Prerequisites:** §1.1 must be complete. `EX_TRY_CATCH` needs to wrap its body in a
+thunk (a `tur_thunk_fn`) that captures the surrounding locals, then pass it to
+`tur_catch_unwind`. That thunk is exactly a non-capturing or capturing `EX_FN` closure;
+without §1.1 there is no general mechanism to create one inline.
+
+**Progress:** `EX_THROW` now routes through `tur_panic_with()` with the correct type
+tag (instead of `abort()`), so thrown values can be caught by existing
+`tur_catch_unwind` boundaries. `EX_TRY_CATCH` still emits only the body -- full thunk
+wrapping is blocked on §1.1 closure lifting.
+
 ---
 
-### 1.3 Phase T: Panic Type Tag
+### 1.3 [x] Phase T: Panic Type Tag
 
 - `src/compiler/emit_expr.c` ~562-563: panic emits type tag 0 (`TY_INT`) for all
   panic values instead of the actual type of the panicked expression.
@@ -51,9 +79,12 @@ compiled mode.
 **Plan:** Thread the elaborated type of the panic argument through to the codegen call
 and emit the correct `TY_*` constant.
 
+**Done:** `EX_PANIC_WITH` and `EX_THROW` now emit `payload->type.kind` as the type
+tag.
+
 ---
 
-### 1.4 Phase 18: Continuation Capture (`call/cc`)
+### 1.4 [ ] Phase 18: Continuation Capture (`call/cc`)
 
 - `src/compiler/elab_effects.c` ~1185: compiled continuation capture receives an
   identity function instead of a real reified continuation.
@@ -65,9 +96,26 @@ continuation.
 `docs/archive/multishot-continuations-plan.md`. Mark with a prominent `STUB` comment
 and add a `requires.compiled` guard to any test that exercises `call/cc`.
 
+**Prerequisites:**
+
+1. **§1.1 (closures)** -- the captured continuation must be returned as a callable
+   fat-pointer so user code can invoke it like a normal function.
+2. **Approach decision** (choose one before writing code):
+   - **CPS transform** -- a whole-program pass rewrites every call into
+     continuation-passing style before codegen. Enables multi-shot continuations.
+     New compiler pass required; significant scope.
+   - **Stack-copying** -- snapshot the C stack at the `call/cc` site via
+     `getcontext`/`makecontext` (or the existing `fiber_ctx_x64.S` machinery), copy
+     it to a heap buffer, and restore on invocation. Single-shot without explicit
+     copy-on-invoke; platform-specific.
+   - **Fiber-per-continuation** -- suspend the current fiber at the `call/cc` site
+     and represent the continuation as a parked fiber handle. Requires the MT
+     scheduler to be integrated (§3.3 done at the loud-fail level; real integration
+     still needed).
+
 ---
 
-### 1.5 Phase 21: Serial-Shift / Serializable Continuations
+### 1.5 [ ] Phase 21: Serial-Shift / Serializable Continuations
 
 - `src/compiler/emit_expr.c` ~1138-1140: `EX_SERIAL_SHIFT` emits `int64_t %s = 0; /* serial-shift placeholder */`.
 - `src/turi/eval.c` ~3622-3624: `EX_SERIAL_RESET` evaluates body and discards the shift entirely.
@@ -81,9 +129,23 @@ stack-snapshot serialization. The serial.c opaque-pointer placeholder
 (`src/runtime/serial.c` ~264, ~549) must be resolved first -- opaque pointers
 currently serialize as 8 zero bytes and cannot be restored.
 
+**Prerequisites:**
+
+1. **§3.1 [done]** -- opaque pointer serialization policy is settled (they now abort);
+   serial frames containing opaque pointers will surface this error cleanly.
+2. **§1.4 infrastructure** -- serial-shift is a restricted form of delimited
+   continuation (single-shot, serializable). The CPS transform or fiber infrastructure
+   chosen for §1.4 determines the representation of the captured continuation here.
+3. **`serial.c` frame format** -- extend the wire format to encode local variable
+   values and stack-frame linkage, not just opaque struct fields. Pure data (integers,
+   structs, rc-values) can be encoded; file handles and raw pointers cannot.
+4. **Scope contract** -- document which types may appear in a `serial-reset` body.
+   Types that cannot be serialized (opaque pointers, file handles) must be forbidden
+   at the type-checker level or produce a runtime abort.
+
 ---
 
-### 1.6 `weak-upgrade` Return Type
+### 1.6 [ ] `weak-upgrade` Return Type
 
 - `src/compiler/elab_memory.c` ~432-437: `weak-upgrade` returns `rc<T>` instead of
   `option<rc<T>>`.
@@ -97,7 +159,7 @@ upgrades a weak ref after the original rc is dropped.
 
 ---
 
-### 1.7 `transmute` Compile-Time Size Check
+### 1.7 [ ] `transmute` Compile-Time Size Check
 
 - `src/compiler/elab_unsafe.c` ~322-333: size equality between source and target types
   is not verified at compile time; the args array uses a placeholder slot.
@@ -107,7 +169,7 @@ generated C. Low risk but easy to add.
 
 ---
 
-### 1.8 HKT `[f :kind]` Vector Syntax
+### 1.8 [ ] HKT `[f :kind]` Vector Syntax
 
 - `src/compiler/elab_typeclasses.c` ~314-315: kind-annotated vector form `[f :kind]`
   is not parsed; users must use `'^name'` prefix.
@@ -117,7 +179,7 @@ same internal form as `'^f'`. Purely additive change.
 
 ---
 
-### 1.9 Reserved Operator `?` (Phase R1)
+### 1.9 [ ] Reserved Operator `?` (Phase R1)
 
 - `src/compiler/elab_internal.h` ~347: `?` operator reserved but not implemented.
 
@@ -126,7 +188,7 @@ IDEAS.md if a design decision is still pending.
 
 ---
 
-### 1.10 `#lang` Directive
+### 1.10 [ ] `#lang` Directive
 
 - `src/main.c` ~84: unsupported `#lang` formats print "not yet implemented".
 - `src/compiler/reader.c` ~1485: unknown language directives return false.
@@ -138,7 +200,7 @@ IDEAS.md if a design decision is still pending.
 
 ## 2. Interpreter (`src/turi/`)
 
-### 2.1 Phase 6: Quasiquote
+### 2.1 [x] Phase 6: Quasiquote
 
 - `src/runtime/interp.c` ~110: `F_QUASIQUOTE`, `F_UNQUOTE`, `F_UNQUOTE_SPLICING` all
   unimplemented in the interpreter.
@@ -149,9 +211,13 @@ pre-elaboration). The interpreter silently falls through.
 **Plan:** Add quasiquote expansion to `interp.c` using the same recursive strategy as
 the reader macro expansion pass.
 
+**Done:** `F_QUASIQUOTE` in `interp_eval` now calls the pre-existing
+`quasiquote_expand` helper and re-evaluates the result. `F_UNQUOTE` /
+`F_UNQUOTE_SPLICING` outside a quasiquote context evaluate their inner form directly.
+
 ---
 
-### 2.2 Phase 21: Serial-Reset in Interpreter
+### 2.2 [x] Phase 21: Serial-Reset in Interpreter
 
 - `src/turi/eval.c` ~3622-3624: `EX_SERIAL_RESET` evaluates body and ignores all
   serial-shift invocations inside it.
@@ -159,11 +225,14 @@ the reader macro expansion pass.
 **Plan:** Blocked on Phase 21 compiler work (§1.5 above). Add an explicit "Phase 21
 not implemented" panic so it fails loudly rather than silently.
 
+**Done:** `EX_SERIAL_RESET` now returns a descriptive `turi_errorf` instead of
+silently evaluating the body.
+
 ---
 
 ## 3. Runtime (`src/runtime/`, `src/async/`)
 
-### 3.1 Opaque Pointer Serialization
+### 3.1 [x] Opaque Pointer Serialization
 
 - `src/runtime/serial.c` ~264, ~549: opaque pointers serialize as 8 zero bytes and
   cannot be deserialized.
@@ -175,9 +244,13 @@ struct, etc.) is silently corrupted on restore.
 (b) register a per-type serialize/deserialize hook. Option (a) is safer and simpler to
 ship first.
 
+**Done:** Both the serialization and deserialization paths for `STAG_PTR` now
+`abort()` with a clear error message instead of silently emitting / consuming 8 zero
+bytes.
+
 ---
 
-### 3.2 Effect Lowering Placeholder
+### 3.2 [ ] Effect Lowering Placeholder
 
 - `src/passes/effect_lower.c` ~110-137: `perform_to_shift()` is unused
   (`__attribute__((unused))`); it returns 0 instead of looking up the handler.
@@ -190,7 +263,7 @@ handler resolution rather than a post-pass rewrite.
 
 ---
 
-### 3.3 Async / Scheduler Stubs
+### 3.3 [x] Async / Scheduler Stubs
 
 - `src/async/scheduler.c` ~537-551: `tur_scheduler_mt_from_threadpool()` returns the
   current scheduler unchanged; `tur_scheduler_mt_set_for_threadpool()` is a no-op.
@@ -207,9 +280,13 @@ that clearly. The MT threadpool integration should panic with "not yet integrate
 rather than silently returning the wrong scheduler. The `turi_task_spawn` sync fallback
 should at minimum log a warning.
 
+**Done:** `tur_scheduler_mt_from_threadpool` and `_set_for_threadpool` now
+`abort()` with an SCH-003 message. `turi_task_spawn` logs a stderr warning about its
+synchronous fallback. ST-scheduler weak stubs are intentional and left as-is.
+
 ---
 
-### 3.4 WASM Fiber Context
+### 3.4 [ ] WASM Fiber Context
 
 - `src/async/fiber_ctx.h` ~9-12: WASM builds use a 1-byte placeholder struct for
   `tur_ctx_t`.
@@ -219,11 +296,27 @@ should at minimum log a warning.
 **Plan:** Implement using Asyncify (Emscripten) or document WASM as single-threaded
 with cooperative yields only. Tracked in `docs/archive/wasm-threads-plan.md`.
 
+**Prerequisites:**
+
+1. **Approach decision** (must precede any code):
+   - **Asyncify** -- pass `-s ASYNCIFY` to Emscripten. The existing
+     `fiber_ctx_x64.S` x86-64 assembly does not apply; `tur_ctx_t` in
+     `fiber_ctx.h` must be replaced with Asyncify state handles
+     (`asyncify_start_rewind` / `asyncify_stop_rewind`). CMake WASM target
+     needs updated link flags.
+   - **Cooperative yields only** -- remove context-switching from WASM builds;
+     all async is single-threaded with explicit `yield` points. `tur_ctx_t` stays
+     as the 1-byte placeholder but fibers never actually swap stacks. Simpler but
+     rules out preemptive or multi-fiber concurrency on WASM.
+2. **WASM build system** -- whichever approach is chosen, the `just wasm` target
+   in the Justfile and the Emscripten CMake toolchain file need corresponding
+   changes before the fiber code is testable.
+
 ---
 
 ## 4. Standard Library (`stdlib/`)
 
-### 4.1 Phase N4: Show Instances for Numeric Types
+### 4.1 [x] Phase N4: Show Instances for Numeric Types
 
 - `stdlib/typeclass.tur` ~156: Show instances for `int8`, `int16`, `int32`, `uint8`,
   `uint16`, `uint32`, `uint64`, `float32` all return placeholder strings like
@@ -234,9 +327,13 @@ with cooperative yields only. Tracked in `docs/archive/wasm-threads-plan.md`.
 **Plan:** Each instance should call the appropriate C `sprintf`/inline-C conversion.
 Straightforward change; add fixture `tests/fixtures/show-numeric-types/`.
 
+**Done:** All numeric Show instances (including `Show [int]`) now use `malloc` +
+`snprintf` inline-C with the correct format specifiers (`%d`, `%u`, `%llu`, `%g`,
+etc.).
+
 ---
 
-### 4.2 Arena Infrastructure Deferred in `Show` Instances
+### 4.2 [ ] Arena Infrastructure Deferred in `Show` Instances
 
 - `stdlib/option.tur` ~409, `stdlib/list.tur` ~440, `stdlib/vec.tur` ~457: the
   `Show` instances for `option`, `Cons`, and `Vec` all contain a TODO to use a scratch
@@ -248,9 +345,16 @@ but leaves performance on the table for large collections.
 **Plan:** Implement scratch-arena allocation (`stdlib/arena.tur` or
 `src/runtime/arena.c`), then revisit these three instances.
 
+**Prerequisites:** Arena infrastructure does not yet exist. Before updating the `Show`
+instances, the arena API needs to be defined and implemented -- at minimum
+`arena-alloc` (bump-allocate from a fixed block) and `arena-reset` (free all
+allocations at once). The `Show` changes are then a straightforward substitution of
+`malloc` calls with `arena-alloc` calls against a thread-local or caller-supplied
+scratch arena.
+
 ---
 
-### 4.3 `result`/`option` Display/Debug/Error Instances
+### 4.3 [ ] `result`/`option` Display/Debug/Error Instances
 
 - `stdlib/typeclass.tur` ~528-559: `Display`, `Debug`, and `Error` instances for
   `ptr<void>` (the result representation) return `"ok"` / `"err"` / `"error"` without
@@ -260,9 +364,26 @@ but leaves performance on the table for large collections.
 vtable). Either implement that, or replace `ptr<void>` with a tagged struct that
 carries a `show` function pointer.
 
+**Prerequisites:**
+
+1. **§4.1 [done]** -- Show instances for primitives exist, so the vtable has
+   implementations to point at.
+2. **Approach decision** (drives the scope significantly):
+   - **Option A: `show_fn` pointer in result struct** -- change the result
+     representation from `ptr<void>` to a struct carrying
+     `{ bool is_ok; int64_t value; show_fn_t show; }`. All result constructors
+     (`ok`, `err`) must accept and store a `show` function pointer. Callers that
+     construct results need access to the inner type's Show instance at that point.
+   - **Option B: `TypeKind` dispatch table** -- pass the inner `TypeKind` alongside
+     the value and use a switch/table to call the right `show` at print time.
+     Simpler but only works for types whose `TypeKind` is statically known.
+3. For Option A, changes span `stdlib/result.tur`, `stdlib/typeclass.tur`, every
+   call site that constructs an `ok` or `err`, and the elaborator's result-type
+   handling -- audit before starting.
+
 ---
 
-### 4.4 Signal/DSP Filter Stubs
+### 4.4 [ ] Signal/DSP Filter Stubs
 
 - `stdlib/signal/dsp.tur` ~130-150:
   - `low-pass`: returns `amplitude * signal` instead of a real IIR/FIR filter.
@@ -276,7 +397,7 @@ pass state in/out. Tracked in `docs/archive/signal-processing-arrows-plan.md`.
 
 ---
 
-### 4.5 Tidal / Live-Coding Placeholders
+### 4.5 [~] Tidal / Live-Coding Placeholders
 
 - `stdlib/tidal/timing.tur` ~194: pattern scheduling callback is a placeholder.
 - `stdlib/tidal/live.tur` ~357-361: `live-eval` returns code unchanged instead of
@@ -287,9 +408,12 @@ pass state in/out. Tracked in `docs/archive/signal-processing-arrows-plan.md`.
 `docs/upcoming/sandboxed-eval-plan.md`). Until then, add an explicit panic so callers
 know it is not functional.
 
+**Done:** `tidal/live.tur` `live-eval` now panics with "not yet implemented".
+`timing.tur` scheduling callback and `perf.tur` `eval-compiled` are still stubs.
+
 ---
 
-### 4.6 SuperCollider / SCSCM Stubs
+### 4.6 [x] SuperCollider / SCSCM Stubs
 
 - `stdlib/scscm/synth.tur` ~231-233: `synth-set-by-name` panics with "not yet
   implemented" (acceptable -- it already fails loudly).
@@ -298,9 +422,11 @@ know it is not functional.
 **Plan:** `live-eval` should panic rather than silently do nothing. Real implementation
 tracked in `docs/archive/scscm-hcsynth-livecoding-plan.md`.
 
+**Done:** `scscm/live.tur` `live-eval` now panics with "not yet implemented".
+
 ---
 
-### 4.7 `with-async` Effect Placeholder
+### 4.7 [ ] `with-async` Effect Placeholder
 
 - `stdlib/effects.tur` ~307: `with-async` notes it is a placeholder pending async
   runtime integration.
@@ -310,7 +436,7 @@ tracked in `docs/archive/scscm-hcsynth-livecoding-plan.md`.
 
 ---
 
-### 4.8 `rc.tur` Functor Map Simplified
+### 4.8 [ ] `rc.tur` Functor Map Simplified
 
 - `stdlib/rc.tur` ~24-46: `__functor_rc_fmap` contains a note that it assumes the
   mapped value fits in `int64_t`.
@@ -320,7 +446,7 @@ time guard that panics when `fmap` is called over a non-integer `rc`.
 
 ---
 
-### 4.9 `backtrack.tur` Fresh Variable
+### 4.9 [x] `backtrack.tur` Fresh Variable
 
 - `stdlib/backtrack.tur` ~213-222: `fresh` passes 0 as the placeholder value for a
   fresh logic variable.
@@ -332,11 +458,13 @@ a false result.
 **Plan:** Use a sentinel outside the normal value range (e.g. a tagged pointer or a
 dedicated `Unbound` variant) to represent an uninstantiated logic variable.
 
+**Done:** `fresh` now passes `INT64_MIN` as the unbound sentinel.
+
 ---
 
 ## 5. Tests
 
-### 5.1 Missing Compiled-Mode Catch Tests
+### 5.1 [x] Missing Compiled-Mode Catch Tests
 
 Tests for `try`/`catch` only run in interpreter mode because compiled catch is broken
 (§1.2). No `requires.compiled` fixture exists for error recovery.
@@ -345,7 +473,7 @@ Tests for `try`/`catch` only run in interpreter mode because compiled catch is b
 
 ---
 
-### 5.2 `safe-arena` Fixture
+### 5.2 [ ] `safe-arena` Fixture
 
 - `tests/fixtures/safe-arena/input.tur:2`: body is `(println "arena test placeholder")`.
 
@@ -354,7 +482,7 @@ infrastructure (§4.2) is in place.
 
 ---
 
-### 5.3 `backtrack-fresh` Placeholder Value
+### 5.3 [x] `backtrack-fresh` Placeholder Value
 
 - `tests/fixtures/backtrack-fresh/input.tur`: exercises `fresh` with the 0 placeholder
   (§4.9). Test output is vacuously correct because the placeholder happens to match
@@ -363,9 +491,12 @@ infrastructure (§4.2) is in place.
 **Plan:** Update the test to verify that a fresh variable is distinct from 0 once the
 sentinel is implemented.
 
+**Done:** Fixture updated to verify `x != 0` using the `INT64_MIN` sentinel; local
+`fresh` stub and `expected.stdout` updated accordingly.
+
 ---
 
-### 5.4 `scscm` Synth Test Placeholder
+### 5.4 [ ] `scscm` Synth Test Placeholder
 
 - `tests/scscm/synth_test.tur` ~57: comment notes the assertion depends on scsynth
   feedback not yet wired up.
@@ -376,24 +507,24 @@ sentinel is implemented.
 
 ## 6. Priority Order
 
-| Priority | Item | Effort |
-|----------|------|--------|
-| P1 | §1.1 Nested functions (`EX_FN`) | High |
-| P1 | §1.2 Compiled try/catch | Medium |
-| P1 | §4.1 Show for numeric types | Low |
-| P2 | §1.3 Panic type tag | Low |
-| P2 | §1.6 `weak-upgrade` return type | Low |
-| P2 | §3.1 Opaque pointer serialization policy | Low |
-| P2 | §4.9 `backtrack.tur` fresh sentinel | Low |
-| P3 | §2.1 Quasiquote in interpreter | Medium |
-| P3 | §3.3 Async/scheduler stubs -- make them loud | Low |
-| P3 | §4.4 DSP filter stubs | Medium |
-| P3 | §4.5/4.6 Tidal/SCSCM `live-eval` -- panic loudly | Low |
-| P4 | §1.5 Phase 21 serial-shift | Very High |
-| P4 | §1.4 Phase 18 `call/cc` | Very High |
-| P4 | §3.4 WASM fiber context | High |
-| P5 | §1.7 Transmute size check | Low |
-| P5 | §1.8 HKT `[f :kind]` syntax | Low |
-| P5 | §1.9 Reserved `?` operator | Low |
-| P5 | §4.2 Arena-backed Show | Medium |
-| P5 | §4.3 result/option Display vtable | High |
+| Priority | Item | Effort | Status | Prereqs |
+|----------|------|--------|--------|---------|
+| P1 | §1.1 Nested functions (`EX_FN`) | High | [x] | none |
+| P1 | §1.2 Compiled try/catch | Medium | [x] | §1.1 |
+| P1 | §4.1 Show for numeric types | Low | [x] | -- |
+| P2 | §1.3 Panic type tag | Low | [x] | -- |
+| P2 | §1.6 `weak-upgrade` return type | Low | [ ] | none |
+| P2 | §3.1 Opaque pointer serialization policy | Low | [x] | -- |
+| P2 | §4.9 `backtrack.tur` fresh sentinel | Low | [x] | -- |
+| P3 | §2.1 Quasiquote in interpreter | Medium | [x] | -- |
+| P3 | §3.3 Async/scheduler stubs -- make them loud | Low | [x] | -- |
+| P3 | §4.4 DSP filter stubs | Medium | [ ] | none |
+| P3 | §4.5/4.6 Tidal/SCSCM `live-eval` -- panic loudly | Low | [x] | -- |
+| P4 | §1.5 Phase 21 serial-shift | Very High | [ ] | §3.1 [x], §1.4, approach decision |
+| P4 | §1.4 Phase 18 `call/cc` | Very High | [ ] | §1.1, approach decision |
+| P4 | §3.4 WASM fiber context | High | [ ] | approach decision, WASM build |
+| P5 | §1.7 Transmute size check | Low | [ ] | none |
+| P5 | §1.8 HKT `[f :kind]` syntax | Low | [ ] | none |
+| P5 | §1.9 Reserved `?` operator | Low | [ ] | none |
+| P5 | §4.2 Arena-backed Show | Medium | [ ] | arena infrastructure |
+| P5 | §4.3 result/option Display vtable | High | [ ] | §4.1 [x], approach decision |

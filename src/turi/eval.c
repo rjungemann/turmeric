@@ -3619,9 +3619,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_cstr(tname);
     }
 
-    /* serial-reset: Phase 21 not yet in interpreter; evaluate body, ignore serial-shift. */
+    /* serial-reset: Phase 21 not yet implemented in interpreter. */
     case EX_SERIAL_RESET:
-        return eval_expr(env, frame, e->as.serial_reset_.body);
+        return turi_errorf("eval: EX_SERIAL_RESET (Phase 21 serial-shift/reset) is not yet "
+                           "implemented in the interpreter");
 
     /* --- Everything else — unimplemented expression kind ------------------ */
     default:
