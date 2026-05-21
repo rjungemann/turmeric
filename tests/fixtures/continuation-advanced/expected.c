@@ -2014,12 +2014,12 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_267(int64_t);
-static int64_t __fn_270(int64_t);
-static int64_t __fn_273(int64_t);
-static int64_t __fn_277(void *, int64_t);
-static int64_t __fn_283(int64_t);
-static int64_t __fn_289(void *, int64_t);
+static int64_t __fn_220(int64_t);
+static int64_t __fn_223(int64_t);
+static int64_t __fn_226(int64_t);
+static int64_t __fn_230(void *, int64_t);
+static int64_t __fn_236(int64_t);
+static int64_t __fn_242(void *, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2027,24 +2027,6 @@ static void * with_c_string(const char *, void *);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(void *);
-static int64_t args_spec_new();
-static int64_t args_spec_prog(int64_t, const char *);
-static int64_t args_spec_flag(int64_t, const char *);
-static int64_t args_spec_option(int64_t, const char *, const char *, int64_t);
-static int64_t args_spec_subcommand(int64_t, const char *, int64_t);
-static int64_t args_parse(int64_t, int64_t);
-static bool args_has_(int64_t, const char *);
-static const char * args_get_str(int64_t, const char *);
-static int64_t args_get_int(int64_t, const char *);
-static bool args_get_bool(int64_t, const char *);
-static const char * args_subcommand(int64_t);
-static int64_t args_sub_result(int64_t);
-static int64_t args_positional(int64_t);
-static bool args_error_(int64_t);
-static const char * args_error_msg(int64_t);
-static void args_print_help(int64_t);
-static void args_spec_free(int64_t);
-static void args_result_free(int64_t);
 static bool contract_enabled_();
 static void tur_contract_check(bool, const char *);
 static void tur_contract_check_inv(int64_t, int64_t, const char *);
@@ -2090,32 +2072,32 @@ static int64_t test_shift_ignores_k();
 static int64_t test_reset_no_shift();
 static int64_t test_deeply_nested_shift();
 
-static int64_t __fn_267(int64_t v) {
+static int64_t __fn_220(int64_t v) {
         return ((v) * (INT64_C(2)));
 }
 
-static int64_t __fn_270(int64_t v) {
+static int64_t __fn_223(int64_t v) {
         return ((v) + (INT64_C(100)));
 }
 
-static int64_t __fn_273(int64_t v) {
+static int64_t __fn_226(int64_t v) {
         return ((v) * (INT64_C(2)));
 }
 
-struct __env_279 { int64_t __fn; int64_t x; };
-static int64_t __fn_277(void * __env_p_280, int64_t v) {
-        struct __env_279 *__env___env_279 = (struct __env_279 *)__env_p_280;
-        return ((__env___env_279->x) + (v));
+struct __env_232 { int64_t __fn; int64_t x; };
+static int64_t __fn_230(void * __env_p_233, int64_t v) {
+        struct __env_232 *__env___env_232 = (struct __env_232 *)__env_p_233;
+        return ((__env___env_232->x) + (v));
 }
 
-static int64_t __fn_283(int64_t v) {
+static int64_t __fn_236(int64_t v) {
         return INT64_C(42);
 }
 
-struct __env_291 { int64_t __fn; int64_t a; int64_t b; int64_t c; };
-static int64_t __fn_289(void * __env_p_292, int64_t v) {
-        struct __env_291 *__env___env_291 = (struct __env_291 *)__env_p_292;
-        return ((__env___env_291->a) + (((__env___env_291->b) + (((__env___env_291->c) + (v))))));
+struct __env_244 { int64_t __fn; int64_t a; int64_t b; int64_t c; };
+static int64_t __fn_242(void * __env_p_245, int64_t v) {
+        struct __env_244 *__env___env_244 = (struct __env_244 *)__env_p_245;
+        return ((__env___env_244->a) + (((__env___env_244->b) + (((__env___env_244->c) + (v))))));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -2172,411 +2154,6 @@ static void * box(int64_t v) {
 static int64_t unbox(void * p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
-  
-}
-
-static int64_t args_spec_new() {
-        int64_t *s = calloc(4, sizeof(int64_t));
-  return (int64_t)(intptr_t)s;
-  
-}
-
-static int64_t args_spec_prog(int64_t spec, const char * name) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  s[3] = (int64_t)(intptr_t)name;
-  return spec;
-  
-}
-
-static int64_t args_spec_flag(int64_t spec, const char * name) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(2 * sizeof(int64_t));
-  cell[0] = (int64_t)(intptr_t)name;
-  cell[1] = s[0];
-  s[0] = (int64_t)(intptr_t)cell;
-  return spec;
-  
-}
-
-static int64_t args_spec_option(int64_t spec, const char * name, const char * type, int64_t dflt) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(4 * sizeof(int64_t));
-  cell[0] = (int64_t)(intptr_t)name;
-  cell[1] = (int64_t)(intptr_t)type;
-  cell[2] = (int64_t)dflt;
-  cell[3] = s[1];
-  s[1] = (int64_t)(intptr_t)cell;
-  return spec;
-  
-}
-
-static int64_t args_spec_subcommand(int64_t spec, const char * name, int64_t sub_spec) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(3 * sizeof(int64_t));
-  cell[0] = (int64_t)(intptr_t)name;
-  cell[1] = (int64_t)sub_spec;
-  cell[2] = s[2];
-  s[2] = (int64_t)(intptr_t)cell;
-  return spec;
-  
-}
-
-static int64_t args_parse(int64_t spec, int64_t argv) {
-        /* --- linearise the *args* cons list into a char* array --- */
-  int argc_l = 0;
-  int64_t tmp = argv;
-  while (tmp) { argc_l++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
-  const char **argv_l = argc_l ? (const char**)malloc(argc_l * sizeof(char*)) : NULL;
-  tmp = argv;
-  for (int ii = 0; ii < argc_l; ii++) {
-    int64_t *cell = (int64_t*)(intptr_t)tmp;
-    argv_l[ii] = (const char*)(intptr_t)cell[0];
-    tmp = cell[1];
-  }
-
-  /* --- stack for nested subcommand dispatch (max depth 8) --- */
-  int64_t spec_stk[8];
-  int64_t res_stk[8];
-  int depth = 0;
-  spec_stk[0] = spec;
-  res_stk[0] = (int64_t)(intptr_t)calloc(6, sizeof(int64_t));
-
-  /* --- main parse loop --- */
-  int i = 0;
-  while (i < argc_l) {
-    const char *arg = argv_l[i];
-    int64_t *sp  = (int64_t*)(intptr_t)spec_stk[depth];
-    int64_t *res = (int64_t*)(intptr_t)res_stk[depth];
-
-    if (strncmp(arg, "--", 2) == 0) {
-      const char *key_start = arg + 2;
-
-      /* --help is always accepted */
-      if (strcmp(key_start, "help") == 0) {
-        int64_t *ent = malloc(3 * sizeof(int64_t));
-        ent[0] = (int64_t)(intptr_t)strdup("help");
-        ent[1] = (int64_t)(intptr_t)strdup("1");
-        ent[2] = res[0];
-        res[0] = (int64_t)(intptr_t)ent;
-        i++; continue;
-      }
-
-      const char *eq = strchr(key_start, '=');
-      if (eq) {
-        /* --key=value form */
-        size_t klen = (size_t)(eq - key_start);
-        char *key = (char*)malloc(klen + 1);
-        memcpy(key, key_start, klen);
-        key[klen] = '\0';
-        const char *val = eq + 1;
-
-        int found = 0;
-        int64_t *opt = (int64_t*)(intptr_t)sp[1];
-        while (opt) {
-          const char *oname = (const char*)(intptr_t)opt[0];
-          if (strcmp(oname + 2, key) == 0) {
-            int64_t *ent = malloc(3 * sizeof(int64_t));
-            ent[0] = (int64_t)(intptr_t)key;
-            ent[1] = (int64_t)(intptr_t)strdup(val);
-            ent[2] = res[0];
-            res[0] = (int64_t)(intptr_t)ent;
-            found = 1; break;
-          }
-          opt = (int64_t*)(intptr_t)opt[3];
-        }
-        if (!found) {
-          int64_t *fl = (int64_t*)(intptr_t)sp[0];
-          while (fl) {
-            if (strcmp(((const char*)(intptr_t)fl[0]) + 2, key) == 0) {
-              if (!res[4]) {
-                res[4] = 1;
-                char *em = (char*)malloc(256);
-                snprintf(em, 256, "flag --%s does not take a value", key);
-                res[5] = (int64_t)(intptr_t)em;
-              }
-              free(key); found = 1; break;
-            }
-            fl = (int64_t*)(intptr_t)fl[1];
-          }
-        }
-        if (!found) {
-          if (!res[4]) {
-            res[4] = 1;
-            char *em = (char*)malloc(256);
-            snprintf(em, 256, "unknown option: --%s", key);
-            res[5] = (int64_t)(intptr_t)em;
-          }
-          free(key);
-        }
-      } else {
-        /* --key form: flag or space-separated option */
-        int found = 0;
-        int64_t *fl = (int64_t*)(intptr_t)sp[0];
-        while (fl) {
-          const char *fname = (const char*)(intptr_t)fl[0];
-          if (strcmp(fname + 2, key_start) == 0) {
-            int64_t *ent = malloc(3 * sizeof(int64_t));
-            ent[0] = (int64_t)(intptr_t)strdup(key_start);
-            ent[1] = (int64_t)(intptr_t)strdup("1");
-            ent[2] = res[0];
-            res[0] = (int64_t)(intptr_t)ent;
-            found = 1; break;
-          }
-          fl = (int64_t*)(intptr_t)fl[1];
-        }
-        if (!found) {
-          int64_t *opt = (int64_t*)(intptr_t)sp[1];
-          while (opt) {
-            const char *oname = (const char*)(intptr_t)opt[0];
-            if (strcmp(oname + 2, key_start) == 0) {
-              if (i + 1 < argc_l) {
-                i++;
-                const char *val = argv_l[i];
-                int64_t *ent = malloc(3 * sizeof(int64_t));
-                ent[0] = (int64_t)(intptr_t)strdup(key_start);
-                ent[1] = (int64_t)(intptr_t)strdup(val);
-                ent[2] = res[0];
-                res[0] = (int64_t)(intptr_t)ent;
-              } else {
-                if (!res[4]) {
-                  res[4] = 1;
-                  char *em = (char*)malloc(256);
-                  snprintf(em, 256, "option --%s requires a value", key_start);
-                  res[5] = (int64_t)(intptr_t)em;
-                }
-              }
-              found = 1; break;
-            }
-            opt = (int64_t*)(intptr_t)opt[3];
-          }
-        }
-        if (!found) {
-          if (!res[4]) {
-            res[4] = 1;
-            char *em = (char*)malloc(256);
-            snprintf(em, 256, "unknown flag: --%s", key_start);
-            res[5] = (int64_t)(intptr_t)em;
-          }
-        }
-      }
-    } else {
-      /* non-flag: try subcommand, else positional */
-      int found_sub = 0;
-      int64_t *sub = (int64_t*)(intptr_t)sp[2];
-      while (sub) {
-        const char *sname = (const char*)(intptr_t)sub[0];
-        if (strcmp(sname, arg) == 0) {
-          res[2] = (int64_t)(intptr_t)strdup(arg);
-          int64_t *sub_res = calloc(6, sizeof(int64_t));
-          res[3] = (int64_t)(intptr_t)sub_res;
-          if (depth < 7) {
-            depth++;
-            spec_stk[depth] = sub[1];
-            res_stk[depth]  = (int64_t)(intptr_t)sub_res;
-          }
-          found_sub = 1; break;
-        }
-        sub = (int64_t*)(intptr_t)sub[2];
-      }
-      if (!found_sub) {
-        /* positional -- prepend; list ends up reversed (last arg is head) */
-        int64_t *pos = malloc(2 * sizeof(int64_t));
-        pos[0] = (int64_t)(intptr_t)arg;
-        pos[1] = res[1];
-        res[1] = (int64_t)(intptr_t)pos;
-      }
-    }
-    i++;
-  }
-
-  /* --- inject defaults and check required options for every result level --- */
-  for (int d = 0; d <= depth; d++) {
-    int64_t *sp_d  = (int64_t*)(intptr_t)spec_stk[d];
-    int64_t *res_d = (int64_t*)(intptr_t)res_stk[d];
-    int64_t *opt = (int64_t*)(intptr_t)sp_d[1];
-    while (opt) {
-      int64_t odflt = opt[2];
-      const char *okey = ((const char*)(intptr_t)opt[0]) + 2;  /* strip "--" */
-      int already = 0;
-      int64_t *e = (int64_t*)(intptr_t)res_d[0];
-      while (e) {
-        if (strcmp((const char*)(intptr_t)e[0], okey) == 0) { already = 1; break; }
-        e = (int64_t*)(intptr_t)e[2];
-      }
-      if (!already) {
-        if (odflt != 0) {
-          /* inject default */
-          int64_t *ent = malloc(3 * sizeof(int64_t));
-          ent[0] = (int64_t)(intptr_t)strdup(okey);
-          ent[1] = (int64_t)(intptr_t)strdup((const char*)(intptr_t)odflt);
-          ent[2] = res_d[0];
-          res_d[0] = (int64_t)(intptr_t)ent;
-        } else if (!res_d[4]) {
-          /* required option missing */
-          res_d[4] = 1;
-          char *em = (char*)malloc(256);
-          snprintf(em, 256, "required option --%s not provided", okey);
-          res_d[5] = (int64_t)(intptr_t)em;
-        }
-      }
-      opt = (int64_t*)(intptr_t)opt[3];
-    }
-  }
-
-  if (argv_l) free(argv_l);
-  return res_stk[0];
-  
-}
-
-static bool args_has_(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
-      return true;
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return false;
-  
-}
-
-static const char * args_get_str(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
-      return (const char*)(intptr_t)e[1];
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return 0;
-  
-}
-
-static int64_t args_get_int(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
-      return strtoll((const char*)(intptr_t)e[1], NULL, 10);
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return 0;
-  
-}
-
-static bool args_get_bool(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0) {
-      const char *v = (const char*)(intptr_t)e[1];
-      return strcmp(v, "1") == 0 || strcmp(v, "true") == 0
-          || strcmp(v, "yes") == 0 || strcmp(v, "on") == 0;
-    }
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return false;
-  
-}
-
-static const char * args_subcommand(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return (const char*)(intptr_t)res[2];
-  
-}
-
-static int64_t args_sub_result(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return res[3];
-  
-}
-
-static int64_t args_positional(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return res[1];
-  
-}
-
-static bool args_error_(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return res[4] != 0;
-  
-}
-
-static const char * args_error_msg(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return (const char*)(intptr_t)res[5];
-  
-}
-
-static void args_print_help(int64_t spec) {
-        int64_t *sp = (int64_t*)(intptr_t)spec;
-  const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
-  printf("Usage: %s [options]", prog);
-  if (sp[2]) printf(" <subcommand>");
-  printf("\n");
-  if (sp[0] || sp[1]) {
-    printf("\nOptions:\n");
-    int64_t *fl = (int64_t*)(intptr_t)sp[0];
-    while (fl) {
-      printf("  %s\n", (const char*)(intptr_t)fl[0]);
-      fl = (int64_t*)(intptr_t)fl[1];
-    }
-    int64_t *opt = (int64_t*)(intptr_t)sp[1];
-    while (opt) {
-      const char *oname = (const char*)(intptr_t)opt[0];
-      const char *otype = (const char*)(intptr_t)opt[1];
-      int64_t odflt = opt[2];
-      if (odflt)
-        printf("  %s=<%s>  (default: %s)\n", oname, otype, (const char*)(intptr_t)odflt);
-      else
-        printf("  %s=<%s>  (required)\n", oname, otype);
-      opt = (int64_t*)(intptr_t)opt[3];
-    }
-  }
-  if (sp[2]) {
-    printf("\nSubcommands:\n");
-    int64_t *sub = (int64_t*)(intptr_t)sp[2];
-    while (sub) {
-      printf("  %s\n", (const char*)(intptr_t)sub[0]);
-      sub = (int64_t*)(intptr_t)sub[2];
-    }
-  }
-  
-}
-
-static void args_spec_free(int64_t spec) {
-        int64_t *sp = (int64_t*)(intptr_t)spec;
-  int64_t *fl = (int64_t*)(intptr_t)sp[0];
-  while (fl) { int64_t *nx = (int64_t*)(intptr_t)fl[1]; free(fl); fl = nx; }
-  int64_t *opt = (int64_t*)(intptr_t)sp[1];
-  while (opt) { int64_t *nx = (int64_t*)(intptr_t)opt[3]; free(opt); opt = nx; }
-  int64_t *sub = (int64_t*)(intptr_t)sp[2];
-  while (sub) { int64_t *nx = (int64_t*)(intptr_t)sub[2]; free(sub); sub = nx; }
-  free(sp);
-  
-}
-
-static void args_result_free(int64_t result) {
-        int64_t cur = result;
-  while (cur) {
-    int64_t *res = (int64_t*)(intptr_t)cur;
-    int64_t sub  = res[3];
-    int64_t *e   = (int64_t*)(intptr_t)res[0];
-    while (e) {
-      int64_t *nx = (int64_t*)(intptr_t)e[2];
-      free((void*)(intptr_t)e[0]);  /* key */
-      free((void*)(intptr_t)e[1]);  /* val */
-      free(e);
-      e = nx;
-    }
-    int64_t *pos = (int64_t*)(intptr_t)res[1];
-    while (pos) { int64_t *nx = (int64_t*)(intptr_t)pos[1]; free(pos); pos = nx; }
-    if (res[2]) free((void*)(intptr_t)res[2]);  /* subcommand name */
-    if (res[5]) free((void*)(intptr_t)res[5]);  /* error message */
-    free(res);
-    cur = sub;
-  }
   
 }
 
@@ -2767,33 +2344,33 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 }
 
 static int64_t test_nested_reset() {
-        int64_t __t0 = __fn_267(INT64_C(5));
+        int64_t __t0 = __fn_220(INT64_C(5));
         return ((INT64_C(1)) + (((INT64_C(10)) + (__t0))));
 }
 
 static int64_t test_shift_return_different() {
-        int64_t __t1 = __fn_270(INT64_C(7));
+        int64_t __t1 = __fn_223(INT64_C(7));
         return __t1;
 }
 
 static int64_t test_multiple_shifts() {
         int64_t __t2;
         {
-            int64_t __t3 = __fn_273(INT64_C(3));
-            int64_t x_275 = __t3;
-            (void)x_275;
-            struct __env_279 *__t5 = (struct __env_279 *)malloc(sizeof(struct __env_279));
-            __t5->__fn = (int64_t)(intptr_t)__fn_277;
-            __t5->x = x_275;
+            int64_t __t3 = __fn_226(INT64_C(3));
+            int64_t x_228 = __t3;
+            (void)x_228;
+            struct __env_232 *__t5 = (struct __env_232 *)malloc(sizeof(struct __env_232));
+            __t5->__fn = (int64_t)(intptr_t)__fn_230;
+            __t5->x = x_228;
             void *__t6 = __t5;
-            int64_t __t4 = __fn_277(__t6, INT64_C(4));
+            int64_t __t4 = __fn_230(__t6, INT64_C(4));
             __t2 = __t4;
         }
         return __t2;
 }
 
 static int64_t test_shift_ignores_k() {
-        int64_t __t7 = __fn_283(INT64_C(10));
+        int64_t __t7 = __fn_236(INT64_C(10));
         return __t7;
 }
 
@@ -2804,19 +2381,19 @@ static int64_t test_reset_no_shift() {
 static int64_t test_deeply_nested_shift() {
         int64_t __t8;
         {
-            int64_t a_285 = INT64_C(1);
-            (void)a_285;
-            int64_t b_286 = INT64_C(2);
-            (void)b_286;
-            int64_t c_287 = INT64_C(3);
-            (void)c_287;
-            struct __env_291 *__t10 = (struct __env_291 *)malloc(sizeof(struct __env_291));
-            __t10->__fn = (int64_t)(intptr_t)__fn_289;
-            __t10->a = a_285;
-            __t10->b = b_286;
-            __t10->c = c_287;
+            int64_t a_238 = INT64_C(1);
+            (void)a_238;
+            int64_t b_239 = INT64_C(2);
+            (void)b_239;
+            int64_t c_240 = INT64_C(3);
+            (void)c_240;
+            struct __env_244 *__t10 = (struct __env_244 *)malloc(sizeof(struct __env_244));
+            __t10->__fn = (int64_t)(intptr_t)__fn_242;
+            __t10->a = a_238;
+            __t10->b = b_239;
+            __t10->c = c_240;
             void *__t11 = __t10;
-            int64_t __t9 = __fn_289(__t11, INT64_C(10));
+            int64_t __t9 = __fn_242(__t11, INT64_C(10));
             __t8 = __t9;
         }
         return __t8;

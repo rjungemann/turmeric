@@ -1,6 +1,8 @@
 ;; args-basic -- test flag and space-separated option parsing.
 ;; run.args: --verbose --input hello
 
+(load "stdlib/args.tur")
+
 (defn print-cstr [s :cstr] :void
   ```c
   printf("%s\n", s ? s : "");

@@ -1,5 +1,7 @@
 ;; args-subcommand -- test subcommand dispatch and sub-result access.
 
+(load "stdlib/args.tur")
+
 (defn print-cstr [s :cstr] :void
   ```c
   printf("%s\n", s ? s : "");

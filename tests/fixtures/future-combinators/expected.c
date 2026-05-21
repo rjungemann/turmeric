@@ -2021,24 +2021,6 @@ static void * with_c_string(const char *, void *);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(void *);
-static int64_t args_spec_new();
-static int64_t args_spec_prog(int64_t, const char *);
-static int64_t args_spec_flag(int64_t, const char *);
-static int64_t args_spec_option(int64_t, const char *, const char *, int64_t);
-static int64_t args_spec_subcommand(int64_t, const char *, int64_t);
-static int64_t args_parse(int64_t, int64_t);
-static bool args_has_(int64_t, const char *);
-static const char * args_get_str(int64_t, const char *);
-static int64_t args_get_int(int64_t, const char *);
-static bool args_get_bool(int64_t, const char *);
-static const char * args_subcommand(int64_t);
-static int64_t args_sub_result(int64_t);
-static int64_t args_positional(int64_t);
-static bool args_error_(int64_t);
-static const char * args_error_msg(int64_t);
-static void args_print_help(int64_t);
-static void args_spec_free(int64_t);
-static void args_result_free(int64_t);
 static bool contract_enabled_();
 static void tur_contract_check(bool, const char *);
 static void tur_contract_check_inv(int64_t, int64_t, const char *);
@@ -2146,411 +2128,6 @@ static void * box(int64_t v) {
 static int64_t unbox(void * p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
-  
-}
-
-static int64_t args_spec_new() {
-        int64_t *s = calloc(4, sizeof(int64_t));
-  return (int64_t)(intptr_t)s;
-  
-}
-
-static int64_t args_spec_prog(int64_t spec, const char * name) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  s[3] = (int64_t)(intptr_t)name;
-  return spec;
-  
-}
-
-static int64_t args_spec_flag(int64_t spec, const char * name) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(2 * sizeof(int64_t));
-  cell[0] = (int64_t)(intptr_t)name;
-  cell[1] = s[0];
-  s[0] = (int64_t)(intptr_t)cell;
-  return spec;
-  
-}
-
-static int64_t args_spec_option(int64_t spec, const char * name, const char * type, int64_t dflt) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(4 * sizeof(int64_t));
-  cell[0] = (int64_t)(intptr_t)name;
-  cell[1] = (int64_t)(intptr_t)type;
-  cell[2] = (int64_t)dflt;
-  cell[3] = s[1];
-  s[1] = (int64_t)(intptr_t)cell;
-  return spec;
-  
-}
-
-static int64_t args_spec_subcommand(int64_t spec, const char * name, int64_t sub_spec) {
-        int64_t *s = (int64_t*)(intptr_t)spec;
-  int64_t *cell = malloc(3 * sizeof(int64_t));
-  cell[0] = (int64_t)(intptr_t)name;
-  cell[1] = (int64_t)sub_spec;
-  cell[2] = s[2];
-  s[2] = (int64_t)(intptr_t)cell;
-  return spec;
-  
-}
-
-static int64_t args_parse(int64_t spec, int64_t argv) {
-        /* --- linearise the *args* cons list into a char* array --- */
-  int argc_l = 0;
-  int64_t tmp = argv;
-  while (tmp) { argc_l++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
-  const char **argv_l = argc_l ? (const char**)malloc(argc_l * sizeof(char*)) : NULL;
-  tmp = argv;
-  for (int ii = 0; ii < argc_l; ii++) {
-    int64_t *cell = (int64_t*)(intptr_t)tmp;
-    argv_l[ii] = (const char*)(intptr_t)cell[0];
-    tmp = cell[1];
-  }
-
-  /* --- stack for nested subcommand dispatch (max depth 8) --- */
-  int64_t spec_stk[8];
-  int64_t res_stk[8];
-  int depth = 0;
-  spec_stk[0] = spec;
-  res_stk[0] = (int64_t)(intptr_t)calloc(6, sizeof(int64_t));
-
-  /* --- main parse loop --- */
-  int i = 0;
-  while (i < argc_l) {
-    const char *arg = argv_l[i];
-    int64_t *sp  = (int64_t*)(intptr_t)spec_stk[depth];
-    int64_t *res = (int64_t*)(intptr_t)res_stk[depth];
-
-    if (strncmp(arg, "--", 2) == 0) {
-      const char *key_start = arg + 2;
-
-      /* --help is always accepted */
-      if (strcmp(key_start, "help") == 0) {
-        int64_t *ent = malloc(3 * sizeof(int64_t));
-        ent[0] = (int64_t)(intptr_t)strdup("help");
-        ent[1] = (int64_t)(intptr_t)strdup("1");
-        ent[2] = res[0];
-        res[0] = (int64_t)(intptr_t)ent;
-        i++; continue;
-      }
-
-      const char *eq = strchr(key_start, '=');
-      if (eq) {
-        /* --key=value form */
-        size_t klen = (size_t)(eq - key_start);
-        char *key = (char*)malloc(klen + 1);
-        memcpy(key, key_start, klen);
-        key[klen] = '\0';
-        const char *val = eq + 1;
-
-        int found = 0;
-        int64_t *opt = (int64_t*)(intptr_t)sp[1];
-        while (opt) {
-          const char *oname = (const char*)(intptr_t)opt[0];
-          if (strcmp(oname + 2, key) == 0) {
-            int64_t *ent = malloc(3 * sizeof(int64_t));
-            ent[0] = (int64_t)(intptr_t)key;
-            ent[1] = (int64_t)(intptr_t)strdup(val);
-            ent[2] = res[0];
-            res[0] = (int64_t)(intptr_t)ent;
-            found = 1; break;
-          }
-          opt = (int64_t*)(intptr_t)opt[3];
-        }
-        if (!found) {
-          int64_t *fl = (int64_t*)(intptr_t)sp[0];
-          while (fl) {
-            if (strcmp(((const char*)(intptr_t)fl[0]) + 2, key) == 0) {
-              if (!res[4]) {
-                res[4] = 1;
-                char *em = (char*)malloc(256);
-                snprintf(em, 256, "flag --%s does not take a value", key);
-                res[5] = (int64_t)(intptr_t)em;
-              }
-              free(key); found = 1; break;
-            }
-            fl = (int64_t*)(intptr_t)fl[1];
-          }
-        }
-        if (!found) {
-          if (!res[4]) {
-            res[4] = 1;
-            char *em = (char*)malloc(256);
-            snprintf(em, 256, "unknown option: --%s", key);
-            res[5] = (int64_t)(intptr_t)em;
-          }
-          free(key);
-        }
-      } else {
-        /* --key form: flag or space-separated option */
-        int found = 0;
-        int64_t *fl = (int64_t*)(intptr_t)sp[0];
-        while (fl) {
-          const char *fname = (const char*)(intptr_t)fl[0];
-          if (strcmp(fname + 2, key_start) == 0) {
-            int64_t *ent = malloc(3 * sizeof(int64_t));
-            ent[0] = (int64_t)(intptr_t)strdup(key_start);
-            ent[1] = (int64_t)(intptr_t)strdup("1");
-            ent[2] = res[0];
-            res[0] = (int64_t)(intptr_t)ent;
-            found = 1; break;
-          }
-          fl = (int64_t*)(intptr_t)fl[1];
-        }
-        if (!found) {
-          int64_t *opt = (int64_t*)(intptr_t)sp[1];
-          while (opt) {
-            const char *oname = (const char*)(intptr_t)opt[0];
-            if (strcmp(oname + 2, key_start) == 0) {
-              if (i + 1 < argc_l) {
-                i++;
-                const char *val = argv_l[i];
-                int64_t *ent = malloc(3 * sizeof(int64_t));
-                ent[0] = (int64_t)(intptr_t)strdup(key_start);
-                ent[1] = (int64_t)(intptr_t)strdup(val);
-                ent[2] = res[0];
-                res[0] = (int64_t)(intptr_t)ent;
-              } else {
-                if (!res[4]) {
-                  res[4] = 1;
-                  char *em = (char*)malloc(256);
-                  snprintf(em, 256, "option --%s requires a value", key_start);
-                  res[5] = (int64_t)(intptr_t)em;
-                }
-              }
-              found = 1; break;
-            }
-            opt = (int64_t*)(intptr_t)opt[3];
-          }
-        }
-        if (!found) {
-          if (!res[4]) {
-            res[4] = 1;
-            char *em = (char*)malloc(256);
-            snprintf(em, 256, "unknown flag: --%s", key_start);
-            res[5] = (int64_t)(intptr_t)em;
-          }
-        }
-      }
-    } else {
-      /* non-flag: try subcommand, else positional */
-      int found_sub = 0;
-      int64_t *sub = (int64_t*)(intptr_t)sp[2];
-      while (sub) {
-        const char *sname = (const char*)(intptr_t)sub[0];
-        if (strcmp(sname, arg) == 0) {
-          res[2] = (int64_t)(intptr_t)strdup(arg);
-          int64_t *sub_res = calloc(6, sizeof(int64_t));
-          res[3] = (int64_t)(intptr_t)sub_res;
-          if (depth < 7) {
-            depth++;
-            spec_stk[depth] = sub[1];
-            res_stk[depth]  = (int64_t)(intptr_t)sub_res;
-          }
-          found_sub = 1; break;
-        }
-        sub = (int64_t*)(intptr_t)sub[2];
-      }
-      if (!found_sub) {
-        /* positional -- prepend; list ends up reversed (last arg is head) */
-        int64_t *pos = malloc(2 * sizeof(int64_t));
-        pos[0] = (int64_t)(intptr_t)arg;
-        pos[1] = res[1];
-        res[1] = (int64_t)(intptr_t)pos;
-      }
-    }
-    i++;
-  }
-
-  /* --- inject defaults and check required options for every result level --- */
-  for (int d = 0; d <= depth; d++) {
-    int64_t *sp_d  = (int64_t*)(intptr_t)spec_stk[d];
-    int64_t *res_d = (int64_t*)(intptr_t)res_stk[d];
-    int64_t *opt = (int64_t*)(intptr_t)sp_d[1];
-    while (opt) {
-      int64_t odflt = opt[2];
-      const char *okey = ((const char*)(intptr_t)opt[0]) + 2;  /* strip "--" */
-      int already = 0;
-      int64_t *e = (int64_t*)(intptr_t)res_d[0];
-      while (e) {
-        if (strcmp((const char*)(intptr_t)e[0], okey) == 0) { already = 1; break; }
-        e = (int64_t*)(intptr_t)e[2];
-      }
-      if (!already) {
-        if (odflt != 0) {
-          /* inject default */
-          int64_t *ent = malloc(3 * sizeof(int64_t));
-          ent[0] = (int64_t)(intptr_t)strdup(okey);
-          ent[1] = (int64_t)(intptr_t)strdup((const char*)(intptr_t)odflt);
-          ent[2] = res_d[0];
-          res_d[0] = (int64_t)(intptr_t)ent;
-        } else if (!res_d[4]) {
-          /* required option missing */
-          res_d[4] = 1;
-          char *em = (char*)malloc(256);
-          snprintf(em, 256, "required option --%s not provided", okey);
-          res_d[5] = (int64_t)(intptr_t)em;
-        }
-      }
-      opt = (int64_t*)(intptr_t)opt[3];
-    }
-  }
-
-  if (argv_l) free(argv_l);
-  return res_stk[0];
-  
-}
-
-static bool args_has_(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
-      return true;
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return false;
-  
-}
-
-static const char * args_get_str(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
-      return (const char*)(intptr_t)e[1];
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return 0;
-  
-}
-
-static int64_t args_get_int(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
-      return strtoll((const char*)(intptr_t)e[1], NULL, 10);
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return 0;
-  
-}
-
-static bool args_get_bool(int64_t result, const char * key) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  int64_t *e   = (int64_t*)(intptr_t)res[0];
-  while (e) {
-    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0) {
-      const char *v = (const char*)(intptr_t)e[1];
-      return strcmp(v, "1") == 0 || strcmp(v, "true") == 0
-          || strcmp(v, "yes") == 0 || strcmp(v, "on") == 0;
-    }
-    e = (int64_t*)(intptr_t)e[2];
-  }
-  return false;
-  
-}
-
-static const char * args_subcommand(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return (const char*)(intptr_t)res[2];
-  
-}
-
-static int64_t args_sub_result(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return res[3];
-  
-}
-
-static int64_t args_positional(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return res[1];
-  
-}
-
-static bool args_error_(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return res[4] != 0;
-  
-}
-
-static const char * args_error_msg(int64_t result) {
-        int64_t *res = (int64_t*)(intptr_t)result;
-  return (const char*)(intptr_t)res[5];
-  
-}
-
-static void args_print_help(int64_t spec) {
-        int64_t *sp = (int64_t*)(intptr_t)spec;
-  const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
-  printf("Usage: %s [options]", prog);
-  if (sp[2]) printf(" <subcommand>");
-  printf("\n");
-  if (sp[0] || sp[1]) {
-    printf("\nOptions:\n");
-    int64_t *fl = (int64_t*)(intptr_t)sp[0];
-    while (fl) {
-      printf("  %s\n", (const char*)(intptr_t)fl[0]);
-      fl = (int64_t*)(intptr_t)fl[1];
-    }
-    int64_t *opt = (int64_t*)(intptr_t)sp[1];
-    while (opt) {
-      const char *oname = (const char*)(intptr_t)opt[0];
-      const char *otype = (const char*)(intptr_t)opt[1];
-      int64_t odflt = opt[2];
-      if (odflt)
-        printf("  %s=<%s>  (default: %s)\n", oname, otype, (const char*)(intptr_t)odflt);
-      else
-        printf("  %s=<%s>  (required)\n", oname, otype);
-      opt = (int64_t*)(intptr_t)opt[3];
-    }
-  }
-  if (sp[2]) {
-    printf("\nSubcommands:\n");
-    int64_t *sub = (int64_t*)(intptr_t)sp[2];
-    while (sub) {
-      printf("  %s\n", (const char*)(intptr_t)sub[0]);
-      sub = (int64_t*)(intptr_t)sub[2];
-    }
-  }
-  
-}
-
-static void args_spec_free(int64_t spec) {
-        int64_t *sp = (int64_t*)(intptr_t)spec;
-  int64_t *fl = (int64_t*)(intptr_t)sp[0];
-  while (fl) { int64_t *nx = (int64_t*)(intptr_t)fl[1]; free(fl); fl = nx; }
-  int64_t *opt = (int64_t*)(intptr_t)sp[1];
-  while (opt) { int64_t *nx = (int64_t*)(intptr_t)opt[3]; free(opt); opt = nx; }
-  int64_t *sub = (int64_t*)(intptr_t)sp[2];
-  while (sub) { int64_t *nx = (int64_t*)(intptr_t)sub[2]; free(sub); sub = nx; }
-  free(sp);
-  
-}
-
-static void args_result_free(int64_t result) {
-        int64_t cur = result;
-  while (cur) {
-    int64_t *res = (int64_t*)(intptr_t)cur;
-    int64_t sub  = res[3];
-    int64_t *e   = (int64_t*)(intptr_t)res[0];
-    while (e) {
-      int64_t *nx = (int64_t*)(intptr_t)e[2];
-      free((void*)(intptr_t)e[0]);  /* key */
-      free((void*)(intptr_t)e[1]);  /* val */
-      free(e);
-      e = nx;
-    }
-    int64_t *pos = (int64_t*)(intptr_t)res[1];
-    while (pos) { int64_t *nx = (int64_t*)(intptr_t)pos[1]; free(pos); pos = nx; }
-    if (res[2]) free((void*)(intptr_t)res[2]);  /* subcommand name */
-    if (res[5]) free((void*)(intptr_t)res[5]);  /* error message */
-    free(res);
-    cur = sub;
-  }
   
 }
 
@@ -2909,119 +2486,119 @@ static void * make_unsettled() {
 
 int main() {
         {
-            void * f1_292 = future_of(INT64_C(42));
-            (void)f1_292;
-            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_292))));
-            future_free((void *)(intptr_t)(f1_292));
+            void * f1_245 = future_of(INT64_C(42));
+            (void)f1_245;
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_245))));
+            future_free((void *)(intptr_t)(f1_245));
         }
         {
-            void * f2_293 = future_error_of(INT64_C(-1));
-            (void)f2_293;
-            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_293))));
-            future_free((void *)(intptr_t)(f2_293));
+            void * f2_246 = future_error_of(INT64_C(-1));
+            (void)f2_246;
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_246))));
+            future_free((void *)(intptr_t)(f2_246));
         }
         {
-            void * f3_294 = future_of(INT64_C(10));
-            (void)f3_294;
+            void * f3_247 = future_of(INT64_C(10));
+            (void)f3_247;
             {
-                void * f3m_295 = future_map((void *)(intptr_t)(f3_294), (void *)(intptr_t)(double_fn));
-                (void)f3m_295;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_295))));
-                future_free((void *)(intptr_t)(f3_294));
-                future_free((void *)(intptr_t)(f3m_295));
+                void * f3m_248 = future_map((void *)(intptr_t)(f3_247), (void *)(intptr_t)(double_fn));
+                (void)f3m_248;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_248))));
+                future_free((void *)(intptr_t)(f3_247));
+                future_free((void *)(intptr_t)(f3m_248));
             }
         }
         {
-            void * f4_296 = future_error_of(INT64_C(-5));
-            (void)f4_296;
+            void * f4_249 = future_error_of(INT64_C(-5));
+            (void)f4_249;
             {
-                void * f4m_297 = future_map((void *)(intptr_t)(f4_296), (void *)(intptr_t)(double_fn));
-                (void)f4m_297;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_297))));
-                future_free((void *)(intptr_t)(f4_296));
-                future_free((void *)(intptr_t)(f4m_297));
+                void * f4m_250 = future_map((void *)(intptr_t)(f4_249), (void *)(intptr_t)(double_fn));
+                (void)f4m_250;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_250))));
+                future_free((void *)(intptr_t)(f4_249));
+                future_free((void *)(intptr_t)(f4m_250));
             }
         }
         {
-            void * f5_298 = future_of(INT64_C(7));
-            (void)f5_298;
+            void * f5_251 = future_of(INT64_C(7));
+            (void)f5_251;
             {
-                void * f5t_299 = future_then((void *)(intptr_t)(f5_298), (void *)(intptr_t)(times10_fn));
-                (void)f5t_299;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_299))));
-                future_free((void *)(intptr_t)(f5_298));
-                future_free((void *)(intptr_t)(f5t_299));
+                void * f5t_252 = future_then((void *)(intptr_t)(f5_251), (void *)(intptr_t)(times10_fn));
+                (void)f5t_252;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_252))));
+                future_free((void *)(intptr_t)(f5_251));
+                future_free((void *)(intptr_t)(f5t_252));
             }
         }
         {
-            void * f6_300 = future_error_of(INT64_C(-3));
-            (void)f6_300;
+            void * f6_253 = future_error_of(INT64_C(-3));
+            (void)f6_253;
             {
-                void * f6t_301 = future_then((void *)(intptr_t)(f6_300), (void *)(intptr_t)(times10_fn));
-                (void)f6t_301;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_301))));
-                future_free((void *)(intptr_t)(f6_300));
-                future_free((void *)(intptr_t)(f6t_301));
+                void * f6t_254 = future_then((void *)(intptr_t)(f6_253), (void *)(intptr_t)(times10_fn));
+                (void)f6t_254;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_254))));
+                future_free((void *)(intptr_t)(f6_253));
+                future_free((void *)(intptr_t)(f6t_254));
             }
         }
         {
-            void * fa_302 = future_of(INT64_C(100));
-            (void)fa_302;
+            void * fa_255 = future_of(INT64_C(100));
+            (void)fa_255;
             {
-                void * fb_303 = future_of(INT64_C(200));
-                (void)fb_303;
+                void * fb_256 = future_of(INT64_C(200));
+                (void)fb_256;
                 {
-                    void * fall_304 = future_all2((void *)(intptr_t)(fa_302), (void *)(intptr_t)(fb_303));
-                    (void)fall_304;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_304))));
-                    future_free((void *)(intptr_t)(fa_302));
-                    future_free((void *)(intptr_t)(fb_303));
-                    future_free((void *)(intptr_t)(fall_304));
+                    void * fall_257 = future_all2((void *)(intptr_t)(fa_255), (void *)(intptr_t)(fb_256));
+                    (void)fall_257;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_257))));
+                    future_free((void *)(intptr_t)(fa_255));
+                    future_free((void *)(intptr_t)(fb_256));
+                    future_free((void *)(intptr_t)(fall_257));
                 }
             }
         }
         {
-            void * fa2_305 = future_of(INT64_C(100));
-            (void)fa2_305;
+            void * fa2_258 = future_of(INT64_C(100));
+            (void)fa2_258;
             {
-                void * fb2_306 = future_error_of(INT64_C(-7));
-                (void)fb2_306;
+                void * fb2_259 = future_error_of(INT64_C(-7));
+                (void)fb2_259;
                 {
-                    void * fall2_307 = future_all2((void *)(intptr_t)(fa2_305), (void *)(intptr_t)(fb2_306));
-                    (void)fall2_307;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_307))));
-                    future_free((void *)(intptr_t)(fa2_305));
-                    future_free((void *)(intptr_t)(fb2_306));
-                    future_free((void *)(intptr_t)(fall2_307));
+                    void * fall2_260 = future_all2((void *)(intptr_t)(fa2_258), (void *)(intptr_t)(fb2_259));
+                    (void)fall2_260;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_260))));
+                    future_free((void *)(intptr_t)(fa2_258));
+                    future_free((void *)(intptr_t)(fb2_259));
+                    future_free((void *)(intptr_t)(fall2_260));
                 }
             }
         }
         {
-            void * fa3_308 = future_of(INT64_C(55));
-            (void)fa3_308;
+            void * fa3_261 = future_of(INT64_C(55));
+            (void)fa3_261;
             {
-                void * fb3_309 = future_error_of(INT64_C(-8));
-                (void)fb3_309;
+                void * fb3_262 = future_error_of(INT64_C(-8));
+                (void)fb3_262;
                 {
-                    void * fany_310 = future_any2((void *)(intptr_t)(fa3_308), (void *)(intptr_t)(fb3_309));
-                    (void)fany_310;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_310))));
-                    future_free((void *)(intptr_t)(fa3_308));
-                    future_free((void *)(intptr_t)(fb3_309));
-                    future_free((void *)(intptr_t)(fany_310));
+                    void * fany_263 = future_any2((void *)(intptr_t)(fa3_261), (void *)(intptr_t)(fb3_262));
+                    (void)fany_263;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_263))));
+                    future_free((void *)(intptr_t)(fa3_261));
+                    future_free((void *)(intptr_t)(fb3_262));
+                    future_free((void *)(intptr_t)(fany_263));
                 }
             }
         }
         {
-            void * fc_311 = make_unsettled();
-            (void)fc_311;
-            future_cancel((void *)(intptr_t)(fc_311));
-            if (future_cancelled_((void *)(intptr_t)(fc_311))) {
+            void * fc_264 = make_unsettled();
+            (void)fc_264;
+            future_cancel((void *)(intptr_t)(fc_264));
+            if (future_cancelled_((void *)(intptr_t)(fc_264))) {
                 puts("cancelled");
             } else {
                 puts("FAIL");
             }
-            future_free((void *)(intptr_t)(fc_311));
+            future_free((void *)(intptr_t)(fc_264));
         }
         int64_t __t0;
         __t0 = INT64_C(0);
