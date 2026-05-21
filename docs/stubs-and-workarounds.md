@@ -10,7 +10,7 @@ Checkbox key: `[x]` done, `[~]` partial, `[ ]` not yet started.
 
 ## 1. Compiler / Codegen (`src/compiler/`)
 
-### 1.1 [ ] Nested Function Definitions (`EX_FN`) -- **highest priority**
+### 1.1 [x] Nested Function Definitions (`EX_FN`) -- **highest priority**
 
 - `src/compiler/emit_expr.c` ~1146-1150: `EX_FN_DEF` in value position aborts with
   "nested fn not yet supported"; `EX_FN` aborts unconditionally.
