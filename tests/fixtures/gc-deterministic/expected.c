@@ -462,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -485,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2059,23 +2061,7 @@ static bool has_(void *, void *);
 static int64_t count(void *);
 static void * merge(void *, void *);
 static bool map_eq_(int64_t, int64_t, int64_t);
-
-struct __defer_env_14 {RcControlBlock * ub; };
-
-struct __defer_env_11 {RcControlBlock * ua; };
-
-static void __defer_15(void *__env) {
-    struct __defer_env_14 *__e = (struct __defer_env_14 *)__env;
-    rc_strong_decrement(__e->ub);
-    rc_free_queue_drain();
-}
-
-static void __defer_12(void *__env) {
-    struct __defer_env_11 *__e = (struct __defer_env_11 *)__env;
-    rc_strong_decrement(__e->ua);
-    rc_free_queue_drain();
-}
-
+static bool some_(void *);
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -2320,6 +2306,12 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
   
 }
 
+static bool some_(void * o) {
+        struct { bool is_some; int64_t value; } *opt = (void*)o;
+  return opt != NULL && opt->is_some;
+  
+}
+
 int main() {
         gc_enable();
         {
@@ -2327,49 +2319,56 @@ int main() {
             *__t0 = INT64_C(1);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * a_214 = __t1;
-            (void)a_214;
+            RcControlBlock * a_216 = __t1;
+            (void)a_216;
             int64_t *__t2 = (int64_t *)malloc(sizeof(int64_t));
             *__t2 = INT64_C(2);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * b_215 = __t3;
-            (void)b_215;
+            RcControlBlock * b_217 = __t3;
+            (void)b_217;
             {
-                RcControlBlock *__t4 = a_214; rc_weak_increment(a_214);
-                RcControlBlock * wa_216 = __t4;
-                (void)wa_216;
-                RcControlBlock *__t5 = b_215; rc_weak_increment(b_215);
-                RcControlBlock * wb_217 = __t5;
-                (void)wb_217;
-                rc_strong_decrement(a_214);
+                RcControlBlock *__t4 = a_216; rc_weak_increment(a_216);
+                RcControlBlock * wa_218 = __t4;
+                (void)wa_218;
+                RcControlBlock *__t5 = b_217; rc_weak_increment(b_217);
+                RcControlBlock * wb_219 = __t5;
+                (void)wb_219;
+                rc_strong_decrement(a_216);
                 rc_free_queue_drain();
-                rc_strong_decrement(b_215);
+                rc_strong_decrement(b_217);
                 rc_free_queue_drain();
                 gc_force();
                 {
-                    RcControlBlock *__t6 = rc_upgrade(wa_216);
-                    RcControlBlock * ua_218 = __t6;
-                    (void)ua_218;
-                    RcControlBlock *__t7 = rc_upgrade(wb_217);
-                    RcControlBlock * ub_219 = __t7;
-                    (void)ub_219;
-                    tur_frame __frame_8;
-                    tur_frame_init(&__frame_8, NULL);
-                    int64_t __t9 = rc_strong_count(ua_218);
-                    int64_t __t10 = rc_strong_count(ub_219);
-                    printf("%lld\n", (long long)(((__t9) + (__t10))));
-                    struct __defer_env_11 __t13 = {.ua = ua_218};
-                    tur_frame_push_defer(&__frame_8, __defer_12, &__t13);
-                    struct __defer_env_14 __t16 = {.ub = ub_219};
-                    tur_frame_push_defer(&__frame_8, __defer_15, &__t16);
-                    tur_frame_fire_lifo(&__frame_8);
+                    RcControlBlock *__t6 = rc_upgrade(wa_218);
+                    struct { bool is_some; int64_t value; } *__t7 = NULL;
+                    if (__t6) { __t7 = malloc(sizeof(*__t7)); __t7->is_some = true; __t7->value = (int64_t)(intptr_t)__t6; }
+                    void * ua_220 = __t7;
+                    (void)ua_220;
+                    RcControlBlock *__t8 = rc_upgrade(wb_219);
+                    struct { bool is_some; int64_t value; } *__t9 = NULL;
+                    if (__t8) { __t9 = malloc(sizeof(*__t9)); __t9->is_some = true; __t9->value = (int64_t)(intptr_t)__t8; }
+                    void * ub_221 = __t9;
+                    (void)ub_221;
+                    int64_t __t10;
+                    if (some_((void *)(intptr_t)(ua_220))) {
+                        __t10 = INT64_C(1);
+                    } else {
+                        __t10 = INT64_C(0);
+                    }
+                    int64_t __t11;
+                    if (some_((void *)(intptr_t)(ub_221))) {
+                        __t11 = INT64_C(1);
+                    } else {
+                        __t11 = INT64_C(0);
+                    }
+                    printf("%lld\n", (long long)(((__t10) + (__t11))));
                 }
             }
         }
-        int64_t __t17;
-        __t17 = INT64_C(0);
-        return (int)__t17;
+        int64_t __t12;
+        __t12 = INT64_C(0);
+        return (int)__t12;
 }
 
 

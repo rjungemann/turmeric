@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2538,41 +2541,41 @@ static void wq_thread_join(void * t) {
 
 int main() {
         {
-            void * q_240 = work_queue_new_bounded(INT64_C(4));
-            (void)q_240;
+            void * q_241 = work_queue_new_bounded(INT64_C(4));
+            (void)q_241;
             {
-                void * prod_arg_241 = wq_arg_new((void *)(intptr_t)(q_240));
-                (void)prod_arg_241;
+                void * prod_arg_242 = wq_arg_new((void *)(intptr_t)(q_241));
+                (void)prod_arg_242;
                 {
-                    void * cons_arg_242 = wq_arg_new((void *)(intptr_t)(q_240));
-                    (void)cons_arg_242;
+                    void * cons_arg_243 = wq_arg_new((void *)(intptr_t)(q_241));
+                    (void)cons_arg_243;
                     {
-                        void * tp_243 = wq_thread_spawn((void *)(intptr_t)(wq_producer), (void *)(intptr_t)(prod_arg_241));
-                        (void)tp_243;
+                        void * tp_244 = wq_thread_spawn((void *)(intptr_t)(wq_producer), (void *)(intptr_t)(prod_arg_242));
+                        (void)tp_244;
                         {
-                            void * tc_244 = wq_thread_spawn((void *)(intptr_t)(wq_consumer), (void *)(intptr_t)(cons_arg_242));
-                            (void)tc_244;
-                            wq_thread_join((void *)(intptr_t)(tp_243));
-                            wq_thread_join((void *)(intptr_t)(tc_244));
+                            void * tc_245 = wq_thread_spawn((void *)(intptr_t)(wq_consumer), (void *)(intptr_t)(cons_arg_243));
+                            (void)tc_245;
+                            wq_thread_join((void *)(intptr_t)(tp_244));
+                            wq_thread_join((void *)(intptr_t)(tc_245));
                         }
                     }
-                    printf("%lld\n", (long long)(wq_arg_result((void *)(intptr_t)(cons_arg_242))));
-                    wq_arg_free((void *)(intptr_t)(prod_arg_241));
-                    wq_arg_free((void *)(intptr_t)(cons_arg_242));
+                    printf("%lld\n", (long long)(wq_arg_result((void *)(intptr_t)(cons_arg_243))));
+                    wq_arg_free((void *)(intptr_t)(prod_arg_242));
+                    wq_arg_free((void *)(intptr_t)(cons_arg_243));
                 }
             }
-            work_queue_free((void *)(intptr_t)(q_240));
+            work_queue_free((void *)(intptr_t)(q_241));
         }
         {
-            void * uq_245 = work_queue_new();
-            (void)uq_245;
-            work_queue_push((void *)(intptr_t)(uq_245), INT64_C(10));
-            work_queue_push((void *)(intptr_t)(uq_245), INT64_C(20));
-            work_queue_push((void *)(intptr_t)(uq_245), INT64_C(30));
-            printf("%lld\n", (long long)(work_queue_pop((void *)(intptr_t)(uq_245))));
-            printf("%lld\n", (long long)(work_queue_pop((void *)(intptr_t)(uq_245))));
-            printf("%lld\n", (long long)(work_queue_pop((void *)(intptr_t)(uq_245))));
-            work_queue_free((void *)(intptr_t)(uq_245));
+            void * uq_246 = work_queue_new();
+            (void)uq_246;
+            work_queue_push((void *)(intptr_t)(uq_246), INT64_C(10));
+            work_queue_push((void *)(intptr_t)(uq_246), INT64_C(20));
+            work_queue_push((void *)(intptr_t)(uq_246), INT64_C(30));
+            printf("%lld\n", (long long)(work_queue_pop((void *)(intptr_t)(uq_246))));
+            printf("%lld\n", (long long)(work_queue_pop((void *)(intptr_t)(uq_246))));
+            printf("%lld\n", (long long)(work_queue_pop((void *)(intptr_t)(uq_246))));
+            work_queue_free((void *)(intptr_t)(uq_246));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2404,29 +2407,29 @@ static void sem_thread_join(void * t) {
 
 int main() {
         {
-            void * s1_234 = sem_new(INT64_C(1));
-            (void)s1_234;
-            sem_acquire((void *)(intptr_t)(s1_234));
-            sem_release((void *)(intptr_t)(s1_234));
+            void * s1_235 = sem_new(INT64_C(1));
+            (void)s1_235;
+            sem_acquire((void *)(intptr_t)(s1_235));
+            sem_release((void *)(intptr_t)(s1_235));
             printf("%lld\n", (long long)(INT64_C(1)));
-            sem_free((void *)(intptr_t)(s1_234));
+            sem_free((void *)(intptr_t)(s1_235));
         }
         {
-            void * s2_235 = sem_new(INT64_C(0));
-            (void)s2_235;
+            void * s2_236 = sem_new(INT64_C(0));
+            (void)s2_236;
             {
-                void * arg_236 = sem_arg_new((void *)(intptr_t)(s2_235));
-                (void)arg_236;
+                void * arg_237 = sem_arg_new((void *)(intptr_t)(s2_236));
+                (void)arg_237;
                 {
-                    void * t_237 = sem_thread_spawn((void *)(intptr_t)(sem_worker), (void *)(intptr_t)(arg_236));
-                    (void)t_237;
-                    sem_release((void *)(intptr_t)(s2_235));
-                    sem_thread_join((void *)(intptr_t)(t_237));
+                    void * t_238 = sem_thread_spawn((void *)(intptr_t)(sem_worker), (void *)(intptr_t)(arg_237));
+                    (void)t_238;
+                    sem_release((void *)(intptr_t)(s2_236));
+                    sem_thread_join((void *)(intptr_t)(t_238));
                 }
-                printf("%lld\n", (long long)(sem_arg_result((void *)(intptr_t)(arg_236))));
-                sem_arg_free((void *)(intptr_t)(arg_236));
+                printf("%lld\n", (long long)(sem_arg_result((void *)(intptr_t)(arg_237))));
+                sem_arg_free((void *)(intptr_t)(arg_237));
             }
-            sem_free((void *)(intptr_t)(s2_235));
+            sem_free((void *)(intptr_t)(s2_236));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

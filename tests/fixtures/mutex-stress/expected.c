@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2419,20 +2422,20 @@ static void ms_join_all(void * handles, int64_t n) {
 
 int main() {
         {
-            void * mtx_242 = mutex_new();
-            (void)mtx_242;
+            void * mtx_243 = mutex_new();
+            (void)mtx_243;
             {
-                void * counter_243 = ms_counter_new();
-                (void)counter_243;
+                void * counter_244 = ms_counter_new();
+                (void)counter_244;
                 {
-                    void * handles_244 = ms_spawn_all((void *)(intptr_t)(ms_worker), (void *)(intptr_t)(mtx_242), (void *)(intptr_t)(counter_243), INT64_C(10), INT64_C(100));
-                    (void)handles_244;
-                    ms_join_all((void *)(intptr_t)(handles_244), INT64_C(10));
+                    void * handles_245 = ms_spawn_all((void *)(intptr_t)(ms_worker), (void *)(intptr_t)(mtx_243), (void *)(intptr_t)(counter_244), INT64_C(10), INT64_C(100));
+                    (void)handles_245;
+                    ms_join_all((void *)(intptr_t)(handles_245), INT64_C(10));
                 }
-                printf("%lld\n", (long long)(ms_counter_load((void *)(intptr_t)(counter_243))));
-                ms_counter_free((void *)(intptr_t)(counter_243));
+                printf("%lld\n", (long long)(ms_counter_load((void *)(intptr_t)(counter_244))));
+                ms_counter_free((void *)(intptr_t)(counter_244));
             }
-            mutex_free((void *)(intptr_t)(mtx_242));
+            mutex_free((void *)(intptr_t)(mtx_243));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2379,54 +2382,54 @@ static void fb_print(void * results, int64_t i) {
 
 int main() {
         {
-            void * results_232 = fb_results_new();
-            (void)results_232;
+            void * results_233 = fb_results_new();
+            (void)results_233;
             {
-                void * rng_a_233 = fb_range_new((void *)(intptr_t)(results_232), INT64_C(0), INT64_C(5));
-                (void)rng_a_233;
+                void * rng_a_234 = fb_range_new((void *)(intptr_t)(results_233), INT64_C(0), INT64_C(5));
+                (void)rng_a_234;
                 {
-                    void * rng_b_234 = fb_range_new((void *)(intptr_t)(results_232), INT64_C(5), INT64_C(5));
-                    (void)rng_b_234;
+                    void * rng_b_235 = fb_range_new((void *)(intptr_t)(results_233), INT64_C(5), INT64_C(5));
+                    (void)rng_b_235;
                     {
-                        void * rng_c_235 = fb_range_new((void *)(intptr_t)(results_232), INT64_C(10), INT64_C(5));
-                        (void)rng_c_235;
+                        void * rng_c_236 = fb_range_new((void *)(intptr_t)(results_233), INT64_C(10), INT64_C(5));
+                        (void)rng_c_236;
                         {
-                            void * ta_236 = fb_thread_spawn((void *)(intptr_t)(fb_worker), (void *)(intptr_t)(rng_a_233));
-                            (void)ta_236;
+                            void * ta_237 = fb_thread_spawn((void *)(intptr_t)(fb_worker), (void *)(intptr_t)(rng_a_234));
+                            (void)ta_237;
                             {
-                                void * tb_237 = fb_thread_spawn((void *)(intptr_t)(fb_worker), (void *)(intptr_t)(rng_b_234));
-                                (void)tb_237;
+                                void * tb_238 = fb_thread_spawn((void *)(intptr_t)(fb_worker), (void *)(intptr_t)(rng_b_235));
+                                (void)tb_238;
                                 {
-                                    void * tc_238 = fb_thread_spawn((void *)(intptr_t)(fb_worker), (void *)(intptr_t)(rng_c_235));
-                                    (void)tc_238;
-                                    fb_thread_join((void *)(intptr_t)(ta_236));
-                                    fb_thread_join((void *)(intptr_t)(tb_237));
-                                    fb_thread_join((void *)(intptr_t)(tc_238));
+                                    void * tc_239 = fb_thread_spawn((void *)(intptr_t)(fb_worker), (void *)(intptr_t)(rng_c_236));
+                                    (void)tc_239;
+                                    fb_thread_join((void *)(intptr_t)(ta_237));
+                                    fb_thread_join((void *)(intptr_t)(tb_238));
+                                    fb_thread_join((void *)(intptr_t)(tc_239));
                                 }
                             }
                         }
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(0));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(1));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(2));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(3));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(4));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(5));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(6));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(7));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(8));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(9));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(10));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(11));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(12));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(13));
-                        fb_print((void *)(intptr_t)(results_232), INT64_C(14));
-                        fb_range_free((void *)(intptr_t)(rng_a_233));
-                        fb_range_free((void *)(intptr_t)(rng_b_234));
-                        fb_range_free((void *)(intptr_t)(rng_c_235));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(0));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(1));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(2));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(3));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(4));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(5));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(6));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(7));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(8));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(9));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(10));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(11));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(12));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(13));
+                        fb_print((void *)(intptr_t)(results_233), INT64_C(14));
+                        fb_range_free((void *)(intptr_t)(rng_a_234));
+                        fb_range_free((void *)(intptr_t)(rng_b_235));
+                        fb_range_free((void *)(intptr_t)(rng_c_236));
                     }
                 }
             }
-            fb_results_free((void *)(intptr_t)(results_232));
+            fb_results_free((void *)(intptr_t)(results_233));
         }
         int64_t __t0;
         __t0 = INT64_C(0);
