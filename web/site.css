@@ -48,28 +48,15 @@ nav {
   gap: 10px;
 }
 
-.nav-mark {
-  width: 30px;
-  height: 30px;
-  background: var(--gold);
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 18px;
-  font-weight: 600;
-  color: #0A0800;
+.nav-logo-icon {
+  display: block;
   flex-shrink: 0;
 }
 
-.nav-name {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 21px;
-  font-weight: 500;
-  color: var(--gold-bright);
-  letter-spacing: 0.01em;
+.nav-logo-wordmark {
+  display: block;
 }
+
 
 .nav-links {
   display: flex;
@@ -113,7 +100,7 @@ nav {
   font-family: 'DM Sans', sans-serif;
   font-size: 13.5px;
   font-weight: 500;
-  color: #0A0800;
+  color: #000;
   padding: 7px 18px;
   border-radius: 7px;
   border: 1px solid var(--gold);
@@ -268,12 +255,12 @@ nav {
 }
 
 .section-title {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-weight: 400;
   line-height: 1.1;
   color: var(--text-primary);
   margin-bottom: 20px;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.03em;
 }
 
 .section-title em { font-style: italic; color: var(--gold-bright); }
@@ -393,9 +380,10 @@ nav {
 }
 
 .cta-title {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-weight: 400;
   line-height: 1.1;
+  letter-spacing: -0.03em;
   color: var(--text-primary);
   margin-bottom: 18px;
   position: relative;
@@ -500,10 +488,81 @@ footer {
   transform: none;
 }
 
+/* ── HAMBURGER ─────────────────────────── */
+.nav-hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.nav-hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--text-sec);
+  border-radius: 2px;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+nav.nav-open .nav-hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+nav.nav-open .nav-hamburger span:nth-child(2) { opacity: 0; }
+nav.nav-open .nav-hamburger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* ── MOBILE PANEL ──────────────────────── */
+.nav-mobile-panel {
+  display: none;
+  position: absolute;
+  top: 60px;
+  left: 0;
+  right: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 16px 20px;
+  background: rgba(12,10,8,0.97);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+nav.nav-open .nav-mobile-panel {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.nav-mobile-panel a {
+  font-size: 15px;
+  color: var(--text-sec);
+  padding: 10px 12px;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+}
+.nav-mobile-panel a:hover { color: var(--text-primary); background: var(--bg-hover); }
+.nav-mobile-panel a.active { color: var(--gold-bright); }
+.nav-mobile-cta {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.nav-mobile-cta a { flex: 1; text-align: center; justify-content: center; }
+.nav-mobile-cta .btn-gold { color: #000; }
+
 /* ── RESPONSIVE ────────────────────────── */
 @media (max-width: 768px) {
   nav { padding: 0 20px; }
   .nav-links { display: none; }
+  .nav-right { display: none; }
+  .nav-hamburger { display: flex; }
+  .nav-mobile-panel { display: flex; }
 
   .split-section {
     padding: 60px 24px;
@@ -527,7 +586,6 @@ footer {
 
 @media (max-width: 480px) {
   nav { padding: 0 16px; }
-  .nav-right .btn-ghost { display: none; }
 
   .hero-actions { flex-direction: column; align-items: stretch; }
   .btn-hero { justify-content: center; }
@@ -556,6 +614,25 @@ footer {
 .token.number     { color: var(--syn-num); }
 .token.punctuation { color: var(--syn-punc); }
 .token.operator   { color: var(--text-sec); }
+
+/* ── COPY BUTTON ───────────────────────────── */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-mid);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+.copy-btn:hover { color: var(--text-sec); background: var(--bg-hover); border-color: var(--border-str); }
+.copy-btn.copied { color: var(--gold); border-color: var(--gold-line); background: var(--gold-subtle); }
 
 /* ── UTILITIES ─────────────────────────── */
 .dot-sep { color: var(--border-str); }

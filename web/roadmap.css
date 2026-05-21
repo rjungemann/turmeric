@@ -19,7 +19,7 @@
 }
 
 .hero-title {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: clamp(40px, 6vw, 66px);
   font-weight: 400;
   line-height: 1.08;
@@ -87,7 +87,7 @@
 
 /* Override site.css .section-title — roadmap uses a smaller heading */
 .section-title {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 26px;
   font-weight: 400;
   color: var(--text-primary);

@@ -361,6 +361,8 @@
     {"doc", "doc -- print documentation for a function, macro, or struct at the REPL.\n\nParameters:\n  name -- symbol whose documentation to display\n\nSince: Phase D1 (auto-docs)"},
     {"with-resource", "with-resource -- bind and safely consume a resource within a scope.\n\nParameters:\n  binding -- a two-element vector [name init] where init produces the resource\n   -- & body  -- expressions forming the scope in which the resource is available\n\nSince: ST3"},
     {"must-use", "must-use -- wrap a value to enforce that it is used at least once.\n\nParameters:\n  expr -- the expression whose value must be used\n\nSince: ST3"},
+    {"as->", "as-> -- thread a value through a pipeline of transformations, naming it at each step.\n\nParameters:\n  expr -- the initial value\n  name -- the symbol to bind to the threaded value\n   -- & forms -- alternating transformation/name pairs; the last form is the final expression\n\nSince: Phase M8"},
+    {"dot", "dot -- transform (. thing method args...) into (.method thing args...).\n\nParameters:\n  thing -- the object or value on which the method is called\n  method -- the method name\n   -- & args -- arguments to pass to the method\n\nSince: Phase M8"},
     {"map-new", "map-new -- create a new empty map.\n\nSince: Phase P3"},
     {"assoc", "assoc -- insert or update a key/value pair; returns a new map.\n\nParameters:\n  m -- source map pointer\n  key -- key pointer (hashed by pointer identity)\n  val -- value pointer\n\nSince: Phase P3"},
     {"dissoc", "dissoc -- remove a key from the map; returns a new map.\n\nParameters:\n  m -- source map pointer\n  key -- key pointer to remove\n\nSince: Phase P3"},

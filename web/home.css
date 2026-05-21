@@ -27,18 +27,18 @@
 }
 
 h1 {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: clamp(52px, 8vw, 96px);
   font-weight: 400;
   line-height: 1.0;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.03em;
   color: var(--text-primary);
   margin-bottom: 6px;
 }
 h1 em { font-style: italic; color: var(--gold-bright); }
 
 .hero-subtitle {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: clamp(20px, 2.5vw, 28px);
   font-weight: 300;
   font-style: italic;
@@ -142,7 +142,7 @@ section {
 }
 
 .feat-title {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 22px;
   font-weight: 500;
   color: var(--text-primary);
@@ -189,7 +189,7 @@ section {
 }
 
 .bench-metric {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 56px;
   font-weight: 300;
   color: var(--gold-bright);
@@ -243,7 +243,7 @@ section {
 }
 
 .step-num {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 13px;
   color: var(--gold-dim);
   letter-spacing: 0.06em;
@@ -251,7 +251,7 @@ section {
 }
 
 .step-title {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 20px;
   font-weight: 500;
   color: var(--text-primary);
@@ -264,10 +264,17 @@ section {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 14px 16px;
+  padding: 14px 46px 14px 16px;
   line-height: 1.7;
   white-space: pre;
   overflow-x: auto;
+  position: relative;
+}
+
+.step-code .copy-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 
 .step-desc { font-size: 13.5px; color: var(--text-sec); line-height: 1.6; font-weight: 300; }
@@ -301,7 +308,7 @@ section {
 }
 
 .infl-item {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: 'Space Grotesk', sans-serif;
   font-size: 20px;
   font-weight: 400;
   color: var(--text-dim);

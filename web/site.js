@@ -28,6 +28,42 @@ document.querySelectorAll('.code-version, .step-code').forEach(el => {
   el.innerHTML = Prism.highlight(raw, Prism.languages.turmeric, 'turmeric');
 });
 
+// ── COPY BUTTONS ────────────────────────────────────────────────────────────
+
+const SVG_COPY  = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const SVG_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+
+function makeCopyBtn(text) {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.setAttribute('aria-label', 'Copy to clipboard');
+  btn.title = 'Copy';
+  btn.innerHTML = SVG_COPY;
+  btn.addEventListener('click', () => {
+    navigator.clipboard.writeText(text.trim()).then(() => {
+      btn.innerHTML = SVG_CHECK;
+      btn.classList.add('copied');
+      btn.setAttribute('aria-label', 'Copied!');
+      setTimeout(() => {
+        btn.innerHTML = SVG_COPY;
+        btn.classList.remove('copied');
+        btn.setAttribute('aria-label', 'Copy to clipboard');
+      }, 2000);
+    });
+  });
+  return btn;
+}
+
+// Inline copy button after .install-cmd (fits into the flex row naturally)
+document.querySelectorAll('.install-cmd').forEach(el => {
+  el.insertAdjacentElement('afterend', makeCopyBtn(el.textContent));
+});
+
+// Absolutely-positioned copy button overlaid top-right on each .step-code block
+document.querySelectorAll('.step-code').forEach(el => {
+  el.appendChild(makeCopyBtn(el.textContent));
+});
+
 // ── WEB COMPONENTS ─────────────────────────────────────────────────────────
 
 class SiteNav extends HTMLElement {
@@ -41,22 +77,55 @@ class SiteNav extends HTMLElement {
       ['/docs/spice/',       'Packages'],
     ];
 
+    const linkHTML = links.map(([href, label]) =>
+      `<a href="${href}"${active === label ? ' class="active"' : ''}>${label}</a>`
+    ).join('');
+
     this.innerHTML = `
       <nav>
         <a class="nav-logo" href="/">
-          <div class="nav-mark">T</div>
-          <span class="nav-name">Turmeric</span>
+          <img src="/logo-icon.svg" class="nav-logo-icon" width="28" height="28" alt="">
+          <img src="/logo.svg" class="nav-logo-wordmark" width="101" height="28" alt="Turmeric">
         </a>
-        <div class="nav-links">
-          ${links.map(([href, label]) =>
-            `<a href="${href}"${active === label ? ' class="active"' : ''}>${label}</a>`
-          ).join('')}
-        </div>
+        <div class="nav-links">${linkHTML}</div>
         <div class="nav-right">
           <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
           <a href="/try" class="btn-gold">Try it →</a>
         </div>
+        <button class="nav-hamburger" aria-label="Open menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+        <div class="nav-mobile-panel">
+          ${linkHTML}
+          <div class="nav-mobile-cta">
+            <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
+            <a href="/try" class="btn-gold">Try it →</a>
+          </div>
+        </div>
       </nav>`;
+
+    const nav    = this.querySelector('nav');
+    const btn    = this.querySelector('.nav-hamburger');
+    const panel  = this.querySelector('.nav-mobile-panel');
+
+    btn.addEventListener('click', () => {
+      const open = nav.classList.toggle('nav-open');
+      btn.setAttribute('aria-expanded', String(open));
+    });
+
+    document.addEventListener('click', e => {
+      if (!this.contains(e.target) && nav.classList.contains('nav-open')) {
+        nav.classList.remove('nav-open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+
+    panel.querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', () => {
+        nav.classList.remove('nav-open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+    });
   }
 }
 
@@ -66,9 +135,9 @@ class SiteFooter extends HTMLElement {
       <footer>
         <div class="footer-inner">
           <div class="footer-brand footer-col">
-            <a href="/" class="nav-logo" style="display:inline-flex;gap:9px;align-items:center;">
-              <div class="nav-mark">T</div>
-              <span class="nav-name">Turmeric</span>
+            <a href="/" class="nav-logo" style="display:inline-flex;gap:10px;align-items:center;">
+              <img src="/logo-icon.svg" class="nav-logo-icon" width="28" height="28" alt="">
+              <img src="/logo.svg" class="nav-logo-wordmark" width="101" height="28" alt="Turmeric">
             </a>
             <p>A lightning-fast functional language with typeclasses, effects, and a
                Lisp-flavored syntax. Open source under the MIT license.</p>
