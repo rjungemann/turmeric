@@ -42,6 +42,25 @@ Phase 18's delimited continuations reify the call stack as a heap-allocated clos
 (resume k 42)  ; => 43
 ```
 
+```sweet-exp
+;; Capture a continuation
+def saved #f
+def result
+  {1 + cloneable-shift([k]
+    set!(saved k)
+    10)}
+
+;; Serialize to bytes
+def bytes serialize(saved)
+
+;; Write to disk or send over network
+write-file("continuation.dat" bytes)
+
+;; Later, in another process:
+def k deserialize(read-file("continuation.dat"))
+resume(k 42)  ; => 43
+```
+
 ## Serialization Design
 
 ### Stable Symbol Table
@@ -53,6 +72,13 @@ Function pointers are not portable across builds. Each continuation frame stores
   [fn-symbol : string  ; e.g., "mymodule.myfunction"
    args : (list any)   ; serializable arguments
    captures : (map symbol any)])  ; captured variables
+```
+
+```sweet-exp
+struct continuation-frame
+  [fn-symbol : string  ; e.g., "mymodule.myfunction"
+   args : (list any)   ; serializable arguments
+   captures : (map symbol any)]  ; captured variables
 ```
 
 On deserialization, the symbol is resolved to the current build's function pointer.
@@ -81,6 +107,26 @@ Not all types can be serialized. Opt-in via the `Serializable` trait:
   (deserialize [path] (open-file path)))
 ```
 
+```sweet-exp
+defclass Serializable [a]
+  serialize([x : a] : bytes)
+  deserialize([b : bytes] : a)
+
+;; Primitive implementations
+instance Serializable int64 ...
+instance Serializable string ...
+instance Serializable bool ...
+
+;; Derived implementations
+instance Serializable (Pair a b) [Serializable a, Serializable b] ...
+
+;; NOT serializable
+instance Serializable FileHandle
+  ;; Custom handler: store file path, re-open on deserialize
+  serialize([fh] file-handle-path(fh))
+  deserialize([path] open-file(path))
+```
+
 ### Resource Types
 
 File handles, sockets, and other system resources can define custom **marshal/unmarshal hooks**:
@@ -97,6 +143,18 @@ File handles, sockets, and other system resources can define custom **marshal/un
   (unmarshal [path] (open-file path)))
 ```
 
+```sweet-exp
+defclass Resource-Serializable [a]
+  ;; Serialize to a stable representation
+  marshal([x : a] : resource-token)
+  ;; Restore from token in new process
+  unmarshal([token : resource-token] : a)
+
+instance Resource-Serializable FileHandle
+  marshal([fh] file-handle-path(fh))
+  unmarshal([path] open-file(path))
+```
+
 ### Ownership Model and Serialization
 
 Serialized continuations produce a **deep copy**. Ownership is transferred; originals are invalidated:
@@ -107,6 +165,14 @@ Serialized continuations produce a **deep copy**. Ownership is transferred; orig
   (serialize k))  ; Serialization deep-copies r
                   ; Original r is now inaccessible
 (deserialize bytes)  ; Deserialize: new r created with value 42
+```
+
+```sweet-exp
+def r ref(42)
+cloneable-shift([k]
+  serialize(k))  ; Serialization deep-copies r
+                 ; Original r is now inaccessible
+deserialize(bytes)  ; Deserialize: new r created with value 42
 ```
 
 This is safe because:
@@ -152,6 +218,40 @@ A multi-step business process that survives crashes:
   (resume k))
 ```
 
+```sweet-exp
+defn process-order [order-id]
+  ;; Step 1: Validate order
+  def order load-order(order-id)
+  unless valid-order?(order)
+    throw(validation-error("Invalid order"))
+  checkpoint("order-validated" order)
+
+  ;; Step 2: Charge payment (slow network call)
+  def charge-result charge-payment(order.payment-info)
+  checkpoint("payment-charged" charge-result)
+
+  ;; Step 3: Fulfill order
+  def fulfillment fulfill(order charge-result)
+  checkpoint("order-fulfilled" fulfillment)
+
+  fulfillment
+
+;; Checkpointing macro
+defmacro checkpoint [name value]
+  `(cloneable-shift [k]
+     ;; Save continuation to disk
+     (def checkpoint-file (str "checkpoint-" ~name ".bin"))
+     (write-file checkpoint-file (serialize k))
+     ;; Resume immediately on first run
+     (continue k ~value))
+
+;; On crash, user can resume from last checkpoint
+defn resume-from-checkpoint [name]
+  def checkpoint-file str("checkpoint-" name ".bin")
+  def k deserialize(read-file(checkpoint-file))
+  resume(k)
+```
+
 ## Example: Distributed Task Migration
 
 Send a half-finished computation to another node:
@@ -175,6 +275,25 @@ Send a half-finished computation to another node:
 (def result (resume job))
 ```
 
+```sweet-exp
+;; Node A: long-running job, half done
+def job
+  cloneable-reset
+    fn []
+      def task1-result run-task1()
+      def task2-result run-task2(task1-result)
+      def task3-result run-task3(task2-result)
+      task3-result
+
+;; Save state
+def bytes serialize(job)
+send-to-node-b(bytes)
+
+;; Node B: resume
+def job deserialize(receive-bytes())
+def result resume(job)
+```
+
 ## Example: Web Continuations (Racket-style)
 
 Serialize "what to do when form is submitted" as a URL token:
@@ -194,6 +313,23 @@ Serialize "what to do when form is submitted" as a URL token:
   (def k (load-continuation-from-db token))
   (def response (resume k (parse-form-data req)))
   response)
+```
+
+```sweet-exp
+;; Initial page
+defn get-checkout [req]
+  cloneable-shift([k]
+    ;; Save continuation to disk, return URL token
+    def token save-continuation-to-db(k)
+    render-page
+      form(:action str("/checkout-submit?token=" token)))
+
+;; Form submission handler
+defn post-checkout-submit [token req]
+  ;; Load and resume continuation
+  def k load-continuation-from-db(token)
+  def response resume(k parse-form-data(req))
+  response
 ```
 
 ## Example: Checkpointing Long-Running Computation
@@ -217,6 +353,23 @@ Periodic snapshots for crash recovery:
   (checkpoint-every-n 1000 data))
 ```
 
+```sweet-exp
+defn analyze-large-dataset [data]
+  defn checkpoint-every-n [n items]
+    let [processed []]
+      for-each-with-index(items
+        fn [i item]
+          set!(processed conj(processed process(item)))
+          when {mod({i + 1} n) = 0}
+            ;; Checkpoint every n items
+            cloneable-shift([k]
+              write-file(str("checkpoint-" i ".bin")
+                         serialize(k))
+              continue(k)))
+
+  checkpoint-every-n(1000 data)
+```
+
 ## Reconstruction and Error Handling
 
 ### Schema Versioning
@@ -228,6 +381,13 @@ Continuation frames carry schema version. Mismatches produce an error:
                              ; - Function no longer exists
                              ; - Argument types changed
                              ; - Captured types are incompatible
+```
+
+```sweet-exp
+def k deserialize(bytes)  ; May fail if:
+                          ; - Function no longer exists
+                          ; - Argument types changed
+                          ; - Captured types are incompatible
 ```
 
 Error handling:
@@ -243,6 +403,17 @@ Error handling:
                            " but current code is version " (current-version)))))))
 ```
 
+```sweet-exp
+try-with
+  fn []
+    deserialize(read-file("checkpoint.bin"))
+  fn [e k]
+    match e
+      (schema-mismatch _ old-version) ->
+        throw(error(str("Cannot resume: checkpoint uses version " old-version
+                        " but current code is version " current-version())))
+```
+
 ### Partial Reconstruction
 
 If deserialization of a captured value fails, the whole continuation fails. To tolerate missing state:
@@ -253,6 +424,14 @@ If deserialization of a captured value fails, the whole continuation fails. To t
   (try
     (deserialize captured-value)
     (catch [e] (None))))
+```
+
+```sweet-exp
+;; Wrap potentially failing values in Option
+def opt-value
+  try
+    deserialize(captured-value)
+    catch([e] None())
 ```
 
 ## Performance Considerations
@@ -288,6 +467,24 @@ If deserialization of a captured value fails, the whole continuation fails. To t
 ;; Resource marshalling
 (marshal resource : a) : resource-token
 (unmarshal token : resource-token) : a
+```
+
+```sweet-exp
+;; Serialize a continuation
+serialize(cont : (cloneable-shift [k] k)) : bytes
+
+;; Deserialize a continuation
+deserialize(bytes : bytes) : (cloneable-shift [k] k)
+
+;; Resume a continuation with a value
+resume(k : (cloneable-shift [k] k) v : a) : a
+
+;; Checkpoint macro (example)
+checkpoint(name value)
+
+;; Resource marshalling
+marshal(resource : a) : resource-token
+unmarshal(token : resource-token) : a
 ```
 
 ## See Also

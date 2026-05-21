@@ -1033,7 +1033,7 @@ defn greet [name :cstr] :void
 
 Then in the REPL:
 
-```turmeric
+```turmeric no-check
 :reload hello.tur
 ```
 

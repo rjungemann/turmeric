@@ -63,6 +63,19 @@ This is what 80% of "monad chaining" turns into.
   (Fail [] _) 8080)   ;; default if anything in the chain fails
 ```
 
+```sweet-exp
+defeffect Fail [] : a
+
+defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
+  let [s perform(Read-Config(cfg-key))]
+    cond
+      empty?(s)  perform(Fail())
+      :else      parse-int(s)
+
+handle lookup-port("http.port")
+  (Fail [] _)  8080   ;; default if anything in the chain fails
+```
+
 No `>>=`, no nested `Just`, no chains of `match`. Direct-style code that fails
 through an effect.
 
@@ -82,6 +95,23 @@ through an effect.
                    (eprintln (str-concat "config error: " (.what e)))
                    (default-config))
   (Io    [op] k) (resume k (do-io op)))
+```
+
+```sweet-exp
+defstruct Cfg-Error [what :cstr where :cstr]
+defeffect Throw [e :Cfg-Error] : a
+
+defn read-config [path :cstr] :Config @ {Throw Io}
+  let [text   read-file(path)
+       parsed parse-toml(text)]
+    validate(parsed)
+
+handle read-config("/etc/foo.toml")
+  (Throw [e]  _)
+    do
+      eprintln(str-concat("config error: " .what(e)))
+      default-config()
+  (Io    [op] k)  resume(k do-io(op))
 ```
 
 Chains of `bind` threading `Result<T, Error>` become linear, direct-style
@@ -108,6 +138,28 @@ code. The handler is the only place errors are visible.
 (run-with-state 0 counter-step)  ; => (pair 1 nil)
 ```
 
+```sweet-exp
+defeffect Get []       :int
+defeffect Set [v :int] :nil
+
+defn counter-step [] :nil @ {Get Set}
+  let [n perform(Get())]
+    perform(Set({n + 1}))
+
+defn run-with-state [init :int body] :(pair int a)
+  let [s init
+       r nil]
+    handle set!(r body())
+      (Get []  k)  resume(k s)
+      (Set [v] k)
+        do
+          set!(s v)
+          resume(k nil)
+    pair(s r)
+
+run-with-state(0 counter-step)  ; => (pair 1 nil)
+```
+
 This is the `State` monad as an effect handler. The handler is the
 interpretation; callers of `counter-step` don't see the threading.
 
@@ -124,6 +176,19 @@ interpretation; callers of `counter-step` don't see the threading.
       (none? c)     (perform (Parse-Fail))
       (is-digit? c) (perform (Parse-Take))
       :else         (perform (Parse-Fail)))))
+```
+
+```sweet-exp
+defeffect Parse-Peek [] :(option char)
+defeffect Parse-Take [] :char
+defeffect Parse-Fail [] :a
+
+defn digit [] :char @ {Parse-Peek Parse-Take Parse-Fail}
+  let [c perform(Parse-Peek())]
+    cond
+      none?(c)      perform(Parse-Fail())
+      is-digit?(c)  perform(Parse-Take())
+      :else         perform(Parse-Fail())
 ```
 
 Classical Haskell parser-combinator code looks like `digit >>= \d -> ...`.
@@ -161,6 +226,25 @@ For these, write a per-type `bind` and use a `do-monadic` macro:
 (defn res-pure [x] :(result a e) (ok x))
 ```
 
+```sweet-exp
+;; Per-type bind functions -- no Monad typeclass needed.
+defn opt-bind [m :(option a) f :(-> a (option b))] :(option b)
+  cond
+    some?(m)  f(unwrap(m))
+    :else     none
+
+defn opt-pure [x] :(option a)
+  some(x)
+
+defn res-bind [m :(result a e) f :(-> a (result b e))] :(result b e)
+  cond
+    ok?(m)  f(unwrap-ok(m))
+    :else   m
+
+defn res-pure [x] :(result a e)
+  ok(x)
+```
+
 `bind` and `pure` are just functions per-type, not methods of a `Monad`
 typeclass. Call them by name: `(opt-bind ...)`, `(res-pure ...)`.
 
@@ -177,6 +261,14 @@ parameters, since there is no global "the Monad":
   `(do-monadic res-bind res-pure ~bindings ~body))
 ```
 
+```sweet-exp
+defmacro do-option [bindings body]
+  `(do-monadic opt-bind opt-pure ~bindings ~body)
+
+defmacro do-result [bindings body]
+  `(do-monadic res-bind res-pure ~bindings ~body)
+```
+
 Usage:
 
 ```turmeric
@@ -184,6 +276,14 @@ Usage:
   [x (lookup-int "port")
    y (lookup-int "timeout")]
   (opt-pure (+ x y)))
+;; => (some 30) if both lookups succeed; none otherwise.
+```
+
+```sweet-exp
+do-option
+  [x lookup-int("port")
+   y lookup-int("timeout")]
+  opt-pure({x + y})
 ;; => (some 30) if both lookups succeed; none otherwise.
 ```
 

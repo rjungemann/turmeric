@@ -369,6 +369,20 @@ defn printf [fmt : (Fmt args), a1 : args.0, a2 : args.1, ...] : unit
 | C emission | Medium | Lambda lifting for dependent functions |
 | Error messages | High | Dependent type mismatches are complex |
 
+### Revised Assessment (post-v4 infrastructure)
+
+The shipping of GADTs (G0–G4) and Sized Types (SZ0–SZ3) has substantially reduced the net-new work:
+
+| Phase | Original status | With current infrastructure |
+|---|---|---|
+| DT0 (type-level naturals + Vec) | New work | ~80% done — `StaticInt`, `SizedVec`, size normalization, and inference constructors from SZ0–SZ1 are exactly this; `Succ`/`Zero` constructor forms are what remains |
+| DT1 (dependent pattern matching) | New work | ~50% done — GADT pattern matching already refines index types in `match` arms; the per-arm narrowing machinery exists |
+| DT2 (proof terms: `Equal`, `LessThan`) | New work | Still new — Contract Types prove predicates exist at runtime, but compile-time proof terms with eliminators are separate |
+| DT3 (Pi types) | New work | Still the core hard piece — types that refer to value-level binders require dependent unification; nothing in the elaborator handles this |
+| DT4 (dependent typeclasses) | New work | Still complex, but robust dictionary-passing infrastructure reduces the implementation surface |
+
+**Revised complexity: Very High → High-to-Very High.** GADTs and Sized Types cover the parts of dependent types that users most commonly reach for. Pi types remain a genuine elaborator research problem and are the primary remaining blocker.
+
 ### Prior Art
 
 - **Idris:** Full dependent types, proof erasure
@@ -910,6 +924,21 @@ defn velocity [distance : Meters, time : Seconds] : MetersPerSecond
 | Codegen changes | High | Runtime check insertion |
 | C emission | Medium | Runtime check code |
 | Error messages | High | Refinement mismatch explanations |
+
+### Revised Assessment (post-v4 infrastructure)
+
+Contract Types (CT0–CT4), Union/Intersection Types (IT0–IT4), and Sized Types (SZ0–SZ3) have collectively covered ~60–70% of the scaffolding:
+
+| Phase | Original status | With current infrastructure |
+|---|---|---|
+| RT0 (syntax + predicate storage) | New work | Essentially done — Contract Types use identical syntax (`{ x : T | p x }`) and the same predicate storage in the type representation |
+| RT1 (subtyping: `T { p }` ≤ `T`) | New work | Partially done — union/intersection subtyping handles the structural part; predicate entailment (is `p` stronger than `q`?) still needs the SMT layer |
+| RT2 (refinement propagation) | New work | Partially done — CT3 already eliminates provable contracts at compile time; bidirectional propagation (inferring result predicates from argument predicates) is still needed |
+| RT3 (runtime check insertion) | New work | Done — CT1 already does this with configurable failure handling (`--keep-contracts`, `set-contract-handler!`, `with-contract-handler`) |
+| RT4 (stdlib integration, FFI boundaries) | New work | ~90% done via CT4 |
+| C emission concern | ⚠️ Fair | ✅ Resolved — Contract Types already generate runtime-check C99 cleanly |
+
+**Revised complexity: High (C99 ⚠️) → Medium-High (C99 ✅).** The remaining work is almost entirely scoped to SMT integration and bidirectional predicate propagation — a well-defined, separable problem rather than a full-stack implementation. This makes Refinement Types the better near-term candidate of the two deferred features.
 
 ### Prior Art
 
@@ -1516,8 +1545,8 @@ See [contract-types-plan.md](contract-types-plan.md) for full implementation det
 | [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **✅ ET0–ET4 complete; LC0–LC3, MS0–MS4 complete** |
 | [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **✅ SZ0–SZ3 complete (`-Xgadt`)** |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **✅ IMPLEMENTED — CT0–CT4 complete (`-Xcontract-types`)** |
-| [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
-| [Refinement Types](#6-refinement-types) | Very High | Medium | ⚠️ Fair | ✅ Good | Low | **⏸ Deferred** |
+| [Dependent Types](#2-dependent-types) | High-to-Very High (revised) | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
+| [Refinement Types](#6-refinement-types) | Medium-High (revised) | Medium | ✅ Good (revised) | ✅ Good | Low | **⏸ Deferred** |
 
 ---
 
@@ -1573,12 +1602,12 @@ See [contract-types-plan.md](contract-types-plan.md).
 
 **Priority:** Low
 
-| Feature | Reason for Deferral |
-|---|---|
-| Dependent Types | Very high complexity, unclear demand |
-| Refinement Types | High complexity, limited C99 fit |
+| Feature | Reason for Deferral | Revised blocker |
+|---|---|---|
+| Dependent Types | Very high complexity, unclear demand | Pi types (DT3) — dependent unification in elaborator; DT0–DT1 now largely covered by GADTs + Sized Types |
+| Refinement Types | High complexity, limited C99 fit | SMT integration (RT1–RT2) — RT0, RT3–RT4 now largely covered by Contract Types; C99 fit concern resolved |
 
-**Rationale:** These features have high complexity and unclear immediate value. They should be reconsidered when:
+**Rationale:** These features remain deferred, but post-v4 infrastructure has materially reduced both. Refinement Types in particular are now the better near-term candidate: the remaining gap is the SMT/predicate-entailment layer, while Dependent Types still require a fundamental elaborator extension (Pi types) that nothing in the current stack bootstraps. Reconsider when:
 1. There is strong user demand
 2. The other features are stable
 3. There are clear use cases that cannot be addressed otherwise
@@ -1925,4 +1954,4 @@ v5+ (Deferred)
 
 ---
 
-*Last updated: 2026-05-20 (SZ0–SZ3 complete; CT0–CT4 complete; all v4 features shipped)*
+*Last updated: 2026-05-20 (SZ0–SZ3 complete; CT0–CT4 complete; all v4 features shipped; Dependent Types and Refinement Types complexity revised against v4 infrastructure)*

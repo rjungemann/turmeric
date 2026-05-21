@@ -32,6 +32,16 @@ Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
     (Blue)  3))
 ```
 
+```sweet-exp
+defdata Color :copy (Red) (Green) (Blue)
+
+defn color-to-int [c] :int
+  match c
+    (Red)   1
+    (Green) 2
+    (Blue)  3
+```
+
 Parameterized ADTs work the same way:
 
 ```turmeric
@@ -43,6 +53,17 @@ Parameterized ADTs work the same way:
   (match opt
     (None)    default
     (Some x)  x))
+```
+
+```sweet-exp
+defdata Option [a]
+  (None)
+  (Some a)
+
+defn option-or [opt default] :int
+  match opt
+    (None)    default
+    (Some x)  x
 ```
 
 The `:copy` modifier makes the type copyable (like `defstruct :copy`). Without
@@ -61,6 +82,17 @@ Constructors can carry typed fields:
     (Rect w h)   (* w h)))
 ```
 
+```sweet-exp
+defdata Shape
+  (Circle int)
+  (Rect   int int)
+
+defn area [s] :int
+  match s
+    (Circle r)   {r * r}
+    (Rect w h)   {w * h}
+```
+
 Pattern matching is exhaustiveness-checked. If you omit a constructor the
 compiler reports the missing arm.
 
@@ -76,6 +108,13 @@ each constructor carries an explicit `: return-type` annotation:
 (defgadt Expr [a]
   (Lit int         : (Expr int))
   (Add (Expr int) (Expr int) : (Expr int)))
+```
+
+```sweet-exp
+; Requires: -Xgadt
+defgadt Expr [a]
+  (Lit int         : (Expr int))
+  (Add (Expr int) (Expr int) : (Expr int))
 ```
 
 Each constructor line reads as: "field types ... `: return type`". Here:
@@ -99,6 +138,13 @@ Evaluation is written the same as for a plain ADT:
     (Add l r) (+ (eval-expr l) (eval-expr r))))
 ```
 
+```sweet-exp
+defn eval-expr [e] :int
+  match e
+    (Lit n)   n
+    (Add l r) {eval-expr(l) + eval-expr(r)}
+```
+
 ---
 
 ## 3. Type Refinement in Match Arms
@@ -112,6 +158,12 @@ parameters. Consider a typed tag:
   (BoolTag : (Tag bool)))
 ```
 
+```sweet-exp
+defgadt Tag [a]
+  (IntTag  : (Tag int))
+  (BoolTag : (Tag bool))
+```
+
 A function dispatching on the tag can return `a` without a cast:
 
 ```turmeric
@@ -119,6 +171,13 @@ A function dispatching on the tag can return `a` without a cast:
   (match t
     (IntTag)  0
     (BoolTag) 0))
+```
+
+```sweet-exp
+defn default-value [t] :int
+  match t
+    (IntTag)  0
+    (BoolTag) 0
 ```
 
 In the `IntTag` arm the type-checker knows `a = int`; in `BoolTag` it knows
@@ -152,6 +211,31 @@ A larger example combining plain ADTs and GADTs in one program:
   0)
 ```
 
+```sweet-exp
+defdata Color :copy (Red) (Green) (Blue)
+
+defgadt Expr [a]
+  (Lit int         : (Expr int))
+  (Add (Expr int) (Expr int) : (Expr int))
+
+defn color-to-int [c] :int
+  match c
+    (Red)   1
+    (Green) 2
+    (Blue)  3
+
+defn eval-expr [e] :int
+  match e
+    (Lit n)   n
+    (Add l r) {eval-expr(l) + eval-expr(r)}
+
+defn main [] :int
+  println(color-to-int((Red)))
+  println(eval-expr(Add((Lit 10) (Lit 20))))
+  println(color-to-int((Green)))
+  0
+```
+
 You can also use multiple constructors that refine the same type variable in
 different ways:
 
@@ -174,6 +258,25 @@ different ways:
     0))
 ```
 
+```sweet-exp
+defgadt Expr [a]
+  (Lit int                         : (Expr int))
+  (Add (Expr int) (Expr int)       : (Expr int))
+  (Mul (Expr int) (Expr int)       : (Expr int))
+
+defn eval-expr [e] :int
+  match e
+    (Lit n)   n
+    (Add l r) {eval-expr(l) + eval-expr(r)}
+    (Mul l r) {eval-expr(l) * eval-expr(r)}
+
+defn main [] :int
+  ; (2 + (3 * 4)) = 14
+  let [e Add((Lit 2) Mul((Lit 3) (Lit 4)))]
+    println(eval-expr(e))
+    0
+```
+
 ---
 
 ## 4. The `Equal` GADT and `coerce`
@@ -184,6 +287,12 @@ The standard library provides a built-in equality witness GADT:
 ; Built into the runtime -- you do not need to declare this yourself.
 ; (defgadt Equal [a b]
 ;   (Refl : (Equal a a)))
+```
+
+```sweet-exp
+; Built into the runtime -- you do not need to declare this yourself.
+; defgadt Equal [a b]
+;   (Refl : (Equal a a))
 ```
 
 `(Refl)` is the only constructor. Because its return type is `(Equal a a)`,
@@ -203,6 +312,18 @@ Use `coerce` to convert a value across a proven equality:
         0)))
 ```
 
+```sweet-exp
+defgadt Equal [a b]
+  (Refl : (Equal a a))
+
+defn main [] :int
+  match (Refl)
+    (Refl)
+      do
+        println(coerce((Refl) 42))
+        0
+```
+
 In the `(Refl)` arm the type-checker knows `a = b`, so `coerce` can safely
 reinterpret the value without any runtime overhead.
 
@@ -213,6 +334,12 @@ on `Refl` and returning `Refl`:
 (defn sym [eq] :(Equal b a)
   (match eq
     (Refl) (Refl)))
+```
+
+```sweet-exp
+defn sym [eq] :(Equal b a)
+  match eq
+    (Refl) (Refl)
 ```
 
 ---
@@ -231,6 +358,25 @@ They work in both plain ADT and GADT matches:
     (Pos n)                (do (println "pos") 0)
     (Neg n)                (do (println "neg") 0)
     (Zero)                 (do (println "zero") 0)))
+```
+
+```sweet-exp
+defdata Sign (Pos int) (Neg int) (Zero)
+
+defn classify [s] :int
+  match s
+    (Pos n) when {n > 100} do
+                             println("big")
+                             0
+    (Pos n)                do
+                             println("pos")
+                             0
+    (Neg n)                do
+                             println("neg")
+                             0
+    (Zero)                 do
+                             println("zero")
+                             0
 ```
 
 Arms are tried top to bottom. The first arm whose pattern matches *and* whose
@@ -278,6 +424,17 @@ features that can be used together.
     (b : bool) (do (println "bool") 0)))
 ```
 
+```sweet-exp
+defn describe [x : (int | bool)] :int
+  match x
+    (n : int)  do
+                 println("int")
+                 0
+    (b : bool) do
+                 println("bool")
+                 0
+```
+
 The `(match x (n : int) body1 (b : bool) body2)` form dispatches on the
 runtime tag. Pattern arms must be exhaustive across all union members.
 
@@ -302,6 +459,21 @@ the tag-dispatched call automatically:
   0)
 ```
 
+```sweet-exp
+defclass Show [a]
+  show [x] :cstr
+
+definstance Show [int]
+  show [x] "an-int"
+
+definstance Show [bool]
+  show [x] "a-bool"
+
+defn print-any [x : (int | bool)] :int
+  println(.show(x))
+  0
+```
+
 If any union member lacks an instance the compiler emits an error at the
 call site naming the missing member.
 
@@ -322,6 +494,18 @@ boxed into `any` carry a runtime tag so their type can be recovered:
   0)
 ```
 
+```sweet-exp
+defn consume [x : any] :int
+  println(type-of(x))   ; prints "int", "bool", "cstr", etc.
+  0
+
+defn main [] :int
+  consume(42)      ; prints "int"
+  consume(true)    ; prints "bool"
+  consume("hello") ; prints "cstr"
+  0
+```
+
 Use `(type-of x)` to retrieve the type name as a `cstr`. Use `(cast x T)`
 to unsafely unbox an `any` value as type `T` (no runtime tag check -- use
 only when you know the type):
@@ -330,6 +514,12 @@ only when you know the type):
 (defn print-as-int [x : any] :int
   (println (cast x int))
   0)
+```
+
+```sweet-exp
+defn print-as-int [x : any] :int
+  println(cast(x int))
+  0
 ```
 
 ---
@@ -421,6 +611,42 @@ only when you know the type):
 (defn show-type [x : any] :int
   (println (type-of x))
   0)
+```
+
+```sweet-exp
+; Declare a plain ADT
+defdata Color :copy (Red) (Green) (Blue)
+
+; Declare a GADT  (requires -Xgadt)
+defgadt Expr [a]
+  (Lit int                         : (Expr int))
+  (Add (Expr int) (Expr int)       : (Expr int))
+  (Mul (Expr int) (Expr int)       : (Expr int))
+
+; Pattern match -- exhaustiveness checked, guards optional
+defn eval-expr [e] :int
+  match e
+    (Lit n)   n
+    (Add l r) {eval-expr(l) + eval-expr(r)}
+    (Mul l r) {eval-expr(l) * eval-expr(r)}
+
+; Equality witness
+defgadt Equal [a b]
+  (Refl : (Equal a a))
+
+; coerce a value using an equality proof
+coerce((Refl) some-value)
+
+; Union type dispatch  (requires -Xunion-types)
+defn describe [x : (int | bool)] :int
+  match x
+    (n : int)  0
+    (b : bool) 1
+
+; Gradual typing  (requires -Xunion-types)
+defn show-type [x : any] :int
+  println(type-of(x))
+  0
 ```
 
 ## See also

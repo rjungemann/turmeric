@@ -35,6 +35,16 @@ For a conceptual walkthrough and worked examples, see the [STM Tutorial](stm-tut
 ;; (tvar/free counter)  ; called via inline C if needed
 ```
 
+```sweet-exp
+require ["stdlib/stm.tur"]
+
+;; Create a TVar with an initial value
+def counter tvar/new(0)
+
+;; Free when no longer needed (only when no transactions reference it)
+;; tvar/free(counter)  ; called via inline C if needed
+```
+
 `tvar/new` accepts any value; TVars are untyped at the Turmeric level.
 
 ## Reading and Writing
@@ -60,6 +70,25 @@ All TVar access must happen inside `atomically`:
     (tvar/write counter (+ v 1))))
 ```
 
+```sweet-exp
+;; Read
+def val
+  atomically
+    fn []
+      tvar/read(counter)
+
+;; Write
+atomically
+  fn []
+    tvar/write(counter 42)
+
+;; Read-modify-write (common pattern)
+atomically
+  fn []
+    def v tvar/read(counter)
+    tvar/write(counter {v + 1})
+```
+
 ### Swap and CAS
 
 ```turmeric
@@ -77,6 +106,21 @@ All TVar access must happen inside `atomically`:
       (tvar/cas counter 99 100))))
 ```
 
+```sweet-exp
+;; Swap: write new value and return old value (within one transaction)
+def old-val
+  atomically
+    fn []
+      tvar/swap(counter 99)
+
+;; Compare-and-swap: write new only if current value equals expected
+;; Returns true if the swap succeeded
+def swapped
+  atomically
+    fn []
+      tvar/cas(counter 99 100)
+```
+
 ## Retry
 
 `retry` aborts the current transaction and blocks until one of the `TVar`s read during this transaction changes, then re-runs from the beginning:
@@ -89,6 +133,16 @@ All TVar access must happen inside `atomically`:
     (when (< v 10)
       (retry))
     v))
+```
+
+```sweet-exp
+;; Block until counter reaches at least 10
+atomically
+  fn []
+    def v tvar/read(counter)
+    when {v < 10}
+      retry()
+    v
 ```
 
 `retry` never returns. The runtime records the read set, sleeps the thread, and wakes it when any read TVar is modified by another transaction.
@@ -104,6 +158,15 @@ All TVar access must happen inside `atomically`:
     (or-else
       (fn [] (dequeue queue-a))
       (fn [] (dequeue queue-b)))))
+```
+
+```sweet-exp
+;; Drain queue-a if possible, otherwise queue-b
+atomically
+  fn []
+    or-else
+      fn [] dequeue(queue-a)
+      fn [] dequeue(queue-b)
 ```
 
 Both branches see the same transactional snapshot. If both retry, the outer transaction also retries.
@@ -138,6 +201,20 @@ A defer fires at the end of a transaction, after commit or abort. Register them 
   ```)
 ```
 
+```sweet-exp
+defn register-commit-defer [env-ptr fn-ptr] :void
+  ```
+  STM_Transaction *tx = tur_stm_current_tx();
+  tur_stm_defer_on_commit(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
+  ```)
+
+defn register-abort-defer [env-ptr fn-ptr] :void
+  ```c
+  STM_Transaction *tx = tur_stm_current_tx();
+  tur_stm_defer_on_abort(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
+  ```)
+```
+
 Commit defers run once, in registration order, after the write set is applied. Abort defers run on every failed attempt, including retries — design them to be idempotent.
 
 Up to 32 defers per transaction; exceeding this panics.
@@ -166,6 +243,30 @@ Up to 32 defers per transaction; exceeding this panics.
       (tvar/write mv val))))
 ```
 
+```sweet-exp
+;; An empty slot is represented as nil
+defn tmvar/new [] :ptr
+  tvar/new(ptr/null())
+defn tmvar/empty? [mv]
+  nil?(tvar/read(mv))
+
+defn tmvar/take [mv]
+  atomically
+    fn []
+      def v tvar/read(mv)
+      when nil?(v)
+        retry()
+      tvar/write(mv ptr/null())
+      v
+
+defn tmvar/put [mv val]
+  atomically
+    fn []
+      when not(nil?(tvar/read(mv)))
+        retry()
+      tvar/write(mv val)
+```
+
 ### TChan (unbounded FIFO)
 
 ```turmeric
@@ -187,6 +288,27 @@ Up to 32 defers per transaction; exceeding this panics.
       (car q))))
 ```
 
+```sweet-exp
+;; Backed by a TVar holding a list
+defn tchan/new [] :ptr
+  tvar/new('())
+
+defn tchan/write [ch val]
+  atomically
+    fn []
+      def q tvar/read(ch)
+      tvar/write(ch append(q list(val)))
+
+defn tchan/read [ch]
+  atomically
+    fn []
+      def q tvar/read(ch)
+      when nil?(q)
+        retry()
+      tvar/write(ch cdr(q))
+      car(q)
+```
+
 ## Composability
 
 Because `retry` and `or-else` work purely through the transaction's read set, any two transactions compose without deadlock:
@@ -199,6 +321,14 @@ Because `retry` and `or-else` work purely through the transaction's read set, an
     (log-transfer account-a account-b 30)))
 ```
 
+```sweet-exp
+;; Both operations run in a single atomic transaction
+atomically
+  fn []
+    transfer(account-a account-b 30)
+    log-transfer(account-a account-b 30)
+```
+
 This is the key advantage over locks: you can call sub-transactions without worrying about lock ordering.
 
 ## Side Effects Inside Transactions
@@ -206,17 +336,31 @@ This is the key advantage over locks: you can call sub-transactions without worr
 Transactions may run more than once (on retry). **Avoid observable side effects** such as I/O, printing, or sending messages inside `atomically`. Use commit defers for effects that should fire exactly once on success:
 
 ```turmeric
-;; BAD — println may run multiple times
+;; BAD -- println may run multiple times
 (atomically
   (fn []
     (tvar/write counter 42)
     (println "done")))
 
-;; GOOD — println fires once after commit
+;; GOOD -- println fires once after commit
 (atomically
   (fn []
     (tvar/write counter 42)
     (register-commit-defer nil log-fn)))
+```
+
+```sweet-exp
+;; BAD -- println may run multiple times
+atomically
+  fn []
+    tvar/write(counter 42)
+    println("done")
+
+;; GOOD -- println fires once after commit
+atomically
+  fn []
+    tvar/write(counter 42)
+    register-commit-defer(nil log-fn)
 ```
 
 ## Limitations (v1)

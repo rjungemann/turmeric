@@ -29,6 +29,17 @@ Higher-level primitives -- channels, futures, task groups, thread pools, semapho
 ;; Block until thread completes and get result
 (println (thread-join result))  ; prints 42
 ```
+```sweet-exp
+;; Spawn a new thread
+def result
+  thread
+    fn []
+      println("Hello from thread!")
+      42
+
+;; Block until thread completes and get result
+println(thread-join(result))  ; prints 42
+```
 
 ### Properties
 
@@ -51,6 +62,16 @@ Each thread has its own stack and thread-local variables:
 ;; Set current value
 (thread-local-set my-tls 100)
 ```
+```sweet-exp
+;; Declare a thread-local
+thread-local my-tls 42
+
+;; Get current value (only accessible within this thread)
+thread-local-get(my-tls)  ; => 42
+
+;; Set current value
+thread-local-set(my-tls 100)
+```
 
 ## Shared Ownership: Arc<T>
 
@@ -68,6 +89,19 @@ Each thread has its own stack and thread-local variables:
 
 ;; Original and clones all point to same value
 (println (counter-value shared))
+```
+```sweet-exp
+;; Create a shared value
+def shared arc(make-counter(0))
+
+;; Clone the arc (increments reference count)
+thread
+  fn []
+    let [my-copy arc-clone(shared)]
+      modify-counter(my-copy)
+
+;; Original and clones all point to same value
+println(counter-value(shared))
 ```
 
 ### Properties
@@ -100,6 +134,20 @@ Each thread has its own stack and thread-local variables:
 (let [val (with-lock counter (fn [v] v))]
   (println val))
 ```
+```sweet-exp
+;; Create a mutex
+def counter mutex(0)
+
+;; Acquire lock, modify, and release (automatically via defer)
+with-lock counter
+  fn [value]
+    let [new-val {value + 1}]
+      new-val
+
+;; Check current value (requires lock)
+let [val with-lock(counter fn [v] v)]
+  println(val)
+```
 
 ### Properties
 
@@ -124,6 +172,18 @@ For read-heavy workloads, use `RwLock<T>`:
 (write-lock data
   (fn [vec] (set-vec vec 0 42)))
 ```
+```sweet-exp
+;; Multiple readers or one writer
+def data rw-lock(vec(1 2 3))
+
+;; Read lock (multiple threads can hold simultaneously)
+read-lock data
+  fn [vec] println(vec)
+
+;; Write lock (exclusive)
+write-lock data
+  fn [vec] set-vec(vec 0 42)
+```
 
 ## Atomic Types: Atomic<T>
 
@@ -144,6 +204,22 @@ For simple types, **`Atomic<T>`** provides lock-free atomic operations:
 
 ;; Atomic add/sub
 (atomic-add counter 5)  ; atomically add 5
+```
+```sweet-exp
+;; Atomic integer
+def counter atomic(0)
+
+;; Atomic load
+println(atomic-load(counter))  ; => 0
+
+;; Atomic store
+atomic-store(counter 42)
+
+;; Atomic compare-and-swap
+atomic-cas(counter 42 100)  ; success if value was 42, set to 100
+
+;; Atomic add/sub
+atomic-add(counter 5)  ; atomically add 5
 ```
 
 ### Types Supported
@@ -178,6 +254,20 @@ mutex, condvar, and value/error slot.
 (println (ok-val result))  ; => 42
 (promise-free p)
 ```
+```sweet-exp
+;; Create a promise/future pair (same underlying cell)
+def p promise-new()
+def f p
+
+;; Producer thread fulfills the promise
+thread(fn [] promise-fulfill(p 42))
+
+;; Consumer blocks on the future
+def result future-get(f)
+println(ok?(result))     ; => true
+println(ok-val(result))  ; => 42
+promise-free(p)
+```
 
 ### Core API
 
@@ -201,6 +291,12 @@ mutex, condvar, and value/error slot.
 
 (def e (future-error-of 7))  ; immediately rejected
 ```
+```sweet-exp
+def f future-of(99)       ; immediately fulfilled
+future-done?(f)           ; => true
+
+def e future-error-of(7)  ; immediately rejected
+```
 
 ### Combinators
 
@@ -210,6 +306,13 @@ mutex, condvar, and value/error slot.
 
 ;; Flat-map: fn must return a new future
 (def f3 (future-then f (fn [v] (future-of (+ v 1)))))
+```
+```sweet-exp
+;; Map a function over the fulfilled value
+def f2 future-map(f fn [v] {v * 2})
+
+;; Flat-map: fn must return a new future
+def f3 future-then(f fn [v] future-of({v + 1}))
 ```
 
 ### Multi-Combinators
@@ -234,6 +337,16 @@ mutex, condvar, and value/error slot.
     (println (tuple-second tup))
     (tuple-free tup)))
 ```
+```sweet-exp
+;; Join two futures into a pair
+def tup-future future-join(fa fb)
+def tup-result future-get(tup-future)
+when ok?(tup-result)
+  let [tup ok-val(tup-result)]
+    println(tuple-first(tup))
+    println(tuple-second(tup))
+    tuple-free(tup)
+```
 
 ### Timeouts
 
@@ -246,6 +359,16 @@ mutex, condvar, and value/error slot.
 
 ;; Stand-alone timeout future (rejects with exn = -1 after ms)
 (def t (future-timeout 1000))
+```
+```sweet-exp
+;; Race a computation against a deadline
+def result future-get(future-with-timeout(task-future 5000))
+if future-cancelled?(result)
+  println("timed out")
+  println(ok-val(result))
+
+;; Stand-alone timeout future (rejects with exn = -1 after ms)
+def t future-timeout(1000)
 ```
 
 ## Synchronization Primitives
@@ -275,6 +398,22 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 (println (chan-recv ch))  ; => 3
 (chan-free ch)
 ```
+```sweet-exp
+def ch chan-new(8)
+
+;; Producer thread
+thread
+  fn []
+    chan-send(ch 1)
+    chan-send(ch 2)
+    chan-send(ch 3)
+
+;; Consumer
+println(chan-recv(ch))  ; => 1
+println(chan-recv(ch))  ; => 2
+println(chan-recv(ch))  ; => 3
+chan-free(ch)
+```
 
 | Function | Signature | Notes |
 |---|---|---|
@@ -298,6 +437,20 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 
 (println (async-chan-count ch))  ; current item count
 (async-chan-free ch)
+```
+```sweet-exp
+def ch async-chan-new(16)
+
+async-chan-send(ch 99)
+
+;; Non-blocking send (returns false if full)
+if async-chan-try-send(ch 100) ...
+
+;; Non-blocking recv (returns INT64_MIN if empty)
+let [v async-chan-try-recv(ch)] ...
+
+println(async-chan-count(ch))  ; current item count
+async-chan-free(ch)
 ```
 
 | Function | Signature | Notes |
@@ -333,6 +486,22 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
   (ch-a :send 99)
   (:default (println "ch-a full, dropping")))
 ```
+```sweet-exp
+def ch-a chan-new(4)
+def ch-b chan-new(4)
+
+;; Poll with a default arm (never blocks)
+let [[idx val] select(ch-a :recv)(ch-b :recv)(:default :nothing)]
+  cond
+    {idx = 0}  println(str("from ch-a: " val))
+    {idx = 1}  println(str("from ch-b: " val))
+    :else       println("nothing ready")
+
+;; Send-or-drop
+select
+  (ch-a :send 99)
+  (:default println("ch-a full, dropping"))
+```
 
 Returns `(index value)` where `index` is the 0-based clause position (or `-1`
 for `:default`) and `value` is the received value, `true` for `:send`, or the
@@ -359,6 +528,18 @@ Block until a condition is signaled:
 ;; Thread B: signal the condition
 (condition-signal cond)
 ```
+```sweet-exp
+def cond condition-variable()
+
+;; Thread A: wait for signal
+with-lock mutex
+  fn [_]
+    condition-wait(cond mutex)
+    println("woken!")
+
+;; Thread B: signal the condition
+condition-signal(cond)
+```
 
 ### Semaphore
 
@@ -377,6 +558,19 @@ unnamed form is unavailable on macOS).
     (sem-acquire sem)
     (do-work)
     (sem-release sem)))
+```
+```sweet-exp
+;; Binary semaphore (mutex-like)
+def s sem-new(1)
+
+;; Limit concurrency to 3 parallel workers
+def sem sem-new(3)
+
+thread
+  fn []
+    sem-acquire(sem)
+    do-work()
+    sem-release(sem)
 ```
 
 | Function | Notes |
@@ -398,6 +592,14 @@ threads call it concurrently.
 (once-call flag init-resource)
 
 (once-flag-free flag)
+```
+```sweet-exp
+def flag once-flag-new()
+
+;; Safe to call from any number of threads
+once-call(flag init-resource)
+
+once-flag-free(flag)
 ```
 
 | Function | Notes |
@@ -428,6 +630,20 @@ directly for custom worker patterns. A sentinel value `INT64_MIN` returned by
 (work-queue-close q)
 (work-queue-free q)
 ```
+```sweet-exp
+;; Unbounded queue (grows dynamically)
+def q work-queue-new()
+
+;; Bounded queue (push blocks when full)
+def bq work-queue-new-bounded(64)
+
+work-queue-push(q 42)
+let [v work-queue-pop(q)] ...  ; blocks until item available
+
+;; Shutdown: wake all blocked producers and consumers
+work-queue-close(q)
+work-queue-free(q)
+```
 
 | Function | Notes |
 |---|---|
@@ -454,6 +670,17 @@ delivered via `Future` (see the Futures section).
 (thread-pool-shutdown tp)  ; closes queue and joins all workers
 (thread-pool-free tp)      ; must be called after shutdown
 ```
+```sweet-exp
+def tp thread-pool-new(4)
+
+;; Submit returns a Future fulfilled with the task's return value
+def fut thread-pool-submit(tp my-work-fn my-arg)
+def result future-get(fut)
+println(ok-val(result))
+
+thread-pool-shutdown(tp)  ; closes queue and joins all workers
+thread-pool-free(tp)      ; must be called after shutdown
+```
 
 | Function | Notes |
 |---|---|
@@ -475,6 +702,15 @@ current workers are busy.
 
 (thread-pool-dynamic-shutdown dtp)
 (thread-pool-dynamic-free dtp)
+```
+```sweet-exp
+def dtp thread-pool-new-dynamic(2 8)
+
+def fut thread-pool-dynamic-submit(dtp my-work-fn nil)
+def result future-get(fut)
+
+thread-pool-dynamic-shutdown(dtp)
+thread-pool-dynamic-free(dtp)
 ```
 
 | Function | Notes |
@@ -519,6 +755,30 @@ Cancellation is **cooperative** -- tasks must periodically check
   (task-group-spawn g my-fiber-b))
 (task-group-free g)
 ```
+```sweet-exp
+;; Manual lifecycle
+def g task-group-new()
+
+task-group-spawn g
+  fn []
+    println("worker A")
+    task-group-task-done(g)
+
+task-group-spawn g
+  fn []
+    println("worker B")
+    task-group-task-done(g)
+
+task-group-wait(g)
+task-group-free(g)
+
+;; Preferred: task-group-with macro (calls wait automatically)
+def g task-group-new()
+task-group-with g
+  task-group-spawn(g my-fiber-a)
+  task-group-spawn(g my-fiber-b)
+task-group-free(g)
+```
 
 ### Cooperative Cancellation
 
@@ -536,6 +796,20 @@ Cancellation is **cooperative** -- tasks must periodically check
 (task-group-wait g)
 (task-group-free g)
 ```
+```sweet-exp
+def g task-group-new()
+
+task-group-spawn g
+  fn []
+    while not(task-group-should-exit?(g))
+      do-work()
+    task-group-task-done(g)
+
+;; Cancel from another thread or the parent
+task-group-cancel(g)
+task-group-wait(g)
+task-group-free(g)
+```
 
 ### Timeouts
 
@@ -545,6 +819,13 @@ Cancellation is **cooperative** -- tasks must periodically check
 (task-group-with-timeout g 5000
   (task-group-spawn g long-running-task))
 (task-group-free g)
+```
+```sweet-exp
+;; Auto-cancel after 5 seconds
+def g task-group-new()
+task-group-with-timeout g 5000
+  task-group-spawn(g long-running-task)
+task-group-free(g)
 ```
 
 ### Lifecycle API
@@ -595,6 +876,16 @@ Cancellation is **cooperative** -- tasks must periodically check
 ;; Macro form
 (task-group-async g my-thunk)
 ```
+```sweet-exp
+;; Spawn an async computation into a task group; get a Future back
+def g task-group-new()
+def fut task-group-spawn-async(g my-thunk)
+def result future-get(fut)
+task-group-free(g)
+
+;; Macro form
+task-group-async(g my-thunk)
+```
 
 **Panic propagation** is automatic: if a fiber spawned into a group panics, the
 group is cancelled with reason 1 (panic). No extra API is needed.
@@ -609,6 +900,17 @@ Marker traits control what types can be safely shared:
 - **`Sync`** -- Type can be safely shared via `&T` in multiple threads. If `T : Sync`, multiple threads can hold `&T` simultaneously without a `Mutex`.
 
 ```turmeric
+;; These are Send (safe to move to threads)
+int, bool, string, (Pair a b) [Send a, Send b]
+
+;; These are Sync (safe to share via &)
+int, bool, Mutex<T> [T : Sync]
+
+;; NOT Sync (require Mutex for shared access)
+Rc<T> (thread-local ref counting)
+ref<T> (single-thread ownership)
+```
+```sweet-exp
 ;; These are Send (safe to move to threads)
 int, bool, string, (Pair a b) [Send a, Send b]
 
@@ -639,6 +941,19 @@ Turmeric's borrow checker enforces:
     (fn []
       (println (arc-deref x)))))
 ```
+```sweet-exp
+;; ERROR: cannot move borrowed reference to thread
+let [x 42]
+  thread
+    fn []
+      println(x)  ; x is borrowed; can't move across boundary
+
+;; OK: clone or use Arc
+let [x arc(42)]
+  thread
+    fn []
+      println(arc-deref(x))
+```
 
 ## Common Patterns
 
@@ -663,6 +978,25 @@ Turmeric's borrow checker enforces:
 
 (chan-free ch)
 ```
+```sweet-exp
+def ch chan-new(16)
+
+;; Producer
+thread
+  fn []
+    for-each items
+      fn [item] chan-send(ch item)
+    chan-send(ch :done)
+
+;; Consumer
+let loop []
+  let [v chan-recv(ch)]
+    when not=(v :done)
+      process(v)
+      loop()
+
+chan-free(ch)
+```
 
 ### Thread-Safe Counter
 
@@ -679,6 +1013,19 @@ Turmeric's borrow checker enforces:
 
 (println (with-lock counter (fn [n] n)))  ; => 10
 ```
+```sweet-exp
+def counter mutex(0)
+
+for-each range(10)
+  fn [i]
+    thread
+      fn []
+        with-lock counter
+          fn [n]
+            {n + 1}
+
+println(with-lock(counter fn [n] n))  ; => 10
+```
 
 ### Barrier
 
@@ -692,6 +1039,17 @@ Turmeric's borrow checker enforces:
         (println (str "Thread " i " starting"))
         (barrier-wait barrier)
         (println (str "Thread " i " done"))))))
+```
+```sweet-exp
+def barrier barrier-new(3)
+
+for-each range(3)
+  fn [i]
+    thread
+      fn []
+        println(str("Thread " i " starting"))
+        barrier-wait(barrier)
+        println(str("Thread " i " done"))
 ```
 
 ### Structured Concurrency with TaskGroup
@@ -708,6 +1066,19 @@ Turmeric's borrow checker enforces:
             (run-task task))
           (task-group-task-done g))))))
 (task-group-free g)
+```
+```sweet-exp
+;; Spawn N workers; cancel all if one fails or times out
+def g task-group-new()
+task-group-with-timeout g 10000
+  for-each tasks
+    fn [task]
+      task-group-spawn g
+        fn []
+          when not(task-group-should-exit?(g))
+            run-task(task)
+          task-group-task-done(g)
+task-group-free(g)
 ```
 
 ### Fan-Out with Thread Pool and Futures
@@ -730,6 +1101,26 @@ Turmeric's borrow checker enforces:
 
 (thread-pool-shutdown tp)
 (thread-pool-free tp)
+```
+```sweet-exp
+def tp thread-pool-new(4)
+
+;; Submit all tasks and collect futures
+def futures
+  map items
+    fn [item]
+      thread-pool-submit(tp process-item item)
+
+;; Await all results
+for-each futures
+  fn [fut]
+    let [r future-get(fut)]
+      if ok?(r)
+        collect(ok-val(r))
+        log-error(err-val(r))
+
+thread-pool-shutdown(tp)
+thread-pool-free(tp)
 ```
 
 ## Web REPL (WASM) Threading Constraints

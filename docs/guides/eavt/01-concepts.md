@@ -69,6 +69,10 @@ Adding a new fact. In Turmeric:
 (db-assert! db entity attr-ptr value)
 ```
 
+```sweet-exp
+db-assert!(db entity attr-ptr value)
+```
+
 This returns the transaction number (`tx`) that was assigned to the fact.
 Every call to `db-assert!` increments the transaction counter.
 
@@ -78,6 +82,10 @@ Filtering facts with a predicate. The core function is:
 
 ```turmeric
 (db-q db pred)
+```
+
+```sweet-exp
+db-q(db pred)
 ```
 
 where `pred` is a function `(fn [datum] :bool ...)`. It returns a vector of
@@ -94,6 +102,15 @@ Higher-level combinators build predicates:
 (q-not p)             ;; datums NOT matching p
 ```
 
+```sweet-exp
+q-entity(1)          ; datums for entity 1
+q-attr(":user/name") ; datums with attribute :user/name
+q-ea(1 ":user/age")  ; entity 1 AND attribute :user/age
+q-and(p q)           ; datums matching both p and q
+q-or(p q)            ; datums matching either p or q
+q-not(p)             ; datums NOT matching p
+```
+
 ### Retract
 
 Logical deletion is expressed as asserting a special `:db/retract` datum. The
@@ -103,6 +120,11 @@ for the marker:
 ```turmeric
 (db-retract! db entity ":user/email")
 ;; Asserts: [entity, ":db/retract", StrVal(":user/email"), next-tx]
+```
+
+```sweet-exp
+db-retract!(db entity ":user/email")
+; Asserts: [entity, ":db/retract", StrVal(":user/email"), next-tx]
 ```
 
 This means retraction is itself a fact with a timestamp, so you can query
@@ -118,6 +140,11 @@ past transaction:
 ;; Returns an rvec of all datums with tx <= snapshot-tx
 ```
 
+```sweet-exp
+db-as-of(db snapshot-tx)
+; Returns an rvec of all datums with tx <= snapshot-tx
+```
+
 This enables "time travel" -- you can ask "what did the database look like before
 the last update?"
 
@@ -130,6 +157,11 @@ Pull collects all facts for a single entity:
 ;; Returns an rvec of all datums where datum-entity = entity-id
 ```
 
+```sweet-exp
+pull(db entity-id)
+; Returns an rvec of all datums where datum-entity = entity-id
+```
+
 This is the EAVT equivalent of `SELECT * FROM ... WHERE entity = ?`.
 
 ## History
@@ -139,6 +171,11 @@ The history of an attribute for an entity shows how its value evolved over time:
 ```turmeric
 (history db entity ":user/age")
 ;; Returns an rvec of all datums for (entity, ":user/age"), sorted by tx
+```
+
+```sweet-exp
+history(db entity ":user/age")
+; Returns an rvec of all datums for (entity, ":user/age"), sorted by tx
 ```
 
 ## Comparison with Other Data Models
@@ -200,6 +237,13 @@ Turmeric uses a tagged union to represent the three Value types:
   (EntityVal :int)) ;; entity ID reference
 ```
 
+```sweet-exp
+defdata Value
+  (LongVal :int)    ; 64-bit integer
+  (StrVal :int)     ; :cstr pointer stored as int
+  (EntityVal :int)  ; entity ID reference
+```
+
 Use `match` to inspect a value:
 
 ```turmeric
@@ -207,6 +251,13 @@ Use `match` to inspect a value:
   (LongVal n)   (println n)
   (StrVal s)    (println-cstr s)
   (EntityVal e) (println e))
+```
+
+```sweet-exp
+match some-value
+  (LongVal n)   println(n)
+  (StrVal s)    println-cstr(s)
+  (EntityVal e) println(e)
 ```
 
 Constructors:

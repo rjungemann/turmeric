@@ -54,6 +54,12 @@ The Turmeric wrappers for these structs are in `indexed.tur`:
 (defn eavt-idx-lookup  [idx entity attr] :ptr<void>  ...)
 ```
 
+```sweet-exp
+defn eavt-idx-new [] :ptr<void>  ...
+defn eavt-idx-insert! [idx entity attr datum] :nil  ...
+defn eavt-idx-lookup [idx entity attr] :ptr<void>  ...
+```
+
 ---
 
 ## 3. Hash Function
@@ -88,6 +94,18 @@ hash map.
   ```)
 ```
 
+```sweet-exp
+defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
+  ```c
+  struct eavt_idx *i = (struct eavt_idx *)idx;
+  size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
+  struct eavt_entry *e = malloc(sizeof(*e));
+  e->entity = entity; e->attr = attr; e->datum = datum;
+  e->next = i->buckets[h];
+  i->buckets[h] = e;
+  ```)
+```
+
 Prepending is O(1) and maintains insertion order within each chain.
 
 ---
@@ -99,6 +117,22 @@ entries that match `(entity, attr)` exactly:
 
 ```turmeric
 (defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
+  ```c
+  ...
+  size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
+  struct eavt_entry *e = i->buckets[h];
+  while (e != NULL) {
+    if (e->entity == entity && e->attr == attr) {
+      /* push e->datum into result rvec */
+    }
+    e = e->next;
+  }
+  return result;
+  ```)
+```
+
+```sweet-exp
+defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
   ```c
   ...
   size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
@@ -135,6 +169,12 @@ Three functions compose the indexed database:
 (defn idb-idx   [idb :int] :ptr<void> ...) ;; extract eavt idx pointer
 ```
 
+```sweet-exp
+defn idb-new [] :int  ...             ; allocate db + index
+defn idb-db [idb :int] :int  ...     ; extract raw db pointer
+defn idb-idx [idb :int] :ptr<void>  ... ; extract eavt idx pointer
+```
+
 `idb-assert!` calls `db-assert!` on the raw database and then inserts the new
 datum into the index:
 
@@ -149,11 +189,27 @@ datum into the index:
             tx))))))
 ```
 
+```sweet-exp
+defn idb-assert! [idb :int entity :int attr :int value :int] :int
+  let [db idb-db(idb)]
+    let [idx idb-idx(idb)]
+      let [tx db-assert!(db entity attr value)]
+        let [n db-count(db)]
+          let [datum db-ref(db {n - 1})]
+            eavt-idx-insert!(idx entity attr datum)
+            tx
+```
+
 `idb-q-ea` is the indexed fast path for entity+attribute queries:
 
 ```turmeric
 (defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
   (eavt-idx-lookup (idb-idx idb) entity (cstr->int attr)))
+```
+
+```sweet-exp
+defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
+  eavt-idx-lookup(idb-idx(idb) entity cstr->int(attr))
 ```
 
 ---
@@ -190,6 +246,21 @@ The `demo` in `indexed.tur` inserts three users and then does indexed lookups:
 ;; Entity 3 has no email -- should return empty result
 (let [results (idb-q-ea idb 3 ":user/email")]
   (println (rvec-len results)))  ;; => 0
+```
+
+```sweet-exp
+idb-assert!(idb 1 cstr->int(":user/name")  str-val("Alice"))
+idb-assert!(idb 1 cstr->int(":user/age")   long-val(30))
+idb-assert!(idb 1 cstr->int(":user/email") str-val("alice@example.com"))
+...
+
+; Indexed lookup: entity=1, attr=:user/name
+let [results idb-q-ea(idb 1 ":user/name")]
+  ...
+
+; Entity 3 has no email -- should return empty result
+let [results idb-q-ea(idb 3 ":user/email")]
+  println(rvec-len(results))  ; => 0
 ```
 
 Expected output:

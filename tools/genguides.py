@@ -82,17 +82,40 @@ SIDEBAR_TOGGLE_JS = '''\
 SYNTAX_TOGGLE_JS = '''\
   <script>
   (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
     document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
       toggle.addEventListener('click', function(e){
         if (!e.target.classList.contains('seg-btn')) return;
         var syntax = e.target.dataset.syntax;
-        var card = toggle.closest('.code-card');
-        toggle.querySelectorAll('.seg-btn').forEach(function(btn){
-          btn.classList.toggle('active', btn === e.target);
-        });
-        card.querySelectorAll('.code-version').forEach(function(v){
-          v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
-        });
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
       });
     });
   })();
@@ -211,14 +234,17 @@ def inject_syntax_toggles(body_html: str) -> str:
         return (
             '<div class="code-card code-toggle">'
             '<div class="code-card-bar">'
-            '<div class="code-syntax-toggle">'
-            '<button class="seg-btn active" data-syntax="turmeric">turmeric</button>'
-            '<button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>'
+            '<div class="code-syntax-toggle" role="tablist">'
+            '<button class="seg-btn active" data-syntax="turmeric"'
+            ' role="tab" aria-selected="true">turmeric</button>'
+            '<button class="seg-btn" data-syntax="sweet-exp"'
+            ' role="tab" aria-selected="false">sweet-exp</button>'
             '</div>'
             '</div>'
             '<div class="code-card-body">'
-            f'<div class="code-version turmeric-version">{tur_block}</div>'
-            f'<div class="code-version sweet-exp-version" style="display:none">{sweet_block}</div>'
+            f'<div class="code-version turmeric-version" role="tabpanel">{tur_block}</div>'
+            f'<div class="code-version sweet-exp-version" role="tabpanel"'
+            f' style="display:none">{sweet_block}</div>'
             '</div>'
             '</div>'
         )

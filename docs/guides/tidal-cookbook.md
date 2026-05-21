@@ -51,6 +51,25 @@ This cookbook provides practical examples and recipes for creating music with th
 (player-stop player)
 ```
 
+```sweet-exp
+import tidal tidal/synth scscm
+
+;; Connect to scsynth
+def session scscm-connect()
+
+;; Create a simple pattern
+def pattern cycle(220.0 440.0 880.0)
+
+;; Create a player
+def player make-player(session "sine" pattern 120.0)
+
+;; Start playing
+player-start(player)
+
+;; Stop playing
+player-stop(player)
+```
+
 ### Creating a Complete Track
 
 ```turmeric
@@ -72,6 +91,23 @@ This cookbook provides practical examples and recipes for creating music with th
 (player-start player)
 ```
 
+```sweet-exp
+def track
+  stack
+    ;; Bass
+    slow(4 note-pattern(cycle(36 40 43 48)))
+    ;; Melody
+    note-pattern(cycle(60 64 67 72))
+    ;; Drums
+    stack
+      kick([0.0 2.0])
+      snare([1.0 3.0])
+      hat([0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5])
+
+def player make-player(session "sine" track 120.0)
+player-start(player)
+```
+
 ---
 
 ## 2. Drum Patterns
@@ -85,6 +121,14 @@ This cookbook provides practical examples and recipes for creating music with th
   (hat [0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5])))
 ```
 
+```sweet-exp
+def basic-beat
+  stack
+    kick([0.0 2.0])
+    snare([1.0 3.0])
+    hat([0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5])
+```
+
 ### Rock Beat
 
 ```turmeric
@@ -93,6 +137,15 @@ This cookbook provides practical examples and recipes for creating music with th
   (kick [1.0 3.0] :vel 90)  ;; Ghost notes
   (snare [1.0 3.0] :vel 110)
   (hat [0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75 2.0 2.25 2.5 2.75 3.0 3.25 3.5 3.75] :vel 70)))
+```
+
+```sweet-exp
+def rock-beat
+  stack
+    kick([0.0 2.0] :vel 120)
+    kick([1.0 3.0] :vel 90)  ;; Ghost notes
+    snare([1.0 3.0] :vel 110)
+    hat([0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75 2.0 2.25 2.5 2.75 3.0 3.25 3.5 3.75] :vel 70)
 ```
 
 ### House Beat
@@ -105,6 +158,15 @@ This cookbook provides practical examples and recipes for creating music with th
   (cymbal [4.0 8.0 12.0 16.0] :vel 90)))
 ```
 
+```sweet-exp
+def house-beat
+  stack
+    kick([0.0 1.0 2.0 3.0] :vel 127)
+    snare([1.0 3.0] :vel 100)
+    hat([0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5] :vel 80)
+    cymbal([4.0 8.0 12.0 16.0] :vel 90)
+```
+
 ### Techno Beat
 
 ```turmeric
@@ -113,6 +175,15 @@ This cookbook provides practical examples and recipes for creating music with th
   (snare [1.0 3.0] :vel 100)
   (hat [0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75 2.0 2.25 2.5 2.75 3.0 3.25 3.5 3.75] :vel 60)
   (cymbal [0.0 4.0 8.0 12.0] :vel 80)))
+```
+
+```sweet-exp
+def techno-beat
+  stack
+    kick([0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5] :vel 120)
+    snare([1.0 3.0] :vel 100)
+    hat([0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75 2.0 2.25 2.5 2.75 3.0 3.25 3.5 3.75] :vel 60)
+    cymbal([0.0 4.0 8.0 12.0] :vel 80)
 ```
 
 ### Hip Hop Beat
@@ -124,6 +195,16 @@ This cookbook provides practical examples and recipes for creating music with th
   (snare [1.0 3.0] :vel 110)
   (hat [0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75] :vel 70)
   (hat [0.375 0.625 0.875 1.125 1.375 1.625 1.875] :vel 60)))
+```
+
+```sweet-exp
+def hiphop-beat
+  stack
+    kick([0.0 1.0] :vel 127)
+    kick([0.5 1.5] :vel 100)
+    snare([1.0 3.0] :vel 110)
+    hat([0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75] :vel 70)
+    hat([0.375 0.625 0.875 1.125 1.375 1.625 1.875] :vel 60)
 ```
 
 ### Using Euclidean Rhythms
@@ -139,6 +220,18 @@ def euclid-to-beats [euclid-pat]
   (filter some? (map (fn [i] (when (== (euclid-pat i) 1.0) i)) (range 0 (int (ceil (* 2 (len euclid-pat)))))))
 ```
 
+```sweet-exp
+def euclid-beat
+  stack
+    kick(euclid-to-beats(euclid(8 3)))
+    snare(euclid-to-beats(euclid(8 2)))
+    hat(euclid-to-beats(euclid(16 7)))
+
+;; Helper function
+def euclid-to-beats [euclid-pat]
+  filter(some? map(fn([i] when({euclid-pat(i) == 1.0} i)) range(0 int(ceil({2 * len(euclid-pat)})))))
+```
+
 ### Fills
 
 ```turmeric
@@ -151,6 +244,19 @@ def euclid-to-beats [euclid-pat]
     (kick [0.5 1.5 2.5 3.5] :vel 100)) 0)))
 ```
 
+```sweet-exp
+def beat-with-fill
+  stack
+    kick([0.0 2.0])
+    snare([1.0 3.0])
+    hat([0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5])
+    every(4
+      stack
+        snare([0.25 0.75 1.25 1.75 2.25 2.75 3.25 3.75] :vel 90)
+        kick([0.5 1.5 2.5 3.5] :vel 100)
+      0)
+```
+
 ---
 
 ## 3. Melodic Patterns
@@ -161,10 +267,18 @@ def euclid-to-beats [euclid-pat]
 (def melody (cycle 60 62 64 65 67 69 71 72))
 ```
 
+```sweet-exp
+def melody cycle(60 62 64 65 67 69 71 72)
+```
+
 ### Arpeggio
 
 ```turmeric
 (def arpeggio (arp-pattern (const [48 52 55 60]) 4.0))
+```
+
+```sweet-exp
+def arpeggio arp-pattern(const([48 52 55 60]) 4.0)
 ```
 
 ### Scale Patterns
@@ -186,6 +300,23 @@ def euclid-to-beats [euclid-pat]
 (def chromatic (cycle (range 0 12)))
 ```
 
+```sweet-exp
+;; C Major scale
+def c-major cycle(0 2 4 5 7 9 11 12)
+
+;; C Pentatonic scale
+def c-pentatonic cycle(0 2 4 7 9)
+
+;; C Minor scale
+def c-minor cycle(0 2 3 5 7 8 10 12)
+
+;; Whole tone scale
+def whole-tone cycle(0 2 4 6 8 10)
+
+;; Chromatic
+def chromatic cycle(range(0 12))
+```
+
 ### Chord Progressions
 
 ```turmeric
@@ -195,6 +326,16 @@ def euclid-to-beats [euclid-pat]
   (chord-pattern (const 53) (const 57) (const 60))   ;; F major
   (chord-pattern (const 55) (const 59) (const 62))   ;; G major
   (chord-pattern (const 48) (const 52) (const 55))))  ;; C major
+```
+
+```sweet-exp
+;; I - IV - V - I in C major
+def progression
+  seq
+    chord-pattern(const(48) const(52) const(55))   ;; C major
+    chord-pattern(const(53) const(57) const(60))   ;; F major
+    chord-pattern(const(55) const(59) const(62))   ;; G major
+    chord-pattern(const(48) const(52) const(55))   ;; C major
 ```
 
 ### Bass Lines
@@ -210,6 +351,17 @@ def euclid-to-beats [euclid-pat]
 (def octave-bass (cycle 36 48 40 52 43 55 48 60))
 ```
 
+```sweet-exp
+;; Simple bass line
+def bassline slow(4 cycle(36 40 43 48))
+
+;; Walking bass
+def walking-bass cycle(36 38 40 41 43 45 48 50)
+
+;; Octave jumping bass
+def octave-bass cycle(36 48 40 52 43 55 48 60)
+```
+
 ### Melodic Contour
 
 ```turmeric
@@ -220,6 +372,17 @@ def euclid-to-beats [euclid-pat]
 
 ;; Wave-like contour
 (def wave-melody (add (const 64) (sine 0.25 8.0)))
+```
+
+```sweet-exp
+;; Ascending then descending
+def mountain
+  seq
+    cycle(60 62 64 65 67 69 71 72)  ;; Up
+    cycle(72 71 69 67 65 64 62 60)  ;; Down
+
+;; Wave-like contour
+def wave-melody add(const(64) sine(0.25 8.0))
 ```
 
 ---
@@ -245,6 +408,26 @@ def euclid-to-beats [euclid-pat]
   (add (cycle 48 50 52) (const 12)))) ;; +12 semitones
 ```
 
+```sweet-exp
+;; Parallel fifths
+def fifths
+  stack
+    cycle(48 50 52)                    ;; Root
+    add(cycle(48 50 52) const(7))      ;; +7 semitones
+
+;; Parallel thirds
+def thirds
+  stack
+    cycle(48 50 52)                    ;; Root
+    add(cycle(48 50 52) const(4))      ;; +4 semitones
+
+;; Parallel octaves
+def octaves
+  stack
+    cycle(48 50 52)                    ;; Root
+    add(cycle(48 50 52) const(12))     ;; +12 semitones
+```
+
 ### Block Chords
 
 ```turmeric
@@ -268,6 +451,30 @@ def euclid-to-beats [euclid-pat]
   (add (cycle 48 50 52) (const 10)))) ;; Minor seventh
 ```
 
+```sweet-exp
+;; Major triad
+def major-chord
+  stack
+    cycle(48 50 52)                   ;; Root
+    add(cycle(48 50 52) const(4))     ;; Major third
+    add(cycle(48 50 52) const(7))     ;; Fifth
+
+;; Minor triad
+def minor-chord
+  stack
+    cycle(48 50 52)                   ;; Root
+    add(cycle(48 50 52) const(3))     ;; Minor third
+    add(cycle(48 50 52) const(7))     ;; Fifth
+
+;; Seventh chord
+def seventh-chord
+  stack
+    cycle(48 50 52)                   ;; Root
+    add(cycle(48 50 52) const(4))     ;; Major third
+    add(cycle(48 50 52) const(7))     ;; Fifth
+    add(cycle(48 50 52) const(10))    ;; Minor seventh
+```
+
 ### Broken Chords (Arpeggiated)
 
 ```turmeric
@@ -279,6 +486,17 @@ def euclid-to-beats [euclid-pat]
 
 ;; Broken seventh chord
 (def broken-seventh (arp-pattern (const [48 52 55 59]) 4.0))
+```
+
+```sweet-exp
+;; Broken chord with 8th notes
+def broken-chord arp-pattern(const([48 52 55]) 2.0)
+
+;; Broken chord with 16th notes
+def fast-broken arp-pattern(const([48 52 55 60]) 4.0)
+
+;; Broken seventh chord
+def broken-seventh arp-pattern(const([48 52 55 59]) 4.0)
 ```
 
 ### Inversions
@@ -295,6 +513,22 @@ def euclid-to-beats [euclid-pat]
   (add (cycle 48 50 52) (const -12))  ;; Root down octave
   (add (cycle 48 50 52) (const -7))   ;; Fifth down octave
   (add (cycle 48 50 52) (const 4))))  ;; Third
+```
+
+```sweet-exp
+;; First inversion (root in bass becomes third)
+def first-inversion
+  stack
+    add(cycle(48 50 52) const(-12))   ;; Root down octave
+    cycle(48 50 52)                    ;; Original root
+    add(cycle(48 50 52) const(4))     ;; Third
+
+;; Second inversion (third in bass becomes fifth)
+def second-inversion
+  stack
+    add(cycle(48 50 52) const(-12))   ;; Root down octave
+    add(cycle(48 50 52) const(-7))    ;; Fifth down octave
+    add(cycle(48 50 52) const(4))     ;; Third
 ```
 
 ---
@@ -317,6 +551,20 @@ def euclid-to-beats [euclid-pat]
 (def dotted (slow 0.6667 melody))
 ```
 
+```sweet-exp
+;; Slow down
+def half-speed slow(2 melody)
+
+;; Speed up
+def double-speed fast(2 melody)
+
+;; Triple time
+def triple-time fast(3 melody)
+
+;; Dotted rhythm (1.5x)
+def dotted slow(0.6667 melody)
+```
+
 ### Time Shifting
 
 ```turmeric
@@ -332,6 +580,20 @@ def euclid-to-beats [euclid-pat]
   (fast 0.9 (cycle 61 63 65))))  ;; Odd notes slightly anticipated
 ```
 
+```sweet-exp
+;; Delay
+def delayed shift(0.5 melody)
+
+;; Anticipation (negative shift)
+def anticipated shift(-0.25 melody)
+
+;; Swing feel
+def swing
+  stack
+    slow(1.1 cycle(60 62 64))    ;; Even notes slightly delayed
+    fast(0.9 cycle(61 63 65))    ;; Odd notes slightly anticipated
+```
+
 ### Repetition
 
 ```turmeric
@@ -345,6 +607,17 @@ def euclid-to-beats [euclid-pat]
 (def tremolo (repeat 8 (cycle 60)))
 ```
 
+```sweet-exp
+;; Double notes
+def double-notes repeat(2 cycle(60 62 64))
+
+;; Triple notes
+def triple-notes repeat(3 cycle(60 62))
+
+;; Tremolo effect
+def tremolo repeat(8 cycle(60))
+```
+
 ### Grouping
 
 ```turmeric
@@ -353,6 +626,14 @@ def euclid-to-beats [euclid-pat]
 
 ;; Group of 5
 (def quintuplet-group (slow 0.4 (cycle 60 62 64 65 67)))
+```
+
+```sweet-exp
+;; Group of 3 (triplet feel in 4/4)
+def triplet-group slow(0.75 cycle(60 62 64))
+
+;; Group of 5
+def quintuplet-group slow(0.4 cycle(60 62 64 65 67))
 ```
 
 ---
@@ -372,12 +653,29 @@ def euclid-to-beats [euclid-pat]
 (def random-melody (add (cycle 60 62 64) (jitter (const 0) 1.0 -1.0)))
 ```
 
+```sweet-exp
+;; Random pitch
+def random-pitch jitter(cycle(60 62 64) 2.0 60.0)
+
+;; Random velocity
+def random-vel jitter(const(100) 20.0 100.0)
+
+;; Random melody
+def random-melody add(cycle(60 62 64) jitter(const(0) 1.0 -1.0))
+```
+
 ### Random Walk
 
 ```turmeric
 (def random-walk-melody 
   (let [start 60]
     (add (const start) (range (cycle 0 1 2 3 4) -10 10))))
+```
+
+```sweet-exp
+def random-walk-melody
+  let [start 60]
+    add(const(start) range(cycle(0 1 2 3 4) -10 10))
 ```
 
 ### Stochastic Patterns
@@ -397,12 +695,34 @@ def euclid-to-beats [euclid-pat]
   (const 72)))
 ```
 
+```sweet-exp
+;; 50% chance of playing
+def fifty-chance when(cycle(true false) melody 0)
+
+;; 25% chance
+def twentyfive-chance when(cycle(true false false false) melody 0)
+
+;; Random selection
+def random-notes
+  rand-select
+    const(60)
+    const(64)
+    const(67)
+    const(72)
+```
+
 ### Markov Chains
 
 ```turmeric
 (def markov-melody 
   (let [base (cycle 60 62 64 67)]
     (add base (jitter (const 0) 1.0 -1.0))))
+```
+
+```sweet-exp
+def markov-melody
+  let [base cycle(60 62 64 67)]
+    add(base jitter(const(0) 1.0 -1.0))
 ```
 
 ### Euclidean Patterns
@@ -418,6 +738,17 @@ def euclid-to-beats [euclid-pat]
 (def euclid-offset (euclid 8 3 1))
 ```
 
+```sweet-exp
+;; 5 hits in 8 steps
+def euclid-5-8 euclid(8 5)
+
+;; 7 hits in 16 steps
+def euclid-7-16 euclid(16 7)
+
+;; With offset
+def euclid-offset euclid(8 3 1)
+```
+
 ### L-Systems
 
 ```turmeric
@@ -425,6 +756,13 @@ def euclid-to-beats [euclid-pat]
 (def l-system-melody 
   (let [rules {"a" ["a" "b"] "b" ["a"]}]
     (cycle 60 62 64 65 67 69)))
+```
+
+```sweet-exp
+;; Simple L-system inspired pattern
+def l-system-melody
+  let [rules {"a" ["a" "b"] "b" ["a"]}]
+    cycle(60 62 64 65 67 69)
 ```
 
 ### Mathematical Sequences
@@ -441,6 +779,18 @@ def euclid-to-beats [euclid-pat]
     (cycle (map (fn [p] (+ 60 (mod p 12))) primes))))
 ```
 
+```sweet-exp
+;; Fibonacci melody
+def fibonacci-melody
+  let [fib [0 1 1 2 3 5 8 13 21]]
+    cycle(map(fn([n] {60 + mod(n 24)}) fib))
+
+;; Prime number melody
+def prime-melody
+  let [primes [2 3 5 7 11 13 17 19 23]]
+    cycle(map(fn([p] {60 + mod(p 12)}) primes))
+```
+
 ---
 
 ## 7. Polyrhythm
@@ -454,6 +804,14 @@ def euclid-to-beats [euclid-pat]
   (polymeter 1.5 (cycle 67 69 71))))
 ```
 
+```sweet-exp
+;; 2 against 3
+def two-vs-three
+  stack
+    polymeter(1.0 cycle(60 62 64))
+    polymeter(1.5 cycle(67 69 71))
+```
+
 ### Multiple Polyrhythms
 
 ```turmeric
@@ -462,6 +820,15 @@ def euclid-to-beats [euclid-pat]
   (polymeter 1.0 (cycle 60 62))
   (polymeter 1.5 (cycle 67 69))
   (polymeter 2.0 (cycle 72 74))))
+```
+
+```sweet-exp
+;; 2 against 3 against 4
+def poly-complex
+  stack
+    polymeter(1.0 cycle(60 62))
+    polymeter(1.5 cycle(67 69))
+    polymeter(2.0 cycle(72 74))
 ```
 
 ### Canon
@@ -474,11 +841,24 @@ def euclid-to-beats [euclid-pat]
 (def three-voice-canon (canon (cycle 60 64 67) 3 1.0))
 ```
 
+```sweet-exp
+;; 4 voice canon
+def four-voice-canon canon(cycle(60 62 64 65 67) 4 0.5)
+
+;; 3 voice canon with different intervals
+def three-voice-canon canon(cycle(60 64 67) 3 1.0)
+```
+
 ### Spread
 
 ```turmeric
 ;; Spread chord across stereo field
 (def spread-chord (spread (chord-pattern (const 60) (const 64) (const 67)) 5 2.0))
+```
+
+```sweet-exp
+;; Spread chord across stereo field
+def spread-chord spread(chord-pattern(const(60) const(64) const(67)) 5 2.0)
 ```
 
 ### Time Signature Changes
@@ -496,12 +876,31 @@ def euclid-to-beats [euclid-pat]
 ])))
 ```
 
+```sweet-exp
+;; 4/4 then 3/4
+def changing-meter timesig(cycle(60 62 64) [(4.0 4) (3.0 4)])
+
+;; Multiple time signatures
+def complex-meter
+  timesig(cycle(60 62 64 65)
+    [(4.0 4)   ;; 4 beats in 4/4
+     (3.0 4)   ;; 3 beats in 3/4
+     (5.0 4)   ;; 5 beats in 5/4
+     (7.0 8)]) ;; 7 beats in 7/8
+```
+
 ### Nested Patterns
 
 ```turmeric
 ;; Pattern of patterns
 (def nested-melody 
   (nest (cycle (const 60) (const 64) (const 67)) 2.0))
+```
+
+```sweet-exp
+;; Pattern of patterns
+def nested-melody
+  nest(cycle(const(60) const(64) const(67)) 2.0)
 ```
 
 ---
@@ -521,6 +920,17 @@ def euclid-to-beats [euclid-pat]
 (def filter-mod (saw 0.5 1000.0 20000.0))
 ```
 
+```sweet-exp
+;; Sine wave vibrato
+def vibrato sine(2.0 0.1)
+
+;; Square wave tremolo
+def tremolo square(4.0 0.5)
+
+;; Sawtooth wave filter modulation
+def filter-mod saw(0.5 1000.0 20000.0)
+```
+
 ### Combined Effects
 
 ```turmeric
@@ -528,6 +938,14 @@ def euclid-to-beats [euclid-pat]
 (def modulated (stack 
   (add (const 64) (sine 2.0 0.1))
   (mul (const 0.5) (square 4.0 0.5))))
+```
+
+```sweet-exp
+;; Vibrato + tremolo
+def modulated
+  stack
+    add(const(64) sine(2.0 0.1))
+    mul(const(0.5) square(4.0 0.5))
 ```
 
 ### Envelope Shaping
@@ -538,6 +956,14 @@ def euclid-to-beats [euclid-pat]
 
 ;; ADSR for plucks
 (def pluck-envelope (adsr 0.001 0.1 0.3 0.5 (const true)))
+```
+
+```sweet-exp
+;; Fast attack, slow release
+def pad-envelope ar(0.001 1.0 const(true))
+
+;; ADSR for plucks
+def pluck-envelope adsr(0.001 0.1 0.3 0.5 const(true))
 ```
 
 ### Dynamic Range
@@ -551,6 +977,17 @@ def euclid-to-beats [euclid-pat]
 
 ;; Swell
 (def swell (range (phase 2.0) 0.0 1.0 0.0 0.5))
+```
+
+```sweet-exp
+;; Crescendo
+def crescendo range(phase(4.0) 0.0 1.0 0.1 1.0)
+
+;; Diminuendo
+def diminuendo range(phase(4.0) 0.0 1.0 1.0 0.1)
+
+;; Swell
+def swell range(phase(2.0) 0.0 1.0 0.0 0.5)
 ```
 
 ---
@@ -570,6 +1007,17 @@ def euclid-to-beats [euclid-pat]
 (player-update player (slow 2 (cycle 220.0 440.0 880.0)))
 ```
 
+```sweet-exp
+def session make-live-session(120.0)
+def player make-player(session "sine" const(440.0) 120.0)
+
+;; Update pattern live
+player-update(player cycle(220.0 440.0 880.0))
+
+;; Update to transformed pattern
+player-update(player slow(2 cycle(220.0 440.0 880.0)))
+```
+
 ### d1 and hush
 
 ```turmeric
@@ -582,6 +1030,19 @@ def euclid-to-beats [euclid-pat]
 
 ;; Silence all (hush)
 (def hush (swap-patterns player (const 0)))
+```
+
+```sweet-exp
+;; Set default pattern (d1)
+def d1-pattern
+  stack
+    cycle(220.0 440.0)
+    kick([0.0 2.0])
+
+def d1 swap-patterns(player d1-pattern)
+
+;; Silence all (hush)
+def hush swap-patterns(player const(0))
 ```
 
 ### Pattern Swapping
@@ -600,6 +1061,19 @@ def euclid-to-beats [euclid-pat]
 (swap-patterns player (get patterns :melody))
 ```
 
+```sweet-exp
+def patterns
+  { :bass slow(4 cycle(36 40 43 48))
+    :melody cycle(60 64 67 72)
+    :drums stack(kick([0.0 2.0]) snare([1.0 3.0])) }
+
+;; Swap to bass
+swap-patterns(player get(patterns :bass))
+
+;; Swap to melody
+swap-patterns(player get(patterns :melody))
+```
+
 ### Mini-Notation Live
 
 ```turmeric
@@ -611,6 +1085,17 @@ def euclid-to-beats [euclid-pat]
 
 ;; Drum notation
 (player-update player (d "bd sd hh cp"))
+```
+
+```sweet-exp
+;; Use mini-notation for quick pattern entry
+player-update(player s("1 2 3 4"))
+
+;; With operators
+player-update(player s("1*2 3*0.5"))
+
+;; Drum notation
+player-update(player d("bd sd hh cp"))
 ```
 
 ### Stateful Patterns
@@ -629,6 +1114,21 @@ def euclid-to-beats [euclid-pat]
   (player-update player (add (const 60) new-pat)))
 ```
 
+```sweet-exp
+;; Counter
+def counter counter-pattern(10)
+
+;; LFO with accumulating phase
+def lfo
+  make-stateful-pattern(0.0
+    fn([phase time]
+      [{phase + 0.01} const({10.0 * math/sin(phase)})]))
+
+;; Use in live coding
+let [[new-state new-pat] step-stateful(counter 0.0)]
+  player-update(player add(const(60) new-pat))
+```
+
 ---
 
 ## 10. Performance Tips
@@ -640,6 +1140,11 @@ def euclid-to-beats [euclid-pat]
 (def cached-melody (cached (complex-generative-pattern) 1024))
 ```
 
+```sweet-exp
+;; Cache expensive patterns
+def cached-melody cached(complex-generative-pattern() 1024)
+```
+
 ### Pattern Inlining
 
 ```turmeric
@@ -647,11 +1152,21 @@ def euclid-to-beats [euclid-pat]
 (def inlined (inline-pattern (slow 2 (cycle 1 2))))
 ```
 
+```sweet-exp
+;; Inline simple patterns
+def inlined inline-pattern(slow(2 cycle(1 2)))
+```
+
 ### Pattern Fusion
 
 ```turmeric
 ;; Fuse consecutive operations
 (def fused (fuse-pattern (slow 2 (fast 2 (cycle 1 2)))))
+```
+
+```sweet-exp
+;; Fuse consecutive operations
+def fused fuse-pattern(slow(2 fast(2 cycle(1 2))))
 ```
 
 ### Avoid Unnecessary Computations
@@ -662,6 +1177,14 @@ def euclid-to-beats [euclid-pat]
 
 ;; Use simple patterns when possible
 (def simple (const 440.0))  ;; Faster than (cycle 440.0)
+```
+
+```sweet-exp
+;; Pre-compute values
+def precomputed const(map(fn([x] {x * 2}) range(100)))
+
+;; Use simple patterns when possible
+def simple const(440.0)  ;; Faster than (cycle 440.0)
 ```
 
 ---

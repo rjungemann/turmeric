@@ -25,6 +25,15 @@ The canonical idiom for a page in a multi-step flow:
     (perform HttpEffect (send-html html))))
 ```
 
+```sweet-exp
+defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
+  serial-shift [k]
+    def token  store-continuation(k)
+    def action str("/submit?k=" token)
+    def html   render-fn(action)
+    perform HttpEffect send-html(html)
+```
+
 **Parameters:**
 - `render-fn` -- a function that takes the form `action` URL and returns an HTML string
 
@@ -52,6 +61,14 @@ The continuation store (`conts.tur`) must satisfy:
 (load-continuation token) : (Option (serial-continuation cstr))
 ```
 
+```sweet-exp
+;; Store k and return a token that can be used to resume it.
+store-continuation(k)  : cstr
+
+;; Look up k by token. Returns None if missing or expired.
+load-continuation(token) : (Option (serial-continuation cstr))
+```
+
 ### Token Format
 
 Tokens are 64 hex characters (256 bits of randomness). When HMAC signing is enabled (see [web-continuations-tutorial.md](web-continuations-tutorial.md) Step 9), tokens have the form `<64-hex-chars>.<64-hex-chars>` (raw token + HMAC-SHA256 signature).
@@ -75,6 +92,14 @@ The tutorial implementation does not evict tokens automatically. For a productio
   (Vec.for-each dir-entries (fn [entry]
     (when (> (- (unix-now) (file-mtime entry)) CONT-TTL-SECONDS)
       (file-delete entry)))))
+```
+
+```sweet-exp
+defn evict-expired-conts [] : unit
+  def dir-entries dir-list("data/conts/")
+  Vec.for-each dir-entries fn [entry]
+    when {(- unix-now() file-mtime(entry)) > CONT-TTL-SECONDS}
+      file-delete(entry)
 ```
 
 Alternatively use the `StoredCont` struct (tutorial Step 9) to embed the creation timestamp inside the file itself, making expiry checks independent of filesystem mtime.
@@ -104,6 +129,25 @@ Any value captured inside a `serial-reset` boundary must implement `Serializable
                 :field-c (cstr->int64 (Vec.get parts 2))))))))
 ```
 
+```sweet-exp
+;; Pattern: serialize as a Vec cstr (one field per element).
+definstance Serializable MyStruct
+  serialize [s]
+    serialize(Vec.of([s.field-a
+                      s.field-b
+                      int64->cstr(s.field-c)]))
+  deserialize [b]
+    match deserialize(b) : (Result (Vec cstr) cstr)
+      (Err msg) -> Err(msg)
+      (Ok parts) ->
+        if {Vec.len(parts) < 3}
+          Err("MyStruct: not enough fields")
+          Ok(MyStruct
+              :field-a Vec.get(parts 0)
+              :field-b Vec.get(parts 1)
+              :field-c cstr->int64(Vec.get(parts 2)))
+```
+
 **Rules:**
 - All fields must themselves implement `Serializable`
 - Resource types (file handles, sockets) cannot be captured -- restructure to move them outside the `serial-reset` boundary
@@ -123,6 +167,17 @@ POST /submit?k=TOKEN
   -> serial-resume k req.body
   -> flow resumes where send-form-and-wait was called
   -> eventually calls perform HttpEffect (send-html ...)
+  -> HTTP response sent
+```
+
+```sweet-exp
+POST /submit?k=TOKEN
+  -> parse TOKEN from query string
+  -> verify HMAC signature (if signing enabled)
+  -> load continuation from store -> k
+  -> serial-resume(k req.body)
+  -> flow resumes where send-form-and-wait was called
+  -> eventually calls perform HttpEffect send-html(...)
   -> HTTP response sent
 ```
 
@@ -158,6 +213,21 @@ A helper function that calls `send-form-and-wait` internally can be called from 
     (def address (collect-address))
     (def card    (collect-payment))
     (finalize-order name address card)))
+```
+
+```sweet-exp
+;; Sub-flow: collect a name and return it.
+defn collect-name [] : cstr
+  def body send-form-and-wait(fn [a] render-name-form(a))
+  or(parse-form-field(body "name") "Anonymous")
+
+;; Main flow: call sub-flows in sequence.
+defn checkout-flow [req : HttpRequest] : unit
+  serial-reset
+    def name    collect-name()
+    def address collect-address()
+    def card    collect-payment()
+    finalize-order(name address card)
 ```
 
 Each helper is just a function -- `serial-shift` works correctly across call boundaries because the entire continuation stack within the `serial-reset` region is serialized.

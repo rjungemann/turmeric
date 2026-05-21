@@ -18,6 +18,10 @@ typeclasses, ownership, and the effects system.
 (defstruct Name [field1 :type1 field2 :type2 ...])
 ```
 
+```sweet-exp
+defstruct Name [field1 :type1 field2 :type2 ...]
+```
+
 Fields are listed as alternating name/type pairs inside the vector literal.
 All field names must be distinct.
 
@@ -25,6 +29,12 @@ All field names must be distinct.
 (defstruct Point [x :int y :int])
 (defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8])
 (defstruct Vec2  [x :float32 y :float32])
+```
+
+```sweet-exp
+defstruct Point [x :int y :int]
+defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8]
+defstruct Vec2  [x :float32 y :float32]
 ```
 
 A `defstruct` at file scope registers the type immediately so that later
@@ -49,10 +59,20 @@ Every struct has a **copy kind** that governs how the value can be used:
 (defstruct Socket  :linear [fd :int])             ; must be consumed exactly once
 ```
 
+```sweet-exp
+defstruct Point   :copy   [x :int y :int]      ; freely copyable
+defstruct Packet  :move   [ptr :ptr<void>]      ; ownership transferred on use
+defstruct Socket  :linear [fd :int]             ; must be consumed exactly once
+```
+
 Omitting the annotation is the same as `:move`:
 
 ```turmeric
 (defstruct Pair [first :int second :int])   ; move-only by default
+```
+
+```sweet-exp
+defstruct Pair [first :int second :int]   ; move-only by default
 ```
 
 The compiler enforces that a `:copy` struct's fields are all themselves
@@ -96,11 +116,25 @@ in the order they appear in `defstruct`.
   ...)
 ```
 
+```sweet-exp
+defstruct Point :copy [x :int y :int]
+
+let [p make-struct(Point 3 4)]
+  ...
+```
+
 ```turmeric
 (defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8])
 
 (let [px (make-struct Pixel 255u8 128u8 64u8 255u8)]
   ...)
+```
+
+```sweet-exp
+defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8]
+
+let [px make-struct(Pixel 255u8 128u8 64u8 255u8)]
+  ...
 ```
 
 The argument count must exactly match the field count; a mismatch is a
@@ -120,12 +154,25 @@ Use `.fieldname` to read a field from a struct value:
   (println (.y p)))   ; 4
 ```
 
+```sweet-exp
+defstruct Point :copy [x :int y :int]
+
+let [p make-struct(Point 3 4)]
+  println(.x(p))    ; 3
+  println(.y(p))    ; 4
+```
+
 The `.fieldname` form is also valid for arithmetic:
 
 ```turmeric
 (defn distance-sq [p] :int
   (+ (* (.x p) (.x p))
      (* (.y p) (.y p))))
+```
+
+```sweet-exp
+defn distance-sq [p] :int
+  {{.x(p) * .x(p)} + {.y(p) * .y(p)}}
 ```
 
 ---
@@ -141,6 +188,14 @@ moving the struct:
 (let [p (make-struct Point 3 4)]
   (let [rx &(.x p)]
     (println @rx)))   ; prints 3
+```
+
+```sweet-exp
+defstruct Point :copy [x :int y :int]
+
+let [p make-struct(Point 3 4)]
+  let [rx &(.x p)]
+    println(@rx)   ; prints 3
 ```
 
 ---
@@ -167,6 +222,21 @@ moved. A second extraction from the same binding is a use-after-move error
       (println (deref x)))))
 ```
 
+```sweet-exp
+defstruct PtrBox :move [ptr :lref<int>]
+
+;; OK: single extraction
+let [b make-struct(PtrBox lref/new(42))]
+  println(deref(.ptr(b)))
+
+;; ERROR TUR-E0005: second extraction of a moved struct
+defstruct Box :move [val :lref<int>]
+let [b make-struct(Box lref/new(42))]
+  let [x .val(b)]
+    let [y .val(b)]   ; use-after-move
+      println(deref(x))
+```
+
 ---
 
 ## Reference-counted structs
@@ -182,6 +252,14 @@ wrapper manages drop glue automatically when the count reaches zero.
     (println (rc/strong-count w))))
 ```
 
+```sweet-exp
+defstruct Wrapper :move [val :rc<int>]
+
+let [inner rc/of(10)]
+  let [w rc/of(make-struct(Wrapper inner))]
+    println(rc/strong-count(w))
+```
+
 If the struct itself contains `:rc<T>` fields, the compiler generates nested
 drop glue to decrement those inner counts:
 
@@ -191,6 +269,14 @@ drop glue to decrement those inner counts:
 (let [inner (rc/of 42)
       outer (rc/of (make-struct Node inner))]
   (println (rc/strong-count outer)))
+```
+
+```sweet-exp
+defstruct Node :move [val :rc<int>]
+
+let [inner rc/of(42)
+     outer rc/of(make-struct(Node inner))]
+  println(rc/strong-count(outer))
 ```
 
 ---
@@ -216,11 +302,29 @@ notation.
     ```))
 ```
 
+```sweet-exp
+defstruct Pair [first :int second :int]
+
+definstance Clone [Pair]
+  clone [x] :int
+    ```c
+    struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pair));
+    dst->first = x.first;
+    dst->second = x.second;
+    return (int64_t)(intptr_t)dst;
+    ```
+```
+
 ### `Eq`
 
 ```turmeric
 (definstance Eq [Pair]
   (eq? [x y] (pair-eq? x y (fn [a b] (= a b)))))
+```
+
+```sweet-exp
+definstance Eq [Pair]
+  eq? [x y] pair-eq?(x y fn([a b] {a = b}))
 ```
 
 ### `Show`
@@ -244,12 +348,37 @@ notation.
   (println (.show p)))   ; Point { x = 3, y = 4 }
 ```
 
+```sweet-exp
+defstruct Point :copy [x :int y :int]
+
+definstance Show [Point]
+  show [__p] :cstr
+    ```c
+    int nx = snprintf(NULL, 0, "%lld", (long long)__p.x);
+    int ny = snprintf(NULL, 0, "%lld", (long long)__p.y);
+    size_t len = 13 + (size_t)nx + 6 + (size_t)ny + 3 + 1;
+    char *buf = (char *)malloc(len);
+    snprintf(buf, len, "Point { x = %lld, y = %lld }",
+             (long long)__p.x, (long long)__p.y);
+    return (const char *)(intptr_t)buf;
+    ```
+
+let [p make-struct(Point 3 4)]
+  println(.show(p))   ; Point { x = 3, y = 4 }
+```
+
 ### `Bifunctor`
 
 ```turmeric
 (definstance Bifunctor [Pair]
   (bimap [container fn-left fn-right]
     (__bifunctor_pair_bimap container fn-left fn-right)))
+```
+
+```sweet-exp
+definstance Bifunctor [Pair]
+  bimap [container fn-left fn-right]
+    __bifunctor_pair_bimap(container fn-left fn-right)
 ```
 
 ---
@@ -272,6 +401,22 @@ propagates that effect row to the enclosing function.
       (Emit [s] k) (do (println s) (resume k nil)))))
 ```
 
+```sweet-exp
+defeffect Emit [s :cstr] :nil
+
+defstruct Emitter :copy [run :fn #{Emit}]
+
+defn main [] :int
+  let [em make-struct(Emitter fn([s] perform(Emit(s))))]
+    handle
+      do
+        .run(em "hello")
+        0
+      (Emit [s] k) do
+        println(s)
+        resume(k nil)
+```
+
 ---
 
 ## Cross-module structs
@@ -288,6 +433,16 @@ were locally defined.
     (let [p (make-struct Point 3 4)]
       (println (+ (.x p) (.y p)))
       0)))
+```
+
+```sweet-exp
+;; geom module defines Point
+defmodule app
+  import geom :refer [Point]
+  defn main [] :int
+    let [p make-struct(Point 3 4)]
+      println({.x(p) + .y(p)})
+      0
 ```
 
 ---
@@ -308,6 +463,20 @@ Follow the `;;;` convention immediately above the `defstruct` form:
 ;;;
 ;;; Since: Phase B1
 (defstruct Point :copy [x :int y :int])
+```
+
+```sweet-exp
+;;; Point -- a 2D integer coordinate.
+;;;
+;;; Parameters:
+;;;   x -- horizontal position
+;;;   y -- vertical position
+;;;
+;;; Example:
+;;;   make-struct(Point 3 4)  ; => Point with x=3, y=4
+;;;
+;;; Since: Phase B1
+defstruct Point :copy [x :int y :int]
 ```
 
 See the [docstring standard in CLAUDE.md](../../CLAUDE.md) for the full

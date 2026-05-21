@@ -15,9 +15,15 @@ A **rank-1 type** is a normal monomorphic function type: `(-> int int)`.
 A **rank-2 type** introduces a `forall` *inside* a function argument. The classic example is `(forall [a] (-> a a))` — a function that works for any type `a`. When you pass such a function as an argument, the *callee* gets to choose `a` for each use, not the caller.
 
 ```turmeric
-; apply-poly works for any type — the callee instantiates `a`
+; apply-poly works for any type -- the callee instantiates `a`
 (defn apply-poly [f (forall [a] (-> a a)) x :int] :int
   (f x))
+```
+
+```sweet-exp
+; apply-poly works for any type -- the callee instantiates `a`
+defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+  f(x)
 ```
 
 Without rank-2 types, you'd need to pick a concrete type for `f` at the call site, losing the generality.
@@ -42,6 +48,11 @@ Annotate a parameter with a `forall` type by placing the type form immediately a
   (f x))
 ```
 
+```sweet-exp
+defn my-fn [f (forall [a] (-> a a)) x :int] :int
+  f(x)
+```
+
 The `forall` type must appear as a parenthesized form `(forall [...] ...)` directly following the parameter symbol.
 
 ### Multiple type variables
@@ -49,6 +60,11 @@ The `forall` type must appear as a parenthesized form `(forall [...] ...)` direc
 ```turmeric
 (defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
   (f x y))
+```
+
+```sweet-exp
+defn swap-apply [f (forall [a b] (-> a b a)) x :int y :int] :int
+  f(x y)
 ```
 
 ### Existential types
@@ -61,6 +77,14 @@ Use `exists` to hide a type implementation:
 
 (defn use-counter [c (exists [s] s)] :int
   (open c as [s v] v))
+```
+
+```sweet-exp
+defn make-counter [] (exists [s] s)
+  pack(int 0)
+
+defn use-counter [c (exists [s] s)] :int
+  open(c as [s v] v)
 ```
 
 See `docs/higher-ranked-types-plan.md` for the full existential type spec.
@@ -81,6 +105,17 @@ Apply a single function uniformly over data, without fixing its type:
 (apply-to-both inc 3 7)  ; => 12
 ```
 
+```sweet-exp
+defn apply-to-both [f (forall [a] (-> a a)) x :int y :int] :int
+  {f(x) + f(y)}
+
+defn inc [x :int] :int
+  {x + 1}
+
+; At the call site, `inc` is wrapped automatically
+apply-to-both(inc 3 7)  ; => 12
+```
+
 ### Pattern 2: Church-numeral iteration
 
 Apply a polymorphic function n times — the essence of Church numerals:
@@ -93,6 +128,16 @@ Apply a polymorphic function n times — the essence of Church numerals:
 
 (church-apply inc 5 0)       ; => 5
 (church-apply double-it 3 1) ; => 8
+```
+
+```sweet-exp
+defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
+  if {n <= 0}
+    x
+    church-apply(f {n - 1} f(x))
+
+church-apply(inc 5 0)       ; => 5
+church-apply(double-it 3 1) ; => 8
 ```
 
 This works because HRT5 correctly propagates the poly fn type through recursive calls.
@@ -108,6 +153,13 @@ Thread a value through a sequence of polymorphic transforms:
 (pipe2 inc double-it 3)  ; => (3+1)*2 = 8
 ```
 
+```sweet-exp
+defn pipe2 [f (forall [a] (-> a a)) g (forall [a] (-> a a)) x :int] :int
+  g(f(x))
+
+pipe2(inc double-it 3)  ; => (3+1)*2 = 8
+```
+
 ### Pattern 4: Let-binding of poly fn aliases
 
 You can bind a poly fn to a local name and use it multiple times:
@@ -119,6 +171,15 @@ You can bind a poly fn to a local name and use it multiple times:
 (defn use-poly-id [] :int
   (let [f id]  ; f is a poly fn alias for id
     (+ (apply-poly f 10) (apply-poly f 20))))
+```
+
+```sweet-exp
+defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+  f(x)
+
+defn use-poly-id [] :int
+  let [f id]  ; f is a poly fn alias for id
+    {apply-poly(f 10) + apply-poly(f 20)}
 ```
 
 The `source_binding` mechanism tracks `f` back to `id` so the correct wrapper is generated.
@@ -133,6 +194,14 @@ Pass a received poly fn parameter to another function expecting a poly fn:
 
 (defn apply-twice [f (forall [a] (-> a a)) x :int] :int
   (apply-once f (apply-once f x)))  ; f forwarded directly
+```
+
+```sweet-exp
+defn apply-once [f (forall [a] (-> a a)) x :int] :int
+  f(x)
+
+defn apply-twice [f (forall [a] (-> a a)) x :int] :int
+  apply-once(f apply-once(f x))  ; f forwarded directly
 ```
 
 No wrapper is created when forwarding — the existing `tur_poly_fn_t` is passed through.
@@ -152,6 +221,17 @@ Define typeclass methods that accept polymorphic function arguments:
 (.transform inc 5)  ; => 6
 ```
 
+```sweet-exp
+defclass Transform []
+  transform([[f (forall [a] (-> a a))] x] :int)
+
+definstance Transform []
+  transform([f x] f(x))
+
+; Call with any function
+.transform(inc 5)  ; => 6
+```
+
 ### Pattern 7: Rank-3 types
 
 A function whose parameter is itself rank-2 — it accepts a "polymorphic function handler":
@@ -159,6 +239,11 @@ A function whose parameter is itself rank-2 — it accepts a "polymorphic functi
 ```turmeric
 (defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] :int
   (h id))
+```
+
+```sweet-exp
+defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] :int
+  h(id)
 ```
 
 Rank-3 arguments are passed by pointer internally (compound literal protocol).
@@ -179,6 +264,11 @@ wrapper. Use direct function calls or closure capture instead.
 (apply-poly 5 42)  ; => error: arg 1: expected ptr<void>, got int
 ```
 
+```sweet-exp
+; ERROR: 5 is not a function
+apply-poly(5 42)  ; => error: arg 1: expected ptr<void>, got int
+```
+
 ### No rank-2 inference at call sites
 
 You must annotate rank-2 parameters explicitly in `defn`. The compiler does not infer rank-N types from usage:
@@ -190,6 +280,15 @@ You must annotate rank-2 parameters explicitly in `defn`. The compiler does not 
 ; With annotation, it's a proper rank-2 function
 (defn apply [f (forall [a] (-> a a)) x :int] :int  ; rank-2
   (f x))
+```
+
+```sweet-exp
+; Without annotation, this is just (-> ptr<void> int int), not a rank-2 fn
+defn apply [f x]  ; NOT rank-2
+
+; With annotation, it's a proper rank-2 function
+defn apply [f (forall [a] (-> a a)) x :int] :int  ; rank-2
+  f(x)
 ```
 
 ### Closures cannot be rank-2 arguments directly

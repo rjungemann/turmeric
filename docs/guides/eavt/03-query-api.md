@@ -31,6 +31,20 @@ no way to compare Values. `query.tur` adds `value-eq?`:
     (EntityVal x) (match b (EntityVal y) (= x y)        _ false)))
 ```
 
+```sweet-exp
+defn value-eq? [a :int b :int] :bool
+  match a
+    (LongVal x)   match b
+                    (LongVal y)   {x = y}
+                    _ false
+    (StrVal x)    match b
+                    (StrVal y)    cstr-eq?(x y)
+                    _ false
+    (EntityVal x) match b
+                    (EntityVal y) {x = y}
+                    _ false
+```
+
 The outer `match` dispatches on `a`'s constructor; the inner `match` checks that
 `b` has the same constructor and then compares the payload.
 
@@ -50,10 +64,21 @@ A wildcard arm `_ false` handles mismatched constructors (e.g. comparing a
          (value-eq? (datum-value d) v))))
 ```
 
+```sweet-exp
+defn q-av [a :cstr v :int]
+  fn([d]
+    and(cstr-eq?(datum-attr(d) cstr->int(a))
+        value-eq?(datum-value(d) v)))
+```
+
 Usage -- find the entity with age 31:
 
 ```turmeric
 (db-q db (q-av ":user/age" (long-val 31)))
+```
+
+```sweet-exp
+db-q(db q-av(":user/age" long-val(31)))
 ```
 
 This returns all datums where `attr = :user/age` AND `value = LongVal(31)`.
@@ -70,6 +95,11 @@ before a given transaction number:
   (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))
 ```
 
+```sweet-exp
+defn db-as-of [db :int as-of-tx :int] :ptr<void>
+  db-q(db fn([d] {datum-tx(d) <= as-of-tx}))
+```
+
 Example -- capture Alice's initial age, then update it and compare:
 
 ```turmeric
@@ -81,6 +111,17 @@ Example -- capture Alice's initial age, then update it and compare:
   ;; Snapshot at tx-age-1 -- only sees age=30
   (let [snap (db-as-of db tx-age-1)]
     ...))
+```
+
+```sweet-exp
+; tx-age-1 is the transaction number returned by this assert
+let [tx-age-1 db-assert!(db 1 cstr->int(":user/age") long-val(30))]
+  ; Later update
+  db-assert!(db 1 cstr->int(":user/age") long-val(31))
+
+  ; Snapshot at tx-age-1 -- only sees age=30
+  let [snap db-as-of(db tx-age-1)]
+    ...
 ```
 
 The snapshot is a fresh result vec of datum pointers. The datums themselves are
@@ -96,6 +137,11 @@ Pull collects every datum for a single entity:
 ```turmeric
 (defn pull [db :int e :int] :ptr<void>
   (db-q db (fn [d] (= (datum-entity d) e))))
+```
+
+```sweet-exp
+defn pull [db :int e :int] :ptr<void>
+  db-q(db fn([d] {datum-entity(d) = e}))
 ```
 
 This is equivalent to `SELECT * FROM datums WHERE entity = e`. The result
@@ -123,6 +169,17 @@ transaction number ascending:
     raw)))
 ```
 
+```sweet-exp
+defn history [db :int entity :int attr :cstr] :ptr<void>
+  let [raw db-q(db fn([d]
+                       and({datum-entity(d) = entity}
+                           cstr-eq?(datum-attr(d) cstr->int(attr)))))]
+    ; Insertion sort by tx
+    let [n rvec-len(raw)]
+      ...
+    raw
+```
+
 The sort is insertion sort -- O(n^2) but adequate for the tutorial scale
 (single-digit attribute histories per entity). Production implementations would
 use an index.
@@ -133,6 +190,12 @@ Usage:
 (let [hist (history db 1 ":user/age")]
   ;; Iterate: oldest tx first
   ...)
+```
+
+```sweet-exp
+let [hist history(db 1 ":user/age")]
+  ; Iterate: oldest tx first
+  ...
 ```
 
 Each datum in `hist` carries its `tx`, so you can print `(datum-tx d)` next to
@@ -147,6 +210,11 @@ Retraction is represented as a new fact, not a deletion:
 ```turmeric
 (defn db-retract! [db :int entity :int attr :cstr] :int
   (db-assert! db entity (cstr->int ":db/retract") (StrVal (cstr->int attr))))
+```
+
+```sweet-exp
+defn db-retract! [db :int entity :int attr :cstr] :int
+  db-assert!(db entity cstr->int(":db/retract") StrVal(cstr->int(attr)))
 ```
 
 This asserts a datum whose attribute is `:db/retract` and whose value is the
@@ -173,12 +241,37 @@ transaction:
         found))))
 ```
 
+```sweet-exp
+defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
+  let [n db-count(db)]
+    let [^mut i 0]
+      let [^mut found false]
+        while {i < n}
+          do
+            let [d db-ref(db i)]
+              when and({datum-entity(d) = entity}
+                       cstr-eq?(datum-attr(d) cstr->int(":db/retract"))
+                       {datum-tx(d) <= as-of-tx})
+                match datum-value(d)
+                  (StrVal s) when cstr-eq?(s cstr->int(attr))
+                               set! found true
+                  _ nil
+            set! i {i + 1}
+        found
+```
+
 Usage -- retract Bob's email and verify:
 
 ```turmeric
 (db-retract! db 2 ":user/email")
 (println (retracted? db 2 ":user/email" (db-count db)))
 ;; => true
+```
+
+```sweet-exp
+db-retract!(db 2 ":user/email")
+println(retracted?(db 2 ":user/email" db-count(db)))
+; => true
 ```
 
 The retraction is itself a datum with a transaction number, so you can ask
@@ -235,6 +328,13 @@ could write:
   (q-and
     (q-av ":user/age" (long-val 30))
     (q-not (fn [d] (retracted? db (datum-entity d) ":user/age" 999)))))
+```
+
+```sweet-exp
+db-q(db
+  q-and(
+    q-av(":user/age" long-val(30))
+    q-not(fn([d] retracted?(db datum-entity(d) ":user/age" 999)))))
 ```
 
 Combining `q-and`, `q-or`, `q-not`, `q-av`, and custom predicates gives you a

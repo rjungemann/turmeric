@@ -41,6 +41,23 @@ A module is a single `.tur` file with a `defmodule` form at the top:
     (...)))
 ```
 
+```sweet-exp
+;; src/geom/vector.tur
+defmodule geom/vector
+  export Point make-vector vector-x vector-y magnitude
+
+  defn make-vector [x :int y :int] :ptr
+    (...)
+
+  defn vector-x [^Point p] :int
+    .x(p)
+  defn vector-y [^Point p] :int
+    .y(p)
+
+  defn magnitude [^Point p] :int
+    (...)
+```
+
 **Rules:**
 
 - `defmodule` must be the first form in the file (after stdlib auto-loads).
@@ -83,6 +100,17 @@ Use `(import ...)` inside `defmodule` to bring in another module:
       0)))
 ```
 
+```sweet-exp
+defmodule app
+  import geom/vector :as v
+  import math :refer [sqrt abs]
+
+  defn main [] :int
+    let [p v/make-vector(3 4)]
+      println(v/magnitude(p))
+      0
+```
+
 ### Forms of `import`
 
 | Form                                | Effect                                                   |
@@ -121,8 +149,19 @@ listed in `(export ...)` are visible to other modules.
   (defn map [f xs] :ptr (...))
   (defn filter [pred xs] :ptr (...))
 
-  ;; private helper — only visible inside list-utils
+  ;; private helper -- only visible inside list-utils
   (defn -fold [f acc xs] :ptr (...)))
+```
+
+```sweet-exp
+defmodule list-utils
+  export map filter
+
+  defn map [f xs] :ptr (...)
+  defn filter [pred xs] :ptr (...)
+
+  ;; private helper -- only visible inside list-utils
+  defn -fold [f acc xs] :ptr (...)
 ```
 
 ### Visibility rules
@@ -139,6 +178,14 @@ listed in `(export ...)` are visible to other modules.
 
   (defmacro when2 [test a b]
     (list if test (do a b))))
+```
+
+```sweet-exp
+defmodule control-flow
+  export when2
+
+  defmacro when2 [test a b]
+    list(if test do(a b))
 ```
 
 Imported macros expand correctly in the consumer module — recursive macro
@@ -161,6 +208,17 @@ Top-level `(defer ...)` forms inside a module run at process exit via
   (defer (println "shutting down logger"))
 
   (defn log [msg] :int (...)))
+```
+
+```sweet-exp
+defmodule logger
+  export log
+
+  def file-handle ...
+
+  defer println("shutting down logger")
+
+  defn log [msg] :int (...)
 ```
 
 Ordering: module defers fire in LIFO order (last-defined fires first), matching
@@ -206,6 +264,14 @@ the function name:
 
   (defn (export-as "plugin_init_v2") init [] :int
     (...)))
+```
+
+```sweet-exp
+defmodule plugin
+  export init
+
+  defn (export-as "plugin_init_v2") init [] :int
+    (...)
 ```
 
 This bypasses module mangling: the emitted C function will be named exactly
@@ -254,6 +320,13 @@ src/
   app.tur              ;; (defmodule app (import geom/vector :as v) ...)
   geom/
     vector.tur          ;; (defmodule geom/vector ...)
+```
+
+```sweet-exp
+src/
+  app.tur              ;; defmodule app ...
+  geom/
+    vector.tur          ;; defmodule geom/vector ...
 ```
 
 `./build/tur build src/app.tur -o app` recursively loads `geom/vector` from
@@ -343,6 +416,38 @@ or use `(export-as "...")` to override the C name explicitly.
     (let [p (make-vector 3 4)]
       (println (magnitude p))   ;; 5
       0)))
+```
+
+```sweet-exp
+;; src/math.tur
+defmodule math
+  export sqrt square
+
+  defn sqrt [x :int] :int (...)
+  defn square [x :int] :int
+    {x * x}
+
+;; src/geom/vector.tur
+defmodule geom/vector
+  import math :as m
+  export Point make-vector magnitude
+
+  defstruct Point [x : int y : int]
+
+  defn make-vector [x :int y :int] :ptr
+    Point(x y)
+
+  defn magnitude [^Point p] :int
+    m/sqrt({m/square(.x(p)) + m/square(.y(p))})
+
+;; src/app.tur
+defmodule app
+  import geom/vector :refer [make-vector magnitude]
+
+  defn main [] :int
+    let [p make-vector(3 4)]
+      println(magnitude(p))   ;; 5
+      0
 ```
 
 Build with `./build/tur build src/app.tur -o app`.

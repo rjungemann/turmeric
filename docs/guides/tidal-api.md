@@ -487,6 +487,10 @@ The main module re-exports all functions from submodules:
 (import tidal)  ;; Imports all tidal/* modules
 ```
 
+```sweet-exp
+import tidal  ;; Imports all tidal/* modules
+```
+
 ### Convenience Functions
 
 | Function | Signature | Description |

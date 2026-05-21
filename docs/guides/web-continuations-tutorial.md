@@ -60,6 +60,18 @@ browser submits form
   -> k is now inside handler-1 again, with form data in hand
   -> proceeds naturally to the next step
 ```
+```sweet-exp
+handler-1 runs to a "send this form, then resume" point
+  -> captures continuation k
+  -> stashes k under token T
+  -> sends HTML page with action="/?k=T"
+
+browser submits form
+  -> server looks up T, loads k
+  -> resumes k with form data
+  -> k is now inside handler-1 again, with form data in hand
+  -> proceeds naturally to the next step
+```
 
 From the programmer's perspective, writing a multi-page flow reads like a single straight-line function. No state machine, no session table, no hidden fields to maintain.
 
@@ -225,6 +237,64 @@ Declare the three C functions using `extern-c`:
    (body         : cstr)] : unit
   "httpd_send_response")
 ```
+```sweet-exp
+;;; httpd-start -- bind an HTTP listener on the given port.
+;;;
+;;; Parameters:
+;;;   port -- TCP port number (1-65535)
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   httpd-start(8080)
+;;;
+;;; Since: Guestbook example
+extern-c httpd-start [(port : int64)] : int64
+  "httpd_start"
+
+;;; httpd-next-request -- block until the next HTTP request arrives.
+;;;
+;;; Parameters:
+;;;   out-method -- pointer to receive the HTTP method string
+;;;   out-path   -- pointer to receive the URL path
+;;;   out-query  -- pointer to receive the raw query string
+;;;   out-body   -- pointer to receive the POST body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   httpd-next-request(method path query body)
+;;;
+;;; Since: Guestbook example
+extern-c httpd-next-request
+  [(out-method : ptr<cstr>)
+   (out-path   : ptr<cstr>)
+   (out-query  : ptr<cstr>)
+   (out-body   : ptr<cstr>)] : unit
+  "httpd_next_request"
+
+;;; httpd-send-response -- write an HTTP response to the current connection.
+;;;
+;;; Parameters:
+;;;   status       -- HTTP status code (200, 302, 404, etc.)
+;;;   content-type -- MIME type string
+;;;   body         -- response body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   httpd-send-response(200 "text/html" "<h1>Hello</h1>")
+;;;
+;;; Since: Guestbook example
+extern-c httpd-send-response
+  [(status       : int64)
+   (content-type : cstr)
+   (body         : cstr)] : unit
+  "httpd_send_response"
+```
 
 ### 1.3 Request and Response Structs
 
@@ -237,6 +307,16 @@ Declare the three C functions using `extern-c`:
    path    : cstr   ; URL path, e.g. "/submit"
    query   : cstr   ; raw query string, e.g. "k=abc123"
    body    : cstr]) ; raw POST body, e.g. "name=Alice"
+```
+```sweet-exp
+;;; HttpRequest -- parsed HTTP request from the listener.
+;;;
+;;; Since: Guestbook example
+defstruct HttpRequest
+  [method  : cstr   ; "GET" or "POST"
+   path    : cstr   ; URL path, e.g. "/submit"
+   query   : cstr   ; raw query string, e.g. "k=abc123"
+   body    : cstr]  ; raw POST body, e.g. "name=Alice"
 ```
 
 `HttpResponse` is implicit -- the C shim owns the socket, so the Turmeric side just calls `httpd-send-response` directly rather than constructing a value.
@@ -256,6 +336,13 @@ Algebraic effects decouple handler logic from transport. Define one effect opera
 (defeffect HttpEffect
   (send-html [body : cstr] : unit))
 ```
+```sweet-exp
+;;; HttpEffect -- algebraic effect for sending HTTP responses.
+;;;
+;;; Since: Guestbook example
+defeffect HttpEffect
+  send-html [body : cstr] : unit
+```
 
 ### 2.2 A Trivial Handler
 
@@ -274,6 +361,23 @@ Algebraic effects decouple handler logic from transport. Define one effect opera
 ;;; Since: Guestbook example
 (defn hello-handler [req : HttpRequest] : unit
   (perform HttpEffect (send-html "<h1>Hello from Turmeric!</h1>")))
+```
+```sweet-exp
+;;; hello-handler -- send a minimal HTML page.
+;;;
+;;; Parameters:
+;;;   req -- the incoming HTTP request (unused)
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   hello-handler(req)
+;;;
+;;; Since: Guestbook example
+defn hello-handler [req : HttpRequest] : unit
+  perform HttpEffect
+    send-html("<h1>Hello from Turmeric!</h1>")
 ```
 
 ### 2.3 The Effect Handler in `main.tur`
@@ -302,6 +406,29 @@ The top-level loop in `main.tur` interprets `HttpEffect` by calling the C shim:
 (defn main [] : unit
   (httpd-start 8080)
   (run-loop))
+```
+```sweet-exp
+defn run-loop [] : unit
+  loop
+    def method ptr-alloc(cstr)
+    def path   ptr-alloc(cstr)
+    def query  ptr-alloc(cstr)
+    def body   ptr-alloc(cstr)
+    httpd-next-request(method path query body)
+    def req
+      HttpRequest
+        :method ptr-deref(method)
+        :path   ptr-deref(path)
+        :query  ptr-deref(query)
+        :body   ptr-deref(body)
+    handle dispatch(req)
+      HttpEffect.send-html [html] ->
+        httpd-send-response(200 "text/html" html)
+        resume(unit)
+
+defn main [] : unit
+  httpd-start(8080)
+  run-loop()
 ```
 
 The `dispatch` function (defined in `router.tur`) routes requests to the appropriate handler.
@@ -335,6 +462,27 @@ Before introducing continuations, build a plain single-page form to establish th
        "<br/><button type='submit'>Next &rarr;</button>"
        "</form></body></html>"))
 ```
+```sweet-exp
+;;; render-name-form -- render the name-entry page.
+;;;
+;;; Parameters:
+;;;   action -- form action URL
+;;;
+;;; Returns:
+;;;   HTML string for the name-entry page.
+;;;
+;;; Example:
+;;;   render-name-form("/step2")
+;;;
+;;; Since: Guestbook example
+defn render-name-form [action : cstr] : cstr
+  str("<html><body>"
+      "<h2>Guestbook -- Enter Your Name</h2>"
+      "<form method='POST' action='" action "'>"
+      "<label>Your name: <input name='name' autofocus/></label>"
+      "<br/><button type='submit'>Next &rarr;</button>"
+      "</form></body></html>")
+```
 
 ### 3.2 Parsing Form Fields
 
@@ -365,6 +513,31 @@ URL-encoded POST bodies have the form `name=Alice&message=Hello+World`. Extract 
       (def end       (or (cstr-find rest "&") (cstr-len rest)))
       (Some (percent-decode (cstr-take rest end)))))
 ```
+```sweet-exp
+;;; parse-form-field -- extract a named field from a URL-encoded body.
+;;;
+;;; Parameters:
+;;;   body  -- raw POST body string
+;;;   field -- field name to extract
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(value) if found, None if absent.
+;;;
+;;; Example:
+;;;   parse-form-field("name=Alice&msg=Hello" "name")  ; => Some("Alice")
+;;;
+;;; Since: Guestbook example
+defn parse-form-field [body : cstr, field : cstr] : (Option cstr)
+  def prefix str(field "=")
+  def start  cstr-find(body prefix)
+  match start
+    None -> None
+    Some(idx) ->
+      def val-start {idx + cstr-len(prefix)}
+      def rest      cstr-drop(body val-start)
+      def end       or(cstr-find(rest "&") cstr-len(rest))
+      Some(percent-decode(cstr-take(rest end)))
+```
 
 The `percent-decode` helper converts `%XX` sequences and replaces `+` with space:
 
@@ -383,6 +556,22 @@ The `percent-decode` helper converts `%XX` sequences and replaces `+` with space
 ;;; Since: Guestbook example
 (defn percent-decode [s : cstr] : cstr
   ...)
+```
+```sweet-exp
+;;; percent-decode -- decode a URL percent-encoded string.
+;;;
+;;; Parameters:
+;;;   s -- percent-encoded input
+;;;
+;;; Returns:
+;;;   Decoded cstr. Invalid sequences are passed through unchanged.
+;;;
+;;; Example:
+;;;   percent-decode("Hello%20World")  ; => "Hello World"
+;;;
+;;; Since: Guestbook example
+defn percent-decode [s : cstr] : cstr
+  ...
 ```
 
 > **Note**: A complete `percent-decode` implementation is provided in `src/security.tur`. For ASCII-only names and messages you can skip percent-decoding during early development, but include it before exposing the server to real users.
@@ -414,6 +603,28 @@ The `percent-decode` helper converts `%XX` sequences and replaces `+` with space
     ;; Done: show result
     (perform HttpEffect
       (send-html (str "<p>" a " + " b " = " (int64->cstr (+ a b)) "</p>")))))
+```
+```sweet-exp
+;; Toy example: add two numbers entered on separate pages.
+defn add-flow [req : HttpRequest] : unit
+  serial-reset
+    ;; Page 1: ask for first number
+    def body-a
+      send-form-and-wait(fn [action]
+        str("<form method='POST' action='" action "'>"
+            "<input name='a'/><button>Next</button></form>"))
+    def a cstr->int64(or(parse-form-field(body-a "a") "0"))
+
+    ;; Page 2: ask for second number
+    def body-b
+      send-form-and-wait(fn [action]
+        str("<form method='POST' action='" action "'>"
+            "<input name='b'/><button>Add</button></form>"))
+    def b cstr->int64(or(parse-form-field(body-b "b") "0"))
+
+    ;; Done: show result
+    perform HttpEffect
+      send-html(str("<p>" a " + " b " = " int64->cstr({a + b}) "</p>"))
 ```
 
 The two `send-form-and-wait` calls look like blocking reads but each one:
@@ -447,6 +658,27 @@ This helper encapsulates the pattern:
     (def action (str "/submit?k=" token))
     (def html   (render-fn action))
     (perform HttpEffect (send-html html))))
+```
+```sweet-exp
+;;; send-form-and-wait -- render a form page and suspend until it is submitted.
+;;;
+;;; Parameters:
+;;;   render-fn -- a function from action URL to HTML string
+;;;
+;;; Returns:
+;;;   The raw POST body submitted by the browser.
+;;;
+;;; Example:
+;;;   def body send-form-and-wait(fn [action] render-name-form(action))
+;;;
+;;; Since: Guestbook example
+defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
+  serial-shift [k]
+    def token  store-continuation(k)
+    def action str("/submit?k=" token)
+    def html   render-fn(action)
+    perform HttpEffect
+      send-html(html)
 ```
 
 After `perform HttpEffect (send-html html)`, the current fiber is done -- the HTTP loop will call `serial-resume k body` the next time that token is POSTed.
@@ -488,6 +720,40 @@ After `perform HttpEffect (send-html html)`, the current fiber is done -- the HT
       (match (bytes->serial-cont bytes)
         (Err _)  -> (None)
         (Ok k)   -> (Some k))))
+```
+```sweet-exp
+;;; store-continuation -- serialize k and save to data/conts/<token>.bin.
+;;;
+;;; Parameters:
+;;;   k -- a serial-continuation to persist
+;;;
+;;; Returns:
+;;;   A random hex token string (64 hex characters).
+;;;
+;;; Since: Guestbook example
+defn store-continuation [k : (serial-continuation cstr)] : cstr
+  def token random-hex-64()
+  def bytes serial-cont->bytes(k)
+  file-write(str("data/conts/" token ".bin") bytes)
+  token
+
+;;; load-continuation -- deserialize a continuation from disk.
+;;;
+;;; Parameters:
+;;;   token -- hex token returned by store-continuation
+;;;
+;;; Returns:
+;;;   (Option (serial-continuation cstr)) -- Some(k) if found, None if missing.
+;;;
+;;; Since: Guestbook example
+defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
+  def path str("data/conts/" token ".bin")
+  match file-read(path)
+    Err(_) -> None
+    Ok(bytes) ->
+      match bytes->serial-cont(bytes)
+        Err(_) -> None
+        Ok(k)  -> Some(k)
 ```
 
 ### 4.4 The Router
@@ -536,6 +802,52 @@ After `perform HttpEffect (send-html html)`, the current fiber is done -- the HT
         (Some k) ->
           (serial-resume k req.body))))
 ```
+```sweet-exp
+;;; dispatch -- route an HTTP request to the appropriate handler.
+;;;
+;;; Parameters:
+;;;   req -- the incoming request
+;;;
+;;; Returns:
+;;;   unit (side effect: sends an HTTP response)
+;;;
+;;; Since: Guestbook example
+defn dispatch [req : HttpRequest] : unit
+  cond
+    ;; GET / -> start a new guestbook flow
+    and(cstr-eq?(req.method "GET") cstr-eq?(req.path "/"))
+    run-guestbook-flow(req)
+
+    ;; GET /entries -> list all entries
+    and(cstr-eq?(req.method "GET") cstr-eq?(req.path "/entries"))
+    show-entries-handler(req)
+
+    ;; POST /submit?k=TOKEN -> resume a stored continuation
+    and(cstr-eq?(req.method "POST") cstr-eq?(req.path "/submit"))
+    resume-handler(req)
+
+    ;; 404 for everything else
+    :else
+    perform HttpEffect
+      send-html("<h1>404 Not Found</h1>")
+
+;;; resume-handler -- extract the token from the query string and resume.
+;;;
+;;; Since: Guestbook example
+defn resume-handler [req : HttpRequest] : unit
+  def token parse-form-field(req.query "k")
+  match token
+    None ->
+      perform HttpEffect
+        send-html("<p>Missing token.</p>")
+    Some(t) ->
+      match load-continuation(t)
+        None ->
+          perform HttpEffect
+            send-html("<p>Unknown or expired token.</p>")
+        Some(k) ->
+          serial-resume(k req.body)
+```
 
 ---
 
@@ -565,6 +877,29 @@ Now wire together two `send-form-and-wait` calls for the name and message pages.
     (def msg-body (send-form-and-wait
                     (fn [action] (render-message-form action name))))
     (def message (or (parse-form-field msg-body "message") ""))))
+```
+```sweet-exp
+;;; run-guestbook-flow -- the main multi-page flow.
+;;;
+;;; Parameters:
+;;;   req -- the initial GET / request (used only to start the flow)
+;;;
+;;; Returns:
+;;;   unit (side effect: sends HTML pages, eventually writes an entry)
+;;;
+;;; Since: Guestbook example
+defn run-guestbook-flow [req : HttpRequest] : unit
+  serial-reset
+
+    ;; Page 1: name
+    def name-body
+      send-form-and-wait(fn [action] render-name-form(action))
+    def name or(parse-form-field(name-body "name") "Anonymous")
+
+    ;; Page 2: message
+    def msg-body
+      send-form-and-wait(fn [action] render-message-form(action name))
+    def message or(parse-form-field(msg-body "message") "")
 ```
 
 ### 5.1 What Happens at Runtime
@@ -666,6 +1001,36 @@ Back navigation is completely free -- the server already serialized both continu
        "</form>"
        "</body></html>"))
 ```
+```sweet-exp
+;;; render-preview -- render the preview page with confirm and back links.
+;;;
+;;; Parameters:
+;;;   name      -- HTML-escaped author name
+;;;   message   -- HTML-escaped message text
+;;;   t-back    -- token for the "Edit" continuation
+;;;   t-confirm -- token for the "Confirm" continuation
+;;;
+;;; Returns:
+;;;   HTML string.
+;;;
+;;; Since: Guestbook example
+defn render-preview [name    : cstr,
+                     message : cstr,
+                     t-back  : cstr,
+                     t-confirm : cstr] : cstr
+  str("<html><body>"
+      "<h2>Preview Your Entry</h2>"
+      "<p><strong>Name:</strong> " name "</p>"
+      "<p><strong>Message:</strong> " message "</p>"
+      "<form method='POST' action='/submit?k=" t-confirm "'>"
+      "  <button type='submit' name='action' value='confirm'>"
+      "    Confirm and Post</button>"
+      "</form>"
+      "<form method='POST' action='/submit?k=" t-back "'>"
+      "  <button type='submit'>&#8592; Edit Message</button>"
+      "</form>"
+      "</body></html>")
+```
 
 ---
 
@@ -681,6 +1046,15 @@ Back navigation is completely free -- the server already serialized both continu
   [name      : cstr
    message   : cstr
    posted-at : int64])  ; Unix timestamp (seconds since epoch)
+```
+```sweet-exp
+;;; GuestEntry -- a single guestbook post.
+;;;
+;;; Since: Guestbook example
+defstruct GuestEntry
+  [name      : cstr
+   message   : cstr
+   posted-at : int64]  ; Unix timestamp (seconds since epoch)
 ```
 
 ### 7.2 The `Serializable` Instance
@@ -703,6 +1077,23 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
                 :name      (Vec.get parts 0)
                 :message   (Vec.get parts 1)
                 :posted-at (cstr->int64 (Vec.get parts 2))))))))
+```
+```sweet-exp
+;;; Serializable instance for GuestEntry.
+;;; Serializes as a Vec of three cstr values.
+definstance Serializable GuestEntry
+  serialize [e]
+    serialize(Vec.of([e.name e.message int64->cstr(e.posted-at)]))
+  deserialize [b]
+    match deserialize(b : (Result (Vec cstr) cstr))
+      Err(msg) -> Err(msg)
+      Ok(parts) ->
+        if {Vec.len(parts) < 3}
+          Err("GuestEntry: not enough fields")
+          Ok(GuestEntry
+              :name      Vec.get(parts 0)
+              :message   Vec.get(parts 1)
+              :posted-at cstr->int64(Vec.get(parts 2)))
 ```
 
 ### 7.3 The Store API
@@ -736,6 +1127,34 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
 ;;;
 ;;; Since: Guestbook example
 (defn store-all [] : (Vec GuestEntry) ...)
+```
+```sweet-exp
+;;; store-load -- load all guestbook entries from data/entries.bin.
+;;;
+;;; Returns:
+;;;   (Vec GuestEntry) -- empty Vec if the file does not exist yet.
+;;;
+;;; Since: Guestbook example
+defn store-load [] : (Vec GuestEntry) ...
+
+;;; store-append -- append a new entry and flush to disk.
+;;;
+;;; Parameters:
+;;;   entry -- the entry to append
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Since: Guestbook example
+defn store-append [entry : GuestEntry] : unit ...
+
+;;; store-all -- return a snapshot of all current entries.
+;;;
+;;; Returns:
+;;;   (Vec GuestEntry) -- most-recent entry last.
+;;;
+;;; Since: Guestbook example
+defn store-all [] : (Vec GuestEntry) ...
 ```
 
 The file format is a serialized `(Vec GuestEntry)` written atomically: write to a temp file, then rename over the live file. This prevents corruption on crash.
@@ -780,6 +1199,39 @@ Complete the flow. After the preview confirmation, write the entry and show the 
     (perform HttpEffect
       (send-html (render-thankyou (store-all))))))
 ```
+```sweet-exp
+defn run-guestbook-flow [req : HttpRequest] : unit
+  serial-reset
+
+    ;; Page 1: name
+    def name-body
+      send-form-and-wait(fn [a] render-name-form(a))
+    def name or(parse-form-field(name-body "name") "Anonymous")
+
+    ;; Page 2: message
+    def msg-body
+      send-form-and-wait(fn [a] render-message-form(a name))
+    def message or(parse-form-field(msg-body "message") "")
+
+    ;; Page 3: preview (stores two continuations: k-back and k-confirm)
+    serial-shift [k-back]
+      serial-shift [k-confirm]
+        def t-back    store-continuation(k-back)
+        def t-confirm store-continuation(k-confirm)
+        perform HttpEffect
+          send-html(render-preview(html-escape(name)
+                                   html-escape(message)
+                                   t-back
+                                   t-confirm))
+
+    ;; Page 4: confirmed -- write entry and show thank-you
+    store-append(GuestEntry
+                  :name      html-escape(name)
+                  :message   html-escape(message)
+                  :posted-at unix-now())
+    perform HttpEffect
+      send-html(render-thankyou(store-all()))
+```
 
 > **How confirm vs. back is handled:** The preview page has two forms pointing to two different tokens. The router dispatches entirely based on which token was POSTed. No `action` field inspection is needed in the flow itself.
 
@@ -805,6 +1257,27 @@ Complete the flow. After the preview confirmation, write the entry and show the 
        "<ul>" (cstr-join rows "") "</ul>"
        "<p><a href='/'>Add another entry</a></p>"
        "</body></html>"))
+```
+```sweet-exp
+;;; render-thankyou -- render the thank-you page with the full guestbook.
+;;;
+;;; Parameters:
+;;;   entries -- all guestbook entries to display
+;;;
+;;; Returns:
+;;;   HTML string.
+;;;
+;;; Since: Guestbook example
+defn render-thankyou [entries : (Vec GuestEntry)] : cstr
+  def rows
+    Vec.map(entries fn [e]
+      str("<li><strong>" e.name "</strong>: " e.message "</li>"))
+  str("<html><body>"
+      "<h2>Thank you! Your entry has been posted.</h2>"
+      "<h3>Guestbook</h3>"
+      "<ul>" cstr-join(rows "") "</ul>"
+      "<p><a href='/'>Add another entry</a></p>"
+      "</body></html>")
 ```
 
 ---
@@ -850,12 +1323,51 @@ Random tokens prevent guessing, but they do not prevent token forgery if an atta
         (None))
     _ -> (None)))
 ```
+```sweet-exp
+;;; sign-token -- append an HMAC-SHA256 signature to a token.
+;;;
+;;; Parameters:
+;;;   token  -- raw hex token string
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   "token.signature" cstr.
+;;;
+;;; Since: Guestbook example
+defn sign-token [token : cstr, secret : bytes] : cstr
+  def sig hex-encode(hmac-sha256(secret cstr->bytes(token)))
+  str(token "." sig)
+
+;;; verify-token -- check the signature and return the raw token.
+;;;
+;;; Parameters:
+;;;   signed -- "token.signature" cstr
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(token) if valid, None if tampered or malformed.
+;;;
+;;; Since: Guestbook example
+defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
+  def parts cstr-split(signed ".")
+  match parts
+    [token sig] ->
+      def expected hex-encode(hmac-sha256(secret cstr->bytes(token)))
+      if cstr-eq?(sig expected)
+        Some(token)
+        None
+    _ -> None
+```
 
 Load the secret from an environment variable at startup:
 
 ```turmeric
 (def SERVER-SECRET
   (cstr->bytes (or (getenv "GUESTBOOK_SECRET") "dev-insecure-secret")))
+```
+```sweet-exp
+def SERVER-SECRET
+  cstr->bytes(or(getenv("GUESTBOOK_SECRET") "dev-insecure-secret"))
 ```
 
 Replace `store-continuation` and `load-continuation` with signed variants that call `sign-token` / `verify-token` before returning or looking up a token.
@@ -877,6 +1389,20 @@ Store a creation timestamp alongside the continuation bytes. Reject tokens older
 ;;; Since: Guestbook example
 (defn continuation-expired? [sc : StoredCont] : bool
   (> (- (unix-now) sc.created-at) CONT-TTL-SECONDS))
+```
+```sweet-exp
+def CONT-TTL-SECONDS 1800
+
+;;; StoredCont -- a continuation blob with a creation timestamp.
+;;; Since: Guestbook example
+defstruct StoredCont
+  [bytes      : bytes
+   created-at : int64]  ; unix-now at time of storage
+
+;;; continuation-expired? -- true if the stored continuation is too old.
+;;; Since: Guestbook example
+defn continuation-expired? [sc : StoredCont] : bool
+  {unix-now() - sc.created-at} > CONT-TTL-SECONDS
 ```
 
 `load-continuation` checks `continuation-expired?` and returns `None` for stale tokens.
@@ -903,6 +1429,25 @@ Escape `<`, `>`, `&`, and `"` before inserting user input into HTML:
   (def s2 (cstr-replace-all s1 "<"  "&lt;"))
   (def s3 (cstr-replace-all s2 ">"  "&gt;"))
   (cstr-replace-all s3 "\"" "&quot;"))
+```
+```sweet-exp
+;;; html-escape -- escape HTML special characters in a string.
+;;;
+;;; Parameters:
+;;;   s -- raw user input
+;;;
+;;; Returns:
+;;;   HTML-safe cstr.
+;;;
+;;; Example:
+;;;   html-escape("<script>") ; => "&lt;script&gt;"
+;;;
+;;; Since: Guestbook example
+defn html-escape [s : cstr] : cstr
+  def s1 cstr-replace-all(s "&"  "&amp;")
+  def s2 cstr-replace-all(s1 "<"  "&lt;")
+  def s3 cstr-replace-all(s2 ">"  "&gt;")
+  cstr-replace-all(s3 "\"" "&quot;")
 ```
 
 Call `html-escape` on every user-supplied string before embedding it in a template. The preview page and thank-you page in Step 8 already do this.

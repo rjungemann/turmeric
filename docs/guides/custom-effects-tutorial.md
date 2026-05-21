@@ -70,12 +70,28 @@ The simplest effect takes no parameters and returns nothing useful. It is a sign
 (handle (greet)
   (Emit [] k) (do (println "hello!") (resume k nil)))
 ```
+```sweet-exp
+;; Declare an effect that signals "I want to emit a line of output."
+defeffect Emit [] :nil
+
+;; A function that emits twice.
+defn greet [] :nil
+  do
+    perform(Emit())
+    perform(Emit())
+
+;; Handle by printing a fixed message each time.
+handle greet()
+  (Emit [] k) do(println("hello!") resume(k nil))
+```
 
 **Output:**
 ```
 hello!
 hello!
 ```turmeric
+```sweet-exp
+```
 
 Key points:
 - `defeffect` declares the name, parameter list, and return type.
@@ -121,6 +137,17 @@ Effects can carry data to the handler. Declare typed parameters just like functi
   (Double [x] k) (resume k (* x 2))))
 ; => 42
 ```
+```sweet-exp
+;; An effect that asks the handler to double a value.
+defeffect Double [x :int] :int
+
+defn use-double [n :int] :int
+  perform(Double(n))
+
+println(handle use-double(21)
+  (Double [x] k) resume(k {x * 2}))
+; => 42
+```
 
 The handler pattern `(Double [x] k)` binds `x` to the argument supplied by the performer and `k` to the continuation. You can compute any value to pass back via `resume`.
 
@@ -147,6 +174,23 @@ A single `handle` block can match several different effects.
 ; prints: 42
 ; returns: 42
 ```
+```sweet-exp
+defeffect Ask  []       :int
+defeffect Tell [x :int] :nil
+
+;; Performs both effects: asks for a number, then tells the result.
+defn use-both [] :int
+  let [result {1 + perform(Ask())}]
+    do
+      perform(Tell(result))
+      result
+
+println(handle use-both()
+  (Ask  []  k) resume(k 41)
+  (Tell [x] k) do(println(x) resume(k nil)))
+; prints: 42
+; returns: 42
+```
 
 Handlers are tried in order. Each clause is independent; unhandled effects bubble up to the next enclosing `handle`.
 
@@ -162,6 +206,18 @@ Multiple effects can also carry different result transforms:
 (println (handle (compute)
   (Add [x] k) (resume k (+ x 10))   ; 3+10 = 13
   (Mul [x] k) (resume k (* x 2))))  ; 4*2  =  8
+; => 104
+```
+```sweet-exp
+defeffect Add [x :int] :int
+defeffect Mul [x :int] :int
+
+defn compute [] :int
+  {perform(Add(3)) * perform(Mul(4))}
+
+println(handle compute()
+  (Add [x] k) resume(k {x + 10})   ; 3+10 = 13
+  (Mul [x] k) resume(k {x * 2}))   ; 4*2  =  8
 ; => 104
 ```
 
@@ -185,6 +241,19 @@ Handlers nest lexically. The innermost matching handler wins.
   (Val [] k) (resume k 10)))
 ; => 52  (10 + 42)
 ```
+```sweet-exp
+defeffect Val [] :int
+
+defn get-val [] :int
+  perform(Val())
+
+;; Outer handler supplies 10; inner overrides with 42 for its scope.
+println(handle
+  {get-val() + handle get-val()
+                 (Val [] k) resume(k 42)}
+  (Val [] k) resume(k 10))
+; => 52  (10 + 42)
+```
 
 Use this to test functions under different conditions without changing the function itself.
 
@@ -203,6 +272,19 @@ Each `perform` is an independent suspension. The handler is re-entered for every
 
 (println (handle (pick-two)
   (Choose [n] k) (resume k (* n 10))))
+; First:  1 * 10 = 10
+; Second: 2 * 10 = 20
+; => 30
+```
+```sweet-exp
+defeffect Choose [n :int] :int
+
+;; Calls Choose twice sequentially.
+defn pick-two [] :int
+  {perform(Choose(1)) + perform(Choose(2))}
+
+println(handle pick-two()
+  (Choose [n] k) resume(k {n * 10}))
 ; First:  1 * 10 = 10
 ; Second: 2 * 10 = 20
 ; => 30
@@ -229,6 +311,19 @@ Continuations are **one-shot**: you must call `resume k` exactly once per handle
 ; prints: cleanup
 ; prints: 42
 ```
+```sweet-exp
+defeffect Ask [] :int
+
+defn deferred-ask [] :int
+  do
+    defer(println("cleanup"))
+    perform(Ask())
+
+println(handle deferred-ask()
+  (Ask [] k) resume(k 42))
+; prints: cleanup
+; prints: 42
+```
 
 The `defer` fires when `deferred-ask` returns, which happens after the handler resumes `k` with 42.
 
@@ -250,6 +345,18 @@ Borrows and reference-counted values that are live at the point of `perform` rem
   (GetBase [] k) (resume k 42)))
 ; => 142
 ```
+```sweet-exp
+;; Refs are live during perform.
+defeffect GetBase [] :int
+
+defn sum-with-base [] :int
+  let [base ref(100)]
+    {deref(base) + perform(GetBase())}
+
+println(handle sum-with-base()
+  (GetBase [] k) resume(k 42))
+; => 142
+```
 
 ```turmeric
 ;; RC values are live during perform; no leaks.
@@ -261,6 +368,18 @@ Borrows and reference-counted values that are live at the point of `perform` rem
 
 (println (handle (use-rc)
   (GetCount [] k) (resume k 42)))
+; => 42
+```
+```sweet-exp
+;; RC values are live during perform; no leaks.
+defeffect GetCount [] :int
+
+defn use-rc [] :int
+  let [r rc/of(42)]
+    {0 + perform(GetCount())}
+
+println(handle use-rc()
+  (GetCount [] k) resume(k 42))
 ; => 42
 ```
 
@@ -288,6 +407,22 @@ Handlers that are used in many places can be packaged as macros for a cleaner ca
 ; hello
 ; world
 ```
+```sweet-exp
+defeffect Write [s :cstr] :nil
+
+;; Package the handler as a macro so callers don't repeat boilerplate.
+defmacro with-write [body]
+  handle body
+    (Write [s] k) do(println(s) resume(k nil))
+
+;; Usage:
+with-write
+  do
+    perform(Write("hello"))
+    perform(Write("world"))
+; hello
+; world
+```
 
 This is the standard pattern used in `stdlib/effects.tur` for `with-write`, `with-getenv`, and `with-read-console`.
 
@@ -302,7 +437,7 @@ An effect handler can abort the computation (not resume) and throw an exception 
 
 (defmacro with-fail-throw [body]
   (handle body
-    (Fail [msg] k) (throw! msg)))   ; no resume — aborts the computation
+    (Fail [msg] k) (throw! msg)))   ; no resume -- aborts the computation
 
 (try
   (with-fail-throw
@@ -312,6 +447,24 @@ An effect handler can abort the computation (not resume) and throw an exception 
       (println "after fail")))          ; never reached
   (catch [err :cstr]
     (println err)))
+; before fail
+; something went wrong
+```
+```sweet-exp
+defeffect Fail [msg :cstr] :nil
+
+defmacro with-fail-throw [body]
+  handle body
+    (Fail [msg] k) throw!(msg)   ; no resume -- aborts the computation
+
+try
+  with-fail-throw
+    do
+      println("before fail")
+      perform(Fail("something went wrong"))
+      println("after fail")          ; never reached
+  catch [err :cstr]
+    println(err)
 ; before fail
 ; something went wrong
 ```
@@ -338,6 +491,20 @@ Not calling `resume` at all is valid — the computation past the `perform` is s
 ; true
 ; 42
 ```
+```sweet-exp
+defeffect Ask [] :int
+
+defn ask-with-check [] :int
+  perform(Ask())
+
+println(handle ask-with-check()
+  (Ask [] k)
+  do
+    println(cont?(k))   ; => true
+    resume(k 42))
+; true
+; 42
+```
 
 ---
 
@@ -349,7 +516,7 @@ Replace real I/O with a test double by swapping the handler. The business logic 
 (defeffect Read  []        :int)
 (defeffect Write [s :cstr] :nil)
 
-;; Pure business logic — no I/O primitives.
+;; Pure business logic -- no I/O primitives.
 (defn echo-doubled [] :int
   (let [n (perform (Read))]
     (do
@@ -374,6 +541,37 @@ Replace real I/O with a test double by swapping the handler. The business logic 
 ;; In tests:
 (with-test-io 21
   (echo-doubled))
+; => 42
+```
+```sweet-exp
+defeffect Read  []        :int
+defeffect Write [s :cstr] :nil
+
+;; Pure business logic -- no I/O primitives.
+defn echo-doubled [] :int
+  let [n perform(Read())]
+    do
+      perform(Write(int->cstr({n * 2})))
+      0
+
+;; Production handler: real stdin/stdout.
+defmacro with-real-io [body]
+  handle body
+    (Read  []  k) resume(k read-int-console())
+    (Write [s] k) do(println(s) resume(k nil))
+
+;; Test handler: fixed input, captured output.
+defmacro with-test-io [input body]
+  handle body
+    (Read  []  k) resume(k input)
+    (Write [s] k) do(println(s) resume(k nil))
+
+;; In production:
+;;   with-real-io echo-doubled()
+;;
+;; In tests:
+with-test-io 21
+  echo-doubled()
 ; => 42
 ```
 
@@ -417,6 +615,42 @@ Define a `Log` effect with levels. Wire it to a real logger in production, suppr
         (resume k nil))))
 
 (with-stderr-log (println (process 21)))
+; starting
+; done
+; 42
+```
+```sweet-exp
+defeffect Log [level :cstr msg :cstr] :nil
+
+;; Business logic
+defn process [x :int] :int
+  do
+    perform(Log("info" "starting"))
+    let [result {x * 2}]
+      do
+        perform(Log("info" "done"))
+        result
+
+;; Handler: print everything
+defmacro with-stderr-log [body]
+  handle body
+    (Log [level msg] k)
+      do(println(msg) resume(k nil))
+
+;; Handler: suppress all logs
+defmacro with-silent-log [body]
+  handle body
+    (Log [level msg] k) resume(k nil)
+
+;; Handler: only print warnings and errors
+defmacro with-warn-log [body]
+  handle body
+    (Log [level msg] k)
+      if or({level = "warn"} {level = "error"})
+        do(println(msg) resume(k nil))
+        resume(k nil)
+
+with-stderr-log println(process(21))
 ; starting
 ; done
 ; 42

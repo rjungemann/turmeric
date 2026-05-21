@@ -66,6 +66,18 @@ clean-test:
     find tests/cli -name 'actual.*' -delete
 
 # ---------------------------------------------------------------------------
+# Documentation
+# ---------------------------------------------------------------------------
+
+# Render all guide markdown files to docs/html/guides/.
+guides:
+    python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+
+# Check that every turmeric+sweet-exp toggle pair in the guides is valid.
+check-guides:
+    python3 tools/check-guide-pairs.py docs/guides/
+
+# ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
 

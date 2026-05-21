@@ -36,6 +36,25 @@ with nested `match`. Guards (`when`) handle conditional transitions.
     (Done)      (Done)))
 ```
 
+```sweet-exp
+defdata State (Idle) (Running :int) (Done)
+defdata Event (Start) (Tick :int) (Stop)
+
+defn transition [state :State event :Event] :State
+  match state
+    (Idle)
+      match event
+        (Start)   Running(0)
+        (Tick _)  Idle()
+        (Stop)    Idle()
+    (Running n)
+      match event
+        (Tick x)  Running({n + x})
+        (Stop)    Done()
+        (Start)   Running(n)
+    (Done)  Done()
+```
+
 ---
 
 ## 2. State + Algebraic Effects
@@ -57,6 +76,23 @@ making the machine testable with mock handlers.
                              (Running (+ n x)))
                   ...)
     ...))
+```
+
+```sweet-exp
+defeffect Emit [msg :cstr] :nil ^extends IO
+defeffect Store [key :cstr val :int] :nil ^extends IO
+
+defn step [state :State event :Event] :State
+  match state
+    (Running n)
+      match event
+        (Tick x)
+          do
+            perform(Emit("tick"))
+            perform(Store("count" {n + x}))
+            Running({n + x})
+        ...
+    ...
 ```
 
 See `stdlib/effects.tur` and `docs/guides/effects-system-guide.md`.
@@ -83,6 +119,11 @@ where each stage transforms and routes values.
 ```turmeric
 ;;; route each input through pre-processing, then the core step
 (>>> pre-process core-step)
+```
+
+```sweet-exp
+;;; route each input through pre-processing, then the core step
+>>>(pre-process core-step)
 ```
 
 See `stdlib/arrow.tur`.

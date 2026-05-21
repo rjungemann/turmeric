@@ -26,12 +26,28 @@ Enable with the `-Xdynamic-vars` compiler flag.
 *log-level*   ; => current binding, or root value if none active
 ```
 
+```sweet-exp
+;; Declare a dynamic var at module toplevel
+defdynamic *log-level* :int 1
+
+;; Override for a dynamic extent
+binding [*log-level* 0]
+  do-work()
+
+;; Read anywhere -- no parameter required
+*log-level*   ; => current binding, or root value if none active
+```
+
 ## Core Forms
 
 ### `defdynamic`
 
 ```turmeric
 (defdynamic *name* :type root-expr)
+```
+
+```sweet-exp
+defdynamic *name* :type root-expr
 ```
 
 Declares a dynamic var with a fixed declared type and a root value. The root
@@ -54,6 +70,12 @@ warns (`TUR-W0600`) if earmuffs are omitted.
   body)
 ```
 
+```sweet-exp
+binding [*var1* expr1
+         *var2* expr2]
+  body
+```
+
 Pushes an override frame for each var on the current thread, evaluates
 `body`, then pops all frames before returning. The override is visible to
 all code called transitively from `body` -- not just lexically enclosed code.
@@ -69,12 +91,25 @@ Binding forms compose: inner forms take precedence over outer ones:
   *log-level*)     ; => 1
 ```
 
+```sweet-exp
+binding [*log-level* 1]
+  binding [*log-level* 3]
+    *log-level*   ; => 3
+  *log-level*     ; => 1
+```
+
 ### `set!`
 
 ```turmeric
 (binding [*log-level* 1]
   (set! *log-level* 4)
   *log-level*)   ; => 4
+```
+
+```sweet-exp
+binding [*log-level* 1]
+  set!(*log-level* 4)
+  *log-level*   ; => 4
 ```
 
 Mutates the current thread's top binding frame for the var. Requires an
@@ -105,6 +140,21 @@ affect any other thread's view of the var.
 (show-locale)        ; prints en-US -- binding was restored when use-fr returned
 ```
 
+```sweet-exp
+defdynamic *locale* :cstr "en-US"
+
+defn show-locale [] :int
+  println(*locale*)
+
+defn use-fr [] :int
+  binding [*locale* "fr-FR"]
+    show-locale()   ; show-locale sees "fr-FR" from its callsite
+  0
+
+use-fr()             ; prints fr-FR
+show-locale()        ; prints en-US -- binding was restored when use-fr returned
+```
+
 A spawned thread (via `spawn`) starts with no binding frames; all var reads
 return root values.
 
@@ -129,6 +179,22 @@ snapshot of the parent's current binding frame:
   0)
 ```
 
+```sweet-exp
+load("stdlib/dynvar.tur")
+
+defdynamic *request-id* :cstr "none"
+
+defn thread-join [t :ptr<void>] :nil ...  ; see stdlib/thread.tur
+
+defn main [] :int
+  binding [*request-id* "req-1"]
+    let [t spawn-conveying(fn [] println(*request-id*))]
+      set!(*request-id* "req-2")   ; parent changes its own binding
+      thread-join(t)                ; child printed "req-1" (snapshot)
+      println(*request-id*)         ; prints "req-2"
+  0
+```
+
 The snapshot is a **copy** of each var's current top-of-stack value taken at
 spawn time. Parent and child binding stacks are independent afterwards.
 
@@ -147,6 +213,10 @@ Load the file to get both the vars and `spawn-conveying`:
 
 ```turmeric
 (load "stdlib/dynvar.tur")
+```
+
+```sweet-exp
+load("stdlib/dynvar.tur")
 ```
 
 > **Known limitation:** Root-value initialization for vars declared in
@@ -184,6 +254,21 @@ overridden, never intercepted) or an interceptable operation.
   (process))
 ```
 
+```sweet-exp
+;; Dynamic var: no annotation at call site, no handler at every boundary
+defdynamic *log-level* :int 1
+
+defn log-info [msg :cstr] :int
+  if {*log-level* >= 1} println(msg) 0
+
+defn process [] :int
+  log-info("processing")
+  42
+
+binding [*log-level* 0]   ; one override, deep stack covered automatically
+  process()
+```
+
 ### Use effects when
 
 - The operation has multiple implementations (prod vs. mock, local vs. remote).
@@ -200,6 +285,16 @@ overridden, never intercepted) or an interceptable operation.
     (assert! (= (query "SELECT 1") "1"))
     [(DbEffect.query sql k)
      (resume k (mock-db-exec sql))]))
+```
+
+```sweet-exp
+defeffect DbEffect query([sql :str] :str)
+
+defn run-tests [] :unit
+  handle
+    assert!(=(query("SELECT 1") "1"))
+    [(DbEffect.query sql k)
+     resume(k mock-db-exec(sql))]
 ```
 
 ### Comparison
@@ -232,6 +327,17 @@ bodies and `perform` may appear inside `binding` bodies without interaction.
     (thunk)))
 ```
 
+```sweet-exp
+defdynamic *log-level* :int 1
+
+defn log-debug [msg :cstr] :int
+  if {*log-level* = 0} println(msg) 0
+
+defn run-verbose [thunk] :int
+  binding [*log-level* 0]
+    thunk()
+```
+
 ### Test fixture injection
 
 ```turmeric
@@ -244,6 +350,18 @@ bodies and `perform` may appear inside `binding` bodies without interaction.
   (binding [*db* 42]   ; inject test connection
     (println (query "SELECT 1")))
   0)
+```
+
+```sweet-exp
+defdynamic *db* :int 0   ; :int as a stand-in for a connection handle
+
+defn query [sql :cstr] :int
+  *db*
+
+defn run-tests [] :int
+  binding [*db* 42]   ; inject test connection
+    println(query("SELECT 1"))
+  0
 ```
 
 ### Module-tagged structured logging
@@ -259,6 +377,19 @@ bodies and `perform` may appear inside `binding` bodies without interaction.
   (binding [*current-module* "auth"]
     (log "starting"))
   0)
+```
+
+```sweet-exp
+load("stdlib/dynvar.tur")   ; provides *current-module*
+
+defn log [msg :cstr] :int
+  println(*current-module*)
+  println(msg)
+
+defn start-auth-module [] :int
+  binding [*current-module* "auth"]
+    log("starting")
+  0
 ```
 
 ## Error Reference

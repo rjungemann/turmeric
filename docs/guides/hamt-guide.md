@@ -28,6 +28,18 @@ Turmeric's HAMT uses xxHash64 for hashing, 5-bit hash chunks (32 slots per level
 ;; Share ownership (increments ref count; returns same pointer)
 (def m2 (hamt/retain m))
 ```
+```sweet-exp
+import "stdlib/hamt.tur"
+
+;; Create an empty map (ref_count = 1)
+def m hamt/new()
+
+;; Free when done (decrements ref count; frees if zero)
+hamt/free(m)
+
+;; Share ownership (increments ref count; returns same pointer)
+def m2 hamt/retain(m)
+```
 
 ### Memory model
 
@@ -48,14 +60,34 @@ All mutations return a **new** HAMT; the original is untouched.
 ;; Delete a key
 (def m3 (hamt/del m2 h "hello"))
 
-;; Lookup — returns nil if not found
+;; Lookup -- returns nil if not found
 (def val (hamt/get m2 h "hello"))  ; => "updated"
 
 ;; Membership test
 (hamt/has? m2 h "hello")  ; => true
 
-;; Count — O(1)
+;; Count -- O(1)
 (hamt/count m2)  ; => 1
+```
+```sweet-exp
+;; Hash a string key
+def h hamt/hash-str("hello")
+
+;; Insert or update
+def m1 hamt/set(m  h "hello" "world")
+def m2 hamt/set(m1 h "hello" "updated")  ; m1 still has "world"
+
+;; Delete a key
+def m3 hamt/del(m2 h "hello")
+
+;; Lookup -- returns nil if not found
+def val hamt/get(m2 h "hello")  ; => "updated"
+
+;; Membership test
+hamt/has?(m2 h "hello")  ; => true
+
+;; Count -- O(1)
+hamt/count(m2)  ; => 1
 ```
 
 ## Hashing Keys
@@ -70,18 +102,34 @@ Two built-in hash functions cover the common cases:
 (def ptr (some-object))
 (def h  (hamt/hash-ptr ptr))
 ```
+```sweet-exp
+;; Hash a NUL-terminated C string
+def h hamt/hash-str("my-key")
+
+;; Hash a pointer value directly (identity map)
+def ptr some-object()
+def h   hamt/hash-ptr(ptr)
+```
 
 For custom key types, compute a 64-bit hash yourself (e.g. via inline C calling `tur_hamt_hash_xxh64`) and pass it directly to `hamt/set` / `hamt/get` etc.
 
 ## Merging Maps
 
 ```turmeric
-;; Merge b into a — b wins on collision
+;; Merge b into a -- b wins on collision
 (def merged (hamt/merge a b))
 
 ;; Merge with a custom conflict resolver
 ;; fn receives (val-from-a val-from-b ctx) and returns the winning value
 (def merged (hamt/merge-with a b resolve-fn nil))
+```
+```sweet-exp
+;; Merge b into a -- b wins on collision
+def merged hamt/merge(a b)
+
+;; Merge with a custom conflict resolver
+;; fn receives (val-from-a val-from-b ctx) and returns the winning value
+def merged hamt/merge-with(a b resolve-fn nil)
 ```
 
 ## Iteration
@@ -103,6 +151,23 @@ For custom key types, compute a 64-bit hash yourself (e.g. via inline C calling 
 
 (hamt/iter-free iter)
 ```
+```sweet-exp
+;; Allocate an iterator (at least 64 bytes; use inline C for stack allocation)
+def iter malloc(128)
+hamt/iter-init(iter m)
+
+;; Allocate output slots
+def hash-out malloc(8)
+def key-out  malloc(8)
+def val-out  malloc(8)
+
+loop
+  when hamt/iter-next(iter hash-out key-out val-out)
+    println(ptr-deref(key-out))
+    recur()
+
+hamt/iter-free(iter)
+```
 
 Iteration order is unspecified (hash order, not insertion order).
 
@@ -121,6 +186,19 @@ Iteration order is unspecified (hash order, not insertion order).
 ;; Merge-with: merge a and b; call (fn val-a val-b ctx) for duplicate keys
 (def merged (hamt/merge-with a b resolver nil))
 ```
+```sweet-exp
+;; Map: new HAMT with each value replaced by (fn val ctx)
+def doubled hamt/map(m double-fn nil)
+
+;; Filter: new HAMT keeping only entries where (fn key val ctx) is true
+def filtered hamt/filter(m keep?-fn nil)
+
+;; Reduce: fold all entries; returns final accumulator
+def sum hamt/reduce(m add-fn int->ptr(0) nil)
+
+;; Merge-with: merge a and b; call (fn val-a val-b ctx) for duplicate keys
+def merged hamt/merge-with(a b resolver nil)
+```
 
 The `fn` arguments are C function pointers. Use inline C to define them:
 
@@ -132,7 +210,16 @@ The `fn` arguments are C function pointers. Use inline C to define them:
   }
   return (void*)double_val;
   ```)
-```turmeric
+```
+```sweet-exp
+defn my-map-fn [] :ptr
+  ```
+  void *double_val(void *val, void *ctx) {
+      return (void*)((intptr_t)val * 2);
+  }
+  return (void*)double_val;
+  ```)
+```
 
 ## Transient Mode
 
@@ -142,7 +229,7 @@ Transients allow **batch construction** with in-place mutation, then seal back i
 ;; Fork a transient from an existing map (original unchanged)
 (def t (hamt/transient m))
 
-;; Mutate in place — no new HAMT created per operation
+;; Mutate in place -- no new HAMT created per operation
 (hamt/transient-set! t h1 "a" "alpha")
 (hamt/transient-set! t h2 "b" "beta")
 (hamt/transient-del! t h1 "a")
@@ -163,6 +250,15 @@ Transients allow **batch construction** with in-place mutation, then seal back i
 
 ;; Dump the trie structure in DOT format to stderr (for Graphviz)
 (hamt/dump m)
+```
+```sweet-exp
+;; Print a human-readable "{k->v, ...}" string (caller must free result)
+def s hamt/show(m)
+println(s)
+free(s)
+
+;; Dump the trie structure in DOT format to stderr (for Graphviz)
+hamt/dump(m)
 ```
 
 ## Quick Reference
@@ -207,6 +303,15 @@ Transients allow **batch construction** with in-place mutation, then seal back i
         (hamt/transient-set! t (hamt/hash-str k) k v)))
     (hamt/persistent! t)))
 ```
+```sweet-exp
+;; Use a transient for O(N) bulk construction
+defn list->hamt [pairs]
+  let [t hamt/transient(hamt/new())]
+    for-each pairs
+      fn [[k v]]
+        hamt/transient-set!(t hamt/hash-str(k) k v)
+    hamt/persistent!(t)
+```
 
 ### Accumulate versions
 
@@ -218,12 +323,24 @@ Transients allow **batch construction** with in-place mutation, then seal back i
 
 ;; v0, v1, and v2 all remain valid; share structure
 ```
+```sweet-exp
+;; Each update is a new version; retain old ones cheaply
+def v0 hamt/new()
+def v1 hamt/set(v0 hamt/hash-str("x") "x" "1")
+def v2 hamt/set(v1 hamt/hash-str("y") "y" "2")
+
+;; v0, v1, and v2 all remain valid; share structure
+```
 
 ### Config overlay
 
 ```turmeric
 ;; Merge user config on top of defaults (user wins)
 (def config (hamt/merge defaults user-config))
+```
+```sweet-exp
+;; Merge user config on top of defaults (user wins)
+def config hamt/merge(defaults user-config)
 ```
 
 ## See Also

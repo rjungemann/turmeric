@@ -33,6 +33,13 @@ defn use-ask [] :int
 
 Note: all guide content must be ASCII-only. Use `--` (double hyphen), never em dashes.
 
+## Coverage
+
+Run `just check-guides` to verify all pairs and see current coverage. As of the last
+update, paired guides include: `quickstart.md`, `repl-tutorial.md`,
+`effects-system-guide.md`. Remaining guides are being converted incrementally --
+see the task plan for progress.
+
 ## Getting Started
 
 - **[quickstart.md](quickstart.md)** — Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects

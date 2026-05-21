@@ -49,6 +49,15 @@ all predicate expressions.
   ...)
 ```
 
+```sweet-exp
+;; A non-negative integer
+deftype Nat { x : int | {x >= 0} }
+
+;; Inline in a function signature
+defn sqrt [x : { y : double | {y >= 0} }] : double
+  ...
+```
+
 The bound variable (`x`, `y`) is local to the predicate expression. It refers to the
 value being checked, not to any name in the surrounding scope.
 
@@ -59,6 +68,13 @@ value being checked, not to any name in the surrounding scope.
   :pre  (!= y 0)
   :post (= (* result y) x)
   (/ x y))
+```
+
+```sweet-exp
+defn divide [x : int, y : int] : int
+  :pre  {y != 0}
+  :post {(* result y) = x}
+  {x / y}
 ```
 
 - **`:pre`** -- checked at function entry, before any user code runs.
@@ -74,12 +90,25 @@ value being checked, not to any name in the surrounding scope.
   (sqrt x))
 ```
 
+```sweet-exp
+defn safe-sqrt [x : double] : double
+  :pre  {x >= 0.0}
+  :post {result >= 0.0}
+  sqrt(x)
+```
+
 ### Contract on a Struct Field
 
 ```turmeric
 (defstruct BoundedBuffer [
   data  : (vec int)
   index : { i : int | (and (>= i 0) (< i (vec/len data))) }])
+```
+
+```sweet-exp
+defstruct BoundedBuffer [
+  data  : (vec int)
+  index : { i : int | and({i >= 0} {i < vec/len(data)}) }]
 ```
 
 The predicate for a struct field may reference other fields in scope at elaboration time.
@@ -90,6 +119,12 @@ The predicate for a struct field may reference other fields in scope at elaborat
 (extern-c sqlite3_column_int [stmt : ptr, col : int] : int
   :pre  (and (!= stmt null) (>= col 0))
   :post (>= result 0))
+```
+
+```sweet-exp
+extern-c sqlite3_column_int [stmt : ptr, col : int] : int
+  :pre  and({stmt != null} {col >= 0})
+  :post {result >= 0}
 ```
 
 ---
@@ -112,6 +147,17 @@ no redundant check is needed:
   (vec-get-checked v 3))
 ```
 
+```sweet-exp
+defn vec-get-checked [v : (vec a), i : { x : int | and({x >= 0} {x < vec/len(v)}) }] : a
+  vec/get-unsafe(v i)
+
+;; At the call site, the elaborator inserts:
+;;   assert((3 >= 0) && (3 < vec_len(v)), "contract violated: i in bounds")
+;;   vec_get_unsafe(v, 3)
+defn example [v : (vec int)] : int
+  vec-get-checked(v 3)
+```
+
 ### Gradual Typing with Contracts
 
 Accept an untyped value and narrow it at runtime:
@@ -125,6 +171,15 @@ Accept an untyped value and narrow it at runtime:
   (ensure-positive 42))
 ```
 
+```sweet-exp
+defn ensure-positive [x : any] : { y : int | {y >= 0} }
+  :contract {x >= 0}
+  x
+
+defn pipeline [] : { y : int | {y >= 0} }
+  ensure-positive(42)
+```
+
 ### API Boundary Validation via FFI
 
 Contracts are checked before the C call and on return:
@@ -135,6 +190,12 @@ Contracts are checked before the C call and on return:
   :post (>= result 0))
 ```
 
+```sweet-exp
+extern-c sqlite3_column_int [stmt : ptr, col : int] : int
+  :pre  and({stmt != null} {col >= 0})
+  :post {result >= 0}
+```
+
 ### Pre- and Post-Conditions
 
 ```turmeric
@@ -142,6 +203,13 @@ Contracts are checked before the C call and on return:
   :pre  (>= x 0.0)
   :post (>= result 0.0)
   (sqrt x))
+```
+
+```sweet-exp
+defn safe-sqrt [x : double] : double
+  :pre  {x >= 0.0}
+  :post {result >= 0.0}
+  sqrt(x)
 ```
 
 ---
@@ -166,11 +234,21 @@ By default, a violated contract calls `panic`. A custom handler can be registere
   (log/error (str "Contract violated at " location ": " msg))))
 ```
 
+```sweet-exp
+set-contract-handler!(fn [msg location] : unit
+  log/error(str("Contract violated at " location ": " msg)))
+```
+
 For scoped overrides:
 
 ```turmeric
 (with-contract-handler my-handler
   (do-something-with-contracts))
+```
+
+```sweet-exp
+with-contract-handler my-handler
+  do-something-with-contracts()
 ```
 
 ---

@@ -47,6 +47,13 @@ intended for use as a type-level literal.
   (println (static-int-val si)))   ; => 10
 ```
 
+```sweet-exp
+import stdlib/sized
+
+let [si static-int(10)]
+  println(static-int-val(si))   ; => 10
+```
+
 Arithmetic on `StaticInt` values:
 
 ```turmeric
@@ -54,6 +61,13 @@ Arithmetic on `StaticInt` values:
       b (static-int 4)]
   (println (static-int-val (static-int-add a b)))   ; => 7
   (println (static-int-val (static-int-mul a b))))  ; => 12
+```
+
+```sweet-exp
+let [a static-int(3)
+     b static-int(4)]
+  println(static-int-val(static-int-add(a b)))   ; => 7
+  println(static-int-val(static-int-mul(a b)))   ; => 12
 ```
 
 ### Size expressions
@@ -75,11 +89,21 @@ Use `size-static`, `size-add`, and `size-mul` to build `Size` expressions, and
   (println (size-eval s)))   ; => 13
 ```
 
+```sweet-exp
+let [s size-add(size-static(3) size-mul(size-static(2) size-static(5)))]
+  println(size-eval(s))   ; => 13
+```
+
 `size-normalize` flattens a `Size` expression to `(Static n)`:
 
 ```turmeric
 (let [s (size-normalize (size-add (size-static 4) (size-static 6)))]
   (println (size-eval s)))   ; => 10
+```
+
+```sweet-exp
+let [s size-normalize(size-add(size-static(4) size-static(6)))]
+  println(size-eval(s))   ; => 10
 ```
 
 `size-simplify` folds constant sub-expressions and collapses identities such as
@@ -88,6 +112,11 @@ Use `size-static`, `size-add`, and `size-mul` to build `Size` expressions, and
 ```turmeric
 (let [s (size-simplify (size-mul (size-static 1) (size-add (size-static 2) (size-static 3))))]
   (println (size-eval s)))   ; => 5
+```
+
+```sweet-exp
+let [s size-simplify(size-mul(size-static(1) size-add(size-static(2) size-static(3))))]
+  println(size-eval(s))   ; => 5
 ```
 
 ### SizedVec
@@ -103,6 +132,12 @@ that).
   (println (sized-vec-get v 1)))    ; => 20
 ```
 
+```sweet-exp
+let [v sized-vec-of-3(10 20 30)]
+  println(sized-vec-len(v))       ; => 3
+  println(sized-vec-get(v 1))     ; => 20
+```
+
 `sized-vec-push` prepends an element and returns a new `SizedVec` whose size
 is `n + 1`:
 
@@ -110,6 +145,12 @@ is `n + 1`:
 (let [v  (sized-vec-of-2 1 2)
       v2 (sized-vec-push v 0)]
   (println (sized-vec-len v2)))   ; => 3
+```
+
+```sweet-exp
+let [v  sized-vec-of-2(1 2)
+     v2 sized-vec-push(v 0)]
+  println(sized-vec-len(v2))   ; => 3
 ```
 
 ---
@@ -126,11 +167,24 @@ Five predicates compare two `Size` expressions at runtime:
 (size-ge? (size-static 4) (size-static 4))                               ; => true
 ```
 
+```sweet-exp
+size-eq?(size-static(4) size-add(size-static(2) size-static(2)))   ; => true
+size-lt?(size-static(3) size-static(4))                             ; => true
+size-le?(size-static(4) size-static(4))                             ; => true
+size-gt?(size-static(5) size-static(3))                             ; => true
+size-ge?(size-static(4) size-static(4))                             ; => true
+```
+
 `size-compat?` is the runtime analog of the subtyping rule -- two sizes are
 compatible when they evaluate to the same integer:
 
 ```turmeric
 (size-compat? (size-static 8) (size-mul (size-static 2) (size-static 4)))
+; => true
+```
+
+```sweet-exp
+size-compat?(size-static(8) size-mul(size-static(2) size-static(4)))
 ; => true
 ```
 
@@ -148,6 +202,17 @@ fails:
 (size-assert-eq! (size-static 4) (size-static 5))
 ```
 
+```sweet-exp
+; passes silently
+size-assert-eq!(size-static(4) size-add(size-static(2) size-static(2)))
+
+; passes silently (3 <= 10)
+size-assert-le!(size-static(3) size-static(10))
+
+; panics: "sized type mismatch"
+size-assert-eq!(size-static(4) size-static(5))
+```
+
 ---
 
 ## Size Inference
@@ -163,6 +228,14 @@ constructors to let the compiler infer the size:
         (println (sized-vec-len v3))))))  ; => 3
 ```
 
+```sweet-exp
+let [v1 sized-vec-of-1(42)]          ; size inferred as 1
+  let [v2 sized-vec-of-2(1 2)]       ; size inferred as 2
+    let [v3 sized-vec-of-3(1 2 3)]   ; size inferred as 3
+      let [v4 sized-vec-of-4(1 2 3 4)] ; size inferred as 4
+        println(sized-vec-len(v3))      ; => 3
+```
+
 When the size is determined at runtime (e.g. from a cons list), use
 `sized-vec-from-list`:
 
@@ -170,6 +243,12 @@ When the size is determined at runtime (e.g. from a cons list), use
 (let [lst (cons 10 (cons 20 (cons 30 (nil-value))))]
   (let [v (unsafe (sized-vec-from-list lst))]
     (println (sized-vec-len v))))   ; => 3
+```
+
+```sweet-exp
+let [lst cons(10 cons(20 cons(30 nil-value())))]
+  let [v unsafe(sized-vec-from-list(lst))]
+    println(sized-vec-len(v))   ; => 3
 ```
 
 `sized-vec-from-list` requires `#{Unsafe}` because it casts the cons cell
@@ -208,6 +287,21 @@ All `SizedBuf` operations require `#{Unsafe}` at the call site.
   (unsafe (sized-buf-free b)))
 ```
 
+```sweet-exp
+import stdlib/sized-buf
+
+let [b unsafe(sized-buf-new-zeroed(4))]
+  unsafe(sized-buf-set!(b 0 10))
+  unsafe(sized-buf-set!(b 1 20))
+  unsafe(sized-buf-set!(b 2 30))
+  unsafe(sized-buf-set!(b 3 40))
+  println(unsafe(sized-buf-get(b 2)))    ; => 30
+  println(unsafe(sized-buf-sum(b)))      ; => 100
+  println(unsafe(sized-buf-min(b)))      ; => 10
+  println(unsafe(sized-buf-max(b)))      ; => 40
+  unsafe(sized-buf-free(b))
+```
+
 `sized-buf-fill!` sets every element to the same value:
 
 ```turmeric
@@ -215,6 +309,13 @@ All `SizedBuf` operations require `#{Unsafe}` at the call site.
   (unsafe (sized-buf-fill! b 7))
   (println (unsafe (sized-buf-sum b)))   ; => 56
   (unsafe (sized-buf-free b)))
+```
+
+```sweet-exp
+let [b unsafe(sized-buf-new(8))]
+  unsafe(sized-buf-fill!(b 7))
+  println(unsafe(sized-buf-sum(b)))   ; => 56
+  unsafe(sized-buf-free(b))
 ```
 
 `sized-buf-copy!` copies all elements from one buffer into another (both must
@@ -232,6 +333,18 @@ have the same length):
   (unsafe (sized-buf-free dst)))
 ```
 
+```sweet-exp
+let [src unsafe(sized-buf-new-zeroed(3))
+     dst unsafe(sized-buf-new-zeroed(3))]
+  unsafe(sized-buf-set!(src 0 1))
+  unsafe(sized-buf-set!(src 1 2))
+  unsafe(sized-buf-set!(src 2 3))
+  unsafe(sized-buf-copy!(src dst))
+  println(unsafe(sized-buf-get(dst 1)))   ; => 2
+  unsafe(sized-buf-free(src))
+  unsafe(sized-buf-free(dst))
+```
+
 ### Stack allocation
 
 `sized-buf-with-stack` allocates `n` elements on the stack via `alloca` and
@@ -246,6 +359,16 @@ the buffer is reclaimed automatically when the enclosing function returns.
   (unsafe (sized-buf-sum b)))
 
 (println (unsafe (sized-buf-with-stack 3 fill-and-sum)))   ; => 60
+```
+
+```sweet-exp
+defn fill-and-sum [b] :int
+  unsafe(sized-buf-set!(b 0 10))
+  unsafe(sized-buf-set!(b 1 20))
+  unsafe(sized-buf-set!(b 2 30))
+  unsafe(sized-buf-sum(b))
+
+println(unsafe(sized-buf-with-stack(3 fill-and-sum)))   ; => 60
 ```
 
 The callback must be a named function (not an anonymous lambda) because `alloca`
@@ -265,6 +388,14 @@ otherwise.
 (println (unsafe (sized-buf-compute 100)))   ; => 4950
 ```
 
+```sweet-exp
+; n <= 64: uses alloca (stack)
+println(unsafe(sized-buf-compute(10)))    ; => 45  (0+1+...+9)
+
+; n > 64: uses malloc (heap)
+println(unsafe(sized-buf-compute(100)))   ; => 4950
+```
+
 `sized-buf-size` returns the element count as a `Size` expression so you can
 pass it to size predicates and assertions:
 
@@ -274,6 +405,12 @@ pass it to size predicates and assertions:
   (unsafe (sized-buf-free b)))
 ```
 
+```sweet-exp
+let [b unsafe(sized-buf-new(6))]
+  println(size-eval(unsafe(sized-buf-size(b))))   ; => 6
+  unsafe(sized-buf-free(b))
+```
+
 Converting a `SizedVec` to a flat `SizedBuf`:
 
 ```turmeric
@@ -281,6 +418,13 @@ Converting a `SizedVec` to a flat `SizedBuf`:
       b (unsafe (sized-buf-from-sized-vec v))]
   (println (unsafe (sized-buf-sum b)))   ; => 6
   (unsafe (sized-buf-free b)))
+```
+
+```sweet-exp
+let [v sized-vec-of-3(1 2 3)
+     b unsafe(sized-buf-from-sized-vec(v))]
+  println(unsafe(sized-buf-sum(b)))   ; => 6
+  unsafe(sized-buf-free(b))
 ```
 
 ---
@@ -323,6 +467,32 @@ All operations require `#{Unsafe}`.
   (unsafe (sized-matrix-free m)))
 ```
 
+```sweet-exp
+import stdlib/sized-matrix
+
+let [m unsafe(sized-matrix-new-zeroed(3 4))]
+  ; Shape
+  println(unsafe(sized-matrix-rows(m)))    ; => 3
+  println(unsafe(sized-matrix-cols(m)))    ; => 4
+  println(size-eval(unsafe(sized-matrix-size(m))))   ; => 12
+
+  ; Element access
+  unsafe(sized-matrix-set!(m 0 0 1))
+  unsafe(sized-matrix-set!(m 0 1 2))
+  unsafe(sized-matrix-set!(m 1 0 5))
+  println(unsafe(sized-matrix-get(m 0 1)))   ; => 2
+
+  ; Bulk operations
+  println(unsafe(sized-matrix-row-sum(m 0)))    ; => 3  (1+2+0+0)
+  println(unsafe(sized-matrix-col-sum(m 0)))    ; => 6  (1+5+0)
+  println(unsafe(sized-matrix-total-sum(m)))    ; => 8
+
+  ; Shape assertion (panics if shape does not match)
+  unsafe(sized-matrix-assert-shape!(m (Static 3) (Static 4)))
+
+  unsafe(sized-matrix-free(m))
+```
+
 `sized-matrix-fill!` sets every element to the same value:
 
 ```turmeric
@@ -332,6 +502,13 @@ All operations require `#{Unsafe}`.
   (unsafe (sized-matrix-free m)))
 ```
 
+```sweet-exp
+let [m unsafe(sized-matrix-new(2 2))]
+  unsafe(sized-matrix-fill!(m 9))
+  println(unsafe(sized-matrix-total-sum(m)))   ; => 36
+  unsafe(sized-matrix-free(m))
+```
+
 `sized-matrix-row-size` returns the column count as a `Size` expression,
 useful for checking row-vector widths:
 
@@ -339,6 +516,12 @@ useful for checking row-vector widths:
 (let [m (unsafe (sized-matrix-new 3 4))]
   (println (size-eval (unsafe (sized-matrix-row-size m))))   ; => 4
   (unsafe (sized-matrix-free m)))
+```
+
+```sweet-exp
+let [m unsafe(sized-matrix-new(3 4))]
+  println(size-eval(unsafe(sized-matrix-row-size(m))))   ; => 4
+  unsafe(sized-matrix-free(m))
 ```
 
 ---
@@ -391,6 +574,41 @@ Bit `i` is stored at byte `i/8`, at position `i%8` within that byte (LSB = bit
   (unsafe (sized-bitvec-free bv)))
 ```
 
+```sweet-exp
+import stdlib/sized-bits
+
+let [bv unsafe(sized-bitvec-new(16))]
+  ; Set some bits
+  unsafe(sized-bitvec-set!(bv 0))
+  unsafe(sized-bitvec-set!(bv 3))
+  unsafe(sized-bitvec-set!(bv 7))
+
+  ; Read bits
+  println(unsafe(sized-bitvec-get(bv 0)))   ; => 1
+  println(unsafe(sized-bitvec-get(bv 1)))   ; => 0
+
+  ; Popcount
+  println(unsafe(sized-bitvec-count(bv)))   ; => 3
+
+  ; Clear and toggle
+  unsafe(sized-bitvec-clear!(bv 0))
+  unsafe(sized-bitvec-toggle!(bv 1))
+  println(unsafe(sized-bitvec-count(bv)))   ; => 2
+
+  ; Fill all bits
+  unsafe(sized-bitvec-fill!(bv 1))
+  println(unsafe(sized-bitvec-count(bv)))   ; => 16
+
+  ; Length and size
+  println(unsafe(sized-bitvec-len(bv)))                      ; => 16
+  println(size-eval(unsafe(sized-bitvec-size(bv))))          ; => 16
+
+  ; Length assertion (panics if length does not match)
+  unsafe(sized-bitvec-assert-len!(bv (Static 16)))
+
+  unsafe(sized-bitvec-free(bv))
+```
+
 ---
 
 ## FFI Integration
@@ -422,6 +640,30 @@ pointers, providing type-safe size information without any runtime cost.
 (println (size-eval (unsafe (ffi-struct-field-count)))) ; => 3
 ```
 
+```sweet-exp
+; Wrapper that reports the byte size of a point struct via an inline-C accessor.
+defn ffi-point-size [] #{Unsafe} :Size
+  ```c
+  return ctor_Static(sizeof(struct { int64_t x; int64_t y; }));
+  ```)
+
+; Wrapper that reports the element count for a fixed-size C array.
+defn ffi-array-size [] #{Unsafe} :Size
+  ```c
+  return ctor_Static(16);
+  ```)
+
+; Wrapper that reports the field count of a struct.
+defn ffi-struct-field-count [] #{Unsafe} :Size
+  ```c
+  return ctor_Static(3);
+  ```)
+
+println(size-eval(unsafe(ffi-point-size())))         ; => 16
+println(size-eval(unsafe(ffi-array-size())))         ; => 16
+println(size-eval(unsafe(ffi-struct-field-count()))) ; => 3
+```
+
 The pattern is: return `ctor_Static(n)` from inline C to inject a sized
 annotation into Turmeric's type system.
 
@@ -436,6 +678,11 @@ Passing an `int` where a `Size` is expected is a compile-time error:
 (size-add 3 4)
 ```
 
+```sweet-exp
+; ERROR: TUR-E0001: expected <adt>, got int
+size-add(3 4)
+```
+
 Shape or length assertions produce descriptive runtime messages:
 
 ```turmeric
@@ -447,6 +694,17 @@ Shape or length assertions produce descriptive runtime messages:
 
 ; Panics: "sized type mismatch"
 (size-assert-eq! (size-static 4) (size-static 5))
+```
+
+```sweet-exp
+; Panics: "row mismatch" (or "col mismatch")
+unsafe(sized-matrix-assert-shape!(m (Static 2) (Static 2)))
+
+; Panics: "sized type mismatch"
+unsafe(sized-bitvec-assert-len!(bv (Static 8)))
+
+; Panics: "sized type mismatch"
+size-assert-eq!(size-static(4) size-static(5))
 ```
 
 ---

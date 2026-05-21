@@ -24,6 +24,13 @@ simple tagged union (algebraic data type) with three variants:
   (EntityVal :int)) ;; entity ID reference
 ```
 
+```sweet-exp
+defdata Value
+  (LongVal :int)    ; 64-bit integer
+  (StrVal :int)     ; :cstr pointer stored as int
+  (EntityVal :int)  ; entity ID reference
+```
+
 `LongVal` holds a 64-bit integer (ages, counts, timestamps).
 `StrVal` holds a string -- the `:cstr` pointer is stored as a plain `:int`
 so it can pass through the database machinery without triggering the borrow
@@ -38,6 +45,15 @@ Constructors wrap the raw int:
 (defn entity-val [e :int] :int (EntityVal e))
 ```
 
+```sweet-exp
+defn long-val [n :int] :int
+  LongVal(n)
+defn str-val [s :cstr] :int
+  StrVal(cstr->int(s))
+defn entity-val [e :int] :int
+  EntityVal(e)
+```
+
 The printer dispatches on the constructor:
 
 ```turmeric
@@ -46,6 +62,14 @@ The printer dispatches on the constructor:
     (LongVal n)   (println n)
     (StrVal s)    (println-cstr s)
     (EntityVal e) (println e)))
+```
+
+```sweet-exp
+defn print-value [v :int] :nil
+  match v
+    (LongVal n)   println(n)
+    (StrVal s)    println-cstr(s)
+    (EntityVal e) println(e)
 ```
 
 ---
@@ -69,6 +93,15 @@ The C helper allocates and fills the struct:
   ```)
 ```
 
+```sweet-exp
+defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+```
+
 Accessors project individual fields:
 
 ```turmeric
@@ -79,6 +112,17 @@ Accessors project individual fields:
 (defn datum-value  [d :int] :int
   ```c return ((int64_t*)(intptr_t)d)[2]; ```)
 (defn datum-tx     [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+```
+
+```sweet-exp
+defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+defn datum-attr [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+defn datum-value [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+defn datum-tx [d :int] :int
   ```c return ((int64_t*)(intptr_t)d)[3]; ```)
 ```
 
@@ -111,11 +155,33 @@ increments it before stamping the new datum.
   ```)
 ```
 
+```sweet-exp
+defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+```
+
 `db-assert!` increments `next-tx`, allocates a new datum, appends it to the
 vector, and returns the transaction number:
 
 ```turmeric
 (defn db-assert! [db :int entity :int attr :int value :int] :int
+  ...
+  p[1] += 1;
+  int64_t tx = p[1];
+  ...
+  v->data[v->len++] = (int64_t)(intptr_t)d;
+  return tx;
+```
+
+```sweet-exp
+defn db-assert! [db :int entity :int attr :int value :int] :int
   ...
   p[1] += 1;
   int64_t tx = p[1];
@@ -140,6 +206,13 @@ Query results are collected in a `rvec` -- another growable C vector, typed
 (defn rvec-push! [v :ptr<void> val :int]  ...)
 ```
 
+```sweet-exp
+defn rvec-new [] :ptr<void>  ...
+defn rvec-len [v :ptr<void>] :int  ...
+defn rvec-get [v :ptr<void> i :int] :int  ...
+defn rvec-push! [v :ptr<void> val :int]  ...
+```
+
 `:ptr<void>` is an escape hatch that tells the compiler "I own this memory,
 do not track it". Use it sparingly and only when you are certain the vector
 outlives all uses of its contents.
@@ -156,6 +229,16 @@ Attribute names are C string literals. Two helpers convert between Turmeric
   ```c return (int64_t)(intptr_t)s; ```)
 
 (defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+```
+
+```sweet-exp
+defn cstr->int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+defn cstr-eq? [a :int b :int] :bool
   ```c
   return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
   ```)
@@ -186,6 +269,20 @@ result vec of all matching datums:
         result))))
 ```
 
+```sweet-exp
+defn db-q [db :int pred] :ptr<void>
+  let [n db-count(db)]
+    let [result rvec-new()]
+      let [^mut i 0]
+        while {i < n}
+          do
+            let [d db-ref(db i)]
+              when pred(d)
+                rvec-push!(result d)
+            set! i {i + 1}
+        result
+```
+
 Higher-level combinators return closures suitable as `pred`:
 
 | Combinator | Description |
@@ -208,6 +305,15 @@ Example -- find all names:
         (set! i (+ i 1))))))
 ```
 
+```sweet-exp
+let [names db-q(db q-attr(":user/name"))]
+  let [^mut i 0]
+    while {i < rvec-len(names)}
+      do
+        print-value(datum-value(rvec-get(names i)))
+        set! i {i + 1}
+```
+
 ---
 
 ## 7. Running the Demo
@@ -224,6 +330,17 @@ attributes each), then exercises the query combinators:
 
 ;; Users who are NOT entity 2 (i.e. not Bob), filtered by having an age attr
 (db-q db (q-and (q-attr ":user/age") (q-not (q-entity 2))))
+```
+
+```sweet-exp
+; All user names
+db-q(db q-attr(":user/name"))
+
+; Everything known about entity 1 (Alice)
+db-q(db q-entity(1))
+
+; Users who are NOT entity 2 (i.e. not Bob), filtered by having an age attr
+db-q(db q-and(q-attr(":user/age") q-not(q-entity(2))))
 ```
 
 Expected output:

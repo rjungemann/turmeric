@@ -37,6 +37,18 @@ Typeclasses can be parameterised over type constructors using the `^f` or `^^f` 
   (fold-right [container acc fn] :int))
 ```
 
+```sweet-exp
+defclass Functor [^f]
+  fmap [container fn] :int
+
+defclass Monad [^m]
+  bind [ma fn] :int
+
+defclass Foldable [^t]
+  fold-left  [container acc fn] :int
+  fold-right [container acc fn] :int
+```
+
 The `^f` parameter means "f has kind `* -> *`".
 Using a primitive type (like `int`) in the type argument position is a type error:
 
@@ -46,11 +58,22 @@ Using a primitive type (like `int`) in the type argument position is a type erro
   (fmap [c f] c))
 ```
 
+```sweet-exp
+;; ERROR: int has kind *, not * -> *
+definstance Functor [int]
+  fmap [c f] c
+```
+
 ### Binary type constructor (`^^f` — kind `* -> * -> *`)
 
 ```turmeric
 (defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
+```
+
+```sweet-exp
+defclass Bifunctor [^^f]
+  bimap [container fn-left fn-right] :int
 ```
 
 The `^^f` parameter means "f has kind `* -> * -> *`".
@@ -63,6 +86,11 @@ It is currently informational only (parsed and ignored):
 ```turmeric
 (defkind Unary  (* -> *))
 (defkind Binary (* -> * -> *))
+```
+
+```sweet-exp
+defkind Unary  (* -> *)
+defkind Binary (* -> * -> *)
 ```
 
 ## Defining Instances
@@ -83,6 +111,20 @@ Provide a concrete type constructor when implementing an HKT typeclass:
   (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
 ```
 
+```sweet-exp
+;; Functor for Option
+definstance Functor [option]
+  fmap [container fn] __fmap_option(container fn)
+
+;; Monad for Option
+definstance Monad [option]
+  bind [ma fn] __bind_option(ma fn)
+
+;; Bifunctor for Pair
+definstance Bifunctor [pair]
+  bimap [container fn-left fn-right] __bimap_pair(container fn-left fn-right)
+```
+
 ## Using HKT Typeclasses
 
 ### Method dispatch (`.method`)
@@ -93,6 +135,12 @@ Call typeclass methods using the dot-dispatch syntax:
 ;; fmap over an Option
 (let [opt (__opt_some 5)]
   (.fmap opt (fn [x] (* x 2))))    ;; dispatches Functor.fmap
+```
+
+```sweet-exp
+;; fmap over an Option
+let [opt __opt_some(5)]
+  .fmap(opt fn([x] {x * 2}))    ;; dispatches Functor.fmap
 ```
 
 > **Note**: Method dispatch on HKT containers uses the first-found instance as a
@@ -106,6 +154,11 @@ For reliability with multiple instances, call the implementation function direct
 ```turmeric
 (__fmap_option opt (fn [x] (* x 2)))
 (__bind_option opt (fn [x] (__opt_some (* x 2))))
+```
+
+```sweet-exp
+__fmap_option(opt fn([x] {x * 2}))
+__bind_option(opt fn([x] __opt_some({x * 2})))
 ```
 
 ## Container Values at Runtime
@@ -124,6 +177,19 @@ Use inline C blocks to allocate and dereference them:
 
 (defn __opt_none [] :int
   ```c return 0; ```)
+```
+
+```sweet-exp
+defn __opt_some [x] :int
+  ```
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```
+
+defn __opt_none [] :int
+  ```c return 0; ```
 ```
 
 Implement `fmap` and `bind` using inline C to call the closure function pointer:
@@ -147,6 +213,27 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
   if (!opt || !opt->is_some) return 0;
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
+```
+
+```sweet-exp
+defn __fmap_option [container fn] :int
+  ```
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```
+
+defn __bind_option [ma fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+  if (!opt || !opt->is_some) return 0;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  ```
 ```
 
 ## Standard HKT Typeclasses
@@ -190,6 +277,32 @@ The standard library (`stdlib/typeclass.tur`) provides:
     0))
 ```
 
+```sweet-exp
+defclass Functor [^f]
+  fmap [container fn] :int
+
+defn id [x] :int x
+defn times2 [x] :int {x * 2}
+defn inc [x] :int {x + 1}
+
+definstance Functor [option]
+  fmap [container fn] __fmap_option(container fn)
+
+defn main [] :int
+  do
+    ;; Identity law: fmap id x = x
+    let [opt    __opt_some(42)
+         result __fmap_option(opt id)]
+      println(__opt_unwrap(result))  ;; 42
+
+    ;; Composition law: fmap (f . g) x = fmap f (fmap g x)
+    let [opt __opt_some(5)
+         lhs __fmap_option(opt fn([x] times2(inc(x))))
+         rhs __fmap_option(__fmap_option(opt inc) times2)]
+      println(=(__opt_unwrap(lhs) __opt_unwrap(rhs)))  ;; true
+    0
+```
+
 ## Monad Chaining
 
 Use `bind` directly to chain monadic operations:
@@ -201,6 +314,13 @@ Use `bind` directly to chain monadic operations:
   (println (__opt_unwrap result)))  ;; 7
 ```
 
+```sweet-exp
+;; Sequence two Option computations
+let [step1  __bind_option(__opt_some(3) fn([x] __opt_some({x * 2})))  ;; step1 = some 6
+     result __bind_option(step1 fn([y] __opt_some({y + 1})))]         ;; result = some 7
+  println(__opt_unwrap(result))  ;; 7
+```
+
 ## do-m Notation
 
 The `do-m` macro provides monadic do-notation. It desugars to nested `.bind` calls:
@@ -208,6 +328,11 @@ The `do-m` macro provides monadic do-notation. It desugars to nested `.bind` cal
 ```turmeric
 ;; (do-m x ma1 y ma2 body) desugars to:
 ;; (.bind ma1 (fn [x] (.bind ma2 (fn [y] body))))
+```
+
+```sweet-exp
+;; do-m(x ma1 y ma2 body) desugars to:
+;; .bind(ma1 fn([x] .bind(ma2 fn([y] body))))
 ```
 
 Simple usage (single binding, no variable capture in body):
@@ -227,6 +352,23 @@ Simple usage (single binding, no variable capture in body):
 ;; None propagates automatically
 (let [r (do-m x (__opt_none) (__opt_some (* x 3)))]
   (println (__opt_some? r)))  ;; false
+```
+
+```sweet-exp
+definstance Monad [option]
+  bind [ma fn] __bind_option(ma fn)
+
+;; Single expression: returned as-is
+let [r do-m(__opt_some(42))]
+  println(__opt_unwrap(r))  ;; 42
+
+;; One binding: desugars to .bind call
+let [r do-m(x __opt_some(5) __opt_some({x * 3}))]
+  println(__opt_unwrap(r))  ;; 15
+
+;; None propagates automatically
+let [r do-m(x __opt_none() __opt_some({x * 3}))]
+  println(__opt_some?(r))  ;; false
 ```
 
 ## Closures with fmap
@@ -259,6 +401,31 @@ typeclass dispatch.
   (println (__opt_unwrap r)))  ;; 12
 ```
 
+```sweet-exp
+;; Non-capturing closure
+let [opt    __opt_some(10)
+     result .fmap(opt fn([x] {x * x}))]
+  println(__opt_unwrap(result))  ;; 100
+
+;; Capturing closure -- delta is captured from the enclosing scope
+let [delta  5
+     opt    __opt_some(10)
+     result .fmap(opt fn([x] {x + delta}))]
+  println(__opt_unwrap(result))  ;; 15
+
+;; Multi-capture
+let [a      2
+     b      3
+     opt    __opt_some(10)
+     result .fmap(opt fn([x] {(x * a) + b}))]
+  println(__opt_unwrap(result))  ;; 23
+
+;; Capturing closure through .bind
+let [scale 3
+     r     .bind(__opt_some(4) fn([x] __opt_some({x * scale})))]
+  println(__opt_unwrap(r))  ;; 12
+```
+
 Named functions (non-closures) also work unchanged:
 
 ```turmeric
@@ -269,12 +436,26 @@ Named functions (non-closures) also work unchanged:
   (println (__opt_unwrap result)))  ;; 14
 ```
 
+```sweet-exp
+defn double [x] :int {x * 2}
+
+let [opt    __opt_some(7)
+     result .fmap(opt double)]
+  println(__opt_unwrap(result))  ;; 14
+```
+
 `do-m` with captured variables works too:
 
 ```turmeric
 (let [factor 3
       r      (do-m x (__opt_some 5) (__opt_some (* x factor)))]
   (println (__opt_unwrap r)))  ;; 15
+```
+
+```sweet-exp
+let [factor 3
+     r      do-m(x __opt_some(5) __opt_some({x * factor}))]
+  println(__opt_unwrap(r))  ;; 15
 ```
 
 ## Binary Type Constructors (Bifunctor)
@@ -286,6 +467,15 @@ Named functions (non-closures) also work unchanged:
 (definstance Bifunctor [pair]
   (bimap [container fn-left fn-right]
     (__bimap_pair container fn-left fn-right)))
+```
+
+```sweet-exp
+defclass Bifunctor [^^f]
+  bimap [container fn-left fn-right] :int
+
+definstance Bifunctor [pair]
+  bimap [container fn-left fn-right]
+    __bimap_pair(container fn-left fn-right)
 ```
 
 ## Performance
@@ -387,6 +577,17 @@ elaborator simply recognises the type name and records it as `TY_INT`.
     (Nil)      0))
 ```
 
+```sweet-exp
+defdata IntList
+  (Cons :int :IntList)
+  (Nil)
+
+defn sum [lst :int] :int
+  match lst
+    (Cons h t) {h + sum(t)}
+    (Nil)      0
+```
+
 ### Mutually-recursive ADTs
 
 ```turmeric
@@ -398,6 +599,17 @@ elaborator simply recognises the type name and records it as `TY_INT`.
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))))
+```
+
+```sweet-exp
+defdata Expr
+  (Lit :int)
+  (Add :Expr :Expr)
+
+defn eval-expr [e :int] :int
+  match e
+    (Lit n)   n
+    (Add l r) {eval-expr(l) + eval-expr(r)}
 ```
 
 ### Fix -- fixed-point of a functor
@@ -415,6 +627,19 @@ elaborator simply recognises the type name and records it as `TY_INT`.
   (if (= n 0)
     (roll (ZeroF))
     (roll (SuccF (to-nat (- n 1))))))
+```
+
+```sweet-exp
+load("stdlib/fix.tur")
+
+defdata NatF [^f]
+  (ZeroF)
+  (SuccF :int)
+
+defn to-nat [n :int] :int
+  if {n = 0}
+    roll(ZeroF())
+    roll(SuccF(to-nat({n - 1})))
 ```
 
 See `stdlib/fix.tur` for the full API.
@@ -447,6 +672,29 @@ without committing to a concrete effect type:
     0))
 ```
 
+```sweet-exp
+load("stdlib/free.tur")
+
+;; Define a small effect algebra
+defdata CalcOp
+  (CalcAdd :int :int)
+  (CalcMul :int :int)
+
+;; Lift operations into Free
+defn calc-add [a :int b :int] :int free-lift(CalcAdd(a b))
+
+;; Interpret with free-run
+defn run-op [op :int] :int
+  match op
+    (CalcAdd a b) {a + b}
+    (CalcMul a b) {a * b}
+
+defn main [] :int
+  let [prog calc-add(3 4)]
+    println(free-run(fn([op] let([_ prog] run-op(op))) prog))
+    0
+```
+
 See `stdlib/free.tur` for `free-pure`, `free-lift`, `free-bind`, `free-fmap`,
 and `free-run`.
 
@@ -463,6 +711,10 @@ and `free-run`.
 
    ```turmeric
    (.fmap @option opt f)   ; disambiguate: use the option Functor instance
+   ```
+
+   ```sweet-exp
+   .fmap(@option opt f)   ; disambiguate: use the option Functor instance
    ```
 
    See `docs/archive/hkt-opaque-dispatch-plan.md` for background.

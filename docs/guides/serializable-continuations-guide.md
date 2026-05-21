@@ -39,6 +39,19 @@ A **continuation** represents "the rest of the computation" — a suspended stat
 (def k (load-from-disk "my-continuation.bin"))
 (serial-resume k 100)  ; Resumes computation with x=42, returns 142
 ```
+```sweet-exp
+;; Capture a serializable continuation
+serial-reset
+  let [x 42]
+    serial-shift k
+      ;; k is a serializable continuation expecting an int64
+      save-to-disk(k "my-continuation.bin")
+      0
+
+;; Later, in another process:
+def k load-from-disk("my-continuation.bin")
+serial-resume(k 100)  ; Resumes computation with x=42, returns 142
+```
 
 ### The `Serializable` Typeclass
 
@@ -48,6 +61,11 @@ Not all values can be serialized. Types must opt-in via the `Serializable` typec
 defclass Serializable [a]
   (serialize   [x : a] : bytes)
   (deserialize [b : bytes] : (Result a cstr))
+```
+```sweet-exp
+defclass Serializable [a]
+  serialize   [x : a] : bytes
+  deserialize [b : bytes] : (Result a cstr)
 ```
 
 Primitive types have automatic instances:
@@ -59,6 +77,13 @@ Primitive types have automatic instances:
 (definstance Serializable cstr)
 (definstance Serializable bytes)
 ```
+```sweet-exp
+definstance Serializable int64
+definstance Serializable float64
+definstance Serializable bool
+definstance Serializable cstr
+definstance Serializable bytes
+```
 
 Container types derive their instances from element types:
 
@@ -67,6 +92,12 @@ Container types derive their instances from element types:
 (definstance (Serializable (Pair a b)) [Serializable a, Serializable b])
 (definstance (Serializable (Option a)) [Serializable a])
 (definstance (Serializable (Result a b)) [Serializable a, Serializable b])
+```
+```sweet-exp
+definstance (Serializable (Vec a)) [Serializable a]
+definstance (Serializable (Pair a b)) [Serializable a, Serializable b]
+definstance (Serializable (Option a)) [Serializable a]
+definstance (Serializable (Result a b)) [Serializable a, Serializable b]
 ```
 
 Types that **do not** implement `Serializable` (file handles, raw pointers, `Mutex<T>`) cannot be captured in a serializable continuation. The elaborator enforces this at the `serial-reset` boundary.
@@ -84,6 +115,16 @@ defclass ResourceSerializable [a]
 definstance ResourceSerializable FileHandle
   (marshal [fh] (file-handle-path fh))
   (unmarshal [path] (open-file path ReadOnly))
+```
+```sweet-exp
+defclass ResourceSerializable [a]
+  marshal   [x : a] : value
+  unmarshal [v : value] : a
+
+;; Example: serialize a file handle by its path, reopen on resume
+definstance ResourceSerializable FileHandle
+  marshal [fh] file-handle-path(fh)
+  unmarshal [path] open-file(path ReadOnly)
 ```
 
 ## Surface API
@@ -106,6 +147,22 @@ definstance ResourceSerializable FileHandle
 ;; Resume a continuation with a value
 (serial-resume k v) : T
 ```
+```sweet-exp
+;; Delimit a serializable region
+serial-reset body
+
+;; Capture the continuation
+serial-shift [k] body  ; k : serial-continuation<T>
+
+;; Serialize a continuation to bytes
+serial-cont->bytes(k) : bytes
+
+;; Deserialize bytes to a continuation
+bytes->serial-cont(b) : (Result (serial-continuation<T>) cstr)
+
+;; Resume a continuation with a value
+serial-resume(k v) : T
+```
 
 ### The `serial-continuation<T>` Type
 
@@ -115,6 +172,13 @@ defalias serial-continuation<T>
     [resume    : (-> T (serial-continuation<T>))
      to-bytes  : (-> bytes)
      schema-id : cstr])  ; Stable hash of frame chain shape
+```
+```sweet-exp
+defalias serial-continuation<T>
+  struct
+    [resume    : (-> T (serial-continuation<T>))
+     to-bytes  : (-> bytes)
+     schema-id : cstr]  ; Stable hash of frame chain shape
 ```
 
 ## Examples
@@ -152,6 +216,35 @@ defn resume-order [order-id : int64] : unit
          k (bytes->serial-cont checkpoint.bytes)]
     (serial-resume k checkpoint.value))
 ```
+```sweet-exp
+defn process-order [order-id : int64] : unit
+  serial-reset
+    ;; Step 1: Validate
+    def order load-order(order-id)
+    unless valid-order?(order)
+      throw(validation-error("Invalid order"))
+
+    ;; Checkpoint after validation
+    serial-shift [k]
+      save-checkpoint("order-validated" k order)
+      continue(k order)
+
+    ;; Step 2: Charge payment
+    def charge-result charge-payment(order.payment-info)
+
+    serial-shift [k]
+      save-checkpoint("payment-charged" k charge-result)
+      continue(k charge-result)
+
+    ;; Step 3: Fulfill
+    fulfill(order charge-result)
+
+;; Resume from last checkpoint
+defn resume-order [order-id : int64] : unit
+  let? [checkpoint load-latest-checkpoint(order-id)
+        k bytes->serial-cont(checkpoint.bytes)]
+    serial-resume(k checkpoint.value)
+```
 
 ### Distributed Task Migration
 
@@ -174,6 +267,24 @@ Send a half-finished computation to another node:
   (let? [k (bytes->serial-cont bytes)]
     (def result (serial-resume k input))
     (serial-cont->bytes (serial-shift [k'] (continue k' result)))))
+```
+```sweet-exp
+;; Node A: Start computation
+def result
+  serial-reset
+    def task1 run-task1()
+    def task2 run-task2(task1)
+    serial-shift [k]
+      ;; Serialize and send to Node B
+      def bytes serial-cont->bytes(k)
+      send-to-node-b(bytes task2)
+      continue(k recv-from-node-b())
+
+;; Node B: Resume computation
+defn handle-migration [bytes : bytes, input : any] : bytes
+  let? [k bytes->serial-cont(bytes)]
+    def result serial-resume(k input)
+    serial-cont->bytes(serial-shift [k'] continue(k' result))
 ```
 
 ### Web Continuations (Racket-style)
@@ -201,6 +312,28 @@ Serialize "what to do when form is submitted" as a URL token:
     (serial-resume k cc-number))
   (render-page (h1 "Thank you for your order!")))
 ```
+```sweet-exp
+;; Generate a form page with continuation token
+defn get-checkout [req : HttpRequest] : HttpResponse
+  serial-reset
+    def cart get-cart(req.session)
+    serial-shift [k]
+      ;; Save continuation, return URL with token
+      def token save-continuation(k)
+      render-page
+        form(:action str("/checkout-submit?token=" token))
+          label("Credit Card")
+          input(:type "text" :name "cc")
+          submit()
+
+;; Handle form submission
+defn post-checkout-submit [req : HttpRequest] : HttpResponse
+  let? [token parse-token(req.query.token)
+        k load-continuation(token)]
+    def cc-number parse-form-data(req)
+    serial-resume(k cc-number)
+  render-page(h1("Thank you for your order!"))
+```
 
 ### Checkpointing Long-Running Computation
 
@@ -227,6 +360,27 @@ defn recover-analysis [] : Report
   (let? [k (bytes->serial-cont latest.bytes)]
     (serial-resume k))
 ```
+```sweet-exp
+defn analyze-dataset [data : (Vec Record)] : Report
+  defn checkpoint-every [n : int64, items : (Vec Record)] : Report
+    let [processed Vec.new()]
+      for-each-with-index items
+        fn [i item]
+          Vec.push(processed process(item))
+          when {mod({i + 1} n) = 0}
+            serial-shift [k]
+              save-checkpoint(str("checkpoint-" i) k)
+              continue(k)
+      compute-report(processed)
+
+  checkpoint-every(1000 data)
+
+;; On restart: find latest checkpoint and resume
+defn recover-analysis [] : Report
+  def latest find-latest-checkpoint()
+  let? [k bytes->serial-cont(latest.bytes)]
+    serial-resume(k)
+```
 
 ## Error Handling
 
@@ -245,6 +399,18 @@ Continuation frames carry a schema version. If the code changes between serializ
         (error "Cannot resume: checkpoint uses schema " old 
                "but current code uses schema " new)
       _ -> (raise e))))
+```
+```sweet-exp
+try-with
+  fn []
+    def k bytes->serial-cont(bytes)
+    serial-resume(k value)
+  fn [e k]
+    match e
+      SchemaMismatch(old new) ->
+        error("Cannot resume: checkpoint uses schema " old
+              "but current code uses schema " new)
+      _ -> raise(e)
 ```
 
 ### Handling Unserializable Types
@@ -275,6 +441,16 @@ def circular : (Option (Box circular))
 (serial-reset
   (serial-shift [k] (save-cont k) 0))
 ```
+```sweet-exp
+def circular : (Option (Box circular))
+set-box!(circular Some(Box.new(circular)))
+
+;; This will fail with a circular reference error
+serial-reset
+  serial-shift [k]
+    save-cont(k)
+    0
+```
 
 ## Interaction with Ownership
 
@@ -289,6 +465,17 @@ Serialization always performs a **deep clone**. Reference-counted values are ful
     ;; Serialization deep-copies r
     (def bytes (serial-cont->bytes k))
     (continue k)))
+
+;; After deserialization, the resumed continuation has a NEW ref
+;; with the same value (42), but it's a different cell in memory
+```
+```sweet-exp
+def r ref(42)
+serial-reset
+  serial-shift [k]
+    ;; Serialization deep-copies r
+    def bytes serial-cont->bytes(k)
+    continue(k)
 
 ;; After deserialization, the resumed continuation has a NEW ref
 ;; with the same value (42), but it's a different cell in memory
@@ -313,6 +500,14 @@ defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
 defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
   (bytes->serial-cont (read-file path))
 ```
+```sweet-exp
+;; File I/O helpers
+defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
+  write-file(path serial-cont->bytes(k))
+
+defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
+  bytes->serial-cont(read-file(path))
+```
 
 ### `stdlib/workflow.tur`
 
@@ -331,6 +526,22 @@ defworkflow-step process-approval [order-id : int64] : bool
 defn resume-approval [order-id : int64, approved? : bool] : unit
   (let? [k (db-load-continuation order-id)]
     (serial-resume k approved?))
+```
+```sweet-exp
+;; Define a workflow step that can be suspended and resumed
+defworkflow-step process-approval [order-id : int64] : bool
+  def approved?
+    serial-shift [k]
+      db-save-continuation(order-id k)
+      false
+  when approved?
+    fulfill-order!(order-id)
+  approved?
+
+;; Resume a workflow from the database
+defn resume-approval [order-id : int64, approved? : bool] : unit
+  let? [k db-load-continuation(order-id)]
+    serial-resume(k approved?)
 ```
 
 ## Best Practices
@@ -354,6 +565,21 @@ Only capture what you need. Use identifiers instead of entire objects:
     (save-cont k)
     (continue k)))
 ```
+```sweet-exp
+;; Good: capture only the ID
+serial-reset
+  def order-id 12345
+  serial-shift [k]
+    save-cont(k)
+    process-order(order-id)
+
+;; Less good: capture the entire order object
+serial-reset
+  def order load-order(12345)  ; Large object
+  serial-shift [k]
+    save-cont(k)
+    continue(k)
+```
 
 ### Limit Continuation Depth
 
@@ -374,6 +600,18 @@ defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)
   (def stored (load-from-disk path))
   (when (= stored.version CURRENT_VERSION)
     (bytes->serial-cont stored.data))
+```
+```sweet-exp
+;; Wrap continuation with version info
+defn save-versioned [k : serial-continuation<T>, version : int64] : unit
+  def bytes serial-cont->bytes(k)
+  save-to-disk(struct [version version, data bytes])
+
+;; On load, verify version compatibility
+defn load-versioned [path : cstr] : (Result (serial-continuation<T>) cstr)
+  def stored load-from-disk(path)
+  when {stored.version = CURRENT_VERSION}
+    bytes->serial-cont(stored.data)
 ```
 
 ### Security Considerations

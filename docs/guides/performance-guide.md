@@ -41,6 +41,13 @@ There is no boxing overhead for scalars declared with concrete types:
   (sqrt (+ (* a a) (* b b))))
 ```
 
+```sweet-exp
+defn square [x] :int
+  {x * x}
+defn hyp [a b] :float
+  sqrt({a * a} + {b * b})
+```
+
 Avoid leaving numeric expressions untyped in hot loops -- the elaborator may
 widen to a tagged value when it cannot infer a concrete numeric type.
 
@@ -58,6 +65,18 @@ Iterative is faster for large N because it avoids stack growth:
 ; recursive -- O(2^n) time, avoid for n > ~30
 (defn fib-rec [n] :int
   (if (< n 2) n (+ (fib-rec (- n 1)) (fib-rec (- n 2)))))
+```
+
+```sweet-exp
+; iterative -- O(n) time, O(1) space
+defn fib-iter [n] :int
+  let [loop fn [i a b] :int
+              if ={i 0} a loop({i - 1} b {a + b})]
+    loop(n 0 1)
+
+; recursive -- O(2^n) time, avoid for n > ~30
+defn fib-rec [n] :int
+  if {n < 2} n {fib-rec({n - 1}) + fib-rec({n - 2})}
 ```
 
 ### Prime sieve
@@ -85,6 +104,26 @@ The Sieve of Eratosthenes benefits from a `vec` (growable array backed by a C
     flags))
 ```
 
+```sweet-exp
+import "stdlib/vec.tur"
+
+defn sieve [limit] :vec
+  let [flags vec/make(limit true)]
+    vec/set!(flags 0 false)
+    vec/set!(flags 1 false)
+    let [loop fn [i] :void
+              when <={i * i} limit
+                when vec/get(flags i)
+                  let [inner fn [j] :void
+                              when <=(j limit)
+                                vec/set!(flags j false)
+                                inner({j + i})]
+                    inner({i * i})
+                loop({i + 1})]
+      loop(2)
+    flags
+```
+
 ### Monte Carlo pi estimation
 
 Use `rand` (from `stdlib/rand.tur`) rather than importing `<stdlib.h>` via
@@ -103,6 +142,22 @@ inline-C so the compiler can see through calls and optimise the loop:
                                (+ inside 1)
                                inside)))))]
     (loop samples 0)))
+```
+
+```sweet-exp
+import "stdlib/rand.tur"
+
+defn estimate-pi [samples] :float
+  let [loop fn [i inside] :float
+              if ={i 0}
+                {4.0 * int->float(inside) / int->float(samples)}
+                let [x rand/float()
+                     y rand/float()]
+                  loop({i - 1}
+                       if <={{x * x} + {y * y}} 1.0
+                         {inside + 1}
+                         inside)]
+    loop(samples 0)
 ```
 
 ---
@@ -138,6 +193,18 @@ For hot paths that need mutable semantics, combine `hamt` with `ref`:
     (ref/get m)))
 ```
 
+```sweet-exp
+import "stdlib/hamt.tur"
+import "stdlib/ref.tur"
+
+defn freq-count [words] :hamt
+  let [m ref(hamt/empty())]
+    list/for-each(words fn [w] :void
+      ref/update!(m fn [h] :hamt
+        hamt/insert(h w {1 + hamt/get-or(h w 0)})))
+    ref/get(m)
+```
+
 HAMT operations are O(log₃₂ n) in practice -- fast for lookups but slower
 than a mutable hash table for write-heavy workloads. If you need the latter,
 reach for an inline-C wrapper around `uthash` or a fixed-size open-addressing
@@ -155,6 +222,15 @@ table.
 (let [v (vec/of 5 3 8 1 9 2)]
   (vec/sort! v <)
   v)
+```
+
+```sweet-exp
+import "stdlib/vec.tur"
+
+; in-place, cache-friendly
+let [v vec/of(5 3 8 1 9 2)]
+  vec/sort!(v <)
+  v
 ```
 
 ---
@@ -177,6 +253,17 @@ many pieces, use `str/builder`:
     (str/builder/finish b)))
 ```
 
+```sweet-exp
+import "stdlib/str.tur"
+
+defn join [sep parts] :str
+  let [b str/builder()]
+    list/for-each-indexed(parts fn [i s] :void
+      when {i > 0} str/builder/append!(b sep)
+      str/builder/append!(b s))
+    str/builder/finish(b)
+```
+
 ### Text search
 
 For simple substring search, `str/index-of` wraps `strstr` and is O(n·m) in
@@ -191,6 +278,14 @@ pattern once and reuse the handle -- the search itself is then O(n):
     (regex/count re text)))
 ```
 
+```sweet-exp
+import "stdlib/regex.tur"
+
+defn count-matches [pattern text] :int
+  let [re regex/compile(pattern)]
+    regex/count(re text)
+```
+
 ### Prefer `str/view` over copying
 
 `str/view` is a non-owning slice into an existing string. Use it when you only
@@ -199,6 +294,11 @@ need to inspect a substring -- no allocation, no copy:
 ```turmeric
 (let [s "hello world"]
   (str/view s 6 11))   ; => "world", zero-copy
+```
+
+```sweet-exp
+let [s "hello world"]
+  str/view(s 6 11)   ; => "world", zero-copy
 ```
 
 ---
@@ -215,6 +315,14 @@ Threads are spawned with `spawn` (from `stdlib/concurrency.tur`):
 (defn parallel-map [f xs] :list
   (let [handles (list/map xs (fn [x] :handle (spawn (fn [] :any (f x)))))]
     (list/map handles (fn [h] :any (await h)))))
+```
+
+```sweet-exp
+import "stdlib/concurrency.tur"
+
+defn parallel-map [f xs] :list
+  let [handles list/map(xs fn [x] :handle spawn(fn [] :any f(x)))]
+    list/map(handles fn [h] :any await(h))
 ```
 
 Each `spawn` creates a POSIX thread. Thread creation overhead is several
@@ -234,6 +342,16 @@ Use `chan` for lock-free message passing between threads:
     (chan/close c)))
 ```
 
+```sweet-exp
+import "stdlib/chan.tur"
+
+defn pipeline [producer-fn consumer-fn n] :void
+  let [c chan/make(64)]
+    spawn(fn [] :void producer-fn(c))
+    spawn(fn [] :void consumer-fn(c))
+    chan/close(c)
+```
+
 Channel sends block when the buffer is full; size the buffer to amortise
 context-switch cost for your throughput target.
 
@@ -250,6 +368,15 @@ thread-local slot:
 
 (defn with-indent [body] :any
   (with-var [*indent* (+ *indent* 2)] (body)))
+```
+
+```sweet-exp
+import "stdlib/dynamic-vars.tur"
+
+defvar *indent* 0
+
+defn with-indent [body] :any
+  with-var [*indent* {*indent* + 2}] body()
 ```
 
 ---
@@ -291,6 +418,24 @@ aggressively against one that reuses buffers:
       (loop n))))
 ```
 
+```sweet-exp
+; high churn -- allocates a new list each iteration
+defn churn [n] :void
+  let [loop fn [i] :void
+              when {i > 0}
+                let [_ list/range(0 1000)] loop({i - 1})]
+    loop(n)
+
+; low churn -- reuses a vec
+defn no-churn [n] :void
+  let [v vec/make(1000 0)]
+    let [loop fn [i] :void
+                when {i > 0}
+                  vec/fill!(v 0)
+                  loop({i - 1})]
+      loop(n)
+```
+
 ---
 
 ## 6. Recursion and stack usage
@@ -307,6 +452,14 @@ and uses O(1) stack:
   (if (= n 0) acc (factorial (- n 1) (* n acc))))
 
 (factorial 1000000 1)
+```
+
+```sweet-exp
+; tail-recursive -- safe for any n
+defn factorial [n acc] :int
+  if ={n 0} acc factorial({n - 1} {n * acc})
+
+factorial(1000000 1)
 ```
 
 Non-tail recursion is not optimised and will overflow the stack for deep
@@ -331,6 +484,18 @@ discriminant, or use a trampoline:
 (trampoline/run (even? 100000))   ; => true, O(1) stack
 ```
 
+```sweet-exp
+import "stdlib/trampoline.tur"
+
+defn even? [n] :thunk
+  if ={n 0} done(true) bounce(fn [] :thunk odd?({n - 1}))
+
+defn odd? [n] :thunk
+  if ={n 0} done(false) bounce(fn [] :thunk even?({n - 1}))
+
+trampoline/run(even?(100000))   ; => true, O(1) stack
+```
+
 ---
 
 ## 7. I/O operations
@@ -351,6 +516,16 @@ bytes):
       s)))
 ```
 
+```sweet-exp
+import "stdlib/io.tur"
+
+defn read-file [path] :str
+  let [f io/open(path "rb")]
+    let [s io/read-all(f)]
+      io/close(f)
+      s
+```
+
 `io/read-all` reads in 65536-byte chunks internally; do not loop over
 `io/read-byte` for large files -- the per-call overhead dominates.
 
@@ -366,6 +541,15 @@ durability is required:
       (io/write f line)
       (io/write f "\n")))
     (io/close f)))   ; flush happens here
+```
+
+```sweet-exp
+defn write-lines [path lines] :void
+  let [f io/open(path "wb")]
+    list/for-each(lines fn [line] :void
+      io/write(f line)
+      io/write(f "\n"))
+    io/close(f)   ; flush happens here
 ```
 
 Calling `io/flush` inside the loop adds a syscall per line; omit it unless you
@@ -388,6 +572,12 @@ pressure:
                  mass :float])
 ```
 
+```sweet-exp
+defstruct body [x :float y :float z :float
+                vx :float vy :float vz :float
+                mass :float]
+```
+
 ### Ray tracing
 
 Ray-box intersection and dot products are the hot paths. Annotate return types
@@ -397,6 +587,11 @@ loop:
 ```turmeric
 (defn dot [ax ay az bx by bz] :float
   (+ (* ax bx) (+ (* ay by) (* az bz))))
+```
+
+```sweet-exp
+defn dot [ax ay az bx by bz] :float
+  {{ax * bx} + {ay * by} + {az * bz}}
 ```
 
 ---
@@ -422,6 +617,21 @@ Each benchmark file should follow this template so that the automated runner
       (benchmark n)
       (let [elapsed (- (time/now-ns) t0)]
         (println (str/format "elapsed_ns={}" elapsed))))))
+```
+
+```sweet-exp
+import "stdlib/time.tur"
+import "stdlib/args.tur"
+
+defn benchmark [n] :void
+  ; ... work under test ...
+
+defn main [] :void
+  let [n args/parse-int(args/get(1) 1000)]
+    let [t0 time/now-ns()]
+      benchmark(n)
+      let [elapsed {time/now-ns() - t0}]
+        println(str/format("elapsed_ns={}" elapsed))
 ```
 
 Pass problem size via `*args*` (never hardcode), so the runner can sweep

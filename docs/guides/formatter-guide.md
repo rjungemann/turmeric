@@ -115,6 +115,15 @@ Before formatting:
 (defn factorial [n :int] :int (if (<= n 1) 1 (* n (factorial (- n 1)))))
 ```
 
+```sweet-exp
+defn add [x :int y :int] :int
+  {x + y}
+defn factorial [n :int] :int
+  if {n <= 1}
+    1
+    {n * factorial({n - 1})}
+```
+
 After `tur format`:
 
 ```turmeric
@@ -125,6 +134,16 @@ After `tur format`:
   (if (<= n 1)
     1
     (* n (factorial (- n 1)))))
+```
+
+```sweet-exp
+defn add [x :int y :int] :int
+  {x + y}
+
+defn factorial [n :int] :int
+  if {n <= 1}
+    1
+    {n * factorial({n - 1})}
 ```
 
 ## See also

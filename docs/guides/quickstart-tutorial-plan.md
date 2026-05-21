@@ -446,6 +446,10 @@ Instruction: save the following to `hello.tur`:
 (defn greet [name :cstr] :void
   (println (str-concat "Hello, " (str-concat name "!"))))
 ```
+```sweet-exp
+defn greet [name :cstr] :void
+  println(str-concat("Hello, " str-concat(name "!")))
+```
 
 Then in the REPL:
 
@@ -525,6 +529,9 @@ Type this:
 
 ```turmeric
 (expression)
+```
+```sweet-exp
+expression
 ```
 
 Expected output:

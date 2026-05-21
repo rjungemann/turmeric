@@ -43,6 +43,15 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
   (bt-print (run-backtrack evens)))
 ```
 
+```sweet-exp
+;; Return all even numbers from 1..10
+let [evens mbind(fresh(1 11) fn [x]
+               if {mod(x 2) = 0}
+                 mreturn(x)
+                 mzero())]
+  bt-print(run-backtrack(evens))
+```
+
 Output:
 ```
 2
@@ -84,6 +93,11 @@ Use `run-backtrack-depth` when you only need the first N results:
 (bt-print (run-backtrack-depth all-solutions 5))
 ```
 
+```sweet-exp
+;; Take only the first 5 solutions
+bt-print(run-backtrack-depth(all-solutions 5))
+```
+
 You can also pass `--backtrack-depth N` to the compiler as a flag, which emits
 `#define BACKTRACK_DEPTH_DEFAULT N` in the generated C preamble — useful for
 runtime dispatch when the stdlib is extended to check this constant.
@@ -104,6 +118,20 @@ runtime dispatch when the stdlib is extended to check this constant.
       ;; for each row 0..n-1, expand the board
       ...))]
       board)))
+```
+
+```sweet-exp
+;; Count solutions to N-Queens for N=6 using backtrack-do
+defn safe? [col row packed n] :bool
+  ;; check if placing at col,row is safe given previous placements in packed
+  ...
+
+defn queens [n] :int
+  let [result mreturn(0)]  ;; start with empty board (encoded as 0)
+    let [board mbind(result fn [packed]
+      ;; for each row 0..n-1, expand the board
+      ...)]
+      board
 ```
 
 See `tests/fixtures/backtrack-n-queens/input.tur` for the full self-contained
@@ -128,6 +156,20 @@ outside the monad boundary and the results are wrapped with `mreturn`:
                  (Choose [a b] k)
                  (resume k a))]   ;; always pick 'a'
     (bt-print result)))
+```
+
+```sweet-exp
+defeffect Choose [a :int b :int] :int
+
+defn make-choice [] :int
+  let [x perform(Choose(10 20))]
+    mreturn({x * 2})
+
+defn main []
+  let [result
+        handle make-choice()
+          (Choose [a b] k)  resume(k a)]   ;; always pick 'a'
+    bt-print(result)
 ```
 
 See `tests/fixtures/backtrack-integration-effects/input.tur` for a complete
