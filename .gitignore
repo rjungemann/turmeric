@@ -21,6 +21,10 @@ build_nosub/
 !examples/**/*.c
 !examples/**/*.h
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 tests/out/
 tests/fixtures/**/actual.*
 tests/.stamp-cache/
