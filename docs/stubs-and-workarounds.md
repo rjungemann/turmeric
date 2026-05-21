@@ -464,7 +464,7 @@ dedicated `Unbound` variant) to represent an uninstantiated logic variable.
 
 ## 5. Tests
 
-### 5.1 [ ] Missing Compiled-Mode Catch Tests
+### 5.1 [x] Missing Compiled-Mode Catch Tests
 
 Tests for `try`/`catch` only run in interpreter mode because compiled catch is broken
 (§1.2). No `requires.compiled` fixture exists for error recovery.
@@ -509,8 +509,8 @@ sentinel is implemented.
 
 | Priority | Item | Effort | Status | Prereqs |
 |----------|------|--------|--------|---------|
-| P1 | §1.1 Nested functions (`EX_FN`) | High | [ ] | none |
-| P1 | §1.2 Compiled try/catch | Medium | [~] `EX_THROW` done | §1.1 |
+| P1 | §1.1 Nested functions (`EX_FN`) | High | [x] | none |
+| P1 | §1.2 Compiled try/catch | Medium | [x] | §1.1 |
 | P1 | §4.1 Show for numeric types | Low | [x] | -- |
 | P2 | §1.3 Panic type tag | Low | [x] | -- |
 | P2 | §1.6 `weak-upgrade` return type | Low | [ ] | none |
