@@ -10,6 +10,8 @@ bool g_unsafe_warn_nested = false;
 bool g_unsafe_require_safety = false;
 bool g_unsafe_stats_enabled = false;
 bool g_lint_unsafe_enabled = false;
+/* U6: warn on inline-C outside #{Unsafe}-annotated functions */
+bool g_lint_inline_c_unsafe = false;
 
 /* Phase R5: Panic strategy configuration */
 bool g_panic_abort = false;

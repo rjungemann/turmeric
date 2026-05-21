@@ -1612,6 +1612,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--lint-unsafe-doc")   == 0) { g_lint_unsafe_enabled = true; }
         else if (strcmp(tok, "--require-unsafe-docs")== 0) { g_lint_unsafe_enabled = true; g_unsafe_require_safety = true; }
         else if (strcmp(tok, "--lint-unsafe-nested")== 0) { g_lint_unsafe_enabled = true; }
+        else if (strcmp(tok, "--lint-inline-c-unsafe") == 0) g_lint_inline_c_unsafe = true;
         tok = strtok(NULL, " \t");
     }
 }
@@ -3876,6 +3877,13 @@ int main(int argc, char **argv) {
             g_lint_unsafe_enabled = true;
             g_unsafe_stats_enabled = true;
             /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--lint-inline-c-unsafe") == 0) {
+            g_lint_inline_c_unsafe = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

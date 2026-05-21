@@ -29,6 +29,12 @@
   return (double)(uint64_t)bits / 9007199254740992.0; /* 2^53 */
   ```)
 
+;; int->float -- cast a 64-bit integer to a double.
+(defn int->float [x :int] :float
+  ```c
+  return (double)(int64_t)x;
+  ```)
+
 ;; print-float6 -- print a float with 6 decimal places (matches C benchmark output).
 (defn print-float6 [x :float] :nil
   ```c
@@ -51,6 +57,6 @@
 ;; estimate-pi -- run Monte Carlo and print the result.
 (defn estimate-pi [iters :int] :nil
   (let [inside (mc-loop 0 iters 6364136223846793005 0)]
-    (print-float6 (* 4.0 (int->unit-float (* inside iters))))))
+    (print-float6 (/ (* 4.0 (int->float inside)) (int->float iters)))))
 
 (estimate-pi (if (= *args* 0) 1000 (cstr->parse-int (head *args*))))

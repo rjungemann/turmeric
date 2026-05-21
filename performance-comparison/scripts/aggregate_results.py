@@ -29,7 +29,7 @@ RAW_DIR       = BASE_DIR / "results" / "raw"
 PROCESSED_DIR = BASE_DIR / "results" / "processed"
 
 TRIM_FRACTION = 0.10   # discard top and bottom 10% of runs
-LANGUAGES     = ["c", "turmeric", "clojure", "racket", "python"]
+LANGUAGES     = ["c", "turmeric", "rust", "clojure", "racket", "turi", "python"]
 
 
 def load_raw(cat_filter: "str | None", size_filter: "str | None") -> list:

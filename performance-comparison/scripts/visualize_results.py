@@ -22,12 +22,14 @@ BASE_DIR      = Path(__file__).resolve().parent.parent
 PROCESSED_DIR = BASE_DIR / "results" / "processed"
 ANALYSIS_DIR  = BASE_DIR / "analysis"
 
-LANG_ORDER    = ["c", "turmeric", "clojure", "racket", "python"]
+LANG_ORDER    = ["c", "turmeric", "rust", "clojure", "racket", "turi", "python"]
 LANG_COLORS   = {
     "c":       "#4e9af1",
     "turmeric":"#f0a500",
+    "rust":    "#ce422b",
     "clojure": "#63b76c",
     "racket":  "#e05c5c",
+    "turi":    "#8c6d00",
     "python":  "#9b59b6",
 }
 BAR_WIDTH     = 40   # max ASCII bar width in chars
@@ -208,7 +210,7 @@ def build_html(entries: list, cat_filter: "str | None") -> str:
 <body>
 <h1>Turmeric Performance Comparison</h1>
 <p class="subtitle">
-  C · Turmeric · Clojure · Racket · Python &nbsp;|&nbsp;
+  C · Turmeric · Rust · Clojure · Racket · Turi · Python &nbsp;|&nbsp;
   Trimmed mean (±10%) &nbsp;|&nbsp; Speedup relative to C baseline
 </p>
 

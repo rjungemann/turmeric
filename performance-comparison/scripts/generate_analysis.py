@@ -28,7 +28,7 @@ BASE_DIR      = Path(__file__).resolve().parent.parent
 PROCESSED_DIR = BASE_DIR / "results" / "processed"
 ANALYSIS_DIR  = BASE_DIR / "analysis"
 
-LANG_ORDER = ["c", "turmeric", "clojure", "racket", "python"]
+LANG_ORDER = ["c", "turmeric", "rust", "clojure", "racket", "turi", "python"]
 TODAY      = date.today().isoformat()
 
 CATEGORY_DESCRIPTIONS = {
@@ -46,8 +46,10 @@ CATEGORY_DESCRIPTIONS = {
 LANGUAGE_NOTES = {
     "c":       "Compiled with `clang -O3 -lpthread -lm`. Serves as the baseline (1.0×).",
     "turmeric":"Custom compiled language. Builds via `build-rel/tur build`. Inline-C used for I/O and math-heavy benchmarks.",
+    "rust":    "Compiled with `cargo build --release`. Native code; expected to be near C performance.",
     "clojure": "Runs on the JVM (Clojure CLI). JVM startup included in all timings; JIT warmup may benefit repeated runs.",
     "racket":  "Runs on Chez Scheme backend (`racket`). Includes startup overhead.",
+    "turi":    "Turmeric tree-walking interpreter mode (`tur --interpret`). Uses reduced input sizes where needed to avoid stack overflow.",
     "python":  "CPython 3.13.1 (no JIT). Interpreted; expected to be slowest except for I/O-bound tasks.",
 }
 

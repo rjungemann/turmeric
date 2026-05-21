@@ -10,6 +10,8 @@ extern bool g_unsafe_warn_nested;
 extern bool g_unsafe_require_safety;
 extern bool g_unsafe_stats_enabled;
 extern bool g_lint_unsafe_enabled;
+/* U6: warn on inline-C outside #{Unsafe}-annotated functions */
+extern bool g_lint_inline_c_unsafe;
 
 /* Phase R5: panic strategy */
 extern bool g_panic_abort;

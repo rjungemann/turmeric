@@ -305,6 +305,13 @@ Expr *elab_form(Elab *e, Form *f) {
             }
         case F_CBLOCK: {
             /* Phase 2: inline C code block ```c ... ``` */
+            /* U6: warn if inline-C appears outside an #{Unsafe}-annotated function */
+            if (g_lint_inline_c_unsafe && e->unsafe_depth == 0) {
+                diag_emit_with_code(DIAG_WARNING, f->span,
+                    TUR_W0036_INLINE_C_MISSING_UNSAFE,
+                    "inline-C block in function not annotated #{Unsafe}; "
+                    "add #{Unsafe} to the function or wrap the call site in (unsafe ...)");
+            }
             /* For now, we don't support captures, so the InlineC has no captures */
             InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
             ic->code = f->as.cblock;
