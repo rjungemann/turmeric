@@ -311,13 +311,41 @@ Expr *elab_defclass(Elab *e, const Form *call) {
                 
                 for (uint8_t i = 0; i < n_type_params; i++) {
                     Form *p = params_form->as.list.items[i];
-                    /* Phase HKT H1: [f :kind] vector form — not yet supported;
-                     * users should use the '^name' prefix instead. */
+                    /* Phase HKT H1: [f :kind] vector form — lowered to the same
+                     * internal representation as '^f' (KIND_ARROW) or '^^f' (KIND_ARROW2).
+                     * Accepted forms: [f :kind] and [f :kind2]. */
                     if (p->tag == F_VEC) {
-                        diag_emit(DIAG_ERROR, p->span,
-                                  "kind annotations in defclass type parameters must use "
-                                  "the '^name' prefix syntax (e.g. '^f' for kind '* -> *')");
-                        return NULL;
+                        if (p->as.list.len != 2 ||
+                            p->as.list.items[0]->tag != F_SYM ||
+                            p->as.list.items[1]->tag != F_KEYWORD) {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "[f :kind] form requires exactly two elements: "
+                                      "a symbol and a kind keyword (:kind or :kind2)");
+                            return NULL;
+                        }
+                        const Symbol *bare = p->as.list.items[0]->as.sym;
+                        const char   *kw   = p->as.list.items[1]->as.sym->name;
+                        Kind          kt;
+                        if (strcmp(kw, "kind2") == 0) {
+                            kt = KIND_ARROW2;
+                        } else if (strcmp(kw, "kind") == 0) {
+                            kt = KIND_ARROW;
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "unknown kind keyword ':%s'; expected :kind or :kind2",
+                                      kw);
+                            return NULL;
+                        }
+                        if (bare->len == 0 || bare->name[0] < 'a' || bare->name[0] > 'z') {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "'%s' is not a valid type parameter; "
+                                      "use a lowercase name in [name :kind]",
+                                      bare->name);
+                            return NULL;
+                        }
+                        type_params[i]      = bare;
+                        type_param_kinds[i] = kt;
+                        continue;
                     }
                     if (p->tag != F_SYM) {
                         diag_emit(DIAG_ERROR, p->span,

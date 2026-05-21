@@ -131,10 +131,9 @@
 ;;;   time -- time in beats
 ;;;
 ;;; Returns:
-;;;   Pattern value (always 0.0 in this placeholder implementation).
+;;;   Pattern value at the given time (not yet implemented).
 (defn eval-compiled [cp time]
-  ;; Conceptual
-  0.0)
+  (panic "eval-compiled: not yet implemented (requires compiled pattern representation)"))
 
 ;; ============================================================================
 ;; Lazy Pattern Evaluation

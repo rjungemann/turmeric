@@ -145,7 +145,7 @@ currently serialize as 8 zero bytes and cannot be restored.
 
 ---
 
-### 1.6 [ ] `weak-upgrade` Return Type
+### 1.6 [x] `weak-upgrade` Return Type
 
 - `src/compiler/elab_memory.c` ~432-437: `weak-upgrade` returns `rc<T>` instead of
   `option<rc<T>>`.
@@ -157,9 +157,11 @@ instead of `none`, so callers cannot detect upgrade failure.
 result in `some`/`none` depending on the strong-count check. Add a fixture that
 upgrades a weak ref after the original rc is dropped.
 
+**Done:** `elab_weak_upgrade` now returns `TY_PTR_VOID` (option representation as `ptr<void>`). Emitted C allocates a `{ bool is_some; int64_t value; }` struct on success, NULL for none. `weak-dangling` fixture updated to use `some?`; new `weak-upgrade-option` fixture added.
+
 ---
 
-### 1.7 [ ] `transmute` Compile-Time Size Check
+### 1.7 [x] `transmute` Compile-Time Size Check
 
 - `src/compiler/elab_unsafe.c` ~322-333: size equality between source and target types
   is not verified at compile time; the args array uses a placeholder slot.
@@ -167,15 +169,19 @@ upgrades a weak ref after the original rc is dropped.
 **Plan:** Resolve both type sizes in the elaborator and emit a `static_assert` in the
 generated C. Low risk but easy to add.
 
+**Done:** `elab_transmute` now parses the target-type form, calls `type_size_bytes` to check source/target sizes at elaboration time, sets the correct result type, and emits a properly-typed cast in `BS_TRANSMUTE`.
+
 ---
 
-### 1.8 [ ] HKT `[f :kind]` Vector Syntax
+### 1.8 [x] HKT `[f :kind]` Vector Syntax
 
 - `src/compiler/elab_typeclasses.c` ~314-315: kind-annotated vector form `[f :kind]`
   is not parsed; users must use `'^name'` prefix.
 
 **Plan:** Parse `[f :kind]` in the kind-annotation reader path and lower it to the
 same internal form as `'^f'`. Purely additive change.
+
+**Done:** The `[f :kind]` (KIND_ARROW) and `[f :kind2]` (KIND_ARROW2) forms are now accepted in `defclass` type-parameter lists and lowered to the same internal representation as `'^f'` and `'^^f'`.
 
 ---
 
@@ -250,7 +256,7 @@ bytes.
 
 ---
 
-### 3.2 [ ] Effect Lowering Placeholder
+### 3.2 [x] Effect Lowering Placeholder
 
 - `src/passes/effect_lower.c` ~110-137: `perform_to_shift()` is unused
   (`__attribute__((unused))`); it returns 0 instead of looking up the handler.
@@ -260,6 +266,8 @@ handler resolution rather than a post-pass rewrite.
 
 **Plan:** Either wire in the pass or remove the dead code. See
 `docs/archive/emit-effects-extraction-plan.md` for context.
+
+**Done:** Removed the three dead unused functions (`perform_to_shift`, `handle_to_reset`, `lower_resume`) from `effect_lower.c`. The pass itself remains in place; wiring it in is tracked as future work.
 
 ---
 
@@ -383,7 +391,7 @@ carries a `show` function pointer.
 
 ---
 
-### 4.4 [ ] Signal/DSP Filter Stubs
+### 4.4 [x] Signal/DSP Filter Stubs
 
 - `stdlib/signal/dsp.tur` ~130-150:
   - `low-pass`: returns `amplitude * signal` instead of a real IIR/FIR filter.
@@ -395,9 +403,11 @@ carries a `show` function pointer.
 or a dedicated filter-state struct. The stateless API signature may need to change to
 pass state in/out. Tracked in `docs/archive/signal-processing-arrows-plan.md`.
 
+**Done:** Implemented first-order IIR filters using heap-allocated state. Added `__dsp_alloc_state` helper. `low-pass` now applies `y[n] = a*x[n] + (1-a)*y[n-1]`. `high-pass` applies `y[n] = x[n] - low_pass(x)[n]`. State is allocated per filter instance when applied to a signal.
+
 ---
 
-### 4.5 [~] Tidal / Live-Coding Placeholders
+### 4.5 [x] Tidal / Live-Coding Placeholders
 
 - `stdlib/tidal/timing.tur` ~194: pattern scheduling callback is a placeholder.
 - `stdlib/tidal/live.tur` ~357-361: `live-eval` returns code unchanged instead of
@@ -408,8 +418,7 @@ pass state in/out. Tracked in `docs/archive/signal-processing-arrows-plan.md`.
 `docs/upcoming/sandboxed-eval-plan.md`). Until then, add an explicit panic so callers
 know it is not functional.
 
-**Done:** `tidal/live.tur` `live-eval` now panics with "not yet implemented".
-`timing.tur` scheduling callback and `perf.tur` `eval-compiled` are still stubs.
+**Done:** `tidal/live.tur` `live-eval` now panics with "not yet implemented". `timing.tur` scheduling callback now panics with "not yet implemented (requires synth parameter update integration)". `perf.tur` `eval-compiled` now panics with "not yet implemented (requires compiled pattern representation)".
 
 ---
 
@@ -513,18 +522,19 @@ sentinel is implemented.
 | P1 | §1.2 Compiled try/catch | Medium | [x] | §1.1 |
 | P1 | §4.1 Show for numeric types | Low | [x] | -- |
 | P2 | §1.3 Panic type tag | Low | [x] | -- |
-| P2 | §1.6 `weak-upgrade` return type | Low | [ ] | none |
+| P2 | §1.6 `weak-upgrade` return type | Low | [x] | none |
 | P2 | §3.1 Opaque pointer serialization policy | Low | [x] | -- |
 | P2 | §4.9 `backtrack.tur` fresh sentinel | Low | [x] | -- |
 | P3 | §2.1 Quasiquote in interpreter | Medium | [x] | -- |
+| P3 | §3.2 Effect lowering dead code | Low | [x] | -- |
 | P3 | §3.3 Async/scheduler stubs -- make them loud | Low | [x] | -- |
-| P3 | §4.4 DSP filter stubs | Medium | [ ] | none |
+| P3 | §4.4 DSP filter stubs | Medium | [x] | none |
 | P3 | §4.5/4.6 Tidal/SCSCM `live-eval` -- panic loudly | Low | [x] | -- |
 | P4 | §1.5 Phase 21 serial-shift | Very High | [ ] | §3.1 [x], §1.4, approach decision |
 | P4 | §1.4 Phase 18 `call/cc` | Very High | [ ] | §1.1, approach decision |
 | P4 | §3.4 WASM fiber context | High | [ ] | approach decision, WASM build |
-| P5 | §1.7 Transmute size check | Low | [ ] | none |
-| P5 | §1.8 HKT `[f :kind]` syntax | Low | [ ] | none |
+| P5 | §1.7 Transmute size check | Low | [x] | none |
+| P5 | §1.8 HKT `[f :kind]` syntax | Low | [x] | none |
 | P5 | §1.9 Reserved `?` operator | Low | [ ] | none |
 | P5 | §4.2 Arena-backed Show | Medium | [ ] | arena infrastructure |
 | P5 | §4.3 result/option Display vtable | High | [ ] | §4.1 [x], approach decision |

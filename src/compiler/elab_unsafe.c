@@ -305,8 +305,7 @@ Expr *elab_reinterpret(Elab *e, const Form *call) {
 }
 
 Expr *elab_transmute(Elab *e, const Form *call) {
-    /* (transmute value to-type) - type-punning with compile-time size check
-     * For v1, we just check we're in an unsafe block */
+    /* (transmute value to-type) - type-punning with compile-time size check */
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "transmute requires exactly 2 arguments: (transmute value to-type)");
@@ -319,20 +318,39 @@ Expr *elab_transmute(Elab *e, const Form *call) {
     }
     Expr *value = elab_form(e, call->as.list.items[1]);
     if (!value) return NULL;
-    /* For v1, compile-time size check is not implemented */
+
+    /* Resolve the target type from the keyword or symbol form. */
+    Form *to_type_form = call->as.list.items[2];
+    TypeKind target_kind = TY_UNKNOWN;
+    if (to_type_form->tag == F_KEYWORD || to_type_form->tag == F_SYM) {
+        target_kind = typekind_from_symbol(to_type_form->as.sym->name);
+    }
+
+    /* Compile-time size check: source and target types must have the same size. */
+    int src_size = type_size_bytes(value->type.kind);
+    int dst_size = (target_kind != TY_UNKNOWN) ? type_size_bytes(target_kind) : 0;
+    if (src_size > 0 && dst_size > 0 && src_size != dst_size) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "transmute: size mismatch -- source type '%s' (%d bytes) vs "
+                  "target type '%s' (%d bytes)",
+                  type_name(value->type), src_size,
+                  to_type_form->as.sym->name, dst_size);
+        return NULL;
+    }
+
     const BuiltinSpec *spec = builtin_lookup(e->sym_transmute, value->type, 2);
     if (!spec) {
         diag_emit(DIAG_ERROR, call->span, "transmute: builtin lookup failed");
         return NULL;
     }
-    Type result_type = TYPE_INT;
+    Type result_type = (target_kind != TY_UNKNOWN) ? (Type){ .kind = target_kind,
+        .copy_kind = CK_COPY, .n_lifetimes = 0 } : TYPE_INT;
     Expr *out = expr_new(e->arena, EX_BUILTIN, result_type, call->span);
     out->as.builtin.spec = spec;
-    Expr **args = arena_alloc(e->arena, 2 * sizeof(Expr *));
+    Expr **args = arena_alloc(e->arena, 1 * sizeof(Expr *));
     args[0] = value;
-    args[1] = value; /* Placeholder */
     out->as.builtin.args = args;
-    out->as.builtin.n = 2;
+    out->as.builtin.n = 1;
     return out;
 }
 

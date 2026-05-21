@@ -1940,14 +1940,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return tmp;
         }
         case EX_WEAK_UPGRADE: {
-            /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
+            /* (upgrade w) -> option<rc<T>> as ptr<void>: some(rc) or none (NULL) */
             char *inner = emit_value(ctx, body, e->as.weak_upgrade_.expr);
-            char *tmp = fresh_tmp(ctx);
+            char *cb_tmp  = fresh_tmp(ctx);
+            char *opt_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            /* Try to upgrade - returns the same cb if alive, NULL otherwise */
-            buf_printf(body, "RcControlBlock *%s = rc_upgrade(%s);\n", tmp, inner);
+            buf_printf(body, "RcControlBlock *%s = rc_upgrade(%s);\n", cb_tmp, inner);
             free(inner);
-            return tmp;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "struct { bool is_some; int64_t value; } *%s = NULL;\n", opt_tmp);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) { %s = malloc(sizeof(*%s)); %s->is_some = true; "
+                             "%s->value = (int64_t)(intptr_t)%s; }\n",
+                       cb_tmp, opt_tmp, opt_tmp, opt_tmp, opt_tmp, cb_tmp);
+            return opt_tmp;
         }
         case EX_WEAK_PRED: {
             /* (weak? w) - check if w is weak<T> */

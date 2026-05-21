@@ -107,47 +107,73 @@
 ;; Filters
 ;; =============================================================================
 
+;;; __dsp_alloc_state -- allocate a zero-initialized double-sized state cell.
+(defn __dsp_alloc_state [] :int
+  ```c
+  double *p = (double *)calloc(1, sizeof(double));
+  if (!p) { fprintf(stderr, "dsp: state alloc failed\n"); abort(); }
+  return (int64_t)(intptr_t)p;
+  ```)
+
 ;;; low-pass -- first-order IIR low-pass filter Signal Function.
 ;;;
 ;;; Parameters:
 ;;;   alpha -- smoothing coefficient in (0,1); lower = more smoothing.
 ;;;
 ;;; Returns:
-;;;   A Signal Function that smooths the input signal.
+;;;   A Signal Function applying an exponential moving average: y[n] = a*x[n] + (1-a)*y[n-1].
 ;;;
 ;;; Example:
 ;;;   (low-pass 0.5)  ; => SF applying EMA with alpha=0.5
+;;;
+;;; Since: Phase B1
 (defn low-pass [alpha]
   (let [av alpha]
     (fn [sig]
-      ```c
-      /* Simple IIR low-pass: y[t] = alpha * x[t] + (1-alpha) * y[t-1] */
-      /* For continuous-time signals we use the input at t directly */
-      double a = ((union { int64_t i; double d; }){.i = av}).d;
-      /* Return a signal function that just scales the input */
-      /* Note: true stateful filter requires discrete time; stub returns scaled input */
-      /* We return the signal itself scaled by alpha (not a real filter) */
-      /* This is a placeholder - proper stateful filter requires discrete sampling */
-      return (int64_t)(intptr_t)sig;
-      ```)))
+      (let [sv sig
+            state (__dsp_alloc_state)]
+        (fn [t]
+          ```c
+          double a = ((union { int64_t i; double d; }){.i = av}).d;
+          double *prev = (double *)(intptr_t)state;
+          double x = ((union { int64_t i; double d; }){
+            .i = ((int64_t(*)(int64_t))(intptr_t)sv)(t)
+          }).d;
+          double y = a * x + (1.0 - a) * (*prev);
+          *prev = y;
+          union { double d; int64_t i; } u; u.d = y;
+          return u.i;
+          ```)))))
 
 ;;; high-pass -- first-order IIR high-pass filter Signal Function.
 ;;;
 ;;; Parameters:
-;;;   alpha -- filter coefficient in (0,1).
+;;;   alpha -- filter coefficient in (0,1); higher = more high-frequency content.
 ;;;
 ;;; Returns:
-;;;   A Signal Function applying high-pass filtering.
+;;;   A Signal Function applying high-pass filtering: y[n] = x[n] - low_pass(x)[n].
 ;;;
 ;;; Example:
 ;;;   (high-pass 0.5)  ; => high-pass SF with alpha=0.5
+;;;
+;;; Since: Phase B1
 (defn high-pass [alpha]
   (let [av alpha]
     (fn [sig]
-      ```c
-      /* Stub: high-pass filter placeholder */
-      return (int64_t)(intptr_t)sig;
-      ```)))
+      (let [sv sig
+            state (__dsp_alloc_state)]
+        (fn [t]
+          ```c
+          double a = ((union { int64_t i; double d; }){.i = av}).d;
+          double *prev_lp = (double *)(intptr_t)state;
+          double x = ((union { int64_t i; double d; }){
+            .i = ((int64_t(*)(int64_t))(intptr_t)sv)(t)
+          }).d;
+          double lp = a * x + (1.0 - a) * (*prev_lp);
+          *prev_lp = lp;
+          union { double d; int64_t i; } u; u.d = x - lp;
+          return u.i;
+          ```))))))
 
 ;; =============================================================================
 ;; Amplitude Operations

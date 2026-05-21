@@ -801,10 +801,9 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
             break;
         case BS_TRANSMUTE:
-            /* transmute: type-punning with compile-time size check
-             * For v1, we assume sizes match and emit a simple cast
-             * Emit: (int64_t)arg0 */
-            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+            /* transmute: bitwise reinterpretation; size equality verified at
+             * elaboration time. Cast through the result type. */
+            buf_printf(&out, "((%s)%s)", type_c_name(e->type), arg_strs[0]);
             break;
         /* Phase U3: Unsafe primitives - unchecked array ops */
         case BS_ARRAY_GET_UNCHECKED:

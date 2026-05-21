@@ -426,15 +426,9 @@ Expr *elab_weak_upgrade(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Returns option<rc<T>> */
-    /* For now, we return rc<T> wrapped in option */
-    /* option<rc<T>> would be a separate type, but we'll use rc<T> for simplicity in v1 */
-    /* TODO: Proper option type when option is fully implemented */
-    Type result_type = inner->type;  /* weak<T> - for now, upgrade returns weak<T> or rc<T> */
-    /* Actually, upgrade should return option<rc<T>> */
-    /* Since option isn't fully implemented, we'll return rc<T> or nil */
-    /* For Phase 9, we'll just return rc<T> to keep it simple */
-    result_type = type_rc(inner->type.as.rc.inner);
+    /* Returns option<rc<T>>, represented as ptr<void> (heap-allocated some/none struct).
+     * Callers use some?/option-unwrap from stdlib/option.tur to inspect the result. */
+    Type result_type = TYPE_PTR_VOID;
 
     /* Create EX_WEAK_UPGRADE expression */
     Expr *out = expr_new(e->arena, EX_WEAK_UPGRADE, result_type, call->span);
