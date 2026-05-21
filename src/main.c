@@ -61,6 +61,21 @@
 #define TUR_VERSION "unknown"
 #endif
 
+/* E14: structured JSON output global — set by --json flag.
+ * When true: tur doc prints JSON; tur test prints JSON; tur check uses JSON diag. */
+static bool use_json_output = false;
+
+/* Escape a string for JSON output (handles backslash, double-quote, newline). */
+static void json_escape(const char *s, char *out, size_t cap) {
+    size_t i = 0;
+    while (*s && i + 4 < cap) {
+        if (*s == '\\' || *s == '"') { out[i++] = '\\'; out[i++] = *s++; }
+        else if (*s == '\n')          { out[i++] = '\\'; out[i++] = 'n'; s++; }
+        else                          { out[i++] = *s++; }
+    }
+    out[i] = '\0';
+}
+
 /* Extract basename from a path. */
 static const char *basename_of(const char *path) {
     const char *s = strrchr(path, '/');
@@ -1231,10 +1246,28 @@ static int cmd_test(const char *dir) {
         }
     }
 
-    putchar('\n');
-    printf("%d tests, %d passed, %d failed\n", n_files, passed, failed);
-    for (int i = 0; i < failed; i++) {
-        printf("FAIL %s\n", failed_files[i]);
+    if (use_json_output) {
+        printf("{\"total\":%d,\"passed\":%d,\"failed\":%d,\"tests\":[",
+               n_files, passed, failed);
+        bool first = true;
+        for (int i = 0; i < n_files; i++) {
+            bool is_fail = false;
+            for (int j = 0; j < failed; j++) {
+                if (failed_files[j] == tur_files[i]) { is_fail = true; break; }
+            }
+            if (!first) printf(",");
+            first = false;
+            char esc[1024];
+            json_escape(tur_files[i], esc, sizeof(esc));
+            printf("{\"file\":\"%s\",\"status\":\"%s\"}", esc, is_fail ? "fail" : "pass");
+        }
+        printf("]}\n");
+    } else {
+        putchar('\n');
+        printf("%d tests, %d passed, %d failed\n", n_files, passed, failed);
+        for (int i = 0; i < failed; i++) {
+            printf("FAIL %s\n", failed_files[i]);
+        }
     }
 
     free(failed_files);
@@ -1405,10 +1438,11 @@ static int is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
-/* tur format [--check] [file]
+/* tur format [--check|--diff] [file]
  * Read source from file (or stdin if no file given), format it, and write to
- * stdout.  With --check, exit 1 if the file is not already formatted. */
-static int cmd_format(const char *path, bool check_only) {
+ * stdout.  --check: exit 1 if file is not already formatted (no output).
+ * --diff: print unified diff if file would change; exit 1 if changed. */
+static int cmd_format(const char *path, bool check_only, bool diff_mode) {
     char  *src = NULL;
     size_t len = 0;
 
@@ -1470,6 +1504,34 @@ static int cmd_format(const char *path, bool check_only) {
             if (!same) {
                 if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
                 rc = 1;
+            }
+        } else if (diff_mode) {
+            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+            if (!same) {
+                /* Write original and formatted to temp files, run diff -u. */
+                char orig_tmp[] = "/tmp/tur-fmt-orig-XXXXXX";
+                int orig_fd = mkstemp(orig_tmp);
+                if (orig_fd >= 0) {
+                    (void)write(orig_fd, src, len);
+                    close(orig_fd);
+                }
+                char new_tmp[] = "/tmp/tur-fmt-new-XXXXXX";
+                int new_fd = mkstemp(new_tmp);
+                if (new_fd >= 0) {
+                    (void)write(new_fd, out.data, out.len);
+                    close(new_fd);
+                }
+                const char *label = path ? path : "<stdin>";
+                char diff_cmd[8192];
+                /* -L flag supported by both GNU diff and BSD diff (macOS) */
+                snprintf(diff_cmd, sizeof(diff_cmd),
+                         "diff -u -L '%s' -L '%s' '%s' '%s'",
+                         label, label, orig_tmp, new_tmp);
+                int diff_rc = system(diff_cmd);
+                unlink(orig_tmp);
+                unlink(new_tmp);
+                /* diff exits 1 when files differ, 0 when same */
+                if (diff_rc != 0) rc = 1;
             }
         } else {
             buf_to_file(&out, stdout);
@@ -3684,9 +3746,10 @@ static int usage(void) {
         "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
         "  tur eval '<expr>'                 evaluate an inline expression\n"
         "  tur doc <symbol>                  print documentation for a builtin or special form\n"
+        "  tur explain <TUR-E####|snippet>   explain a diagnostic code or snippet errors\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
-        "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
+        "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
         "  tur init [--bin|--lib] <name>     create a new project\n"
@@ -3702,6 +3765,7 @@ static int usage(void) {
         "\n"
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
+        "  --json                           structured JSON output (tur doc, tur test, tur check)\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
         "  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)\n"
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
@@ -3781,7 +3845,8 @@ static int usage_eval(void) {
 static int usage_doc(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur doc <symbol>   print documentation for a builtin or special form\n"
+        "  tur doc <symbol>          print documentation for a builtin or special form\n"
+        "  tur doc --json <symbol>   print documentation as JSON\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -3791,10 +3856,20 @@ static int usage_doc(void) {
 static int cmd_doc_cli(const char *sym) {
     const char *d = turi_doc_lookup_builtin(sym);
     if (d) {
-        printf("%s\n", d);
+        if (use_json_output) {
+            char esc_sym[128], esc_doc[512];
+            json_escape(sym, esc_sym, sizeof(esc_sym));
+            json_escape(d,   esc_doc, sizeof(esc_doc));
+            printf("{\"name\":\"%s\",\"doc\":\"%s\"}\n", esc_sym, esc_doc);
+        } else {
+            printf("%s\n", d);
+        }
         return 0;
     }
-    fprintf(stderr, "no documentation for '%s'\n", sym);
+    if (use_json_output)
+        fprintf(stderr, "{\"error\":\"no documentation for '%s'\"}\n", sym);
+    else
+        fprintf(stderr, "no documentation for '%s'\n", sym);
     return 1;
 }
 
@@ -3803,6 +3878,7 @@ static int usage_format(void) {
         "usage:\n"
         "  tur format [file.tur]          format a source file (stdin if no file given)\n"
         "  tur format --check [file.tur]  exit 1 if formatting would change the file\n"
+        "  tur format --diff [file.tur]   print unified diff of formatting changes\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -3828,7 +3904,22 @@ static int usage_repl(void) {
         "  :doc <sym>      look up documentation for a symbol\n"
         "  :type <expr>    print the inferred type of an expression\n"
         "  :reload <file>  reload a source file\n"
+        "  :reset          clear session and start fresh\n"
         "  :tutorial       start the interactive tutorial\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int usage_explain(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur explain <TUR-E####>    print explanation for a diagnostic code\n"
+        "  tur explain '<snippet>'   compile a snippet and explain errors\n"
+        "\n"
+        "examples:\n"
+        "  tur explain TUR-E0042\n"
+        "  tur explain '(+ 1 \"x\")'\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -4005,7 +4096,14 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "--json-diagnostics") == 0) {
             use_json_diagnostics = true;
-            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--json") == 0) {
+            /* E14: structured JSON output — implies --json-diagnostics for check */
+            use_json_output = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -4216,6 +4314,7 @@ int main(int argc, char **argv) {
     
         /* Initialize diagnostics - use color unless --no-color or --json-diagnostics specified */
         /* JSON output disables color */
+        if (use_json_output) use_json_diagnostics = true;
         diag_init(!no_color && !use_json_diagnostics && stderr_is_tty());
         diag_set_json_output(use_json_diagnostics);
     
@@ -4364,22 +4463,32 @@ int main(int argc, char **argv) {
         if (argc != 3) return usage_doc();
         return cmd_doc_cli(argv[2]);
     }
+    /* E13: tur explain — first-class subcommand wrapping --explain */
+    if (strcmp(cmd, "explain") == 0) {
+        if (argc < 3 || (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0)))
+            return usage_explain();
+        return cmd_explain(argv[2]);
+    }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;
+        bool diff_mode  = false;
         const char *fmt_input = NULL;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
                 return usage_format();
             if (strcmp(argv[i], "--check") == 0) {
                 check_only = true;
+            } else if (strcmp(argv[i], "--diff") == 0) {
+                diff_mode = true;
             } else if (argv[i][0] != '-') {
-                if (fmt_input) return usage();
+                if (fmt_input) return usage_format();
                 fmt_input = argv[i];
             } else {
-                return usage();
+                return usage_format();
             }
         }
-        return cmd_format(fmt_input, check_only);
+        if (check_only && diff_mode) return usage_format();
+        return cmd_format(fmt_input, check_only, diff_mode);
     }
     if (strcmp(cmd, "test") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))

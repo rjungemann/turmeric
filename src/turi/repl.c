@@ -37,6 +37,10 @@
 #  include <editline/readline.h>
 #endif
 
+/* E11: tab-completion — current REPL environment for the completion generator.
+ * Updated whenever the env is recreated (e.g. after :reset). */
+static TuriEnv *g_completion_env = NULL;
+
 /* Compiler internals (CMake adds src/ to the include path) */
 #include "arena.h"
 #include "buf.h"
@@ -72,6 +76,52 @@ static int paren_balance(const char *s) {
     }
     return depth;
 }
+
+/* -------------------------------------------------------------------------
+ * E11: Tab-completion generator (editline only)
+ * ---------------------------------------------------------------------- */
+
+#ifdef TURI_HAVE_EDITLINE
+/* Known REPL meta-commands for colon-prefix completion. */
+static const char *const k_meta_cmds[] = {
+    ":help", ":quit", ":q",
+    ":type", ":doc", ":reload", ":reset",
+    ":tutorial", ":next", ":prev", ":hint", ":skip",
+    ":quit-tutorial", ":tutorial-progress",
+    NULL
+};
+
+/* readline/editline generator: called with state=0 on first call for a
+ * given prefix, then state>0 for subsequent calls.  Returns a malloc'd
+ * match string or NULL when the list is exhausted. */
+static char *tur_completion_generator(const char *text, int state) {
+    static int meta_idx;
+    static EnvBinding *cur_binding;
+    size_t tlen = strlen(text);
+
+    if (state == 0) {
+        meta_idx   = 0;
+        cur_binding = g_completion_env ? g_completion_env->globals : NULL;
+    }
+
+    if (text[0] == ':') {
+        /* Complete meta-commands */
+        while (k_meta_cmds[meta_idx]) {
+            const char *m = k_meta_cmds[meta_idx++];
+            if (strncmp(m, text, tlen) == 0) return strdup(m);
+        }
+        return NULL;
+    }
+
+    /* Complete environment bindings */
+    while (cur_binding) {
+        const char *name = cur_binding->name;
+        cur_binding = cur_binding->next;
+        if (strncmp(name, text, tlen) == 0) return strdup(name);
+    }
+    return NULL;
+}
+#endif /* TURI_HAVE_EDITLINE */
 
 /* -------------------------------------------------------------------------
  * Line input abstraction (editline when available, fgets fallback)
@@ -673,6 +723,23 @@ int turi_repl_run(void) {
     using_history();
     stifle_history(1000);
     if (hist_path) read_history(hist_path);
+    /* E11: install tab-completion generator.
+     * editline declares rl_completion_entry_function as Function* (int ret)
+     * but actual calling convention is char* — suppress the type mismatch. */
+    g_completion_env = env;
+#  if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wincompatible-function-pointer-types"
+#  elif defined(__GNUC__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+#  endif
+    rl_completion_entry_function = tur_completion_generator;
+#  if defined(__clang__)
+#    pragma clang diagnostic pop
+#  elif defined(__GNUC__)
+#    pragma GCC diagnostic pop
+#  endif
 #endif
 
     Buf multi;
@@ -736,6 +803,9 @@ int turi_repl_run(void) {
                 balance = 0;
                 multi.len = 0;
                 in_sweet_form = false;
+#ifdef TURI_HAVE_EDITLINE
+                g_completion_env = env;
+#endif
                 printf(";; session cleared\n");
                 free(line);
                 continue;

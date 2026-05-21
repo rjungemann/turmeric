@@ -663,6 +663,98 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Tier 3: tur explain subcommand  (E13)
+# ---------------------------------------------------------------------------
+
+# tur explain --help: should print usage and exit 0
+out=$("$TUR" explain --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "explain-help" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q "tur explain"; then
+    fail "explain-help" "output '$out' did not mention 'tur explain'"
+else
+    pass "explain-help"
+fi
+
+# tur explain <snippet>: compile a bad snippet and exit nonzero
+out=$("$TUR" explain '(+ 1 "x")' 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "explain-snippet-error" "expected nonzero exit for type error snippet, got 0"
+else
+    pass "explain-snippet-error"
+fi
+
+# tur explain <good snippet>: no errors, exit 0
+out=$("$TUR" explain '(+ 1 2)' 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "explain-snippet-ok" "expected exit 0 for valid snippet, got $rc; output: $out"
+else
+    pass "explain-snippet-ok"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 3: tur format --diff  (E12)
+# ---------------------------------------------------------------------------
+
+# tur format --diff on already-formatted file: exit 0, no output
+TMP_FMT=$(mktemp /tmp/tur_fmt_XXXXXX.tur)
+printf '(+ 1 2)\n' > "$TMP_FMT"
+out=$("$TUR" format --diff "$TMP_FMT" 2>&1); rc=$?
+rm -f "$TMP_FMT"
+if [ $rc -ne 0 ]; then
+    fail "format-diff-clean" "expected exit 0 for already-formatted file, got $rc; output: $out"
+else
+    pass "format-diff-clean"
+fi
+
+# tur format --diff on unformatted file: exit 1 and print diff
+TMP_UGLY=$(mktemp /tmp/tur_ugly_XXXXXX.tur)
+printf '(+   1   2)\n' > "$TMP_UGLY"
+out=$("$TUR" format --diff "$TMP_UGLY" 2>&1); rc=$?
+rm -f "$TMP_UGLY"
+if [ $rc -eq 0 ]; then
+    fail "format-diff-changed" "expected exit 1 for unformatted file, got 0"
+elif ! echo "$out" | grep -q "^[-+]"; then
+    fail "format-diff-changed" "expected diff output, got '$out'"
+else
+    pass "format-diff-changed"
+fi
+
+# tur format --help: should mention --diff
+out=$("$TUR" format --help 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "format-help-diff" "expected exit 0, got $rc"
+elif ! echo "$out" | grep -q -- "--diff"; then
+    fail "format-help-diff" "format --help did not mention --diff"
+else
+    pass "format-help-diff"
+fi
+
+# ---------------------------------------------------------------------------
+# Tier 3: --json output flag  (E14)
+# ---------------------------------------------------------------------------
+
+# tur --json doc +: should print JSON with name and doc fields
+out=$("$TUR" --json doc "+" 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "json-doc" "expected exit 0, got $rc; output: $out"
+elif ! echo "$out" | grep -q '"name"'; then
+    fail "json-doc" "expected JSON with 'name' field, got '$out'"
+elif ! echo "$out" | grep -q '"doc"'; then
+    fail "json-doc" "expected JSON with 'doc' field, got '$out'"
+else
+    pass "json-doc"
+fi
+
+# tur --json doc unknown: exit 1 even in JSON mode
+out=$("$TUR" --json doc "no-such-sym-xyz" 2>&1); rc=$?
+if [ $rc -eq 0 ]; then
+    fail "json-doc-unknown" "expected nonzero exit for unknown sym in JSON mode, got 0"
+else
+    pass "json-doc-unknown"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo
