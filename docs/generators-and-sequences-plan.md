@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** Not started. GF0-GF2, LZ0-LZ4 planned.
+**Status:** GF0 complete. GF1-GF2, LZ0-LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -80,18 +80,20 @@ defn seq-map [f g]
 
 **Goal:** Fully specify the IR and C emission strategy before touching the compiler.
 
+**Design document:** `docs/design/generator-state-machine-design.md`
+
 **Tasks:**
-- [ ] Define the `Generator` struct representation: state tag + captured-variable
+- [x] Define the `Generator` struct representation: state tag + captured-variable
       fields per `gen` body
-- [ ] Enumerate control-flow forms that cross yield points: `while`, `if`,
+- [x] Enumerate control-flow forms that cross yield points: `while`, `if`,
       `cond`, `do`, `let`, nested `gen`
-- [ ] Specify how variables live across yield points (captured in struct vs.
+- [x] Specify how variables live across yield points (captured in struct vs.
       local C variables)
-- [ ] Write representative hand-compiled C output for: simple loop, nested loops,
+- [x] Write representative hand-compiled C output for: simple loop, nested loops,
       early return via `return`, conditional yield
-- [ ] Define `(Generator a)` surface type and its `next`/`done` operations
-- [ ] Decide: statically sized struct per `gen` vs. arena-allocated dynamic struct
-- [ ] Document limitations: no `gen` inside `match` arms that span a yield (v1),
+- [x] Define `(Generator a)` surface type and its `next`/`done` operations
+- [x] Decide: statically sized struct per `gen` vs. arena-allocated dynamic struct
+- [x] Document limitations: no `gen` inside `match` arms that span a yield (v1),
       no recursive generators (v1)
 
 **Deliverable:** Design document with hand-compiled C examples and a list of
