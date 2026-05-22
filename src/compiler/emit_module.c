@@ -83,6 +83,8 @@ int emit_program(Buf *out, const Expr *program) {
         const Expr *e = items[i];
         if (e->kind == EX_DEF && e->as.def_.struct_def) {
             StructDef *def = e->as.def_.struct_def;
+            /* SI4-C: opaque types are just int64_t in C -- no typedef needed. */
+            if (def->is_opaque) continue;
             /* Emit: typedef struct Name { fields... } Name; */
             buf_printf(&early_file, "typedef struct %s {\n", def->name);
             for (uint32_t j = 0; j < def->n_fields; j++) {
@@ -407,8 +409,12 @@ int emit_program(Buf *out, const Expr *program) {
                  * directly from the fn_type's result_full_type if present, or fall
                  * back to "int64_t" for opaque/unresolved struct types. */
                 if (result == TY_STRUCT) {
+                    /* LT4/SI4-C: inline-C bodies returning :StructName always emit int64_t.
+                     * Opaque types (defopaque) also emit int64_t via type_c_name. */
+                    bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                     const struct Type *rft = e->type.as.fn.result_full_type;
-                    if (rft && rft->kind == TY_STRUCT && rft->as.struct_.def &&
+                    if (!body_is_inline_c && rft && rft->kind == TY_STRUCT &&
+                        rft->as.struct_.def && !rft->as.struct_.def->is_opaque &&
                         rft->as.struct_.def->name) {
                         buf_puts(&fwd_decls, rft->as.struct_.def->name);
                     } else {
@@ -431,13 +437,8 @@ int emit_program(Buf *out, const Expr *program) {
                     /* ER4: function-typed parameters are passed as int64_t. */
                     buf_puts(&fwd_decls, "int64_t");
                 } else if (fd->param_types[j].kind == TY_STRUCT) {
-                    /* LT4: struct params lower to the actual struct name. */
-                    const StructDef *sd = fd->param_types[j].as.struct_.def;
-                    if (sd && sd->name) {
-                        buf_puts(&fwd_decls, sd->name);
-                    } else {
-                        buf_puts(&fwd_decls, "int64_t");
-                    }
+                    /* LT4/SI4-C: struct params lower to struct name, except opaque types → int64_t. */
+                    buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
                 } else {
                     buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
                 }

@@ -104,8 +104,10 @@ char *turi_wasm_eval(const char *input) {
     char type_tag[64] = {0};
     TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
 
-    /* SI4: try Show instance first; fall back to repr */
+    /* SI4: three-tier display: turi_try_show → turi_show_result → repr */
     const char *show_str = turi_try_show(g_env, result);
+    if (!show_str)
+        show_str = turi_show_result(g_env, result, type_tag);
     if (show_str) {
         char *ret = turi_wasm_strdup(show_str);
         free((char *)show_str);
@@ -158,8 +160,10 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
         return 1;
     }
 
-    /* SI4: try Show instance first; fall back to repr */
+    /* SI4: three-tier display: turi_try_show → turi_show_result → repr */
     const char *show_str = turi_try_show(g_env, result);
+    if (!show_str)
+        show_str = turi_show_result(g_env, result, type_tag);
     if (show_str) {
         *out_result = turi_wasm_strdup(show_str);
         free((char *)show_str);

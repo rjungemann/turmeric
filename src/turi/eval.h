@@ -51,6 +51,12 @@ TuriValue turi_eval_typed(TuriEnv *env, const char *src,
  * Currently handles TURI_STRUCT values; primitives fall back to NULL. */
 const char *turi_try_show(TuriEnv *env, TuriValue val);
 
+/* SI4-C: Show a heap-pointer stdlib value using type_tag from turi_eval_typed.
+ * Handles TURI_INT values whose elaborated type is "Pair" or "Cons".
+ * Returns a heap-allocated C string (caller must free() it), or NULL when
+ * the type_tag is not a known heap-pointer type. */
+const char *turi_show_result(TuriEnv *env, TuriValue val, const char *type_tag);
+
 /* ---------------------------------------------------------------------------
  * SB3 / SB4: Sandbox resource-limit and capability API
  * --------------------------------------------------------------------------- */

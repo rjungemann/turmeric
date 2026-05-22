@@ -512,7 +512,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         bool is_defstruct = (head->as.sym == e.sym_defstruct);
         bool is_defdata   = (head->as.sym == e.sym_defdata);
         bool is_defgadt   = (head->as.sym == e.sym_defgadt);
-        if (!is_defstruct && !is_defdata && !is_defgadt) continue;
+        bool is_defopaque = (head->as.sym == e.sym_defopaque);
+        if (!is_defstruct && !is_defdata && !is_defgadt && !is_defopaque) continue;
         /* GADTs are only registered if -Xgadt is enabled */
         if (is_defgadt && !g_gadt_enabled) continue;
         Form *name_f = f->as.list.items[1];
@@ -522,7 +523,21 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         if (scope_lookup(&e.global, type_name)) continue;
         /* Pre-allocate a stub def and register a forward binding */
         elab_add_forward_type(&e, type_name);
-        if (is_defstruct) {
+        if (is_defopaque) {
+            StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
+            stub->name = type_name->name;
+            stub->n_fields = 0;
+            stub->fields = NULL;
+            stub->is_copy = true;
+            stub->is_linear = false;
+            stub->needs_drop_glue = false;
+            stub->is_opaque = true;
+            stub->origin_file_id = name_f->span.file_id;
+            elab_register_struct_def(&e, stub);
+            Type t = type_struct(stub);
+            Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
+            scope_add(&e.global, b);
+        } else if (is_defstruct) {
             StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
             stub->name = type_name->name;
             stub->n_fields = 0;

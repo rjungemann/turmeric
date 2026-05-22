@@ -1,8 +1,10 @@
 ;; Pair type for Turmeric
 ;; A generic pair of values (a, b) - stored as int64_t
 ;; Phase B1: Clone trait infrastructure
+;; SI4-C: PairPtr is an opaque int64_t newtype for heap-allocated Pair pointers.
 
 (defstruct Pair [first :int second :int])
+(defopaque PairPtr :int)
 
 ;;; pair-new -- allocate a new Pair on the heap.
 ;;;
@@ -11,14 +13,14 @@
 ;;;   b -- second element (int64_t)
 ;;;
 ;;; Returns:
-;;;   Pointer to a newly allocated Pair, as int64_t.
+;;;   PairPtr (opaque int64_t heap pointer) to a newly allocated Pair.
 ;;;
 ;;; Example:
-;;;   (pair-new 1 2)  ; => <Pair ptr>
+;;;   (pair-new 1 2)  ; => (1, 2)
 ;;;
 ;;; Since: Phase B1
 ;; Create a new Pair
-(defn pair-new [a b] #{Unsafe} :int
+(defn pair-new [a b] #{Unsafe} :PairPtr
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = a;

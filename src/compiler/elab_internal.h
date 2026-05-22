@@ -295,6 +295,8 @@ typedef struct Elab {
     /* Phase 11: defstruct */
     const Symbol *sym_defstruct;   /* defstruct */
     const Symbol *sym_make_struct; /* make-struct */
+    /* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags */
+    const Symbol *sym_defopaque;   /* defopaque */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
@@ -771,6 +773,7 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
 void elab_add_forward_type(Elab *e, const Symbol *sym);
 void elab_register_struct_def(Elab *e, StructDef *def);
 Expr *elab_defstruct(Elab *e, const Form *call);
+Expr *elab_defopaque(Elab *e, const Form *call);
 void elab_register_adt_def(Elab *e, AdtDef *def);
 Expr *elab_defdata(Elab *e, const Form *call);
 TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name);

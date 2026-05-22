@@ -3956,7 +3956,8 @@ void turi_init(bool use_color) {
     diag_init(use_color);
 }
 
-void turi_value_repr(char *buf, size_t cap, TuriValue v) {
+/* OQ2: depth-limited repr — truncate deeply nested structs to avoid runaway output. */
+static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth) {
     if (!buf || cap == 0) return;
     switch (v.tag) {
     case TURI_NIL:
@@ -3997,12 +3998,17 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
             snprintf(buf, cap, "#<struct %s>", n);
             break;
         }
+        /* OQ2: hard depth limit -- truncate rather than recurse forever */
+        if (depth <= 0) {
+            snprintf(buf, cap, "#<struct %s>", n);
+            break;
+        }
         /* Print as "TypeName { field1 = val1, field2 = val2 }" */
         size_t pos = 0;
         pos += (size_t)snprintf(buf + pos, cap - pos, "%s {", n);
         for (uint32_t i = 0; i < s->n_fields && pos < cap - 1; i++) {
             char fval[128];
-            turi_value_repr(fval, sizeof(fval), s->fields[i]);
+            turi_value_repr_d(fval, sizeof(fval), s->fields[i], depth - 1);
             const char *fname = (i < s->def->n_fields) ? s->def->fields[i].name : "?";
             const char *sep = (i == 0) ? " " : ", ";
             pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
@@ -4029,6 +4035,10 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "#<struct-type %s>", v.as_cstr ? v.as_cstr : "?");
         break;
     }
+}
+
+void turi_value_repr(char *buf, size_t cap, TuriValue v) {
+    turi_value_repr_d(buf, cap, v, 4);
 }
 
 /* -------------------------------------------------------------------------
@@ -4091,6 +4101,64 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
 
     if (result.tag != TURI_CSTR || !result.as_cstr) return NULL;
     return strdup(result.as_cstr);
+}
+
+/* -------------------------------------------------------------------------
+ * SI4-C: turi_show_result — show heap-pointer stdlib types by type tag
+ * ---------------------------------------------------------------------- */
+
+/* Pair pointer: struct { int64_t first; int64_t second; } */
+static char *show_pair_ptr(int64_t ptr_val) {
+    typedef struct { int64_t first; int64_t second; } PairCell;
+    if (!ptr_val) return strdup("nil");
+    PairCell *p = (PairCell *)(intptr_t)ptr_val;
+    char *buf = (char *)malloc(64);
+    if (!buf) return NULL;
+    snprintf(buf, 64, "(%lld, %lld)", (long long)p->first, (long long)p->second);
+    return buf;
+}
+
+/* Cons pointer: struct { int64_t value; int64_t next; } -- formats as "[v1, v2, ...]" */
+static char *show_cons_ptr(int64_t ptr_val) {
+    typedef struct { int64_t value; int64_t next; } ConsCell;
+    if (!ptr_val) return strdup("[]");
+    ConsCell *cell = (ConsCell *)(intptr_t)ptr_val;
+
+    /* First pass: compute buffer size */
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)cell->value);
+    size_t total = 1 + (n > 0 ? (size_t)n : 0) + 1; /* "[" + v1 + "]" */
+    ConsCell *cur = (ConsCell *)(intptr_t)cell->next;
+    while (cur) {
+        n = snprintf(tmp, sizeof(tmp), "%lld", (long long)cur->value);
+        total += 2 + (n > 0 ? (size_t)n : 0); /* ", " + v */
+        cur = (ConsCell *)(intptr_t)cur->next;
+    }
+
+    /* Second pass: build the string */
+    char *buf = (char *)malloc(total + 1);
+    if (!buf) return NULL;
+    int off = snprintf(buf, total + 1, "[%lld", (long long)cell->value);
+    cur = (ConsCell *)(intptr_t)cell->next;
+    while (cur) {
+        off += snprintf(buf + off, (int)(total + 1) - off, ", %lld",
+                        (long long)cur->value);
+        cur = (ConsCell *)(intptr_t)cur->next;
+    }
+    snprintf(buf + off, (int)(total + 1) - off, "]");
+    return buf;
+}
+
+const char *turi_show_result(TuriEnv *env, TuriValue val, const char *type_tag) {
+    (void)env;
+    if (!type_tag || val.tag != TURI_INT) return NULL;
+    /* "Pair" kept for backwards compat; "PairPtr" is the defopaque name */
+    if (strcmp(type_tag, "Pair") == 0 || strcmp(type_tag, "PairPtr") == 0)
+        return show_pair_ptr(val.as_int);
+    /* "Cons" kept for backwards compat; "ConsPtr" is the defopaque name */
+    if (strcmp(type_tag, "Cons") == 0 || strcmp(type_tag, "ConsPtr") == 0)
+        return show_cons_ptr(val.as_int);
+    return NULL;
 }
 
 /* -------------------------------------------------------------------------

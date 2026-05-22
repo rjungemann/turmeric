@@ -978,7 +978,10 @@ const char *type_c_name(Type t) {
             /* Phase HKT H3: TY_STRUCT without a concrete StructDef represents an
              * opaque HKT type-constructor argument; it is stored as int64_t at
              * runtime (container values are int64_t-sized opaque handles). */
-            return t.as.struct_.def ? t.as.struct_.def->name : "int64_t";
+            /* SI4-C: defopaque types are also int64_t in C (named only for REPL tags). */
+            if (!t.as.struct_.def) return "int64_t";
+            if (t.as.struct_.def->is_opaque) return "int64_t";
+            return t.as.struct_.def->name;
         /* Phase G0: ADT types are passed as int64_t (opaque heap pointer) */
         case TY_ADT:
             return "int64_t";

@@ -1077,6 +1077,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase 11: defstruct */
     e->sym_defstruct = intern_cstr(st, "defstruct");
     e->sym_make_struct = intern_cstr(st, "make-struct");
+    /* SI4-C: defopaque */
+    e->sym_defopaque = intern_cstr(st, "defopaque");
     e->kw_copy = intern_cstr(st, "copy");
     e->kw_move = intern_cstr(st, "move");
     e->kw_linear = intern_cstr(st, "linear"); /* LT4 */

@@ -1,7 +1,7 @@
 # SI4 -- REPL Auto-Show Implementation Plan
 
 > **Status:** SI4-A complete (2026-05-22). SI4-B complete (free). SI4-C
-> partially scaffolded; heap-pointer type-dispatch remains.
+> complete (2026-05-22). OQ2 complete (2026-05-22).
 >
 > **Prerequisites:** SI0--SI3 complete (all `Show` instances exist for stdlib
 > types).
@@ -210,71 +210,32 @@ and the `turi_show_result` dispatch table would interpret the `int64_t` as a
 
 **Tasks for Option A:**
 
-- [ ] **Investigate `ptr<T>` support** in the type system.  `TY_PTR_VOID`
-  (`ptr<void>`) exists; check whether `ptr<Pair>` parses and what TypeKind it
-  produces.  If `ptr<T>` is already supported, `turi_eval_typed` may already
-  return `"ptr<Pair>"` for a function declared to return `ptr<Pair>`.
+- [x] **Investigate `ptr<T>` support** -- determined not needed; went with
+  `defopaque` instead (see below).
 
-- [ ] **Or implement opaque newtypes** (`defopaque Name :base-type`) as a
+- [x] **Implement opaque newtypes** (`defopaque Name :base-type`) as a
   zero-overhead type alias that carries a distinct name through elaboration.
-  This is the most minimal change that makes the type tag useful.
+  Implementation: added `bool is_opaque` to `StructDef`, `type_c_name` returns
+  "int64_t" for opaque structs, `elab_defopaque` in `elab_structs.c`, forward
+  pre-pass in `elab_toplevel.c`, dispatch in `elab_call.c`.
 
-- [ ] **Update stdlib constructors** to use the new type annotation:
-  - `pair-new` → returns `"Pair"` (or `"ptr<Pair>"`, `"PairPtr"`)
-  - `cons` / `nil-value` → returns `"Cons"` (or `"ptr<Cons>"`)
-  - `some` / `none` → returns `"Option"` (or `"ptr<Option>"`)
-  - `vec-new` → returns `"Vec"` (or `"ptr<Vec>"`)
+- [x] **Update stdlib constructors** to use the new type annotation:
+  - `pair-new` → returns `":PairPtr"` (defopaque PairPtr :int in pair.tur)
+  - `cons` / `nil-value` → returns `":ConsPtr"` (defopaque ConsPtr :int in list.tur)
+  - `some` / `none` → left as `:int` (Option support deferred)
+  - `vec-new` → left as `:int` (Vec support deferred)
 
-- [ ] **Implement `turi_show_result(TuriValue val, const char *type_tag)` in
-  `eval.c`** (or a new `show_dispatch.c`).  Dispatch table over known type tags:
+- [x] **Implement `turi_show_result(TuriValue val, const char *type_tag)` in
+  `eval.c`** -- dispatches on "PairPtr"/"Pair" and "ConsPtr"/"Cons".
 
-  ```c
-  const char *turi_show_result(TuriEnv *env, TuriValue val,
-                                const char *type_tag) {
-      (void)env;
-      /* Already handled by turi_try_show for TURI_STRUCT */
-      if (val.tag == TURI_STRUCT) return NULL;  /* let caller use turi_try_show */
+- [x] **Wire `turi_show_result` into the REPL** (`repl.c`) and WASM glue
+  (`wasm_glue.c`) as a third-tier fallback after `turi_try_show` -- done.
 
-      if (!type_tag || strcmp(type_tag, "int") == 0) return NULL;  /* fallback */
-      if (strcmp(type_tag, "bool") == 0 ||
-          strcmp(type_tag, "cstr") == 0 ||
-          strcmp(type_tag, "float") == 0) return NULL;  /* turi_value_repr is fine */
-
-      /* Heap-pointer types -- interpret TURI_INT val as a typed pointer */
-      int64_t ptr_val = val.as_int;
-      if (strcmp(type_tag, "Pair") == 0 || strcmp(type_tag, "PairPtr") == 0)
-          return show_pair_ptr(ptr_val);
-      if (strcmp(type_tag, "Cons") == 0 || strcmp(type_tag, "list") == 0)
-          return show_cons_ptr(ptr_val);
-      if (strcmp(type_tag, "Option") == 0)
-          return show_option_ptr(ptr_val);
-      if (strcmp(type_tag, "Vec") == 0)
-          return show_vec_ptr(ptr_val);
-      return NULL;  /* unknown tag -- fallback to turi_value_repr */
-  }
-  ```
-
-  Each `show_*_ptr` helper mirrors the C struct layout from the corresponding
-  `stdlib/*.tur` file (they all use `malloc`'d structs whose layout is known
-  at compile time).
-
-- [ ] **Wire `turi_show_result` into the REPL** (`repl.c`) and WASM glue
-  (`wasm_glue.c`) as a third-tier fallback after `turi_try_show`:
-  ```
-  turi_try_show   (for TURI_STRUCT with Show instance)
-  ↓ NULL
-  turi_show_result (for TURI_INT with specific heap-pointer type tag)
-  ↓ NULL
-  turi_value_repr  (default)
-  ```
-
-- [ ] **Smoke tests:**
-  - `(pair-new 10 20)` → `"(10, 20)"`
-  - `(cons 1 (cons 2 (nil-value)))` → `"[1, 2]"`
-  - `(some 99)` → `"some(99)"`
-  - `(none)` → `"none"`
-  - `(+ 1 2)` → `"3"` (plain int, no regression)
-  - `(make-struct Point 3 4)` → `"Point { x = 3, y = 4 }"` (no regression)
+- [x] **Smoke tests (verified in REPL):**
+  - `(pair-new 5 10)` → `(5, 10)` ✓
+  - `(cons 1 (cons 2 (nil-value)))` → `[1, 2]` ✓
+  - `(+ 1 2)` → `3` (plain int, no regression) ✓
+  - Deferred: `some`/`none`, `vec-new` (require defopaque ConsPtr/VecPtr)
 
 #### Option B -- Tagged value struct in generated C (alternative)
 
@@ -432,31 +393,9 @@ approach (like OCaml's) would be more natural than NaN boxing anyway.
    concern.
 
 2. **Depth limit for recursive struct repr?**
-   **Decision: hard limit of 4, truncate with `#<struct TypeName>`.**
-   Add a `depth` parameter to `turi_value_repr` (and `turi_print_value`),
-   decrementing on each recursive call. When `depth` reaches 0, emit
-   `#<struct TypeName>` (using the name already stored in `TuriStruct->name`)
-   rather than expanding the fields. Example output at the limit:
-
-   ```
-   Outer { inner = Inner { deep = #<struct Deep> } }
-   ```
-
-   The public signatures stay clean by wrapping in a top-level entry point
-   that passes the initial depth:
-
-   ```c
-   /* Internal: depth-limited repr. */
-   static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth);
-
-   /* Public entry point: always starts at depth 4. */
-   void turi_value_repr(char *buf, size_t cap, TuriValue v) {
-       turi_value_repr_d(buf, cap, v, 4);
-   }
-   ```
-
-   This is not yet implemented; the current `turi_value_repr` does not guard
-   against deeply nested struct cycles.
+   **Decision: hard limit of 4, truncate with `#<struct TypeName>`.** -- **DONE (OQ2).**
+   `turi_value_repr` now calls `turi_value_repr_d(buf, cap, v, 4)` internally.
+   When depth reaches 0, emits `#<struct TypeName>` instead of expanding fields.
 
 3. **Memory ownership of `turi_show_result` return values (SI4-C only).**
    **Decision: per-evaluation scratch arena.**

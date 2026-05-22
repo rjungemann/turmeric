@@ -987,8 +987,13 @@ int turi_repl_run(void) {
                     }
                 }
                 if (!type_sentinel) {
-                    /* SI4: try Show instance for structs; fall back to repr */
+                    /* SI4: three-tier display:
+                     *   1. turi_try_show   -- TURI_STRUCT with Show instance
+                     *   2. turi_show_result -- TURI_INT heap-pointer (Pair, Cons)
+                     *   3. repl_print_value -- default repr */
                     const char *show_str = turi_try_show(env, result);
+                    if (!show_str)
+                        show_str = turi_show_result(env, result, type_tag);
                     if (show_str) {
                         if (use_color)
                             printf("=> " COL_RESET "%s" COL_RESET "\n", show_str);
