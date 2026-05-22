@@ -2,6 +2,58 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.8.0] — 2026-05-22
+
+### Added
+
+- **Language Server Protocol (LSP)** (#62)
+  - `tur lsp`: stdio-based LSP server with hover, go-to-definition, diagnostics, and completion
+  - `tur check --json`: machine-readable diagnostic output for editor integration
+  - VSCode extension updated to launch `tur lsp` and wire hover/definition providers
+
+- **Sandboxed eval (SB0–SB4)** (#65)
+  - `turi_env_new_sandboxed()`: capability-restricted interpreter environment
+  - `TuriCaps` bitmask (`TURI_CAP_IO`, `TURI_CAP_FFI`, `TURI_CAP_INLINE_C`, `TURI_CAP_ASYNC`, `TURI_CAP_UNSAFE`, `TURI_CAP_IMPORT`)
+  - Step-fuel limit (`turi_env_set_fuel`) and max-depth guard (`turi_env_set_max_depth`)
+  - `import` and inline-C call sites blocked in sandboxed environments
+  - New API: `turi_env_allow`, `turi_env_deny`, `turi_env_has_cap`
+
+- **Lazy sequences (LZ0–LZ1)** (#63)
+  - `Seq[A]` pull-based lazy sequence type with short-circuit support
+  - Builders: `seq-from-list`, `seq-from-range`, `seq-repeat`, `seq-iterate`
+  - Transforms: `seq-map`, `seq-filter`, `seq-take`, `seq-drop`, `seq-flat-map`, `seq-zip`
+  - Consumers: `seq-to-list`, `seq-fold`, `seq-for-each`, `seq-count`, `seq-first`
+  - `Range` type with constructors and set-algebra operations (`range-intersection`, `range-gap`, `range-span`, `range-encloses`, etc.)
+  - Stdlib in `stdlib/seq/core.tur`, `stdlib/seq/builders.tur`, `stdlib/seq/transform.tur`, `stdlib/seq/consume.tur`, `stdlib/range.tur`
+
+- **9 new stdlib modules** (#64)
+  - `stdlib/json.tur` -- JSON parse/emit
+  - `stdlib/csv.tur` -- CSV read/write
+  - `stdlib/fs.tur` -- filesystem operations
+  - `stdlib/path.tur` -- path manipulation
+  - `stdlib/env.tur` -- environment variables
+  - `stdlib/process.tur` -- subprocess spawning
+  - `stdlib/re.tur` -- POSIX regular expressions
+  - `stdlib/term.tur` -- terminal control (ANSI colours, cursor)
+  - `stdlib/digest.tur` -- hashing (SHA-256, MD5)
+
+- **Doctest framework (D0–D5)** (#58)
+  - `tools/doctest.py`: extract and run `;;; Example:` blocks from stdlib docstrings
+  - `tools/run-doctests.sh`: stamp-cached test runner with SKIP support for interpreter-incompatible modules
+  - `just doctest` target; `just test` extended to include doctests
+  - Fixed incorrect docstring examples in `stdlib/math.tur` and `stdlib/async_pipe.tur`
+
+- **Emacs major mode** (#61)
+  - `emacs/turmeric-mode.el`: syntax highlighting, indentation, and `M-x turmeric-run` for `.tur` files
+
+- **Spice `subdir` support**
+  - Spice manifests now accept a `subdir` key for monorepo sub-packages
+
+- **New guides**
+  - Generators guide (`docs/guides/generators-guide.md`) -- generator state machine design and usage
+  - CLI args guide (`docs/guides/cli-args-guide.md`) -- structured argument parsing with `stdlib/args.tur`
+  - Cloudflare deployment guide (`docs/guides/cloudflare-deployment-guide.md`) -- deploying the web REPL to Cloudflare Pages
+
 ## [0.7.0] — 2026-05-21
 
 ### Added
