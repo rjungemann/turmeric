@@ -138,6 +138,8 @@ typedef enum TypeKind {
     /* DV0: Dynamic var reference type (-Xdynamic-vars) */
     TY_DYNVAR,       /* dynvar<T> -- internal marker for a dynamic var binding; wraps declared value type T.
                         Only held in DynVarEntry during elaboration; never appears as the type of a user expression. */
+    /* GF1: Generator type */
+    TY_GENERATOR,    /* generator<T> -- heap pointer to C state-machine struct; _next returns void* */
 } TypeKind;
 
 /* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
@@ -306,6 +308,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* DV0: Dynamic var reference is copy (it's an opaque elaboration-time marker) */
         case TY_DYNVAR:
             return CK_COPY;
+        /* GF1: Generator is a heap pointer — copy by value (pointer copy) */
+        case TY_GENERATOR:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -460,6 +465,10 @@ typedef struct Type {
         struct {
             struct Type *value_type; /* the declared element type of the dynamic var */
         } dynvar_;
+        /* GF1: Generator type -- heap pointer to C state-machine struct */
+        struct {
+            TypeKind element_kind; /* the TypeKind of values yielded by this generator */
+        } generator_;
     } as;
 } Type;
 

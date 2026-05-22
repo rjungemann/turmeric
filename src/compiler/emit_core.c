@@ -420,6 +420,20 @@ char *raw_name_for_binding(const Binding *b) {
  * function parameter in the current context, use the raw name (without ID).
  * Otherwise, append the ID suffix. Caller frees. */
 char *name_for_binding(EmitCtx *ctx, const Binding *b) {
+    /* GF1: If inside a generator _next function, redirect struct fields to __g->field */
+    if (ctx->gen_var_name && ctx->gen_struct_bindings) {
+        for (uint32_t i = 0; i < ctx->n_gen_struct_bindings; i++) {
+            if (ctx->gen_struct_bindings[i] == b) {
+                char *field_name = raw_name_for_binding(b);
+                size_t sz = strlen(ctx->gen_var_name) + strlen(field_name) + 4;
+                char *result = (char *)malloc(sz);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, sz, "%s->%s", ctx->gen_var_name, field_name);
+                free(field_name);
+                return result;
+            }
+        }
+    }
     /* Phase 3: If this is a captured binding in a closure thunk, emit as env->field */
     if (ctx->closure && ctx->env_var_name) {
         for (uint8_t i = 0; i < ctx->closure->n_captures; i++) {

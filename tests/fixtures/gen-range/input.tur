@@ -1,0 +1,24 @@
+; GF1 fixture: simple generator that yields integers in a range.
+
+(defn some? [p] :bool
+  ```c
+  return p != 0;
+  ```)
+
+(defn unwrap [p] :int
+  ```c
+  return *(int64_t *)(intptr_t)p;
+  ```)
+
+(defn main [] :void
+  (let [start 0
+        end   5
+        g (gen []
+            (let [^mut i start]
+              (while (< i end)
+                (yield i)
+                (set! i (+ i 1)))))]
+    (while (not (gen-done? g))
+      (let [v (gen-next g)]
+        (when (some? v)
+          (println (unwrap v)))))))

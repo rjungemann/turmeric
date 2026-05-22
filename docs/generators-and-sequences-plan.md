@@ -1,10 +1,10 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1-GF2, LZ0-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2, LZ0-LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
-**Last updated:** 2026-05-18
+**Last updated:** 2026-05-22
 
 ---
 
@@ -116,27 +116,38 @@ supported/unsupported control-flow patterns.
 - `src/compiler/emit_module.c` -- emit the `typedef struct` for each `gen` closure
 
 **Tasks:**
-- [ ] Add `TY_GENERATOR` to `types.h`; store element type and captured variable
+- [x] Add `TY_GENERATOR` to `types.h`; store element type and captured variable
       list per generator instance
-- [ ] Elaborate `(gen [...] body)`: collect all variables live across yield
+- [x] Elaborate `(gen [...] body)`: collect all variables live across yield
       points; build generator type
-- [ ] Elaborate `(yield expr)`: check expr type matches generator element type;
+- [x] Elaborate `(yield expr)`: check expr type matches generator element type;
       record yield point
-- [ ] Emit generator struct typedef (state tag + captured fields)
-- [ ] Emit `_next` function: switch on state tag, execute body segments between
+- [x] Emit generator struct typedef (state tag + captured fields)
+- [x] Emit `_next` function: switch on state tag, execute body segments between
       yields
-- [ ] Emit `(gen-next g)` call-site as invocation of `_next`
-- [ ] Handle `while` loops that contain yields (loop-back state tag)
-- [ ] Handle `if`/`cond` branches that contain yields (branch state tags)
-- [ ] Handle `let`-bound variables that span a yield (promote to struct field)
-- [ ] Add `(gen-done? g)` predicate (state == -1)
-- [ ] Write fixture: simple loop generator (`range-gen`)
-- [ ] Write fixture: generator with `if` branch
-- [ ] Write fixture: generator with early return
-- [ ] Write fixture: nested generator (outer drives inner)
+- [x] Emit `(gen-next g)` call-site as invocation of `_next`
+- [x] Handle `while` loops that contain yields (loop-back state tag)
+- [x] Handle `if`/`cond` branches that contain yields (branch state tags)
+- [x] Handle `let`-bound variables that span a yield (promote to struct field)
+- [x] Add `(gen-done? g)` predicate (state == -1)
+- [x] Write fixture: simple loop generator (`range-gen`)
+- [x] Write fixture: generator with `if` branch
+- [x] Write fixture: generator with early return
+- [x] Write fixture: nested generator (outer drives inner)
 
 **Exit criterion:** All fixtures pass; generated C compiles and runs correctly
 under Valgrind with no leaks.
+
+**Implementation notes:**
+- Generator struct always starts with `int32_t __state` and `void *(*__next_fn)(void *)`
+  fields (the `__tur_gen_hdr_t` layout). This allows `gen-next` and `gen-done?` to work
+  on any generator without knowing its concrete type.
+- Generator functions are emitted to `ctx->pending_handler_fns` so they appear at
+  file scope before the enclosing function definition (same flush mechanism as
+  algebraic-effect handler functions).
+- All `let` bindings in a gen body are conservatively promoted to struct fields
+  (yield-live analysis v1). Captures (free variables) are stored as the initial
+  subset of struct fields.
 
 
 ## Phase GF2 -- Generator Standard Library (3 days)

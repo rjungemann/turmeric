@@ -539,7 +539,26 @@ typedef struct Elab {
     const Symbol   **active_dynvar_bindings; /* dynvar names with a live binding frame */
     uint32_t         n_active_dynvar_bindings;
     uint32_t         cap_active_dynvar_bindings;
+    /* GF1: Generator elaboration context */
+    struct GenContext *gen_ctx;     /* non-NULL when inside a (gen ...) body */
+    uint32_t          gen_counter; /* monotonically increasing, for unique struct names */
+    const Symbol     *sym_gen;          /* "gen" */
+    const Symbol     *sym_yield;        /* "yield" */
+    const Symbol     *sym_gen_next;     /* "gen-next" */
+    const Symbol     *sym_gen_done;     /* "gen-done?" */
 } Elab;
+
+/* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
+typedef struct GenContext {
+    uint32_t          n_yields;         /* number of (yield ...) forms seen so far */
+    TypeKind          element_kind;     /* TypeKind of the first yield (TY_UNKNOWN until set) */
+    bool              element_kind_set; /* true once first yield is elaborated */
+    struct GenContext *parent;          /* enclosing GenContext (NULL for outermost) */
+    /* Collect let-bindings inside gen body for struct field promotion */
+    Binding         **let_bindings;     /* arena-allocated array of Binding* */
+    uint32_t          n_let_bindings;
+    uint32_t          cap_let_bindings;
+} GenContext;
 
 /* Phase 6: Macro definition */
 typedef struct MacroDef {
@@ -682,6 +701,12 @@ Expr *elab_case(Elab *e, const Form *call);
 Expr *elab_defer(Elab *e, const Form *call);
 Expr *elab_return(Elab *e, const Form *call);
 Expr *elab_question(Elab *e, const Form *call);
+
+/* GF1: Generator forms */
+Expr *elab_gen(Elab *e, const Form *call);
+Expr *elab_yield(Elab *e, const Form *call);
+Expr *elab_gen_next(Elab *e, const Form *call);
+Expr *elab_gen_done(Elab *e, const Form *call);
 
 /* elab_memory.c */
 Expr *elab_ref(Elab *e, const Form *call);

@@ -324,6 +324,20 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                /* GF1: Generator body -- traverse to find local defs */
+                case EX_GEN:
+                    if (cur->as.gen_.def && cur->as.gen_.def->body)
+                        ls[lsp++] = cur->as.gen_.def->body;
+                    break;
+                case EX_YIELD:
+                    if (cur->as.yield_.value) ls[lsp++] = cur->as.yield_.value;
+                    break;
+                case EX_GEN_NEXT:
+                    if (cur->as.gen_next_.gen_expr) ls[lsp++] = cur->as.gen_next_.gen_expr;
+                    break;
+                case EX_GEN_DONE:
+                    if (cur->as.gen_done_.gen_expr) ls[lsp++] = cur->as.gen_done_.gen_expr;
+                    break;
                 case EX_HANDLE: {
                     /* Handle case params (effect args + k) are locally defined.
                      * Register them so collect_free_vars doesn't treat them as
@@ -595,6 +609,20 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 }
                 break;
             }
+            /* GF1: Generator forms */
+            case EX_GEN:
+                if (cur->as.gen_.def && cur->as.gen_.def->body)
+                    stack[sp++] = cur->as.gen_.def->body;
+                break;
+            case EX_YIELD:
+                if (cur->as.yield_.value) stack[sp++] = cur->as.yield_.value;
+                break;
+            case EX_GEN_NEXT:
+                if (cur->as.gen_next_.gen_expr) stack[sp++] = cur->as.gen_next_.gen_expr;
+                break;
+            case EX_GEN_DONE:
+                if (cur->as.gen_done_.gen_expr) stack[sp++] = cur->as.gen_done_.gen_expr;
+                break;
             default:
                 break;
         }
@@ -1241,6 +1269,13 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->global_protocols  = NULL;
     e->n_global_protocols = 0;
     e->cap_global_protocols = 0;
+    /* GF1: Generator forms */
+    e->sym_gen       = intern_cstr(st, "gen");
+    e->sym_yield     = intern_cstr(st, "yield");
+    e->sym_gen_next  = intern_cstr(st, "gen-next");
+    e->sym_gen_done  = intern_cstr(st, "gen-done?");
+    e->gen_ctx       = NULL;
+    e->gen_counter   = 0;
     /* CLI-ARGS: Pre-declare *args* as a global :int binding backed by g_tur_args.
      * Scripts access CLI arguments (after --) via *args* as a list of :cstr values
      * represented as int64_t pointers (same layout as stdlib/list.tur cons cells). */

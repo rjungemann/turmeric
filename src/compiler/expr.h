@@ -97,6 +97,20 @@ struct Binding {
     struct DynVarEntry *dynvar_entry; /* non-NULL iff is_dynvar */
 };
 
+/* GF1: Generator definition -- one per (gen ...) expression */
+typedef struct GenDef {
+    struct Expr  *body;              /* elaborated body expression */
+    struct Binding **captures;       /* free variables captured from enclosing scope */
+    uint32_t      n_captures;
+    struct Binding **struct_bindings; /* all let bindings in gen body (yield-live) */
+    uint32_t      n_struct_bindings;
+    uint32_t      n_yield_points;    /* number of (yield ...) forms in body */
+    TypeKind      element_kind;      /* TypeKind of values yielded */
+    char          struct_name[64];   /* e.g. "__gen_myfn_0_t" */
+    char          next_fn[64];       /* e.g. "__gen_myfn_0_next" */
+    char          create_fn[64];     /* e.g. "__gen_myfn_0_create" */
+} GenDef;
+
 typedef enum ExprKind {
     EX_NIL_LIT = 1,
     EX_BOOL_LIT,
@@ -221,6 +235,11 @@ typedef enum ExprKind {
     EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
     EX_DYNVAR_BINDING,   /* (binding [*v* expr ...] body) -- dynamic binding form */
     EX_DYNVAR_SET,       /* (set! *name* expr) on a dynvar -- mutate top binding frame */
+    /* GF1: Generator forms */
+    EX_GEN,              /* (gen [] body) -- generator expression; returns TY_GENERATOR */
+    EX_YIELD,            /* (yield expr)  -- yield a value inside gen body; type TY_NIL */
+    EX_GEN_NEXT,         /* (gen-next g)  -- advance generator; returns ptr<void> (option) */
+    EX_GEN_DONE,         /* (gen-done? g) -- check if generator is exhausted; returns bool */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -661,6 +680,24 @@ struct Expr {
             DynVarEntry        *entry;      /* which dynamic var to mutate */
             struct Expr        *value;      /* new value */
         } dynvar_set_;
+        /* GF1: Generator expression */
+        struct {
+            GenDef             *def;        /* generator definition */
+        } gen_;
+        /* GF1: Yield expression -- inside a gen body */
+        struct {
+            struct Expr        *value;      /* value being yielded */
+            uint32_t            yield_id;   /* 1-based yield point index */
+        } yield_;
+        /* GF1: Advance a generator -- returns ptr<void> (option) */
+        struct {
+            struct Expr        *gen_expr;   /* the generator value */
+            GenDef             *def;        /* generator definition */
+        } gen_next_;
+        /* GF1: Check if a generator is exhausted */
+        struct {
+            struct Expr        *gen_expr;   /* the generator value */
+        } gen_done_;
     } as;
 };
 

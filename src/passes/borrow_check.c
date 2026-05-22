@@ -630,6 +630,17 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_expr_recursive(ctx, e->as.any_type_of_.value);
         case EX_ANY_CAST:
             return borrow_check_expr_recursive(ctx, e->as.any_cast_.value);
+        /* GF1: Generator forms -- check sub-expressions */
+        case EX_GEN:
+            return e->as.gen_.def && e->as.gen_.def->body
+                ? borrow_check_expr_recursive(ctx, e->as.gen_.def->body) : true;
+        case EX_YIELD:
+            return e->as.yield_.value
+                ? borrow_check_expr_recursive(ctx, e->as.yield_.value) : true;
+        case EX_GEN_NEXT:
+            return borrow_check_expr_recursive(ctx, e->as.gen_next_.gen_expr);
+        case EX_GEN_DONE:
+            return borrow_check_expr_recursive(ctx, e->as.gen_done_.gen_expr);
     }
 
     return true;

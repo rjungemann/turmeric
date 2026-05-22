@@ -558,6 +558,9 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* GF1: Generator type */
+        case TY_GENERATOR:
+            return "generator";
     }
     return "?";
 }
@@ -901,6 +904,12 @@ static void type_name_buf(Buf *b, Type t) {
             else buf_putc(b, '?');
             buf_putc(b, '>');
             break;
+        /* GF1: Generator type */
+        case TY_GENERATOR:
+            buf_puts(b, "generator<");
+            buf_puts(b, type_name(type_from_kind(t.as.generator_.element_kind)));
+            buf_putc(b, '>');
+            break;
     }
 }
 
@@ -1033,6 +1042,9 @@ const char *type_c_name(Type t) {
         /* DV0: TY_DYNVAR is an elaboration-time marker; it has no C runtime representation */
         case TY_DYNVAR:
             return "/*dynvar*/ void";
+        /* GF1: Generator is a heap-allocated state-machine struct; passes as void* */
+        case TY_GENERATOR:
+            return "void *";
     }
     return "void";
 }
@@ -1258,6 +1270,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             return true;
         /* DV0: Dynamic var — leaf; no recursive members */
         case TY_DYNVAR:
+            return true;
+        /* GF1: Generator -- heap pointer, leaf; no recursive members */
+        case TY_GENERATOR:
             return true;
     }
 

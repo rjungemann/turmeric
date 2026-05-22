@@ -1,0 +1,23 @@
+; GF1 fixture: generator with yield in both branches of an if expression.
+
+(defn some? [p] :bool
+  ```c
+  return p != 0;
+  ```)
+
+(defn unwrap [p] :int
+  ```c
+  return *(int64_t *)(intptr_t)p;
+  ```)
+
+(defn main [] :void
+  (let [flag 1
+        g (gen []
+            (if (= flag 1)
+              (yield 10)
+              (yield 20))
+            (yield 30))]
+    (while (not (gen-done? g))
+      (let [v (gen-next g)]
+        (when (some? v)
+          (println (unwrap v)))))))
