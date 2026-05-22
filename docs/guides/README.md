@@ -130,6 +130,7 @@ see the task plan for progress.
 
 - **[compiler-flags-guide.md](compiler-flags-guide.md)** — All `-X` feature flags and diagnostic flags: status, what each enables, dependency graph, and common combinations
 - **[test-runner-contract.md](test-runner-contract.md)** — Test framework API and contract
+- **[sandboxing-guide.md](sandboxing-guide.md)** — Running untrusted code safely: `turi_env_new_sandboxed`, capability flags, step-fuel limits, and native function exposure
 
 ---
 
@@ -148,6 +149,7 @@ see the task plan for progress.
 - Package management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
 - Tools → [formatter-guide.md](formatter-guide.md), [lsp-guide.md](lsp-guide.md), [vscode-guide.md](vscode-guide.md), [vim-guide.md](vim-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
+- Embedding and sandboxing → [eval-api.md](eval-api.md), [sandboxing-guide.md](sandboxing-guide.md), [c-integration-guide.md](c-integration-guide.md)
 
 **By level:**
 - Beginner → [quickstart.md](quickstart.md), [repl-tutorial.md](repl-tutorial.md), then core feature guides
