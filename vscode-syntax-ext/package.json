@@ -7,7 +7,10 @@
   "license": "MIT",
   "main": "./extension.js",
   "engines": {
-    "vscode": "^1.50.0"
+    "vscode": "^1.82.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   },
   "activationEvents": [
     "onLanguage:turmeric"
@@ -43,6 +46,16 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "configuration": {
+      "title": "Turmeric",
+      "properties": {
+        "turmeric.serverPath": {
+          "type": "string",
+          "default": "tur",
+          "description": "Path to the tur executable used for the language server."
+        }
+      }
+    },
     "grammars": [
       {
         "language": "turmeric",

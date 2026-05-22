@@ -56,6 +56,8 @@
 #include "pkg.h"
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
+/* LSP server */
+#include "lsp/lsp.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -517,6 +519,16 @@ static int generate_main_c(Buf *out, const char **h_files, int n_files, const ch
      * For phase 2, we assume the user provides main in one of the modules. */
     buf_puts(out, "/* main() should be defined in one of the included modules */\n");
     return 0;
+}
+
+/* Run type-check only on `path`; discard generated C.
+ * Used by the LSP server. Must be called with diag_lsp_begin active. */
+int tur_check_only(const char *path) {
+    Buf discard;
+    buf_init(&discard);
+    int rc = compile_to_c(path, &discard, NULL, 0);
+    buf_free(&discard);
+    return rc;
 }
 
 static int cmd_emit_c(const char *path) {
@@ -4362,11 +4374,26 @@ int main(int argc, char **argv) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_check();
         if (argc != 3) return usage_check();
+        if (use_json_output) {
+            diag_lsp_begin();
+            Buf out;
+            buf_init(&out);
+            compile_to_c(argv[2], &out, NULL, 0);
+            buf_free(&out);
+            diag_lsp_flush(stdout);
+            diag_lsp_end();
+            return diag_had_error() ? 1 : 0;
+        }
         Buf out;
         buf_init(&out);
         int rc = compile_to_c(argv[2], &out, NULL, 0);
         buf_free(&out);
         return rc;
+    }
+    if (strcmp(cmd, "lsp") == 0) {
+        diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+        lsp_server_run(STDIN_FILENO, STDOUT_FILENO);
+        return 0;
     }
     if (strcmp(cmd, "build") == 0) {
         const char *input = NULL;
