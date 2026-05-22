@@ -1,0 +1,4 @@
+(unsafe
+  (let [src (raw-malloc 8)]
+    (let [dst (raw-malloc 8)]
+      (raw-memcpy dst src 8))))

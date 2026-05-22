@@ -1,0 +1,2 @@
+(defn f [n :int] :int (f (+ n 1)))
+(f 0)

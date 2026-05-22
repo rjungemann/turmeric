@@ -246,6 +246,7 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms,
                                        /*stdlib_prefix=*/0, ".",
                                        /*separate_compilation=*/false,
+                                       /*sandboxed=*/false,
                                        /*tc_env=*/NULL,
                                        /*include_dirs=*/NULL,
                                        /*n_include_dirs=*/0,

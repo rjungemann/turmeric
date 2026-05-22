@@ -364,6 +364,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         uint32_t stdlib_prefix,
                         const char *module_base_dir,
                         bool separate_compilation,
+                        bool sandboxed,
                         TypeClassEnv *out_tc_env,
                         const char **include_dirs,
                         int n_include_dirs,
@@ -378,7 +379,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
     e.module_include_dirs   = include_dirs;
     e.n_module_include_dirs = n_include_dirs;
-    e.separate_compilation = separate_compilation;
+    e.separate_compilation  = separate_compilation;
+    e.sandboxed             = sandboxed;
     builtins_init(st);
 
     int rc = 0;

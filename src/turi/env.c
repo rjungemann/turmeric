@@ -1,5 +1,5 @@
 #include "env.h"
-#include "eval.h"
+#include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL, TURI_DEFAULT_SANDBOX_DEPTH */
 #include "fiber.h"
 
 #include <stdlib.h>
@@ -79,6 +79,7 @@ TuriEnv *turi_env_new(void) {
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
     env->max_eval_depth = 4096;
+    env->caps = TURI_CAP_ALL;
     ht_init(&env->globals_ht);
     /* Phase S7: initialise async scheduler state */
     turi_sched_init(env);
@@ -91,7 +92,12 @@ TuriEnv *turi_env_new(void) {
 
 TuriEnv *turi_env_new_sandboxed(void) {
     TuriEnv *env = turi_env_new();
-    if (env) env->sandboxed = true;
+    if (!env) return NULL;
+    env->sandboxed       = true;
+    env->caps            = TURI_CAP_NONE;
+    env->step_fuel_limit = TURI_DEFAULT_SANDBOX_FUEL;
+    env->step_fuel       = TURI_DEFAULT_SANDBOX_FUEL;
+    env->max_eval_depth  = TURI_DEFAULT_SANDBOX_DEPTH;
     return env;
 }
 

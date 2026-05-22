@@ -173,6 +173,7 @@ static int run_core_passes(PassContext *ctx) {
                                           ctx->stdlib_prefix,
                                           ctx->module_base_dir,
                                           ctx->separate_compilation,
+                                          /*sandboxed=*/false,
                                           &ctx->tc_env,
                                           ctx->include_dirs,
                                           ctx->n_include_dirs,
@@ -4075,7 +4076,7 @@ static int cmd_explain(const char *code) {
         return 1;
     }
 
-    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, NULL,
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, false, NULL,
                                     NULL, 0, NULL);
     if (!prog || diag_had_error()) {
         /* Error already emitted */

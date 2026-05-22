@@ -763,19 +763,37 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
  * Builtin dispatch
  * ---------------------------------------------------------------------- */
 
-/* Returns true if the builtin performs I/O (used for sandboxed check). */
-static bool is_io_builtin(BuiltinShape shape) {
+/* Returns true if the builtin is blocked for the given capability set. */
+static bool is_blocked_builtin(TuriCaps caps, BuiltinShape shape) {
     switch (shape) {
+    /* I/O builtins require TURI_CAP_IO */
     case BS_PRINTLN_INT:
     case BS_PRINTLN_FLOAT:
     case BS_PRINTLN_BOOL:
     case BS_PRINTLN_CSTR:
     case BS_PRINTLN_UINT:
     case BS_PRINTLN_FLOAT32:
+        return !(caps & TURI_CAP_IO);
+    /* FFI builtins require TURI_CAP_FFI */
     case BS_DLOPEN:
     case BS_DLSYM:
     case BS_DLCLOSE:
-        return true;
+        return !(caps & TURI_CAP_FFI);
+    /* Unsafe memory/pointer builtins require TURI_CAP_UNSAFE */
+    case BS_RAW_MALLOC:
+    case BS_RAW_FREE:
+    case BS_RAW_REALLOC:
+    case BS_PTR_DEREF:
+    case BS_PTR_WRITE:
+    case BS_PTR_ARITH:
+    case BS_RAW_MEMSET:
+    case BS_RAW_MEMCPY:
+    case BS_ARRAY_GET_UNCHECKED:
+    case BS_ARRAY_SET_UNCHECKED:
+    case BS_UNSAFE_CAST:
+    case BS_REINTERPRET:
+    case BS_TRANSMUTE:
+        return !(caps & TURI_CAP_UNSAFE);
     default:
         return false;
     }
@@ -785,8 +803,8 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
                                TuriValue *args, uint32_t n) {
     BuiltinShape shape = spec->shape;
 
-    if (env->sandboxed && is_io_builtin(shape)) {
-        return turi_error("eval: I/O not allowed in sandboxed environment");
+    if (is_blocked_builtin(env->caps, shape)) {
+        return turi_error("eval: builtin not allowed in sandboxed environment");
     }
 
     switch (shape) {
@@ -2348,6 +2366,13 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
     args = args_buf;
 
     for (;;) {
+        /* SB3: step-fuel check for TCO iterations (tail calls bypass eval_expr). */
+        if (env->step_fuel_limit > 0) {
+            if (env->step_fuel == 0)
+                return turi_error("eval: step fuel exhausted");
+            env->step_fuel--;
+        }
+
         /* Phase S7: native function dispatch -- no TCO for natives. */
         if (cl->native)
             return cl->native(env, args, n_args, cl->native_ud);
@@ -2364,6 +2389,9 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
 
         /* Native override for inline-C functions (registered by worker/stdlib). */
         if (fn->body && fn->body->kind == EX_INLINE_C && fn->binding) {
+            /* SB: block inline-C in sandboxed environments before native lookup. */
+            if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
+                return turi_error("eval: inline-C not allowed in sandboxed environment");
             const char *fname = fn->binding->name->name;
             TuriValue native_v = turi_env_get(env, fname);
             if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
@@ -2375,6 +2403,9 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
 
         /* Inline-C pattern executor. */
         if (fn->body && fn->body->kind == EX_INLINE_C) {
+            /* SB: block inline-C in sandboxed environments. */
+            if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
+                return turi_error("eval: inline-C not allowed in sandboxed environment");
             InlineC *ic = fn->body->as.inline_c_.inline_c;
             const char *body = ic->code.p;
             size_t blen = (size_t)ic->code.len;
@@ -2457,6 +2488,12 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     if (!e) return turi_nil();
     if (env->returning) return env->return_value;
     if (env->throwing)  return env->throw_value;
+    /* SB3: step-fuel check (skipped when limit == 0, i.e. unrestricted envs) */
+    if (env->step_fuel_limit > 0) {
+        if (env->step_fuel == 0)
+            return turi_error("eval: step fuel exhausted");
+        env->step_fuel--;
+    }
     if (env->eval_depth >= env->max_eval_depth)
         return turi_error("eval: recursion limit exceeded");
     env->eval_depth++;
@@ -3067,7 +3104,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase S5: inline-C is not executable in the tree-walk eval ------- */
     case EX_INLINE_C:
-        if (env->sandboxed)
+        if (!turi_env_has_cap(env, TURI_CAP_INLINE_C))
             return turi_error("eval: inline-C not allowed in sandboxed environment");
         return turi_error("eval: inline-C not supported in interpreter mode "
                           "(function uses native C implementation)");
@@ -3076,7 +3113,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* (async fn-expr) — spawn a fiber that evaluates fn-expr; return Future. */
     case EX_ASYNC: {
-        if (env->sandboxed)
+        if (!turi_env_has_cap(env, TURI_CAP_ASYNC))
             return turi_error("eval: async not allowed in sandboxed environment");
 
         /* Allocate the fiber's own future. */
@@ -3716,11 +3753,13 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
     uint32_t prior = env->prior_toplevel;
     const char *mbase = env->module_base_dir ? env->module_base_dir : ".";
     uint32_t actual_n_fsd = 0;
+    bool import_blocked = !turi_env_has_cap(env, TURI_CAP_IMPORT);
     Expr *prog = elaborate_program(eval_arena, &env->st,
                                    forms, nforms,
                                    /*stdlib_prefix=*/prior,
                                    /*module_base_dir=*/mbase,
                                    /*separate_compilation=*/false,
+                                   /*sandboxed=*/import_blocked,
                                    /*out_tc_env=*/NULL,
                                    /*include_dirs=*/NULL,
                                    /*n_include_dirs=*/0,
@@ -3920,4 +3959,34 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "#<struct-type %s>", v.as_cstr ? v.as_cstr : "?");
         break;
     }
+}
+
+/* -------------------------------------------------------------------------
+ * SB3 / SB4: Resource-limit and capability API
+ * ---------------------------------------------------------------------- */
+
+void turi_env_set_fuel(TuriEnv *env, uint64_t steps) {
+    if (!env) return;
+    env->step_fuel_limit = steps;
+    env->step_fuel       = steps;
+}
+
+void turi_env_set_max_depth(TuriEnv *env, uint32_t depth) {
+    if (!env) return;
+    env->max_eval_depth = depth;
+}
+
+void turi_env_allow(TuriEnv *env, TuriCaps cap) {
+    if (!env) return;
+    env->caps |= cap;
+}
+
+void turi_env_deny(TuriEnv *env, TuriCaps cap) {
+    if (!env) return;
+    env->caps &= ~cap;
+}
+
+bool turi_env_has_cap(TuriEnv *env, TuriCaps cap) {
+    if (!env) return false;
+    return (env->caps & cap) != 0;
 }

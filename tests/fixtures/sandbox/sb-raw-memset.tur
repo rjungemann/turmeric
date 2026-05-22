@@ -1,0 +1,3 @@
+(unsafe
+  (let [p (raw-malloc 8)]
+    (raw-memset p 0 8)))
