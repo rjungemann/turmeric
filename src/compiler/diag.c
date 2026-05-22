@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>  /* isatty */
+#include <stdint.h>
 
 #include "buf.h"
 
@@ -1529,6 +1530,74 @@ static void render_snippet_ex(const SourceFile *f, Span span, const SnippetOpts 
     }
 }
 
+/* Forward declaration (defined later, after diag_set_json_output) */
+static void json_escape_string(Buf *b, const char *s);
+
+/* -------------------------------------------------------------------------
+ * LSP collection mode -- must be declared before diag_emitv / diag_emit_*
+ * --------------------------------------------------------------------- */
+
+typedef struct DiagLspEntry {
+    DiagLevel level;
+    DiagCode  code;
+    uint32_t  line0;        /* 0-based */
+    uint32_t  col_start0;   /* 0-based */
+    uint32_t  col_end0;     /* 0-based */
+    char      file[256];    /* path copied at emit time (avoids dangling ptr) */
+    char      message[512];
+} DiagLspEntry;
+
+static bool          lsp_collect_ = false;
+static DiagLspEntry *lsp_entries_ = NULL;
+static size_t        lsp_entry_count_ = 0;
+static size_t        lsp_entry_cap_ = 0;
+
+static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *msg) {
+    if (lsp_entry_count_ >= lsp_entry_cap_) {
+        lsp_entry_cap_ = lsp_entry_cap_ ? lsp_entry_cap_ * 2 : 32;
+        lsp_entries_ = realloc(lsp_entries_, lsp_entry_cap_ * sizeof(DiagLspEntry));
+    }
+    DiagLspEntry *e = &lsp_entries_[lsp_entry_count_++];
+    e->level      = level;
+    e->code       = code;
+    e->line0      = span.line > 0 ? span.line - 1 : 0;
+    e->col_start0 = span.col_start > 0 ? span.col_start - 1 : 0;
+    e->col_end0   = span.col_end > 0 ? span.col_end - 1 : 0;
+    /* Copy path now while SourceFile* is still valid (it may be stack-allocated) */
+    const SourceFile *f = (span.file_id < MAX_FILES) ? files_[span.file_id] : NULL;
+    snprintf(e->file, sizeof(e->file), "%s", f && f->path ? f->path : "");
+    snprintf(e->message, sizeof(e->message), "%s", msg ? msg : "");
+}
+
+static void lsp_build_array(Buf *b) {
+    static const int lsp_severity[] = { 1, 2, 3, 4 };
+    buf_putc(b, '[');
+    for (size_t i = 0; i < lsp_entry_count_; i++) {
+        const DiagLspEntry *e = &lsp_entries_[i];
+        int sev = (e->level <= DIAG_HELP) ? lsp_severity[e->level] : 3;
+        if (i > 0) buf_putc(b, ',');
+        buf_printf(b,
+            "{\"severity\":%d"
+            ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
+                       ",\"end\":{\"line\":%u,\"character\":%u}}",
+            sev, e->line0, e->col_start0, e->line0, e->col_end0);
+        buf_puts(b, ",\"message\":");
+        json_escape_string(b, e->message);
+        const char *code_str = diag_code_to_string(e->code);
+        if (code_str && code_str[0]) {
+            buf_puts(b, ",\"code\":");
+            json_escape_string(b, code_str);
+        }
+        buf_puts(b, ",\"source\":\"turmeric\"");
+        if (e->file[0]) {
+            buf_puts(b, ",\"file\":");
+            json_escape_string(b, e->file);
+        }
+        buf_putc(b, '}');
+    }
+    buf_putc(b, ']');
+}
+
 /* Original snippet rendering (backward compatible) */
 static void render_snippet(const SourceFile *f, Span span) {
     render_snippet_ex(f, span, NULL);
@@ -1541,6 +1610,13 @@ void diag_render_snippet(const SourceFile *f, Span span, const SnippetOpts *opts
 
 void diag_emitv(DiagLevel level, Span span, const char *fmt, va_list ap) {
     if (level == DIAG_ERROR) had_error_ = true;
+
+    if (lsp_collect_) {
+        char msg[512];
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        lsp_append(level, DIAG_CODE_NONE, span, msg);
+        return;
+    }
 
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
@@ -1579,6 +1655,16 @@ void diag_emit(DiagLevel level, Span span, const char *fmt, ...) {
 /* Emit diagnostic with error code (Phase 8) */
 void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *fmt, ...) {
     if (level == DIAG_ERROR) had_error_ = true;
+
+    if (lsp_collect_) {
+        va_list ap;
+        va_start(ap, fmt);
+        char msg[512];
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        va_end(ap);
+        lsp_append(level, code, span, msg);
+        return;
+    }
 
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
@@ -1621,6 +1707,13 @@ void diag_emit_with_code(DiagLevel level, Span span, DiagCode code, const char *
 void diag_emit_with_notes(DiagLevel level, Span span, const char *message,
                           DiagNote *notes, size_t note_count) {
     if (level == DIAG_ERROR) had_error_ = true;
+
+    if (lsp_collect_) {
+        lsp_append(level, DIAG_CODE_NONE, span, message);
+        for (size_t i = 0; i < note_count; i++)
+            lsp_append(notes[i].level, DIAG_CODE_NONE, notes[i].span, notes[i].message);
+        return;
+    }
 
     /* Phase 8: If JSON output is enabled, emit primary message in JSON format */
     if (json_output_) {
@@ -1671,6 +1764,13 @@ void diag_emit_with_suggestion(DiagLevel level, Span span, const char *message,
                                const DiagSuggestion *suggestion) {
     if (level == DIAG_ERROR) had_error_ = true;
 
+    if (lsp_collect_) {
+        lsp_append(level, DIAG_CODE_NONE, span, message);
+        if (suggestion && suggestion->text)
+            lsp_append(DIAG_HELP, DIAG_CODE_NONE, span, suggestion->text);
+        return;
+    }
+
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
         diag_emit_json(level, span, DIAG_CODE_NONE, message);
@@ -1719,6 +1819,14 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
                          Span *secondary_spans, const char **secondary_labels,
                          size_t secondary_count) {
     if (level == DIAG_ERROR) had_error_ = true;
+
+    if (lsp_collect_) {
+        lsp_append(level, DIAG_CODE_NONE, primary_span, message);
+        for (size_t i = 0; i < secondary_count; i++)
+            lsp_append(DIAG_NOTE, DIAG_CODE_NONE, secondary_spans[i],
+                       secondary_labels ? secondary_labels[i] : "");
+        return;
+    }
 
     /* Phase 8: If JSON output is enabled, emit in JSON format */
     if (json_output_) {
@@ -1782,6 +1890,43 @@ void diag_emit_multi_span(DiagLevel level, const char *message,
 
 void diag_set_json_output(bool enabled) {
     json_output_ = enabled;
+}
+
+void diag_lsp_begin(void) {
+    lsp_collect_ = true;
+    lsp_entry_count_ = 0;
+}
+
+void diag_lsp_flush(FILE *out) {
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"diagnostics\":");
+    lsp_build_array(&b);
+    buf_puts(&b, "}");
+    fwrite(b.data, 1, b.len, out);
+    fputc('\n', out);
+    fflush(out);
+    buf_free(&b);
+}
+
+void diag_lsp_flush_array(struct Buf *buf) {
+    lsp_build_array(buf);
+}
+
+void diag_lsp_end(void) {
+    lsp_collect_ = false;
+    lsp_entry_count_ = 0;
+    free(lsp_entries_);
+    lsp_entries_ = NULL;
+    lsp_entry_cap_ = 0;
+}
+
+void diag_lsp_remap_path(const char *from_path, const char *to_path) {
+    if (!from_path || !to_path) return;
+    for (size_t i = 0; i < lsp_entry_count_; i++) {
+        if (strcmp(lsp_entries_[i].file, from_path) == 0)
+            snprintf(lsp_entries_[i].file, sizeof(lsp_entries_[i].file), "%s", to_path);
+    }
 }
 
 /* Escape a string for JSON output */

@@ -1,19 +1,13 @@
-/* extension.js — Turmeric VS Code extension activation.
- *
- * Registers a document formatter that pipes the open file through
- * `tur format` (reading from stdin, writing formatted source to stdout).
- * The `tur` binary must be on PATH.
- */
-
 'use strict';
 
 const vscode = require('vscode');
 const child_process = require('child_process');
+const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
 
-/**
- * @param {vscode.ExtensionContext} context
- */
+let client;
+
 function activate(context) {
+    /* --- Document formatter (existing: pipes through `tur format`) --- */
     const formatter = vscode.languages.registerDocumentFormattingEditProvider(
         'turmeric',
         {
@@ -30,7 +24,6 @@ function activate(context) {
                     );
                     return [];
                 }
-
                 const fullRange = new vscode.Range(
                     document.positionAt(0),
                     document.positionAt(text.length)
@@ -39,17 +32,44 @@ function activate(context) {
             }
         }
     );
-
     context.subscriptions.push(formatter);
 
-    /* Optional command palette entry */
     const cmd = vscode.commands.registerCommand(
         'turmeric.formatDocument',
         () => vscode.commands.executeCommand('editor.action.formatDocument')
     );
     context.subscriptions.push(cmd);
+
+    /* --- LSP client (launches `tur lsp` as a child process) --- */
+    const config = vscode.workspace.getConfiguration('turmeric');
+    const serverPath = config.get('serverPath', 'tur');
+
+    const serverOptions = {
+        command: serverPath,
+        args: ['lsp'],
+        transport: TransportKind.stdio,
+    };
+
+    const clientOptions = {
+        documentSelector: [{ scheme: 'file', language: 'turmeric' }],
+        synchronize: {
+            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.tur'),
+        },
+    };
+
+    client = new LanguageClient(
+        'turmeric-lsp',
+        'Turmeric Language Server',
+        serverOptions,
+        clientOptions,
+    );
+
+    client.start();
+    context.subscriptions.push({ dispose: () => client.stop() });
 }
 
-function deactivate() {}
+function deactivate() {
+    if (client) return client.stop();
+}
 
 module.exports = { activate, deactivate };

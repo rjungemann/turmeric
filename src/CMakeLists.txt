@@ -45,6 +45,7 @@ set(TUR_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     ${CMAKE_CURRENT_SOURCE_DIR}/async
     ${CMAKE_CURRENT_SOURCE_DIR}/web
+    ${CMAKE_CURRENT_SOURCE_DIR}/lsp
 )
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,11 @@ set(TUR_CORE_SOURCES
     # web/ -- WASM glue and playground tutorial
     web/tutorial.c
     ${TURI_EVAL_SOURCES}
+    # lsp/ -- LSP server (JSON-RPC over stdio, part of the tur binary)
+    lsp/lsp_io.c
+    lsp/lsp_json.c
+    lsp/lsp_docs.c
+    lsp/lsp.c
 )
 
 # Architecture-specific assembly (added to both tur and libturi)

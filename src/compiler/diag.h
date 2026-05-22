@@ -7,6 +7,9 @@
 
 #include "forms.h"
 
+/* Forward declaration for Buf (defined in buf.h) */
+struct Buf;
+
 /* Error codes for diagnostics (Phase 8: diagnostics polish) */
 typedef enum DiagCode {
     DIAG_CODE_NONE = 0,
@@ -236,6 +239,22 @@ void diag_set_json_output(bool enabled);
 
 /* Emit a diagnostic in JSON format */
 void diag_emit_json(DiagLevel level, Span span, DiagCode code, const char *message);
+
+/* LSP collection mode: buffer diagnostics for batch JSON output.
+ * diag_lsp_begin resets the internal list and activates collection.
+ * diag_lsp_flush writes {"diagnostics":[...]} (0-based line/col) to out.
+ * diag_lsp_end discards the list and deactivates collection. */
+void diag_lsp_begin(void);
+void diag_lsp_flush(FILE *out);
+
+/* Write just the diagnostics JSON array [...] into buf (no outer wrapper). */
+void diag_lsp_flush_array(struct Buf *buf);
+
+void diag_lsp_end(void);
+
+/* Replace all occurrences of `from_path` with `to_path` in buffered entries.
+ * Call after diag_lsp_begin + compilation to fix up temp file paths. */
+void diag_lsp_remap_path(const char *from_path, const char *to_path);
 
 /* Phase HKT-P5: Look up a long-form explanation for a diagnostic code.
  * If an explanation exists, writes it to `out` and returns true.
