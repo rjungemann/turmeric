@@ -388,6 +388,8 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
+    /* SI4-C: defopaque */
+    if (name == e->sym_defopaque) return elab_defopaque(e, call);
     /* Phase G0: ADTs */
     if (name == e->sym_defdata) return elab_defdata(e, call);
     if (name == e->sym_match) return elab_match(e, call);
@@ -655,7 +657,16 @@ Expr *elab_call(Elab *e, Form *call) {
     if (fn_binding && (fn_binding->type.kind == TY_FN ||
                        (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) ||
                        fn_binding->closure_fn_binding)) {
-        return elab_call_fn(e, call, fn_binding);
+        Expr *call_expr = elab_call_fn(e, call, fn_binding);
+        /* LT4: patch struct return type with full type containing StructDef pointer,
+         * mirroring the G3 patch for TY_ADT above. Without this, the call expression
+         * gets TY_STRUCT with def=NULL from type_from_kind(TY_STRUCT). */
+        if (call_expr && fn_binding->type.kind == TY_FN &&
+            fn_binding->type.as.fn.result_kind == TY_STRUCT &&
+            fn_binding->type.as.fn.result_full_type) {
+            call_expr->type = *fn_binding->type.as.fn.result_full_type;
+        }
+        return call_expr;
     }
 
     /* Phase 19: Allow calling any binding (for function parameters, higher-order functions) */

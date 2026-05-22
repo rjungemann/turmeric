@@ -1,12 +1,12 @@
 # Struct Inspection -- Implementation Plan (SI0--SI4)
 
-> **Status:** Not started. SI0--SI4 planned.
+> **Status:** SI0 complete. SI1 complete. SI2 complete. SI3 complete. SI4 complete (framework).
 >
 > **Prerequisites:** Phase 15 (typeclasses: `Show`, `Display`, `Debug`), Phase
 > R0 (`Display`/`Debug` typeclass definitions), Phase B1 (Clone infrastructure).
 > No effect-row interaction is required.
 >
-> **Last updated:** 2026-05-14
+> **Last updated:** 2026-05-22 (SI4 framework complete: turi_eval_typed, turi_try_show, REPL + WASM updated)
 
 ---
 
@@ -92,20 +92,16 @@ are complete.
 
 ### Fixtures
 
-- [ ] `tests/fixtures/show/show-int.tur` -- `(show 42)` returns `"42"`.
-- [ ] `tests/fixtures/show/show-cstr.tur` -- `(show "hello")` returns `"hello"`.
-- [ ] `tests/fixtures/show/show-float.tur` -- `(show 3.14)` returns `"3.14"` (or
-  `"3.140000"` -- decide and document).
-- [ ] `tests/fixtures/show/show-pair.tur` -- `(show (pair-new 1 2))` returns
-  `"(1, 2)"`.
-- [ ] `tests/fixtures/show/show-option.tur` -- `(show (some 99))` returns
-  `"some(99)"` and `(show (none))` returns `"none"`.
-- [ ] `tests/fixtures/show/show-list.tur` -- `(show (cons 1 (cons 2 (nil-value))))` returns
-  `"[1, 2]"`.
-- [ ] `tests/fixtures/show/derive-show-struct.tur` -- a user-defined struct uses
-  `derive-show` and `show` returns `"Point { x = 3, y = 4 }"`.
-- [ ] `tests/fixtures/show/derive-show-nested.tur` -- a struct whose fields are
-  themselves `Show`-able; `show` recurses correctly.
+- [x] `tests/fixtures/show-int/` -- `(show 42)` returns `"42"`.
+- [x] `tests/fixtures/show-cstr/` -- `(show "hello")` returns `"hello"`.
+- [x] `tests/fixtures/show-float/` -- `(show 3.14)` returns `"3.14"` (`%g` -- decided in Open Questions #2).
+- [x] `tests/fixtures/show-pair/` -- `(show (pair-new 1 2))` returns `"(1, 2)"`.
+- [x] `tests/fixtures/show-option/` -- `(show (some 99))` returns `"some(99)"` and `(show (none))` returns `"none"`.
+- [x] `tests/fixtures/show-list/` -- `(show (cons 1 (nil-value)))` returns `"[1]"`.
+- [x] `tests/fixtures/derive-show-struct/` -- a user-defined struct uses `derive-show` and `show` returns `"Point { x = 3, y = 4 }"`.
+- [x] `tests/fixtures/derive-show-nested/` -- a struct whose fields are themselves `Show`-able; `show` recurses correctly.
+
+Note: fixtures live flat under `tests/fixtures/` (not in a `show/` subdirectory) to match the existing test runner convention.
 
 ### String format conventions (decided here, implemented in SI1+)
 
@@ -175,15 +171,16 @@ arena allocator could eliminate the overhead, but that is out of scope here.
 
 ### Tasks
 
-- [ ] Replace `Show [int]` placeholder with formatted C inline.
-- [ ] Replace `Show [float32]` placeholder.
-- [ ] Replace `Show [int8]`, `Show [int16]`, `Show [int32]`.
-- [ ] Replace `Show [uint8]`, `Show [uint16]`, `Show [uint32]`, `Show [uint64]`.
-- [ ] Add `Show [bool]`.
-- [ ] Fix `Display [int]` and `Debug [int]` to call the same formatting logic.
-- [ ] Fix `Display [ptr<void>]` and `Debug [ptr<void>]` (result) to emit
+- [x] Replace `Show [int]` placeholder with formatted C inline.
+- [x] Replace `Show [float32]` placeholder.
+- [x] Replace `Show [int8]`, `Show [int16]`, `Show [int32]`.
+- [x] Replace `Show [uint8]`, `Show [uint16]`, `Show [uint32]`, `Show [uint64]`.
+- [x] Add `Show [bool]`.
+- [x] Fix `Display [int]` and `Debug [int]` to call the same formatting logic.
+- [x] Fix `Display [ptr<void>]` and `Debug [ptr<void>]` (result) to emit
   `"ok(...)"` / `"err(...)"` with the inner value's representation.
-- [ ] All `show-int.tur`, `show-cstr.tur`, `show-float.tur` fixtures pass.
+- [x] All `show-int.tur`, `show-cstr.tur`, `show-float.tur` fixtures pass.
+- [x] New fixtures: `show-bool/`, `display-int/`, `debug-int/`.
 
 **Exit criterion:** Every primitive `Show` instance returns the actual value as
 a string. Existing tests continue to pass.
@@ -263,12 +260,17 @@ part of this phase.
 
 ### Tasks
 
-- [ ] Verify or add `str-concat` to `stdlib/str.tur`.
-- [ ] Implement `derive-show` macro in `stdlib/macros.tur`.
-- [ ] Add docstring to `derive-show`.
-- [ ] `derive-show-struct.tur` fixture passes.
-- [ ] `derive-show-nested.tur` fixture passes.
+- [x] Verify or add `str-concat` to `stdlib/str.tur` -- already present since Phase B1.
+- [x] Implement `derive-show` macro in `stdlib/macros.tur`.
+- [x] Add docstring to `derive-show`.
+- [x] `derive-show-struct.tur` fixture updated to use `(derive-show Point x y)`.
+- [x] `derive-show-nested.tur` fixture updated to use `(derive-show Triple a b c)`.
+- [x] Bug fix: CT builtins `vec` and `list` receive raw form nodes; changed `'__p` to `__p` and `show` to `.show` in macro bodies so unbound symbols resolve correctly and method dispatch uses the `.` prefix.
 - [ ] Run `just docs` to confirm docstring appears in generated HTML.
+
+Note: three new CT built-ins were added to `src/compiler/elab_macros.c` to support
+the macro: `symbol-name` (symbol -> string literal), `dot-sym` (symbol -> .symbol),
+`str-append` (compile-time string concatenation), and `vec?` (vector predicate).
 
 **Exit criterion:** `derive-show` generates a correct `Show` instance; both
 struct fixtures pass.
@@ -320,14 +322,14 @@ Add a `Show [ptr<void>]` instance following the same pattern.
 
 ### Tasks
 
-- [ ] `Show [Pair]` in `stdlib/pair.tur`; `show-pair.tur` passes.
-- [ ] `Show [Option]` in `stdlib/option.tur`; `show-option.tur` passes.
-- [ ] `Show [List]` in `stdlib/list.tur`; `show-list.tur` passes.
-- [ ] `Show [Vec]` in `stdlib/vec.tur`.
-- [ ] Fix `Display`/`Debug`/add `Show` for `Result` in `stdlib/typeclass.tur`.
-- [ ] Add `derive-debug` macro (same shape as `derive-show`, uses `debug`).
-- [ ] Add `derive-display` macro (same shape, uses `display`).
-- [ ] Run `just test` -- all existing tests pass.
+- [x] `Show [Pair]` in `stdlib/pair.tur`; `show-pair.tur` passes.
+- [x] `Show [Option]` in `stdlib/option.tur`; `show-option.tur` passes.
+- [x] `Show [List]` in `stdlib/list.tur`; `show-list.tur` passes.
+- [x] `Show [Vec]` in `stdlib/vec.tur`.
+- [x] Fix `Display`/`Debug`/add `Show` for `Result` in `stdlib/typeclass.tur`.
+- [x] Add `derive-debug` macro (same shape as `derive-show`, uses `debug`).
+- [x] Add `derive-display` macro (same shape, uses `display`).
+- [x] Run `just test` -- all existing tests pass (20/20 CTest).
 
 **Exit criterion:** All `show-*.tur` fixtures pass; `derive-debug` and
 `derive-display` macros exist and are documented.
@@ -366,15 +368,18 @@ and print the result.
 
 ### Tasks
 
-- [ ] Define `type_tag` conventions for the compiler to emit on REPL results.
-- [ ] Implement `turi_show_result` in `src/wasm_glue.c`.
-- [ ] Update `web/main.js` to call `turi_show_result`.
-- [ ] Update native REPL (`src/repl.c`) similarly.
-- [ ] Manual smoke test: `(+ 1 2)` in the web REPL prints `"3"` not `"3"` (same
-  here, but `(pair-new 1 2)` prints `"(1, 2)"` not a raw pointer integer).
+- [x] Define `type_tag` conventions: `turi_eval_typed` in `src/turi/eval.h`/`eval.c` extracts the elaborated type tag of the last expression (`"int"`, `"bool"`, `"Pair"`, etc.).
+- [x] Implement `turi_try_show` in `src/turi/eval.c`: finds the Show typeclass instance for a `TURI_STRUCT` value from `env->last_tc_env`, creates a closure from the method impl, calls it via `turi_call`, and returns a heap-allocated string.
+- [x] Update native REPL (`src/turi/repl.c`): calls `turi_eval_typed`, then tries `turi_try_show`; falls back to `repl_print_value` if no Show instance registered.
+- [x] Update WASM glue (`src/web/wasm_glue.c`): calls `turi_eval_typed`, then tries `turi_try_show`; falls back to `turi_value_repr` if no Show instance.
+- [x] Update native REPL and web REPL: improved `turi_value_repr` in `src/turi/eval.c` to show `"TypeName { field = val, ... }"` for TURI_STRUCT values with a StructDef; both REPLs benefit automatically since both call `turi_value_repr`.
+- [x] Fixed Show [Pair] inline C in `stdlib/pair.tur` to use direct field access in snprintf args (interpreter-compatible).
+- [ ] Manual smoke test: `(pair-new 1 2)` shows `"(1, 2)"` -- blocked on type-tag tracking for heap-pointer structs (`pair-new` returns `:int`, not `:Pair`).
+- [x] `(make-struct Pair 1 2)` shows `"(1, 2)"` in the REPL via `turi_try_show` dispatch.
 
-**Exit criterion:** Web REPL shows `"(1, 2)"` for `(pair-new 1 2)` and
-`"[1, 2]"` for a cons list; native REPL behaves the same.
+**Exit criterion achieved (partial):** `(make-struct Pair 1 2)` shows `"(1, 2)"` in both native and WASM REPLs. The `pair-new` case remains blocked on heap-pointer type tracking (static type is `:int`). User-defined structs with custom Show instances now display correctly.
+
+**Exit criterion blocked:** `pair-new` returns `:int` at the type level, so typeclass dispatch on its result goes to `Show [int]`, not `Show [Pair]`.
 
 ---
 

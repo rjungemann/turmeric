@@ -193,6 +193,10 @@ static bool form_contains_ct_builtins(Form *f) {
                     ct_symbol_name(head, "nil?") ||
                     ct_symbol_name(head, "empty?") ||
                     ct_symbol_name(head, "list?") ||
+                    ct_symbol_name(head, "vec?") ||
+                    ct_symbol_name(head, "symbol-name") ||
+                    ct_symbol_name(head, "dot-sym") ||
+                    ct_symbol_name(head, "str-append") ||
                     ct_symbol_name(head, "cons") ||
                     ct_symbol_name(head, "list") ||
                     ct_symbol_name(head, "vec")) {
@@ -269,6 +273,45 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
     if (ct_symbol_name(name, "list?")) {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time list? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_LIST));
+    }
+    if (ct_symbol_name(name, "vec?")) {
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time vec? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
+        return ct_value_form(form_bool(env->elab->arena, span, args[0]->tag == F_VEC));
+    }
+    if (ct_symbol_name(name, "symbol-name")) {
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        if (args[0]->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time symbol-name expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        const Symbol *sym = args[0]->as.sym;
+        return ct_value_form(form_str(env->elab->arena, span, sym->name, sym->len));
+    }
+    if (ct_symbol_name(name, "dot-sym")) {
+        /* (dot-sym field-sym) => the symbol ".field-sym" for use in method calls */
+        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time dot-sym expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        if (args[0]->tag != F_SYM) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time dot-sym expects a symbol"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        const Symbol *sym = args[0]->as.sym;
+        uint32_t new_len = sym->len + 1;
+        char *buf = (char *)arena_alloc(env->elab->arena, new_len + 1);
+        buf[0] = '.';
+        memcpy(buf + 1, sym->name, sym->len);
+        buf[new_len] = '\0';
+        const Symbol *new_sym = symtab_intern(env->elab->st, strslice(buf, new_len));
+        return ct_value_form(form_sym(env->elab->arena, span, new_sym));
+    }
+    if (ct_symbol_name(name, "str-append")) {
+        /* (str-append s1 s2 ...) => compile-time string concatenation */
+        size_t total = 0;
+        for (uint32_t i = 0; i < n_args; i++) {
+            if (args[i]->tag != F_STR) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time str-append expects string arguments"); return ct_value_form(form_nil(env->elab->arena, span)); }
+            total += args[i]->as.s.len;
+        }
+        char *buf = (char *)arena_alloc(env->elab->arena, total + 1);
+        size_t off = 0;
+        for (uint32_t i = 0; i < n_args; i++) {
+            memcpy(buf + off, args[i]->as.s.p, args[i]->as.s.len);
+            off += args[i]->as.s.len;
+        }
+        buf[total] = '\0';
+        return ct_value_form(form_str(env->elab->arena, span, buf, (uint32_t)total));
     }
     if (ct_symbol_name(name, "cons")) {
         if (n_args != 2) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time cons expects 2 arguments"); return ct_value_form(form_nil(env->elab->arena, span)); }

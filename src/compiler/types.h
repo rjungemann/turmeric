@@ -215,6 +215,8 @@ typedef struct StructDef {
     bool is_copy;           /* :copy annotation */
     bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
+    /* SI4-C: opaque newtype -- always int64_t in C; name only used for REPL type tags. */
+    bool is_opaque;
     /* Phase HKT-P4: file that defined this struct (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
     uint16_t origin_file_id;

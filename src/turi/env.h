@@ -143,6 +143,9 @@ typedef struct TuriEnv {
     /* Phase R2: catch-unwind support — setjmp boundary for interpreter panic handling */
     jmp_buf     *catch_jmp;           /* active catch-unwind jmp_buf, or NULL */
     char         catch_panic_msg[512]; /* copy of panic message when longjmp fires */
+    /* SI4: TypeClassEnv* from latest turi_eval; used by turi_try_show for Show dispatch.
+     * Points into an eval_arena (never freed). Cast to TypeClassEnv* in eval.c. */
+    void        *last_tc_env;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

@@ -88,10 +88,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
         } else if (result == TY_STRUCT) {
-            /* LT4: TY_STRUCT return types lower to the actual struct name in C.
-             * Avoid emit_type_from_kind(TY_STRUCT) — see same note in Pass 1. */
+            /* LT4/SI4-C: TY_STRUCT return types lower to the struct name in C,
+             * EXCEPT for inline-C bodies (return int64_t heap pointer) and
+             * defopaque types (always int64_t). */
+            bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
             const struct Type *rft = e->type.as.fn.result_full_type;
-            if (rft && rft->kind == TY_STRUCT && rft->as.struct_.def &&
+            if (!body_is_inline_c && rft && rft->kind == TY_STRUCT &&
+                rft->as.struct_.def && !rft->as.struct_.def->is_opaque &&
                 rft->as.struct_.def->name) {
                 buf_puts(file, rft->as.struct_.def->name);
             } else {
@@ -116,14 +119,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * function pointer) in Turmeric's calling convention. */
             buf_puts(file, "int64_t");
         } else if (fd->param_types[i].kind == TY_STRUCT) {
-            /* LT4: struct params lower to the actual struct name in C.
-             * Avoid emit_type_from_kind(TY_STRUCT) — see same note for return types. */
-            const StructDef *sd = fd->param_types[i].as.struct_.def;
-            if (sd && sd->name) {
-                buf_puts(file, sd->name);
-            } else {
-                buf_puts(file, "int64_t");
-            }
+            /* LT4/SI4-C: struct params lower to struct name; opaque (defopaque) → int64_t. */
+            buf_puts(file, type_c_name(fd->param_types[i]));
         } else {
             buf_puts(file, type_c_name(fd->param_types[i]));
         }

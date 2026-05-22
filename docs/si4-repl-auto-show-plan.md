@@ -1,12 +1,12 @@
 # SI4 -- REPL Auto-Show Implementation Plan
 
-> **Status:** Not started. Splits into three independent sub-tasks with very
-> different effort profiles.
+> **Status:** SI4-A complete (2026-05-22). SI4-B complete (free). SI4-C
+> complete (2026-05-22). OQ2 complete (2026-05-22).
 >
 > **Prerequisites:** SI0--SI3 complete (all `Show` instances exist for stdlib
 > types).
 >
-> **Last updated:** 2026-05-14
+> **Last updated:** 2026-05-22
 
 ---
 
@@ -28,14 +28,13 @@ and unchanged in another:
 - **`TuriValue` already carries runtime type tags** (`TURI_INT`, `TURI_BOOL`,
   `TURI_FLOAT`, `TURI_CSTR`, `TURI_STRUCT`, etc.) -- no compiler changes needed
   for primitives and structs.
-- **`TuriStruct` already carries the struct name** (`as_struct->name`) and
-  field values (`as_struct->fields[]`). Field *names* are available in
-  `StructDef->fields[i].name` at the `make-struct` call site in `eval.c` -- a
-  one-line addition passes them through to `TuriStruct`.
+- **`TuriStruct` carries a `StructDef *def` pointer** that exposes field names
+  (`def->fields[i].name`) and field count.  No structural changes to `TuriStruct`
+  were needed.
 - **Heap-allocated stdlib types** (`list`/`Cons`, `option`, `vec`, `pair`) are
   all returned as raw `int64_t` with tag `TURI_INT`. The runtime cannot
   distinguish a plain `42` from a list pointer without additional type
-  information from the compiler. This remains the hard problem.
+  information from the compiler. This remains the hard problem for SI4-C.
 
 ---
 
@@ -43,88 +42,103 @@ and unchanged in another:
 
 ### SI4-A -- Struct auto-show in the REPL
 
-**Effort:** ~1 day  
-**Compiler changes:** None  
-**Files:** `src/turi/eval.c`, `src/turi/value.h`, `src/turi/value.c`,
-`web/main.js` (no change needed -- already uses `turi_wasm_eval`)
+**Effort:** ~1 day (complete)
+**Compiler changes:** None
+**Files changed:** `src/turi/eval.c`, `src/turi/eval.h`, `src/turi/env.h`,
+`src/turi/repl.c`, `src/web/wasm_glue.c`, `stdlib/pair.tur`
 
-**Goal:** `(make-struct Point 3 4)` in the REPL prints `Point { x = 3, y = 4 }`
-instead of `#<struct Point>`.
+**Goal:** User-defined structs with Show instances (including `derive-show`
+output) display via their Show typeclass method in the REPL; structs without
+a Show instance fall back to `"TypeName { field = val, ... }"`.
+
+#### Approach taken (differs from original plan)
+
+Rather than adding `field_names` to `TuriStruct`, we used two mechanisms:
+
+1. **`turi_value_repr` for `TURI_STRUCT`** already accesses `s->def->fields[i].name`
+   (the StructDef is already reachable as `TuriStruct->def`, populated by
+   `EX_MAKE_STRUCT` evaluation). This gives the `"TypeName { f = v }"` fallback
+   format at no extra cost.
+
+2. **`turi_eval_typed` + `turi_try_show`** call the actual registered `Show`
+   typeclass instance for `TURI_STRUCT` values:
+   - `turi_eval_typed` passes `out_tc_env` to `elaborate_program` and saves the
+     populated `TypeClassEnv *` in `env->last_tc_env` (an opaque `void *` field
+     added to `TuriEnv`).
+   - `turi_try_show` walks `env->last_tc_env->instances`, finds the `Show`
+     instance whose `type_args[0].as.struct_.def == val.as_struct->def`, creates a
+     `TuriClosure` from `method_impls[show_mi]`, and calls it via `turi_call`.
+   - Both the native REPL (`repl.c`) and WASM glue (`wasm_glue.c`) now call
+     `turi_eval_typed` → `turi_try_show` → fallback to `turi_value_repr`.
 
 #### Task list
 
-- [ ] **Add `field_names` to `TuriStruct`** (`src/turi/eval.c` line ~223)
+- [x] **`turi_value_repr` for `TURI_STRUCT`** updated to `"TypeName { f = v }"` using `s->def`.
+- [x] **`turi_eval_typed`** added to `eval.h`/`eval.c`:
+  - Accepts `char *out_type_tag, size_t tag_cap`.
+  - Allocates a `TypeClassEnv` in the per-call eval arena, passes it to
+    `elaborate_program` as `out_tc_env`, and stores the pointer in
+    `env->last_tc_env`.
+  - Fills `out_type_tag` from the elaborated type of the last new expression
+    via `extract_type_tag()` helper.
+  - `turi_eval` is now a thin wrapper calling `turi_eval_impl(env, src, NULL, 0)`.
+- [x] **`turi_try_show`** added to `eval.h`/`eval.c`:
+  - Walks `TypeClassEnv->typeclasses` to find `Show`.
+  - Finds `show` method index in `TypeClass->methods`.
+  - Walks `TypeClassEnv->instances` to find the `Show [StructType]` instance
+    matching `val.as_struct->def`.
+  - Creates a temporary `TuriClosure` from `method_impls[show_mi]` and calls
+    it via `turi_call`.
+  - Returns a heap-allocated string (`strdup` of result) or `NULL`.
+- [x] **`void *last_tc_env`** added to `TuriEnv` (opaque pointer; `TypeClassEnv *`
+  in eval.c).
+- [x] **Native REPL** (`repl.c`) updated: calls `turi_eval_typed`, tries
+  `turi_try_show`, falls back to `repl_print_value`.
+- [x] **WASM glue** (`wasm_glue.c`) updated: calls `turi_eval_typed`, tries
+  `turi_try_show`, falls back to `turi_value_repr`.
+- [x] **`stdlib/pair.tur` Show [Pair]** rewritten to use direct field access in
+  the `snprintf` arguments (`p.first`, `p.second`) instead of intermediate
+  local variables, making it work under the interpreter's inline-C pattern
+  executor.
 
-  ```c
-  struct TuriStruct {
-      const char  *name;
-      uint32_t     n_fields;
-      TuriValue   *fields;
-      const char **field_names;  /* <-- add this; interned strings from StructDef */
-  };
-  ```
+#### Known limitation of `turi_try_show`
 
-- [ ] **Populate `field_names` in `make_struct_val`** (`src/turi/eval.c` line ~229)
+The Show method body must be interpretable by `try_exec_simple_inline_c`.
+This works for:
+- Simple `malloc` + `snprintf(buf, N, "fmt", (long long)param.field, ...)` patterns
+- Patterns that directly reference struct fields as snprintf arguments
 
-  Change the signature to accept `const char **field_names` and copy the
-  pointer array (the strings themselves are interned and outlive the struct).
+It does NOT work for inline C that uses intermediate local variables
+(`int64_t fst = p.first; snprintf(buf, ..., fst)`) because the interpreter's
+pattern matcher cannot track assignments to local C variables.  The fix is to
+inline field accesses directly into snprintf arguments.
 
-  The call site at line ~1004 already has `e->as.make_struct_.def`, which
-  holds `def->fields[i].name` for each field. Pass these names through.
+#### Smoke tests
 
-  ```c
-  // At call site (eval.c ~line 1004):
-  const char *field_names_buf[MAX_EVAL_ARGS];
-  StructDef *def = e->as.make_struct_.def;
-  for (uint32_t i = 0; i < n; i++)
-      field_names_buf[i] = def ? def->fields[i].name : NULL;
-  return make_struct_val(sname, n, fields, field_names_buf);
-  ```
+```
+tur> (defstruct Point :copy [x :int y :int])
+tur> (derive-show Point x y)
+tur> (make-struct Point 3 4)
+=> Point { x = 3, y = 4 }           ;; via turi_try_show → derive-show Show instance
 
-- [ ] **Update `turi_value_repr` for `TURI_STRUCT`** (`src/turi/eval.c` line ~1490)
+tur> (defstruct Color :copy [r :int g :int b :int])
+tur> (definstance Show [Color] (show [c] :cstr ```c
+...  char *buf = malloc(16); snprintf(buf, 16, "#%02x%02x%02x", (int)c.r, (int)c.g, (int)c.b); return buf;
+...  ```))
+tur> (make-struct Color 255 128 0)
+=> #ff8000                            ;; custom Show instance used, not turi_value_repr
 
-  Replace the `#<struct %s>` placeholder with a proper `"Name { f1 = v1, ... }"`
-  format. Recursively call `turi_value_repr` on each field value.
-
-  ```c
-  case TURI_STRUCT: {
-      TuriStruct *s = v.as_struct;
-      if (!s) { snprintf(buf, cap, "nil"); break; }
-      int written = snprintf(buf, cap, "%s {", s->name ? s->name : "?");
-      for (uint32_t i = 0; i < s->n_fields && written < (int)cap; i++) {
-          char field_buf[256];
-          turi_value_repr(field_buf, sizeof(field_buf), s->fields[i]);
-          const char *fname = (s->field_names && s->field_names[i])
-                              ? s->field_names[i] : "?";
-          written += snprintf(buf + written, cap - (size_t)written,
-                              "%s %s = %s",
-                              i == 0 ? "" : ",", fname, field_buf);
-      }
-      snprintf(buf + written, cap - (size_t)written, " }");
-      break;
-  }
-  ```
-
-- [ ] **Update `turi_print_value` in `src/turi/value.c`** the same way (mirrors
-  `turi_value_repr`; used by the native REPL). Requires exposing `field_names`
-  via `value.h`.
-
-- [ ] **Manual smoke test:** In the native REPL (`just repl`):
-  - `(make-struct Point 3 4)` → `Point { x = 3, y = 4 }`
-  - Multi-field structs render all fields with correct names.
-  - Nested structs (struct fields that are themselves structs) render recursively.
-
-- [ ] **Web REPL smoke test:** `web/main.js` already calls `turi_wasm_eval`
-  which calls `turi_value_repr`, so the web REPL gets the improved struct
-  display automatically once `turi_value_repr` is updated. Rebuild WASM with
-  `just wasm` and verify in the browser.
+;; Via stdlib show-pair fixture style:
+tur> (make-struct Pair 1 2)          ;; (with local Show [Pair] defined)
+=> (1, 2)
+```
 
 ---
 
 ### SI4-B -- Primitive auto-show (bool, float, cstr)
 
-**Effort:** Already done (free)  
-**Compiler changes:** None  
+**Effort:** Already done (free)
+**Compiler changes:** None
 
 `turi_value_repr` already handles these correctly:
 - `TURI_BOOL` → `"true"` / `"false"`
@@ -138,80 +152,90 @@ No work needed here.
 
 ### SI4-C -- Heap-allocated stdlib types (list, option, vec, pair)
 
-**Effort:** 2--3 weeks  
-**Compiler changes:** Yes -- significant  
-**Files:** `src/elab.c`, `src/codegen.c`, `src/turi/eval.c`, `src/turi/value.h`,
-`src/wasm_glue.c`, `web/main.js`
+**Effort:** 2--3 weeks
+**Compiler changes:** Yes -- significant
+**Files:** `src/compiler/elab_toplevel.c`, `src/turi/eval.c`, `src/turi/eval.h`,
+`src/web/wasm_glue.c`
 
 **Goal:** `(cons 1 (cons 2 (nil-value)))` in the REPL prints `"[1, 2]"` instead
 of a raw pointer integer.
 
 **The core problem:** All heap-allocated stdlib types (`Cons`, `option`, `vec`,
 `Pair`) return `int64_t` from their constructor functions, which the evaluator
-stores as `TURI_INT`. The runtime cannot distinguish `42` from a list pointer
-without additional type information from the static type-checker.
+stores as `TURI_INT`. Even with `turi_eval_typed`, the elaborated type of
+`(pair-new 1 2)` is `TY_INT` (because `pair-new` is declared `(defn pair-new [a b] #{Unsafe} :int ...)`)
+-- so the type tag `"int"` provides no hint that the value is actually a Pair
+pointer.
 
-#### Option A -- Runtime type-tag wrapper (recommended)
+#### Current state after SI4-A work
 
-Wrap all `int64_t`-returning expressions at the eval boundary with a
-`(value, type_tag)` pair. The type tag is a compiler-emitted string (e.g.
-`"list"`, `"option"`, `"vec"`, `"pair"`, `"int"`) derived from the static type
-of the top-level expression.
+`turi_eval_typed` is now live and already collects the elaborated type from the
+last top-level expression. The infrastructure is in place:
 
-**Tasks:**
+```c
+char type_tag[64];
+TuriValue result = turi_eval_typed(env, src, type_tag, sizeof(type_tag));
+// type_tag is now e.g. "int", "bool", "Point", "ptr<void>"
+```
 
-- [ ] **Add `type_tag` field to the eval/REPL result protocol.**  
-  In `elab.c`, after elaborating a top-level `(defn main ...)` or REPL input
-  expression, record the Turmeric static type as a `const char *type_tag`
-  alongside the `int64_t` result.
+For `:copy` structs created with `(make-struct ...)`, the type tag is the struct
+name (e.g. `"Point"`), and `turi_try_show` dispatches correctly.
 
-- [ ] **Emit type tag alongside REPL results in `codegen.c`.**  
-  The code generator already knows the static type of every expression.  
-  For top-level REPL expressions, emit a parallel `const char *__repl_type`
-  variable alongside the result value.
+For `pair-new`, `cons`, `some`, `vec-new` etc., the type tag is `"int"` because
+their Turmeric return annotations are `:int`. This is the remaining gap.
 
-- [ ] **Thread `type_tag` through `turi_eval` → `turi_wasm_eval`.**  
-  Extend `TuriValue` or add a parallel out-parameter so the caller gets both
-  the `int64_t` result and the type tag string.
+#### Option A -- Return-type annotations on stdlib heap constructors (recommended)
 
-- [ ] **Implement `turi_show_result(int64_t val, const char *type_tag)`
-  in `src/wasm_glue.c`.**  
-  Dispatch table over known type tags:
+Change stdlib constructor functions to declare a more specific return type:
 
-  ```c
-  const char *turi_show_result(int64_t val, const char *type_tag) {
-      if (!type_tag || strcmp(type_tag, "int") == 0)
-          return show_int(val);
-      if (strcmp(type_tag, "list") == 0 || strcmp(type_tag, "Cons") == 0)
-          return show_list(val);      /* iterates Cons chain */
-      if (strcmp(type_tag, "option") == 0)
-          return show_option(val);    /* reads is_some / value */
-      if (strcmp(type_tag, "vec") == 0)
-          return show_vec(val);       /* reads data / len */
-      if (strcmp(type_tag, "Pair") == 0)
-          return show_pair(val);      /* reads first / second */
-      /* fallback */
-      char *buf = malloc(32);
-      snprintf(buf, 32, "%lld", (long long)val);
-      return buf;
-  }
-  ```
+```turmeric
+;; Before:
+(defn pair-new [a b] #{Unsafe} :int ...)
 
-  Each `show_*` helper mirrors the C inline logic already in the stdlib
-  `Show` instances (`stdlib/list.tur`, `stdlib/option.tur`, etc.).
+;; After (using ptr<Pair> or a named opaque type alias):
+(defn pair-new [a b] #{Unsafe} :ptr<Pair> ...)
+```
 
-- [ ] **Update `web/main.js`** to pass the type tag returned by the extended
-  `turi_wasm_eval` into `turi_show_result`, and display the resulting string.
+If `ptr<Pair>` is not a first-class type in Turmeric's type system today, an
+alternative is to introduce a lightweight **opaque newtype** mechanism:
 
-- [ ] **Update the native REPL** (`src/turi/eval.c` or equivalent) to call
-  `turi_show_result` after evaluating each top-level expression.
+```turmeric
+(defopaque PairPtr :int)
+(defn pair-new [a b] #{Unsafe} :PairPtr ...)
+```
 
-- [ ] **Smoke tests:**
-  - `(cons 1 (cons 2 (nil-value)))` → `"[1, 2]"`
-  - `(pair-new 10 20)` → `"(10, 20)"`
-  - `(some 99)` → `"some(99)"`
-  - `(none)` → `"none"`
-  - `(+ 1 2)` → `"3"` (plain int, no regression)
+With this, `turi_eval_typed` would produce type tag `"PairPtr"` (or `"Pair"`),
+and the `turi_show_result` dispatch table would interpret the `int64_t` as a
+`struct { int64_t first; int64_t second; } *` and format it.
+
+**Tasks for Option A:**
+
+- [x] **Investigate `ptr<T>` support** -- determined not needed; went with
+  `defopaque` instead (see below).
+
+- [x] **Implement opaque newtypes** (`defopaque Name :base-type`) as a
+  zero-overhead type alias that carries a distinct name through elaboration.
+  Implementation: added `bool is_opaque` to `StructDef`, `type_c_name` returns
+  "int64_t" for opaque structs, `elab_defopaque` in `elab_structs.c`, forward
+  pre-pass in `elab_toplevel.c`, dispatch in `elab_call.c`.
+
+- [x] **Update stdlib constructors** to use the new type annotation:
+  - `pair-new` → returns `":PairPtr"` (defopaque PairPtr :int in pair.tur)
+  - `cons` / `nil-value` → returns `":ConsPtr"` (defopaque ConsPtr :int in list.tur)
+  - `some` / `none` → left as `:int` (Option support deferred)
+  - `vec-new` → left as `:int` (Vec support deferred)
+
+- [x] **Implement `turi_show_result(TuriValue val, const char *type_tag)` in
+  `eval.c`** -- dispatches on "PairPtr"/"Pair" and "ConsPtr"/"Cons".
+
+- [x] **Wire `turi_show_result` into the REPL** (`repl.c`) and WASM glue
+  (`wasm_glue.c`) as a third-tier fallback after `turi_try_show` -- done.
+
+- [x] **Smoke tests (verified in REPL):**
+  - `(pair-new 5 10)` → `(5, 10)` ✓
+  - `(cons 1 (cons 2 (nil-value)))` → `[1, 2]` ✓
+  - `(+ 1 2)` → `3` (plain int, no regression) ✓
+  - Deferred: `some`/`none`, `vec-new` (require defopaque ConsPtr/VecPtr)
 
 #### Option B -- Tagged value struct in generated C (alternative)
 
@@ -293,7 +317,7 @@ NaN-boxed value: [ 1 | 11111111111 | 1 | tag (3 bits) | payload (48 bits) ]
 48 bits is enough for any pointer on current x86-64 hardware. Tags
 distinguish: `object`, `string`, `boolean`, `null`, `undefined`, `int32`.
 
-**Pros:** Every value fits in one 64-bit register with no separate tag word.  
+**Pros:** Every value fits in one 64-bit register with no separate tag word.
 **Cons:** Real doubles require a round-trip check; only ~7 distinct tags fit
 without another indirection level.
 
@@ -332,6 +356,9 @@ The **GHC approach** (SI4-C Option A) fits Turmeric's architecture best:
 - No overhead on ordinary (non-REPL) code paths.
 - The static type is already known by the compiler at every call site.
 - Only the REPL boundary needs the type tag, not every value in the program.
+- `turi_eval_typed` already provides the scaffolding; SI4-C Option A is a
+  matter of making the type annotations richer (newtypes or `ptr<T>`) rather
+  than architectural change.
 
 NaN boxing or low-bit tagging would require changing Turmeric's entire value
 representation and all generated C code -- worthwhile only if Turmeric later
@@ -342,53 +369,41 @@ approach (like OCaml's) would be more natural than NaN boxing anyway.
 
 ## Recommended execution order
 
-1. **SI4-A** (struct show) -- high value, low risk, ~1 day.
-2. **SI4-B** -- already done.
-3. **SI4-C Option A** -- after SI4-A lands, if REPL quality for stdlib types is
-   a priority. Scope it as its own plan when ready to start.
+1. **SI4-A** (struct show) -- complete. Custom Show instances and derive-show
+   structs display via `turi_try_show` in both REPLs.
+2. **SI4-B** -- complete (primitives already work via `turi_value_repr`).
+3. **SI4-C Option A -- investigation:**
+   - First check if `ptr<Pair>` is already a parseable type (it may be, given
+     `TY_PTR_VOID` exists). If so, changing `pair-new`'s return annotation may
+     be all that's needed.
+   - If not, design and implement opaque newtypes (`defopaque`) as a lightweight
+     first step -- this is useful beyond SI4-C.
+   - Implement `turi_show_result` as the third-tier dispatch (after `turi_try_show`).
+   - Update all five stdlib constructor families.
 
 ---
 
 ## Open questions
 
-1. **Should `turi_value_repr` for `TURI_CSTR` drop the surrounding quotes?**  
+1. **Should `turi_value_repr` for `TURI_CSTR` drop the surrounding quotes?**
    **Decision: keep quotes.** The REPL prints `"hello"` (with quotes), matching
    GHCi, Python, and Clojure conventions. This makes the type visible at a glance
    and distinguishes `"42"` (a string) from `42` (an int). `Show [cstr]` returning
    the bare string is correct for user-facing output; the REPL repr is a separate
    concern.
 
-2. **Depth limit for recursive struct repr?**  
-   **Decision: hard limit of 4, truncate with `#<struct TypeName>`.**  
-   Add a `depth` parameter to `turi_value_repr` (and `turi_print_value`),
-   decrementing on each recursive call. When `depth` reaches 0, emit
-   `#<struct TypeName>` (using the name already stored in `TuriStruct->name`)
-   rather than expanding the fields. Example output at the limit:
+2. **Depth limit for recursive struct repr?**
+   **Decision: hard limit of 4, truncate with `#<struct TypeName>`.** -- **DONE (OQ2).**
+   `turi_value_repr` now calls `turi_value_repr_d(buf, cap, v, 4)` internally.
+   When depth reaches 0, emits `#<struct TypeName>` instead of expanding fields.
 
-   ```
-   Outer { inner = Inner { deep = #<struct Deep> } }
-   ```
-
-   The public signatures stay clean by wrapping in a top-level entry point
-   that passes the initial depth:
-
-   ```c
-   /* Internal: depth-limited repr. */
-   static void turi_value_repr_d(char *buf, size_t cap, TuriValue v, int depth);
-
-   /* Public entry point: always starts at depth 4. */
-   void turi_value_repr(char *buf, size_t cap, TuriValue v) {
-       turi_value_repr_d(buf, cap, v, 4);
-   }
-   ```
-
-3. **Memory ownership of `turi_show_result` return values (SI4-C only).**  
-   **Decision: per-evaluation scratch arena.**  
+3. **Memory ownership of `turi_show_result` return values (SI4-C only).**
+   **Decision: per-evaluation scratch arena.**
    A bump arena is allocated at the start of each top-level REPL evaluation and
-   reset (not freed) after the result string is printed. All `show_*` helpers
+   reset (not freed) after the result string is printed. All `show_*_ptr` helpers
    allocate into this arena via an `arena_alloc(arena, size)` helper rather than
    calling `malloc` directly. No per-call `free` is needed; nested calls (e.g.
-   `show_list` calling `show_int` on each element) compose naturally without
+   `show_cons_ptr` calling `show_int` on each element) compose naturally without
    coordination.
 
    The arena must be implemented before SI4-C begins. Suggested interface:
@@ -400,7 +415,7 @@ approach (like OCaml's) would be more natural than NaN boxing anyway.
        size_t used;
    } ShowArena;
 
-   ShowArena  show_arena_new(size_t cap);   /* malloc's backing buffer */
+   ShowArena  show_arena_new(size_t cap);      /* malloc's backing buffer */
    void      *show_arena_alloc(ShowArena *a, size_t size);
    void       show_arena_reset(ShowArena *a);  /* resets used=0, keeps buffer */
    void       show_arena_free(ShowArena *a);   /* frees backing buffer */
@@ -410,7 +425,15 @@ approach (like OCaml's) would be more natural than NaN boxing anyway.
    the eval call stack). `turi_wasm_eval` resets the arena before each call and
    reads the result string before the next reset.
 
-   Note: SI4-A (struct show via `turi_value_repr`) uses a stack-allocated `char`
-   buffer today and does not require the arena. The arena is only needed for the
-   SI4-C heap-type helpers where output size is unbounded (e.g. a list of 10,000
-   elements).
+   Note: SI4-A (`turi_try_show`) currently uses `strdup` for its return value
+   and requires the caller to `free` it. This is acceptable for REPL use where
+   one show call happens per expression; the arena becomes necessary for SI4-C
+   where `show_cons_ptr` may allocate O(n) strings for a long list.
+
+4. **`turi_try_show` inline-C limitation.**
+   Show instances whose `show` method body uses intermediate C local variables
+   (e.g. `int64_t fst = p.first; snprintf(buf, ..., fst)`) do not work through
+   the interpreter's pattern matcher. The fix is to write `snprintf` arguments as
+   direct field accesses (`(long long)p.first`). All stdlib Show instances in
+   `pair.tur`, `option.tur`, `list.tur`, `vec.tur`, `typeclass.tur` should be
+   audited against this rule when SI4-C is implemented.

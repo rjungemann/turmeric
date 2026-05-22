@@ -958,7 +958,9 @@ int turi_repl_run(void) {
                 }
             }
 
-            TuriValue result = turi_eval(env, multi.data);
+            char     type_tag[64] = {0};
+            TuriValue result = turi_eval_typed(env, multi.data,
+                                               type_tag, sizeof(type_tag));
 
             if (turi_is_error(result)) {
                 const char *msg = turi_error_message(result);
@@ -985,7 +987,22 @@ int turi_repl_run(void) {
                     }
                 }
                 if (!type_sentinel) {
-                    repl_print_value(result, use_color);
+                    /* SI4: three-tier display:
+                     *   1. turi_try_show   -- TURI_STRUCT with Show instance
+                     *   2. turi_show_result -- TURI_INT heap-pointer (Pair, Cons)
+                     *   3. repl_print_value -- default repr */
+                    const char *show_str = turi_try_show(env, result);
+                    if (!show_str)
+                        show_str = turi_show_result(env, result, type_tag);
+                    if (show_str) {
+                        if (use_color)
+                            printf("=> " COL_RESET "%s" COL_RESET "\n", show_str);
+                        else
+                            printf("=> %s\n", show_str);
+                        free((char *)show_str);
+                    } else {
+                        repl_print_value(result, use_color);
+                    }
                     /* 2f: bind _ to last non-nil result */
                     if (result.tag != TURI_NIL)
                         turi_env_set(env, "_", result);

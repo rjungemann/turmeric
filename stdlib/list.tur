@@ -1,20 +1,22 @@
 ;; List type for Turmeric
 ;; Singly-linked list: Cons(value, next) or nil
 ;; Phase B1: Clone trait infrastructure
+;; SI4-C: ConsPtr is an opaque int64_t newtype for heap-allocated Cons pointers.
 
 (defstruct Cons [value :int next :int])
+(defopaque ConsPtr :int)
 
 ;; nil-value - empty list (NULL pointer)
 ;;; nil-value -- return the empty list sentinel (NULL / 0).
 ;;;
 ;;; Returns:
-;;;   The nil list value (0 / NULL pointer).
+;;;   ConsPtr (opaque int64_t) representing an empty list (0 / NULL).
 ;;;
 ;;; Example:
-;;;   (nil-value)  ; => 0
+;;;   (nil-value)  ; => []
 ;;;
 ;;; Since: Phase B1
-(defn nil-value [] #{Unsafe}
+(defn nil-value [] #{Unsafe} :ConsPtr
   ```c
   return 0;
   ```)
@@ -45,13 +47,13 @@
 ;;;   next  -- the existing list (or nil-value for a one-element list)
 ;;;
 ;;; Returns:
-;;;   Pointer (as :int) to the newly allocated Cons cell.
+;;;   ConsPtr (opaque int64_t heap pointer) to a newly allocated Cons cell.
 ;;;
 ;;; Example:
-;;;   (cons 1 (cons 2 (nil-value)))  ; => list [1, 2]
+;;;   (cons 1 (cons 2 (nil-value)))  ; => [1, 2]
 ;;;
 ;;; Since: Phase B1
-(defn cons [value next] #{Unsafe} :int
+(defn cons [value next] #{Unsafe} :ConsPtr
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = value;

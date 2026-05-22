@@ -366,6 +366,47 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     return out;
 }
 
+/* SI4-C: defopaque -- named opaque int64_t newtype for REPL type tags.
+ * Syntax: (defopaque Name :int)
+ * Creates a StructDef with is_opaque=true; type_c_name → "int64_t" everywhere. */
+Expr *elab_defopaque(Elab *e, const Form *call) {
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defopaque requires a name and base type: (defopaque Name :int)");
+        return NULL;
+    }
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span, "defopaque name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+    Binding *existing_b = scope_lookup(e->scope, name);
+    if (existing_b && !elab_is_forward_type(e, name)) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defopaque: '%s' is already defined", name->name);
+        return NULL;
+    }
+    StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+    def->name = name->name;
+    def->n_fields = 0;
+    def->fields = NULL;
+    def->is_copy = true;
+    def->is_linear = false;
+    def->needs_drop_glue = false;
+    def->is_opaque = true;
+    def->origin_file_id = call->span.file_id;
+    Type struct_type = type_struct(def);
+    Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
+    scope_add(&e->global, b);
+    elab_register_struct_def(e, def);
+    Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
+    out->as.def_.binding = b;
+    out->as.def_.init = NULL;
+    out->as.def_.struct_def = def;
+    return out;
+}
+
 /* Phase G0: Helper - register AdtDef in elab registry */
 void elab_register_adt_def(Elab *e, AdtDef *def) {
     if (e->n_adt_defs >= e->cap_adt_defs) {

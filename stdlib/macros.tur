@@ -8,7 +8,10 @@
   (export cond when unless must! must-msg! ignore! do-m for doc as->
           assert! assert-msg! require! require-msg!
           ensure! ensure-msg! invariant! invariant-msg!
-          curry with-resource must-use)
+          curry with-resource must-use
+          derive-show derive-show-body__ derive-show-rest__
+          derive-debug derive-debug-body__ derive-debug-rest__
+          derive-display derive-display-body__ derive-display-rest__)
 
 ;;; cond -- variadic conditional branching via nested if chains.
 ;;;
@@ -441,4 +444,179 @@
 ;;; Since: Phase M8
 (defmacro dot [thing method & args]
   (cons (list '. method) (cons thing args)))
+
+;;; derive-show-rest__ -- internal helper; generates trailing str-concat chain for derive-show.
+(defmacro derive-show-rest__ [& fields]
+  (if (empty? fields)
+    " }"
+    (let [field (first fields)
+          rest-fields (rest fields)
+          is-vec (vec? field)
+          label (if is-vec (first field) (symbol-name field))
+          accessor-sym (if is-vec (second field) field)
+          accessor-form (if is-vec
+                          (list accessor-sym __p)
+                          (list (dot-sym accessor-sym) __p))
+          prefix (str-append ", " label " = ")]
+      (list str-concat prefix
+        (list str-concat
+          (list .show accessor-form)
+          (list derive-show-rest__ ~@rest-fields))))))
+
+;;; derive-show-body__ -- internal helper; generates the full show body expression for derive-show.
+(defmacro derive-show-body__ [TypeName & fields]
+  (let [type-str (symbol-name TypeName)]
+    (if (empty? fields)
+      (str-append type-str " { }")
+      (let [field (first fields)
+            rest-fields (rest fields)
+            is-vec (vec? field)
+            label (if is-vec (first field) (symbol-name field))
+            accessor-sym (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            first-prefix (str-append type-str " { " label " = ")]
+        (list str-concat first-prefix
+          (list str-concat
+            (list .show accessor-form)
+            (list derive-show-rest__ ~@rest-fields)))))))
+
+;;; derive-show -- generate a Show instance for a struct.
+;;;
+;;; Parameters:
+;;;   TypeName -- the struct type name (symbol)
+;;;   fields   -- bare symbols or [label accessor] pairs; each bare symbol x
+;;;               uses label "x" and accessor (.x struct); each [label .accessor]
+;;;               pair uses the given label string and accessor symbol.
+;;;
+;;; Returns:
+;;;   A definstance Show form for TypeName.
+;;;
+;;; Example:
+;;;   (derive-show Point x y)
+;;;   ; (show (make-struct Point 3 4)) => "Point { x = 3, y = 4 }"
+;;;
+;;;   (derive-show MyStruct name [alias .internal])
+;;;   ; uses (.name s) as "name", (.internal s) as "alias"
+;;;
+;;; Since: SI2
+(defmacro derive-show [TypeName & fields]
+  (list definstance Show (vec TypeName)
+    (list show (vec __p) :cstr
+      (list derive-show-body__ TypeName ~@fields))))
+
+;;; derive-debug-rest__ -- internal helper; generates trailing str-concat chain for derive-debug.
+(defmacro derive-debug-rest__ [& fields]
+  (if (empty? fields)
+    ")"
+    (let [field (first fields)
+          rest-fields (rest fields)
+          is-vec (vec? field)
+          label (if is-vec (first field) (symbol-name field))
+          accessor-sym (if is-vec (second field) field)
+          accessor-form (if is-vec
+                          (list accessor-sym __p)
+                          (list (dot-sym accessor-sym) __p))
+          field-prefix (str-append " (" label " ")]
+      (list str-concat field-prefix
+        (list str-concat
+          (list .debug accessor-form)
+          (list str-concat ")"
+            (list derive-debug-rest__ ~@rest-fields)))))))
+
+;;; derive-debug-body__ -- internal helper; generates the full debug body expression for derive-debug.
+(defmacro derive-debug-body__ [TypeName & fields]
+  (let [type-str (symbol-name TypeName)]
+    (if (empty? fields)
+      (str-append "(" type-str ")")
+      (let [field (first fields)
+            rest-fields (rest fields)
+            is-vec (vec? field)
+            label (if is-vec (first field) (symbol-name field))
+            accessor-sym (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            first-prefix (str-append "(" type-str " (" label " ")]
+        (list str-concat first-prefix
+          (list str-concat
+            (list .debug accessor-form)
+            (list str-concat ")"
+              (list derive-debug-rest__ ~@rest-fields))))))))
+
+;;; derive-debug -- generate a Debug instance for a struct.
+;;;
+;;; Parameters:
+;;;   TypeName -- the struct type name (symbol)
+;;;   fields   -- bare symbols or [label accessor] pairs (same syntax as derive-show)
+;;;
+;;; Returns:
+;;;   A definstance Debug form for TypeName.
+;;;
+;;; Example:
+;;;   (derive-debug Point x y)
+;;;   ; (debug (make-struct Point 3 4)) => "(Point (x 3) (y 4))"
+;;;
+;;; Since: SI3
+(defmacro derive-debug [TypeName & fields]
+  (list definstance Debug (vec TypeName)
+    (list debug (vec __p) :cstr
+      (list derive-debug-body__ TypeName ~@fields))))
+
+;;; derive-display-rest__ -- internal helper; generates trailing str-concat chain for derive-display.
+(defmacro derive-display-rest__ [& fields]
+  (if (empty? fields)
+    " }"
+    (let [field (first fields)
+          rest-fields (rest fields)
+          is-vec (vec? field)
+          label (if is-vec (first field) (symbol-name field))
+          accessor-sym (if is-vec (second field) field)
+          accessor-form (if is-vec
+                          (list accessor-sym __p)
+                          (list (dot-sym accessor-sym) __p))
+          prefix (str-append ", " label " = ")]
+      (list str-concat prefix
+        (list str-concat
+          (list .display accessor-form)
+          (list derive-display-rest__ ~@rest-fields))))))
+
+;;; derive-display-body__ -- internal helper; generates the full display body expression for derive-display.
+(defmacro derive-display-body__ [TypeName & fields]
+  (let [type-str (symbol-name TypeName)]
+    (if (empty? fields)
+      (str-append type-str " { }")
+      (let [field (first fields)
+            rest-fields (rest fields)
+            is-vec (vec? field)
+            label (if is-vec (first field) (symbol-name field))
+            accessor-sym (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            first-prefix (str-append type-str " { " label " = ")]
+        (list str-concat first-prefix
+          (list str-concat
+            (list .display accessor-form)
+            (list derive-display-rest__ ~@rest-fields)))))))
+
+;;; derive-display -- generate a Display instance for a struct.
+;;;
+;;; Parameters:
+;;;   TypeName -- the struct type name (symbol)
+;;;   fields   -- bare symbols or [label accessor] pairs (same syntax as derive-show)
+;;;
+;;; Returns:
+;;;   A definstance Display form for TypeName.
+;;;
+;;; Example:
+;;;   (derive-display Point x y)
+;;;   ; (display (make-struct Point 3 4)) => "Point { x = 3, y = 4 }"
+;;;
+;;; Since: SI3
+(defmacro derive-display [TypeName & fields]
+  (list definstance Display (vec TypeName)
+    (list display (vec __p) :cstr
+      (list derive-display-body__ TypeName ~@fields))))
 )

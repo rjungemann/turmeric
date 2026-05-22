@@ -1,8 +1,10 @@
 ;; Pair type for Turmeric
 ;; A generic pair of values (a, b) - stored as int64_t
 ;; Phase B1: Clone trait infrastructure
+;; SI4-C: PairPtr is an opaque int64_t newtype for heap-allocated Pair pointers.
 
 (defstruct Pair [first :int second :int])
+(defopaque PairPtr :int)
 
 ;;; pair-new -- allocate a new Pair on the heap.
 ;;;
@@ -11,14 +13,14 @@
 ;;;   b -- second element (int64_t)
 ;;;
 ;;; Returns:
-;;;   Pointer to a newly allocated Pair, as int64_t.
+;;;   PairPtr (opaque int64_t heap pointer) to a newly allocated Pair.
 ;;;
 ;;; Example:
-;;;   (pair-new 1 2)  ; => <Pair ptr>
+;;;   (pair-new 1 2)  ; => (1, 2)
 ;;;
 ;;; Since: Phase B1
 ;; Create a new Pair
-(defn pair-new [a b] #{Unsafe} :int
+(defn pair-new [a b] #{Unsafe} :PairPtr
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = a;
@@ -93,6 +95,15 @@
   r->second = ((int64_t(*)(int64_t))(intptr_t)fn_right)(p->second);
   return (int64_t)(intptr_t)r;
   ```)
+
+;;; Show [Pair] -- show a Pair as "(first, second)".
+(definstance Show [Pair]
+  (show [p] :cstr
+    ```c
+    char *buf = (char *)malloc(64);
+    snprintf(buf, 64, "(%lld, %lld)", (long long)p.first, (long long)p.second);
+    return (const char *)(intptr_t)buf;
+    ```))
 
 ;;; Bifunctor [Pair] -- bimap applies fn-left to first and fn-right to second.
 (definstance Bifunctor [Pair]
