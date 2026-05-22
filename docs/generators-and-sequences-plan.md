@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1 complete. GF2, LZ0-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0-LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -157,17 +157,30 @@ under Valgrind with no leaks.
 **Code location:** `stdlib/gen.tur`
 
 **Tasks:**
-- [ ] Define `(Generator a)` as an opaque struct wrapper
-- [ ] Define `gen-next : (Generator a) -> (option a)`
-- [ ] Define `gen-done? : (Generator a) -> bool`
-- [ ] Define `gen-collect : (Generator a) -> (vec a)` (materialise all values)
-- [ ] Define `gen-for-each : (fn [a] :unit) (Generator a) -> :unit`
-- [ ] Define `gen-nth : int (Generator a) -> (option a)` (consume to nth)
-- [ ] Define `yield*` macro: yield all values from an inner generator
-- [ ] Add `;;;` docstrings for all exported functions
-- [ ] Write fixtures for `gen-collect`, `gen-for-each`, `gen-nth`, `yield*`
+- [x] Define `gen-some?` / `gen-unwrap` helpers for gen-next results
+- [x] Define `gen-none` -- null result sentinel (:ptr<void>)
+- [x] Define `gen-arr-new` / `gen-arr-push!` / `gen-arr-len` / `gen-arr-get`
+      (internal growable-array used by gen-collect; also exported for callers)
+- [x] Define `gen-collect` macro: materialise all yielded values into a gen-arr
+- [x] Define `gen-for-each` macro: call f on each yielded value
+- [x] Define `gen-nth` macro: return nth (0-indexed) yielded value or gen-none
+- [x] Define `yield*` macro: re-yield all values from an inner generator
+- [x] Add `;;;` docstrings for all exported symbols
+- [x] Write fixtures: gen-collect, gen-for-each, gen-nth, gen-yield-star
 
-**Deliverable:** `stdlib/gen.tur`, fixtures passing.
+**Deliverable:** `stdlib/gen.tur`, all fixtures passing.
+
+**Implementation notes:**
+- Macros use the compile-time `list`/`vec` builtins (NOT quasiquote) to build
+  generated forms. Symbols like `let`, `while`, `when`, `set!` are passed bare
+  (without `'` quote) because they look up to themselves when not in CT env.
+- Quoted symbols (`'let`) produce F_QUOTE forms that cause "unbound symbol 'let'"
+  errors at elaboration time.
+- gen.tur is NOT auto-loaded (it would pollute all programs' generated C and break
+  codegen snapshots). Fixtures and user code load it explicitly:
+  `(load "stdlib/gen.tur")`
+- gen helpers have no `#{Unsafe}` effect annotation so they can be called from
+  normal (non-unsafe) code contexts, matching the ergonomics of gen-next/gen-done?.
 
 ---
 

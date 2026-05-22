@@ -1,0 +1,10 @@
+; GF2 fixture: gen-for-each -- call a function for each yielded value.
+
+(load "stdlib/gen.tur")
+
+(defn main [] :void
+  (let [g (gen []
+            (yield 5)
+            (yield 6)
+            (yield 7))]
+    (gen-for-each println g)))

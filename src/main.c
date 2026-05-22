@@ -293,6 +293,8 @@ static int compile_to_c(const char *path, Buf *out_c,
         /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
         "stdlib/hamt.tur",
         "stdlib/map.tur",
+        /* "stdlib/gen.tur" - GF2 generator stdlib; not auto-loaded to avoid polluting
+         * all programs.  Load explicitly with (load "stdlib/gen.tur"). */
         /* "stdlib/vec.tur" - has typeclass dependencies, not auto-loaded */
         /* "stdlib/typeclass.tur" loaded on demand via (require typeclass) - Phase 15 */
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
