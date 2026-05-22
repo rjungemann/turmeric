@@ -559,7 +559,7 @@ tur add --cmake https://github.com/raysan5/raylib --ref 5.0
 The entry goes into `:cmake-deps` instead of `:spices`.
 
 For projects that need direct control of the CMake build, see
-[cmake-cpm-integration-plan.md](../cmake-cpm-integration-plan.md).
+[cmake-cpm-integration-plan.md](../archive/cmake-cpm-integration-plan.md).
 
 ---
 

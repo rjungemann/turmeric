@@ -187,4 +187,4 @@ The `<name>Config.cmake` file is what `find_package(<name>)` reads. It sets
 
 - [Package management guide](package-management-guide.md) -- Turmeric-to-Turmeric dependencies
 - [C integration guide](c-integration-guide.md) -- calling C from Turmeric
-- `docs/cmake-cpm-integration-plan.md` -- full design specification
+- [cmake-cpm-integration-plan.md](../archive/cmake-cpm-integration-plan.md) -- full design specification

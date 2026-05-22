@@ -112,6 +112,9 @@ see the task plan for progress.
 ## Package Management
 
 - **[package-management-guide.md](package-management-guide.md)** — Creating projects, adding spices, `build.tur`, `tur.lock`, CLI reference
+- **[consuming-spices-guide.md](consuming-spices-guide.md)** — Adding, fetching, and importing spices; cmake-deps; security and lock file rules
+- **[developing-spices-guide.md](developing-spices-guide.md)** — Creating, testing, versioning, and publishing a spice; wrapping C libs with cmake-deps; CMake/CPM export
+- **[using-turmeric-from-cmake.md](using-turmeric-from-cmake.md)** — Publishing a Turmeric library for C/C++ consumers via `tur emit-cmake`
 - **[turmeric-spices](https://github.com/rjungemann/turmeric-spices)** -- Official first-party spice library: `tur-test`, `tur-math`, `tur-sqlite`, `tur-raylib`, `tur-json`, `tur-http`, `tur-regex`
 
 ## Tools and IDE
@@ -138,7 +141,7 @@ see the task plan for progress.
 - Type system → [structs-guide.md](structs-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md)
 - Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
-- Package management → [package-management-guide.md](package-management-guide.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
+- Package management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
 - Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md), [vim-guide.md](vim-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
 
