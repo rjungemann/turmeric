@@ -46,6 +46,12 @@ void diag_register_file(const SourceFile *file) {
 
 bool diag_had_error(void) { return had_error_; }
 
+const char *diag_file_path(uint16_t file_id) {
+    if (file_id < MAX_FILES && files_[file_id])
+        return files_[file_id]->path;
+    return NULL;
+}
+
 void diag_reset(void) {
     had_error_ = false;
     file_count_ = 0;

@@ -2,6 +2,8 @@
 #include "lsp_io.h"
 #include "lsp_json.h"
 #include "lsp_docs.h"
+#include "lsp_sym.h"
+#include "lsp_util.h"
 
 #include "buf.h"
 #include "diag.h"
@@ -67,16 +69,59 @@ static void send_notification(int fd_out, const char *method,
 }
 
 /* -------------------------------------------------------------------------
- * Compile + publish diagnostics
+ * Symbol search helper
  * --------------------------------------------------------------------- */
 
-static void publish_diagnostics(LspDoc *doc, int fd_out) {
-    /* Write source to a temp file so compile_to_c can read it */
+static const LspSymbol *find_symbol(const LspDoc *doc, const char *name) {
+    for (int i = 0; i < doc->symbol_count; i++) {
+        if (strcmp(doc->symbols[i].name, name) == 0)
+            return &doc->symbols[i];
+    }
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * Compile + publish diagnostics + collect symbols
+ * --------------------------------------------------------------------- */
+
+/* Unescape a JSON-escaped string in-place; writes into dst and returns len. */
+static size_t unescape_json(const char *src, size_t src_len, char *dst) {
+    size_t di = 0;
+    for (size_t si = 0; si < src_len && di < src_len; si++) {
+        if (src[si] == '\\' && si + 1 < src_len) {
+            si++;
+            switch (src[si]) {
+                case '"':  dst[di++] = '"';  break;
+                case '\\': dst[di++] = '\\'; break;
+                case 'n':  dst[di++] = '\n'; break;
+                case 'r':  dst[di++] = '\r'; break;
+                case 't':  dst[di++] = '\t'; break;
+                default:   dst[di++] = src[si]; break;
+            }
+        } else {
+            dst[di++] = src[si];
+        }
+    }
+    dst[di] = '\0';
+    return di;
+}
+
+#define LSP_SYM_CAP 2048
+
+static void run_doc_analysis(LspDoc *doc, int fd_out) {
+    /* 1. Scan docstrings from source text */
+    LspDocTable dtable;
+    lsp_doc_table_init(&dtable);
+    lsp_scan_docs(doc->text, doc->text_len, &dtable);
+
+    /* 2. Write source to a temp file */
     char tmp_path[256];
     snprintf(tmp_path, sizeof(tmp_path), "/tmp/tur_lsp_XXXXXX.tur");
     int tmp_fd = mkstemps(tmp_path, 4);
-    if (tmp_fd < 0) return;
-
+    if (tmp_fd < 0) {
+        lsp_doc_table_free(&dtable);
+        return;
+    }
     const char *src = doc->text;
     size_t remaining = doc->text_len;
     while (remaining > 0) {
@@ -87,15 +132,34 @@ static void publish_diagnostics(LspDoc *doc, int fd_out) {
     }
     close(tmp_fd);
 
-    /* Run the compiler in LSP collection mode */
+    /* 3. Allocate symbol buffer */
+    lsp_doc_free_symbols(doc);
+    doc->symbols      = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
+    doc->symbol_cap   = LSP_SYM_CAP;
+    doc->symbol_count = 0;
+
+    /* 4. Run the compiler: collect symbols + gather diagnostics */
     diag_reset();
     diag_init(false);
     diag_lsp_begin();
-    tur_check_only(tmp_path);
+    tur_collect_symbols(tmp_path, doc->symbols, doc->symbol_cap,
+                        &doc->symbol_count);
     diag_lsp_remap_path(tmp_path, doc->path);
+
+    /* 5. Populate docstrings and fix up file paths */
+    for (int i = 0; i < doc->symbol_count; i++) {
+        LspSymbol *sym = &doc->symbols[i];
+        /* Fill docstring from the re-scanner */
+        lsp_scan_docs_lookup(&dtable, sym->name,
+                             sym->doc, sizeof(sym->doc));
+        /* Remap temp file path to the real document path */
+        if (strcmp(sym->file_path, tmp_path) == 0)
+            strncpy(sym->file_path, doc->path, sizeof(sym->file_path) - 1);
+    }
+
     unlink(tmp_path);
 
-    /* Build publishDiagnostics params */
+    /* 6. Build and send publishDiagnostics notification */
     Buf params;
     buf_init(&params);
     buf_puts(&params, "{\"uri\":");
@@ -103,11 +167,12 @@ static void publish_diagnostics(LspDoc *doc, int fd_out) {
     buf_puts(&params, ",\"diagnostics\":");
     diag_lsp_flush_array(&params);
     buf_puts(&params, "}");
-
+    buf_putc(&params, '\0'); /* NUL-terminate for C-string use; strlen stops here */
     diag_lsp_end();
 
     send_notification(fd_out, "textDocument/publishDiagnostics", params.data);
     buf_free(&params);
+    lsp_doc_table_free(&dtable);
 }
 
 /* -------------------------------------------------------------------------
@@ -121,8 +186,11 @@ static void on_initialize(const char *id_raw, size_t id_len, int fd_out) {
     send_response(fd_out, id_raw, id_len,
         "{\"capabilities\":{"
           "\"textDocumentSync\":1,"
-          "\"hoverProvider\":false,"
-          "\"definitionProvider\":false"
+          "\"hoverProvider\":true,"
+          "\"definitionProvider\":true,"
+          "\"completionProvider\":{"
+            "\"triggerCharacters\":[\"(\",\" \"]"
+          "}"
         "}}");
     initialized_ = true;
 }
@@ -144,36 +212,17 @@ static void on_did_open(const char *params, size_t params_len, int fd_out) {
     size_t text_raw_len;
     const char *text_raw = lsp_json_str(td, "text", &text_raw_len);
 
-    /* Unescape the text by round-tripping through a temp buffer */
     char *text = NULL;
     size_t text_len = 0;
     if (text_raw) {
-        /* lsp_json_str_copy handles unescaping */
         text = malloc(text_raw_len + 1);
-        size_t di = 0;
-        for (size_t si = 0; si < text_raw_len && di < text_raw_len; si++) {
-            if (text_raw[si] == '\\' && si + 1 < text_raw_len) {
-                si++;
-                switch (text_raw[si]) {
-                    case '"':  text[di++] = '"';  break;
-                    case '\\': text[di++] = '\\'; break;
-                    case 'n':  text[di++] = '\n'; break;
-                    case 'r':  text[di++] = '\r'; break;
-                    case 't':  text[di++] = '\t'; break;
-                    default:   text[di++] = text_raw[si]; break;
-                }
-            } else {
-                text[di++] = text_raw[si];
-            }
-        }
-        text[di] = '\0';
-        text_len = di;
+        text_len = unescape_json(text_raw, text_raw_len, text);
     }
 
     LspDoc *doc = lsp_doc_open(uri, strlen(uri),
                                text ? text : "", text_len);
     free(text);
-    publish_diagnostics(doc, fd_out);
+    run_doc_analysis(doc, fd_out);
 }
 
 static void on_did_change(const char *params, size_t params_len, int fd_out) {
@@ -185,13 +234,10 @@ static void on_did_change(const char *params, size_t params_len, int fd_out) {
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) return;
 
-    /* contentChanges is an array; for TextDocumentSyncKind.Full (=1),
-     * the first entry has the full new text. */
     size_t cc_len;
     const char *cc_arr = lsp_json_raw(params, "contentChanges", &cc_len);
     if (!cc_arr) return;
 
-    /* Find the first object inside the array */
     const char *p = cc_arr;
     while (*p && *p != '[') p++;
     if (*p == '[') p++;
@@ -203,29 +249,13 @@ static void on_did_change(const char *params, size_t params_len, int fd_out) {
     if (!text_raw) return;
 
     char *text = malloc(text_raw_len + 1);
-    size_t di = 0;
-    for (size_t si = 0; si < text_raw_len && di < text_raw_len; si++) {
-        if (text_raw[si] == '\\' && si + 1 < text_raw_len) {
-            si++;
-            switch (text_raw[si]) {
-                case '"':  text[di++] = '"';  break;
-                case '\\': text[di++] = '\\'; break;
-                case 'n':  text[di++] = '\n'; break;
-                case 'r':  text[di++] = '\r'; break;
-                case 't':  text[di++] = '\t'; break;
-                default:   text[di++] = text_raw[si]; break;
-            }
-        } else {
-            text[di++] = text_raw[si];
-        }
-    }
-    text[di] = '\0';
+    size_t text_len = unescape_json(text_raw, text_raw_len, text);
 
-    lsp_doc_change(uri, strlen(uri), text, di);
+    lsp_doc_change(uri, strlen(uri), text, text_len);
     free(text);
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
-    if (doc) publish_diagnostics(doc, fd_out);
+    if (doc) run_doc_analysis(doc, fd_out);
 }
 
 static void on_did_close(const char *params, size_t params_len) {
@@ -236,6 +266,296 @@ static void on_did_close(const char *params, size_t params_len) {
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) return;
     lsp_doc_close(uri, strlen(uri));
+}
+
+/* -------------------------------------------------------------------------
+ * LD2: textDocument/hover
+ * --------------------------------------------------------------------- */
+
+static void on_hover(const char *id_raw, size_t id_len,
+                     const char *params, int fd_out) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    size_t pos_len;
+    const char *pos = lsp_json_raw(params, "position", &pos_len);
+    if (!pos) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    int line_0 = (int)lsp_json_int(pos, "line");
+    int char_0 = (int)lsp_json_int(pos, "character");
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc || !doc->symbols) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    char name[128];
+    if (!lsp_word_at_pos(doc->text, doc->text_len,
+                         line_0 + 1, char_0 + 1, name, sizeof(name))) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    const LspSymbol *sym = find_symbol(doc, name);
+    if (!sym) {
+        send_response(fd_out, id_raw, id_len, "{\"contents\":\"\"}");
+        return;
+    }
+
+    Buf result;
+    buf_init(&result);
+    buf_puts(&result, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
+
+    /* Build markdown: ```\n(name : type)\n```\n\ndocstring */
+    Buf md;
+    buf_init(&md);
+    buf_puts(&md, "```\n(");
+    buf_puts(&md, sym->name);
+    if (sym->type_str[0]) {
+        buf_puts(&md, " : ");
+        buf_puts(&md, sym->type_str);
+    }
+    buf_puts(&md, ")\n```");
+    if (sym->doc[0]) {
+        buf_puts(&md, "\n\n");
+        buf_puts(&md, sym->doc);
+    }
+    buf_putc(&md, '\0');
+
+    json_str(&result, md.data);
+    buf_free(&md);
+    buf_puts(&result, "}}");
+    buf_putc(&result, '\0');
+
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
+}
+
+/* -------------------------------------------------------------------------
+ * LD3: textDocument/definition
+ * --------------------------------------------------------------------- */
+
+static void on_definition(const char *id_raw, size_t id_len,
+                          const char *params, int fd_out) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    size_t pos_len;
+    const char *pos = lsp_json_raw(params, "position", &pos_len);
+    if (!pos) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    int line_0 = (int)lsp_json_int(pos, "line");
+    int char_0 = (int)lsp_json_int(pos, "character");
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc || !doc->symbols) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    char name[128];
+    if (!lsp_word_at_pos(doc->text, doc->text_len,
+                         line_0 + 1, char_0 + 1, name, sizeof(name))) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    const LspSymbol *sym = find_symbol(doc, name);
+    if (!sym || sym->file_path[0] == '\0') {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    /* Build "file://" URI from sym->file_path */
+    char def_uri[1024];
+    lsp_path_to_uri(sym->file_path, def_uri, sizeof(def_uri));
+
+    /* Convert 1-based spans to 0-based LSP positions */
+    int def_line = sym->line > 0 ? sym->line - 1 : 0;
+    int def_col  = sym->col_start > 0 ? sym->col_start - 1 : 0;
+    int def_end  = sym->col_end > 0 ? sym->col_end - 1 : def_col;
+
+    Buf result;
+    buf_init(&result);
+    buf_printf(&result,
+        "{\"uri\":\"%s\","
+        "\"range\":{"
+          "\"start\":{\"line\":%d,\"character\":%d},"
+          "\"end\":{\"line\":%d,\"character\":%d}"
+        "}}",
+        def_uri, def_line, def_col, def_line, def_end);
+
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
+}
+
+/* -------------------------------------------------------------------------
+ * LD4: textDocument/completion
+ * --------------------------------------------------------------------- */
+
+/* Known stdlib module names for import-path completion */
+static const char *stdlib_modules[] = {
+    "stdlib/args",
+    "stdlib/contract",
+    "stdlib/fix",
+    "stdlib/free",
+    "stdlib/hamt",
+    "stdlib/list",
+    "stdlib/macros",
+    "stdlib/map",
+    "stdlib/option",
+    "stdlib/pair",
+    "stdlib/result",
+    "stdlib/safe",
+    "stdlib/str",
+    "stdlib/vec",
+    NULL
+};
+
+static void on_completion(const char *id_raw, size_t id_len,
+                          const char *params, int fd_out) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(fd_out, id_raw, id_len, "[]");
+        return;
+    }
+
+    size_t pos_len;
+    const char *pos = lsp_json_raw(params, "position", &pos_len);
+    if (!pos) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+
+    int line_0 = (int)lsp_json_int(pos, "line");
+    int char_0 = (int)lsp_json_int(pos, "character");
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+
+    /* Extract partial word at cursor */
+    char prefix[128] = {0};
+    lsp_word_at_pos(doc->text, doc->text_len,
+                    line_0 + 1, char_0 + 1, prefix, sizeof(prefix));
+    size_t prefix_len = strlen(prefix);
+
+    /* Check if cursor is inside an (import ...) form for module completion */
+    int in_import = 0;
+    if (doc->text && doc->text_len > 0) {
+        /* Walk backward from cursor to detect (import */
+        const char *p = doc->text;
+        const char *end = doc->text;
+        /* Find cursor byte offset */
+        int cur_line = 1;
+        while (p < doc->text + doc->text_len && cur_line < line_0 + 1) {
+            if (*p == '\n') cur_line++;
+            p++;
+        }
+        int cur_col = 1;
+        while (p < doc->text + doc->text_len && *p != '\n' && cur_col < char_0 + 1) {
+            p++;
+            cur_col++;
+        }
+        end = p;
+        /* Scan back up to 64 chars for "(import" */
+        const char *scan = end > doc->text + 64 ? end - 64 : doc->text;
+        for (; scan < end - 7; scan++) {
+            if (strncmp(scan, "(import", 7) == 0) {
+                in_import = 1;
+                break;
+            }
+        }
+    }
+
+    Buf result;
+    buf_init(&result);
+    buf_puts(&result, "[");
+
+    int emitted = 0;
+
+    /* Import path completions */
+    if (in_import) {
+        for (int i = 0; stdlib_modules[i]; i++) {
+            const char *mod = stdlib_modules[i];
+            if (prefix_len > 0) {
+                /* Case-insensitive prefix match */
+                int match = 1;
+                for (size_t j = 0; j < prefix_len; j++) {
+                    char a = prefix[j], b = mod[j];
+                    if (a >= 'A' && a <= 'Z') a += 32;
+                    if (b >= 'A' && b <= 'Z') b += 32;
+                    if (a != b) { match = 0; break; }
+                }
+                if (!match) continue;
+            }
+            if (emitted > 0) buf_putc(&result, ',');
+            buf_puts(&result, "{\"label\":");
+            json_str(&result, mod);
+            buf_puts(&result, ",\"kind\":9}");
+            emitted++;
+        }
+    }
+
+    /* Symbol completions (cap at 200) */
+    if (!in_import && doc->symbols) {
+        for (int i = 0; i < doc->symbol_count && emitted < 200; i++) {
+            const LspSymbol *sym = &doc->symbols[i];
+            if (!sym->name[0]) continue;
+
+            /* Prefix filter */
+            if (prefix_len > 0) {
+                int match = 1;
+                for (size_t j = 0; j < prefix_len; j++) {
+                    char a = prefix[j], b = sym->name[j];
+                    if (a >= 'A' && a <= 'Z') a += 32;
+                    if (b >= 'A' && b <= 'Z') b += 32;
+                    if (a != b) { match = 0; break; }
+                }
+                if (!match) continue;
+            }
+
+            /* kind: 3 = Function (type starts with "(fn"), 6 = Variable */
+            int kind = (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+
+            if (emitted > 0) buf_putc(&result, ',');
+            buf_puts(&result, "{\"label\":");
+            json_str(&result, sym->name);
+            buf_printf(&result, ",\"kind\":%d", kind);
+            if (sym->type_str[0]) {
+                buf_puts(&result, ",\"detail\":");
+                json_str(&result, sym->type_str);
+            }
+            if (sym->doc[0]) {
+                buf_puts(&result,
+                    ",\"documentation\":{\"kind\":\"markdown\",\"value\":");
+                json_str(&result, sym->doc);
+                buf_puts(&result, "}");
+            }
+            buf_putc(&result, '}');
+            emitted++;
+        }
+    }
+
+    buf_puts(&result, "]");
+    buf_putc(&result, '\0'); /* NUL-terminate for strlen in send_response */
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
 }
 
 /* -------------------------------------------------------------------------
@@ -278,6 +598,12 @@ void lsp_server_run(int fd_in, int fd_out) {
             on_did_change(params_raw, params_len, fd_out);
         } else if (strcmp(method, "textDocument/didClose") == 0 && params_raw) {
             on_did_close(params_raw, params_len);
+        } else if (strcmp(method, "textDocument/hover") == 0 && params_raw) {
+            on_hover(id_raw, id_len, params_raw, fd_out);
+        } else if (strcmp(method, "textDocument/definition") == 0 && params_raw) {
+            on_definition(id_raw, id_len, params_raw, fd_out);
+        } else if (strcmp(method, "textDocument/completion") == 0 && params_raw) {
+            on_completion(id_raw, id_len, params_raw, fd_out);
         } else if (id_raw) {
             /* Unknown request: return method-not-found */
             Buf resp;

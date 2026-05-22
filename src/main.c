@@ -58,6 +58,8 @@
 #include "globals.h"
 /* LSP server */
 #include "lsp/lsp.h"
+#include "lsp/lsp_sym.h"
+#include "lsp/lsp_docs.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -249,6 +251,98 @@ static int run_core_passes(PassContext *ctx) {
     return 0;
 }
 
+/* -------------------------------------------------------------------------
+ * LSP symbol collection (LD1)
+ * --------------------------------------------------------------------- */
+
+/* Forward declaration: compile_to_c is defined later in this file */
+static int compile_to_c(const char *path, Buf *out_c,
+                        const char **include_dirs, int n_include_dirs);
+
+/* Global state for symbol collection -- set by tur_collect_symbols before
+ * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
+static LspSymbol  *g_collect_syms_out   = NULL;
+static int         g_collect_syms_cap   = 0;
+static int        *g_collect_syms_count = NULL;
+
+/* Walk one level of Expr items and record global bindings into the collector. */
+static void collect_items(const Expr **items, uint32_t n);
+
+static void collect_binding(const Binding *b) {
+    if (!b || !b->name || !b->is_global) return;
+    if (!g_collect_syms_out || !g_collect_syms_count) return;
+    if (*g_collect_syms_count >= g_collect_syms_cap) return;
+    LspSymbol *sym = &g_collect_syms_out[(*g_collect_syms_count)++];
+    memset(sym, 0, sizeof(*sym));
+    size_t nlen = strlen(b->name->name);
+    if (nlen >= sizeof(sym->name)) nlen = sizeof(sym->name) - 1;
+    memcpy(sym->name, b->name->name, nlen);
+    const char *tn = type_name(b->type);
+    if (tn) {
+        size_t tlen = strlen(tn);
+        if (tlen >= sizeof(sym->type_str)) tlen = sizeof(sym->type_str) - 1;
+        memcpy(sym->type_str, tn, tlen);
+    }
+    sym->line      = (int)b->span.line;
+    sym->col_start = (int)b->span.col_start;
+    sym->col_end   = (int)b->span.col_end;
+    const char *fp = diag_file_path(b->span.file_id);
+    if (fp) {
+        size_t flen = strlen(fp);
+        if (flen >= sizeof(sym->file_path)) flen = sizeof(sym->file_path) - 1;
+        memcpy(sym->file_path, fp, flen);
+    }
+}
+
+static void collect_items(const Expr **items, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        const Expr *item = items[i];
+        if (!item) continue;
+        switch (item->kind) {
+            case EX_FN_DEF:
+                collect_binding(item->as.fn_def_.fn ? item->as.fn_def_.fn->binding : NULL);
+                break;
+            case EX_DEF:
+                collect_binding(item->as.def_.binding);
+                break;
+            case EX_DEFDATA:
+                collect_binding(item->as.defdata_.binding);
+                break;
+            case EX_DEFGADT:
+                collect_binding(item->as.defgadt_.binding);
+                break;
+            case EX_DEFMODULE:
+                if (item->as.defmodule_.mod)
+                    collect_items((const Expr **)item->as.defmodule_.mod->body,
+                                  item->as.defmodule_.mod->n_body);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+static void collect_symbols_from_prog(const Expr *prog) {
+    if (!prog || prog->kind != EX_PROGRAM) return;
+    collect_items((const Expr **)prog->as.program.items, prog->as.program.n);
+}
+
+int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
+                        int *count_out) {
+    *count_out = 0;
+    g_collect_syms_out   = out;
+    g_collect_syms_cap   = cap;
+    g_collect_syms_count = count_out;
+    Buf discard;
+    buf_init(&discard);
+    int rc = compile_to_c(path, &discard, NULL, 0);
+    buf_free(&discard);
+    g_collect_syms_out   = NULL;
+    g_collect_syms_cap   = 0;
+    g_collect_syms_count = NULL;
+    return rc;
+}
+
 /* Reads a .tur file and emits its C source into `out_c`. Returns 0 on success,
  * nonzero on error (diagnostics already emitted).
  * include_dirs/n_include_dirs: additional module search paths for (import ...). */
@@ -382,6 +476,10 @@ static int compile_to_c(const char *path, Buf *out_c,
         ctx.include_dirs    = include_dirs;
         ctx.n_include_dirs  = n_include_dirs;
         rc = run_core_passes(&ctx);
+        /* Collect symbols whether or not later passes failed -- elaboration
+         * may have succeeded even when borrow-check reports errors. */
+        if (g_collect_syms_out && ctx.prog)
+            collect_symbols_from_prog(ctx.prog);
         if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
         }
