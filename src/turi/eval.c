@@ -3674,11 +3674,52 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 }
 
 /* -------------------------------------------------------------------------
- * turi_eval: public entry point
+ * turi_eval / turi_eval_typed: public entry points
  * ---------------------------------------------------------------------- */
 
+/* Convert the elaborated Type of an expression to a human-readable tag. */
+static void extract_type_tag(Type t, char *buf, size_t cap) {
+    if (!buf || cap == 0) return;
+    switch (t.kind) {
+    case TY_NIL:     snprintf(buf, cap, "nil");      break;
+    case TY_BOOL:    snprintf(buf, cap, "bool");     break;
+    case TY_INT:
+    case TY_INT64:   snprintf(buf, cap, "int");      break;
+    case TY_INT8:    snprintf(buf, cap, "int8");     break;
+    case TY_INT16:   snprintf(buf, cap, "int16");    break;
+    case TY_INT32:   snprintf(buf, cap, "int32");    break;
+    case TY_FLOAT:
+    case TY_FLOAT64: snprintf(buf, cap, "float");    break;
+    case TY_FLOAT32: snprintf(buf, cap, "float32");  break;
+    case TY_CSTR:    snprintf(buf, cap, "cstr");     break;
+    case TY_PTR_VOID: snprintf(buf, cap, "ptr<void>"); break;
+    case TY_FN:      snprintf(buf, cap, "fn");       break;
+    case TY_STRUCT:
+        if (t.as.struct_.def && t.as.struct_.def->name)
+            snprintf(buf, cap, "%s", t.as.struct_.def->name);
+        else
+            snprintf(buf, cap, "struct");
+        break;
+    default:         snprintf(buf, cap, "unknown");  break;
+    }
+}
+
+static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
+                                 char *out_type_tag, size_t tag_cap);
+
 TuriValue turi_eval(TuriEnv *env, const char *src) {
+    return turi_eval_impl(env, src, NULL, 0);
+}
+
+TuriValue turi_eval_typed(TuriEnv *env, const char *src,
+                           char *out_type_tag, size_t tag_cap) {
+    return turi_eval_impl(env, src, out_type_tag, tag_cap);
+}
+
+static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
+                                 char *out_type_tag, size_t tag_cap) {
     if (!env || !src) return turi_error("turi_eval: null argument");
+    if (out_type_tag && tag_cap > 0) out_type_tag[0] = '\0';
 
     /* Phase S2: Detect #lang directive at the top of the new source.
      * This lets the web REPL and turi_eval_file pick up the reader mode from an
@@ -3754,13 +3795,19 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
     const char *mbase = env->module_base_dir ? env->module_base_dir : ".";
     uint32_t actual_n_fsd = 0;
     bool import_blocked = !turi_env_has_cap(env, TURI_CAP_IMPORT);
+    /* Allocate a TypeClassEnv slot in the per-call arena so it outlives this
+     * stack frame.  elaborate_program fills it; we save the pointer to
+     * env->last_tc_env for later use by turi_try_show. */
+    TypeClassEnv *tc_env_slot =
+        (TypeClassEnv *)arena_alloc(eval_arena, sizeof(TypeClassEnv));
+    memset(tc_env_slot, 0, sizeof(*tc_env_slot));
     Expr *prog = elaborate_program(eval_arena, &env->st,
                                    forms, nforms,
                                    /*stdlib_prefix=*/prior,
                                    /*module_base_dir=*/mbase,
                                    /*separate_compilation=*/false,
                                    /*sandboxed=*/import_blocked,
-                                   /*out_tc_env=*/NULL,
+                                   /*out_tc_env=*/tc_env_slot,
                                    /*include_dirs=*/NULL,
                                    /*n_include_dirs=*/0,
                                    /*out_n_file_scope_defs=*/&actual_n_fsd);
@@ -3836,6 +3883,13 @@ eval_done:;
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
         buf_write(&env->src_acc, src_body, body_len);
         env->prior_toplevel = nforms;  /* track parsed count, not total */
+        /* SI4: persist TypeClassEnv for turi_try_show dispatch. */
+        env->last_tc_env = tc_env_slot;
+        /* SI4: extract type tag from the last new top-level expression. */
+        if (out_type_tag && tag_cap > 0 && total > n_fsd + prior) {
+            Expr *last_expr = prog->as.program.items[total - 1];
+            if (last_expr) extract_type_tag(last_expr->type, out_type_tag, tag_cap);
+        }
     }
 
     return last;
@@ -3975,6 +4029,68 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "#<struct-type %s>", v.as_cstr ? v.as_cstr : "?");
         break;
     }
+}
+
+/* -------------------------------------------------------------------------
+ * SI4: turi_try_show — call Show typeclass instance for TURI_STRUCT values
+ * ---------------------------------------------------------------------- */
+
+const char *turi_try_show(TuriEnv *env, TuriValue val) {
+    if (!env || !env->last_tc_env) return NULL;
+    if (val.tag != TURI_STRUCT || !val.as_struct || !val.as_struct->def)
+        return NULL;
+    StructDef *sdef = val.as_struct->def;
+    TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
+
+    /* Find the Show typeclass in the registry. */
+    TypeClass *show_tc = NULL;
+    for (TypeClass *tc = tc_env->typeclasses; tc; tc = tc->next) {
+        if (tc->name && strcmp(tc->name->name, "Show") == 0) {
+            show_tc = tc;
+            break;
+        }
+    }
+    if (!show_tc) return NULL;
+
+    /* Find the "show" method index in the typeclass. */
+    uint8_t show_mi = 0;
+    bool found_method = false;
+    for (uint8_t mi = 0; mi < show_tc->n_methods; mi++) {
+        if (show_tc->methods[mi].name &&
+            strcmp(show_tc->methods[mi].name->name, "show") == 0) {
+            show_mi = mi;
+            found_method = true;
+            break;
+        }
+    }
+    if (!found_method) return NULL;
+
+    /* Find the Show [StructType] instance. */
+    FnDef *show_impl = NULL;
+    for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+        if (inst->typeclass != show_tc) continue;
+        if (inst->n_type_args < 1) continue;
+        Type t = inst->type_args[0];
+        if (t.kind != TY_STRUCT || !t.as.struct_.def) continue;
+        if (t.as.struct_.def != sdef) continue;
+        if (show_mi < inst->n_method_impls && inst->method_impls[show_mi])
+            show_impl = inst->method_impls[show_mi];
+        break;
+    }
+    if (!show_impl) return NULL;
+
+    /* Create a temporary closure wrapping the Show method and call it. */
+    TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+    if (!cl) return NULL;
+    memset(cl, 0, sizeof(*cl));
+    cl->fn = show_impl;
+    TuriValue fn_val = turi_closure(cl);
+
+    TuriValue result = turi_call(env, fn_val, &val, 1);
+    free(cl);
+
+    if (result.tag != TURI_CSTR || !result.as_cstr) return NULL;
+    return strdup(result.as_cstr);
 }
 
 /* -------------------------------------------------------------------------

@@ -98,15 +98,8 @@
 (definstance Show [Pair]
   (show [p] :cstr
     ```c
-    int64_t fst = p.first;
-    int64_t snd = p.second;
-    int n1 = snprintf(NULL, 0, "%lld", (long long)fst);
-    int n2 = snprintf(NULL, 0, "%lld", (long long)snd);
-    if (n1 < 0) n1 = 0;
-    if (n2 < 0) n2 = 0;
-    char *buf = (char *)malloc((size_t)(1 + n1 + 2 + n2 + 1 + 1));
-    int off = snprintf(buf, (size_t)(n1 + 2), "(%lld", (long long)fst);
-    snprintf(buf + off, (size_t)(2 + n2 + 2), ", %lld)", (long long)snd);
+    char *buf = (char *)malloc(64);
+    snprintf(buf, 64, "(%lld, %lld)", (long long)p.first, (long long)p.second);
     return (const char *)(intptr_t)buf;
     ```))
 

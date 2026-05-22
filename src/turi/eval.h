@@ -39,6 +39,18 @@ void turi_init(bool use_color);
  * bytes, NUL-terminated). */
 void turi_value_repr(char *buf, size_t cap, TuriValue v);
 
+/* Like turi_eval, but also fills out_type_tag with the elaborated type name
+ * of the last top-level expression (e.g. "int", "bool", "Point", "ptr<void>").
+ * Passing NULL/0 for out_type_tag / tag_cap is equivalent to turi_eval. */
+TuriValue turi_eval_typed(TuriEnv *env, const char *src,
+                           char *out_type_tag, size_t tag_cap);
+
+/* Attempt to call the Show typeclass instance for val.
+ * Returns a heap-allocated C string (caller must free() it), or NULL when
+ * no Show instance is registered for this value's concrete type.
+ * Currently handles TURI_STRUCT values; primitives fall back to NULL. */
+const char *turi_try_show(TuriEnv *env, TuriValue val);
+
 /* ---------------------------------------------------------------------------
  * SB3 / SB4: Sandbox resource-limit and capability API
  * --------------------------------------------------------------------------- */

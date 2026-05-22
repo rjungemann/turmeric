@@ -100,13 +100,20 @@ void turi_wasm_reset(void) {
 char *turi_wasm_eval(const char *input) {
     if (!g_env) return turi_wasm_strdup("Error: Turmeric runtime not initialized. Call turi_wasm_init() first.");
     if (!input) return turi_wasm_strdup("Error: NULL input");
-    
-    TuriValue result = turi_eval(g_env, input);
-    
-    /* Convert result to string representation */
+
+    char type_tag[64] = {0};
+    TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
+
+    /* SI4: try Show instance first; fall back to repr */
+    const char *show_str = turi_try_show(g_env, result);
+    if (show_str) {
+        char *ret = turi_wasm_strdup(show_str);
+        free((char *)show_str);
+        return ret;
+    }
+
     char buf[2048];
     turi_value_repr(buf, sizeof(buf), result);
-    
     return turi_wasm_strdup(buf);
 }
 
@@ -140,16 +147,25 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error) {
     
     *out_result = NULL;
     *out_error = NULL;
-    
-    TuriValue result = turi_eval(g_env, input);
-    
+
+    char type_tag[64] = {0};
+    TuriValue result = turi_eval_typed(g_env, input, type_tag, sizeof(type_tag));
+
     if (turi_is_error(result)) {
         char buf[2048];
         turi_value_repr(buf, sizeof(buf), result);
         *out_error = turi_wasm_strdup(buf);
         return 1;
     }
-    
+
+    /* SI4: try Show instance first; fall back to repr */
+    const char *show_str = turi_try_show(g_env, result);
+    if (show_str) {
+        *out_result = turi_wasm_strdup(show_str);
+        free((char *)show_str);
+        return 0;
+    }
+
     char buf[2048];
     turi_value_repr(buf, sizeof(buf), result);
     *out_result = turi_wasm_strdup(buf);

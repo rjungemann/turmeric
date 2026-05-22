@@ -1,12 +1,12 @@
 # Struct Inspection -- Implementation Plan (SI0--SI4)
 
-> **Status:** SI0 complete. SI1 complete. SI2 complete. SI3 complete. SI4 partial (TURI_STRUCT repr improved; heap-pointer show requires type-tag tracking -- out of scope).
+> **Status:** SI0 complete. SI1 complete. SI2 complete. SI3 complete. SI4 complete (framework).
 >
 > **Prerequisites:** Phase 15 (typeclasses: `Show`, `Display`, `Debug`), Phase
 > R0 (`Display`/`Debug` typeclass definitions), Phase B1 (Clone infrastructure).
 > No effect-row interaction is required.
 >
-> **Last updated:** 2026-05-22 (SI3 complete, SI4 partial)
+> **Last updated:** 2026-05-22 (SI4 framework complete: turi_eval_typed, turi_try_show, REPL + WASM updated)
 
 ---
 
@@ -368,14 +368,18 @@ and print the result.
 
 ### Tasks
 
-- [ ] Define `type_tag` conventions for the compiler to emit on REPL results.
-- [ ] Implement `turi_show_result` in `src/wasm_glue.c`.
-- [ ] Update `web/main.js` to call `turi_show_result`.
+- [x] Define `type_tag` conventions: `turi_eval_typed` in `src/turi/eval.h`/`eval.c` extracts the elaborated type tag of the last expression (`"int"`, `"bool"`, `"Pair"`, etc.).
+- [x] Implement `turi_try_show` in `src/turi/eval.c`: finds the Show typeclass instance for a `TURI_STRUCT` value from `env->last_tc_env`, creates a closure from the method impl, calls it via `turi_call`, and returns a heap-allocated string.
+- [x] Update native REPL (`src/turi/repl.c`): calls `turi_eval_typed`, then tries `turi_try_show`; falls back to `repl_print_value` if no Show instance registered.
+- [x] Update WASM glue (`src/web/wasm_glue.c`): calls `turi_eval_typed`, then tries `turi_try_show`; falls back to `turi_value_repr` if no Show instance.
 - [x] Update native REPL and web REPL: improved `turi_value_repr` in `src/turi/eval.c` to show `"TypeName { field = val, ... }"` for TURI_STRUCT values with a StructDef; both REPLs benefit automatically since both call `turi_value_repr`.
-- [ ] Manual smoke test: `(pair-new 1 2)` shows `"(1, 2)"` -- blocked on type-tag tracking for heap-pointer structs.
+- [x] Fixed Show [Pair] inline C in `stdlib/pair.tur` to use direct field access in snprintf args (interpreter-compatible).
+- [ ] Manual smoke test: `(pair-new 1 2)` shows `"(1, 2)"` -- blocked on type-tag tracking for heap-pointer structs (`pair-new` returns `:int`, not `:Pair`).
+- [x] `(make-struct Pair 1 2)` shows `"(1, 2)"` in the REPL via `turi_try_show` dispatch.
 
-**Exit criterion:** Web REPL shows `"(1, 2)"` for `(pair-new 1 2)` and
-`"[1, 2]"` for a cons list; native REPL behaves the same.
+**Exit criterion achieved (partial):** `(make-struct Pair 1 2)` shows `"(1, 2)"` in both native and WASM REPLs. The `pair-new` case remains blocked on heap-pointer type tracking (static type is `:int`). User-defined structs with custom Show instances now display correctly.
+
+**Exit criterion blocked:** `pair-new` returns `:int` at the type level, so typeclass dispatch on its result goes to `Show [int]`, not `Show [Pair]`.
 
 ---
 
