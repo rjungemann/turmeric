@@ -1,0 +1,22 @@
+; LZ0 fixture: seq-from-list -- Seq over a singly-linked list.
+
+(load "stdlib/seq/core.tur")
+
+;;; make-cons -- allocate a cons cell
+;;; make-nil -- return the nil list pointer (0)
+(defn make-cons [val :int nxt :int] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+    malloc(sizeof(*cell));
+  cell->value = val; cell->next = nxt;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn make-nil [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn main [] :void
+  (let [lst (make-cons 1 (make-cons 2 (make-cons 3 (make-nil))))]
+    (seq-for-each println (seq-from-list lst))))

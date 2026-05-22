@@ -1,0 +1,18 @@
+; LZ0 fixture: seq-from-vec -- Seq over a vec.
+
+(load "stdlib/seq/core.tur")
+
+;;; make-vec3 -- allocate a 3-element vec for testing
+(defn make-vec3 [a :int b :int c :int] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+    malloc(sizeof(*vec));
+  vec->data = (int64_t *)malloc(3 * sizeof(int64_t));
+  vec->data[0] = a; vec->data[1] = b; vec->data[2] = c;
+  vec->len = 3; vec->cap = 3;
+  return (int64_t)(intptr_t)vec;
+  ```)
+
+(defn main [] :void
+  (let [v (make-vec3 10 20 30)]
+    (seq-for-each println (seq-from-vec v))))

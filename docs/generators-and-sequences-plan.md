@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2-LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -191,14 +191,14 @@ under Valgrind with no leaks.
 **Code location:** `stdlib/seq/core.tur`
 
 **Tasks:**
-- [ ] Define `(Seq a)` as `(defstruct Seq [mk : (fn [] (Generator a))])`
-- [ ] Define `seq-iter : (Seq a) -> (Generator a)` (call `mk` to get a fresh
+- [x] Define `(Seq a)` as `(defstruct Seq [mk : (fn [] (Generator a))])`
+- [x] Define `seq-iter : (Seq a) -> (Generator a)` (call `mk` to get a fresh
       generator)
-- [ ] Define `seq-of : a -> (Seq a)` (single-element sequence)
-- [ ] Define `empty-seq : (Seq a)` (always done)
-- [ ] Define `seq-from-vec : (vec a) -> (Seq a)`
-- [ ] Define `seq-from-list : list -> (Seq a)`
-- [ ] Write fixtures in `tests/fixtures/seq/core/`
+- [x] Define `seq-of : a -> (Seq a)` (single-element sequence)
+- [x] Define `empty-seq : (Seq a)` (always done)
+- [x] Define `seq-from-vec : (vec a) -> (Seq a)`
+- [x] Define `seq-from-list : list -> (Seq a)`
+- [x] Write fixtures in `tests/fixtures/seq-core-*/`
 
 **Exit criterion:** Core types and adapters work; fixtures pass.
 
@@ -221,9 +221,9 @@ under Valgrind with no leaks.
 | `seq/iterate` | `a (fn [a] a) -> (Seq a)` | x, f(x), f(f(x)), ... |
 | `seq/unfold` | `a (fn [a] (option (pair a a))) -> (Seq a)` | Unfold from seed |
 
-- [ ] Implement all builders as `gen`-based generators
-- [ ] Add `;;;` docstrings for each
-- [ ] Write fixtures in `tests/fixtures/seq/builders/`
+- [x] Implement all builders as `gen`-based generators
+- [x] Add `;;;` docstrings for each
+- [x] Write fixtures in `tests/fixtures/seq-builders-*/`
 
 **Exit criterion:** All builders produce correct output; infinite sequences
 truncated via `seq/take` work correctly.

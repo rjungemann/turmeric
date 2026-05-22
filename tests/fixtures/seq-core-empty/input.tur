@@ -1,0 +1,7 @@
+; LZ0 fixture: empty-seq -- Seq that yields no values.
+
+(load "stdlib/seq/core.tur")
+
+(defn main [] :void
+  (let [arr (seq-collect (empty-seq))]
+    (println (gen-arr-len arr))))
