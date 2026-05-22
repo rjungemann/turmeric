@@ -428,12 +428,18 @@ def extract_doctest_cases(module_name, defn_name, doc):
         expr_part = expr_part.strip()
         expected_raw = expected_raw.strip()
         if TESTABLE_RE.match(expected_raw):
+            # Quoted string: strip outer quotes since println prints the raw
+            # cstr value without surrounding quotes.
+            if expected_raw.startswith('"') and expected_raw.endswith('"'):
+                expected_out = expected_raw[1:-1]
+            else:
+                expected_out = expected_raw
             cases.append(DocTestCase(
                 module_name=module_name,
                 defn_name=defn_name,
                 setup_lines=list(pending_setup),
                 expr=expr_part,
-                expected=expected_raw,
+                expected=expected_out,
             ))
         # Reset pending setup after each '; =>' line (testable or not)
         pending_setup = []
