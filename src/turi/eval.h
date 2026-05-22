@@ -40,6 +40,37 @@ void turi_init(bool use_color);
 void turi_value_repr(char *buf, size_t cap, TuriValue v);
 
 /* ---------------------------------------------------------------------------
+ * SB3 / SB4: Sandbox resource-limit and capability API
+ * --------------------------------------------------------------------------- */
+
+/* Default limits applied by turi_env_new_sandboxed (overridable at compile time). */
+#ifndef TURI_DEFAULT_SANDBOX_FUEL
+#  define TURI_DEFAULT_SANDBOX_FUEL  10000000u   /* 10M eval steps */
+#endif
+#ifndef TURI_DEFAULT_SANDBOX_DEPTH
+#  define TURI_DEFAULT_SANDBOX_DEPTH 256u        /* max recursion frames */
+#endif
+
+/* Set the step-fuel limit for env.  Each call to the evaluator consumes one
+ * unit.  When fuel reaches 0, turi_eval returns TURI_ERROR.
+ * Pass 0 to disable fuel checking (default for unrestricted environments).
+ * turi_env_new_sandboxed sets a default of TURI_DEFAULT_SANDBOX_FUEL. */
+void turi_env_set_fuel(TuriEnv *env, uint64_t steps);
+
+/* Override the maximum recursion depth.
+ * Default: 4096 for unrestricted envs, TURI_DEFAULT_SANDBOX_DEPTH for sandboxed. */
+void turi_env_set_max_depth(TuriEnv *env, uint32_t depth);
+
+/* Grant a capability to an environment (no-op if already granted). */
+void turi_env_allow(TuriEnv *env, TuriCaps cap);
+
+/* Revoke a capability from an environment (no-op if already absent). */
+void turi_env_deny(TuriEnv *env, TuriCaps cap);
+
+/* Return true if the environment currently holds the given capability. */
+bool turi_env_has_cap(TuriEnv *env, TuriCaps cap);
+
+/* ---------------------------------------------------------------------------
  * Phase S7: Async C API
  * --------------------------------------------------------------------------- */
 

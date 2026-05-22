@@ -1,0 +1,3 @@
+(unsafe
+  (let [p (raw-malloc 8)]
+    (ptr-add p 4)))

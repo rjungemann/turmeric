@@ -465,6 +465,8 @@ typedef struct Elab {
     uint16_t         next_import_file_id; /* file_id counter for imported source files */
     /* Phase M3: Separate compilation — skip inlining imported modules */
     bool             separate_compilation;
+    /* SB2: When true, (import ...) is forbidden (sandboxed environment). */
+    bool             sandboxed;
     /* Phase M4: During macro expansion, the defining module of the currently
      * expanding macro (so private helper macros from that module are visible). */
     const Symbol    *macro_expansion_module;

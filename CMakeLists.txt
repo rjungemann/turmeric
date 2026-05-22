@@ -76,6 +76,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# SB0: sandboxed environment test harness
+add_test(
+  NAME tur_eval_sandbox
+  COMMAND "${CMAKE_BINARY_DIR}/tur_eval_sandbox"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Phase S3: algebraic effects via eval core
 add_test(
   NAME tur_eval_effects
@@ -136,6 +142,7 @@ add_test(
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
+                     tur_eval_sandbox
                      tur_eval_effects tur_eval_s4 tur_eval_tco
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
@@ -152,6 +159,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_basic
+                     tur_eval_sandbox
                      tur_eval_effects tur_eval_s4 tur_eval_tco
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout

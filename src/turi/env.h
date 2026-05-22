@@ -59,6 +59,19 @@ typedef struct ArenaNode {
     struct ArenaNode *next;
 } ArenaNode;
 
+/* SB4: Capability bits -- controls which operations are permitted in a
+ * sandboxed environment.  TURI_CAP_ALL grants every capability (unrestricted).
+ * TURI_CAP_NONE grants nothing (fully sandboxed). */
+typedef uint32_t TuriCaps;
+#define TURI_CAP_IO       (1u << 0)  /* println-*, file I/O builtins */
+#define TURI_CAP_FFI      (1u << 1)  /* dlopen/dlsym/dlclose */
+#define TURI_CAP_INLINE_C (1u << 2)  /* inline-C expressions */
+#define TURI_CAP_ASYNC    (1u << 3)  /* (async ...) forms */
+#define TURI_CAP_UNSAFE   (1u << 4)  /* raw-malloc, ptr-deref, unsafe-cast, ... */
+#define TURI_CAP_IMPORT   (1u << 5)  /* (import ...) module loading */
+#define TURI_CAP_ALL      (~(TuriCaps)0)
+#define TURI_CAP_NONE     ((TuriCaps)0)
+
 /* A name→value binding in the global environment. */
 typedef struct EnvBinding {
     const char       *name;   /* points into sym_arena (permanent) */
@@ -85,7 +98,8 @@ typedef struct TuriEnv {
     uint32_t    prior_toplevel;  /* Count of top-level exprs from prior evals */
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
-    bool        sandboxed;       /* When true, I/O builtins are disabled */
+    bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
+    TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
     /* Return-signal state: set by EX_RETURN, cleared by function application */
     bool        returning;
     TuriValue   return_value;
@@ -96,6 +110,9 @@ typedef struct TuriEnv {
     TuriValue   throw_value;
     /* Phase S4: defer stack (DeferItem*, defined in eval.c) */
     void       *defer_stack;
+    /* SB3: step-fuel resource limit (0 in both fields = unlimited) */
+    uint64_t    step_fuel;        /* remaining fuel units; decremented each eval step */
+    uint64_t    step_fuel_limit;  /* initial limit set by turi_env_set_fuel */
     /* Phase S5: recursion depth guard */
     uint32_t    eval_depth;
     uint32_t    max_eval_depth;

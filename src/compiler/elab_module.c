@@ -45,6 +45,13 @@ Expr *elab_load(Elab *e, const Form *call) {
  * Returns the registry entry (may have 0 exports on parse/elab failure).
  * Returns NULL only on fatal error (circular import or OOM). */
 static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span) {
+    /* SB2: Reject imports in sandboxed environments. */
+    if (e->sandboxed) {
+        diag_emit(DIAG_ERROR, import_span,
+                  "import not allowed in sandboxed environment");
+        return NULL;
+    }
+
     /* Already in registry? */
     ElabModule *existing = elab_find_loaded_module(e, name);
     if (existing) {
