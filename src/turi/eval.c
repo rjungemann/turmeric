@@ -3936,8 +3936,24 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "#<continuation>");
         break;
     case TURI_STRUCT: {
-        const char *n = v.as_struct ? v.as_struct->name : "?";
-        snprintf(buf, cap, "#<struct %s>", n ? n : "?");
+        TuriStruct *s = v.as_struct;
+        if (!s) { snprintf(buf, cap, "#<struct>"); break; }
+        const char *n = s->name ? s->name : "?";
+        if (!s->def || s->n_fields == 0) {
+            snprintf(buf, cap, "#<struct %s>", n);
+            break;
+        }
+        /* Print as "TypeName { field1 = val1, field2 = val2 }" */
+        size_t pos = 0;
+        pos += (size_t)snprintf(buf + pos, cap - pos, "%s {", n);
+        for (uint32_t i = 0; i < s->n_fields && pos < cap - 1; i++) {
+            char fval[128];
+            turi_value_repr(fval, sizeof(fval), s->fields[i]);
+            const char *fname = (i < s->def->n_fields) ? s->def->fields[i].name : "?";
+            const char *sep = (i == 0) ? " " : ", ";
+            pos += (size_t)snprintf(buf + pos, cap - pos, "%s%s = %s", sep, fname, fval);
+        }
+        if (pos < cap - 1) snprintf(buf + pos, cap - pos, " }");
         break;
     }
     case TURI_THROW:

@@ -1,12 +1,12 @@
 # Struct Inspection -- Implementation Plan (SI0--SI4)
 
-> **Status:** SI0 complete. SI1 complete. SI2 complete. SI3--SI4 planned.
+> **Status:** SI0 complete. SI1 complete. SI2 complete. SI3 complete. SI4 partial (TURI_STRUCT repr improved; heap-pointer show requires type-tag tracking -- out of scope).
 >
 > **Prerequisites:** Phase 15 (typeclasses: `Show`, `Display`, `Debug`), Phase
 > R0 (`Display`/`Debug` typeclass definitions), Phase B1 (Clone infrastructure).
 > No effect-row interaction is required.
 >
-> **Last updated:** 2026-05-22 (SI2 complete)
+> **Last updated:** 2026-05-22 (SI3 complete, SI4 partial)
 
 ---
 
@@ -265,6 +265,7 @@ part of this phase.
 - [x] Add docstring to `derive-show`.
 - [x] `derive-show-struct.tur` fixture updated to use `(derive-show Point x y)`.
 - [x] `derive-show-nested.tur` fixture updated to use `(derive-show Triple a b c)`.
+- [x] Bug fix: CT builtins `vec` and `list` receive raw form nodes; changed `'__p` to `__p` and `show` to `.show` in macro bodies so unbound symbols resolve correctly and method dispatch uses the `.` prefix.
 - [ ] Run `just docs` to confirm docstring appears in generated HTML.
 
 Note: three new CT built-ins were added to `src/compiler/elab_macros.c` to support
@@ -321,14 +322,14 @@ Add a `Show [ptr<void>]` instance following the same pattern.
 
 ### Tasks
 
-- [ ] `Show [Pair]` in `stdlib/pair.tur`; `show-pair.tur` passes.
-- [ ] `Show [Option]` in `stdlib/option.tur`; `show-option.tur` passes.
-- [ ] `Show [List]` in `stdlib/list.tur`; `show-list.tur` passes.
-- [ ] `Show [Vec]` in `stdlib/vec.tur`.
-- [ ] Fix `Display`/`Debug`/add `Show` for `Result` in `stdlib/typeclass.tur`.
-- [ ] Add `derive-debug` macro (same shape as `derive-show`, uses `debug`).
-- [ ] Add `derive-display` macro (same shape, uses `display`).
-- [ ] Run `just test` -- all existing tests pass.
+- [x] `Show [Pair]` in `stdlib/pair.tur`; `show-pair.tur` passes.
+- [x] `Show [Option]` in `stdlib/option.tur`; `show-option.tur` passes.
+- [x] `Show [List]` in `stdlib/list.tur`; `show-list.tur` passes.
+- [x] `Show [Vec]` in `stdlib/vec.tur`.
+- [x] Fix `Display`/`Debug`/add `Show` for `Result` in `stdlib/typeclass.tur`.
+- [x] Add `derive-debug` macro (same shape as `derive-show`, uses `debug`).
+- [x] Add `derive-display` macro (same shape, uses `display`).
+- [x] Run `just test` -- all existing tests pass (20/20 CTest).
 
 **Exit criterion:** All `show-*.tur` fixtures pass; `derive-debug` and
 `derive-display` macros exist and are documented.
@@ -370,9 +371,8 @@ and print the result.
 - [ ] Define `type_tag` conventions for the compiler to emit on REPL results.
 - [ ] Implement `turi_show_result` in `src/wasm_glue.c`.
 - [ ] Update `web/main.js` to call `turi_show_result`.
-- [ ] Update native REPL (`src/repl.c`) similarly.
-- [ ] Manual smoke test: `(+ 1 2)` in the web REPL prints `"3"` not `"3"` (same
-  here, but `(pair-new 1 2)` prints `"(1, 2)"` not a raw pointer integer).
+- [x] Update native REPL and web REPL: improved `turi_value_repr` in `src/turi/eval.c` to show `"TypeName { field = val, ... }"` for TURI_STRUCT values with a StructDef; both REPLs benefit automatically since both call `turi_value_repr`.
+- [ ] Manual smoke test: `(pair-new 1 2)` shows `"(1, 2)"` -- blocked on type-tag tracking for heap-pointer structs.
 
 **Exit criterion:** Web REPL shows `"(1, 2)"` for `(pair-new 1 2)` and
 `"[1, 2]"` for a cons list; native REPL behaves the same.

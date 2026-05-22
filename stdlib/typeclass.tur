@@ -608,6 +608,21 @@
     return (const char *)buf;
     ```))
 
+;;; Show [ptr<void>] -- Show instance for result<T,E> represented as ptr<void>.
+(definstance Show [ptr<void>]
+  (show [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) return "err";
+    char *buf = (char *)malloc(48);
+    if (res->is_ok) {
+        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
+    } else {
+        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
+    }
+    return (const char *)buf;
+    ```))
+
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 (definstance Error [ptr<void>]
   (error-message [x] :cstr

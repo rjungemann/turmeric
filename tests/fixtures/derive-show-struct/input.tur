@@ -23,47 +23,6 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-;; Internal helpers for derive-show.
-(defmacro derive-show-rest__ [& fields]
-  (if (empty? fields)
-    " }"
-    (let [field (first fields)
-          rest-fields (rest fields)
-          is-vec (vec? field)
-          label (if is-vec (first field) (symbol-name field))
-          accessor-sym (if is-vec (second field) field)
-          accessor-form (if is-vec
-                          (list accessor-sym '__p)
-                          (list (dot-sym accessor-sym) '__p))
-          prefix (str-append ", " label " = ")]
-      (list str-concat prefix
-        (list str-concat
-          (list show accessor-form)
-          (list derive-show-rest__ ~@rest-fields))))))
-
-(defmacro derive-show-body__ [TypeName & fields]
-  (let [type-str (symbol-name TypeName)]
-    (if (empty? fields)
-      (str-append type-str " { }")
-      (let [field (first fields)
-            rest-fields (rest fields)
-            is-vec (vec? field)
-            label (if is-vec (first field) (symbol-name field))
-            accessor-sym (if is-vec (second field) field)
-            accessor-form (if is-vec
-                            (list accessor-sym '__p)
-                            (list (dot-sym accessor-sym) '__p))
-            first-prefix (str-append type-str " { " label " = ")]
-        (list str-concat first-prefix
-          (list str-concat
-            (list show accessor-form)
-            (list derive-show-rest__ ~@rest-fields)))))))
-
-(defmacro derive-show [TypeName & fields]
-  (list definstance Show (vec TypeName)
-    (list show (vec '__p) :cstr
-      (list derive-show-body__ TypeName ~@fields))))
-
 (defstruct Point :copy [x :int y :int])
 (derive-show Point x y)
 
