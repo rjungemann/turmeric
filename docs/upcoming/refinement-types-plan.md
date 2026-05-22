@@ -949,4 +949,4 @@ but safe and simple; finer-grained invalidation can be added later.
   `find_package` / `FetchContent` hybrid pattern used in RT3.
 - **Turmeric Contract Types** -- `docs/guides/contract-types-guide.md`
 - **Turmeric Sized Types** -- `docs/guides/sized-types-guide.md` and CT0--CT4
-  in `docs/advanced-type-system-feasibility-plan.md`
+  in `docs/guides/advanced-type-system-rationale.md`

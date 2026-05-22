@@ -6,7 +6,7 @@
 >
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; borrow checker (Phase 12) and unique ownership (`ref<T>`, Phase 5) in place.
 >
-> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> **Related:** [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)
 > (§1 Linear Types, §3 Uniqueness Types, §4 Substructural Type Systems)
 >
 > **Last updated:** 2026-05-17
@@ -319,4 +319,4 @@ Linear types are the highest-value, lowest-risk advanced type-system feature for
 
 - [Linear Types Can Change the World! — Wadler](https://philipwadler.com/papers/linearity/linearity.pdf)
 - [GHC Linear Types Proposal](https://github.com/ghc-proposals/ghc-proposals/blob/master/proposals/0111-linear-types.rst)
-- [advanced-type-system-feasibility-plan.md §1](advanced-type-system-feasibility-plan.md)
+- [../../guides/advanced-type-system-rationale.md §1](../../guides/advanced-type-system-rationale.md)

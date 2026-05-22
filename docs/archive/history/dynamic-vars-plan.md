@@ -7,7 +7,7 @@
 > **Prerequisites:** Phase T19 complete (thread primitives: `spawn`, `join`, `pthread_key_t` available in generated C). STM (Phase 19 atomics) recommended for DV4 interaction testing.
 >
 > **Related:** [session-types-plan.md](session-types-plan.md),
-> [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)
 > (§8 Effect Types, §1 Linear Types)
 >
 > **Last updated:** 2026-05-19 (DV4 complete: stdlib common vars, integration test fixtures, guide, tur explain entries confirmed)
@@ -638,4 +638,4 @@ Recommend implementing DV0-DV2 together as a single sprint once Phase T19 is con
 - [Racket Parameters](https://docs.racket-lang.org/reference/parameters.html)
 - POSIX `pthread_key_create(3)` / `pthread_getspecific(3)`
 - GCC `__attribute__((cleanup))` documentation
-- [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+- [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)

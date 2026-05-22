@@ -3,7 +3,7 @@
 > **Status:** SZ3 Complete
 > **Target:** v4
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete
-> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> **Related:** [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)
 
 ---
 

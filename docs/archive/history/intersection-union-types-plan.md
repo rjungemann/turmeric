@@ -6,7 +6,7 @@
 >
 > **Prerequisites:** None (can be implemented independently); GADTs (v2) recommended for ADT-as-union sugar.
 >
-> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> **Related:** [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)
 > (§7 Intersection & Union Types)
 >
 > **Last updated:** 2026-05-16 (IT4 partial)
@@ -420,4 +420,4 @@ before union/intersection types are enabled by default.
 
 - [Barbanera & Franzese -- Intersection and Union Types: Syntax and Semantics](https://dl.acm.org/doi/10.1145/357052.357055)
 - [TypeScript Handbook -- Union and Intersection Types](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#union-types)
-- [advanced-type-system-feasibility-plan.md §7](advanced-type-system-feasibility-plan.md)
+- [../../guides/advanced-type-system-rationale.md §7](../../guides/advanced-type-system-rationale.md)

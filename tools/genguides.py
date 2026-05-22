@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import html as _html
 import re
 import sys
 from pathlib import Path
@@ -56,9 +57,12 @@ PAGE_HEADER = '''\
     <button class="hamburger" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
     </button>
-    <a class="brand" href="/">turmeric</a>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
     <nav>
-      <a href="/docs/html/guides/">Guides</a>
+      <a href="/docs/html/guides/" class="active">Guides</a>
       <a href="/docs/html/api/">API Docs</a>
       <a href="/try">Try It</a>
     </nav>
@@ -188,32 +192,32 @@ TURMERIC_HIGHLIGHT_JS = '''\
   </script>'''
 
 GUIDE_CSS = '''\
-    .guide-content h1 { font-size:1.75rem; color:var(--gold); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
-    .guide-content h2 { font-size:1.2rem; color:var(--cream); margin:2rem 0 0.75rem; }
-    .guide-content h3 { font-size:1rem; color:var(--gold); margin:1.5rem 0 0.5rem; }
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
     .guide-content p  { margin-bottom:1rem; }
     .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
     .guide-content li { margin:0.25rem 0; }
-    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-code); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
-    .guide-content pre { background:var(--bg-code); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
     .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
-    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--faint); margin:1rem 0; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
     .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
-    .guide-content th { background:var(--bg-card); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold); }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
     .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
-    .guide-content a { color:var(--gold); }
-    .guide-content strong { color:var(--cream); }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
     .hl-comment { color:#48433D; font-style:italic; }
     .hl-string  { color:#D9735A; }
     .hl-number  { color:#A8C98A; }
     .hl-keyword { color:#EFA030; font-weight:bold; }
     .hl-type    { color:#7AC4B8; }
     .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
-    .code-card-bar { background:var(--bg-card); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
     .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"JetBrains Mono","Fira Code",monospace; font-size:11px; }
-    .seg-btn { padding:3px 10px; background:transparent; color:var(--faint); border:none; cursor:pointer; transition:all 0.14s; }
-    .seg-btn:hover { color:var(--cream); }
-    .seg-btn.active { color:var(--gold); background:var(--highlight); }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
     .code-card-body { }
     .code-version { }
     .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }'''
@@ -260,7 +264,7 @@ def toc_tokens_to_sidebar(tokens: list) -> str:
         name = tok.get('name', '')
         level = tok.get('level', 2)
         indent = 'padding-left:0.75rem;' if level > 2 else ''
-        color = 'color:var(--faint);' if level > 2 else ''
+        color = 'color:var(--text-sec);' if level > 2 else ''
         items.append(
             f'<li style="{indent}"><a href="#{anchor}" style="{color}">{name}</a></li>'
         )
@@ -301,7 +305,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = f'''\
       <div style="margin-bottom:1.25rem">
-        <a href="index.html" style="font-size:0.8rem;color:var(--faint)">← All Guides</a>
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
       <h3>On this page</h3>
       <ul>{sidebar_items}</ul>'''
@@ -340,6 +344,19 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     print(f'  {stem}.html')
 
 
+def _fmt_desc(text: str) -> str:
+    """Normalize and render a guide description for the index page.
+
+    - Replaces em dashes with '--'
+    - HTML-escapes special characters
+    - Converts backtick spans to <code> elements
+    """
+    text = text.replace('—', '--')
+    text = _html.escape(text)
+    text = re.sub(r'`([^`]+)`', lambda m: f'<code>{m.group(1)}</code>', text)
+    return text
+
+
 def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> None:
     categorized_stems = {g['stem'] for c in categories for g in c['guides']}
 
@@ -347,7 +364,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
         if g['stem'] not in all_stems:
             return ''
         return (f'<li><a href="{g["stem"]}.html">{g["label"]}</a>'
-                f'<span style="color:var(--faint)"> — {g["desc"]}</span></li>')
+                f'<span style="color:var(--text-sec)"> -- {_fmt_desc(g["desc"])}</span></li>')
 
     cards = []
     for cat in categories:
@@ -387,7 +404,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}
-    .index-card ul li a {{ color:var(--cream); }}
+    .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
   </style>
 </head>

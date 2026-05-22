@@ -221,13 +221,20 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 return NULL;
             }
             scan++; /* consume name */
-            if (scan >= n_items || fields_form->as.list.items[scan]->tag != F_KEYWORD) {
+            if (scan >= n_items) {
                 diag_emit(DIAG_ERROR, fields_form->span,
                           "defstruct field list must have [name :type ...] pairs");
                 return NULL;
             }
-            const char *tname = fields_form->as.list.items[scan]->as.sym->name;
-            uint32_t tlen = fields_form->as.list.items[scan]->as.sym->len;
+            const Form *type_tok = fields_form->as.list.items[scan];
+            if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
+            if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, fields_form->span,
+                          "defstruct field list must have [name :type ...] pairs");
+                return NULL;
+            }
+            const char *tname = type_tok->as.sym->name;
+            uint32_t tlen = type_tok->as.sym->len;
             scan++; /* consume type keyword */
             /* Optional #{...} effect-row only for :fn fields */
             bool is_fn_field = (tlen == 2 && memcmp(tname, "fn", 2) == 0);
@@ -278,9 +285,10 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         for (uint32_t fi = 0; fi < actual_n_fields; fi++) {
             Form *field_name_form = fields_form->as.list.items[scan++];
             Form *field_type_form = fields_form->as.list.items[scan++];
-
-            const char *tname = field_type_form->as.sym->name;
-            uint32_t tlen = field_type_form->as.sym->len;
+            const Form *type_name_form = (field_type_form->tag == F_TYPE_ANN)
+                ? field_type_form->as.list.items[0] : field_type_form;
+            const char *tname = type_name_form->as.sym->name;
+            uint32_t tlen = type_name_form->as.sym->len;
             TypeKind fkind, finner;
             parse_struct_field_type(tname, tlen, &fkind, &finner);
 

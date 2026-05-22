@@ -10,7 +10,7 @@
 > row-variable substitution). All prerequisite infrastructure is in `src/effect.h`,
 > `src/effect_check.c`, and `src/effect_lower.c`.
 >
-> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> **Related:** [../guides/advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md)
 > (§8 Effect Types / Row Polymorphism, §1 Linear Types)
 >
 > **Last updated:** 2026-05-15
@@ -513,7 +513,7 @@ priority stdlib functions are fully annotated.
 ## Relationship to Advanced Type System Plan
 
 The ER0–ER6 phases are the **near-term enforcement layer** for effect rows. The
-[advanced type system feasibility plan](advanced-type-system-feasibility-plan.md)
+[advanced type system feasibility plan](../guides/advanced-type-system-rationale.md)
 describes a longer-horizon effort (§8 — Effect Types / Row Polymorphism, phases
 ET0–ET4) that extends this work to full effect polymorphism. Key alignment:
 

@@ -38,7 +38,7 @@ nav {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 48px;
+  padding: 0 2rem;
   gap: 0;
 }
 

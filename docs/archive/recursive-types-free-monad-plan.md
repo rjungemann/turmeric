@@ -4,7 +4,7 @@
 
 **Prerequisites:** Phase 15 (typeclasses), HKT (higher-kinded types, `^f` / `^^f` kind syntax), Phase 2 (closures).
 
-**Related:** [hkt-guide.md](guides/hkt-guide.md), [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md), [archive/higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md)
+**Related:** [hkt-guide.md](guides/hkt-guide.md), [../guides/advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md), [archive/higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md)
 
 **Last updated:** 2026-05-15
 
@@ -484,7 +484,7 @@ Equality is checked structurally using a helper that compares `Free` values recu
 | Plan | Relationship |
 |---|---|
 | [hkt-guide.md](guides/hkt-guide.md) | This plan resolves limitation 4 in the Known Limitations section |
-| [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md) | GADTs (planned for v2) may interact with recursive types; this plan is prerequisite |
+| [../guides/advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md) | GADTs (planned for v2) may interact with recursive types; this plan is prerequisite |
 | [lazy-sequences-plan.tur](lazy-sequences-plan.md) | `Free` can model lazy sequences via the `Identity` functor; no direct dependency |
 | [generator-functions-plan.md](generator-functions-plan.md) | Generators could be encoded as `Free`; integration is a stretch goal, not in scope here |
 

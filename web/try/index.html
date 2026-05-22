@@ -11,29 +11,13 @@
     <meta property="og:description" content="Experiment with Turmeric code directly in your browser">
     <meta property="og:type" content="website">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/site.css">
     <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/site.js"></script>
 </head>
 <body>
+<site-nav active="Try It"></site-nav>
     <div id="app">
-        <!-- Header -->
-        <header class="header">
-            <div class="header-content">
-                <div class="logo">
-                    <a href="https://turmeric-lang.com">
-                        <svg class="logo-svg" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
-                            <text x="10" y="35" font-family="monospace" font-size="24" font-weight="bold" fill="#d4a574">turmeric</text>
-                        </svg>
-                    </a>
-                </div>
-                <nav class="nav">
-                    <a href="/" class="nav-link active">Try REPL</a>
-                    <a href="/tutorials" class="nav-link">Tutorials</a>
-                    <a href="/docs/html/api/index.html" class="nav-link" target="_blank" rel="noopener">Docs</a>
-                    <a href="https://github.com/turmeric-lang/turmeric" class="nav-link external" target="_blank" rel="noopener">GitHub</a>
-                </nav>
-            </div>
-        </header>
-
         <!-- Main Layout -->
         <main class="main">
             <div class="repl-container">

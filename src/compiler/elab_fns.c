@@ -390,7 +390,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
             continue;
         }
 
-        if (p->tag != F_SYM && p->tag != F_KEYWORD) {
+        /* Accept both fused :type (F_KEYWORD) and spaced `: type` (F_TYPE_ANN{inner: F_SYM}) */
+        const Form *p_eff = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
+        if (p_eff->tag != F_SYM && p_eff->tag != F_KEYWORD) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: parameter must be a symbol or type annotation");
             /* params is arena-allocated, no need to free */
@@ -398,7 +400,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
 
         /* Handle type annotations: if this is a keyword like :int, it's a type for the previous param */
-        if (p->tag == F_KEYWORD) {
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
             /* This is a type annotation for the previous parameter */
             if (n_params == 0) {
                 diag_emit(DIAG_ERROR, p->span,
@@ -406,7 +408,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return NULL;
             }
             /* Update the type of the last parameter */
-            const Symbol *kw = p->as.sym;
+            const Symbol *kw = p_eff->as.sym;
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 param_kinds[n_params - 1] = TY_INT;
                 params[n_params - 1]->type = TYPE_INT;

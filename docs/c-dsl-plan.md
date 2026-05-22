@@ -996,6 +996,71 @@ Here's a complete example of a C program written in the DSL:
 7. **Static Analysis**: Integration with Clang Static Analyzer
 8. **Sanitizers**: Integration with AddressSanitizer, UndefinedBehaviorSanitizer
 
+## Distributing as a Spice
+
+The C DSL is a pure-Turmeric library (no C dependencies of its own), so it
+ships as a simple spice with no `:cmake-deps`.
+
+### Adding the spice
+
+```sh
+tur add https://github.com/rjungemann/turmeric-spices \
+  --ref c-dsl-v0.1.0 --subdir spices/c-dsl --name c-dsl
+```
+
+### `build.tur` manifest
+
+```turmeric
+(defpackage tur-c-dsl
+  :name        "tur-c-dsl"
+  :version     "0.1.0"
+  :description "Lisp-syntax DSL that compiles to C99 source code"
+  :license     "MIT"
+  :repository  "https://github.com/rjungemann/turmeric-spices"
+
+  :exports {
+    "c-dsl/core"     ["c-let" "c-const" "c-set!" "c-do" "c-return"
+                      "c-if" "c-cond" "c-while" "c-for" "c-do-while"
+                      "c-switch" "c-break" "c-continue"]
+    "c-dsl/types"    ["c-defstruct" "c-defunion" "c-defenum" "c-typedef"]
+    "c-dsl/fns"      ["c-defn" "c-call" "c-declare" "c-extern-c" "c-export"]
+    "c-dsl/mem"      ["c-addr" "c-deref" "c-index" "c-cast"
+                      "c-malloc" "c-calloc" "c-realloc" "c-free" "c-alloca"]
+    "c-dsl/pp"       ["c-include" "c-define" "c-ifdef" "c-ifndef"
+                      "c-static-assert"]
+    "c-dsl/codegen"  ["compile-c" "emit-c-file"]
+    "c-dsl/builtins" ["c-sizeof" "c-alignof" "c-null"
+                      "c-strcat" "c-strlen" "c-strdup" "c-asprintf"]
+  })
+```
+
+### Consuming the spice
+
+```turmeric
+(import c-dsl/core   :refer [c-defn c-let c-for c-set! c-return])
+(import c-dsl/mem    :refer [c-malloc c-free c-sizeof])
+(import c-dsl/codegen :refer [compile-c])
+```
+
+### Spice layout inside turmeric-spices
+
+```
+spices/c-dsl/
+  build.tur
+  tur.lock
+  src/
+    core.tur      -- control flow, variable bindings
+    types.tur     -- struct, union, enum, typedef
+    fns.tur       -- function definition and declaration
+    mem.tur       -- pointer and memory operations
+    pp.tur        -- preprocessor directives
+    codegen.tur   -- compile-c / emit-c-file entry points
+    builtins.tur  -- standard library symbol declarations
+  tests/
+    core_test.tur
+    codegen_test.tur
+```
+
 ## File Structure
 
 ```

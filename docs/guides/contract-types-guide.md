@@ -330,4 +330,4 @@ Contract types are planned in four phases:
 - [Error Handling Guide](error-handling-guide.md) -- `Result`, `Option`, `panic`, and today's contract macros
 - [C Integration Guide](c-integration-guide.md) -- FFI and `extern-c`
 - [Type Annotations Guide](type-annotations-guide.md) -- compound type syntax
-- [advanced-type-system-feasibility-plan.md §6, §10](../advanced-type-system-feasibility-plan.md) -- refinement types and contract type design context
+- [Advanced Type System Rationale](advanced-type-system-rationale.md) -- why contract types shipped and refinement types were deferred

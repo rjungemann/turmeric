@@ -6,7 +6,7 @@
 >
 > **Prerequisites:** None -- can be implemented independently. Existing `contract.tur` runtime assertions provide a foundation but are library-level only.
 >
-> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> **Related:** [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)
 > (§10 Contract Types, §6 Refinement Types)
 > [contracts-plan.md](contracts-plan.md)
 >
@@ -290,4 +290,4 @@ Contract types have no dependencies on other advanced type-system features and c
 
 - [Findler & Felleisen -- Contracts for Higher-Order Functions](https://dl.acm.org/doi/10.1145/351492.351503)
 - [Racket Contract System](https://docs.racket-lang.org/reference/contracts.html)
-- [advanced-type-system-feasibility-plan.md §10](advanced-type-system-feasibility-plan.md)
+- [../../guides/advanced-type-system-rationale.md §10](../../guides/advanced-type-system-rationale.md)

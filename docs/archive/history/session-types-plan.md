@@ -6,7 +6,7 @@
 >
 > **Prerequisites:** Linear Types (LT0-LT4) complete; thread primitives (Phase T19) complete; Higher-Ranked Types (HRT1) recommended. GADTs (G0–G4) are complete and active (`-Xgadt`); Intersection & Union Types (IT0–IT4) are substantially complete (`-Xunion-types`, `-Xintersection-types`); Substructural Types (ST0–ST3) are complete (`-Xsubstructural`). See interaction notes in the [Interaction with Existing Features](#interaction-with-existing-features) table.
 >
-> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> **Related:** [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)
 > (§5 Session Types, §1 Linear Types, §8 Effect Types)
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
@@ -965,7 +965,7 @@ before the runtime (SS7-SS8).
 - [Honda, Yoshida & Carbone -- Multiparty Asynchronous Session Types](https://dl.acm.org/doi/10.1145/1328897.1328472)
 - [Covington et al. -- Session Types for C](https://dl.acm.org/doi/10.1145/1596553.1596586)
 - [Scribble -- Protocol Description Language](https://www.scribble.org/)
-- [advanced-type-system-feasibility-plan.md §5](advanced-type-system-feasibility-plan.md)
+- [../../guides/advanced-type-system-rationale.md §5](../../guides/advanced-type-system-rationale.md)
 
 ---
 

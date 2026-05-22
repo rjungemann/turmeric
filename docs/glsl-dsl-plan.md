@@ -793,6 +793,86 @@ Here's a complete example with vertex and fragment shaders:
 6. **Visual Shader Editor**: GUI for creating shaders visually
 7. **Shader Analysis**: Static analysis for performance optimization
 
+## Distributing as a Spice
+
+The GLSL DSL is a pure-Turmeric library -- it only emits strings of GLSL
+source code and has no C dependencies itself. The `tur-opengl` spice (which
+wraps GLFW and OpenGL) is kept separate so the DSL can be used with any
+graphics backend.
+
+### Adding the spice
+
+```sh
+tur add https://github.com/rjungemann/turmeric-spices \
+  --ref glsl-v0.1.0 --subdir spices/glsl --name glsl
+```
+
+### `build.tur` manifest
+
+```turmeric
+(defpackage tur-glsl
+  :name        "tur-glsl"
+  :version     "0.1.0"
+  :description "Lisp-syntax DSL that compiles to GLSL shader source code"
+  :license     "MIT"
+  :repository  "https://github.com/rjungemann/turmeric-spices"
+
+  :exports {
+    "glsl/core"     ["glsl-let" "glsl-set!" "glsl-if" "glsl-for"
+                     "glsl-defn" "glsl-return" "glsl-discard"]
+    "glsl/types"    ["glsl-defstruct" "glsl-typedef"]
+    "glsl/shaders"  ["glsl-vertex-shader" "glsl-fragment-shader"
+                     "glsl-compute-shader" "glsl-geometry-shader"
+                     "glsl-tess-control-shader" "glsl-tess-evaluation-shader"]
+    "glsl/builtins" ["dot" "cross" "normalize" "length" "distance"
+                     "mix" "clamp" "smoothstep" "step" "reflect" "refract"
+                     "texture" "textureLod" "swizzle"
+                     "vec2" "vec3" "vec4" "mat2" "mat3" "mat4"
+                     "sin" "cos" "tan" "sqrt" "pow" "exp" "log"
+                     "abs" "min" "max" "floor" "ceil" "fract"
+                     "dFdx" "dFdy" "fwidth"]
+    "glsl/codegen"  ["compile-glsl"]
+    "glsl/stdlib"   ["phong-lighting" "fresnel" "gamma-correct"]
+  })
+```
+
+### Consuming the spice
+
+```turmeric
+(import glsl/shaders :refer [glsl-vertex-shader glsl-fragment-shader])
+(import glsl/codegen :refer [compile-glsl])
+(import glsl/builtins :refer [vec3 vec4 normalize dot mix])
+```
+
+Then pass the compiled string to the `tur-opengl` spice's shader compiler:
+
+```turmeric
+(import opengl/shaders :refer [shader-program])
+
+(defn my-program [] :uint
+  (shader-program
+    (compile-glsl (my-vertex-shader))
+    (compile-glsl (my-fragment-shader))))
+```
+
+### Spice layout inside turmeric-spices
+
+```
+spices/glsl/
+  build.tur
+  tur.lock
+  src/
+    core.tur      -- control flow and variable binding forms
+    types.tur     -- struct and typedef forms
+    shaders.tur   -- shader-stage entry-point forms
+    builtins.tur  -- GLSL built-in function wrappers
+    codegen.tur   -- compile-glsl entry point
+    stdlib.tur    -- reusable lighting / math helpers
+  tests/
+    codegen_test.tur
+    shaders_test.tur
+```
+
 ## File Structure
 
 ```

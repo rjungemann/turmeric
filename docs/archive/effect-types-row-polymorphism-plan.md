@@ -13,7 +13,7 @@
 >   `forall [e]` effect polymorphism (ET2).
 >
 > **Related:**
-> - [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md) (§8 Effect Types / Row Polymorphism)
+> - [../guides/advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md) (§8 Effect Types / Row Polymorphism)
 > - [effect-rows-plan.md](effect-rows-plan.md) (ER0--ER6 enforcement phases)
 > - [guides/hrt-guide.md](guides/hrt-guide.md) (Higher-Ranked Types prerequisite)
 >
@@ -633,7 +633,7 @@ rank-N types). ET2 must wait for HRT1. ET3 and ET4 follow ET2.
 - Sivaramakrishnan, K.C. et al. -- [Retrofitting Effect Handlers onto OCaml](https://doi.org/10.1145/3453483.3454039) (OCaml 5)
 - Hillerström, D. & Lindley, S. -- [Liberating Effects with Rows and Handlers](https://doi.org/10.1145/3007263.3007271)
 - [effect-rows-plan.md](effect-rows-plan.md) -- ER0--ER6 near-term enforcement plan
-- [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md) -- Feature decision matrix and roadmap
+- [../guides/advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md) -- Feature decision matrix and roadmap
 
 ---
 

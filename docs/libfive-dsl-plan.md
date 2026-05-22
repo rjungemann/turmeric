@@ -749,6 +749,85 @@ Wrap expensive model computations in Turmeric's lazy thunks so shapes are only e
 
 ---
 
+## Distributing as a Spice
+
+`tur-libfive` wraps the libfive C library via `:cmake-deps`, following the
+same pattern as `tur-sqlite` and `tur-raylib`.
+
+### Adding the spice
+
+```sh
+tur add https://github.com/rjungemann/turmeric-spices \
+  --ref libfive-v0.1.0 --subdir spices/libfive --name libfive
+```
+
+### `build.tur` manifest
+
+```turmeric
+(defpackage tur-libfive
+  :name        "tur-libfive"
+  :version     "0.1.0"
+  :description "libfive solid-modeling DSL -- CSG shapes exported to STL via f-rep"
+  :license     "MIT"
+  :repository  "https://github.com/rjungemann/turmeric-spices"
+
+  :cmake-deps {
+    "libfive" {:url     "https://github.com/libfive/libfive"
+               :ref     "v2.2"
+               :options {:BUILD_STUDIO_APP  "OFF"
+                         :BUILD_GUILE_BINDINGS "OFF"
+                         :BUILD_PYTHON_BINDINGS "OFF"}}}
+
+  :exports {
+    "libfive/core"       ["lf-sphere" "lf-box" "lf-box-exact" "lf-cylinder"
+                          "lf-cone" "lf-torus" "lf-half-space-z"
+                          "lf-circle" "lf-rect" "lf-rounded-box"]
+    "libfive/boolean"    ["lf-union" "lf-union*" "lf-intersection"
+                          "lf-intersection*" "lf-difference" "lf-difference*"
+                          "lf-xor"]
+    "libfive/transforms" ["lf-move" "lf-scale" "lf-scale-xyz"
+                          "lf-rotate-x" "lf-rotate-y" "lf-rotate-z"
+                          "lf-reflect-x" "lf-reflect-y" "lf-reflect-z"
+                          "lf-symmetric-x" "lf-symmetric-y" "lf-symmetric-z"]
+    "libfive/blend"      ["lf-offset" "lf-shell" "lf-erode" "lf-dilate"
+                          "lf-blend-union" "lf-blend-intersection"
+                          "lf-blend-difference"]
+    "libfive/extrude"    ["lf-extrude-z" "lf-revolve-z"
+                          "lf-array" "lf-array-polar" "lf-linear-array"]
+    "libfive/export"     ["lf-save-stl" "lf-save-svg" "lf-eval" "lf-show"]
+  })
+```
+
+### Consuming the spice
+
+```turmeric
+(import libfive/core     :refer [lf-sphere lf-box lf-cylinder])
+(import libfive/boolean  :refer [lf-union lf-difference lf-difference*])
+(import libfive/transforms :refer [lf-move lf-rotate-z])
+(import libfive/export   :refer [lf-save-stl])
+```
+
+### Spice layout inside turmeric-spices
+
+```
+spices/libfive/
+  build.tur
+  tur.lock
+  src/
+    core.tur         -- primitive shape constructors
+    boolean.tur      -- union, intersection, difference, variadic macros
+    transforms.tur   -- move, scale, rotate, reflect, symmetric
+    blend.tur        -- offset, shell, smooth blend operations
+    extrude.tur      -- extrude-z, revolve-z, array, linear-array
+    export.tur       -- save-stl, save-svg, lf-eval, lf-show
+    ffi.tur          -- raw extern-c bindings to libfive C API
+  src/libfive_shim.h -- C header subset used by ffi.tur
+  tests/
+    shapes_test.tur
+    boolean_test.tur
+    export_test.tur
+```
+
 ## File Structure
 
 ```
