@@ -1,0 +1,290 @@
+;; stdlib/process.tur -- process management: pid, spawn, wait, exec, cwd, chdir.
+;;
+;; Wrappers around unistd.h / sys/wait.h primitives.
+;; process/capture uses popen(3) for capturing stdout.
+
+;;; process/pid -- return the current process ID.
+;;;
+;;; Returns:
+;;;   The PID of the calling process as :int.
+;;;
+;;; Example:
+;;;   (process/pid)  ; => 12345
+;;;
+;;; Since: Phase B2
+(defn process/pid [] :int
+  ```c
+  #include <unistd.h>
+  return (int64_t)getpid();
+  ```)
+
+;;; process/ppid -- return the parent process ID.
+;;;
+;;; Returns:
+;;;   The PPID of the calling process as :int.
+;;;
+;;; Example:
+;;;   (process/ppid)  ; => 1
+;;;
+;;; Since: Phase B2
+(defn process/ppid [] :int
+  ```c
+  #include <unistd.h>
+  return (int64_t)getppid();
+  ```)
+
+;;; process/exit -- terminate the process with the given exit code.
+;;;
+;;; Parameters:
+;;;   code -- exit status (0 = success, non-zero = failure)
+;;;
+;;; Example:
+;;;   (process/exit 0)
+;;;
+;;; Since: Phase B2
+(defn process/exit [code :int] :void
+  ```c
+  exit((int)code);
+  ```)
+
+;;; process/exec -- replace the current process image with a new program.
+;;;
+;;; Linearises the Turmeric cons list argv into a NULL-terminated char**
+;;; and calls execvp(3).  Does not return on success.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path to the executable
+;;;   argv -- cons list of cstr arguments (head = argv[0])
+;;;
+;;; Returns:
+;;;   -1 if execvp fails (errno set); does not return on success.
+;;;
+;;; Example:
+;;;   (process/exec "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))
+;;;
+;;; Since: Phase B2
+(defn process/exec [path :cstr argv :int] :int
+  ```c
+  #include <unistd.h>
+  int argc = 0;
+  int64_t tmp = argv;
+  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
+  char **args = (char**)malloc((argc + 1) * sizeof(char*));
+  tmp = argv;
+  for (int i = 0; i < argc; i++) {
+    int64_t *cell = (int64_t*)(intptr_t)tmp;
+    args[i] = (char*)(intptr_t)cell[0];
+    tmp = cell[1];
+  }
+  args[argc] = NULL;
+  execvp(path, args);
+  free(args);
+  return -1;
+  ```)
+
+;;; process/spawn -- fork and exec a new child process.
+;;;
+;;; Parameters:
+;;;   path -- path to the executable
+;;;   argv -- cons list of cstr arguments (head = argv[0])
+;;;
+;;; Returns:
+;;;   The child PID on success, -1 on fork failure.
+;;;
+;;; Example:
+;;;   (let [pid (process/spawn "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))]
+;;;     (process/wait pid))
+;;;
+;;; Since: Phase B2
+(defn process/spawn [path :cstr argv :int] :int
+  ```c
+  #include <unistd.h>
+  int argc = 0;
+  int64_t tmp = argv;
+  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
+  char **args = (char**)malloc((argc + 1) * sizeof(char*));
+  tmp = argv;
+  for (int i = 0; i < argc; i++) {
+    int64_t *cell = (int64_t*)(intptr_t)tmp;
+    args[i] = (char*)(intptr_t)cell[0];
+    tmp = cell[1];
+  }
+  args[argc] = NULL;
+  pid_t pid = fork();
+  if (pid < 0) { free(args); return -1; }
+  if (pid == 0) { execvp(path, args); _exit(127); }
+  free(args);
+  return (int64_t)pid;
+  ```)
+
+;;; process/wait -- wait for a child process to exit.
+;;;
+;;; Parameters:
+;;;   pid -- child process ID returned by process/spawn
+;;;
+;;; Returns:
+;;;   The exit status code (0 = clean exit), -1 on error.
+;;;
+;;; Example:
+;;;   (process/wait child-pid)  ; => 0
+;;;
+;;; Since: Phase B2
+(defn process/wait [pid :int] :int
+  ```c
+  #include <sys/wait.h>
+  int status = 0;
+  if (waitpid((pid_t)pid, &status, 0) < 0) return -1;
+  if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
+  return -1;
+  ```)
+
+;;; process/run -- spawn a child process and wait for it to finish.
+;;;
+;;; Parameters:
+;;;   path -- path to the executable
+;;;   argv -- cons list of cstr arguments
+;;;
+;;; Returns:
+;;;   An ok result (:int pointer) containing the exit code, or an err
+;;;   result containing a strdup'd error message cstr.  Free with
+;;;   result-free when done.
+;;;
+;;; Example:
+;;;   (process/run "/bin/ls" (cons "/bin/ls" 0))
+;;;
+;;; Since: Phase B2
+(defn process/run [path :cstr argv :int] :int
+  ```c
+  #include <unistd.h>
+  #include <sys/wait.h>
+  int argc = 0;
+  int64_t tmp = argv;
+  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
+  char **args = (char**)malloc((argc + 1) * sizeof(char*));
+  tmp = argv;
+  for (int i = 0; i < argc; i++) {
+    int64_t *cell = (int64_t*)(intptr_t)tmp;
+    args[i] = (char*)(intptr_t)cell[0];
+    tmp = cell[1];
+  }
+  args[argc] = NULL;
+  #define _RUN_RESULT(ok_flag, oval, eval) \
+    do { \
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *_r = malloc(sizeof(*_r)); \
+      _r->is_ok = (ok_flag); _r->ok_val = (oval); _r->err_val = (eval); \
+      return (int64_t)(intptr_t)_r; \
+    } while(0)
+  pid_t pid = fork();
+  if (pid < 0) { free(args); _RUN_RESULT(false, 0, (int64_t)(intptr_t)strdup("fork failed")); }
+  if (pid == 0) { execvp(path, args); _exit(127); }
+  free(args);
+  int status = 0;
+  if (waitpid(pid, &status, 0) < 0) _RUN_RESULT(false, 0, (int64_t)(intptr_t)strdup("waitpid failed"));
+  int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  _RUN_RESULT(true, (int64_t)code, 0);
+  #undef _RUN_RESULT
+  ```)
+
+;;; process/capture -- run a command and capture its stdout as a string.
+;;;
+;;; Uses popen(3) internally; argument values are single-quote wrapped
+;;; before being passed to the shell.
+;;;
+;;; Parameters:
+;;;   path -- path to the executable
+;;;   argv -- cons list of cstr arguments
+;;;
+;;; Returns:
+;;;   An ok result containing a heap-allocated NUL-terminated cstr of the
+;;;   captured stdout, or an err result with an error message cstr.
+;;;   Free captured output with free(); free the result with result-free.
+;;;
+;;; Example:
+;;;   (process/capture "/bin/echo" (cons "/bin/echo" (cons "hi" 0)))
+;;;
+;;; Since: Phase B2
+(defn process/capture [path :cstr argv :int] :int
+  ```c
+  int argc = 0;
+  int64_t tmp = argv;
+  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
+  char **args = (char**)malloc((argc + 1) * sizeof(char*));
+  tmp = argv;
+  for (int i = 0; i < argc; i++) {
+    int64_t *cell = (int64_t*)(intptr_t)tmp;
+    args[i] = (char*)(intptr_t)cell[0];
+    tmp = cell[1];
+  }
+  args[argc] = NULL;
+  /* build shell command string with single-quoted args */
+  size_t cmd_cap = strlen(path) + 8;
+  for (int i = 0; i < argc; i++) cmd_cap += strlen(args[i]) + 6;
+  char *cmd = malloc(cmd_cap);
+  size_t cpos = 0;
+  for (int i = 0; i < argc; i++) {
+    if (i > 0) cmd[cpos++] = ' ';
+    cmd[cpos++] = '\'';
+    size_t alen = strlen(args[i]);
+    memcpy(cmd + cpos, args[i], alen);
+    cpos += alen;
+    cmd[cpos++] = '\'';
+  }
+  cmd[cpos] = '\0';
+  free(args);
+  FILE *fp = popen(cmd, "r");
+  free(cmd);
+  #define _CAP_RESULT(ok_flag, oval, eval) \
+    do { \
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *_r = malloc(sizeof(*_r)); \
+      _r->is_ok = (ok_flag); _r->ok_val = (oval); _r->err_val = (eval); \
+      return (int64_t)(intptr_t)_r; \
+    } while(0)
+  if (!fp) _CAP_RESULT(false, 0, (int64_t)(intptr_t)strdup("popen failed"));
+  size_t cap = 4096, len = 0;
+  char *buf = malloc(cap);
+  size_t n;
+  while ((n = fread(buf + len, 1, cap - len - 1, fp)) > 0) {
+    len += n;
+    if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+  }
+  pclose(fp);
+  buf[len] = '\0';
+  _CAP_RESULT(true, (int64_t)(intptr_t)buf, 0);
+  #undef _CAP_RESULT
+  ```)
+
+;;; process/cwd -- return the current working directory.
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated cstr of the cwd, or NULL on error.
+;;;   The caller must free the returned string.
+;;;
+;;; Example:
+;;;   (process/cwd)  ; => "/home/user/project"
+;;;
+;;; Since: Phase B2
+(defn process/cwd [] :cstr
+  ```c
+  #include <unistd.h>
+  char *buf = malloc(4096);
+  if (!getcwd(buf, 4096)) { free(buf); return NULL; }
+  return buf;
+  ```)
+
+;;; process/chdir -- change the current working directory.
+;;;
+;;; Parameters:
+;;;   path -- the target directory path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error (errno set).
+;;;
+;;; Example:
+;;;   (process/chdir "/tmp")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn process/chdir [path :cstr] :int
+  ```c
+  #include <unistd.h>
+  return (int64_t)chdir(path);
+  ```)

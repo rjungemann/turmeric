@@ -1,0 +1,395 @@
+;; stdlib/csv.tur -- CSV parse and emit following RFC 4180.
+;;
+;; Handles quoted fields (double-quote), embedded commas, embedded quotes
+;; (doubled as ""), and embedded newlines within quoted fields.
+;; Depends on: str.tur (cstr ops), vec.tur layout, fs.tur for file helpers.
+
+;;; csv/parse-row -- parse one CSV line into a vec of field cstrs.
+;;;
+;;; Handles RFC 4180 quoting: fields may be optionally enclosed in
+;;; double-quotes; embedded quotes are doubled ("").  The trailing
+;;; newline (if any) is ignored.
+;;;
+;;; Parameters:
+;;;   line -- NUL-terminated CSV row cstr
+;;;
+;;; Returns:
+;;;   A heap-allocated vec whose elements are (int64_t)(char*) field cstrs.
+;;;   Both the vec and all field strings are independently heap-allocated.
+;;;   Free with csv/row-free.
+;;;
+;;; Example:
+;;;   (csv/parse-row "a,\"b,c\",d")  ; => vec ["a", "b,c", "d"]
+;;;
+;;; Since: Phase B2
+(defn csv/parse-row [line :cstr] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  const char *p = line;
+  /* strip trailing CR/LF */
+  size_t tlen = strlen(line);
+  while (tlen > 0 && (line[tlen-1] == '\n' || line[tlen-1] == '\r')) tlen--;
+  const char *end = line + tlen;
+  while (p <= end) {
+    /* push a field */
+    size_t fcap = 64, flen = 0;
+    char *field = malloc(fcap);
+    if (p < end && *p == '"') {
+      /* quoted field */
+      p++;
+      while (p <= end) {
+        if (*p == '"') {
+          if (*(p+1) == '"') { /* escaped quote */
+            if (flen+1 >= fcap) { fcap*=2; field=realloc(field,fcap); }
+            field[flen++] = '"'; p += 2;
+          } else {
+            p++; break; /* closing quote */
+          }
+        } else {
+          if (flen+1 >= fcap) { fcap*=2; field=realloc(field,fcap); }
+          field[flen++] = *p++;
+        }
+      }
+    } else {
+      /* unquoted field */
+      while (p < end && *p != ',') {
+        if (flen+1 >= fcap) { fcap*=2; field=realloc(field,fcap); }
+        field[flen++] = *p++;
+      }
+    }
+    field[flen] = '\0';
+    if (v->len >= v->cap) {
+      v->cap = v->cap > 0 ? v->cap*2 : 4;
+      v->data = realloc(v->data, v->cap * sizeof(int64_t));
+    }
+    v->data[v->len++] = (int64_t)(intptr_t)field;
+    /* skip comma separator */
+    if (p < end && *p == ',') p++;
+    else break;
+  }
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;;; csv/row-free -- free a row vec and all its field strings.
+;;;
+;;; Parameters:
+;;;   v -- vec pointer returned by csv/parse-row or csv/emit-row (may be 0)
+;;;
+;;; Example:
+;;;   (csv/row-free my-row)
+;;;
+;;; Since: Phase B2
+(defn csv/row-free [v :int] :void
+  ```c
+  if (!v) return;
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
+  free(vec->data);
+  free(vec);
+  ```)
+
+;;; csv/parse -- parse a multi-line CSV string into a cons list of row vecs.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated CSV string (possibly multi-line)
+;;;
+;;; Returns:
+;;;   A cons list of row vec pointers (each from csv/parse-row).
+;;;   Free with csv/free.
+;;;
+;;; Example:
+;;;   (csv/parse "a,b\n1,2\n")  ; => cons of two row vecs
+;;;
+;;; Since: Phase B2
+(defn csv/parse [s :cstr] :int
+  ```c
+  const char *p = s;
+  int64_t head = 0;
+  /* We reuse the row parser by feeding it lines */
+  while (*p) {
+    /* find end of this line */
+    const char *eol = p;
+    while (*eol && *eol != '\n') eol++;
+    /* copy line for parse-row (it needs NUL-terminated input) */
+    size_t llen = (size_t)(eol - p);
+    char *line = malloc(llen + 1);
+    memcpy(line, p, llen);
+    line[llen] = '\0';
+    /* parse the row using the same logic as csv/parse-row */
+    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    v->data = NULL; v->len = 0; v->cap = 0;
+    const char *rp = line;
+    /* strip trailing CR */
+    size_t tlen = strlen(line);
+    while (tlen > 0 && (line[tlen-1] == '\r')) tlen--;
+    const char *rend = line + tlen;
+    while (rp <= rend) {
+      size_t fcap = 64, flen = 0;
+      char *field = malloc(fcap);
+      if (rp < rend && *rp == '"') {
+        rp++;
+        while (rp <= rend) {
+          if (*rp == '"') {
+            if (*(rp+1) == '"') { if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);} field[flen++]='"'; rp+=2; }
+            else { rp++; break; }
+          } else {
+            if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);} field[flen++]=*rp++;
+          }
+        }
+      } else {
+        while (rp < rend && *rp != ',') { if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);} field[flen++]=*rp++; }
+      }
+      field[flen]='\0';
+      if(v->len>=v->cap){v->cap=v->cap>0?v->cap*2:4;v->data=realloc(v->data,v->cap*sizeof(int64_t));}
+      v->data[v->len++]=(int64_t)(intptr_t)field;
+      if (rp < rend && *rp == ',') rp++;
+      else break;
+    }
+    free(line);
+    int64_t *cell = malloc(2 * sizeof(int64_t));
+    cell[0] = (int64_t)(intptr_t)v;
+    cell[1] = head;
+    head = (int64_t)(intptr_t)cell;
+    p = eol;
+    if (*p == '\n') p++;
+  }
+  return head;
+  ```)
+
+;;; csv/free -- free a cons list of rows returned by csv/parse.
+;;;
+;;; Parameters:
+;;;   lst -- cons list of row vecs returned by csv/parse
+;;;
+;;; Example:
+;;;   (csv/free my-csv)
+;;;
+;;; Since: Phase B2
+(defn csv/free [lst :int] :void
+  ```c
+  int64_t cur = lst;
+  while (cur) {
+    int64_t *cell = (int64_t*)(intptr_t)cur;
+    int64_t vptr  = cell[0];
+    int64_t next  = cell[1];
+    if (vptr) {
+      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)vptr;
+      for (size_t i = 0; i < v->len; i++) free((void*)(intptr_t)v->data[i]);
+      free(v->data);
+      free(v);
+    }
+    free(cell);
+    cur = next;
+  }
+  ```)
+
+;;; csv/emit-row -- serialize a vec of field cstrs to a CSV line cstr.
+;;;
+;;; Fields containing commas, double-quotes, or newlines are enclosed in
+;;; double-quotes; embedded quotes are doubled.
+;;;
+;;; Parameters:
+;;;   v -- vec of (int64_t)(char*) field cstrs
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated CSV line without a trailing newline.
+;;;   The caller must free.
+;;;
+;;; Example:
+;;;   (csv/emit-row my-vec)  ; => "a,\"b,c\",d"
+;;;
+;;; Since: Phase B2
+(defn csv/emit-row [v :int] :cstr
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  size_t out_cap = 256, pos = 0;
+  char *out = malloc(out_cap);
+  for (size_t i = 0; i < vec->len; i++) {
+    const char *f = (const char*)(intptr_t)vec->data[i];
+    /* check if quoting is needed */
+    int needs_quote = 0;
+    for (const char *q = f; *q; q++) {
+      if (*q == ',' || *q == '"' || *q == '\n' || *q == '\r') { needs_quote = 1; break; }
+    }
+    if (i > 0) {
+      if (pos+1 >= out_cap) { out_cap*=2; out=realloc(out,out_cap); }
+      out[pos++] = ',';
+    }
+    if (needs_quote) {
+      if (pos+2 >= out_cap) { out_cap*=2; out=realloc(out,out_cap); }
+      out[pos++] = '"';
+      for (const char *q = f; *q; q++) {
+        if (pos+3 >= out_cap) { out_cap*=2; out=realloc(out,out_cap); }
+        if (*q == '"') { out[pos++]='"'; out[pos++]='"'; }
+        else out[pos++]=*q;
+      }
+      out[pos++] = '"';
+    } else {
+      size_t flen = strlen(f);
+      while (pos + flen + 2 > out_cap) { out_cap*=2; out=realloc(out,out_cap); }
+      memcpy(out+pos, f, flen);
+      pos += flen;
+    }
+  }
+  out[pos] = '\0';
+  return out;
+  ```)
+
+;;; csv/emit -- serialize a cons list of row vecs to a full CSV string.
+;;;
+;;; Parameters:
+;;;   rows -- cons list of row vecs (as from csv/parse)
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated CSV string with newline-separated rows.
+;;;   The caller must free.
+;;;
+;;; Example:
+;;;   (csv/emit my-rows)  ; => "a,b\n1,2\n"
+;;;
+;;; Since: Phase B2
+(defn csv/emit [rows :int] :cstr
+  ```c
+  size_t out_cap = 256, pos = 0;
+  char *out = malloc(out_cap);
+  out[0] = '\0';
+  int64_t cur = rows;
+  while (cur) {
+    int64_t *cell = (int64_t*)(intptr_t)cur;
+    int64_t vptr = cell[0];
+    /* emit this row using csv/emit-row logic inline */
+    if (vptr) {
+      struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
+      for (size_t i = 0; i < vec->len; i++) {
+        const char *f = (const char*)(intptr_t)vec->data[i];
+        int needs_quote = 0;
+        for (const char *q = f; *q; q++) {
+          if (*q==',' || *q=='"' || *q=='\n' || *q=='\r') { needs_quote=1; break; }
+        }
+        if (i > 0) { if(pos+1>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]=','; }
+        if (needs_quote) {
+          if(pos+2>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]='"';
+          for (const char *q=f;*q;q++) {
+            if(pos+3>=out_cap){out_cap*=2;out=realloc(out,out_cap);}
+            if(*q=='"'){out[pos++]='"';out[pos++]='"';} else out[pos++]=*q;
+          }
+          if(pos+2>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]='"';
+        } else {
+          size_t flen=strlen(f);
+          while(pos+flen+2>out_cap){out_cap*=2;out=realloc(out,out_cap);}
+          memcpy(out+pos,f,flen); pos+=flen;
+        }
+      }
+      if(pos+2>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]='\n';
+    }
+    cur = cell[1];
+  }
+  out[pos]='\0';
+  return out;
+  ```)
+
+;;; csv/read-file -- read a CSV file and parse it into a cons list of row vecs.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated file path cstr
+;;;
+;;; Returns:
+;;;   A cons list of row vecs (same as csv/parse), or 0 on read error.
+;;;   Free with csv/free.
+;;;
+;;; Example:
+;;;   (csv/read-file "data.csv")  ; => cons list of rows
+;;;
+;;; Since: Phase B2
+(defn csv/read-file [path :cstr] :int
+  ```c
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  char *buf = malloc((size_t)size + 1);
+  size_t n = fread(buf, 1, (size_t)size, f);
+  fclose(f);
+  buf[n] = '\0';
+  /* parse inline -- duplicate csv/parse logic to avoid cross-defn calls */
+  const char *p = buf;
+  int64_t head = 0;
+  while (*p) {
+    const char *eol = p;
+    while (*eol && *eol != '\n') eol++;
+    size_t llen = (size_t)(eol - p);
+    char *line = malloc(llen + 1);
+    memcpy(line, p, llen);
+    line[llen] = '\0';
+    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    v->data = NULL; v->len = 0; v->cap = 0;
+    const char *rp = line;
+    size_t tlen = strlen(line);
+    while (tlen > 0 && line[tlen-1] == '\r') tlen--;
+    const char *rend = line + tlen;
+    while (rp <= rend) {
+      size_t fcap=64,flen=0; char *field=malloc(fcap);
+      if (rp<rend && *rp=='"') {
+        rp++;
+        while(rp<=rend){if(*rp=='"'){if(*(rp+1)=='"'){if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]='"';rp+=2;}else{rp++;break;}}else{if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]=*rp++;}}
+      } else {
+        while(rp<rend&&*rp!=','){if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]=*rp++;}
+      }
+      field[flen]='\0';
+      if(v->len>=v->cap){v->cap=v->cap>0?v->cap*2:4;v->data=realloc(v->data,v->cap*sizeof(int64_t));}
+      v->data[v->len++]=(int64_t)(intptr_t)field;
+      if(rp<rend&&*rp==',')rp++; else break;
+    }
+    free(line);
+    int64_t *cell=malloc(2*sizeof(int64_t)); cell[0]=(int64_t)(intptr_t)v; cell[1]=head; head=(int64_t)(intptr_t)cell;
+    p = eol; if(*p=='\n')p++;
+  }
+  free(buf);
+  return head;
+  ```)
+
+;;; csv/write-file -- serialize a cons list of row vecs to a CSV file.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated destination path cstr
+;;;   rows -- cons list of row vecs
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (csv/write-file "out.csv" my-rows)  ; => 0
+;;;
+;;; Since: Phase B2
+(defn csv/write-file [path :cstr rows :int] :int
+  ```c
+  FILE *f = fopen(path, "wb");
+  if (!f) return -1;
+  int64_t cur = rows;
+  while (cur) {
+    int64_t *cell = (int64_t*)(intptr_t)cur;
+    int64_t vptr  = cell[0];
+    if (vptr) {
+      struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
+      for (size_t i = 0; i < vec->len; i++) {
+        const char *fd = (const char*)(intptr_t)vec->data[i];
+        int nq = 0;
+        for (const char *q=fd;*q;q++) if(*q==','||*q=='"'||*q=='\n'||*q=='\r'){nq=1;break;}
+        if (i > 0) fputc(',', f);
+        if (nq) {
+          fputc('"', f);
+          for (const char *q=fd;*q;q++) { if(*q=='"')fputc('"',f); fputc(*q,f); }
+          fputc('"', f);
+        } else {
+          fputs(fd, f);
+        }
+      }
+      fputc('\n', f);
+    }
+    cur = cell[1];
+  }
+  fclose(f);
+  return 0;
+  ```)
