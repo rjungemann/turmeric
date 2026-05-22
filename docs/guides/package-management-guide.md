@@ -112,9 +112,14 @@ Turmeric source file evaluated at build time. The top-level form is
   :repository  "https://github.com/alice/tur-geom"
 
   ;; Turmeric package dependencies
+  ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
   :spices {
-    "math"  {:url "https://github.com/bob/tur-math"    :ref "v1.5.2"}
-    "test"  {:url "https://github.com/bob/tur-test"    :ref "v0.3.0"
+    "math"  {:url    "https://github.com/rjungemann/turmeric-spices"
+             :ref    "math-v0.1.0"
+             :subdir "spices/math"}
+    "test"  {:url    "https://github.com/rjungemann/turmeric-spices"
+             :ref    "test-v0.1.0"
+             :subdir "spices/test"
              :optional true}
     "utils" {:path "../tur-utils"}   ; local dev path
   }
@@ -154,9 +159,14 @@ defpackage geom
   :repository  "https://github.com/alice/tur-geom"
 
   ;; Turmeric package dependencies
+  ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
   :spices {
-    "math"  {:url "https://github.com/bob/tur-math"    :ref "v1.5.2"}
-    "test"  {:url "https://github.com/bob/tur-test"    :ref "v0.3.0"
+    "math"  {:url    "https://github.com/rjungemann/turmeric-spices"
+             :ref    "math-v0.1.0"
+             :subdir "spices/math"}
+    "test"  {:url    "https://github.com/rjungemann/turmeric-spices"
+             :ref    "test-v0.1.0"
+             :subdir "spices/test"
              :optional true}
     "utils" {:path "../tur-utils"}   ; local dev path
   }
@@ -254,6 +264,22 @@ tur add ../tur-utils --path
 Use this for monorepo workspaces or while actively developing a dependency.
 Local path spices are never written to `tur.lock`.
 
+### Official first-party spices
+
+The [turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo
+contains the official first-party spice library: `tur-test`, `tur-math`,
+`tur-sqlite`, `tur-raylib`, `tur-json`, `tur-http`, and `tur-regex`.
+
+Add any of them with `tur add` using the `:subdir` key:
+
+```sh
+tur add https://github.com/rjungemann/turmeric-spices \
+  --ref http-v0.1.0 --subdir spices/http --name http
+
+tur add https://github.com/rjungemann/turmeric-spices \
+  --ref json-v0.1.0 --subdir spices/json --name json
+```
+
 ### Adding from the Spice registry (future)
 
 ```sh
@@ -267,7 +293,8 @@ is, `tur add spice/<pkg>` prints:
 ```
 The Spice registry is not yet available.
 Add the package directly with a Git URL:
-  tur add https://github.com/turmeric-spice/tur-http --ref v0.1.0
+  tur add https://github.com/rjungemann/turmeric-spices \
+    --ref http-v0.1.0 --subdir spices/http --name http
 ```turmeric
 
 ```sweet-exp
@@ -335,8 +362,9 @@ so it can be parsed by the same reader and diffed cleanly in version control.
             :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
             :sha256     "abc123..."
             :fetched-at "2026-05-14T09:00:00Z"}
-    "math" {:url        "https://github.com/bob/tur-math"
-            :ref        "v1.5.2"
+    "math" {:url        "https://github.com/rjungemann/turmeric-spices"
+            :ref        "math-v0.1.0"
+            :subdir     "spices/math"
             :resolved   "d6e7f8a9b0c1..."
             :sha256     "def456..."
             :fetched-at "2026-05-14T09:00:03Z"}
@@ -361,8 +389,9 @@ deflockfile
             :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
             :sha256     "abc123..."
             :fetched-at "2026-05-14T09:00:00Z"}
-    "math" {:url        "https://github.com/bob/tur-math"
-            :ref        "v1.5.2"
+    "math" {:url        "https://github.com/rjungemann/turmeric-spices"
+            :ref        "math-v0.1.0"
+            :subdir     "spices/math"
             :resolved   "d6e7f8a9b0c1..."
             :sha256     "def456..."
             :fetched-at "2026-05-14T09:00:03Z"}

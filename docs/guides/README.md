@@ -110,6 +110,7 @@ see the task plan for progress.
 ## Package Management
 
 - **[package-management-guide.md](package-management-guide.md)** — Creating projects, adding spices, `build.tur`, `tur.lock`, CLI reference
+- **[turmeric-spices](https://github.com/rjungemann/turmeric-spices)** -- Official first-party spice library: `tur-test`, `tur-math`, `tur-sqlite`, `tur-raylib`, `tur-json`, `tur-http`, `tur-regex`
 
 ## Tools and IDE
 
@@ -133,7 +134,7 @@ see the task plan for progress.
 - Type system → [structs-guide.md](structs-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md)
 - Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
-- Package management → [package-management-guide.md](package-management-guide.md)
+- Package management → [package-management-guide.md](package-management-guide.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
 - Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md), [vim-guide.md](vim-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
 
