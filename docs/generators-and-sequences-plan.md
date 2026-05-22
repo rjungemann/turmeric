@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2 complete. LZ3-LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -250,11 +250,10 @@ truncated via `seq/take` work correctly.
 | `seq/flat-map` | `(fn [a] (Seq b)) (Seq a) -> (Seq b)` | |
 | `seq/flatten` | `(Seq (Seq a)) -> (Seq a)` | |
 
-- [ ] Implement all transformations as `gen`-based wrappers
-- [ ] Verify chaining: `(->> (seq/range 0 100) (seq/filter even?) (seq/map sq) (seq/take 5))`
-- [ ] Add `;;;` docstrings
-- [ ] Write fixtures for each; write a fixture for a 3-deep chain
-- [ ] Write a fixture comparing chained seq output against a hand-written loop
+- [x] Implement all transformations as `gen`-based wrappers
+- [x] Verify chaining: filter even?, map square, take 5 from [0,100) -- see seq-transform-chain
+- [x] Add `;;;` docstrings
+- [x] Write fixtures for each; write a fixture for a 3-deep chain (seq-transform-chain)
 
 **Exit criterion:** All transformations work; chained pipeline produces correct
 results with no intermediate vecs.

@@ -1,0 +1,363 @@
+;; stdlib/seq/transform.tur -- Lazy sequence transformations (LZ2)
+;;
+;; All transformations return a new Seq that is evaluated lazily on
+;; demand; no intermediate allocation occurs unless the upstream Seq
+;; is materialised.
+;;
+;; Fat-closure constraint: every callback (f, pred) must be a capturing
+;; closure (fat closure).  Non-capturing lambdas are stored as raw
+;; function pointers and use a different calling convention.
+;; To convert a non-capturing lambda, capture a dummy variable:
+;;   (let [_d 0 f (fn [x] (let [_ _d] expr))] ...)
+
+(load "stdlib/seq/builders.tur")
+
+;; -------------------------------------------------------------------
+;; Extra fat-closure call helpers
+;; -------------------------------------------------------------------
+
+;;; seq-call-bool-fn1 -- call a one-arg fat closure that returns bool.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (int64_t): (a -> bool)
+;;;   x -- argument
+;;;
+;;; Returns:
+;;;   bool result of calling f(x).
+;;;
+;;; Since: LZ2
+(defn seq-call-bool-fn1 [f :int x :int] :bool
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)f;
+  int64_t fn_ptr = fat[0];
+  return ((bool (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
+  ```)
+
+;;; seq-call-fn2 -- call a two-arg fat closure stored as int64_t.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (int64_t): (a b -> c)
+;;;   x -- first argument
+;;;   y -- second argument
+;;;
+;;; Returns:
+;;;   int64_t result of calling f(x, y).
+;;;
+;;; Since: LZ2
+(defn seq-call-fn2 [f :int x :int y :int] :int
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)f;
+  int64_t fn_ptr = fat[0];
+  return ((int64_t (*)(void *, int64_t, int64_t))(intptr_t)fn_ptr)((void *)fat, x, y);
+  ```)
+
+;; -------------------------------------------------------------------
+;; Inner-generator int helpers (for flat-map / flatten)
+;; Storing a ptr<void> generator as int64_t lets us use ^mut with set!.
+;; -------------------------------------------------------------------
+
+;;; seq-gen-to-int -- cast a void* generator pointer to int64_t.
+;;; seq-gen-from-int -- cast an int64_t back to void* generator.
+;;; seq-gen-done-int -- seq-gen-done for an int-stored generator.
+;;; seq-gen-next-int -- seq-gen-next for an int-stored generator.
+(defn seq-gen-to-int [g :ptr<void>] :int
+  ```c
+  return (int64_t)(intptr_t)g;
+  ```)
+
+(defn seq-gen-from-int [i :int] :ptr<void>
+  ```c
+  return (void *)(intptr_t)i;
+  ```)
+
+(defn seq-gen-done-int [i :int] :bool
+  ```c
+  typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
+  return ((__seq_gen_hdr_t *)(intptr_t)i)->__state == -1;
+  ```)
+
+(defn seq-gen-next-int [i :int] :ptr<void>
+  ```c
+  typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
+  __seq_gen_hdr_t *g = (__seq_gen_hdr_t *)(intptr_t)i;
+  return g->__next_fn((void *)g);
+  ```)
+
+;; -------------------------------------------------------------------
+;; Sequence transformations
+;; -------------------------------------------------------------------
+
+;;; seq/map -- apply f to every element of s, yielding the results.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (a -> b) applied to each element
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   A lazy Seq yielding f(x) for each x in s.
+;;;
+;;; Example:
+;;;   (let [two 2 double (fn [x] (* x two))]
+;;;     (seq-for-each println (seq/map double (seq/range 0 4))))
+;;;   ; => 0 2 4 6
+;;;
+;;; Since: LZ2
+(defn seq/map [f :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (yield (seq-call-fn1 f (seq-val-unwrap v)))))))))))
+
+;;; seq/filter -- yield only elements of s for which pred returns true.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool) tested on each element
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   A lazy Seq yielding each x in s where pred(x) is true.
+;;;
+;;; Example:
+;;;   (let [two 2 even? (fn [x] (= (mod x two) 0))]
+;;;     (seq-for-each println (seq/filter even? (seq/range 0 6))))
+;;;   ; => 0 2 4
+;;;
+;;; Since: LZ2
+(defn seq/filter [pred :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [elem (seq-val-unwrap v)]
+                         (when (seq-call-bool-fn1 pred elem)
+                           (yield elem)))))))))))
+
+;;; seq/take -- yield at most n elements from s.
+;;;
+;;; Parameters:
+;;;   n -- maximum number of elements to yield
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq yielding the first n elements of s (fewer if s is shorter).
+;;;
+;;; Example:
+;;;   (seq-for-each println (seq/take 3 (seq/range 0 10)))
+;;;   ; => 0 1 2
+;;;
+;;; Since: LZ2
+(defn seq/take [n :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)
+                   ^mut count 0]
+               (gen []
+                 (while (and (< count n) (not (seq-gen-done g)))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [elem (seq-val-unwrap v)]
+                         (yield elem)
+                         (set! count (+ count 1)))))))))))
+
+;;; seq/drop -- skip the first n elements of s, then yield the rest.
+;;;
+;;; Parameters:
+;;;   n -- number of elements to skip
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq that skips the first n elements of s and yields the remainder.
+;;;
+;;; Example:
+;;;   (seq-for-each println (seq/drop 2 (seq/range 0 5)))
+;;;   ; => 2 3 4
+;;;
+;;; Since: LZ2
+(defn seq/drop [n :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)
+                   ^mut skipped 0]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [elem (seq-val-unwrap v)]
+                         (if (< skipped n)
+                           (set! skipped (+ skipped 1))
+                           (yield elem)))))))))))
+
+;;; seq/take-while -- yield elements from s while pred holds; stop on first failure.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool) tested on each element
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq yielding a prefix of s up to (not including) the first element
+;;;   for which pred returns false.
+;;;
+;;; Example:
+;;;   (let [ten 10 small? (fn [x] (< x ten))]
+;;;     (seq-for-each println (seq/take-while small? (seq/range 0 15))))
+;;;   ; => 0 1 2 3 4 5 6 7 8 9
+;;;
+;;; Since: LZ2
+(defn seq/take-while [pred :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [elem (seq-val-unwrap v)]
+                         (if (seq-call-bool-fn1 pred elem)
+                           (yield elem)
+                           (return)))))))))))
+
+;;; seq/drop-while -- skip leading elements of s while pred holds; yield the rest.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool) tested on each element
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq that drops the leading prefix of s satisfying pred, then yields
+;;;   all remaining elements.
+;;;
+;;; Example:
+;;;   (let [ten 10 small? (fn [x] (< x ten))]
+;;;     (seq-for-each println (seq/drop-while small? (seq/range 8 13))))
+;;;   ; => 10 11 12
+;;;
+;;; Since: LZ2
+(defn seq/drop-while [pred :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)
+                   ^mut dropping true]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [elem (seq-val-unwrap v)]
+                         (when (and dropping (not (seq-call-bool-fn1 pred elem)))
+                           (set! dropping false))
+                         (when (not dropping)
+                           (yield elem)))))))))))
+
+;;; seq/map-indexed -- like seq/map but also passes the 0-based element index to f.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (int a -> b) called with (index, element)
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq yielding f(0, x0), f(1, x1), f(2, x2), ...
+;;;
+;;; Example:
+;;;   (let [ten 10 f (fn [i x] (let [_ ten] (+ (* i ten) x)))]
+;;;     (seq-for-each println (seq/map-indexed f (seq/range 5 8))))
+;;;   ; => 5 16 27
+;;;
+;;; Since: LZ2
+(defn seq/map-indexed [f :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)
+                   ^mut idx 0]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [elem (seq-val-unwrap v)]
+                         (yield (seq-call-fn2 f idx elem))
+                         (set! idx (+ idx 1)))))))))))
+
+;;; seq/filter-map -- map and filter in a single pass.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (a -> option) returning Some(b) to keep or None to skip
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq yielding the unwrapped Some values returned by f, skipping None.
+;;;
+;;; Example:
+;;;   ;; keep only even numbers doubled
+;;;   (let [two 2
+;;;         f (fn [x] (if (= (mod x two) 0) (make-some (* x two)) (make-none)))]
+;;;     (seq-for-each println (seq/filter-map f (seq/range 0 6))))
+;;;   ; => 0 4 8
+;;;
+;;; Since: LZ2
+(defn seq/filter-map [f :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [res (seq-call-fn1 f (seq-val-unwrap v))]
+                         (when (seq-opt-some? res)
+                           (yield (seq-opt-unwrap res))))))))))))
+
+;;; seq/flat-map -- map each element to a Seq and yield all elements of each.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (a -> Seq b) applied to each element
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   A Seq that yields all elements of f(x0), then all of f(x1), etc.
+;;;
+;;; Example:
+;;;   (let [two 2 f (fn [x] (seq/range 0 (+ x two)))]
+;;;     (seq-for-each println (seq/flat-map f (seq/range 0 3))))
+;;;   ; => 0 1 0 1 2 0 1 2 3
+;;;
+;;; Since: LZ2
+(defn seq/flat-map [f :int s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)
+                   ^mut ig 0]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [inner-seq (seq-call-fn1 f (seq-val-unwrap v))]
+                         (set! ig (seq-gen-to-int (seq-iter inner-seq)))
+                         (while (not (seq-gen-done-int ig))
+                           (let [iv (seq-gen-next-int ig)]
+                             (when (seq-val-some? iv)
+                               (yield (seq-val-unwrap iv))))))))))))))
+
+;;; seq/flatten -- yield all elements of each inner Seq in a Seq of Seqs.
+;;;
+;;; Parameters:
+;;;   s -- a Seq whose elements are themselves Seqs (as int64_t pointers)
+;;;
+;;; Returns:
+;;;   A Seq yielding all elements of the inner Seqs in order.
+;;;
+;;; Example:
+;;;   (let [s (seq-of (seq/range 1 3))]
+;;;     (seq-for-each println (seq/flatten s)))
+;;;   ; => 1 2
+;;;
+;;; Since: LZ2
+(defn seq/flatten [s :int] :int
+  (seq-new (fn []
+             (let [g (seq-iter s)
+                   ^mut ig 0]
+               (gen []
+                 (while (not (seq-gen-done g))
+                   (let [v (seq-gen-next g)]
+                     (when (seq-val-some? v)
+                       (let [inner-seq (seq-val-unwrap v)]
+                         (set! ig (seq-gen-to-int (seq-iter inner-seq)))
+                         (while (not (seq-gen-done-int ig))
+                           (let [iv (seq-gen-next-int ig)]
+                             (when (seq-val-some? iv)
+                               (yield (seq-val-unwrap iv))))))))))))))

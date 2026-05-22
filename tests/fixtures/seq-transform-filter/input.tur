@@ -1,0 +1,8 @@
+; LZ2 fixture: seq/filter -- keep elements satisfying a predicate.
+
+(load "stdlib/seq/transform.tur")
+
+(defn main [] :void
+  (let [two 2
+        even? (fn [x] (= (mod x two) 0))]
+    (seq-for-each println (seq/filter even? (seq/range 0 7)))))
