@@ -1,12 +1,12 @@
 # Struct Inspection -- Implementation Plan (SI0--SI4)
 
-> **Status:** SI0 complete. SI1 complete. SI2--SI4 planned.
+> **Status:** SI0 complete. SI1 complete. SI2 complete. SI3--SI4 planned.
 >
 > **Prerequisites:** Phase 15 (typeclasses: `Show`, `Display`, `Debug`), Phase
 > R0 (`Display`/`Debug` typeclass definitions), Phase B1 (Clone infrastructure).
 > No effect-row interaction is required.
 >
-> **Last updated:** 2026-05-22
+> **Last updated:** 2026-05-22 (SI2 complete)
 
 ---
 
@@ -260,12 +260,16 @@ part of this phase.
 
 ### Tasks
 
-- [ ] Verify or add `str-concat` to `stdlib/str.tur`.
-- [ ] Implement `derive-show` macro in `stdlib/macros.tur`.
-- [ ] Add docstring to `derive-show`.
-- [ ] `derive-show-struct.tur` fixture passes.
-- [ ] `derive-show-nested.tur` fixture passes.
+- [x] Verify or add `str-concat` to `stdlib/str.tur` -- already present since Phase B1.
+- [x] Implement `derive-show` macro in `stdlib/macros.tur`.
+- [x] Add docstring to `derive-show`.
+- [x] `derive-show-struct.tur` fixture updated to use `(derive-show Point x y)`.
+- [x] `derive-show-nested.tur` fixture updated to use `(derive-show Triple a b c)`.
 - [ ] Run `just docs` to confirm docstring appears in generated HTML.
+
+Note: three new CT built-ins were added to `src/compiler/elab_macros.c` to support
+the macro: `symbol-name` (symbol -> string literal), `dot-sym` (symbol -> .symbol),
+`str-append` (compile-time string concatenation), and `vec?` (vector predicate).
 
 **Exit criterion:** `derive-show` generates a correct `Show` instance; both
 struct fixtures pass.

@@ -1,4 +1,5 @@
 ;; SI2: derive-show generates a Show instance for a struct.
+;; Tests that (derive-show Point x y) expands to the correct Show instance.
 (defclass Show [a]
   (show [x] :cstr))
 
@@ -10,24 +11,61 @@
     return (const char *)(intptr_t)buf;
     ```))
 
-(defstruct Point :copy [x :int y :int])
+(defn str-concat [a :cstr b :cstr] :cstr
+  ```c
+  const char *sa = (const char*)(intptr_t)a;
+  const char *sb = (const char*)(intptr_t)b;
+  size_t la = strlen(sa), lb = strlen(sb);
+  char *out = (char *)malloc(la + lb + 1);
+  memcpy(out, sa, la);
+  memcpy(out + la, sb, lb);
+  out[la + lb] = '\0';
+  return (int64_t)(intptr_t)out;
+  ```)
 
-;; Manually-expanded form of: (derive-show Point x y)
-;; This is what the derive-show macro from stdlib/macros.tur generates.
-(definstance Show [Point]
-  (show [__p] :cstr
-    ```c
-    // "Point { x = " + show(x) + ", y = " + show(y) + " }"
-    int nx = snprintf(NULL, 0, "%lld", (long long)__p.x);
-    int ny = snprintf(NULL, 0, "%lld", (long long)__p.y);
-    if (nx < 0) nx = 0;
-    if (ny < 0) ny = 0;
-    // "Point { x = " = 13, ", y = " = 6, " }" = 3
-    size_t len = 13 + (size_t)nx + 6 + (size_t)ny + 3 + 1;
-    char *buf = (char *)malloc(len);
-    snprintf(buf, len, "Point { x = %lld, y = %lld }", (long long)__p.x, (long long)__p.y);
-    return (const char *)(intptr_t)buf;
-    ```))
+;; Internal helpers for derive-show.
+(defmacro derive-show-rest__ [& fields]
+  (if (empty? fields)
+    " }"
+    (let [field (first fields)
+          rest-fields (rest fields)
+          is-vec (vec? field)
+          label (if is-vec (first field) (symbol-name field))
+          accessor-sym (if is-vec (second field) field)
+          accessor-form (if is-vec
+                          (list accessor-sym '__p)
+                          (list (dot-sym accessor-sym) '__p))
+          prefix (str-append ", " label " = ")]
+      (list str-concat prefix
+        (list str-concat
+          (list show accessor-form)
+          (list derive-show-rest__ ~@rest-fields))))))
+
+(defmacro derive-show-body__ [TypeName & fields]
+  (let [type-str (symbol-name TypeName)]
+    (if (empty? fields)
+      (str-append type-str " { }")
+      (let [field (first fields)
+            rest-fields (rest fields)
+            is-vec (vec? field)
+            label (if is-vec (first field) (symbol-name field))
+            accessor-sym (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym '__p)
+                            (list (dot-sym accessor-sym) '__p))
+            first-prefix (str-append type-str " { " label " = ")]
+        (list str-concat first-prefix
+          (list str-concat
+            (list show accessor-form)
+            (list derive-show-rest__ ~@rest-fields)))))))
+
+(defmacro derive-show [TypeName & fields]
+  (list definstance Show (vec TypeName)
+    (list show (vec '__p) :cstr
+      (list derive-show-body__ TypeName ~@fields))))
+
+(defstruct Point :copy [x :int y :int])
+(derive-show Point x y)
 
 (defn main [] :int
   (let [p (make-struct Point 3 4)]
