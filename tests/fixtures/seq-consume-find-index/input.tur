@@ -1,0 +1,10 @@
+; LZ3 fixture: seq/find-index -- 0-based index of first element satisfying pred.
+; First index where x>6 in [0,10) = 7; None in [0,5).
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (let [six 6
+        big? (fn [x] (> x six))]
+    (println (seq-opt-unwrap (seq/find-index big? (seq/range 0 10))))
+    (println (seq-opt-some? (seq/find-index big? (seq/range 0 5))))))

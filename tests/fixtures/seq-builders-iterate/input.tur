@@ -1,0 +1,15 @@
+; LZ1 fixture: seq/iterate -- x, f(x), f(f(x)), ...
+; The closure must capture a variable to satisfy the fat-closure convention.
+
+(load "stdlib/seq/builders.tur")
+
+(defn main [] :void
+  (let [factor 2
+        g (seq-iter (seq/iterate 1 (fn [x] (* x factor))))
+        ^mut count 0]
+    (while (< count 6)
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (do
+            (println (seq-val-unwrap v))
+            (set! count (+ count 1))))))))

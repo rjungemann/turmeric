@@ -1584,7 +1584,17 @@ Expr *elab_gen(Elab *e, const Form *call) {
 
     /* Generate unique struct/fn names */
     uint32_t gen_id = e->gen_counter++;
-    const char *fn_name = e->current_fn_name ? e->current_fn_name->name : "top";
+    const char *fn_name_raw = e->current_fn_name ? e->current_fn_name->name : "top";
+    /* Mangle fn_name to a valid C identifier: replace hyphens/slashes/dots with '_'. */
+    size_t fn_name_len = strlen(fn_name_raw);
+    char *fn_name_buf = (char *)alloca(fn_name_len + 1);
+    for (size_t _i = 0; _i < fn_name_len; _i++) {
+        char _c = fn_name_raw[_i];
+        fn_name_buf[_i] = ((_c >= 'a' && _c <= 'z') || (_c >= 'A' && _c <= 'Z') ||
+                           (_c >= '0' && _c <= '9') || _c == '_') ? _c : '_';
+    }
+    fn_name_buf[fn_name_len] = '\0';
+    const char *fn_name = fn_name_buf;
 
     GenDef *def = (GenDef *)arena_alloc(e->arena, sizeof(GenDef));
     memset(def, 0, sizeof(GenDef));

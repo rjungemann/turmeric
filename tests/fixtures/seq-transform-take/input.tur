@@ -1,0 +1,7 @@
+; LZ2 fixture: seq/take -- yield at most n elements.
+
+(load "stdlib/seq/transform.tur")
+
+(defn main [] :void
+  (seq-for-each println (seq/take 3 (seq/range 0 10)))
+  (println (gen-arr-len (seq-collect (seq/take 10 (seq/range 0 3))))))

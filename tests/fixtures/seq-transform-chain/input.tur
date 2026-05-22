@@ -1,0 +1,12 @@
+; LZ2 fixture: chained transformations -- filter, map, take with no intermediate allocation.
+; Computes squares of even numbers from [0,100), taking the first 5.
+; Expected: 0^2=0, 2^2=4, 4^2=16, 6^2=36, 8^2=64
+
+(load "stdlib/seq/transform.tur")
+
+(defn main [] :void
+  (let [two 2
+        even? (fn [x] (= (mod x two) 0))
+        sq (fn [x] (let [_ two] (* x x)))]
+    (seq-for-each println
+      (seq/take 5 (seq/map sq (seq/filter even? (seq/range 0 100)))))))

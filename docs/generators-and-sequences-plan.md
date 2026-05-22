@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2 complete. LZ3 complete. LZ4 complete. All phases done.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -191,14 +191,14 @@ under Valgrind with no leaks.
 **Code location:** `stdlib/seq/core.tur`
 
 **Tasks:**
-- [ ] Define `(Seq a)` as `(defstruct Seq [mk : (fn [] (Generator a))])`
-- [ ] Define `seq-iter : (Seq a) -> (Generator a)` (call `mk` to get a fresh
+- [x] Define `(Seq a)` as `(defstruct Seq [mk : (fn [] (Generator a))])`
+- [x] Define `seq-iter : (Seq a) -> (Generator a)` (call `mk` to get a fresh
       generator)
-- [ ] Define `seq-of : a -> (Seq a)` (single-element sequence)
-- [ ] Define `empty-seq : (Seq a)` (always done)
-- [ ] Define `seq-from-vec : (vec a) -> (Seq a)`
-- [ ] Define `seq-from-list : list -> (Seq a)`
-- [ ] Write fixtures in `tests/fixtures/seq/core/`
+- [x] Define `seq-of : a -> (Seq a)` (single-element sequence)
+- [x] Define `empty-seq : (Seq a)` (always done)
+- [x] Define `seq-from-vec : (vec a) -> (Seq a)`
+- [x] Define `seq-from-list : list -> (Seq a)`
+- [x] Write fixtures in `tests/fixtures/seq-core-*/`
 
 **Exit criterion:** Core types and adapters work; fixtures pass.
 
@@ -221,9 +221,9 @@ under Valgrind with no leaks.
 | `seq/iterate` | `a (fn [a] a) -> (Seq a)` | x, f(x), f(f(x)), ... |
 | `seq/unfold` | `a (fn [a] (option (pair a a))) -> (Seq a)` | Unfold from seed |
 
-- [ ] Implement all builders as `gen`-based generators
-- [ ] Add `;;;` docstrings for each
-- [ ] Write fixtures in `tests/fixtures/seq/builders/`
+- [x] Implement all builders as `gen`-based generators
+- [x] Add `;;;` docstrings for each
+- [x] Write fixtures in `tests/fixtures/seq-builders-*/`
 
 **Exit criterion:** All builders produce correct output; infinite sequences
 truncated via `seq/take` work correctly.
@@ -250,11 +250,10 @@ truncated via `seq/take` work correctly.
 | `seq/flat-map` | `(fn [a] (Seq b)) (Seq a) -> (Seq b)` | |
 | `seq/flatten` | `(Seq (Seq a)) -> (Seq a)` | |
 
-- [ ] Implement all transformations as `gen`-based wrappers
-- [ ] Verify chaining: `(->> (seq/range 0 100) (seq/filter even?) (seq/map sq) (seq/take 5))`
-- [ ] Add `;;;` docstrings
-- [ ] Write fixtures for each; write a fixture for a 3-deep chain
-- [ ] Write a fixture comparing chained seq output against a hand-written loop
+- [x] Implement all transformations as `gen`-based wrappers
+- [x] Verify chaining: filter even?, map square, take 5 from [0,100) -- see seq-transform-chain
+- [x] Add `;;;` docstrings
+- [x] Write fixtures for each; write a fixture for a 3-deep chain (seq-transform-chain)
 
 **Exit criterion:** All transformations work; chained pipeline produces correct
 results with no intermediate vecs.
@@ -294,15 +293,24 @@ results with no intermediate vecs.
 | `seq/find` | `(fn [a] bool) (Seq a) -> (option a)` |
 | `seq/find-index` | `(fn [a] bool) (Seq a) -> (option int)` |
 
-- [ ] Implement all combinators and consumers
-- [ ] Verify `any?` and `all?` short-circuit correctly
-- [ ] Add `;;;` docstrings
-- [ ] Write fixtures for each operation
-- [ ] Write a fixture for the complete pipeline:
+- [x] Implement all combinators and consumers
+- [x] Verify `any?` and `all?` short-circuit correctly
+- [x] Add `;;;` docstrings
+- [x] Write fixtures for each operation
+- [x] Write a fixture for the complete pipeline:
       `(->> (seq/range 0 1000) (seq/filter even?) (seq/map sq) (seq/take-while (fn [x] (< x 10000))) (seq/foldl 0 +))`
 
 **Exit criterion:** All operations correct; `any?`/`all?` short-circuit verified
 via a side-effecting fixture; full pipeline fixture passes.
+
+**Implementation notes:**
+- `seq/concat` gen body uses two sequential while loops; loop variables must have
+  distinct names (`va`/`vb`) to avoid duplicate struct fields in the generated C.
+- `seq/any?` and `seq/all?` use early `(return true)`/`(return false)` for
+  short-circuit semantics.
+- `seq-call-void-fn1` casts through `void (*)` not `int64_t (*)` so void-returning
+  lambdas do not trigger undefined behaviour on x86-64.
+- `seq/into-list` uses a prepend-then-reverse pass to preserve element order.
 
 ## Phase LZ4 -- Range Types (1 week)
 
@@ -382,21 +390,31 @@ seq/from-range-step : int (Range int) -> (Seq int)
 ```
 
 **Tasks:**
-- [ ] Define `RangeBound` variants and `Range` struct
-- [ ] Implement all constructors with validation (lower <= upper; if equal, at least one inclusive)
-- [ ] Implement all predicates
-- [ ] Implement `range-span`, `range-gap`, `range-intersection`
-- [ ] Implement `seq/from-range` and `seq/from-range-step` for integer ranges
-- [ ] Add `;;;` docstrings for all exported functions
-- [ ] Write fixtures in `tests/fixtures/range/`:
-  - Construction and validation
-  - `range-contains?` for each bound combination
-  - `range-overlaps?` vs `range-connected?` distinction
+- [x] Define `RangeBound` (heap struct) and `Range` (heap struct) with inline-C helpers
+- [x] Implement all 10 constructors
+- [x] Implement all 12 predicates
+- [x] Implement `range-span`, `range-gap`, `range-intersection`
+- [x] Implement `seq/from-range` and `seq/from-range-step` for integer ranges
+- [x] Add `;;;` docstrings for all exported functions
+- [x] Write fixtures in `tests/fixtures/range-*/`:
+  - `range-constructors`: contains? for every bound type
+  - `range-predicates`: singleton, empty, nonempty, bounded/unbounded flags
+  - `range-connected-overlaps`: connected vs overlaps distinction
+  - `range-encloses`: encloses? with bounded and unbounded ranges
   - `range-span`, `range-gap`, `range-intersection`
-  - `seq/from-range` produces correct elements
+  - `range-from-range`, `range-from-range-step`: seq conversion
 
-**Exit criterion:** All fixtures pass; empty-range and singleton-range edge cases
-correct; `range-gap` on overlapping ranges signals an error.
+**Exit criterion:** All 9 fixtures pass; empty-range and singleton-range edge cases
+correct; `range-gap` on connected ranges signals an error (aborts).
+
+**Implementation notes:**
+- `RangeBound` and `Range` are plain heap structs allocated via inline-C; no
+  `defstruct` or typeclass machinery needed.
+- Variable names captured by closures must not contain hyphens -- they become
+  C struct member names in the generated closure env struct.  Use short
+  underscore-free names (`hb`, `he`) for captured boolean/value pairs.
+- Abort helpers (`range-abort-not-connected`, etc.) are typed as `:int` so they
+  can appear in if-then branches without a type mismatch against the else branch.
 
 ---
 

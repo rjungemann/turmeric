@@ -1,0 +1,9 @@
+; LZ0 fixture: seq-collect -- materialise all values into a gen-arr.
+
+(load "stdlib/seq/core.tur")
+
+(defn main [] :void
+  (let [s (seq-of 99)
+        arr (seq-collect s)]
+    (println (gen-arr-len arr))
+    (println (gen-arr-get arr 0))))

@@ -1,0 +1,239 @@
+;; stdlib/seq/builders.tur -- Standard sequence constructors (LZ1)
+;;
+;; All builders return a Seq (:int heap pointer) that can be iterated with
+;; seq-iter, seq-gen-done, seq-gen-next from stdlib/seq/core.tur.
+;;
+;; Fat-closure constraint: the mk thunks stored in each Seq are capturing
+;; closures.  seq-iter relies on the uniform fat-closure calling convention
+;; (env struct, fn_ptr at offset 0).  Builder functions that accept a
+;; callback (seq/repeatedly, seq/iterate, seq/unfold) require that the
+;; passed function also be a capturing closure.
+
+(load "stdlib/seq/core.tur")
+
+;; -------------------------------------------------------------------
+;; Fat-closure call helpers
+;; These call a stored int64_t fat-closure with 0 or 1 argument.
+;; The fat-closure convention: struct { int64_t __fn; captured... }
+;; fn_ptr = fat[0]; result = fn_ptr(fat_ptr [, arg])
+;; -------------------------------------------------------------------
+
+;;; seq-call-fn0 -- call a zero-arg fat closure stored as int64_t.
+;;; seq-call-fn1 -- call a one-arg fat closure stored as int64_t.
+(defn seq-call-fn0 [f :int] :int
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)f;
+  int64_t fn_ptr = fat[0];
+  return ((int64_t (*)(void *))(intptr_t)fn_ptr)((void *)fat);
+  ```)
+
+(defn seq-call-fn1 [f :int x :int] :int
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)f;
+  int64_t fn_ptr = fat[0];
+  return ((int64_t (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
+  ```)
+
+;; -------------------------------------------------------------------
+;; Option helpers for seq/unfold (no #{Unsafe}, usable in gen bodies)
+;; -------------------------------------------------------------------
+
+;;; seq-opt-some? -- test whether an option value is non-NULL (some).
+;;; seq-opt-unwrap -- extract the int64_t value from a some option.
+(defn seq-opt-some? [o :int] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
+  return opt != NULL && opt->is_some;
+  ```)
+
+(defn seq-opt-unwrap [o :int] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void *)(intptr_t)o;
+  return opt->value;
+  ```)
+
+;; Pair helpers for seq/unfold (matching pair.tur layout)
+;;; seq-pair-first -- return the first element of a Pair.
+;;; seq-pair-second -- return the second element of a Pair.
+(defn seq-pair-first [p :int] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
+  return pair->first;
+  ```)
+
+(defn seq-pair-second [p :int] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
+  return pair->second;
+  ```)
+
+;; -------------------------------------------------------------------
+;; Sequence builders
+;; -------------------------------------------------------------------
+
+;;; seq/range -- half-open integer range [start, end).
+;;;
+;;; Parameters:
+;;;   start -- inclusive lower bound
+;;;   end   -- exclusive upper bound
+;;;
+;;; Returns:
+;;;   A Seq yielding start, start+1, ..., end-1.
+;;;   Empty if start >= end.
+;;;
+;;; Example:
+;;;   (seq/range 0 5)  ; => 0 1 2 3 4
+;;;
+;;; Since: LZ1
+(defn seq/range [start :int end :int] :int
+  (seq-new (fn []
+             (let [^mut i start]
+               (gen []
+                 (while (< i end)
+                   (yield i)
+                   (set! i (+ i 1))))))))
+
+;;; seq/range-step -- integer range with a custom step.
+;;;
+;;; Parameters:
+;;;   start -- inclusive start value
+;;;   end   -- exclusive end value (for positive step) or lower bound (negative)
+;;;   step  -- increment per element (must not be zero)
+;;;
+;;; Returns:
+;;;   A Seq yielding start, start+step, start+2*step, ...
+;;;   stopping before end (positive step) or before going below end (negative step).
+;;;
+;;; Example:
+;;;   (seq/range-step 0 10 2)   ; => 0 2 4 6 8
+;;;   (seq/range-step 10 0 -3)  ; => 10 7 4 1
+;;;
+;;; Since: LZ1
+(defn seq/range-step [start :int end :int step :int] :int
+  (seq-new (fn []
+             (let [^mut i start]
+               (gen []
+                 (if (> step 0)
+                   (while (< i end)
+                     (yield i)
+                     (set! i (+ i step)))
+                   (while (> i end)
+                     (yield i)
+                     (set! i (+ i step)))))))))
+
+;;; seq/repeat -- infinite sequence repeating a single value.
+;;;
+;;; Parameters:
+;;;   v -- the value to repeat indefinitely
+;;;
+;;; Returns:
+;;;   An infinite Seq always yielding v.
+;;;   Use seq-nth or a bounded iteration to consume.
+;;;
+;;; Example:
+;;;   (seq/repeat 42)  ; => 42 42 42 ...
+;;;
+;;; Since: LZ1
+(defn seq/repeat [v :int] :int
+  (seq-new (fn []
+             (gen []
+               (while true
+                 (yield v))))))
+
+;;; seq/repeatedly -- infinite sequence from repeated zero-arg function calls.
+;;;
+;;; Parameters:
+;;;   f -- a zero-arg fat closure called to produce each element
+;;;
+;;; Returns:
+;;;   An infinite Seq yielding (f), (f), (f), ...
+;;;
+;;; Example:
+;;;   (let [counter (ref 0)]
+;;;     (seq/repeatedly (fn [] (let [v @counter] (set-ref! counter (+ v 1)) v))))
+;;;
+;;; Since: LZ1
+(defn seq/repeatedly [f :int] :int
+  (seq-new (fn []
+             (gen []
+               (while true
+                 (yield (seq-call-fn0 f)))))))
+
+;;; seq/cycle -- infinite sequence cycling over a finite Seq.
+;;;
+;;; Materialises the inner Seq into an array on first iteration,
+;;; then cycles the array indefinitely.
+;;;
+;;; Parameters:
+;;;   s -- a finite Seq to cycle
+;;;
+;;; Returns:
+;;;   An infinite Seq repeating the elements of s.
+;;;   Returns empty-seq if s is itself empty.
+;;;
+;;; Example:
+;;;   (seq/cycle (seq/range 0 3))  ; => 0 1 2 0 1 2 0 1 2 ...
+;;;
+;;; Since: LZ1
+(defn seq/cycle [s :int] :int
+  (let [arr (seq-collect s)
+        n   (gen-arr-len arr)]
+    (if (= n 0)
+      (empty-seq)
+      (seq-new (fn []
+                 (let [^mut i 0]
+                   (gen []
+                     (while true
+                       (yield (gen-arr-get arr i))
+                       (set! i (+ i 1))
+                       (when (= i n)
+                         (set! i 0))))))))))
+
+;;; seq/iterate -- infinite sequence x, f(x), f(f(x)), ...
+;;;
+;;; Parameters:
+;;;   init -- seed value
+;;;   f    -- one-arg fat closure applied to produce the next element
+;;;
+;;; Returns:
+;;;   A Seq yielding init, f(init), f(f(init)), ...
+;;;
+;;; Example:
+;;;   (seq/iterate 1 (fn [x] (* x 2)))  ; => 1 2 4 8 16 ...
+;;;
+;;; Since: LZ1
+(defn seq/iterate [init :int f :int] :int
+  (seq-new (fn []
+             (let [^mut cur init]
+               (gen []
+                 (while true
+                   (yield cur)
+                   (set! cur (seq-call-fn1 f cur))))))))
+
+;;; seq/unfold -- build a Seq by unfolding from a seed value.
+;;;
+;;; Parameters:
+;;;   seed -- initial seed value
+;;;   f    -- one-arg fat closure: seed -> (option (pair value next-seed))
+;;;           return none to terminate the sequence
+;;;
+;;; Returns:
+;;;   A Seq yielding the first element of each pair until f returns none.
+;;;
+;;; Example:
+;;;   (seq/unfold 0 (fn [n]
+;;;     (if (< n 5) (some (pair-new n (+ n 1))) (none))))
+;;;   ; => 0 1 2 3 4
+;;;
+;;; Since: LZ1
+(defn seq/unfold [seed :int f :int] :int
+  (seq-new (fn []
+             (let [^mut s seed]
+               (gen []
+                 (while true
+                   (let [r (seq-call-fn1 f s)]
+                     (if (seq-opt-some? r)
+                       (let [p (seq-opt-unwrap r)]
+                         (yield (seq-pair-first p))
+                         (set! s (seq-pair-second p)))
+                       (return)))))))))

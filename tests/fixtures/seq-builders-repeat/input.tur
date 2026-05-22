@@ -1,0 +1,13 @@
+; LZ1 fixture: seq/repeat -- infinite sequence of a single value, take 4.
+
+(load "stdlib/seq/builders.tur")
+
+(defn main [] :void
+  (let [g (seq-iter (seq/repeat 7))
+        ^mut count 0]
+    (while (< count 4)
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (do
+            (println (seq-val-unwrap v))
+            (set! count (+ count 1))))))))

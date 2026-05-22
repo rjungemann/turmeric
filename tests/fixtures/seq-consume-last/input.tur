@@ -1,0 +1,8 @@
+; LZ3 fixture: seq/last -- return last element or None.
+; Last of [5,10) = 9; last of empty seq = None.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (println (seq-opt-unwrap (seq/last (seq/range 5 10))))
+  (println (seq-opt-some? (seq/last (empty-seq)))))

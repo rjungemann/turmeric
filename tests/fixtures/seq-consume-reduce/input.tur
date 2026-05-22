@@ -1,0 +1,10 @@
+; LZ3 fixture: seq/reduce -- fold without initial value; None if empty.
+; Reduce + over [1,5) = 10; reduce on empty = None.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (let [zero 0
+        sum (fn [a b] (let [_ zero] (+ a b)))]
+    (println (seq-opt-unwrap (seq/reduce sum (seq/range 1 5))))
+    (println (seq-opt-some? (seq/reduce sum (empty-seq))))))

@@ -1,0 +1,10 @@
+; LZ3 fixture: seq/any? -- true if any element satisfies pred; short-circuits.
+; any >5 in [0,10) = true; any >5 in [0,5) = false.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (let [five 5
+        big? (fn [x] (> x five))]
+    (println (seq/any? big? (seq/range 0 10)))
+    (println (seq/any? big? (seq/range 0 5)))))

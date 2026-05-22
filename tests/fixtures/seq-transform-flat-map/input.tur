@@ -1,0 +1,8 @@
+; LZ2 fixture: seq/flat-map -- map each element to a Seq, yield all elements.
+
+(load "stdlib/seq/transform.tur")
+
+(defn main [] :void
+  (let [two 2
+        f (fn [x] (seq/range 0 (+ x two)))]
+    (seq-for-each println (seq/flat-map f (seq/range 0 3)))))

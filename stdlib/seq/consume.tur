@@ -1,0 +1,416 @@
+;; stdlib/seq/consume.tur -- Terminal sequence consumers (LZ3)
+;;
+;; Functions that fully drive a Seq and return a scalar, collection, or option.
+;; All return types are int64_t (even options and lists -- they are heap pointers).
+;;
+;; Fat-closure constraint: callbacks must be capturing closures.
+;;
+;; Option layout (used by seq/nth, seq/first, seq/last, seq/reduce,
+;;                seq/find, seq/find-index):
+;;   struct { bool is_some; int64_t value; }
+;; Inspect with seq-opt-some? and seq-opt-unwrap from stdlib/seq/builders.tur.
+
+(load "stdlib/seq/transform.tur")
+
+;; -------------------------------------------------------------------
+;; Option allocation helpers
+;; -------------------------------------------------------------------
+
+;;; seq-make-some -- allocate Some(v) option.
+;;; seq-make-none -- allocate None option.
+(defn seq-make-some [v :int] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+    (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
+  opt->is_some = true; opt->value = v;
+  return (int64_t)(intptr_t)opt;
+  ```)
+
+(defn seq-make-none [] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+    (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
+  opt->is_some = false; opt->value = 0;
+  return (int64_t)(intptr_t)opt;
+  ```)
+
+;; -------------------------------------------------------------------
+;; Vec / List allocation helpers (inline-C, no #{Unsafe} needed)
+;; -------------------------------------------------------------------
+
+;;; seq-out-vec-new -- allocate an empty vec (same layout as stdlib/vec.tur).
+(defn seq-out-vec-new [] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+    (struct { int64_t *data; size_t len; size_t cap; } *)malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;;; seq-out-vec-push! -- append val to the vec at v.
+(defn seq-out-vec-push! [v :int val :int] :void
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+    (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (vec->len == vec->cap) {
+    vec->cap = vec->cap ? vec->cap * 2 : 8;
+    vec->data = (int64_t *)realloc(vec->data,
+                                   vec->cap * sizeof(int64_t));
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;;; seq-make-cons -- allocate a cons cell { value, next }.
+(defn seq-make-cons [val :int nxt :int] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+    (struct { int64_t value; int64_t next; } *)malloc(sizeof(*cell));
+  cell->value = val; cell->next = nxt;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+;; -------------------------------------------------------------------
+;; Void fat-closure call helper (for seq/for-each)
+;; -------------------------------------------------------------------
+
+;;; seq-call-void-fn1 -- call a one-arg fat closure that returns void.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (a -> void)
+;;;   x -- argument
+;;;
+;;; Since: LZ3
+(defn seq-call-void-fn1 [f :int x :int] :void
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)f;
+  int64_t fn_ptr = fat[0];
+  ((void (*)(void *, int64_t))(intptr_t)fn_ptr)((void *)fat, x);
+  ```)
+
+;; -------------------------------------------------------------------
+;; Collection consumers
+;; -------------------------------------------------------------------
+
+;;; seq/into-vec -- materialise a Seq into a growable vec.
+;;;
+;;; Parameters:
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   int64_t pointer to a heap vec containing all elements of s.
+;;;   Access with seq-vec-len and seq-vec-get (from stdlib/seq/core.tur).
+;;;
+;;; Example:
+;;;   (let [v (seq/into-vec (seq/range 0 3))]
+;;;     (println (seq-vec-len v)))  ; => 3
+;;;
+;;; Since: LZ3
+(defn seq/into-vec [s :int] :int
+  (let [g (seq-iter s)
+        v (seq-out-vec-new)]
+    (while (not (seq-gen-done g))
+      (let [elem (seq-gen-next g)]
+        (when (seq-val-some? elem)
+          (seq-out-vec-push! v (seq-val-unwrap elem)))))
+    v))
+
+;;; seq/into-list -- materialise a Seq into a singly-linked list (head first).
+;;;
+;;; Parameters:
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   int64_t head pointer to a singly-linked list with the same element
+;;;   order as s.  Iterate with seq-list-nil?, seq-list-head, seq-list-tail
+;;;   (from stdlib/seq/core.tur), or pass to seq-from-list.
+;;;
+;;; Example:
+;;;   (seq-for-each println (seq-from-list (seq/into-list (seq/range 0 3))))
+;;;   ; => 0 1 2
+;;;
+;;; Since: LZ3
+(defn seq/into-list [s :int] :int
+  (let [g (seq-iter s)
+        ^mut lst 0]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (set! lst (seq-make-cons (seq-val-unwrap v) lst)))))
+    ;; lst is now reversed; reverse it back
+    (let [^mut cur lst
+          ^mut rev 0]
+      (while (not (seq-list-nil? cur))
+        (let [nxt (seq-list-tail cur)]
+          (set! rev (seq-make-cons (seq-list-head cur) rev))
+          (set! cur nxt)))
+      rev)))
+
+;; -------------------------------------------------------------------
+;; Element access
+;; -------------------------------------------------------------------
+
+;;; seq/nth -- return the element at 0-based position n, or None.
+;;;
+;;; Parameters:
+;;;   n -- 0-based index
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   Some(element) if s has at least n+1 elements, else None.
+;;;
+;;; Example:
+;;;   (seq-opt-unwrap (seq/nth 2 (seq/range 10 15)))  ; => 12
+;;;
+;;; Since: LZ3
+(defn seq/nth [n :int s :int] :int
+  (let [g (seq-iter s)
+        ^mut count 0]
+    (while (and (< count n) (not (seq-gen-done g)))
+      (let [_skip (seq-gen-next g)]
+        (set! count (+ count 1))))
+    (if (seq-gen-done g)
+      (seq-make-none)
+      (let [v (seq-gen-next g)]
+        (if (seq-val-some? v)
+          (seq-make-some (seq-val-unwrap v))
+          (seq-make-none))))))
+
+;;; seq/first -- return the first element of s, or None if s is empty.
+;;;
+;;; Parameters:
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   Some(first element) or None.
+;;;
+;;; Example:
+;;;   (seq-opt-unwrap (seq/first (seq/range 5 10)))  ; => 5
+;;;
+;;; Since: LZ3
+(defn seq/first [s :int] :int
+  (let [g (seq-iter s)
+        v (seq-gen-next g)]
+    (if (seq-val-some? v)
+      (seq-make-some (seq-val-unwrap v))
+      (seq-make-none))))
+
+;;; seq/last -- return the last element of s, or None if s is empty.
+;;;
+;;; Parameters:
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   Some(last element) or None.
+;;;
+;;; Example:
+;;;   (seq-opt-unwrap (seq/last (seq/range 5 10)))  ; => 9
+;;;
+;;; Since: LZ3
+(defn seq/last [s :int] :int
+  (let [g (seq-iter s)
+        ^mut result (seq-make-none)]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (set! result (seq-make-some (seq-val-unwrap v))))))
+    result))
+
+;; -------------------------------------------------------------------
+;; Aggregation
+;; -------------------------------------------------------------------
+
+;;; seq/count -- count the number of elements in s.
+;;;
+;;; Parameters:
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   The total number of elements yielded by s.
+;;;
+;;; Example:
+;;;   (seq/count (seq/range 0 7))  ; => 7
+;;;
+;;; Since: LZ3
+(defn seq/count [s :int] :int
+  (let [g (seq-iter s)
+        ^mut n 0]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (set! n (+ n 1)))))
+    n))
+
+;;; seq/reduce -- fold s with f, no initial value; returns None if s is empty.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (a a -> a) combining accumulator and next element
+;;;   s -- source Seq
+;;;
+;;; Returns:
+;;;   Some(result) after applying f left-associatively across all elements,
+;;;   or None if s is empty.
+;;;
+;;; Example:
+;;;   (let [zero 0 sum (fn [a b] (let [_ zero] (+ a b)))]
+;;;     (seq-opt-unwrap (seq/reduce sum (seq/range 1 5))))  ; => 10
+;;;
+;;; Since: LZ3
+(defn seq/reduce [f :int s :int] :int
+  (let [g (seq-iter s)]
+    (if (seq-gen-done g)
+      (seq-make-none)
+      (let [v (seq-gen-next g)]
+        (if (not (seq-val-some? v))
+          (seq-make-none)
+          (let [^mut acc (seq-val-unwrap v)]
+            (while (not (seq-gen-done g))
+              (let [v2 (seq-gen-next g)]
+                (when (seq-val-some? v2)
+                  (set! acc (seq-call-fn2 f acc (seq-val-unwrap v2))))))
+            (seq-make-some acc)))))))
+
+;;; seq/foldl -- fold s left with f starting from init.
+;;;
+;;; Parameters:
+;;;   init -- initial accumulator value
+;;;   f    -- fat closure (b a -> b) combining accumulator and next element
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   The final accumulator after applying f to each element of s.
+;;;
+;;; Example:
+;;;   (let [zero 0 sum (fn [a b] (let [_ zero] (+ a b)))]
+;;;     (seq/foldl zero sum (seq/range 1 5)))  ; => 10
+;;;
+;;; Since: LZ3
+(defn seq/foldl [init :int f :int s :int] :int
+  (let [g (seq-iter s)
+        ^mut acc init]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (set! acc (seq-call-fn2 f acc (seq-val-unwrap v))))))
+    acc))
+
+;;; seq/for-each -- call f on every element of s for side effects.
+;;;
+;;; Parameters:
+;;;   f -- fat closure (a -> void) called with each element
+;;;   s -- source Seq
+;;;
+;;; Example:
+;;;   (let [zero 0 f (fn [x] (let [_ zero] (println x)))]
+;;;     (seq/for-each f (seq/range 0 3)))  ; prints 0 1 2
+;;;
+;;; Since: LZ3
+(defn seq/for-each [f :int s :int] :void
+  (let [g (seq-iter s)]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (seq-call-void-fn1 f (seq-val-unwrap v)))))))
+
+;; -------------------------------------------------------------------
+;; Short-circuiting predicates
+;; -------------------------------------------------------------------
+
+;;; seq/any? -- return true if pred holds for at least one element; short-circuits.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool)
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   true as soon as pred(x) is true; false if no element satisfies pred.
+;;;
+;;; Example:
+;;;   (let [five 5 eq5? (fn [x] (= x five))]
+;;;     (seq/any? eq5? (seq/range 0 10)))  ; => true
+;;;
+;;; Since: LZ3
+(defn seq/any? [pred :int s :int] :bool
+  (let [g (seq-iter s)]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (when (seq-call-bool-fn1 pred (seq-val-unwrap v))
+            (return true)))))
+    false))
+
+;;; seq/all? -- return true if pred holds for every element; short-circuits on first failure.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool)
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   false as soon as pred(x) is false; true if every element satisfies pred.
+;;;
+;;; Example:
+;;;   (let [ten 10 small? (fn [x] (< x ten))]
+;;;     (seq/all? small? (seq/range 0 10)))  ; => true
+;;;
+;;; Since: LZ3
+(defn seq/all? [pred :int s :int] :bool
+  (let [g (seq-iter s)]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (when (not (seq-call-bool-fn1 pred (seq-val-unwrap v)))
+            (return false)))))
+    true))
+
+;; -------------------------------------------------------------------
+;; Search
+;; -------------------------------------------------------------------
+
+;;; seq/find -- return the first element satisfying pred, or None.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool)
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   Some(first matching element), or None if no element satisfies pred.
+;;;
+;;; Example:
+;;;   (let [six 6 big? (fn [x] (> x six))]
+;;;     (seq-opt-unwrap (seq/find big? (seq/range 0 10))))  ; => 7
+;;;
+;;; Since: LZ3
+(defn seq/find [pred :int s :int] :int
+  (let [g (seq-iter s)]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (let [elem (seq-val-unwrap v)]
+            (when (seq-call-bool-fn1 pred elem)
+              (return (seq-make-some elem)))))))
+    (seq-make-none)))
+
+;;; seq/find-index -- return the 0-based index of the first element satisfying pred, or None.
+;;;
+;;; Parameters:
+;;;   pred -- fat closure (a -> bool)
+;;;   s    -- source Seq
+;;;
+;;; Returns:
+;;;   Some(index) of the first matching element, or None.
+;;;
+;;; Example:
+;;;   (let [six 6 big? (fn [x] (> x six))]
+;;;     (seq-opt-unwrap (seq/find-index big? (seq/range 0 10))))  ; => 7
+;;;
+;;; Since: LZ3
+(defn seq/find-index [pred :int s :int] :int
+  (let [g (seq-iter s)
+        ^mut idx 0]
+    (while (not (seq-gen-done g))
+      (let [v (seq-gen-next g)]
+        (when (seq-val-some? v)
+          (let [elem (seq-val-unwrap v)]
+            (when (seq-call-bool-fn1 pred elem)
+              (return (seq-make-some idx)))
+            (set! idx (+ idx 1))))))
+    (seq-make-none)))

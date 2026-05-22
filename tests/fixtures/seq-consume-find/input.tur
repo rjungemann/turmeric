@@ -1,0 +1,10 @@
+; LZ3 fixture: seq/find -- first element satisfying pred, or None.
+; First >6 in [0,10) = 7; first >6 in [0,5) = None.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (let [six 6
+        big? (fn [x] (> x six))]
+    (println (seq-opt-unwrap (seq/find big? (seq/range 0 10))))
+    (println (seq-opt-some? (seq/find big? (seq/range 0 5))))))

@@ -1,0 +1,9 @@
+; LZ3 fixture: seq/for-each -- call f on every element for side effects.
+; Prints each element of [0,3).
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (let [zero 0
+        pln (fn [x] (let [_ zero] (println x)))]
+    (seq/for-each pln (seq/range 0 3))))
