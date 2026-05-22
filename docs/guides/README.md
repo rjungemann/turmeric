@@ -73,6 +73,8 @@ see the task plan for progress.
 - **[hrt-guide.md](hrt-guide.md)** — Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[module-system-guide.md](module-system-guide.md)** — Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** — Foreign function interface (FFI) and C interop
+- **[generators-guide.md](generators-guide.md)** — Zero-overhead generators (`gen`/`yield`), lazy `Seq` combinators, and `Range` types
+- **[cli-args-guide.md](cli-args-guide.md)** — CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
 - **[effects-vs-monads.md](effects-vs-monads.md)** — Design rationale: why effects instead of Haskell-style monads
 - **[type-annotations-guide.md](type-annotations-guide.md)** — Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
 - **[gadts-guide.md](gadts-guide.md)** — GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
@@ -131,6 +133,8 @@ see the task plan for progress.
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
+- Generators and sequences → [generators-guide.md](generators-guide.md)
+- CLI arguments → [cli-args-guide.md](cli-args-guide.md)
 - Type system → [structs-guide.md](structs-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md)
 - Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
