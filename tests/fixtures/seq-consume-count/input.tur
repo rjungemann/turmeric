@@ -1,0 +1,8 @@
+; LZ3 fixture: seq/count -- count elements in a Seq.
+; Count of [0,7) = 7; count of empty = 0.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (println (seq/count (seq/range 0 7)))
+  (println (seq/count (empty-seq))))

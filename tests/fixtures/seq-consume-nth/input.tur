@@ -1,0 +1,8 @@
+; LZ3 fixture: seq/nth -- return element at 0-based index, or None.
+; nth 2 of [10,15) = 12; nth 10 of [10,15) = None.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (println (seq-opt-unwrap (seq/nth 2 (seq/range 10 15))))
+  (println (seq-opt-some? (seq/nth 10 (seq/range 10 15)))))

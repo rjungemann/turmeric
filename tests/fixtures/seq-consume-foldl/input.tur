@@ -1,0 +1,9 @@
+; LZ3 fixture: seq/foldl -- left fold with initial accumulator.
+; Sum [1,6) starting from 0 = 15.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (let [zero 0
+        sum (fn [a b] (let [_ zero] (+ a b)))]
+    (println (seq/foldl 0 sum (seq/range 1 6)))))

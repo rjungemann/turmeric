@@ -1,0 +1,8 @@
+; LZ3 fixture: seq/first -- return first element or None.
+; First of [5,10) = 5; first of empty seq = None.
+
+(load "stdlib/seq/consume.tur")
+
+(defn main [] :void
+  (println (seq-opt-unwrap (seq/first (seq/range 5 10))))
+  (println (seq-opt-some? (seq/first (empty-seq)))))

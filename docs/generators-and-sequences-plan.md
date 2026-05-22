@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2 complete. LZ3-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2 complete. LZ3 complete. LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -293,15 +293,24 @@ results with no intermediate vecs.
 | `seq/find` | `(fn [a] bool) (Seq a) -> (option a)` |
 | `seq/find-index` | `(fn [a] bool) (Seq a) -> (option int)` |
 
-- [ ] Implement all combinators and consumers
-- [ ] Verify `any?` and `all?` short-circuit correctly
-- [ ] Add `;;;` docstrings
-- [ ] Write fixtures for each operation
-- [ ] Write a fixture for the complete pipeline:
+- [x] Implement all combinators and consumers
+- [x] Verify `any?` and `all?` short-circuit correctly
+- [x] Add `;;;` docstrings
+- [x] Write fixtures for each operation
+- [x] Write a fixture for the complete pipeline:
       `(->> (seq/range 0 1000) (seq/filter even?) (seq/map sq) (seq/take-while (fn [x] (< x 10000))) (seq/foldl 0 +))`
 
 **Exit criterion:** All operations correct; `any?`/`all?` short-circuit verified
 via a side-effecting fixture; full pipeline fixture passes.
+
+**Implementation notes:**
+- `seq/concat` gen body uses two sequential while loops; loop variables must have
+  distinct names (`va`/`vb`) to avoid duplicate struct fields in the generated C.
+- `seq/any?` and `seq/all?` use early `(return true)`/`(return false)` for
+  short-circuit semantics.
+- `seq-call-void-fn1` casts through `void (*)` not `int64_t (*)` so void-returning
+  lambdas do not trigger undefined behaviour on x86-64.
+- `seq/into-list` uses a prepend-then-reverse pass to preserve element order.
 
 ## Phase LZ4 -- Range Types (1 week)
 
