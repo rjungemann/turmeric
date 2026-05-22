@@ -74,6 +74,7 @@ typedef struct PkgSpice {
     char *url;      /* NULL for local-path deps */
     char *ref;      /* git tag/branch/SHA; NULL for local-path deps */
     char *path;     /* relative local path; NULL for git deps */
+    char *subdir;   /* subdirectory within repo (monorepo sub-packages); NULL = root */
     bool  optional;
 } PkgSpice;
 
@@ -213,9 +214,11 @@ bool pkg_gen_cmake_deps(const char *project_dir,
 /* Invoke cmake to configure and build the cmake/ subproject.
  * Updates lock entries with resolved git SHAs.
  * Returns true on success. */
+/* target: NULL for native, "wasm" to use emcmake/Emscripten toolchain. */
 bool pkg_cmake_build(const char *project_dir,
                      const PkgManifest *manifest,
-                     PkgLockFile *lock);
+                     PkgLockFile *lock,
+                     const char *target);
 
 /* Verify that each cmake dep's resolved SHA still matches tur.lock.
  * Returns true if all match (or lock has no entry yet).

@@ -10,7 +10,7 @@
 ;;   Binding  -- an assoc-list mapping variable names to Value pointers
 ;;   datalog  -- run a list of clauses, return all surviving bindings
 ;;
-;; Run with: ./build/tur examples/eavt/datalog.tur
+;; Run with: ./build/tur examples/datalog/datalog.tur
 
 ;; ============================================================
 ;; Value ADT

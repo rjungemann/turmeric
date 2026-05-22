@@ -629,8 +629,10 @@ static void default_output_name(const char *input, char *out, size_t cap) {
     }
 }
 
+/* target: NULL for native build, "wasm" to compile with emcc. */
 static int cmd_build(const char *input, const char *out_path,
-                     const char **include_dirs, int n_include_dirs);
+                     const char **include_dirs, int n_include_dirs,
+                     const char *target);
 static char *find_project_root(const char *start);
 
 /* Build a deterministic path for the intermediate generated-C file so that
@@ -661,7 +663,8 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
 }
 
 static int cmd_build(const char *input, const char *out_path,
-                     const char **include_dirs, int n_include_dirs) {
+                     const char **include_dirs, int n_include_dirs,
+                     const char *target) {
     Buf csrc;
     buf_init(&csrc);
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs);
@@ -742,21 +745,38 @@ static int cmd_build(const char *input, const char *out_path,
     }
     buf_free(&csrc);
 
+    bool wasm_target = target && strcmp(target, "wasm") == 0;
+
     char chosen_out[1024];
     if (!out_path) {
         default_output_name(input, chosen_out, sizeof(chosen_out));
+        /* emcc outputs <name>.js + <name>.wasm; use .js as the primary output */
+        if (wasm_target) {
+            size_t n = strlen(chosen_out);
+            if (n + 3 < sizeof(chosen_out)) { chosen_out[n++] = '.'; chosen_out[n++] = 'j'; chosen_out[n++] = 's'; chosen_out[n] = '\0'; }
+        }
         out_path = chosen_out;
     }
 
-    const char *cc = getenv("CC");
-    if (!cc || !*cc) cc = "cc";
+    const char *cc;
+    if (wasm_target) {
+        cc = "emcc";
+    } else {
+        cc = getenv("CC");
+        if (!cc || !*cc) cc = "cc";
+    }
 
     /* TUR_CC_FLAGS overrides the default compiler flags.  Useful for test runs
      * where -O0 is fast enough and ccache benefits from consistent flags.
      * -fno-strict-aliasing: emitted code and inline C blocks routinely pun
      * pointers through int64_t, which GCC's TBAA miscompiles at -O2. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
-    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
+    if (!cc_flags || !*cc_flags) {
+        if (wasm_target)
+            cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing -s WASM=1";
+        else
+            cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
+    }
 
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
     Buf cmake_flags;
@@ -955,7 +975,7 @@ static int cmd_run(int argc, char **argv) {
         if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; } \
         close(_fd);                                                      \
         int _rc = cmd_build((entry_path), out_path,                      \
-                            spice_inc_dirs, n_spice_inc_dirs);           \
+                            spice_inc_dirs, n_spice_inc_dirs, NULL);     \
         if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
@@ -992,7 +1012,7 @@ static int cmd_run(int argc, char **argv) {
             int out_fd = mkstemp(out_path);
             if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
             close(out_fd);
-            int brc = cmd_build(src_tmp, out_path, spice_inc_dirs, n_spice_inc_dirs);
+            int brc = cmd_build(src_tmp, out_path, spice_inc_dirs, n_spice_inc_dirs, NULL);
             unlink(src_tmp);
             if (brc != 0) { unlink(out_path); free(spice_inc_dirs); return brc; }
             Buf run_cmd; buf_init(&run_cmd);
@@ -1140,6 +1160,13 @@ static int cmd_run(int argc, char **argv) {
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
                              spices_dir, s->name);
                 }
+                /* For monorepo sub-packages, descend into the subdir */
+                if (s->subdir) {
+                    char tmp[4096];
+                    snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
+                    strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
+                    dep_dir[sizeof(dep_dir) - 1] = '\0';
+                }
                 /* Prefer dep_dir/src if it exists */
                 char src_sub[4096];
                 snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
@@ -1162,7 +1189,7 @@ static int cmd_run(int argc, char **argv) {
         bool cmake_built = (stat(cmake_lists, &_cmst) == 0);
         if (!cmake_built) {
             if (!pkg_gen_cmake_deps(root, &m) ||
-                !pkg_cmake_build(root, &m, &lock)) {
+                !pkg_cmake_build(root, &m, &lock, NULL)) {
                 fprintf(stderr, "tur run: cmake dependency build failed\n");
                 pkg_lock_free(&lock);
                 pkg_manifest_free(&m);
@@ -1243,7 +1270,7 @@ static int cmd_test(const char *dir) {
         }
         close(fd);
 
-        int build_rc = cmd_build(tur_files[i], out_path, NULL, 0);
+        int build_rc = cmd_build(tur_files[i], out_path, NULL, 0, NULL);
         int run_rc = 1;
         if (build_rc == 0) {
             int status = system(out_path);
@@ -3815,8 +3842,9 @@ static int usage_build(void) {
         "  tur build <dir> [-o <out>]        build all .tur files in directory\n"
         "\n"
         "flags:\n"
-        "  -o <out>   output file path\n"
-        "  -I <dir>   add include directory\n"
+        "  -o <out>          output file path\n"
+        "  -I <dir>          add include directory\n"
+        "  --target wasm     compile to WebAssembly via emcc (requires Emscripten)\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -4398,6 +4426,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "build") == 0) {
         const char *input = NULL;
         const char *out = NULL;
+        const char *build_target = NULL;
         /* Collect -I flags from the command line */
         int     n_build_inc = 0;
         int     build_inc_cap = 4;
@@ -4407,6 +4436,12 @@ int main(int argc, char **argv) {
                 free(build_inc); return usage_build();
             } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
                 out = argv[++i];
+            } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
+                build_target = argv[++i];
+                if (strcmp(build_target, "wasm") != 0) {
+                    fprintf(stderr, "tur build: unknown target '%s' (supported: wasm)\n", build_target);
+                    free(build_inc); return 1;
+                }
             } else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc) {
                 if (n_build_inc >= build_inc_cap) {
                     build_inc_cap *= 2;
@@ -4422,19 +4457,19 @@ int main(int argc, char **argv) {
                 }
                 build_inc[n_build_inc++] = argv[i] + 2;
             } else if (argv[i][0] != '-') {
-                if (input) { free(build_inc); return usage(); }
+                if (input) { free(build_inc); return usage_build(); }
                 input = argv[i];
             } else {
-                free(build_inc); return usage();
+                free(build_inc); return usage_build();
             }
         }
-        if (!input) { free(build_inc); return usage(); }
+        if (!input) { free(build_inc); return usage_build(); }
         /* Check if input is a directory - use multi-file build */
         int rc;
         if (is_directory(input)) {
             rc = cmd_build_multi(input, out);
         } else {
-            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc);
+            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc, build_target);
         }
         free(build_inc);
         return rc;

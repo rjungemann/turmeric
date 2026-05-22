@@ -6,7 +6,7 @@ description: Create a database and a query system to go with it
 
 # Datalog Tutorial Pt. 3: Query API
 
-This session covers `examples/eavt/query.tur`, which extends the minimal
+This session covers `examples/datalog/query.tur`, which extends the minimal
 implementation with:
 
 - Value equality (`value-eq?`)
@@ -19,7 +19,7 @@ implementation with:
 Run the example:
 
 ```sh
-./build/tur examples/eavt/query.tur
+./build/tur examples/datalog/query.tur
 ```
 
 ---

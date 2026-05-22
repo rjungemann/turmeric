@@ -60,9 +60,9 @@ All notable changes to Turmeric are documented here.
 
 - **`emit_effects.c`** — effects codegen extracted from `emit_expr.c` into a dedicated translation unit (#50)
 
-- **EAVT / Datalog database tutorial series** (`docs/guides/datalog-*.md`, `examples/eavt/`)
+- **EAVT / Datalog database tutorial series** (`docs/guides/datalog-*.md`, `examples/datalog/`)
   - Four-part guide: EAVT concepts, minimal implementation, query API, B-tree indexing
-  - Five progressive example programs in `examples/eavt/`: `minimal.tur`, `indexed.tur`, `query.tur`, `blog.tur`, `datalog.tur`
+  - Five progressive example programs in `examples/datalog/`: `minimal.tur`, `indexed.tur`, `query.tur`, `blog.tur`, `datalog.tur`
 
 - **New and expanded guides**
   - Performance guide (`docs/guides/performance-guide.md`) — numerical, data structures, concurrency, memory, recursion, I/O, benchmarking methodology

@@ -35,7 +35,7 @@ The foundational implementation (~110 lines). Contains:
 
 **Run:**
 ```
-./build/tur examples/eavt/minimal.tur
+./build/tur examples/datalog/minimal.tur
 ```
 
 ### `query.tur`
@@ -51,7 +51,7 @@ Extends `minimal.tur` with richer query capabilities:
 
 **Run:**
 ```
-./build/tur examples/eavt/query.tur
+./build/tur examples/datalog/query.tur
 ```
 
 ### `indexed.tur`
@@ -67,7 +67,7 @@ for millions of facts it is essential.
 
 **Run:**
 ```
-./build/tur examples/eavt/indexed.tur
+./build/tur examples/datalog/indexed.tur
 ```
 
 ### `blog.tur`
@@ -82,7 +82,7 @@ A complete blog system showing how EAVT scales to a real domain:
 
 **Run:**
 ```
-./build/tur examples/eavt/blog.tur
+./build/tur examples/datalog/blog.tur
 ```
 
 ### `datalog.tur`
@@ -98,7 +98,7 @@ The demo shows a two-clause join: "find all post titles by the user named Alice.
 
 **Run:**
 ```
-./build/tur examples/eavt/datalog.tur
+./build/tur examples/datalog/datalog.tur
 ```
 
 ## Key Concepts
@@ -136,7 +136,7 @@ to deconstruct.
 
 ## Tutorial Docs
 
-Step-by-step explanations of each file live in `docs/guides/eavt/`:
+Step-by-step explanations of each file live in `docs/guides/datalog/`:
 
 - `01-concepts.md` -- EAVT model, immutability, comparison with SQL
 - `02-minimal-impl.md` -- walk through `minimal.tur` line by line

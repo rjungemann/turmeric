@@ -164,6 +164,7 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         s->url      = form_str_dup(map_get_kw(val, "url"));
         s->ref      = form_str_dup(map_get_kw(val, "ref"));
         s->path     = form_str_dup(map_get_kw(val, "path"));
+        s->subdir   = form_str_dup(map_get_kw(val, "subdir"));
         const Form *opt_f = map_get_kw(val, "optional");
         s->optional = form_bool_val(opt_f);
     }
@@ -514,6 +515,7 @@ void pkg_manifest_free(PkgManifest *m) {
         free(m->spices[i].url);
         free(m->spices[i].ref);
         free(m->spices[i].path);
+        free(m->spices[i].subdir);
     }
     free(m->spices);
     for (int i = 0; i < m->n_cmake_deps; i++) {
@@ -929,7 +931,8 @@ typedef struct FetchItem {
     char *name;
     char *url;
     char *ref;
-    char *path;  /* NULL = git dep */
+    char *path;   /* NULL = git dep */
+    char *subdir; /* NULL = repo root; set for monorepo sub-packages */
     bool  is_cmake;
     /* origin for error reporting */
     char *from;
@@ -978,9 +981,10 @@ bool pkg_fetch_all(const char *project_dir,
         }
         FetchItem *it = &queue[q_len++];
         it->name     = tur_strdup(s->name);
-        it->url      = s->url  ? tur_strdup(s->url)  : NULL;
-        it->ref      = s->ref  ? tur_strdup(s->ref)  : NULL;
-        it->path     = s->path ? tur_strdup(s->path) : NULL;
+        it->url      = s->url    ? tur_strdup(s->url)    : NULL;
+        it->ref      = s->ref    ? tur_strdup(s->ref)    : NULL;
+        it->path     = s->path   ? tur_strdup(s->path)   : NULL;
+        it->subdir   = s->subdir ? tur_strdup(s->subdir) : NULL;
         it->is_cmake = false;
         it->from     = tur_strdup("(root)");
     }
@@ -993,7 +997,7 @@ bool pkg_fetch_all(const char *project_dir,
         if (it->is_cmake) {
             /* cmake deps are handled in pkg_gen_cmake_deps, not fetched here */
             free(it->name); free(it->url); free(it->ref);
-            free(it->path); free(it->from);
+            free(it->path); free(it->subdir); free(it->from);
             continue;
         }
 
@@ -1005,7 +1009,7 @@ bool pkg_fetch_all(const char *project_dir,
                 free(le->ref); le->ref = NULL;
             }
             free(it->name); free(it->url); free(it->ref);
-            free(it->path); free(it->from);
+            free(it->path); free(it->subdir); free(it->from);
             continue;
         }
 
@@ -1038,7 +1042,7 @@ bool pkg_fetch_all(const char *project_dir,
         }
         if (conflict) {
             free(it->name); free(it->url); free(it->ref);
-            free(it->path); free(it->from);
+            free(it->path); free(it->subdir); free(it->from);
             continue;
         }
 
@@ -1060,7 +1064,7 @@ bool pkg_fetch_all(const char *project_dir,
             fprintf(stderr, "spice: using cached '%s' @ %s\n",
                     it->name, le->resolved ? le->resolved : le->ref);
             free(it->name); free(it->url); free(it->ref);
-            free(it->path); free(it->from);
+            free(it->path); free(it->subdir); free(it->from);
             continue;
         }
 
@@ -1080,7 +1084,7 @@ bool pkg_fetch_all(const char *project_dir,
             fprintf(stderr, "spice: failed to fetch '%s'\n", it->name);
             ok = false;
             free(it->name); free(it->url); free(it->ref);
-            free(it->path); free(it->from);
+            free(it->path); free(it->subdir); free(it->from);
             continue;
         }
 
@@ -1102,9 +1106,14 @@ bool pkg_fetch_all(const char *project_dir,
             free(resolved);
         }
 
-        /* Read transitive deps from this spice's build.tur */
+        /* Read transitive deps from this spice's build.tur.
+         * If :subdir is set, the manifest lives inside the monorepo subdir. */
         char sub_build[4096];
-        snprintf(sub_build, sizeof(sub_build), "%s/build.tur", dest);
+        if (it->subdir)
+            snprintf(sub_build, sizeof(sub_build), "%s/%s/build.tur",
+                     dest, it->subdir);
+        else
+            snprintf(sub_build, sizeof(sub_build), "%s/build.tur", dest);
         struct stat sub_st;
         if (stat(sub_build, &sub_st) == 0) {
             PkgManifest sub;
@@ -1131,9 +1140,10 @@ bool pkg_fetch_all(const char *project_dir,
                     }
                     FetchItem *nit = &queue[q_len++];
                     nit->name     = tur_strdup(ss->name);
-                    nit->url      = ss->url  ? tur_strdup(ss->url)  : NULL;
-                    nit->ref      = ss->ref  ? tur_strdup(ss->ref)  : NULL;
-                    nit->path     = ss->path ? tur_strdup(ss->path) : NULL;
+                    nit->url      = ss->url    ? tur_strdup(ss->url)    : NULL;
+                    nit->ref      = ss->ref    ? tur_strdup(ss->ref)    : NULL;
+                    nit->path     = ss->path   ? tur_strdup(ss->path)   : NULL;
+                    nit->subdir   = ss->subdir ? tur_strdup(ss->subdir) : NULL;
                     nit->is_cmake = false;
                     char from_buf[256];
                     snprintf(from_buf, sizeof(from_buf), "%s@%s",
@@ -1153,14 +1163,14 @@ bool pkg_fetch_all(const char *project_dir,
         }
 
         free(it->name); free(it->url); free(it->ref);
-        free(it->path); free(it->from);
+        free(it->path); free(it->subdir); free(it->from);
     }
 
     /* Free remaining unprocessed items */
     while (q_head < q_len) {
         FetchItem *it = &queue[q_head++];
         free(it->name); free(it->url); free(it->ref);
-        free(it->path); free(it->from);
+        free(it->path); free(it->subdir); free(it->from);
     }
     free(queue);
 
@@ -1314,8 +1324,11 @@ bool pkg_gen_cmake_deps(const char *project_dir,
 
 bool pkg_cmake_build(const char *project_dir,
                      const PkgManifest *manifest,
-                     PkgLockFile *lock) {
+                     PkgLockFile *lock,
+                     const char *target) {
     if (manifest->n_cmake_deps == 0) return true;
+
+    bool wasm = target && strcmp(target, "wasm") == 0;
 
     char cmake_src[4096];
     snprintf(cmake_src, sizeof(cmake_src), "%s/cmake", project_dir);
@@ -1331,9 +1344,12 @@ bool pkg_cmake_build(const char *project_dir,
     /* Configure */
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
+    if (wasm)
+        buf_printf(&cmd, "emcmake cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
+    else
+        buf_printf(&cmd, "cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
     buf_putc(&cmd, '\0');
-    fprintf(stderr, "spice: cmake configure ...\n");
+    fprintf(stderr, "spice: cmake configure%s ...\n", wasm ? " (wasm)" : "");
     int rc = system(cmd.data);
     buf_free(&cmd);
     if (rc != 0) {
@@ -1840,8 +1856,9 @@ static const Symbol *pkg_intern(SymbolTable *st, const char *name) {
  * or #{ :path "..." } for local deps. */
 static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
                                   const char *url, const char *ref,
-                                  const char *path, bool optional) {
-    Form *items[8];
+                                  const char *path, const char *subdir,
+                                  bool optional) {
+    Form *items[10];
     uint32_t n = 0;
     if (path) {
         items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "path"));
@@ -1853,6 +1870,10 @@ static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
         if (ref) {
             items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "ref"));
             items[n++] = form_str(a, SPAN_UNKNOWN, ref, (uint32_t)strlen(ref));
+        }
+        if (subdir) {
+            items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "subdir"));
+            items[n++] = form_str(a, SPAN_UNKNOWN, subdir, (uint32_t)strlen(subdir));
         }
     }
     if (optional) {
@@ -1869,10 +1890,11 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
                                        const Form *dp,
                                        const char *spice_name,
                                        const char *url, const char *ref,
-                                       const char *path, bool optional) {
+                                       const char *path, const char *subdir,
+                                       bool optional) {
     Form *entry_key = form_str(a, SPAN_UNKNOWN,
                                spice_name, (uint32_t)strlen(spice_name));
-    Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, optional);
+    Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir, optional);
 
     uint32_t n = dp->as.list.len;
 
@@ -1926,7 +1948,8 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
 static bool pkg_build_tur_add_spice(const char *build_path,
                                      const char *spice_name,
                                      const char *url, const char *ref,
-                                     const char *path, bool optional) {
+                                     const char *path, const char *subdir,
+                                     bool optional) {
     /* 1. Read raw source (keep for comment preservation). */
     FILE *f = fopen(build_path, "rb");
     if (!f) {
@@ -1994,7 +2017,7 @@ static bool pkg_build_tur_add_spice(const char *build_path,
 
     forms[dp_idx] = pkg_defpackage_add_spice(
             &arena, &st, forms[dp_idx],
-            spice_name, url, ref, path, optional);
+            spice_name, url, ref, path, subdir, optional);
 
     /* 4. Re-emit with comment preservation. */
     Buf out;
@@ -2052,10 +2075,11 @@ static bool pkg_build_tur_add_spice(const char *build_path,
 
 int cmd_pkg_add(int argc, char **argv) {
     /* Usage: tur add <url-or-path> [--ref <ref>] [--name <name>]
-     *                              [--path] [--optional] */
+     *                              [--path] [--subdir <dir>] [--optional] */
     const char *url_or_path   = NULL;
     const char *ref           = NULL;
     const char *name_override = NULL;
+    const char *subdir        = NULL;
     bool        is_path       = false;
     bool        optional      = false;
 
@@ -2066,6 +2090,8 @@ int cmd_pkg_add(int argc, char **argv) {
             name_override = argv[++i];
         } else if (strcmp(argv[i], "--path") == 0) {
             is_path = true;
+        } else if (strcmp(argv[i], "--subdir") == 0 && i + 1 < argc) {
+            subdir = argv[++i];
         } else if (strcmp(argv[i], "--optional") == 0) {
             optional = true;
         } else if (argv[i][0] != '-') {
@@ -2077,7 +2103,7 @@ int cmd_pkg_add(int argc, char **argv) {
         }
     }
     if (!url_or_path) {
-        fprintf(stderr, "usage: tur add <url> [--ref <ref>] [--name <name>]\n"
+        fprintf(stderr, "usage: tur add <url> [--ref <ref>] [--name <name>] [--subdir <dir>]\n"
                         "       tur add <path> --path\n");
         return 1;
     }
@@ -2146,7 +2172,8 @@ int cmd_pkg_add(int argc, char **argv) {
     const char *spice_url  = is_path ? NULL : url_or_path;
     const char *spice_path = is_path ? url_or_path : NULL;
     if (!pkg_build_tur_add_spice("build.tur", name_buf,
-                                  spice_url, ref, spice_path, optional)) {
+                                  spice_url, ref, spice_path,
+                                  is_path ? NULL : subdir, optional)) {
         pkg_manifest_free(&m);
         return 1;
     }
@@ -2164,6 +2191,7 @@ int cmd_pkg_add(int argc, char **argv) {
     } else {
         ns->url = tur_strdup(url_or_path);
         if (ref) ns->ref = tur_strdup(ref);
+        if (subdir) ns->subdir = tur_strdup(subdir);
     }
 
     /* Fetch immediately and update tur.lock */
@@ -2350,7 +2378,7 @@ int cmd_pkg_fetch(int argc, char **argv) {
         if (ok) {
             if (!pkg_gen_cmake_deps(".", &m)) {
                 ok = false;
-            } else if (!pkg_cmake_build(".", &m, &lock)) {
+            } else if (!pkg_cmake_build(".", &m, &lock, NULL)) {
                 ok = false;
             }
         }

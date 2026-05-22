@@ -78,7 +78,7 @@ A **fact** (or **datum**) is a tuple: `[entity, attribute, value, tx]`
 
 ### Session 1: Core Concepts (30 min reading + exercises)
 
-**File:** `docs/tutorials/eavt/01-concepts.md`
+**File:** `docs/tutorials/datalog/01-concepts.md`
 
 - What is EAVT?
 - Why immutability matters
@@ -93,7 +93,7 @@ A **fact** (or **datum**) is a tuple: `[entity, attribute, value, tx]`
 
 ### Session 2: Minimal Implementation (45 min)
 
-**File:** `docs/tutorials/eavt/02-minimal-impl.md`
+**File:** `docs/tutorials/datalog/02-minimal-impl.md`
 
 - Define the Datum type
 - Basic database structure
@@ -101,58 +101,58 @@ A **fact** (or **datum**) is a tuple: `[entity, attribute, value, tx]`
 - `q` — simple queries
 - `db-as-of` — temporal queries
 
-**Code:** `examples/eavt/minimal.tur`
+**Code:** `examples/datalog/minimal.tur`
 
 ### Session 3: Query API (60 min)
 
-**File:** `docs/tutorials/eavt/03-query-api.md`
+**File:** `docs/tutorials/datalog/03-query-api.md`
 
 - Query combinators: `where`, `and`, `or`, `not`
 - Value constraints: `=`, `>`, `<`, `in`
 - Pull API: get entity with all attributes
 - Aggregations: count, distinct
 
-**Code:** `examples/eavt/query.tur`
+**Code:** `examples/datalog/query.tur`
 
 ### Session 4: Indexing (45 min)
 
-**File:** `docs/tutorials/eavt/04-indexing.md`
+**File:** `docs/tutorials/datalog/04-indexing.md`
 
 - EAVT index (by default)
 - AEVT index (for attribute-based queries)
 - VAET index (for value-based queries)
 - Performance tradeoffs
 
-**Code:** `examples/eavt/indexed.tur`
+**Code:** `examples/datalog/indexed.tur`
 
 ### Session 5: Schema (Optional, 30 min)
 
-**File:** `docs/tutorials/eavt/05-schema.md`
+**File:** `docs/tutorials/datalog/05-schema.md`
 
 - Defining schemas for validation
 - Cardinality (one/many)
 - Type constraints
 - Reference attributes
 
-**Code:** `examples/eavt/schema.tur`
+**Code:** `examples/datalog/schema.tur`
 
 ### Session 6: Persistence (45 min)
 
-**File:** `docs/tutorials/eavt/06-persistence.md`
+**File:** `docs/tutorials/datalog/06-persistence.md`
 
 - Serializing the database
 - Loading from disk
 - Transaction log
 - Snapshots
 
-**Code:** `examples/eavt/persistent.tur`
+**Code:** `examples/datalog/persistent.tur`
 
 ---
 
 ## 3. Example Code Structure
 
 ```
-examples/eavt/
+examples/datalog/
 ├── minimal.tur          ;; ~50 lines: core types + basic ops
 ├── query.tur            ;; ~100 lines: full query API
 ├── indexed.tur          ;; ~80 lines: indexed database
@@ -170,7 +170,7 @@ examples/eavt/
 ### 4.1 The Datum
 
 ```turmeric
-;; examples/eavt/minimal.tur
+;; examples/datalog/minimal.tur
 
 ;; Entity: a unique identifier (long for now, could be UUID)
 (defalias Entity int64)
@@ -510,7 +510,7 @@ defn retract [db : Database, e : Entity, a : Attribute] : Database
 ### 7.1 Defining the Schema (Optional)
 
 ```turmeric
-;; examples/eavt/blog.tur
+;; examples/datalog/blog.tur
 
 ;; Schema attributes (optional - EAVT doesn't require schema)
 def user/name   ":user/name"
@@ -639,7 +639,7 @@ defn example_queries []
 ### 8.1 Schema Types
 
 ```turmeric
-;; examples/eavt/schema.tur
+;; examples/datalog/schema.tur
 
 ;; Attribute cardinality
 defalias Cardinality
@@ -773,7 +773,7 @@ Storage format (v1):
 ### 9.2 Serialization Code
 
 ```turmeric
-;; examples/eavt/persistent.tur
+;; examples/datalog/persistent.tur
 
 (defalias SerializedDatum (Vector uint8))
 
@@ -904,7 +904,7 @@ defn load_db [path : cstr] : (Result Database cstr)
 ### 10.1 Unit Tests
 
 ```turmeric
-;; tests/eavt/test_minimal.tur
+;; tests/datalog/test_minimal.tur
 
 defn test_empty_db []
   (let [db (empty_db)]
@@ -935,7 +935,7 @@ defn test_query []
 ### 10.2 Query Tests
 
 ```turmeric
-;; tests/eavt/test_query.tur
+;; tests/datalog/test_query.tur
 
 defn test_and_query []
   (let [db (empty_db)]
@@ -969,7 +969,7 @@ defn test_not_query []
 ### 10.3 Index Tests
 
 ```turmeric
-;; tests/eavt/test_indexed.tur
+;; tests/datalog/test_indexed.tur
 
 defn test_eavt_index []
   (let [db (empty_indexed_db)]
@@ -1000,7 +1000,7 @@ defn test_vae_index []
 ### 10.4 Serialization Tests
 
 ```turmeric
-;; tests/eavt/test_persistent.tur
+;; tests/datalog/test_persistent.tur
 
 defn test_serialize_deserialize []
   (let [db (empty_db)]
@@ -1032,7 +1032,7 @@ defn test_serialize_deserialize []
 - [ ] Define `Database` struct
 - [ ] Implement `empty_db`, `assert!`, basic `q`
 - [ ] Write tests for minimal implementation
-- [ ] Create `examples/eavt/minimal.tur`
+- [ ] Create `examples/datalog/minimal.tur`
 
 ### Phase 2: Query API (2-3 days)
 - [ ] Implement query combinators (`and_q`, `or_q`, `not_q`)
@@ -1041,7 +1041,7 @@ defn test_serialize_deserialize []
 - [ ] Implement temporal queries (`db_as_of`, `history`)
 - [ ] Implement retraction support
 - [ ] Write query tests
-- [ ] Create `examples/eavt/query.tur`
+- [ ] Create `examples/datalog/query.tur`
 
 ### Phase 3: Indexing (2 days)
 - [ ] Define index structures
@@ -1049,30 +1049,30 @@ defn test_serialize_deserialize []
 - [ ] Implement `assert_indexed!` with index updates
 - [ ] Implement indexed query functions (`q_eavt`, `q_a`, `q_v`, etc.)
 - [ ] Write index tests
-- [ ] Create `examples/eavt/indexed.tur`
+- [ ] Create `examples/datalog/indexed.tur`
 
 ### Phase 4: Example Application (1-2 days)
 - [ ] Create blog system example
 - [ ] Implement schema system (optional)
 - [ ] Create comprehensive examples
-- [ ] Create `examples/eavt/blog.tur`
-- [ ] Create `examples/eavt/schema.tur`
+- [ ] Create `examples/datalog/blog.tur`
+- [ ] Create `examples/datalog/schema.tur`
 
 ### Phase 5: Persistence (2 days)
 - [ ] Design serialization format
 - [ ] Implement serialization functions
 - [ ] Implement deserialization functions
 - [ ] Write serialization tests
-- [ ] Create `examples/eavt/persistent.tur`
+- [ ] Create `examples/datalog/persistent.tur`
 
 ### Phase 6: Documentation (2-3 days)
-- [ ] Write `docs/tutorials/eavt/01-concepts.md`
-- [ ] Write `docs/tutorials/eavt/02-minimal-impl.md`
-- [ ] Write `docs/tutorials/eavt/03-query-api.md`
-- [ ] Write `docs/tutorials/eavt/04-indexing.md`
-- [ ] Write `docs/tutorials/eavt/05-schema.md` (optional)
-- [ ] Write `docs/tutorials/eavt/06-persistence.md`
-- [ ] Write `examples/eavt/README.md`
+- [ ] Write `docs/tutorials/datalog/01-concepts.md`
+- [ ] Write `docs/tutorials/datalog/02-minimal-impl.md`
+- [ ] Write `docs/tutorials/datalog/03-query-api.md`
+- [ ] Write `docs/tutorials/datalog/04-indexing.md`
+- [ ] Write `docs/tutorials/datalog/05-schema.md` (optional)
+- [ ] Write `docs/tutorials/datalog/06-persistence.md`
+- [ ] Write `examples/datalog/README.md`
 
 **Total estimated effort:** 11-18 days
 
@@ -1144,7 +1144,7 @@ Immutable data structures provide...
 ## Running the Example
 
 ```bash
-turmeric examples/eavt/minimal.tur
+turmeric examples/datalog/minimal.tur
 ```
 
 ## Exercises

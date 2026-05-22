@@ -6,7 +6,7 @@ description: Create a database and a query system to go with it
 
 # Datalog Tutorial Pt. 4: Indexing
 
-This session covers `examples/eavt/indexed.tur`, which adds a hash-chained EAVT
+This session covers `examples/datalog/indexed.tur`, which adds a hash-chained EAVT
 index on top of the minimal database. The index maps `(entity, attr)` pairs to
 linked lists of matching datum pointers, giving O(1) average-case lookup for the
 most common query pattern.
@@ -14,7 +14,7 @@ most common query pattern.
 Run the example:
 
 ```sh
-./build/tur examples/eavt/indexed.tur
+./build/tur examples/datalog/indexed.tur
 ```
 
 ---
@@ -336,4 +336,4 @@ The four example files form a progression:
 | `datalog.tur` | Term ADT, Binding, pattern matching, join via clause chains | ~350 |
 
 Each file is self-contained and can be run independently with
-`./build/tur examples/eavt/<file>.tur`.
+`./build/tur examples/datalog/<file>.tur`.

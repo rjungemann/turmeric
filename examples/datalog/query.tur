@@ -8,7 +8,7 @@
 ;;   - History (sorted by tx)
 ;;   - Retraction (encoding as :db/retract facts)
 ;;
-;; Run with: ./build/tur examples/eavt/query.tur
+;; Run with: ./build/tur examples/datalog/query.tur
 
 ;; ============================================================
 ;; Value ADT

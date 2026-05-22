@@ -6,14 +6,14 @@ description: Create a database and a query system to go with it
 
 # EAVT Database: Minimal ImplementationDatalog Tutorial Pt. 2: Minimal Implementation
 
-This session walks through `examples/eavt/minimal.tur` line by line. By the
+This session walks through `examples/datalog/minimal.tur` line by line. By the
 end you will have a working, append-only fact database with a predicate-based
 query interface in roughly 150 lines of Turmeric.
 
 Run the complete example at any time:
 
 ```sh
-./build/tur examples/eavt/minimal.tur
+./build/tur examples/datalog/minimal.tur
 ```
 
 ---

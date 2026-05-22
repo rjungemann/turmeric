@@ -526,6 +526,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             stub->n_fields = 0;
             stub->fields = NULL;
             stub->is_copy = false;
+            stub->is_linear = false;
             stub->needs_drop_glue = false;
             stub->origin_file_id = name_f->span.file_id;
             elab_register_struct_def(&e, stub);

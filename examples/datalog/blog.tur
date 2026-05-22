@@ -4,7 +4,7 @@
 ;; and comments. Shows how to model relationships as EntityVal references,
 ;; query across entities, and print human-readable output.
 ;;
-;; Run with: ./build/tur examples/eavt/blog.tur
+;; Run with: ./build/tur examples/datalog/blog.tur
 
 ;; ============================================================
 ;; Value ADT

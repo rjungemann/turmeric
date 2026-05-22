@@ -9,7 +9,7 @@
 ;;   eavt_entry: [entity :int64, attr :int64, datum :int64, next :ptr]
 ;;   eavt_idx:   [buckets :ptr, nbuckets :size_t]
 ;;
-;; Run with: ./build/tur examples/eavt/indexed.tur
+;; Run with: ./build/tur examples/datalog/indexed.tur
 
 ;; ============================================================
 ;; Value ADT

@@ -2572,8 +2572,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Def (top-level binding) ---------------------------------------- */
     case EX_DEF: {
-        TuriValue v = eval_expr(env, frame, e->as.def_.init);
-        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        TuriValue v;
+        if (e->as.def_.struct_def) {
+            v = turi_struct_type_val(e->as.def_.struct_def->name);
+        } else {
+            v = eval_expr(env, frame, e->as.def_.init);
+            if (turi_is_error(v) || env->returning || env->throwing) return v;
+        }
         turi_env_set(env, e->as.def_.binding->name->name, v);
         return v;
     }
@@ -3910,6 +3915,9 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
     }
     case TURI_REF:
         snprintf(buf, cap, "#<ref>");
+        break;
+    case TURI_STRUCT_TYPE:
+        snprintf(buf, cap, "#<struct-type %s>", v.as_cstr ? v.as_cstr : "?");
         break;
     }
 }

@@ -306,17 +306,17 @@ steps:
       You have completed the EAVT tutorial!
 
       Explore the full example files:
-        examples/eavt/minimal.tur  -- core types and query combinators
-        examples/eavt/query.tur    -- extended query API with temporal features
-        examples/eavt/indexed.tur  -- EAVT hash index for O(1) lookups
-        examples/eavt/blog.tur     -- multi-entity blog domain example
-        examples/eavt/datalog.tur  -- Datalog-style pattern query engine
+        examples/datalog/minimal.tur  -- core types and query combinators
+        examples/datalog/query.tur    -- extended query API with temporal features
+        examples/datalog/indexed.tur  -- EAVT hash index for O(1) lookups
+        examples/datalog/blog.tur     -- multi-entity blog domain example
+        examples/datalog/datalog.tur  -- Datalog-style pattern query engine
 
       Read the tutorial docs:
-        docs/tutorials/eavt/01-concepts.md     -- EAVT model and comparison with SQL
-        docs/tutorials/eavt/02-minimal-impl.md -- core implementation walkthrough
-        docs/tutorials/eavt/03-query-api.md    -- value equality, as-of, pull, history
-        docs/tutorials/eavt/04-indexing.md     -- hash index design and trade-offs
+        docs/tutorials/datalog/01-concepts.md     -- EAVT model and comparison with SQL
+        docs/tutorials/datalog/02-minimal-impl.md -- core implementation walkthrough
+        docs/tutorials/datalog/03-query-api.md    -- value equality, as-of, pull, history
+        docs/tutorials/datalog/04-indexing.md     -- hash index design and trade-offs
     expected: ""
     hints: []
     success_message: "Well done! You built an immutable EAVT database from scratch."

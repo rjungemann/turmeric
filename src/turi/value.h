@@ -27,6 +27,7 @@ typedef enum TuriTag {
     TURI_THROW,          /* in-flight exception: TuriThrow* (Phase S4) */
     TURI_FUTURE,         /* async future handle: TuriFuture* (Phase S7) */
     TURI_REF,            /* mutable borrow reference: void* to EvalBinding */
+    TURI_STRUCT_TYPE,    /* struct type descriptor: as_cstr holds the name */
 } TuriTag;
 
 typedef struct TuriValue {
@@ -63,6 +64,9 @@ static inline TuriValue turi_struct_val(TuriStruct *s) {
 }
 static inline TuriValue turi_throw_val(TuriThrow *t) {
     return (TuriValue){TURI_THROW, .as_throw = t};
+}
+static inline TuriValue turi_struct_type_val(const char *name) {
+    return (TuriValue){TURI_STRUCT_TYPE, .as_cstr = name};
 }
 static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 

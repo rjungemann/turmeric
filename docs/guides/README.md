@@ -102,10 +102,10 @@ see the task plan for progress.
 
 ### EAVT Database (multi-chapter)
 
-- **[eavt/01-concepts.md](eavt/01-concepts.md)** — EAVT model, immutability, comparison with SQL
-- **[eavt/02-minimal-impl.md](eavt/02-minimal-impl.md)** — Walk through `minimal.tur` line by line
-- **[eavt/03-query-api.md](eavt/03-query-api.md)** — Walk through `query.tur` additions
-- **[eavt/04-indexing.md](eavt/04-indexing.md)** — Why indexing matters and how `indexed.tur` works
+- **[datalog/01-concepts.md](datalog/01-concepts.md)** — EAVT model, immutability, comparison with SQL
+- **[datalog/02-minimal-impl.md](datalog/02-minimal-impl.md)** — Walk through `minimal.tur` line by line
+- **[datalog/03-query-api.md](datalog/03-query-api.md)** — Walk through `query.tur` additions
+- **[datalog/04-indexing.md](datalog/04-indexing.md)** — Why indexing matters and how `indexed.tur` works
 
 ## Package Management
 

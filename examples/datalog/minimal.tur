@@ -9,7 +9,7 @@
 ;;   Value       -- a typed payload (long, string, entity ref, ...)
 ;;   Transaction -- a monotonic counter stamped on each assert
 ;;
-;; Run with: ./build/tur examples/eavt/minimal.tur
+;; Run with: ./build/tur examples/datalog/minimal.tur
 
 ;; ============================================================
 ;; Value ADT -- typed payload stored in each fact
