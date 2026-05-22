@@ -1,0 +1,13 @@
+; LZ4 fixture: seq/from-range-step -- integer Range to Seq with custom step.
+
+(load "stdlib/range.tur")
+
+(defn main [] :void
+  ; step 2 over [0,8]: 0 2 4 6 8
+  (seq-for-each println (seq/from-range-step 2 (closed-range 0 8)))
+  (println -1)
+  ; step 3 over [0,9): 0 3 6
+  (seq-for-each println (seq/from-range-step 3 (closed-open-range 0 9)))
+  (println -2)
+  ; step 1 over (0,4]: 1 2 3 4
+  (seq-for-each println (seq/from-range-step 1 (open-closed-range 0 4))))

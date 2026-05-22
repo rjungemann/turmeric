@@ -1,6 +1,6 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2 complete. LZ3 complete. LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0 complete. LZ1 complete. LZ2 complete. LZ3 complete. LZ4 complete. All phases done.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
@@ -390,21 +390,31 @@ seq/from-range-step : int (Range int) -> (Seq int)
 ```
 
 **Tasks:**
-- [ ] Define `RangeBound` variants and `Range` struct
-- [ ] Implement all constructors with validation (lower <= upper; if equal, at least one inclusive)
-- [ ] Implement all predicates
-- [ ] Implement `range-span`, `range-gap`, `range-intersection`
-- [ ] Implement `seq/from-range` and `seq/from-range-step` for integer ranges
-- [ ] Add `;;;` docstrings for all exported functions
-- [ ] Write fixtures in `tests/fixtures/range/`:
-  - Construction and validation
-  - `range-contains?` for each bound combination
-  - `range-overlaps?` vs `range-connected?` distinction
+- [x] Define `RangeBound` (heap struct) and `Range` (heap struct) with inline-C helpers
+- [x] Implement all 10 constructors
+- [x] Implement all 12 predicates
+- [x] Implement `range-span`, `range-gap`, `range-intersection`
+- [x] Implement `seq/from-range` and `seq/from-range-step` for integer ranges
+- [x] Add `;;;` docstrings for all exported functions
+- [x] Write fixtures in `tests/fixtures/range-*/`:
+  - `range-constructors`: contains? for every bound type
+  - `range-predicates`: singleton, empty, nonempty, bounded/unbounded flags
+  - `range-connected-overlaps`: connected vs overlaps distinction
+  - `range-encloses`: encloses? with bounded and unbounded ranges
   - `range-span`, `range-gap`, `range-intersection`
-  - `seq/from-range` produces correct elements
+  - `range-from-range`, `range-from-range-step`: seq conversion
 
-**Exit criterion:** All fixtures pass; empty-range and singleton-range edge cases
-correct; `range-gap` on overlapping ranges signals an error.
+**Exit criterion:** All 9 fixtures pass; empty-range and singleton-range edge cases
+correct; `range-gap` on connected ranges signals an error (aborts).
+
+**Implementation notes:**
+- `RangeBound` and `Range` are plain heap structs allocated via inline-C; no
+  `defstruct` or typeclass machinery needed.
+- Variable names captured by closures must not contain hyphens -- they become
+  C struct member names in the generated closure env struct.  Use short
+  underscore-free names (`hb`, `he`) for captured boolean/value pairs.
+- Abort helpers (`range-abort-not-connected`, etc.) are typed as `:int` so they
+  can appear in if-then branches without a type mismatch against the else branch.
 
 ---
 

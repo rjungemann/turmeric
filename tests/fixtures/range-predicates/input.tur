@@ -1,0 +1,29 @@
+; LZ4 fixture: singleton/empty/nonempty and bounded/unbounded predicates.
+
+(load "stdlib/range.tur")
+
+(defn main [] :void
+  ; singleton
+  (println (singleton-range? (singleton-range 3)))   ; true
+  (println (singleton-range? (closed-range 1 3)))    ; false
+  (println (singleton-range? (open-range 3 3)))      ; false
+  ; empty
+  (println (empty-range? (open-range 3 3)))          ; true  -- (3,3) has no elements
+  (println (empty-range? (closed-open-range 3 3)))   ; true  -- [3,3) has no elements
+  (println (empty-range? (singleton-range 3)))       ; false
+  (println (empty-range? (closed-range 1 5)))        ; false
+  (println (empty-range? (at-least-range 0)))        ; false -- unbounded never empty
+  ; nonempty
+  (println (nonempty-range? (closed-range 1 5)))     ; true
+  (println (nonempty-range? (open-range 3 3)))       ; false
+  ; bounded checks
+  (println (bounded-range?   (closed-range 1 5)))    ; true
+  (println (bounded-range?   (at-least-range 1)))    ; false
+  (println (bounded-above?   (closed-range 1 5)))    ; true
+  (println (bounded-above?   (at-least-range 1)))    ; false
+  (println (bounded-below?   (closed-range 1 5)))    ; true
+  (println (bounded-below?   (at-most-range 5)))     ; false
+  (println (unbounded-above? (at-least-range 1)))    ; true
+  (println (unbounded-above? (closed-range 1 5)))    ; false
+  (println (unbounded-below? (at-most-range 5)))     ; true
+  (println (unbounded-below? (closed-range 1 5))))   ; false

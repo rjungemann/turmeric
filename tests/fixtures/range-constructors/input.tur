@@ -1,0 +1,32 @@
+; LZ4 fixture: range constructors and range-contains? for each bound type.
+
+(load "stdlib/range.tur")
+
+(defn main [] :void
+  ; closed [1,5]: contains 1, 3, 5; not 0 or 6
+  (println (range-contains? (closed-range 1 5) 1))   ; true
+  (println (range-contains? (closed-range 1 5) 3))   ; true
+  (println (range-contains? (closed-range 1 5) 5))   ; true
+  (println (range-contains? (closed-range 1 5) 0))   ; false
+  (println (range-contains? (closed-range 1 5) 6))   ; false
+  ; open (1,5): excludes 1 and 5
+  (println (range-contains? (open-range 1 5) 1))     ; false
+  (println (range-contains? (open-range 1 5) 3))     ; true
+  (println (range-contains? (open-range 1 5) 5))     ; false
+  ; closed-open [1,5)
+  (println (range-contains? (closed-open-range 1 5) 1))  ; true
+  (println (range-contains? (closed-open-range 1 5) 5))  ; false
+  ; open-closed (1,5]
+  (println (range-contains? (open-closed-range 1 5) 1))  ; false
+  (println (range-contains? (open-closed-range 1 5) 5))  ; true
+  ; unbounded ranges
+  (println (range-contains? (at-least-range 3) 3))        ; true
+  (println (range-contains? (at-least-range 3) 2))        ; false
+  (println (range-contains? (greater-than-range 3) 3))    ; false
+  (println (range-contains? (greater-than-range 3) 4))    ; true
+  (println (range-contains? (at-most-range 5) 5))         ; true
+  (println (range-contains? (at-most-range 5) 6))         ; false
+  (println (range-contains? (less-than-range 5) 5))       ; false
+  (println (range-contains? (less-than-range 5) 4))       ; true
+  (println (range-contains? (unbounded-range) 999))       ; true
+  (println (range-contains? (unbounded-range) -999)))     ; true

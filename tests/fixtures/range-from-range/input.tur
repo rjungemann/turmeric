@@ -1,0 +1,23 @@
+; LZ4 fixture: seq/from-range -- convert integer Range to lazy Seq.
+
+(load "stdlib/range.tur")
+
+(defn main [] :void
+  ; closed [1,4]: 1 2 3 4
+  (seq-for-each println (seq/from-range (closed-range 1 4)))
+  (println -1)
+  ; open (1,5): 2 3 4
+  (seq-for-each println (seq/from-range (open-range 1 5)))
+  (println -2)
+  ; closed-open [0,5): 0 1 2 3 4
+  (seq-for-each println (seq/from-range (closed-open-range 0 5)))
+  (println -3)
+  ; open-closed (0,4]: 1 2 3 4
+  (seq-for-each println (seq/from-range (open-closed-range 0 4)))
+  (println -4)
+  ; singleton [3,3]: 3
+  (seq-for-each println (seq/from-range (singleton-range 3)))
+  (println -5)
+  ; empty (3,3): nothing
+  (seq-for-each println (seq/from-range (open-range 3 3)))
+  (println -6))
