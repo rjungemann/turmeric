@@ -1,12 +1,12 @@
 # Struct Inspection -- Implementation Plan (SI0--SI4)
 
-> **Status:** Not started. SI0--SI4 planned.
+> **Status:** SI0 complete. SI1 complete. SI2--SI4 planned.
 >
 > **Prerequisites:** Phase 15 (typeclasses: `Show`, `Display`, `Debug`), Phase
 > R0 (`Display`/`Debug` typeclass definitions), Phase B1 (Clone infrastructure).
 > No effect-row interaction is required.
 >
-> **Last updated:** 2026-05-14
+> **Last updated:** 2026-05-22
 
 ---
 
@@ -92,20 +92,16 @@ are complete.
 
 ### Fixtures
 
-- [ ] `tests/fixtures/show/show-int.tur` -- `(show 42)` returns `"42"`.
-- [ ] `tests/fixtures/show/show-cstr.tur` -- `(show "hello")` returns `"hello"`.
-- [ ] `tests/fixtures/show/show-float.tur` -- `(show 3.14)` returns `"3.14"` (or
-  `"3.140000"` -- decide and document).
-- [ ] `tests/fixtures/show/show-pair.tur` -- `(show (pair-new 1 2))` returns
-  `"(1, 2)"`.
-- [ ] `tests/fixtures/show/show-option.tur` -- `(show (some 99))` returns
-  `"some(99)"` and `(show (none))` returns `"none"`.
-- [ ] `tests/fixtures/show/show-list.tur` -- `(show (cons 1 (cons 2 (nil-value))))` returns
-  `"[1, 2]"`.
-- [ ] `tests/fixtures/show/derive-show-struct.tur` -- a user-defined struct uses
-  `derive-show` and `show` returns `"Point { x = 3, y = 4 }"`.
-- [ ] `tests/fixtures/show/derive-show-nested.tur` -- a struct whose fields are
-  themselves `Show`-able; `show` recurses correctly.
+- [x] `tests/fixtures/show-int/` -- `(show 42)` returns `"42"`.
+- [x] `tests/fixtures/show-cstr/` -- `(show "hello")` returns `"hello"`.
+- [x] `tests/fixtures/show-float/` -- `(show 3.14)` returns `"3.14"` (`%g` -- decided in Open Questions #2).
+- [x] `tests/fixtures/show-pair/` -- `(show (pair-new 1 2))` returns `"(1, 2)"`.
+- [x] `tests/fixtures/show-option/` -- `(show (some 99))` returns `"some(99)"` and `(show (none))` returns `"none"`.
+- [x] `tests/fixtures/show-list/` -- `(show (cons 1 (nil-value)))` returns `"[1]"`.
+- [x] `tests/fixtures/derive-show-struct/` -- a user-defined struct uses `derive-show` and `show` returns `"Point { x = 3, y = 4 }"`.
+- [x] `tests/fixtures/derive-show-nested/` -- a struct whose fields are themselves `Show`-able; `show` recurses correctly.
+
+Note: fixtures live flat under `tests/fixtures/` (not in a `show/` subdirectory) to match the existing test runner convention.
 
 ### String format conventions (decided here, implemented in SI1+)
 
@@ -175,15 +171,16 @@ arena allocator could eliminate the overhead, but that is out of scope here.
 
 ### Tasks
 
-- [ ] Replace `Show [int]` placeholder with formatted C inline.
-- [ ] Replace `Show [float32]` placeholder.
-- [ ] Replace `Show [int8]`, `Show [int16]`, `Show [int32]`.
-- [ ] Replace `Show [uint8]`, `Show [uint16]`, `Show [uint32]`, `Show [uint64]`.
-- [ ] Add `Show [bool]`.
-- [ ] Fix `Display [int]` and `Debug [int]` to call the same formatting logic.
-- [ ] Fix `Display [ptr<void>]` and `Debug [ptr<void>]` (result) to emit
+- [x] Replace `Show [int]` placeholder with formatted C inline.
+- [x] Replace `Show [float32]` placeholder.
+- [x] Replace `Show [int8]`, `Show [int16]`, `Show [int32]`.
+- [x] Replace `Show [uint8]`, `Show [uint16]`, `Show [uint32]`, `Show [uint64]`.
+- [x] Add `Show [bool]`.
+- [x] Fix `Display [int]` and `Debug [int]` to call the same formatting logic.
+- [x] Fix `Display [ptr<void>]` and `Debug [ptr<void>]` (result) to emit
   `"ok(...)"` / `"err(...)"` with the inner value's representation.
-- [ ] All `show-int.tur`, `show-cstr.tur`, `show-float.tur` fixtures pass.
+- [x] All `show-int.tur`, `show-cstr.tur`, `show-float.tur` fixtures pass.
+- [x] New fixtures: `show-bool/`, `display-int/`, `debug-int/`.
 
 **Exit criterion:** Every primitive `Show` instance returns the actual value as
 a string. Existing tests continue to pass.

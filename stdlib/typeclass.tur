@@ -158,6 +158,11 @@
 (definstance Show [cstr]
   (show [x] x))
 
+;;; Show [bool] -- Show instance for bool.
+(definstance Show [bool]
+  (show [x] :cstr
+    (if x "true" "false")))
+
 ;;; Show [int8] -- Show instance for int8.
 (definstance Show [int8]
   (show [x] :cstr
@@ -554,11 +559,22 @@
 ;; Instances for primitive types (Display/Debug)
 ;;; Display [int] -- Display instance for int.
 (definstance Display [int]
-  (display [x] :cstr "<int>"))
+  (display [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
 
 ;;; Debug [int] -- Debug instance for int.
 (definstance Debug [int]
-  (debug [x] :cstr "<int>"))
+  (debug [x] :cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "int(%lld)", (long long)x);
+    return (const char *)buf;
+    ```))
+
 
 ;;; Display [ptr<void>] -- Display instance for result<T,E> represented as ptr<void>.
 ;; Phase R1: Display, Debug, Error instances for result<T, E>
@@ -568,12 +584,13 @@
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
     if (res == NULL) return "err";
+    char *buf = (char *)malloc(48);
     if (res->is_ok) {
-        /* For simplicity, just return a placeholder - proper formatting requires type info */
-        return "ok";
+        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
     } else {
-        return "err";
+        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
     }
+    return (const char *)buf;
     ```))
 
 ;;; Debug [ptr<void>] -- Debug instance for result<T,E> represented as ptr<void>.
@@ -581,12 +598,14 @@
   (debug [x] :cstr
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
-    if (res == NULL) return "err";
+    if (res == NULL) return "Result::err";
+    char *buf = (char *)malloc(64);
     if (res->is_ok) {
-        return "ok(...)";
+        snprintf(buf, 64, "Result::ok(%lld)", (long long)res->ok_val);
     } else {
-        return "err(...)";
+        snprintf(buf, 64, "Result::err(%lld)", (long long)res->err_val);
     }
+    return (const char *)buf;
     ```))
 
 ;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
