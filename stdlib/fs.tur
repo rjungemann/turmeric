@@ -1,0 +1,474 @@
+;; stdlib/fs.tur -- extended file system operations.
+;;
+;; Higher-level wrappers around sys/stat.h, dirent.h, fnmatch.h, and
+;; standard libc file functions.  These complement the low-level I/O
+;; primitives in io.tur.
+
+;;; fs/stat -- return file metadata for a path.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   An opaque pointer (as :int) to a { size mtime mode } triple, or 0
+;;;   if the path is inaccessible.  Inspect with fs/stat-size, fs/stat-mtime,
+;;;   fs/stat-mode.  Free with fs/stat-free.
+;;;
+;;; Example:
+;;;   (let [s (fs/stat "/etc/hosts")] (fs/stat-size s))
+;;;
+;;; Since: Phase B2
+(defn fs/stat [path :cstr] :int
+  ```c
+  #include <sys/stat.h>
+  struct stat st;
+  if (stat(path, &st) != 0) return 0;
+  int64_t *info = malloc(3 * sizeof(int64_t));
+  info[0] = (int64_t)st.st_size;
+  info[1] = (int64_t)st.st_mtime;
+  info[2] = (int64_t)st.st_mode;
+  return (int64_t)(intptr_t)info;
+  ```)
+
+;;; fs/stat-free -- free the stat result returned by fs/stat.
+;;;
+;;; Parameters:
+;;;   s -- stat pointer from fs/stat (may be 0)
+;;;
+;;; Example:
+;;;   (fs/stat-free s)
+;;;
+;;; Since: Phase B2
+(defn fs/stat-free [s :int] :void
+  ```c
+  if (s) free((void*)(intptr_t)s);
+  ```)
+
+;;; fs/stat-size -- extract file size from a stat result.
+;;;
+;;; Parameters:
+;;;   s -- stat pointer from fs/stat
+;;;
+;;; Returns:
+;;;   File size in bytes as :int.
+;;;
+;;; Example:
+;;;   (fs/stat-size (fs/stat "/etc/hosts"))  ; => 221
+;;;
+;;; Since: Phase B2
+(defn fs/stat-size [s :int] :int
+  ```c
+  return ((int64_t*)(intptr_t)s)[0];
+  ```)
+
+;;; fs/stat-mtime -- extract modification time from a stat result.
+;;;
+;;; Parameters:
+;;;   s -- stat pointer from fs/stat
+;;;
+;;; Returns:
+;;;   Modification time as a Unix timestamp (:int).
+;;;
+;;; Example:
+;;;   (fs/stat-mtime (fs/stat "/etc/hosts"))
+;;;
+;;; Since: Phase B2
+(defn fs/stat-mtime [s :int] :int
+  ```c
+  return ((int64_t*)(intptr_t)s)[1];
+  ```)
+
+;;; fs/stat-mode -- extract file mode bits from a stat result.
+;;;
+;;; Parameters:
+;;;   s -- stat pointer from fs/stat
+;;;
+;;; Returns:
+;;;   File mode bits as :int (same as st_mode from stat(2)).
+;;;
+;;; Example:
+;;;   (fs/stat-mode (fs/stat "/etc/hosts"))  ; => 33188
+;;;
+;;; Since: Phase B2
+(defn fs/stat-mode [s :int] :int
+  ```c
+  return ((int64_t*)(intptr_t)s)[2];
+  ```)
+
+;;; fs/exists? -- test whether a path exists.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   true if stat(2) succeeds on the path, false otherwise.
+;;;
+;;; Example:
+;;;   (fs/exists? "/etc/hosts")  ; => true
+;;;
+;;; Since: Phase B2
+(defn fs/exists? [path :cstr] :bool
+  ```c
+  #include <sys/stat.h>
+  struct stat st;
+  return stat(path, &st) == 0;
+  ```)
+
+;;; fs/file? -- test whether a path is a regular file.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   true if path is a regular file.
+;;;
+;;; Example:
+;;;   (fs/file? "/etc/hosts")  ; => true
+;;;
+;;; Since: Phase B2
+(defn fs/file? [path :cstr] :bool
+  ```c
+  #include <sys/stat.h>
+  struct stat st;
+  if (stat(path, &st) != 0) return false;
+  return S_ISREG(st.st_mode);
+  ```)
+
+;;; fs/dir? -- test whether a path is a directory.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   true if path is a directory.
+;;;
+;;; Example:
+;;;   (fs/dir? "/tmp")  ; => true
+;;;
+;;; Since: Phase B2
+(defn fs/dir? [path :cstr] :bool
+  ```c
+  #include <sys/stat.h>
+  struct stat st;
+  if (stat(path, &st) != 0) return false;
+  return S_ISDIR(st.st_mode);
+  ```)
+
+;;; fs/mkdir -- create a directory with mode 0755.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error (errno set).
+;;;
+;;; Example:
+;;;   (fs/mkdir "/tmp/mydir")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/mkdir [path :cstr] :int
+  ```c
+  #include <sys/stat.h>
+  return (int64_t)mkdir(path, 0755);
+  ```)
+
+;;; fs/mkdirp -- create a directory and all missing parent directories.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 if any mkdir call fails for a reason other than
+;;;   the directory already existing.
+;;;
+;;; Example:
+;;;   (fs/mkdirp "/tmp/a/b/c")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/mkdirp [path :cstr] :int
+  ```c
+  #include <sys/stat.h>
+  #include <errno.h>
+  char *p = strdup(path);
+  int ret = 0;
+  for (char *s = p + 1; *s; s++) {
+    if (*s == '/') {
+      *s = '\0';
+      if (mkdir(p, 0755) != 0 && errno != EEXIST) { ret = -1; break; }
+      *s = '/';
+    }
+  }
+  if (ret == 0 && mkdir(p, 0755) != 0 && errno != EEXIST) ret = -1;
+  free(p);
+  return ret;
+  ```)
+
+;;; fs/rmdir -- remove an empty directory.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (fs/rmdir "/tmp/mydir")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/rmdir [path :cstr] :int
+  ```c
+  return (int64_t)rmdir(path);
+  ```)
+
+;;; fs/rm -- remove a regular file.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (fs/rm "/tmp/tmpfile.txt")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/rm [path :cstr] :int
+  ```c
+  return (int64_t)unlink(path);
+  ```)
+
+;;; fs/rename -- rename or move a file.
+;;;
+;;; Parameters:
+;;;   src -- source path cstr
+;;;   dst -- destination path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (fs/rename "/tmp/a.txt" "/tmp/b.txt")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/rename [src :cstr dst :cstr] :int
+  ```c
+  return (int64_t)rename(src, dst);
+  ```)
+
+;;; fs/copy -- copy a file from src to dst using a read/write loop.
+;;;
+;;; Parameters:
+;;;   src -- source path cstr
+;;;   dst -- destination path cstr
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (fs/copy "/etc/hosts" "/tmp/hosts.bak")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/copy [src :cstr dst :cstr] :int
+  ```c
+  FILE *in = fopen(src, "rb");
+  if (!in) return -1;
+  FILE *out = fopen(dst, "wb");
+  if (!out) { fclose(in); return -1; }
+  char buf[8192];
+  size_t n;
+  int ret = 0;
+  while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+    if (fwrite(buf, 1, n, out) != n) { ret = -1; break; }
+  }
+  fclose(in);
+  fclose(out);
+  return ret;
+  ```)
+
+;;; fs/glob -- list directory entries matching a fnmatch(3) pattern.
+;;;
+;;; Parameters:
+;;;   dir     -- directory to search (e.g., "/tmp")
+;;;   pattern -- fnmatch pattern applied to entry names (e.g., "*.txt")
+;;;
+;;; Returns:
+;;;   A cons list of heap-allocated full-path cstrs for matching entries.
+;;;   Returns 0 (empty list) if the directory cannot be opened.
+;;;   Free with fs/glob-free.
+;;;
+;;; Example:
+;;;   (fs/glob "/tmp" "*.txt")  ; => cons list of paths
+;;;
+;;; Since: Phase B2
+(defn fs/glob [dir :cstr pattern :cstr] :int
+  ```c
+  #include <dirent.h>
+  #include <fnmatch.h>
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  int64_t head = 0;
+  struct dirent *ent;
+  size_t dlen = strlen(dir);
+  while ((ent = readdir(d))) {
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    if (fnmatch(pattern, ent->d_name, 0) != 0) continue;
+    int sep = (dlen > 0 && dir[dlen - 1] != '/') ? 1 : 0;
+    size_t nlen = strlen(ent->d_name);
+    char *full = malloc(dlen + sep + nlen + 1);
+    memcpy(full, dir, dlen);
+    if (sep) full[dlen] = '/';
+    memcpy(full + dlen + sep, ent->d_name, nlen + 1);
+    int64_t *cell = malloc(2 * sizeof(int64_t));
+    cell[0] = (int64_t)(intptr_t)full;
+    cell[1] = head;
+    head = (int64_t)(intptr_t)cell;
+  }
+  closedir(d);
+  return head;
+  ```)
+
+;;; fs/glob-free -- free a cons list of paths returned by fs/glob.
+;;;
+;;; Parameters:
+;;;   lst -- cons list returned by fs/glob
+;;;
+;;; Example:
+;;;   (fs/glob-free my-list)
+;;;
+;;; Since: Phase B2
+(defn fs/glob-free [lst :int] :void
+  ```c
+  int64_t cur = lst;
+  while (cur) {
+    int64_t *cell = (int64_t*)(intptr_t)cur;
+    free((void*)(intptr_t)cell[0]);
+    int64_t next = cell[1];
+    free(cell);
+    cur = next;
+  }
+  ```)
+
+;;; fs/tmpfile -- create a unique temporary file via mkstemp(3).
+;;;
+;;; Returns:
+;;;   An opaque pointer (as :int) to a pair { path-cstr, fd }.
+;;;   The path is heap-allocated; the fd is the open descriptor.
+;;;   Free with fs/tmpfile-free.  Returns 0 on mkstemp failure.
+;;;
+;;; Example:
+;;;   (let [t (fs/tmpfile)] (fs/tmpfile-path t))
+;;;
+;;; Since: Phase B2
+(defn fs/tmpfile [] :int
+  ```c
+  char *tmpl = strdup("/tmp/tur_XXXXXX");
+  int fd = mkstemp(tmpl);
+  if (fd < 0) { free(tmpl); return 0; }
+  int64_t *pair = malloc(2 * sizeof(int64_t));
+  pair[0] = (int64_t)(intptr_t)tmpl;
+  pair[1] = (int64_t)fd;
+  return (int64_t)(intptr_t)pair;
+  ```)
+
+;;; fs/tmpfile-path -- extract the path from an fs/tmpfile pair.
+;;;
+;;; Parameters:
+;;;   t -- tmpfile pair from fs/tmpfile
+;;;
+;;; Returns:
+;;;   The path cstr (owned by the pair; do not free separately).
+;;;
+;;; Example:
+;;;   (fs/tmpfile-path my-tmp)  ; => "/tmp/tur_aB3xYz"
+;;;
+;;; Since: Phase B2
+(defn fs/tmpfile-path [t :int] :cstr
+  ```c
+  return (const char*)(intptr_t)((int64_t*)(intptr_t)t)[0];
+  ```)
+
+;;; fs/tmpfile-fd -- extract the file descriptor from an fs/tmpfile pair.
+;;;
+;;; Parameters:
+;;;   t -- tmpfile pair from fs/tmpfile
+;;;
+;;; Returns:
+;;;   The open file descriptor as :int.
+;;;
+;;; Example:
+;;;   (fs/tmpfile-fd my-tmp)  ; => 5
+;;;
+;;; Since: Phase B2
+(defn fs/tmpfile-fd [t :int] :int
+  ```c
+  return ((int64_t*)(intptr_t)t)[1];
+  ```)
+
+;;; fs/tmpfile-free -- close the fd and free the tmpfile pair.
+;;;
+;;; Parameters:
+;;;   t -- tmpfile pair from fs/tmpfile (may be 0)
+;;;
+;;; Example:
+;;;   (fs/tmpfile-free my-tmp)
+;;;
+;;; Since: Phase B2
+(defn fs/tmpfile-free [t :int] :void
+  ```c
+  #include <unistd.h>
+  if (!t) return;
+  int64_t *pair = (int64_t*)(intptr_t)t;
+  close((int)pair[1]);
+  free((void*)(intptr_t)pair[0]);
+  free(pair);
+  ```)
+
+;;; fs/read-text -- read an entire file into a NUL-terminated heap buffer.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated cstr of the file contents, or NULL
+;;;   on error.  The caller must free the returned buffer.
+;;;
+;;; Example:
+;;;   (fs/read-text "/etc/hostname")  ; => "myhost\n"
+;;;
+;;; Since: Phase B2
+(defn fs/read-text [path :cstr] :cstr
+  ```c
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  char *buf = malloc((size_t)size + 1);
+  size_t n = fread(buf, 1, (size_t)size, f);
+  fclose(f);
+  buf[n] = '\0';
+  return buf;
+  ```)
+
+;;; fs/write-text -- write a NUL-terminated string to a file.
+;;;
+;;; Parameters:
+;;;   path    -- NUL-terminated destination path cstr
+;;;   content -- NUL-terminated string to write
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (fs/write-text "/tmp/out.txt" "hello\n")  ; => 0
+;;;
+;;; Since: Phase B2
+(defn fs/write-text [path :cstr content :cstr] :int
+  ```c
+  FILE *f = fopen(path, "wb");
+  if (!f) return -1;
+  size_t len = strlen(content);
+  size_t n = fwrite(content, 1, len, f);
+  fclose(f);
+  return (n == len) ? 0 : -1;
+  ```)

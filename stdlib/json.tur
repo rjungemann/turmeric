@@ -1,0 +1,673 @@
+;; stdlib/json.tur -- JSON encode and decode.
+;;
+;; Pure C implementation with no external dependencies.
+;; Uses vec.tur-compatible layouts for arrays and linked lists for objects.
+;;
+;; JSON value layout: int64_t[2]
+;;   [0] = type tag: 0=null 1=bool 2=int 3=float 4=string 5=array 6=object
+;;   [1] = payload
+;;     null/bool/int: direct int64_t value
+;;     float:         double bits stored via memcpy into int64_t
+;;     string:        (int64_t)(char*)  -- heap-allocated, owned
+;;     array:         (int64_t)(vec*)   -- vec = { int64_t* data; size_t len; size_t cap; }
+;;                      each data[i] is a (int64_t)(json_node*)
+;;     object:        (int64_t)(entry*) -- linked list of int64_t[3]
+;;                      entry = { (int64_t)key_cstr, (int64_t)val_node, (int64_t)next_entry }
+
+;;; json/null -- create a JSON null node.
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON null node.
+;;;
+;;; Example:
+;;;   (json/null)  ; => <null node>
+;;;
+;;; Since: Phase B2
+(defn json/null [] :int
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 0; n[1] = 0;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/bool -- create a JSON boolean node.
+;;;
+;;; Parameters:
+;;;   v -- 0 for false, non-zero for true
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON bool node.
+;;;
+;;; Example:
+;;;   (json/bool 1)  ; => <true node>
+;;;
+;;; Since: Phase B2
+(defn json/bool [v :int] :int
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 1; n[1] = v ? 1 : 0;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/int -- create a JSON integer node.
+;;;
+;;; Parameters:
+;;;   v -- the integer value
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON int node.
+;;;
+;;; Example:
+;;;   (json/int 42)  ; => <42 node>
+;;;
+;;; Since: Phase B2
+(defn json/int [v :int] :int
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 2; n[1] = v;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/float -- create a JSON float node.
+;;;
+;;; Parameters:
+;;;   v -- the float value
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON float node.
+;;;
+;;; Example:
+;;;   (json/float 3.14)  ; => <3.14 node>
+;;;
+;;; Since: Phase B2
+(defn json/float [v :float] :int
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 3;
+  memcpy(&n[1], &v, sizeof(double));
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/string -- create a JSON string node from a cstr.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr (copied internally)
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON string node owning a copy of s.
+;;;
+;;; Example:
+;;;   (json/string "hello")  ; => <"hello" node>
+;;;
+;;; Since: Phase B2
+(defn json/string [s :cstr] :int
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 4; n[1] = (int64_t)(intptr_t)strdup(s);
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/array-new -- create an empty JSON array node.
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON array node backed by a growable vec.
+;;;
+;;; Example:
+;;;   (json/array-new)  ; => <[] node>
+;;;
+;;; Since: Phase B2
+(defn json/array-new [] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 5; n[1] = (int64_t)(intptr_t)v;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/array-push -- append an element to a JSON array node.
+;;;
+;;; Parameters:
+;;;   arr  -- JSON array node from json/array-new
+;;;   elem -- JSON node to append
+;;;
+;;; Returns:
+;;;   The same arr pointer (mutated in place).
+;;;
+;;; Example:
+;;;   (json/array-push arr (json/int 1))
+;;;
+;;; Since: Phase B2
+(defn json/array-push [arr :int elem :int] :int
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)arr;
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (void*)(intptr_t)n[1];
+  if (v->len >= v->cap) {
+    v->cap = v->cap > 0 ? v->cap * 2 : 4;
+    v->data = realloc(v->data, v->cap * sizeof(int64_t));
+  }
+  v->data[v->len++] = elem;
+  return arr;
+  ```)
+
+;;; json/object-new -- create an empty JSON object node.
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON object node with no entries.
+;;;
+;;; Example:
+;;;   (json/object-new)  ; => <{} node>
+;;;
+;;; Since: Phase B2
+(defn json/object-new [] :int
+  ```c
+  int64_t *n = malloc(2 * sizeof(int64_t));
+  n[0] = 6; n[1] = 0;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;;; json/object-put -- add or update a key-value pair in a JSON object.
+;;;
+;;; Parameters:
+;;;   obj -- JSON object node
+;;;   key -- NUL-terminated key cstr (copied internally)
+;;;   val -- JSON value node for the key
+;;;
+;;; Returns:
+;;;   The same obj pointer (mutated in place).
+;;;
+;;; Example:
+;;;   (json/object-put obj "x" (json/int 1))
+;;;
+;;; Since: Phase B2
+(defn json/object-put [obj :int key :cstr val :int] :int
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)obj;
+  int64_t *entry = malloc(3 * sizeof(int64_t));
+  entry[0] = (int64_t)(intptr_t)strdup(key);
+  entry[1] = val;
+  entry[2] = n[1];
+  n[1] = (int64_t)(intptr_t)entry;
+  return obj;
+  ```)
+
+;;; json/type -- return the type tag of a JSON node.
+;;;
+;;; Parameters:
+;;;   node -- JSON node
+;;;
+;;; Returns:
+;;;   0=null 1=bool 2=int 3=float 4=string 5=array 6=object
+;;;
+;;; Example:
+;;;   (json/type (json/int 5))  ; => 2
+;;;
+;;; Since: Phase B2
+(defn json/type [node :int] :int
+  ```c
+  if (!node) return 0;
+  return ((int64_t*)(intptr_t)node)[0];
+  ```)
+
+;;; json/get-bool -- extract the boolean value from a bool node.
+;;;
+;;; Parameters:
+;;;   node -- JSON bool node
+;;;
+;;; Returns:
+;;;   true or false.
+;;;
+;;; Example:
+;;;   (json/get-bool (json/bool 1))  ; => true
+;;;
+;;; Since: Phase B2
+(defn json/get-bool [node :int] :bool
+  ```c
+  return ((int64_t*)(intptr_t)node)[1] != 0;
+  ```)
+
+;;; json/get-int -- extract the integer value from an int node.
+;;;
+;;; Parameters:
+;;;   node -- JSON int node
+;;;
+;;; Returns:
+;;;   The integer value as :int.
+;;;
+;;; Example:
+;;;   (json/get-int (json/int 42))  ; => 42
+;;;
+;;; Since: Phase B2
+(defn json/get-int [node :int] :int
+  ```c
+  return ((int64_t*)(intptr_t)node)[1];
+  ```)
+
+;;; json/get-float -- extract the float value from a float node.
+;;;
+;;; Parameters:
+;;;   node -- JSON float node
+;;;
+;;; Returns:
+;;;   The float value as :float.
+;;;
+;;; Example:
+;;;   (json/get-float (json/float 1.5))  ; => 1.5
+;;;
+;;; Since: Phase B2
+(defn json/get-float [node :int] :float
+  ```c
+  double v;
+  memcpy(&v, &((int64_t*)(intptr_t)node)[1], sizeof(double));
+  return v;
+  ```)
+
+;;; json/get-string -- extract the string value from a string node.
+;;;
+;;; Parameters:
+;;;   node -- JSON string node
+;;;
+;;; Returns:
+;;;   The string cstr (owned by the node; do not free).
+;;;
+;;; Example:
+;;;   (json/get-string (json/string "hi"))  ; => "hi"
+;;;
+;;; Since: Phase B2
+(defn json/get-string [node :int] :cstr
+  ```c
+  return (const char*)(intptr_t)((int64_t*)(intptr_t)node)[1];
+  ```)
+
+;;; json/array-len -- return the number of elements in a JSON array node.
+;;;
+;;; Parameters:
+;;;   node -- JSON array node
+;;;
+;;; Returns:
+;;;   Number of elements as :int.
+;;;
+;;; Example:
+;;;   (json/array-len my-array)  ; => 3
+;;;
+;;; Since: Phase B2
+(defn json/array-len [node :int] :int
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)node;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)n[1];
+  return (int64_t)v->len;
+  ```)
+
+;;; json/array-get -- get element i from a JSON array node.
+;;;
+;;; Parameters:
+;;;   node -- JSON array node
+;;;   i    -- zero-based index
+;;;
+;;; Returns:
+;;;   The JSON node at index i, or 0 if out of bounds.
+;;;
+;;; Example:
+;;;   (json/array-get my-array 0)  ; => first element node
+;;;
+;;; Since: Phase B2
+(defn json/array-get [node :int i :int] :int
+  ```c
+  int64_t *n = (int64_t*)(intptr_t)node;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)n[1];
+  if (i < 0 || (size_t)i >= v->len) return 0;
+  return v->data[i];
+  ```)
+
+;;; json/get -- look up a key in a JSON object node.
+;;;
+;;; Parameters:
+;;;   node -- JSON object node
+;;;   key  -- NUL-terminated key cstr
+;;;
+;;; Returns:
+;;;   A some option (:int) containing the value node, or none (0) if the
+;;;   key is absent.
+;;;
+;;; Example:
+;;;   (json/get my-obj "name")  ; => some(<node>)
+;;;
+;;; Since: Phase B2
+(defn json/get [node :int key :cstr] :int
+  ```c
+  if (!node) return 0;
+  int64_t *n = (int64_t*)(intptr_t)node;
+  int64_t cur = n[1];
+  while (cur) {
+    int64_t *e = (int64_t*)(intptr_t)cur;
+    if (strcmp((const char*)(intptr_t)e[0], key) == 0) {
+      struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+      opt->is_some = true;
+      opt->value = e[1];
+      return (int64_t)(intptr_t)opt;
+    }
+    cur = e[2];
+  }
+  return 0;
+  ```)
+
+;;; json/get! -- look up a key in a JSON object, panicking if absent.
+;;;
+;;; Parameters:
+;;;   node -- JSON object node
+;;;   key  -- NUL-terminated key cstr
+;;;
+;;; Returns:
+;;;   The value node.  Panics if the key is not found.
+;;;
+;;; Example:
+;;;   (json/get! my-obj "name")  ; => <node>
+;;;
+;;; Since: Phase B2
+(defn json/get! [node :int key :cstr] :int
+  ```c
+  if (!node) { fprintf(stderr, "json/get!: null node\n"); abort(); }
+  int64_t *n = (int64_t*)(intptr_t)node;
+  int64_t cur = n[1];
+  while (cur) {
+    int64_t *e = (int64_t*)(intptr_t)cur;
+    if (strcmp((const char*)(intptr_t)e[0], key) == 0) return e[1];
+    cur = e[2];
+  }
+  fprintf(stderr, "json/get!: key not found: %s\n", key);
+  abort();
+  return 0;
+  ```)
+
+;;; json/encode -- serialize a JSON node tree to a NUL-terminated cstr.
+;;;
+;;; Parameters:
+;;;   node -- root JSON node
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated JSON string.  The caller must free.
+;;;
+;;; Example:
+;;;   (json/encode (json/int 42))  ; => "42"
+;;;
+;;; Since: Phase B2
+(defn json/encode [node :int] :cstr
+  ```c
+  struct buf_s { char *data; size_t len; size_t cap; };
+  static void buf_ensure(struct buf_s *b, size_t extra) {
+    if (b->len + extra + 1 > b->cap) {
+      b->cap = (b->len + extra + 1) * 2 + 64;
+      b->data = realloc(b->data, b->cap);
+    }
+  }
+  static void buf_append_s(struct buf_s *b, const char *s) {
+    size_t slen = strlen(s);
+    buf_ensure(b, slen);
+    memcpy(b->data + b->len, s, slen);
+    b->len += slen;
+    b->data[b->len] = '\0';
+  }
+  static void buf_append_c(struct buf_s *b, char c) {
+    buf_ensure(b, 1);
+    b->data[b->len++] = c;
+    b->data[b->len] = '\0';
+  }
+  static void encode_str(struct buf_s *b, const char *s) {
+    buf_append_c(b, '"');
+    for (; *s; s++) {
+      if (*s == '"')       { buf_append_s(b, "\\\""); }
+      else if (*s == '\\') { buf_append_s(b, "\\\\"); }
+      else if (*s == '\n') { buf_append_s(b, "\\n"); }
+      else if (*s == '\r') { buf_append_s(b, "\\r"); }
+      else if (*s == '\t') { buf_append_s(b, "\\t"); }
+      else                 { buf_append_c(b, *s); }
+    }
+    buf_append_c(b, '"');
+  }
+  static void encode_node(int64_t n, struct buf_s *b) {
+    if (!n) { buf_append_s(b, "null"); return; }
+    int64_t *np = (int64_t*)(intptr_t)n;
+    int type = (int)np[0];
+    char tmp[64];
+    switch (type) {
+      case 0: buf_append_s(b, "null"); break;
+      case 1: buf_append_s(b, np[1] ? "true" : "false"); break;
+      case 2: snprintf(tmp, sizeof(tmp), "%lld", (long long)np[1]); buf_append_s(b, tmp); break;
+      case 3: {
+        double v; memcpy(&v, &np[1], sizeof(double));
+        snprintf(tmp, sizeof(tmp), "%.17g", v); buf_append_s(b, tmp); break;
+      }
+      case 4: encode_str(b, (const char*)(intptr_t)np[1]); break;
+      case 5: {
+        struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
+        buf_append_c(b, '[');
+        for (size_t i = 0; i < v->len; i++) {
+          if (i > 0) buf_append_c(b, ',');
+          encode_node(v->data[i], b);
+        }
+        buf_append_c(b, ']');
+        break;
+      }
+      case 6: {
+        buf_append_c(b, '{');
+        int64_t cur = np[1];
+        int first = 1;
+        while (cur) {
+          int64_t *e = (int64_t*)(intptr_t)cur;
+          if (!first) buf_append_c(b, ',');
+          first = 0;
+          encode_str(b, (const char*)(intptr_t)e[0]);
+          buf_append_c(b, ':');
+          encode_node(e[1], b);
+          cur = e[2];
+        }
+        buf_append_c(b, '}');
+        break;
+      }
+      default: buf_append_s(b, "null"); break;
+    }
+  }
+  struct buf_s b;
+  b.data = malloc(256);
+  b.data[0] = '\0';
+  b.len = 0;
+  b.cap = 256;
+  encode_node(node, &b);
+  return b.data;
+  ```)
+
+;;; json/decode -- parse a JSON string into a node tree.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated JSON cstr to parse
+;;;
+;;; Returns:
+;;;   A heap-allocated JSON node tree on success, or 0 on parse error.
+;;;   Free with json/free when done.
+;;;
+;;; Example:
+;;;   (json/decode "{\"x\":1}")  ; => <object node>
+;;;
+;;; Since: Phase B2
+(defn json/decode [s :cstr] :int
+  ```c
+  struct ctx_s { const char *s; size_t pos; int err; };
+  static void skip_ws(struct ctx_s *c) {
+    while (c->s[c->pos] == ' ' || c->s[c->pos] == '\n' ||
+           c->s[c->pos] == '\r' || c->s[c->pos] == '\t') c->pos++;
+  }
+  static char *parse_string_val(struct ctx_s *c) {
+    if (c->s[c->pos] != '"') { c->err = 1; return NULL; }
+    c->pos++;
+    size_t cap = 64, len = 0;
+    char *buf = malloc(cap);
+    while (c->s[c->pos] && c->s[c->pos] != '"') {
+      if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+      if (c->s[c->pos] == '\\') {
+        c->pos++;
+        switch (c->s[c->pos]) {
+          case '"':  buf[len++] = '"';  break;
+          case '\\': buf[len++] = '\\'; break;
+          case '/':  buf[len++] = '/';  break;
+          case 'n':  buf[len++] = '\n'; break;
+          case 'r':  buf[len++] = '\r'; break;
+          case 't':  buf[len++] = '\t'; break;
+          case 'b':  buf[len++] = '\b'; break;
+          case 'f':  buf[len++] = '\f'; break;
+          default:   buf[len++] = c->s[c->pos]; break;
+        }
+      } else {
+        buf[len++] = c->s[c->pos];
+      }
+      c->pos++;
+    }
+    if (c->s[c->pos] != '"') { c->err = 1; free(buf); return NULL; }
+    c->pos++;
+    buf[len] = '\0';
+    return buf;
+  }
+  static int64_t parse_value(struct ctx_s *c) {
+    skip_ws(c);
+    char ch = c->s[c->pos];
+    /* null */
+    if (ch == 'n' && strncmp(c->s + c->pos, "null", 4) == 0) {
+      c->pos += 4;
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 0; n[1] = 0;
+      return (int64_t)(intptr_t)n;
+    }
+    /* true */
+    if (ch == 't' && strncmp(c->s + c->pos, "true", 4) == 0) {
+      c->pos += 4;
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 1; n[1] = 1;
+      return (int64_t)(intptr_t)n;
+    }
+    /* false */
+    if (ch == 'f' && strncmp(c->s + c->pos, "false", 5) == 0) {
+      c->pos += 5;
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 1; n[1] = 0;
+      return (int64_t)(intptr_t)n;
+    }
+    /* string */
+    if (ch == '"') {
+      char *sv = parse_string_val(c);
+      if (!sv) return 0;
+      int64_t *n = malloc(2 * sizeof(int64_t));
+      n[0] = 4; n[1] = (int64_t)(intptr_t)sv;
+      return (int64_t)(intptr_t)n;
+    }
+    /* number */
+    if (ch == '-' || (ch >= '0' && ch <= '9')) {
+      char *end;
+      int64_t ival = strtoll(c->s + c->pos, &end, 10);
+      if (*end == '.' || *end == 'e' || *end == 'E') {
+        double fval = strtod(c->s + c->pos, &end);
+        c->pos = (size_t)(end - c->s);
+        int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 3;
+        memcpy(&n[1], &fval, sizeof(double));
+        return (int64_t)(intptr_t)n;
+      }
+      c->pos = (size_t)(end - c->s);
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 2; n[1] = ival;
+      return (int64_t)(intptr_t)n;
+    }
+    /* array */
+    if (ch == '[') {
+      c->pos++;
+      struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+      v->data = NULL; v->len = 0; v->cap = 0;
+      skip_ws(c);
+      if (c->s[c->pos] != ']') {
+        for (;;) {
+          int64_t elem = parse_value(c);
+          if (c->err) { free(v->data); free(v); return 0; }
+          if (v->len >= v->cap) {
+            v->cap = v->cap > 0 ? v->cap * 2 : 4;
+            v->data = realloc(v->data, v->cap * sizeof(int64_t));
+          }
+          v->data[v->len++] = elem;
+          skip_ws(c);
+          if (c->s[c->pos] == ']') break;
+          if (c->s[c->pos] != ',') { c->err = 1; free(v->data); free(v); return 0; }
+          c->pos++;
+        }
+      }
+      c->pos++;
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 5; n[1] = (int64_t)(intptr_t)v;
+      return (int64_t)(intptr_t)n;
+    }
+    /* object */
+    if (ch == '{') {
+      c->pos++;
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 6; n[1] = 0;
+      skip_ws(c);
+      if (c->s[c->pos] != '}') {
+        for (;;) {
+          skip_ws(c);
+          char *key = parse_string_val(c);
+          if (!key || c->err) { free(n); return 0; }
+          skip_ws(c);
+          if (c->s[c->pos] != ':') { c->err = 1; free(key); free(n); return 0; }
+          c->pos++;
+          int64_t val = parse_value(c);
+          if (c->err) { free(key); free(n); return 0; }
+          int64_t *entry = malloc(3 * sizeof(int64_t));
+          entry[0] = (int64_t)(intptr_t)key;
+          entry[1] = val;
+          entry[2] = n[1];
+          n[1] = (int64_t)(intptr_t)entry;
+          skip_ws(c);
+          if (c->s[c->pos] == '}') break;
+          if (c->s[c->pos] != ',') { c->err = 1; free(n); return 0; }
+          c->pos++;
+        }
+      }
+      c->pos++;
+      return (int64_t)(intptr_t)n;
+    }
+    c->err = 1;
+    return 0;
+  }
+  struct ctx_s ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
+  int64_t result = parse_value(&ctx);
+  if (ctx.err) return 0;
+  return result;
+  ```)
+
+;;; json/free -- recursively free a JSON node tree.
+;;;
+;;; Parameters:
+;;;   node -- root JSON node to free (may be 0)
+;;;
+;;; Example:
+;;;   (json/free my-node)
+;;;
+;;; Since: Phase B2
+(defn json/free [node :int] :void
+  ```c
+  static void free_node(int64_t n) {
+    if (!n) return;
+    int64_t *np = (int64_t*)(intptr_t)n;
+    int type = (int)np[0];
+    if (type == 4) {
+      free((void*)(intptr_t)np[1]);
+    } else if (type == 5) {
+      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
+      for (size_t i = 0; i < v->len; i++) free_node(v->data[i]);
+      free(v->data);
+      free(v);
+    } else if (type == 6) {
+      int64_t cur = np[1];
+      while (cur) {
+        int64_t *e = (int64_t*)(intptr_t)cur;
+        free((void*)(intptr_t)e[0]);
+        free_node(e[1]);
+        int64_t next = e[2];
+        free(e);
+        cur = next;
+      }
+    }
+    free(np);
+  }
+  free_node(node);
+  ```)

@@ -1,0 +1,195 @@
+;; stdlib/path.tur -- pure path string manipulation.
+;;
+;; No syscalls; all functions operate on NUL-terminated cstr values and
+;; return freshly allocated cstr values that the caller must free.
+
+;;; path/join -- join two path segments with a single slash separator.
+;;;
+;;; Parameters:
+;;;   base    -- the base path cstr
+;;;   segment -- the path segment to append
+;;;
+;;; Returns:
+;;;   A new heap-allocated cstr.  Free when done.
+;;;   If base ends with '/' no extra separator is added.
+;;;
+;;; Example:
+;;;   (path/join "/usr" "local")  ; => "/usr/local"
+;;;
+;;; Since: Phase B2
+(defn path/join [base :cstr segment :cstr] :cstr
+  ```c
+  size_t blen = strlen(base);
+  size_t slen = strlen(segment);
+  int add_sep = (blen > 0 && base[blen - 1] != '/') ? 1 : 0;
+  char *out = malloc(blen + add_sep + slen + 1);
+  memcpy(out, base, blen);
+  if (add_sep) out[blen] = '/';
+  memcpy(out + blen + add_sep, segment, slen + 1);
+  return out;
+  ```)
+
+;;; path/basename -- return the last path component.
+;;;
+;;; Parameters:
+;;;   p -- path cstr
+;;;
+;;; Returns:
+;;;   A new heap-allocated cstr containing the last component.
+;;;   Returns a copy of p if no slash is present.
+;;;
+;;; Example:
+;;;   (path/basename "/foo/bar.txt")  ; => "bar.txt"
+;;;
+;;; Since: Phase B2
+(defn path/basename [p :cstr] :cstr
+  ```c
+  const char *last = strrchr(p, '/');
+  const char *name = last ? last + 1 : p;
+  return strdup(name);
+  ```)
+
+;;; path/dirname -- return the parent directory component.
+;;;
+;;; Parameters:
+;;;   p -- path cstr
+;;;
+;;; Returns:
+;;;   A new heap-allocated cstr of the parent directory.
+;;;   Returns "." if no directory component exists, "/" for the root.
+;;;
+;;; Example:
+;;;   (path/dirname "/foo/bar.txt")  ; => "/foo"
+;;;
+;;; Since: Phase B2
+(defn path/dirname [p :cstr] :cstr
+  ```c
+  const char *last = strrchr(p, '/');
+  if (!last) return strdup(".");
+  if (last == p) return strdup("/");
+  size_t len = (size_t)(last - p);
+  char *out = malloc(len + 1);
+  memcpy(out, p, len);
+  out[len] = '\0';
+  return out;
+  ```)
+
+;;; path/extension -- return the file extension including the leading dot.
+;;;
+;;; Parameters:
+;;;   p -- path cstr
+;;;
+;;; Returns:
+;;;   A new heap-allocated cstr of the extension (e.g., ".txt"), or an
+;;;   empty string heap-copy if there is no extension.
+;;;
+;;; Example:
+;;;   (path/extension "/foo/bar.txt")  ; => ".txt"
+;;;   (path/extension "/foo/bar")      ; => ""
+;;;
+;;; Since: Phase B2
+(defn path/extension [p :cstr] :cstr
+  ```c
+  const char *base = strrchr(p, '/');
+  base = base ? base + 1 : p;
+  const char *dot = strrchr(base, '.');
+  if (!dot || dot == base) return strdup("");
+  return strdup(dot);
+  ```)
+
+;;; path/stem -- return the filename without its extension.
+;;;
+;;; Parameters:
+;;;   p -- path cstr
+;;;
+;;; Returns:
+;;;   A new heap-allocated cstr of the stem.  Equal to path/basename if
+;;;   there is no extension.
+;;;
+;;; Example:
+;;;   (path/stem "/foo/bar.txt")  ; => "bar"
+;;;   (path/stem "/foo/bar")      ; => "bar"
+;;;
+;;; Since: Phase B2
+(defn path/stem [p :cstr] :cstr
+  ```c
+  const char *base = strrchr(p, '/');
+  base = base ? base + 1 : p;
+  const char *dot = strrchr(base, '.');
+  if (!dot || dot == base) return strdup(base);
+  size_t len = (size_t)(dot - base);
+  char *out = malloc(len + 1);
+  memcpy(out, base, len);
+  out[len] = '\0';
+  return out;
+  ```)
+
+;;; path/absolute? -- test whether a path is absolute (starts with '/').
+;;;
+;;; Parameters:
+;;;   p -- path cstr
+;;;
+;;; Returns:
+;;;   true if p starts with '/', false otherwise.
+;;;
+;;; Example:
+;;;   (path/absolute? "/usr/bin")  ; => true
+;;;   (path/absolute? "relative")  ; => false
+;;;
+;;; Since: Phase B2
+(defn path/absolute? [p :cstr] :bool
+  ```c
+  return p != NULL && p[0] == '/';
+  ```)
+
+;;; path/normalize -- collapse redundant '.' and '..' segments in a path.
+;;;
+;;; Resolves single-dot and double-dot components without consulting the
+;;; filesystem.  Does not resolve symlinks.
+;;;
+;;; Parameters:
+;;;   p -- path cstr
+;;;
+;;; Returns:
+;;;   A new heap-allocated normalized path cstr.
+;;;
+;;; Example:
+;;;   (path/normalize "/foo/../bar/./baz")  ; => "/bar/baz"
+;;;
+;;; Since: Phase B2
+(defn path/normalize [p :cstr] :cstr
+  ```c
+  size_t plen = strlen(p);
+  char *work = malloc(plen + 2);
+  memcpy(work, p, plen + 1);
+  int is_abs = (work[0] == '/');
+  /* collect segment start pointers by splitting on '/' */
+  char **segs = malloc((plen + 2) * sizeof(char *));
+  int nseg = 0;
+  char *tok = strtok(work, "/");
+  while (tok) {
+    if (strcmp(tok, ".") == 0) {
+      /* skip current-dir component */
+    } else if (strcmp(tok, "..") == 0) {
+      if (nseg > 0) nseg--;
+    } else {
+      segs[nseg++] = tok;
+    }
+    tok = strtok(NULL, "/");
+  }
+  /* rebuild from segments */
+  char *out = malloc(plen + 4);
+  size_t pos = 0;
+  if (is_abs) out[pos++] = '/';
+  for (int i = 0; i < nseg; i++) {
+    if (i > 0) out[pos++] = '/';
+    size_t slen = strlen(segs[i]);
+    memcpy(out + pos, segs[i], slen);
+    pos += slen;
+  }
+  if (pos == 0) out[pos++] = '.';
+  out[pos] = '\0';
+  free(work);
+  free(segs);
+  return out;
+  ```)

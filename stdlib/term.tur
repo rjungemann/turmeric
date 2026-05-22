@@ -1,0 +1,257 @@
+;; stdlib/term.tur -- terminal utilities: size, tty detection, raw mode, ANSI colors.
+;;
+;; Uses sys/ioctl.h for window size, termios.h for raw/cooked mode switching,
+;; and unistd.h for isatty(3).  ANSI helpers respect the NO_COLOR env var.
+
+;;; term/width -- return the terminal column width.
+;;;
+;;; Returns:
+;;;   Number of columns, or 80 as a fallback if ioctl fails.
+;;;
+;;; Example:
+;;;   (term/width)  ; => 80
+;;;
+;;; Since: Phase B2
+(defn term/width [] :int
+  ```c
+  #include <sys/ioctl.h>
+  struct winsize ws;
+  if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return (int64_t)ws.ws_col;
+  return 80;
+  ```)
+
+;;; term/height -- return the terminal row height.
+;;;
+;;; Returns:
+;;;   Number of rows, or 24 as a fallback if ioctl fails.
+;;;
+;;; Example:
+;;;   (term/height)  ; => 24
+;;;
+;;; Since: Phase B2
+(defn term/height [] :int
+  ```c
+  #include <sys/ioctl.h>
+  struct winsize ws;
+  if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) return (int64_t)ws.ws_row;
+  return 24;
+  ```)
+
+;;; term/is-tty? -- test whether a file descriptor refers to a terminal.
+;;;
+;;; Parameters:
+;;;   fd -- file descriptor (0=stdin, 1=stdout, 2=stderr)
+;;;
+;;; Returns:
+;;;   true if fd is connected to a terminal.
+;;;
+;;; Example:
+;;;   (term/is-tty? 1)  ; => true when stdout is a tty
+;;;
+;;; Since: Phase B2
+(defn term/is-tty? [fd :int] :bool
+  ```c
+  #include <unistd.h>
+  return isatty((int)fd) != 0;
+  ```)
+
+;;; term/set-raw -- put a terminal into raw mode (no line buffering or echo).
+;;;
+;;; Saves the original termios so term/set-cooked can restore it.
+;;; The saved state is stored in a static variable; only one fd is
+;;; tracked at a time.
+;;;
+;;; Parameters:
+;;;   fd -- file descriptor of the terminal
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (term/set-raw 0)  ; => 0
+;;;
+;;; Since: Phase B2
+(defn term/set-raw [fd :int] :int
+  ```c
+  #include <termios.h>
+  static struct termios saved_termios;
+  struct termios raw;
+  if (tcgetattr((int)fd, &saved_termios) != 0) return -1;
+  raw = saved_termios;
+  cfmakeraw(&raw);
+  return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &raw);
+  ```)
+
+;;; term/set-cooked -- restore a terminal to cooked (canonical) mode.
+;;;
+;;; Restores the termios state that was saved by the last term/set-raw call.
+;;;
+;;; Parameters:
+;;;   fd -- file descriptor of the terminal
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (term/set-cooked 0)  ; => 0
+;;;
+;;; Since: Phase B2
+(defn term/set-cooked [fd :int] :int
+  ```c
+  #include <termios.h>
+  static struct termios saved_termios;
+  return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &saved_termios);
+  ```)
+
+;; -- ANSI color helpers -------------------------------------------------------
+;; Each helper wraps s in the appropriate ANSI escape sequence when stdout is
+;; a tty and NO_COLOR is not set; otherwise returns a plain copy of s.
+;; All returned strings are heap-allocated; the caller must free them.
+
+;;; term/bold -- wrap a string in ANSI bold codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI bold, or a plain copy if not a tty or
+;;;   NO_COLOR is set.  The caller must free.
+;;;
+;;; Example:
+;;;   (term/bold "hello")  ; => "\x1b[1mhello\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/bold [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 12);
+  snprintf(out, slen + 12, "\x1b[1m%s\x1b[0m", s);
+  return out;
+  ```)
+
+;;; term/dim -- wrap a string in ANSI dim codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI dim, or a plain copy.  Caller must free.
+;;;
+;;; Example:
+;;;   (term/dim "note")  ; => "\x1b[2mnote\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/dim [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 12);
+  snprintf(out, slen + 12, "\x1b[2m%s\x1b[0m", s);
+  return out;
+  ```)
+
+;;; term/red -- wrap a string in ANSI red foreground codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI red, or a plain copy.  Caller must free.
+;;;
+;;; Example:
+;;;   (term/red "error")  ; => "\x1b[31merror\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/red [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 14);
+  snprintf(out, slen + 14, "\x1b[31m%s\x1b[0m", s);
+  return out;
+  ```)
+
+;;; term/green -- wrap a string in ANSI green foreground codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI green, or a plain copy.  Caller must free.
+;;;
+;;; Example:
+;;;   (term/green "ok")  ; => "\x1b[32mok\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/green [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 14);
+  snprintf(out, slen + 14, "\x1b[32m%s\x1b[0m", s);
+  return out;
+  ```)
+
+;;; term/yellow -- wrap a string in ANSI yellow foreground codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI yellow, or a plain copy.  Caller must free.
+;;;
+;;; Example:
+;;;   (term/yellow "warn")  ; => "\x1b[33mwarn\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/yellow [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 14);
+  snprintf(out, slen + 14, "\x1b[33m%s\x1b[0m", s);
+  return out;
+  ```)
+
+;;; term/blue -- wrap a string in ANSI blue foreground codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI blue, or a plain copy.  Caller must free.
+;;;
+;;; Example:
+;;;   (term/blue "info")  ; => "\x1b[34minfo\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/blue [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 14);
+  snprintf(out, slen + 14, "\x1b[34m%s\x1b[0m", s);
+  return out;
+  ```)
+
+;;; term/cyan -- wrap a string in ANSI cyan foreground codes.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated cstr
+;;;
+;;; Returns:
+;;;   Heap-allocated cstr with ANSI cyan, or a plain copy.  Caller must free.
+;;;
+;;; Example:
+;;;   (term/cyan "debug")  ; => "\x1b[36mdebug\x1b[0m"
+;;;
+;;; Since: Phase B2
+(defn term/cyan [s :cstr] :cstr
+  ```c
+  if (!isatty(1) || getenv("NO_COLOR")) return strdup(s);
+  size_t slen = strlen(s);
+  char *out = malloc(slen + 14);
+  snprintf(out, slen + 14, "\x1b[36m%s\x1b[0m", s);
+  return out;
+  ```)
