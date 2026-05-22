@@ -1,0 +1,14 @@
+; GF2 fixture: gen-nth -- return the nth yielded value (0-indexed).
+
+(load "stdlib/gen.tur")
+
+(defn main [] :void
+  ; Generator yields 0 1 2 3 4; gen-nth 2 returns the third value: 2
+  (let [g (gen []
+            (let [^mut i 0]
+              (while (< i 5)
+                (yield i)
+                (set! i (+ i 1)))))
+        v (gen-nth 2 g)]
+    (when (gen-some? v)
+      (println (gen-unwrap v)))))

@@ -1,10 +1,10 @@
 # Generators and Lazy Sequences Plan
 
-**Status:** Not started. GF0-GF2, LZ0-LZ4 planned.
+**Status:** GF0 complete. GF1 complete. GF2 complete. LZ0-LZ4 planned.
 
 **Prerequisites:** Phase 2 (closures), Phase 15 (typeclasses).
 
-**Last updated:** 2026-05-18
+**Last updated:** 2026-05-22
 
 ---
 
@@ -80,18 +80,20 @@ defn seq-map [f g]
 
 **Goal:** Fully specify the IR and C emission strategy before touching the compiler.
 
+**Design document:** `docs/design/generator-state-machine-design.md`
+
 **Tasks:**
-- [ ] Define the `Generator` struct representation: state tag + captured-variable
+- [x] Define the `Generator` struct representation: state tag + captured-variable
       fields per `gen` body
-- [ ] Enumerate control-flow forms that cross yield points: `while`, `if`,
+- [x] Enumerate control-flow forms that cross yield points: `while`, `if`,
       `cond`, `do`, `let`, nested `gen`
-- [ ] Specify how variables live across yield points (captured in struct vs.
+- [x] Specify how variables live across yield points (captured in struct vs.
       local C variables)
-- [ ] Write representative hand-compiled C output for: simple loop, nested loops,
+- [x] Write representative hand-compiled C output for: simple loop, nested loops,
       early return via `return`, conditional yield
-- [ ] Define `(Generator a)` surface type and its `next`/`done` operations
-- [ ] Decide: statically sized struct per `gen` vs. arena-allocated dynamic struct
-- [ ] Document limitations: no `gen` inside `match` arms that span a yield (v1),
+- [x] Define `(Generator a)` surface type and its `next`/`done` operations
+- [x] Decide: statically sized struct per `gen` vs. arena-allocated dynamic struct
+- [x] Document limitations: no `gen` inside `match` arms that span a yield (v1),
       no recursive generators (v1)
 
 **Deliverable:** Design document with hand-compiled C examples and a list of
@@ -114,27 +116,38 @@ supported/unsupported control-flow patterns.
 - `src/compiler/emit_module.c` -- emit the `typedef struct` for each `gen` closure
 
 **Tasks:**
-- [ ] Add `TY_GENERATOR` to `types.h`; store element type and captured variable
+- [x] Add `TY_GENERATOR` to `types.h`; store element type and captured variable
       list per generator instance
-- [ ] Elaborate `(gen [...] body)`: collect all variables live across yield
+- [x] Elaborate `(gen [...] body)`: collect all variables live across yield
       points; build generator type
-- [ ] Elaborate `(yield expr)`: check expr type matches generator element type;
+- [x] Elaborate `(yield expr)`: check expr type matches generator element type;
       record yield point
-- [ ] Emit generator struct typedef (state tag + captured fields)
-- [ ] Emit `_next` function: switch on state tag, execute body segments between
+- [x] Emit generator struct typedef (state tag + captured fields)
+- [x] Emit `_next` function: switch on state tag, execute body segments between
       yields
-- [ ] Emit `(gen-next g)` call-site as invocation of `_next`
-- [ ] Handle `while` loops that contain yields (loop-back state tag)
-- [ ] Handle `if`/`cond` branches that contain yields (branch state tags)
-- [ ] Handle `let`-bound variables that span a yield (promote to struct field)
-- [ ] Add `(gen-done? g)` predicate (state == -1)
-- [ ] Write fixture: simple loop generator (`range-gen`)
-- [ ] Write fixture: generator with `if` branch
-- [ ] Write fixture: generator with early return
-- [ ] Write fixture: nested generator (outer drives inner)
+- [x] Emit `(gen-next g)` call-site as invocation of `_next`
+- [x] Handle `while` loops that contain yields (loop-back state tag)
+- [x] Handle `if`/`cond` branches that contain yields (branch state tags)
+- [x] Handle `let`-bound variables that span a yield (promote to struct field)
+- [x] Add `(gen-done? g)` predicate (state == -1)
+- [x] Write fixture: simple loop generator (`range-gen`)
+- [x] Write fixture: generator with `if` branch
+- [x] Write fixture: generator with early return
+- [x] Write fixture: nested generator (outer drives inner)
 
 **Exit criterion:** All fixtures pass; generated C compiles and runs correctly
 under Valgrind with no leaks.
+
+**Implementation notes:**
+- Generator struct always starts with `int32_t __state` and `void *(*__next_fn)(void *)`
+  fields (the `__tur_gen_hdr_t` layout). This allows `gen-next` and `gen-done?` to work
+  on any generator without knowing its concrete type.
+- Generator functions are emitted to `ctx->pending_handler_fns` so they appear at
+  file scope before the enclosing function definition (same flush mechanism as
+  algebraic-effect handler functions).
+- All `let` bindings in a gen body are conservatively promoted to struct fields
+  (yield-live analysis v1). Captures (free variables) are stored as the initial
+  subset of struct fields.
 
 
 ## Phase GF2 -- Generator Standard Library (3 days)
@@ -144,17 +157,30 @@ under Valgrind with no leaks.
 **Code location:** `stdlib/gen.tur`
 
 **Tasks:**
-- [ ] Define `(Generator a)` as an opaque struct wrapper
-- [ ] Define `gen-next : (Generator a) -> (option a)`
-- [ ] Define `gen-done? : (Generator a) -> bool`
-- [ ] Define `gen-collect : (Generator a) -> (vec a)` (materialise all values)
-- [ ] Define `gen-for-each : (fn [a] :unit) (Generator a) -> :unit`
-- [ ] Define `gen-nth : int (Generator a) -> (option a)` (consume to nth)
-- [ ] Define `yield*` macro: yield all values from an inner generator
-- [ ] Add `;;;` docstrings for all exported functions
-- [ ] Write fixtures for `gen-collect`, `gen-for-each`, `gen-nth`, `yield*`
+- [x] Define `gen-some?` / `gen-unwrap` helpers for gen-next results
+- [x] Define `gen-none` -- null result sentinel (:ptr<void>)
+- [x] Define `gen-arr-new` / `gen-arr-push!` / `gen-arr-len` / `gen-arr-get`
+      (internal growable-array used by gen-collect; also exported for callers)
+- [x] Define `gen-collect` macro: materialise all yielded values into a gen-arr
+- [x] Define `gen-for-each` macro: call f on each yielded value
+- [x] Define `gen-nth` macro: return nth (0-indexed) yielded value or gen-none
+- [x] Define `yield*` macro: re-yield all values from an inner generator
+- [x] Add `;;;` docstrings for all exported symbols
+- [x] Write fixtures: gen-collect, gen-for-each, gen-nth, gen-yield-star
 
-**Deliverable:** `stdlib/gen.tur`, fixtures passing.
+**Deliverable:** `stdlib/gen.tur`, all fixtures passing.
+
+**Implementation notes:**
+- Macros use the compile-time `list`/`vec` builtins (NOT quasiquote) to build
+  generated forms. Symbols like `let`, `while`, `when`, `set!` are passed bare
+  (without `'` quote) because they look up to themselves when not in CT env.
+- Quoted symbols (`'let`) produce F_QUOTE forms that cause "unbound symbol 'let'"
+  errors at elaboration time.
+- gen.tur is NOT auto-loaded (it would pollute all programs' generated C and break
+  codegen snapshots). Fixtures and user code load it explicitly:
+  `(load "stdlib/gen.tur")`
+- gen helpers have no `#{Unsafe}` effect annotation so they can be called from
+  normal (non-unsafe) code contexts, matching the ergonomics of gen-next/gen-done?.
 
 ---
 

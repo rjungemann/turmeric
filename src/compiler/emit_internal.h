@@ -77,6 +77,12 @@ typedef struct EmitCtx {
     Binding **handle_captures;
     uint32_t n_handle_captures;
     const char *handle_env_name;  /* e.g., "__henv_5" */
+    /* GF1: Generator emission context */
+    Binding    **gen_struct_bindings;    /* struct fields when inside _next fn (NULL outside) */
+    uint32_t     n_gen_struct_bindings;
+    const char  *gen_var_name;           /* "__g" when inside _next function (NULL outside) */
+    const char  *gen_struct_type;        /* struct type name when inside _next (NULL outside) */
+    bool         gen_hdr_emitted;        /* true once __tur_gen_hdr_t typedef is in ctx->file */
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */

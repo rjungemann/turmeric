@@ -313,6 +313,11 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
     if (name == e->sym_return) return elab_return(e, call);
+    /* GF1: Generator forms */
+    if (name == e->sym_gen)      return elab_gen     (e, call);
+    if (name == e->sym_yield)    return elab_yield   (e, call);
+    if (name == e->sym_gen_next) return elab_gen_next(e, call);
+    if (name == e->sym_gen_done) return elab_gen_done(e, call);
     /* Phase 5 */
     if (name == e->sym_ref)    return elab_ref   (e, call);
     if (name == e->sym_deref)  return elab_deref (e, call);

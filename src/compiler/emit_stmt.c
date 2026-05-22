@@ -487,17 +487,27 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase 3/4: return */
         case EX_RETURN: {
+            /* GF1: Inside a generator _next function, (return) terminates the generator */
+            if (ctx->gen_var_name) {
+                ctx->return_emitted = true;
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s->__state = -1;\n", ctx->gen_var_name);
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "return NULL;\n");
+                return;
+            }
+
             /* (return) or (return expr) - emit full return statement with defer firing */
-            
+
             /* Set flag to indicate return has been emitted */
             ctx->return_emitted = true;
-            
+
             /* Fire all defers in the frame chain if we're in a scope with defers */
             if (ctx->frame_var) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
             }
-            
+
             /* Emit the return statement */
             indent_buf(body, ctx->indent);
             if (e->as.return_.value) {
@@ -507,6 +517,32 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else {
                 buf_puts(body, "return;\n");
             }
+            return;
+        }
+        /* GF1: yield inside a generator _next function */
+        case EX_YIELD: {
+            uint32_t yid    = e->as.yield_.yield_id;
+            const char *gv  = ctx->gen_var_name;
+            char *yval      = emit_value(ctx, body, e->as.yield_.value);
+            /* Save state for resumption */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s->__state = %u;\n", gv, yid);
+            /* Allocate SOME(value) and return it */
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "{\n");
+            ctx->indent += 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "int64_t *__opt = (int64_t *)malloc(sizeof(int64_t));\n");
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "*__opt = (int64_t)(%s);\n", yval);
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "return (void *)__opt;\n");
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            free(yval);
+            /* Resume label -- execution continues here on next _next call */
+            buf_printf(body, "__yield_%u:;\n", yid - 1);
             return;
         }
         /* Phase 5 */
@@ -604,6 +640,10 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v);
             return;
         }
+        /* GF1: Generator expressions as statements -- emit and discard */
+        case EX_GEN:
+        case EX_GEN_NEXT:
+        case EX_GEN_DONE:
         case EX_PERFORM:
         case EX_HANDLE:
         case EX_RESUME:

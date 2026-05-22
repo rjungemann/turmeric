@@ -1492,3 +1492,279 @@ static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form) {
     out->as.set_deref_.value = value;
     return out;
 }
+
+/* GF1: Walk an elaborated expression tree and collect all EX_LET bindings.
+ * Used to find yield-live variables for generator struct field promotion. */
+static void collect_let_bindings_walk(const Expr *body,
+                                      Binding ***out_arr, uint32_t *n_out,
+                                      uint32_t *cap_out) {
+    if (!body) return;
+    const Expr **stk = (const Expr **)malloc(256 * sizeof(const Expr *));
+    int sp = 0;
+    stk[sp++] = body;
+    while (sp > 0) {
+        const Expr *cur = stk[--sp];
+        if (!cur) continue;
+        switch (cur->kind) {
+            case EX_LET:
+                for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                    Binding *b = cur->as.let_.bindings[i].binding;
+                    if (b) {
+                        if (*n_out >= *cap_out) {
+                            *cap_out = *cap_out ? *cap_out * 2 : 8;
+                            *out_arr = (Binding **)realloc(*out_arr, *cap_out * sizeof(Binding *));
+                        }
+                        (*out_arr)[(*n_out)++] = b;
+                        if (cur->as.let_.bindings[i].init)
+                            stk[sp++] = cur->as.let_.bindings[i].init;
+                    }
+                }
+                if (cur->as.let_.body) stk[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.cond)         stk[sp++] = cur->as.if_.cond;
+                if (cur->as.if_.then_)        stk[sp++] = cur->as.if_.then_;
+                if (cur->as.if_.else_or_null) stk[sp++] = cur->as.if_.else_or_null;
+                break;
+            case EX_DO:
+                for (uint32_t i = 0; i < cur->as.do_.n; i++)
+                    stk[sp++] = cur->as.do_.items[i];
+                break;
+            case EX_WHILE:
+                stk[sp++] = cur->as.while_.cond;
+                stk[sp++] = cur->as.while_.body;
+                break;
+            case EX_YIELD:
+                if (cur->as.yield_.value) stk[sp++] = cur->as.yield_.value;
+                break;
+            case EX_CALL:
+                for (uint32_t i = 0; i < cur->as.call_.n_args; i++)
+                    stk[sp++] = cur->as.call_.args[i];
+                break;
+            case EX_RETURN:
+                if (cur->as.return_.value) stk[sp++] = cur->as.return_.value;
+                break;
+            default:
+                break;
+        }
+    }
+    free(stk);
+}
+
+/* GF1: (gen [] body...) -- create a generator expression.
+ *
+ * The form (gen [] body) compiles to a heap-allocated C state-machine struct
+ * with a _next function.  All let bindings in the body are promoted to struct
+ * fields (conservative yield-live analysis).  Captures (free variables) are
+ * passed to the _create function and stored in the struct. */
+Expr *elab_gen(Elab *e, const Form *call) {
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "gen requires a capture vector and at least one body form: (gen [] body)");
+        return NULL;
+    }
+    /* v1: no nested generators */
+    if (e->gen_ctx) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "nested generators are not supported in v1");
+        return NULL;
+    }
+
+    Form *cap_vec = call->as.list.items[1];
+    if (cap_vec->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, cap_vec->span,
+                  "gen second argument must be an empty capture vector []");
+        return NULL;
+    }
+    if (cap_vec->as.list.len != 0) {
+        diag_emit(DIAG_ERROR, cap_vec->span,
+                  "gen capture vector must be empty in v1 (captures are computed automatically)");
+        return NULL;
+    }
+
+    /* Generate unique struct/fn names */
+    uint32_t gen_id = e->gen_counter++;
+    const char *fn_name = e->current_fn_name ? e->current_fn_name->name : "top";
+
+    GenDef *def = (GenDef *)arena_alloc(e->arena, sizeof(GenDef));
+    memset(def, 0, sizeof(GenDef));
+    snprintf(def->struct_name, sizeof(def->struct_name), "__gen_%s_%u_t", fn_name, gen_id);
+    snprintf(def->next_fn,     sizeof(def->next_fn),    "__gen_%s_%u_next", fn_name, gen_id);
+    snprintf(def->create_fn,   sizeof(def->create_fn),  "__gen_%s_%u_create", fn_name, gen_id);
+
+    /* Push gen context */
+    GenContext gctx;
+    memset(&gctx, 0, sizeof(gctx));
+    gctx.parent = e->gen_ctx;
+    e->gen_ctx = &gctx;
+
+    /* Push a new scope for the gen body */
+    Scope body_scope;
+    scope_init(&body_scope, e->scope);
+    e->scope = &body_scope;
+
+    /* Elaborate body forms */
+    uint32_t n_body = call->as.list.len - 2;
+    Expr *body_expr = NULL;
+    if (n_body == 1) {
+        body_expr = elab_form(e, call->as.list.items[2]);
+    } else {
+        Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_body; i++) {
+            items[i] = elab_form(e, call->as.list.items[i + 2]);
+            if (!items[i]) {
+                e->scope = body_scope.parent;
+                e->gen_ctx = gctx.parent;
+                return NULL;
+            }
+        }
+        body_expr = expr_new(e->arena, EX_DO, items[n_body-1]->type, call->span);
+        body_expr->as.do_.items = items;
+        body_expr->as.do_.n     = n_body;
+    }
+    if (!body_expr) {
+        e->scope = body_scope.parent;
+        e->gen_ctx = gctx.parent;
+        return NULL;
+    }
+
+    /* Pop scope and gen context */
+    e->scope   = body_scope.parent;
+    e->gen_ctx = gctx.parent;
+
+    def->n_yield_points = gctx.n_yields;
+    def->element_kind   = gctx.element_kind_set ? gctx.element_kind : TY_INT;
+    def->body           = body_expr;
+
+    /* Collect free variables (captures) from the elaborated body */
+    uint32_t n_caps = 0;
+    Binding **caps = collect_free_vars(body_expr, NULL, 0, &n_caps);
+    def->captures   = caps ? (Binding **)arena_alloc(e->arena, n_caps * sizeof(Binding *)) : NULL;
+    if (def->captures && caps)
+        memcpy(def->captures, caps, n_caps * sizeof(Binding *));
+    free(caps);
+    def->n_captures = n_caps;
+
+    /* Collect all let bindings for struct field promotion */
+    Binding **let_binds  = NULL;
+    uint32_t  n_let      = 0;
+    uint32_t  cap_let    = 0;
+    collect_let_bindings_walk(body_expr, &let_binds, &n_let, &cap_let);
+
+    /* Build struct_bindings = captures ++ let_bindings (de-duplicated) */
+    uint32_t total = n_caps + n_let;
+    Binding **sb = NULL;
+    uint32_t n_sb = 0;
+    if (total > 0) {
+        sb = (Binding **)arena_alloc(e->arena, total * sizeof(Binding *));
+        /* Add captures first */
+        for (uint32_t i = 0; i < n_caps; i++) sb[n_sb++] = def->captures[i];
+        /* Add let bindings (skip if already in captures) */
+        for (uint32_t i = 0; i < n_let; i++) {
+            bool dup = false;
+            for (uint32_t j = 0; j < n_caps; j++) {
+                if (def->captures[j] == let_binds[i]) { dup = true; break; }
+            }
+            if (!dup) sb[n_sb++] = let_binds[i];
+        }
+    }
+    free(let_binds);
+    def->struct_bindings   = sb;
+    def->n_struct_bindings = n_sb;
+
+    /* Build result type: TY_GENERATOR */
+    Type gen_type;
+    memset(&gen_type, 0, sizeof(gen_type));
+    gen_type.kind = TY_GENERATOR;
+    gen_type.copy_kind = CK_COPY;
+    gen_type.hkt_kind  = KIND_STAR;
+    gen_type.as.generator_.element_kind = def->element_kind;
+
+    Expr *out = expr_new(e->arena, EX_GEN, gen_type, call->span);
+    out->as.gen_.def = def;
+    return out;
+}
+
+/* GF1: (yield expr) -- yield a value inside a gen body. */
+Expr *elab_yield(Elab *e, const Form *call) {
+    if (!e->gen_ctx) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "yield is only valid inside a gen body");
+        return NULL;
+    }
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "yield requires exactly one argument: (yield expr)");
+        return NULL;
+    }
+    Expr *value = elab_form(e, call->as.list.items[1]);
+    if (!value) return NULL;
+
+    /* Record element kind on first yield */
+    if (!e->gen_ctx->element_kind_set) {
+        e->gen_ctx->element_kind     = value->type.kind;
+        e->gen_ctx->element_kind_set = true;
+    }
+
+    uint32_t yid = ++e->gen_ctx->n_yields;
+
+    Expr *out = expr_new(e->arena, EX_YIELD, TYPE_NIL, call->span);
+    out->as.yield_.value    = value;
+    out->as.yield_.yield_id = yid;
+    return out;
+}
+
+/* GF1: (gen-next g) -- advance a generator; returns ptr<void> (some/none). */
+Expr *elab_gen_next(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "gen-next requires exactly one argument: (gen-next g)");
+        return NULL;
+    }
+    Expr *gen_expr = elab_form(e, call->as.list.items[1]);
+    if (!gen_expr) return NULL;
+    if (gen_expr->type.kind != TY_GENERATOR) {
+        diag_emit(DIAG_ERROR, gen_expr->span,
+                  "gen-next expects a generator value, got %s",
+                  type_name(gen_expr->type));
+        return NULL;
+    }
+
+    Type ptr_type;
+    memset(&ptr_type, 0, sizeof(ptr_type));
+    ptr_type.kind      = TY_PTR_VOID;
+    ptr_type.copy_kind = CK_COPY;
+    ptr_type.hkt_kind  = KIND_STAR;
+
+    Expr *out = expr_new(e->arena, EX_GEN_NEXT, ptr_type, call->span);
+    out->as.gen_next_.gen_expr = gen_expr;
+    out->as.gen_next_.def      = gen_expr->as.gen_.def;
+    return out;
+}
+
+/* GF1: (gen-done? g) -- true if the generator is exhausted. */
+Expr *elab_gen_done(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "gen-done? requires exactly one argument: (gen-done? g)");
+        return NULL;
+    }
+    Expr *gen_expr = elab_form(e, call->as.list.items[1]);
+    if (!gen_expr) return NULL;
+    if (gen_expr->type.kind != TY_GENERATOR) {
+        diag_emit(DIAG_ERROR, gen_expr->span,
+                  "gen-done? expects a generator value, got %s",
+                  type_name(gen_expr->type));
+        return NULL;
+    }
+
+    Type bool_type;
+    memset(&bool_type, 0, sizeof(bool_type));
+    bool_type.kind      = TY_BOOL;
+    bool_type.copy_kind = CK_COPY;
+    bool_type.hkt_kind  = KIND_STAR;
+
+    Expr *out = expr_new(e->arena, EX_GEN_DONE, bool_type, call->span);
+    out->as.gen_done_.gen_expr = gen_expr;
+    return out;
+}

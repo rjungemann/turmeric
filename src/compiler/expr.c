@@ -538,5 +538,24 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.any_cast_.value);
             buf_putc(b, ')');
             break;
+        /* GF1: Generator forms */
+        case EX_GEN:
+            buf_puts(b, "(gen [])");
+            break;
+        case EX_YIELD:
+            buf_puts(b, "(yield ");
+            if (e->as.yield_.value) expr_print(b, e->as.yield_.value);
+            buf_putc(b, ')');
+            break;
+        case EX_GEN_NEXT:
+            buf_puts(b, "(gen-next ");
+            if (e->as.gen_next_.gen_expr) expr_print(b, e->as.gen_next_.gen_expr);
+            buf_putc(b, ')');
+            break;
+        case EX_GEN_DONE:
+            buf_puts(b, "(gen-done? ");
+            if (e->as.gen_done_.gen_expr) expr_print(b, e->as.gen_done_.gen_expr);
+            buf_putc(b, ')');
+            break;
     }
 }

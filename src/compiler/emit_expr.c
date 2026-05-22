@@ -30,13 +30,22 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *bn = name_for_binding(ctx, b);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
-        if (b->type.kind == TY_FN) {
+        /* GF1: gen struct fields are already declared in the struct -- just assign */
+        bool is_gen_field = false;
+        if (ctx->gen_var_name && ctx->gen_struct_bindings) {
+            for (uint32_t gi = 0; gi < ctx->n_gen_struct_bindings; gi++) {
+                if (ctx->gen_struct_bindings[gi] == b) { is_gen_field = true; break; }
+            }
+        }
+        if (is_gen_field) {
+            buf_printf(body, "%s = %s;\n", bn, iv);
+        } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
-            buf_printf(body, "%s (*%s)(", 
+            buf_printf(body, "%s (*%s)(",
                        type_c_name(emit_type_from_kind(b->type.as.fn.result_kind)), bn);
             for (uint8_t j = 0; j < b->type.as.fn.arity; j++) {
                 if (j > 0) buf_puts(body, ", ");
-                buf_printf(body, "%s", 
+                buf_printf(body, "%s",
                            type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
             }
             buf_printf(body, ") = %s;\n", iv);
@@ -420,6 +429,105 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     free(frame_var);
 
     return result ? result : atom_nil();
+}
+
+/* GF1: Emit the C struct typedef, _create function, and _next function for a generator.
+ * Written to ctx->pending_handler_fns so they are flushed to file scope before the
+ * enclosing function definition (same pattern as algebraic-effect handler functions). */
+static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
+    /* Use pending_handler_fns so generator structs/functions land at file scope
+     * before the function that creates them (emit_fn_def drains this buffer). */
+    Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : ctx->file;
+
+    /* Emit common gen header typedef once per compilation unit */
+    if (!ctx->gen_hdr_emitted) {
+        buf_puts(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *); } __tur_gen_hdr_t;\n");
+        ctx->gen_hdr_emitted = true;
+    }
+
+    /* Struct typedef: __state, __next_fn, then all struct_binding fields */
+    buf_printf(out, "typedef struct { int32_t __state; void *(*__next_fn)(void *);");
+    for (uint32_t i = 0; i < def->n_struct_bindings; i++) {
+        Binding *b = def->struct_bindings[i];
+        char *fn = raw_name_for_binding(b);
+        buf_printf(out, " %s %s;", type_c_name(b->type), fn);
+        free(fn);
+    }
+    buf_printf(out, " } %s;\n", def->struct_name);
+
+    /* Forward-declare _next before _create so _create can take its address */
+    buf_printf(out, "static void *%s(void *__gv);\n", def->next_fn);
+
+    /* _create function */
+    buf_printf(out, "static void *%s(", def->create_fn);
+    if (def->n_captures == 0) {
+        buf_puts(out, "void");
+    } else {
+        for (uint32_t i = 0; i < def->n_captures; i++) {
+            if (i > 0) buf_puts(out, ", ");
+            Binding *b = def->captures[i];
+            char *fn = raw_name_for_binding(b);
+            buf_printf(out, "%s %s", type_c_name(b->type), fn);
+            free(fn);
+        }
+    }
+    buf_puts(out, ") {\n");
+    buf_printf(out, "    %s *__g = (%s *)malloc(sizeof(%s));\n",
+               def->struct_name, def->struct_name, def->struct_name);
+    buf_printf(out, "    __g->__state = 0;\n");
+    buf_printf(out, "    __g->__next_fn = %s;\n", def->next_fn);
+    for (uint32_t i = 0; i < def->n_captures; i++) {
+        Binding *b = def->captures[i];
+        char *fn = raw_name_for_binding(b);
+        buf_printf(out, "    __g->%s = %s;\n", fn, fn);
+        free(fn);
+    }
+    buf_printf(out, "    return (void *)__g;\n");
+    buf_printf(out, "}\n");
+
+    /* _next function body -- built into a separate buf, then appended */
+    Buf fn_body;
+    buf_init(&fn_body);
+    buf_printf(&fn_body, "static void *%s(void *__gv) {\n", def->next_fn);
+    buf_printf(&fn_body, "    %s *__g = (%s *)__gv;\n", def->struct_name, def->struct_name);
+
+    /* State dispatch at top -- jump to resume label for each yield point */
+    for (uint32_t i = 0; i < def->n_yield_points; i++) {
+        buf_printf(&fn_body, "    if (__g->__state == %u) goto __yield_%u;\n", i + 1, i);
+    }
+    buf_printf(&fn_body, "    if (__g->__state == -1) return NULL;\n");
+
+    /* Save and override gen context in ctx */
+    Binding    **saved_gsb   = ctx->gen_struct_bindings;
+    uint32_t    saved_n_gsb  = ctx->n_gen_struct_bindings;
+    const char *saved_gvn    = ctx->gen_var_name;
+    const char *saved_gst    = ctx->gen_struct_type;
+    int         saved_indent = ctx->indent;
+
+    ctx->gen_struct_bindings   = def->struct_bindings;
+    ctx->n_gen_struct_bindings = def->n_struct_bindings;
+    ctx->gen_var_name          = "__g";
+    ctx->gen_struct_type       = def->struct_name;
+    ctx->indent                = 4;
+
+    emit_stmt(ctx, &fn_body, def->body);
+
+    /* After body: mark done and return NULL */
+    buf_printf(&fn_body, "    __g->__state = -1;\n");
+    buf_printf(&fn_body, "    return NULL;\n");
+    buf_printf(&fn_body, "}\n");
+
+    /* Restore context */
+    ctx->gen_struct_bindings   = saved_gsb;
+    ctx->n_gen_struct_bindings = saved_n_gsb;
+    ctx->gen_var_name          = saved_gvn;
+    ctx->gen_struct_type       = saved_gst;
+    ctx->indent                = saved_indent;
+
+    /* Append _next to out */
+    buf_putc(&fn_body, '\0');
+    buf_puts(out, fn_body.data);
+    buf_free(&fn_body);
 }
 
 
@@ -2818,6 +2926,47 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             return nil_result ? atom_nil() : tmp;
+        }
+        /* GF1: Generator creation -- emit struct/fns to file scope, call create fn */
+        case EX_GEN: {
+            const GenDef *def = e->as.gen_.def;
+            emit_gen_functions(ctx, def);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = %s(", tmp, def->create_fn);
+            for (uint32_t i = 0; i < def->n_captures; i++) {
+                if (i > 0) buf_puts(body, ", ");
+                char *cap_name = name_for_binding(ctx, def->captures[i]);
+                buf_puts(body, cap_name);
+                free(cap_name);
+            }
+            buf_puts(body, ");\n");
+            return tmp;
+        }
+        /* GF1: Advance generator -- call _next via function pointer in struct header */
+        case EX_GEN_NEXT: {
+            char *gen_v = emit_value(ctx, body, e->as.gen_next_.gen_expr);
+            char *tmp   = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = ((__tur_gen_hdr_t *)(%s))->__next_fn(%s);\n",
+                       tmp, gen_v, gen_v);
+            free(gen_v);
+            return tmp;
+        }
+        /* GF1: Check generator exhaustion -- read __state field via common header */
+        case EX_GEN_DONE: {
+            char *gen_v = emit_value(ctx, body, e->as.gen_done_.gen_expr);
+            char *tmp   = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "bool %s = (((__tur_gen_hdr_t *)(%s))->__state == -1);\n",
+                       tmp, gen_v);
+            free(gen_v);
+            return tmp;
+        }
+        /* GF1: Yield in expression position -- forward to stmt emitter, return nil */
+        case EX_YIELD: {
+            emit_stmt(ctx, body, e);
+            return atom_nil();
         }
     }
     return atom_nil();
