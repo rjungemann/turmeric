@@ -424,15 +424,42 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             bool is_exists_form = (head == e->sym_exists || head == e->sym_exists_u);
 
             if (is_forall_form || is_exists_form) {
-                /* Syntax: (forall [a b ...] body-type) or (exists [a b ...] body-type) */
-                if (form->as.list.len != 3) {
+                /* Syntax:
+                 *   (forall [a b ...] body-type)
+                 *   (exists [a b ...] body-type)
+                 *   (exists [a b ...] [(C a) ...] body-type)   -- EX1b
+                 *
+                 * The optional constraint vector (EX1b) is only accepted on
+                 * `exists`; constraints on `forall` are tracked separately. */
+                if (form->as.list.len != 3 && form->as.list.len != 4) {
                     diag_emit(DIAG_ERROR, form->span,
-                              "'%s' requires exactly two elements: a variable list and a body type",
+                              "'%s' requires a variable list, an optional constraint vector, "
+                              "and a body type",
                               is_forall_form ? "forall" : "exists");
                     return NULL;
                 }
                 Form *vars_form = form->as.list.items[1];
-                Form *body_form = form->as.list.items[2];
+                Form *constraint_form = NULL;
+                Form *body_form = NULL;
+                if (form->as.list.len == 3) {
+                    body_form = form->as.list.items[2];
+                } else {
+                    /* 4 items: middle slot is the constraint vector. */
+                    constraint_form = form->as.list.items[2];
+                    body_form = form->as.list.items[3];
+                    if (is_forall_form) {
+                        diag_emit(DIAG_ERROR, constraint_form->span,
+                                  "'forall' does not accept a constraint vector "
+                                  "(use defclass / definstance constraints instead)");
+                        return NULL;
+                    }
+                    if (constraint_form->tag != F_VEC) {
+                        diag_emit(DIAG_ERROR, constraint_form->span,
+                                  "'exists' constraint vector must be a vector, "
+                                  "e.g. [(Show a)]");
+                        return NULL;
+                    }
+                }
 
                 if (vars_form->tag != F_VEC) {
                     diag_emit(DIAG_ERROR, vars_form->span,
@@ -501,6 +528,72 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                     ext_params, ext_kinds, n_extended);
                 if (!body_type) return NULL;
 
+                /* EX1b: Parse the optional constraint vector.  Each entry is a
+                 * 2-form list `(C v)` where C is a typeclass name in scope and
+                 * v is one of the bound variables. */
+                TypeClass **cclasses = NULL;
+                uint8_t    *cvar_idx = NULL;
+                uint8_t     n_constraints = 0;
+                if (constraint_form != NULL) {
+                    uint32_t nc = constraint_form->as.list.len;
+                    if (nc > 0) {
+                        cclasses = (TypeClass **)arena_alloc(
+                            e->arena, nc * sizeof(TypeClass *));
+                        cvar_idx = (uint8_t *)arena_alloc(
+                            e->arena, nc * sizeof(uint8_t));
+                        for (uint32_t i = 0; i < nc; i++) {
+                            Form *cf = constraint_form->as.list.items[i];
+                            if (cf->tag != F_LIST || cf->as.list.len != 2) {
+                                diag_emit(DIAG_ERROR, cf->span,
+                                          "exists: constraint must be a 2-element "
+                                          "list (TypeclassName var), e.g. (Show a)");
+                                return NULL;
+                            }
+                            Form *tc_form = cf->as.list.items[0];
+                            Form *var_ref = cf->as.list.items[1];
+                            if (tc_form->tag != F_SYM) {
+                                diag_emit(DIAG_ERROR, tc_form->span,
+                                          "exists: constraint head must be a typeclass name");
+                                return NULL;
+                            }
+                            if (var_ref->tag != F_SYM) {
+                                diag_emit(DIAG_ERROR, var_ref->span,
+                                          "exists: constraint argument must be one of "
+                                          "the bound variable names");
+                                return NULL;
+                            }
+                            TypeClass *tc = typeclass_env_lookup_typeclass(
+                                &e->typeclass_env, tc_form->as.sym);
+                            if (!tc) {
+                                diag_emit(DIAG_ERROR, tc_form->span,
+                                          "exists: unknown typeclass '%s'",
+                                          tc_form->as.sym->name);
+                                return NULL;
+                            }
+                            /* Find the var index */
+                            uint8_t vi = (uint8_t)0xFF;
+                            for (uint8_t j = 0; j < n_bound; j++) {
+                                if (vars_form->as.list.items[j]->tag == F_SYM
+                                        && vars_form->as.list.items[j]->as.sym
+                                            == var_ref->as.sym) {
+                                    vi = j;
+                                    break;
+                                }
+                            }
+                            if (vi == (uint8_t)0xFF) {
+                                diag_emit(DIAG_ERROR, var_ref->span,
+                                          "exists: constraint variable '%s' is not "
+                                          "one of the bound variables",
+                                          var_ref->as.sym->name);
+                                return NULL;
+                            }
+                            cclasses[i] = tc;
+                            cvar_idx[i] = vi;
+                        }
+                        n_constraints = (uint8_t)nc;
+                    }
+                }
+
                 /* Build the TY_FORALL or TY_EXISTS node */
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 memset(t, 0, sizeof(Type));
@@ -511,6 +604,9 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 t->as.forall_.var_kinds = var_kinds;
                 t->as.forall_.n_vars = n_bound;
                 t->as.forall_.body = body_type;
+                t->as.forall_.constraint_classes = cclasses;
+                t->as.forall_.constraint_var_idx = cvar_idx;
+                t->as.forall_.n_constraints = n_constraints;
                 return t;
             }
         }
@@ -1420,9 +1516,15 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     return out;
 }
 
-/* Phase HRT2: (pack value (exists [a] T)) — existential introduction.
+/* Phase HRT2/EX1c: (pack value (exists [a] T)) -- existential introduction.
  * Boxes the value as an opaque existential; result type is the TY_EXISTS type node.
- * Syntax: (pack expr (exists [a] T)) */
+ * Syntax:
+ *   (pack expr (exists [a] T))
+ *   (pack expr (exists [a] [(C a) ...] T))   -- EX1b/EX1c with constraints
+ *
+ * When the target existential carries constraints, this verifies that the
+ * concrete type of `expr` has an instance for each constraint and records the
+ * resolved witnesses on the EX_EXISTS_PACK node for later runtime bundling. */
 Expr *elab_pack(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1446,10 +1548,127 @@ Expr *elab_pack(Elab *e, const Form *call) {
     Expr *val = elab_form(e, val_form);
     if (!val) return NULL;
 
+    /* EX1c-1: For each constraint (C v) on the existential, verify that the
+     * concrete type of `val` has an instance for C.  Multi-var existentials
+     * with mixed bound vars are out of scope for EX1; require all constraints
+     * to reference var_idx == 0 (the first/only bound var representing the
+     * packed value).  Store the resolved witnesses on the node. */
+    TypeClassInstance **witnesses = NULL;
+    uint8_t n_witnesses = 0;
+    if (ex_type->as.forall_.n_constraints > 0) {
+        uint8_t nc = ex_type->as.forall_.n_constraints;
+        witnesses = (TypeClassInstance **)arena_alloc(
+            e->arena, nc * sizeof(TypeClassInstance *));
+        Type concrete = val->type;
+        for (uint8_t i = 0; i < nc; i++) {
+            TypeClass *tc = ex_type->as.forall_.constraint_classes[i];
+            uint8_t    vi = ex_type->as.forall_.constraint_var_idx[i];
+            if (vi != 0) {
+                /* EX1: only constraints over the first bound variable are
+                 * resolvable here; other vars require EX2 phantom-variable
+                 * support. */
+                diag_emit(DIAG_ERROR, type_form->span,
+                          "pack: constraints over bound variables other than the "
+                          "first are not supported in EX1");
+                return NULL;
+            }
+            TypeClassInstance *inst = typeclass_env_lookup_instance(
+                &e->typeclass_env, tc, &concrete, 1);
+            if (!inst) {
+                diag_emit(DIAG_ERROR, val_form->span,
+                          "pack: no instance '%s' for type '%s' "
+                          "(required by existential constraint)",
+                          (tc && tc->name && tc->name->name) ? tc->name->name : "?",
+                          type_name(concrete));
+                return NULL;
+            }
+            witnesses[i] = inst;
+        }
+        n_witnesses = nc;
+    }
+
     /* Result type is the full TY_EXISTS type node (void* at codegen) */
     Expr *out = expr_new(e->arena, EX_EXISTS_PACK, *ex_type, call->span);
     out->as.exists_pack_.value = val;
+    out->as.exists_pack_.witnesses = witnesses;
+    out->as.exists_pack_.n_witnesses = n_witnesses;
     return out;
+}
+
+/* Phase EX1d: scope-escape check helpers.
+ *
+ * After elaborating an `open` body, we verify that the existentially-bound
+ * value `v` (or anything that aliases it through `let`) does not flow out of
+ * the body's tail position.  This catches the canonical leak patterns:
+ *
+ *   (open e [a v] v)                             ; direct leak
+ *   (open e [a v] (do step v))                   ; tail of `do`
+ *   (open e [a v] (let [w v] w))                 ; aliased through let
+ *   (open e [a v] (if cond v 0))                 ; one branch of `if`
+ *
+ * Indirect leaks via opaque function-return paths (e.g. `(identity v)`) are
+ * deliberately not flagged here -- the EX1 spec leaves general inference of
+ * skolem-tainted return types to a future pass.  When v is leaked through
+ * such a path the runtime payload is still a plain int64_t, so soundness
+ * relies only on the type-level check at the open boundary.
+ *
+ * The tainted set starts as { v } and grows as we walk through `let`s
+ * whose initializer is itself tainted. */
+
+#define EX1D_MAX_TAINTED 32
+
+typedef struct ExistsEscapeCtx {
+    Binding *tainted[EX1D_MAX_TAINTED];
+    uint8_t  n_tainted;
+    bool     overflowed;     /* set if we hit MAX_TAINTED; check becomes conservative */
+} ExistsEscapeCtx;
+
+static bool ex1d_is_tainted(const ExistsEscapeCtx *ctx, const Binding *b) {
+    if (!b) return false;
+    for (uint8_t i = 0; i < ctx->n_tainted; i++) {
+        if (ctx->tainted[i] == b) return true;
+    }
+    return false;
+}
+
+static void ex1d_add_tainted(ExistsEscapeCtx *ctx, Binding *b) {
+    if (!b || ex1d_is_tainted(ctx, b)) return;
+    if (ctx->n_tainted >= EX1D_MAX_TAINTED) { ctx->overflowed = true; return; }
+    ctx->tainted[ctx->n_tainted++] = b;
+}
+
+/* Returns true if the expression's tail value can be the existentially-bound
+ * binding (or any binding aliased to it through `let`). */
+static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_VAR:
+            return ex1d_is_tainted(ctx, e->as.var.binding);
+        case EX_DO:
+            if (e->as.do_.n == 0) return false;
+            return ex1d_tail_leaks(ctx, e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET: {
+            /* First, propagate taint through let-binding initializers so
+             * later references see the alias. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                LetBinding *lb = &e->as.let_.bindings[i];
+                if (lb->init && ex1d_tail_leaks(ctx, lb->init)) {
+                    ex1d_add_tainted(ctx, lb->binding);
+                }
+            }
+            return ex1d_tail_leaks(ctx, e->as.let_.body);
+        }
+        case EX_IF:
+            return ex1d_tail_leaks(ctx, e->as.if_.then_)
+                || ex1d_tail_leaks(ctx, e->as.if_.else_or_null);
+        case EX_EXISTS_OPEN:
+            /* The value flowing out of a nested `open` is the tail of its
+             * body.  Recurse so that a leak of an outer binding through an
+             * inner open is still caught by the outer's check. */
+            return ex1d_tail_leaks(ctx, e->as.exists_open_.body);
+        default:
+            return false;
+    }
 }
 
 /* Phase HRT2: (open packed [a v] body) — existential elimination.
@@ -1490,6 +1709,7 @@ Expr *elab_open(Elab *e, const Form *call) {
                   "open: binders must be symbols");
         return NULL;
     }
+    const Symbol *abs_sym = abstract_form->as.sym;
     const Symbol *val_sym = val_name_form->as.sym;
 
     /* Determine type of v from the existential body type.
@@ -1505,6 +1725,11 @@ Expr *elab_open(Elab *e, const Form *call) {
             }
         }
     }
+
+    /* EX1d: mint a fresh skolem id and push the depth counter so nested
+     * `open` forms cannot confuse each other's escape checks. */
+    uint32_t my_skolem_id = e->open_skolem_next++;
+    e->open_skolem_depth++;
 
     /* Create binding for v in the open body */
     Binding *v_binding = binding_new(e, val_sym, v_type, false, false, val_name_form->span);
@@ -1535,11 +1760,26 @@ Expr *elab_open(Elab *e, const Form *call) {
         }
     }
 
-    /* Restore scope */
+    /* Restore scope and depth */
     e->scope = inner.parent;
     scope_free(&inner);
+    e->open_skolem_depth--;
 
     if (!body_ok || !body) return NULL;
+
+    /* EX1d: scope-escape check.  Verify that the body's tail position does
+     * not leak the existentially-bound value out of the open scope. */
+    ExistsEscapeCtx ctx = (ExistsEscapeCtx){0};
+    ex1d_add_tainted(&ctx, v_binding);
+    if (ex1d_tail_leaks(&ctx, body)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "open: existential type variable '%s' escapes its scope "
+                  "(the body returns the bound value '%s' or an alias)",
+                  abs_sym && abs_sym->name ? abs_sym->name : "a",
+                  val_sym && val_sym->name ? val_sym->name : "v");
+        return NULL;
+    }
+    (void)my_skolem_id; /* reserved for EX1e runtime dispatch */
 
     Expr *out = expr_new(e->arena, EX_EXISTS_OPEN, body->type, call->span);
     out->as.exists_open_.packed      = packed;

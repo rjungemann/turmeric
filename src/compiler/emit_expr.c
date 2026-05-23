@@ -2383,12 +2383,56 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ASCRIBE: {
             return emit_value(ctx, body, e->as.ascribe_.inner);
         }
-        /* Phase HRT2: existential pack — box value as void* */
+        /* Phase HRT2 / EX1e: existential pack.
+         *   - Unconstrained: emit a bare scalar/pointer cast as in HRT2.
+         *   - Constrained (n_witnesses > 0): allocate a tur_existential_t on
+         *     the heap, store the boxed value and one vtable pointer per
+         *     constraint, and return the record pointer cast to tur_exists_t.
+         *
+         * The witnesses array is malloced separately so it can hold any
+         * number of constraints.  EX1e-3 will arrange for method dispatch
+         * on a value bound by `open` to read through these pointers when
+         * the open scrutinee is constrained.
+         * GC: the record is freed when the open scope exits (EX1e-4 deferred). */
         case EX_EXISTS_PACK: {
             char *val = emit_value(ctx, body, e->as.exists_pack_.value);
             Buf out; buf_init(&out);
             TypeKind vk = e->as.exists_pack_.value->type.kind;
-            if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
+            uint8_t n_w = e->as.exists_pack_.n_witnesses;
+            if (n_w > 0 && e->as.exists_pack_.witnesses) {
+                /* Build a list of dict-singleton addresses, one per witness. */
+                char *vt_tmp = fresh_tmp(ctx);
+                char *rec_tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void **%s = (void **)malloc(sizeof(void *) * %u);\n",
+                           vt_tmp, (unsigned)n_w);
+                for (uint8_t wi = 0; wi < n_w; wi++) {
+                    char dict_name[128];
+                    emit_dict_name(dict_name, sizeof(dict_name),
+                                   e->as.exists_pack_.witnesses[wi]);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s[%u] = (void *)(&%s_singleton);\n",
+                               vt_tmp, (unsigned)wi, dict_name);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "tur_existential_t *%s = (tur_existential_t *)malloc(sizeof(tur_existential_t));\n",
+                    rec_tmp);
+                indent_buf(body, ctx->indent);
+                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
+                    buf_printf(body, "%s->value = (int64_t)(intptr_t)(%s);\n",
+                               rec_tmp, val);
+                } else {
+                    buf_printf(body, "%s->value = (int64_t)(%s);\n", rec_tmp, val);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s->n_witnesses = %u;\n", rec_tmp, (unsigned)n_w);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s->witnesses = %s;\n", rec_tmp, vt_tmp);
+                buf_printf(&out, "(tur_exists_t)(%s)", rec_tmp);
+                free(vt_tmp);
+                free(rec_tmp);
+            } else if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
                 /* Already a pointer — cast directly */
                 buf_printf(&out, "(tur_exists_t)(%s)", val);
             } else {
@@ -2414,12 +2458,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_puts(body, "{\n");
             ctx->indent += 4;
 
-            /* Emit and unbox the packed value */
+            /* Emit and unbox the packed value.
+             * EX1e: if the packed scrutinee is a constrained existential,
+             * the runtime value is a tur_existential_t* record whose `value`
+             * field holds the original boxed payload; otherwise the value
+             * was reinterpreted as void* (unchanged from HRT2). */
             char *packed_val = emit_value(ctx, body, e->as.exists_open_.packed);
             char *var_name = name_for_binding(ctx, e->as.exists_open_.var_binding);
+            bool packed_is_record =
+                e->as.exists_open_.packed->type.kind == TY_EXISTS
+                && e->as.exists_open_.packed->type.as.forall_.n_constraints > 0;
             indent_buf(body, ctx->indent);
             TypeKind vk = e->as.exists_open_.var_binding->type.kind;
-            if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+            if (packed_is_record) {
+                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+                    buf_printf(body,
+                        "void *%s = (void *)(intptr_t)((tur_existential_t *)(%s))->value;\n",
+                        var_name, packed_val);
+                } else {
+                    buf_printf(body,
+                        "int64_t %s = ((tur_existential_t *)(%s))->value;\n",
+                        var_name, packed_val);
+                }
+            } else if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
                 buf_printf(body, "void *%s = (void *)(%s);\n", var_name, packed_val);
             } else {
                 /* Unbox scalar via intptr_t */

@@ -1,0 +1,11 @@
+; Phase EX1d: aliasing the existentially-bound value through a `let` and
+; then returning the alias must still trip the scope-escape check.
+(defn leak [e :ptr<void>] :int
+  (open e [a v]
+    (let [w v]
+      w)))
+
+(defn main [] :int
+  (let [e (pack 11 (exists [a] a))]
+    (println (leak e)))
+  0)

@@ -1,0 +1,54 @@
+;; stdlib/existential.tur -- helpers for native pack/open existentials.
+;;
+;; Phase EX1f wires the macros defined here on top of the EX1c constraint
+;; mechanism and the EX1e tur_existential_t heap record.  No struct
+;; encoding is involved -- `showable` expands to a real `pack` and
+;; `show-it` expands to a real `open`.
+;;
+;; This file is NOT auto-loaded by the compiler (every program would
+;; otherwise pull in the typeclass machinery and invalidate codegen
+;; snapshots).  Load it explicitly, after the typeclass stdlib it
+;; depends on:
+;;
+;;     (load "stdlib/typeclass.tur")
+;;     (load "stdlib/existential.tur")
+;;
+;; The Show typeclass must be in scope at the call site because the
+;; existential constraint syntax `(Show a)` resolves the typeclass name
+;; during elaboration.
+
+;;; showable -- pack a value as a Show-constrained existential.
+;;;
+;;; Parameters:
+;;;   x -- any value whose type implements the Show typeclass
+;;;
+;;; Returns:
+;;;   A boxed existential of type (exists [a] [(Show a)] a).  At runtime
+;;;   this is a tur_existential_t* carrying the value and a Show vtable
+;;;   pointer (see Phase EX1e).
+;;;
+;;; Example:
+;;;   (showable 42)
+;;;     ; => packed existential; opening it with show-it prints "42".
+;;;
+;;; Since: Phase EX1f
+(defmacro showable [x]
+  (list pack x (list exists [a] [(list Show a)] a)))
+
+;;; show-it -- open a Show-constrained existential and call .show on
+;;; the inner value.
+;;;
+;;; Parameters:
+;;;   s -- a value of type (exists [a] [(Show a)] a) produced by showable
+;;;
+;;; Returns:
+;;;   The :cstr produced by the Show instance attached to the underlying
+;;;   concrete type.
+;;;
+;;; Example:
+;;;   (show-it (showable 42))   ; => "42"
+;;;   (show-it (showable true)) ; => "true"  (requires Show [bool])
+;;;
+;;; Since: Phase EX1f
+(defmacro show-it [s]
+  (list open s [a v] (list (quote .show) v)))

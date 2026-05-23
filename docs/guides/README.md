@@ -80,6 +80,7 @@ see the task plan for progress.
 - **[type-annotations-guide.md](type-annotations-guide.md)** -- Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
 - **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
+- **[existential-types-guide.md](existential-types-guide.md)** -- Existential types: `pack`/`open`, typeclass-constrained boxing, the scope-escape check, and the `stdlib/existential.tur` helpers
 - **[gadts-guide.md](gadts-guide.md)** -- GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** -- GADTs cookbook: practical patterns and recipes
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** -- Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing

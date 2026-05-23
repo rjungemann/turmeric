@@ -627,9 +627,14 @@ struct Expr {
             bool            is_closure;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
-        /* Phase HRT2: Existential types */
+        /* Phase HRT2: Existential types.
+         * Phase EX1c: optional resolved constraint witnesses (one per constraint
+         * in the target existential type).  NULL when the target has no
+         * constraints. */
         struct {
-            struct Expr *value;   /* the value being packed as an existential */
+            struct Expr           *value;     /* the value being packed */
+            TypeClassInstance    **witnesses; /* arena-allocated; length n_witnesses */
+            uint8_t                n_witnesses;
         } exists_pack_;
         struct {
             struct Expr    *packed;      /* the packed existential expression */

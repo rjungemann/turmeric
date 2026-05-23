@@ -1,10 +1,17 @@
-; Phase HRT2: counter module with hidden state.
+; Phase HRT2 / EX1d: counter module with hidden state.
 ; The counter's internal int is hidden behind an existential (void*).
+;
+; Phase EX1d makes `(open c [a v] v)` reject: returning the existentially-
+; bound value directly would let the abstract type leak out of the open
+; scope.  Instead, we expose a `counter-print` helper that consumes v
+; inside the open and yields :nil; the increment helper repacks before
+; the open expression's tail, so v never appears in the tail position.
 (defn make-counter [n :int] :ptr<void>
   (pack n (exists [a] a)))
 
-(defn counter-get [c :ptr<void>] :int
-  (open c [a v] v))
+(defn counter-print [c :ptr<void>] :nil
+  (open c [a v]
+    (println v)))
 
 (defn counter-incr [c :ptr<void>] :ptr<void>
   (open c [a v]
@@ -15,5 +22,5 @@
         c1 (counter-incr c0)
         c2 (counter-incr c1)
         c3 (counter-incr c2)]
-    (println (counter-get c3)))
+    (counter-print c3))
   0)

@@ -478,6 +478,11 @@ typedef struct Elab {
     /* Phase 21: tracks nesting depth of serial-reset for detecting
      * serial-shift outside any serial-reset boundary. */
     int              serial_reset_depth;
+    /* Phase EX1d: nesting depth of `open` forms.  Each open mints a fresh
+     * skolem id (open_skolem_next++); the depth counter exists so nested
+     * opens cannot confuse each other's escape checks. */
+    int              open_skolem_depth;
+    uint32_t         open_skolem_next;
     /* Phase P3: HAMT lowering - track if HAMT functions are used */
     bool             needs_hamt;
     /* PR5-3-D: Effects brought into scope via :refer [(effect Name)] imports */

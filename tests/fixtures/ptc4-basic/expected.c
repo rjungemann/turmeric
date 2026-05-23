@@ -119,6 +119,12 @@ static const char *__tur_any_type_name(int64_t tag) {
 }
 /* Phase HRT2: existential type (opaque void* box) */
 typedef void * tur_exists_t;
+/* Phase EX1e: constrained-existential heap record */
+typedef struct tur_existential {
+    int64_t  value;
+    int32_t  n_witnesses;
+    void   **witnesses;
+} tur_existential_t;
 /* STM types (Phase 21) */
 typedef void *(*stm_fn_t)(void *env);
 typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;

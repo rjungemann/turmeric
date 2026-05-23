@@ -1215,6 +1215,9 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->macro_expansion_module = NULL;
     e->cloneable_reset_depth = 0;
     e->serial_reset_depth = 0;
+    /* Phase EX1d: existential `open` skolem tracking. */
+    e->open_skolem_depth = 0;
+    e->open_skolem_next  = 0;
     /* Phase P3: HAMT lowering */
     e->needs_hamt = false;
     /* PR5-3-D: referred effects */

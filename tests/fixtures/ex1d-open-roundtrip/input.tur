@@ -1,0 +1,24 @@
+; Phase EX1d: basic pack/open roundtrip.  Pack an int as an existential
+; constrained by Show, open it, call show on the inner value, and print the
+; resulting cstr.  The open's tail is a :cstr (not a reference to v), so
+; the scope-escape check passes.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+; Inline the open at the use site so the constrained existential's type
+; flows directly into `open`.  Passing the value through a function param
+; typed `:ptr<void>` would strip the constraint info and the open would
+; not know to unbox the EX1e tur_existential_t record.
+(defn main [] :int
+  (let [e (pack 42 (exists [a] [(Show a)] a))]
+    (println (open e [a v]
+               (.show v))))
+  0)

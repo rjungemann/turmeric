@@ -1,0 +1,12 @@
+; Phase EX1c: pack must fail when the concrete type lacks an instance of
+; one of the existential's constraints.  Show is defined for cstr only, so
+; packing an int is rejected.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [cstr]
+  (show [x] x))
+
+(defn main [] :int
+  (let [e (pack 42 (exists [a] [(Show a)] a))]
+    0))
