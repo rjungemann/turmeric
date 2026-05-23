@@ -1,11 +1,15 @@
 # Cross-Plan Followups
 
-> **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F7 (doc
-> hygiene) all shipped.  Existential safety completeness phase done.
-> Remaining open phases (each ~1 session of work; independent):
->   - F3 -- dictionary passing for recursive typeclass dispatch
->     (the plan's "largest item"),
->   - F4 -- `^deprecated` attribute system,
+> **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F4 (infra +
+> --Werror=deprecated; full stdlib sweep deferred), F7 (doc
+> hygiene) all shipped.  F3-1 (design) shipped; the F3
+> implementation tasks expanded scope (2-3 sessions) once we
+> discovered the receiver-type-erasure dependency -- deferred.
+> Remaining open phases:
+>   - F3-2..F3-7 -- dictionary passing + receiver type recovery
+>     (see Phase F3 "Additional blocker" for the expanded scope),
+>   - F4-4 -- mass stdlib `^deprecated` annotation (deferred so
+>     each module lands with its migration guidance),
 >   - F5 -- `MutableMap[K V]`,
 >   - F6 -- interpreter (turi) fixture gaps,
 >   - F8 -- `defstruct` compound field type annotations (unblocks
@@ -217,16 +221,116 @@ constraint dictionaries as runtime parameters, so `.eq?` inside a
 `definstance Eq [Vec] [(Eq A)]` body has nothing to dispatch through
 beyond the syntactic name.
 
-**Tasks.**
+### Additional blocker discovered while scoping F3 (2026-05-23)
+
+The plan's framing above describes the *body-side* of dispatch.
+While prototyping F3 we found a matching *call-site* gap: the
+receiver-type-erasure problem.  `tvec-push` and friends return
+`:int` (the C-level int64 representation of the opaque collection
+pointer), not `:Vec[int]`.  Calling `.eq?` on a binding produced
+by `tvec-push` therefore fails with:
+
+```
+error: ambiguous method dispatch: '.eq?' matches 7 instances
+  (Eq[Set], Eq[Cons], Eq[Pair], Eq[Result], Eq[Option], Eq[Vec], Eq[Map])
+  -- receiver type is erased (int64_t).  Hint: annotate the
+  receiver's type or use @TypeName syntax (see D1).
+```
+
+The `@TypeName` workaround pins dispatch but does not actually
+exercise the dictionary-passing path -- it bypasses constraint
+resolution entirely.  Existing typed-collection fixtures
+(`tests/fixtures/typed/tvec-basic`) sidestep this by calling
+`tvec-eq?` directly with an explicit comparator instead of
+`.eq?`, which means the recursive-equality regression is
+currently *latent* (no fixture catches it).
+
+For F3 to actually deliver recursive structural equality through
+`(.eq? outer-vec outer-vec)`, both pieces must land together:
+
+1. The body-side dictionary parameter so `(.eq? a b)` inside an
+   instance body has somewhere to dispatch when `a` has a
+   universally-quantified type.
+2. A call-site mechanism so the receiver's `:int`-erased type is
+   recovered to the constructor's full TY_APP type, allowing
+   instance resolution to pick `Eq[Vec[A]]` (and then resolve
+   `A` from the recovered TY_APP).
+
+The PTC4 work began (2) for direct constructor calls (TY_APP
+`result_full_type`), but the typed-collection helpers
+(`tvec-push`, `tvec-new`, etc.) discard the TY_APP at the return
+boundary.  Closing F3 therefore also requires either:
+
+- (option a) extending PTC4's `result_full_type` to cover the
+  typed-collection helpers, plus a new emit path that keeps
+  TY_APP on let-bindings of helper results, or
+- (option b) introducing a `(:: e :Vec[int])` ascription form
+  that re-attaches TY_APP without changing helper signatures.
+
+Either choice is its own design decision and pushes F3 from "1
+session" to "2-3 sessions" of work.  This was understated in the
+original plan -- the dictionary-passing change alone is
+mechanically the largest piece, but it is not deliverable in
+isolation.
+
+### Design sketch (F3-1)
+
+**Call convention.**  For a constrained-instance method
+`(definstance C [T] [(C1 A) (C2 B) ...] (method [p1 p2 ...] body))`,
+the generated C function gains one hidden parameter per constraint,
+inserted before the user parameters:
+
+```c
+ret_t method_impl(
+    const dict_C1_T* __dict_C1_A,   /* one per constraint */
+    const dict_C2_T* __dict_C2_B,
+    /* ... */
+    arg1_t p1, arg2_t p2, ...       /* original parameters */
+);
+```
+
+**Body-side resolution.**  When `body` evaluates `(.method2 x)`
+where `x : A` (a constrained type variable bound by the instance's
+constraint vector), the elaborator:
+
+1. Finds the constraint `(C1 A)` that binds `A`.
+2. Synthesises a fresh binding for the corresponding hidden
+   dictionary parameter (named e.g. `__dict_C1_A`).
+3. Lowers `(.method2 x)` to `__dict_C1_A->method2_(x, ...)`.
+
+This requires extending the constraint-vector parser in
+`elab_typeclasses.c` to record the hidden-parameter binding per
+constraint, and extending `elab_method_call` to recognise the
+"receiver type is a constrained type variable" case and route
+through the dict binding instead of the static singleton.
+
+**Call-site resolution.**  When the dispatcher resolves
+`(.method outer)` against an instance whose typeclass has its own
+constraints (e.g. `Eq[Vec[A]]` requires `Eq[A]`), the dispatcher
+must recursively resolve the inner constraints (`Eq[A]` where
+`A = Vec[int]` -> `Eq[Vec[int]]`'s singleton -> ...) and pass
+each resolved dictionary as an extra argument.  Recursion
+terminates at primitive types whose instances are unconditional
+singletons.
+
+**ABI compatibility.**  Existing unconstrained instance methods
+(`Eq[int]` etc.) are unchanged -- they have no constraints, so no
+hidden parameters, so the same vtable layout works.  Constrained
+instance methods get a *new* vtable shape (one per typeclass +
+type-args combination), which is a fresh codegen so there is no
+backwards-compatibility issue.
+
+### Tasks
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F3-1 | Design dictionary-passing call convention: for a constrained instance method `f`, the generated function takes one extra hidden parameter per constraint -- a pointer to the resolved typeclass dictionary at the call site.  Document the convention. | design + `docs/` |
-| F3-2 | Extend `elab_typeclasses.c` to elaborate constrained-instance methods with the hidden dictionary parameters in scope, accessible by the constrained typeclass name. | `src/compiler/elab_typeclasses.c` |
-| F3-3 | Extend the method-dispatch loop to thread the resolved dictionaries from the call site into the hidden parameters. | `src/compiler/elab_typeclasses.c` |
-| F3-4 | Update `emit_fns.c` to emit the extra parameters and `emit_expr.c` to pass the dictionaries at the call. | `src/compiler/emit_fns.c`, `emit_expr.c` |
+| F3-1 | Design dictionary-passing call convention -- **shipped** (this section).  The implementation work (F3-2..F3-7) is deferred to a follow-up session given the scope expansion described above. | -- |
+| F3-2 | Extend `elab_typeclasses.c` to elaborate constrained-instance methods with hidden dictionary parameters in scope, accessible by the constrained typeclass name. | `src/compiler/elab_typeclasses.c` |
+| F3-3 | Extend the method-dispatch loop to recursively resolve inner constraints and thread dictionaries from the call site into the hidden parameters. | `src/compiler/elab_typeclasses.c` |
+| F3-4 | Update `emit_fns.c` to emit the extra parameters and `emit_expr.c` to pass the dictionaries at the call.  Also extend the EX_METHOD_CALL emit to choose between the static-singleton path (unconstrained) and the dict-pointer-arg path (constrained). | `src/compiler/emit_fns.c`, `emit_expr.c` |
 | F3-5 | Replace the integer-`=` element comparison in each `t*.tur` constrained `Eq` instance with a dispatch through the element's `.eq?`. | `stdlib/t*.tur` |
 | F3-6 | Add fixture `tests/fixtures/typed/tvec-of-tvec-eq` and `tests/fixtures/typed/tmap-of-tvec-eq` covering recursive structural equality. | `tests/fixtures/typed/` |
+| F3-7 | **New.**  Pick option (a) or (b) for receiver-type recovery on typed-collection helpers (see "Additional blocker" above) and implement it.  Without F3-7, F3-5/F3-6 cannot exercise the dict-passing path through `.eq?`. | `src/compiler/elab_call.c`, `stdlib/t*.tur` |
 
 ---
 
@@ -404,6 +508,12 @@ for that one.
   cycle-collection tests in F2-2.  Recommend landing second.
 - **F3** (typeclass dispatch) is the largest item and is independent
   of all the existential work.  Can land in parallel with F1/F2.
+  The 2026-05-23 scoping exercise found that F3 also requires the
+  receiver-type-recovery work that the original plan did not call
+  out (see the F3 "Additional blocker" subsection); budget 2-3
+  sessions for F3 rather than the originally-implied 1.  F3-1
+  (design) is shipped; the implementation tasks (F3-2..F3-7) are
+  deferred.
 - **F4** (deprecation attribute), **F5** (MutableMap), and **F6**
   (turi gaps) are all independent and can be picked up by whoever has
   spare cycles.
