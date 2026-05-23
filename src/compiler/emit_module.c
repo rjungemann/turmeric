@@ -2513,7 +2513,12 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        default: return default_rc_drop_fn;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n");
+    /* EXG5: layout-tag constants kept in sync with runtime/rc.h. */
+    buf_puts(out, "#define RCK_OPAQUE       0\n");
+    buf_puts(out, "#define RCK_EXISTENTIAL  1\n");
+    buf_puts(out, "#define RCEXP_OPAQUE     0\n");
+    buf_puts(out, "#define RCEXP_RC         1\n");
+    buf_puts(out, "RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {\n");
     buf_puts(out, "    size_t total_size = sizeof(RcControlBlock) + value_size;\n");
     buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);\n");
     buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc: out of memory\\n\"); abort(); }\n");
@@ -2523,10 +2528,15 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
+    buf_puts(out, "    cb->reserved[0] = kind;\n");
+    buf_puts(out, "    cb->reserved[1] = payload_kind;\n");
     buf_puts(out, "    /* Register with GC; primitives (type_kind<=7) cannot form cycles */\n");
     buf_puts(out, "    gc_register_block(cb);\n");
     buf_puts(out, "    if (value_type_kind <= 7) cb->may_contain_cycles = false;\n");
     buf_puts(out, "    return cb;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n");
+    buf_puts(out, "    return rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_OPAQUE, RCEXP_OPAQUE);\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "uint64_t rc_strong_increment(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return 0;\n");
@@ -2623,10 +2633,34 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        gc_all_blocks[i]->color = GC_WHITE;\n");
     buf_puts(out, "    }\n");
+    /* Initial sweep: every strong-rooted block is BLACK and enters the
+     * grey queue so EXG5 propagation below can chase its outgoing edges. */
+    buf_puts(out, "    gc_grey_count = 0;\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        RcControlBlock *cb = gc_all_blocks[i];\n");
     buf_puts(out, "        if (cb->strong_count > 0) {\n");
     buf_puts(out, "            cb->color = GC_BLACK;\n");
+    buf_puts(out, "            if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "                gc_grey_queue[gc_grey_count++] = cb;\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    /* EXG5: propagate reachability through known layouts.  Today only
+     * RCK_EXISTENTIAL blocks expose a follow-able payload (the inner
+     * RcControlBlock pointer when payload_kind == RCEXP_RC).  Without
+     * this step the walker would treat the inner rc as garbage even
+     * while the outer existential is strongly held. */
+    buf_puts(out, "    while (gc_grey_count > 0) {\n");
+    buf_puts(out, "        RcControlBlock *cb = gc_grey_queue[--gc_grey_count];\n");
+    buf_puts(out, "        if (cb && cb->value && cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {\n");
+    buf_puts(out, "            int64_t raw = *(const int64_t *)cb->value;\n");
+    buf_puts(out, "            RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;\n");
+    buf_puts(out, "            if (inner && inner->color != GC_BLACK) {\n");
+    buf_puts(out, "                inner->color = GC_BLACK;\n");
+    buf_puts(out, "                if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "                    gc_grey_queue[gc_grey_count++] = inner;\n");
+    buf_puts(out, "                }\n");
+    buf_puts(out, "            }\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");

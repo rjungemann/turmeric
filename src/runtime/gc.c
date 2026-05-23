@@ -244,18 +244,33 @@ static void gc_mark_phase(void) {
         }
     }
 
-    /* Step 2: Propagate from strong roots
-     * For v1, we can't scan the value contents for RC pointers
-     * (no type metadata at runtime). So we skip this step.
-     * This means we can only collect isolated cycles (not reachable from any strong root).
-     */
+    /* Step 2: Propagate from strong roots.
+     *
+     * For most blocks we still cannot scan the value contents (no type
+     * metadata at runtime), so they are processed as-is.  EXG5 widens
+     * the walker for blocks tagged RCK_EXISTENTIAL: their value field
+     * is a known layout (`tur_existential_t`) whose `value` slot, when
+     * tagged RCEXP_RC, is an RcControlBlock pointer that the walker
+     * follows just like any other strong field.  This makes the inner
+     * rc reachable through the existential, which is what fixes the
+     * cycle-detection blind spot called out in the EXG5 plan. */
     while (gc_grey_count > 0) {
         RcControlBlock *cb = gc_dequeue_grey();
         if (!cb) break;
 
-        /* For v1: we would scan cb->value for RC pointers here
-         * but we don't have type information. So we just mark
-         * it as processed. */
+        if (cb->value && cb->reserved[0] == RCK_EXISTENTIAL &&
+                cb->reserved[1] == RCEXP_RC) {
+            /* `value` points at a tur_existential_t whose first field
+             * is an int64_t holding the inner RcControlBlock pointer
+             * (cast through intptr_t).  Mirror that layout here so we
+             * do not need to depend on the codegen-generated struct. */
+            int64_t raw = *(const int64_t *)cb->value;
+            RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
+            if (inner && gc_get_color(inner) != GC_BLACK) {
+                gc_set_color(inner, GC_BLACK);
+                gc_enqueue_grey(inner);
+            }
+        }
     }
 
     /* Step 3: All BLACK objects are reachable from strong roots */

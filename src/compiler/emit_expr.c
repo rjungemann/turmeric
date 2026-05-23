@@ -2409,13 +2409,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (n_w > 0 && e->as.exists_pack_.witnesses) {
                 /* EXG1-3: combined allocation through rc_cb_alloc.  Payload
                  * size covers the fixed record fields plus one void* per
-                 * witness (flexible-array tail). */
+                 * witness (flexible-array tail).
+                 *
+                 * EXG5-3: tag the block as RCK_EXISTENTIAL and, when the
+                 * packed value is itself an RC-managed pointer, mark the
+                 * payload as RCEXP_RC.  The cycle walker reads these tags
+                 * to follow the inner rc through the existential record
+                 * (see gc_mark_phase). */
+                bool payload_is_rc =
+                    (vk == TY_RC) ||
+                    (vk == TY_WEAK) ||
+                    (vk == TY_EXISTS &&
+                     e->as.exists_pack_.value->type.as.forall_.n_constraints > 0);
+                int payload_kind_const = payload_is_rc ? 1 /* RCEXP_RC */
+                                                       : 0 /* RCEXP_OPAQUE */;
                 char *cb_tmp = fresh_tmp(ctx);
                 char *rec_tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_printf(body,
-                    "RcControlBlock *%s = rc_cb_alloc(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *), %d, tur_existential_drop);\n",
-                    cb_tmp, (unsigned)n_w, (int)TY_PTR_VOID);
+                    "RcControlBlock *%s = rc_cb_alloc_kinded(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *), %d, tur_existential_drop, 1 /* RCK_EXISTENTIAL */, %d);\n",
+                    cb_tmp, (unsigned)n_w, (int)TY_PTR_VOID, payload_kind_const);
                 indent_buf(body, ctx->indent);
                 buf_printf(body,
                     "tur_existential_t *%s = (tur_existential_t *)(%s->value);\n",

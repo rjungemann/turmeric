@@ -1,0 +1,34 @@
+; Phase EXG5-1/EXG5-3: a constrained pack whose payload is a scalar
+; must be tagged with the existential kind (RCK_EXISTENTIAL = 1) and
+; an opaque payload descriptor (RCEXP_OPAQUE = 0).  Verifying via
+; inline-C lets us check the layout-tag bytes written by the kinded
+; allocator without any user-visible API for them.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn kind-tag [e :ptr<void>] :int
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)e;
+  return (int64_t)cb->reserved[0];
+  ```)
+
+(defn payload-tag [e :ptr<void>] :int
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)e;
+  return (int64_t)cb->reserved[1];
+  ```)
+
+(defn main [] :int
+  (let [e1 (pack 42 (exists [a] [(Show a)] a))
+        e2 (rc/clone e1)]
+    (println (kind-tag e1))
+    (println (payload-tag e2)))
+  0)

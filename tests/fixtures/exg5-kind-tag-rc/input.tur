@@ -1,0 +1,25 @@
+; Phase EXG5-3: when a constrained pack's payload is itself an
+; rc-managed pointer, the kinded allocator must mark the payload
+; descriptor as RCEXP_RC = 1.  The cycle walker reads this tag to
+; recognise that the existential's value slot points at another
+; RcControlBlock to scan (see gc_mark_phase).
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [rc]
+  (show [x] :cstr
+    ```c
+    return (const char *)"<rc>";
+    ```))
+
+(defn payload-tag [e :ptr<void>] :int
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)e;
+  return (int64_t)cb->reserved[1];
+  ```)
+
+(defn main [] :int
+  (let [r (rc/of 7)
+        e (pack r (exists [a] [(Show a)] a))]
+    (println (payload-tag e)))
+  0)

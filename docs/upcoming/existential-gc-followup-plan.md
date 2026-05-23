@@ -1,8 +1,12 @@
 # Existential Types -- GC Integration, Follow-up Plan
 
 > **Status:** EXG4 partial (let-tail move tracking + rc/clone relaxation
-> + 3 fixtures shipped 2026-05-23).  EXG5, EXG6, and the EXG4 storage-site
-> auto-clone (EXG4-3) remain open.
+> + 3 fixtures shipped 2026-05-23).  EXG5 walker infrastructure shipped
+> 2026-05-23 (kind tag, rc_cb_alloc_kinded, pack-site descriptor,
+> existential payload follow-up in gc_mark_phase, 3 fixtures); the smart
+> drop hook for RC payloads is still open and the cycle-construction
+> test is blocked on that.  EXG6 and the EXG4 storage-site auto-clone
+> (EXG4-3) remain open.
 > **Last Updated:** 2026-05-23
 > **Type:** Runtime / Memory Management
 
@@ -277,11 +281,11 @@ so EXG4 and EXG5 do not apply.
 | EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites -- **open** (current rc<T> baseline also uses explicit clone at these sites; will revisit when the underlying policy changes) |
 | EXG4-4 | EXG4  | Return-value move semantics -- **shipped (let-tail propagation covers fn-return-via-let)** |
 | EXG4-5 | EXG4  | Cross-scope-flow runtime tests -- **partial:** `exg4-pack-let-tail`, `exg4-exists-clone`, `exg4-pack-share` shipped; the plan's `exg4-pack-return` / `exg4-pack-into-fn` / `exg4-pack-into-struct` cases are blocked on a separate parser limitation (constrained existential return / param type annotations crash `elab_open`) -- track that fix independently |
-| EXG5-1 | EXG5  | Kind tag in `RcControlBlock::reserved` |
-| EXG5-2 | EXG5  | Cycle-walker dispatch on the kind tag |
-| EXG5-3 | EXG5  | Pack-site writes payload descriptor |
-| EXG5-4 | EXG5  | `rc_cb_alloc_kinded` to honour `may_contain_cycles` |
-| EXG5-5 | EXG5  | Cycle-collection tests for existential payloads |
+| EXG5-1 | EXG5  | Kind tag in `RcControlBlock::reserved` -- **shipped** (`reserved[0]` = `RCK_*`, `reserved[1]` = `RCEXP_*`; mirrored in `emit_module.c` so generated code sees identical layout) |
+| EXG5-2 | EXG5  | Cycle-walker dispatch on the kind tag -- **shipped** (`gc_mark_phase` propagates from strong roots through `RCK_EXISTENTIAL` blocks whose `RCEXP_RC` payload points at another `RcControlBlock`; same logic in the inline runtime) |
+| EXG5-3 | EXG5  | Pack-site writes payload descriptor -- **shipped** (`emit_expr.c` `EX_EXISTS_PACK` uses `rc_cb_alloc_kinded`; payload kind is `RCEXP_RC` when the packed value's type is `TY_RC`, `TY_WEAK`, or a constrained `TY_EXISTS`, else `RCEXP_OPAQUE`) |
+| EXG5-4 | EXG5  | `rc_cb_alloc_kinded` to honour `may_contain_cycles` -- **shipped** (variant added in `rc.{h,c}`; `rc_cb_alloc` now forwards to it with `RCK_OPAQUE`).  The `may_contain_cycles=false` short-circuit for primitives is unchanged: the existing `value_type_kind<=7` rule already covers all scalar payloads |
+| EXG5-5 | EXG5  | Cycle-collection tests for existential payloads -- **partial:** `exg5-kind-tag-opaque`, `exg5-kind-tag-rc`, `exg5-walker-rc-payload` shipped (verify the kind/payload bytes via inline-C and run gc! over a live existential).  The plan's `exg5-rc-in-exists` and `exg5-exists-cycle` tests are blocked on a smart drop hook for RC payloads and on `pack` not yet incrementing / move-tracking RC arguments; both pieces should land together in a follow-up |
 | EXG6-1 | EXG6  | `:linear` attribute on `exists` |
 | EXG6-2 | EXG6  | Substructural use-exactly-once check |
 | EXG6-3 | EXG6  | Linear emit path (no RC header) |

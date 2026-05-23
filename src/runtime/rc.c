@@ -74,29 +74,39 @@ static RcDropFn default_drop_fn_for_type(TypeKind value_type) {
  * Initializes strong_count to 1, weak_count to 0.
  */
 RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn drop_fn) {
-    /* Allocate header + value in one block for cache efficiency */
+    return rc_cb_alloc_kinded(value_size, value_type, drop_fn,
+                              RCK_OPAQUE, RCEXP_OPAQUE);
+}
+
+/* EXG5-4: kinded variant -- as rc_cb_alloc but writes the layout tags
+ * into the reserved bytes so the cycle walker and any kind-aware drop
+ * paths can recognise the block.  Existing callers continue to flow
+ * through the older rc_cb_alloc entry point with implicit (RCK_OPAQUE,
+ * RCEXP_OPAQUE). */
+RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
+                                   RcDropFn drop_fn, uint8_t kind,
+                                   uint8_t payload_kind) {
     size_t total_size = sizeof(RcControlBlock) + value_size;
     RcControlBlock *cb = (RcControlBlock *)malloc(total_size);
     if (!cb) {
         fprintf(stderr, "rc: out of memory allocating control block\n");
         abort();
     }
-    
-    /* Initialize the control block */
-    cb->strong_count = 1;  /* First rc<T> reference */
+
+    cb->strong_count = 1;
     cb->weak_count = 0;
-    cb->value = (void *)(cb + 1);  /* Value starts right after header */
+    cb->value = (void *)(cb + 1);
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type);
     cb->value_type_kind = value_type;
-    
-    /* Phase 10: Initialize GC fields */
+
     cb->color = GC_WHITE;
-    cb->may_contain_cycles = true;  /* Default: assume it might contain cycles */
+    cb->may_contain_cycles = true;
     memset(cb->reserved, 0, sizeof(cb->reserved));
-    
-    /* Register with GC for cycle collection tracking */
+    cb->reserved[0] = kind;
+    cb->reserved[1] = payload_kind;
+
     gc_register_block(cb);
-    
+
     return cb;
 }
 

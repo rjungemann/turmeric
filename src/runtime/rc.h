@@ -55,31 +55,62 @@ struct RcControlBlock {
     /* Reference counts */
     uint64_t strong_count;   /* Number of rc<T> pointers to the value */
     uint64_t weak_count;     /* Number of weak<T> pointers to the control block */
-    
+
     /* Pointer to the actual value (allocated right after this struct) */
     void *value;
-    
+
     /* Custom drop function (NULL for types that use free()) */
     RcDropFn drop_fn;
-    
+
     /* Type information for debugging */
     TypeKind value_type_kind;
-    
+
     /* Phase 10: Bacon-Rajan cycle collector fields */
     GcColor color;           /* GC color for cycle collection */
     bool may_contain_cycles;  /* Hint: true if this could be part of a cycle */
-    /* 6 bytes reserved for future use */
+    /* EXG5: layout tag bytes -- reserved[0] is the high-level kind
+     * (one of RCK_*), reserved[1] is the payload descriptor for
+     * RCK_EXISTENTIAL blocks (one of RCEXP_*).  The remaining bytes
+     * are still reserved for future use. */
     uint8_t reserved[6];
 };
+
+/* EXG5-1: High-level layout tag for an RcControlBlock's value field.
+ * Stored in cb->reserved[0].  The default (zero) is RCK_OPAQUE so
+ * existing call sites do not need to change. */
+#define RCK_OPAQUE        0  /* value is a scalar / bit pattern (default) */
+#define RCK_EXISTENTIAL   1  /* value points at a tur_existential_t record */
+
+/* EXG5-1: Payload descriptor for RCK_EXISTENTIAL blocks.
+ * Describes the type of bits stored in tur_existential_t::value, so the
+ * cycle walker (gc_mark_phase) knows whether to follow it as a pointer.
+ * Stored in cb->reserved[1]; meaningless when kind != RCK_EXISTENTIAL. */
+#define RCEXP_OPAQUE      0  /* scalar / bit pattern (no recursion) */
+#define RCEXP_RC          1  /* RcControlBlock pointer (follow it) */
 
 /* Size of the control block header (without the value) */
 #define RC_CB_HEADER_SIZE (sizeof(RcControlBlock))
 
 /* Allocate a control block with space for a value of size `value_size`.
- * Initializes strong_count to 1, weak_count to 0.
+ * Initializes strong_count to 1, weak_count to 0.  The block is tagged
+ * RCK_OPAQUE (cycle walker treats `value` as a scalar / bit pattern).
  * Returns pointer to the control block.
  */
 RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn drop_fn);
+
+/* EXG5-4: Allocate a control block with explicit layout tags.
+ * `kind` is one of RCK_* and describes how the value field is laid out.
+ * `payload_kind` is one of RCEXP_* and (when kind == RCK_EXISTENTIAL)
+ * describes whether the existential's `value` slot is a scalar or an
+ * RcControlBlock pointer the cycle walker must follow.  For other
+ * kinds, payload_kind is ignored.
+ *
+ * Otherwise identical to rc_cb_alloc; the older entry point now just
+ * calls this with (RCK_OPAQUE, RCEXP_OPAQUE).
+ */
+RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
+                                   RcDropFn drop_fn, uint8_t kind,
+                                   uint8_t payload_kind);
 
 /* Free a control block and its value.
  * Called when both strong_count and weak_count reach 0.
