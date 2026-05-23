@@ -74,7 +74,7 @@ class SiteNav extends HTMLElement {
       ['/try',               'Try It'],
       ['/docs/html/guides/', 'Guides'],
       ['/docs/html/api/',    'API Docs'],
-      ['https://github.com/rjungemann/turmeric-spices/', 'Spices'],
+      ['/docs/html/spices/', 'Spices'],
     ];
 
     const linkHTML = links.map(([href, label]) =>
@@ -151,7 +151,7 @@ class SiteFooter extends HTMLElement {
             <div class="footer-col-title">Ecosystem</div>
             <a href="/docs/html/guides/">Guides</a>
             <a href="/docs/html/api/">API Docs</a>
-            <a href="https://github.com/rjungemann/turmeric-spices/">Spices</a>
+            <a href="/docs/html/spices/">Spices</a>
           </div>
           <div class="footer-col">
             <div class="footer-col-title">Community</div>
