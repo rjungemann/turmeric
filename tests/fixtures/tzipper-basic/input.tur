@@ -1,0 +1,38 @@
+;;
+;; Phase TC2: tzipper basic operations test
+
+(extern-c free [p :ptr<void>] :void)
+
+(defn make-arr3 [] :ptr<void>
+  ```c
+  int64_t *arr = malloc(3 * sizeof(int64_t));
+  arr[0] = 1;
+  arr[1] = 2;
+  arr[2] = 3;
+  return arr;
+  ```)
+
+(defn test-focus [] :int
+  (let [left (make-arr3)]
+    (let [right (make-arr3)]
+      (let [z (tzipper-new left 2 10 right 2)]
+        (let [f (tzipper-focus z)]
+          (tzipper-free z)
+          (free left)
+          (free right)
+          f)))))
+
+(defn test-move-right-focus [] :int
+  (let [left (make-arr3)]
+    (let [right (make-arr3)]
+      (let [z (tzipper-new left 0 10 right 3)]
+        (let [opt (tzipper-move-right z)]
+          (let [z2 (tunwrap opt)]
+            (let [f (tzipper-focus z2)]
+              (tzipper-free z)
+              (free left)
+              (free right)
+              f)))))))
+
+(println (test-focus))
+(println (test-move-right-focus))

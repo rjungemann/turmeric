@@ -370,6 +370,18 @@ def _parse_def_line(kind, text):
     params = []
     return_type = None
     if bracket_m:
+        # Phase TM0: For defstruct, detect type-param vector [K V ...] (symbols only, no colons).
+        # If present, record as type_params and the bracket is not the field list.
+        if kind == 'defstruct':
+            bracket_content = bracket_m.group(1).strip()
+            # A type-params list contains only bare symbol names (no ':' characters)
+            if bracket_content and ':' not in bracket_content:
+                tp_names = bracket_content.split()
+                if tp_names:
+                    extra['type_params'] = tp_names
+                    # No field params to parse from this bracket
+                    params = []
+                    return name, params, return_type, extra
         params = _parse_params('[' + bracket_m.group(1) + ']')
         after_bracket = rest[bracket_m.end():]
         # Return type is the first :type or ptr token
@@ -965,13 +977,18 @@ def _render_signature(defn):
     ret = defn['return_type']
 
     if kind == 'defstruct':
+        # LT4: include :linear / :copy / :move annotation if present
+        struct_ann = defn.get('struct_ann', '')
+        ann_str = f' :{struct_ann}' if struct_ann else ''
+        # Phase TM0: render type params like Map[K V] when present
+        type_params = defn.get('type_params', [])
+        if type_params:
+            tp_str = ' '.join(type_params)
+            return f"(defstruct {name}{ann_str} [{tp_str}])"
         param_str = ' '.join(
             f"{p} {t}" if t else p
             for p, t in params
         )
-        # LT4: include :linear / :copy / :move annotation if present
-        struct_ann = defn.get('struct_ann', '')
-        ann_str = f' :{struct_ann}' if struct_ann else ''
         return f"(defstruct {name}{ann_str} [{param_str}])"
 
     if kind == 'definstance':
@@ -1069,6 +1086,7 @@ def render_module_page(module, out_dir):
 
     # Build sidebar TOC (exported only)
     sidebar = '<div class="sidebar">\n'
+    sidebar += '  <div style="margin-bottom:1.25rem"><a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a></div>\n'
     sidebar += '  <h3>Exported</h3>\n  <ul>\n'
     for defn in exported:
         anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
@@ -1150,7 +1168,7 @@ def _index_card_html(module):
 
 def render_index_page(modules, out_dir):
     """Render the module index page, grouped by subdirectory."""
-    content = '<div class="content" style="max-width:960px;margin:0 auto;padding:2rem">\n'
+    content = '<div class="content">\n'
     content += '  <h1 style="color:var(--gold);font-size:2rem;margin-bottom:0.5rem">Turmeric Standard Library</h1>\n'
     content += '  <p style="color:var(--faint);margin-bottom:1.5rem">Auto-generated API reference. Run <code>just docs</code> to regenerate.</p>\n'
 
@@ -1177,8 +1195,15 @@ def render_index_page(modules, out_dir):
 
     content += '</div>\n'
 
+    sidebar = '<div class="sidebar">\n'
+    sidebar += '  <div style="margin-bottom:1.25rem"><a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a></div>\n'
+    sidebar += '</div>\n'
+
     page = _html_header('Turmeric Standard Library | API Docs', css_path='style.css')
+    page += '<div class="page-layout">\n'
+    page += sidebar
     page += content
+    page += '</div>\n'
     page += _html_footer()
 
     out_path = Path(out_dir) / 'index.html'

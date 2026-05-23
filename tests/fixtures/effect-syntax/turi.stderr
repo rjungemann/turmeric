@@ -1,0 +1,8 @@
+tests/fixtures/effect-syntax/input.tur:10:19: warning [TUR-W0033]: handler clause for 'Read' is unreachable: the body does not perform 'Read'
+ 7 | (defn effect-parser-smoke [] :int
+ 8 |   (do
+ 9 |     (handle 41
+10 |       (Read [] k) 0)
+   |                   ^
+11 |     41))
+12 | 

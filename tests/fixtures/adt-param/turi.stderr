@@ -1,0 +1,8 @@
+tests/fixtures/adt-param/input.tur:7:12: error: match: scrutinee must be an ADT type, got adt
+4 | 
+5 | (defn main [] :int
+6 |   (let [v (Some 7)]
+7 |     (match v
+  |            ^
+8 |       (None)   (println "none")
+9 |       (Some n) (println n))

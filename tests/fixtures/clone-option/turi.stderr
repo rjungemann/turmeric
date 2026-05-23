@@ -1,0 +1,14 @@
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2048:16: error: redefinition of 'Option'
+ 2048 | typedef struct Option {
+      |                ^
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2008:16: note: previous definition is here
+ 2008 | typedef struct Option {
+      |                ^
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2050:3: error: typedef redefinition with different types ('struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2048:16)' vs 'struct Option')
+ 2050 | } Option;
+      |   ^
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2010:3: note: previous definition is here
+ 2010 | } Option;
+      |   ^
+2 errors generated.
+tur: cc invocation failed (status 256)

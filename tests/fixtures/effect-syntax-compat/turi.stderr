@@ -1,0 +1,8 @@
+tests/fixtures/effect-syntax-compat/input.tur:8:19: warning [TUR-W0033]: handler clause for 'Read' is unreachable: the body does not perform 'Read'
+ 5 | (defn compat-smoke [] :int
+ 6 |   (do
+ 7 |     (handle 7
+ 8 |       (Read [] k) 0)
+   |                   ^
+ 9 |     7))
+10 | 

@@ -1,0 +1,26 @@
+;;
+;; Phase TC1: tpair basic operations test
+
+(defn test-fst [] :int
+  (tpair-fst (tpair 10 20)))
+
+(defn test-snd [] :int
+  (tpair-snd (tpair 10 20)))
+
+(defn test-pair-eq [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (tpair-eq? (tpair 1 2) (tpair 1 2) eq eq)))
+
+(defn test-pair-neq-fst [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (tpair-eq? (tpair 1 2) (tpair 9 2) eq eq)))
+
+(defn test-pair-neq-snd [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (tpair-eq? (tpair 1 2) (tpair 1 9) eq eq)))
+
+(println (test-fst))
+(println (test-snd))
+(println (test-pair-eq))
+(println (test-pair-neq-fst))
+(println (test-pair-neq-snd))

@@ -6,6 +6,12 @@
 ;;
 ;; For now, we delegate to hamt.tur functions (which is auto-loaded).
 ;; See docs/hamt-plan.md Phase P3 for the lowering pass design.
+;;
+;; DEPRECATED: Phase TM0
+;; The untyped functions in this module (assoc, dissoc, get, has?, count, merge)
+;; are deprecated in favor of the typed Map[K V] API in stdlib/tmap.tur.
+;; These functions will be removed in the release cycle following TM0.
+;; Migration: replace (assoc m k v) with (tmap-assoc-h m (hash k) k v), etc.
 
 ;;; map-new -- create a new empty map.
 ;;;

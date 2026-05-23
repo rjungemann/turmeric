@@ -1,0 +1,35 @@
+;;
+;; Phase TC1: toption basic operations test
+
+(defn test-tsome-tsome [] :bool
+  (tsome? (tsome 42)))
+
+(defn test-tnone-tsome [] :bool
+  (tsome? (tnone)))
+
+(defn test-tunwrap [] :int
+  (tunwrap (tsome 99)))
+
+(defn test-tunwrap-or-some [] :int
+  (tunwrap-or (tsome 7) 0))
+
+(defn test-tunwrap-or-none [] :int
+  (tunwrap-or (tnone) 42))
+
+(defn test-toption-eq-same [] :bool
+  (toption-eq? (tsome 1) (tsome 1) (fn [a b] (= a b))))
+
+(defn test-toption-eq-diff [] :bool
+  (toption-eq? (tsome 1) (tsome 2) (fn [a b] (= a b))))
+
+(defn test-toption-eq-nones [] :bool
+  (toption-eq? (tnone) (tnone) (fn [a b] (= a b))))
+
+(println (test-tsome-tsome))
+(println (test-tnone-tsome))
+(println (test-tunwrap))
+(println (test-tunwrap-or-some))
+(println (test-tunwrap-or-none))
+(println (test-toption-eq-same))
+(println (test-toption-eq-diff))
+(println (test-toption-eq-nones))

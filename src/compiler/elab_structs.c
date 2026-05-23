@@ -173,17 +173,52 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
     
+    /* Phase TM0: optional type-parameter vector [K V ...] before field definitions.
+     * If the next form is a vector containing only symbols (no keyword annotations),
+     * treat it as a type-param list; field defs then come as separate list forms.
+     * Old syntax [field :type ...] is unchanged (vector contains keywords). */
+    const char **type_params_arr = NULL;
+    uint8_t n_type_params_v = 0;
+    bool new_field_syntax = false;
+
+    if (fields_start_idx < call->as.list.len &&
+        call->as.list.items[fields_start_idx]->tag == F_VEC) {
+        Form *maybe_tp = call->as.list.items[fields_start_idx];
+        bool all_syms = true;
+        for (uint32_t pi = 0; pi < maybe_tp->as.list.len; pi++) {
+            if (maybe_tp->as.list.items[pi]->tag != F_SYM) {
+                all_syms = false;
+                break;
+            }
+        }
+        if (all_syms && maybe_tp->as.list.len > 0) {
+            /* This is a type-params list; remaining forms are (field :type) lists */
+            n_type_params_v = (uint8_t)maybe_tp->as.list.len;
+            type_params_arr = (const char **)arena_alloc(e->arena,
+                n_type_params_v * sizeof(char *));
+            for (uint8_t pi = 0; pi < n_type_params_v; pi++) {
+                type_params_arr[pi] = maybe_tp->as.list.items[pi]->as.sym->name;
+            }
+            fields_start_idx++;
+            new_field_syntax = true;
+        }
+    }
+
     if (call->as.list.len < fields_start_idx + 1) {
         diag_emit(DIAG_ERROR, call->span,
                   "defstruct requires a field list");
         return NULL;
     }
-    
-    Form *fields_form = call->as.list.items[fields_start_idx];
-    if (fields_form->tag != F_VEC) {
-        diag_emit(DIAG_ERROR, fields_form->span,
-                  "defstruct field list must be a vector [f1 : T1 f2 : T2 ...]");
-        return NULL;
+
+    /* For new-style syntax, fields are F_LIST forms; for old-style, one F_VEC. */
+    Form *fields_form = NULL;
+    if (!new_field_syntax) {
+        fields_form = call->as.list.items[fields_start_idx];
+        if (fields_form->tag != F_VEC) {
+            diag_emit(DIAG_ERROR, fields_form->span,
+                      "defstruct field list must be a vector [f1 : T1 f2 : T2 ...]");
+            return NULL;
+        }
     }
     
     /* Phase RF0: allow re-elaboration of forward-declared stub types */
@@ -199,20 +234,31 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
 
-    /* Validate field list */
-    uint32_t n_fields = fields_form->as.list.len;
-    if (n_fields == 0) {
-        diag_emit(DIAG_ERROR, fields_form->span,
-                  "defstruct field list cannot be empty");
-        return NULL;
-    }
-
-    uint32_t n_items = n_fields; /* n_fields = fields_form->as.list.len */
-
-    /* Phase 16 v2: Field list may contain optional #{...} after :fn type annotations.
-     * Pre-scan to count actual fields and validate structure. */
+    /* Phase TM0: count actual fields for both old-style and new-style syntax. */
     uint32_t actual_n_fields = 0;
-    {
+    if (new_field_syntax) {
+        /* New style: each remaining item in call->as.list is an F_LIST (field-name :type) */
+        for (uint32_t fi = fields_start_idx; fi < call->as.list.len; fi++) {
+            Form *ff = call->as.list.items[fi];
+            if (ff->tag == F_LIST && ff->as.list.len >= 2) {
+                actual_n_fields++;
+            }
+        }
+        if (actual_n_fields == 0) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "defstruct requires at least one field definition");
+            return NULL;
+        }
+    } else {
+        /* Old style: fields_form is the vector [name :type ...] */
+        uint32_t n_items = fields_form->as.list.len;
+        if (n_items == 0) {
+            diag_emit(DIAG_ERROR, fields_form->span,
+                      "defstruct field list cannot be empty");
+            return NULL;
+        }
+        /* Phase 16 v2: Field list may contain optional #{...} after :fn type annotations.
+         * Pre-scan to count actual fields and validate structure. */
         uint32_t scan = 0;
         while (scan < n_items) {
             if (fields_form->as.list.items[scan]->tag != F_SYM) {
@@ -261,6 +307,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
         def->origin_file_id = call->span.file_id;
+        /* Phase TM0 */
+        def->type_params = type_params_arr;
+        def->n_type_params = n_type_params_v;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
@@ -272,6 +321,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->needs_drop_glue = false;
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
+        /* Phase TM0 */
+        def->type_params = type_params_arr;
+        def->n_type_params = n_type_params_v;
 
         Type struct_type = type_struct(def);
         b = binding_new(e, name, struct_type, false, true, name_form->span);
@@ -279,8 +331,60 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         elab_register_struct_def(e, def);
     }
 
-    /* Parse fields */
-    {
+    /* Parse fields -- two paths: new-style (field-list forms) vs old-style (flat vector). */
+    if (new_field_syntax) {
+        /* Phase TM0 new-style: each (field-name :type) is a separate F_LIST item. */
+        uint32_t fi = 0;
+        for (uint32_t ci = fields_start_idx; ci < call->as.list.len && fi < actual_n_fields; ci++) {
+            Form *ff = call->as.list.items[ci];
+            if (ff->tag != F_LIST || ff->as.list.len < 2) continue;
+            Form *field_name_form = ff->as.list.items[0];
+            Form *field_type_form = ff->as.list.items[1];
+            const Form *type_name_form = (field_type_form->tag == F_TYPE_ANN)
+                ? field_type_form->as.list.items[0] : field_type_form;
+            const char *tname = type_name_form->as.sym->name;
+            uint32_t tlen = type_name_form->as.sym->len;
+            TypeKind fkind, finner;
+            parse_struct_field_type(tname, tlen, &fkind, &finner);
+            if (fkind == TY_UNKNOWN) {
+                const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
+                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                    fkind = TY_INT;
+                    finner = TY_UNKNOWN;
+                } else {
+                    diag_emit(DIAG_ERROR, field_type_form->span,
+                              "defstruct field '%s' has unrecognized type :%s",
+                              field_name_form->as.sym->name, tname);
+                    return NULL;
+                }
+            }
+            if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
+                diag_emit_with_code(DIAG_ERROR, field_type_form->span,
+                                    TUR_E0102_LINEAR_COPY,
+                                    "cannot copy linear field '%s' -- "
+                                    "linear values cannot appear in :copy structs",
+                                    field_name_form->as.sym->name);
+                return NULL;
+            }
+            if (is_copy && !typekind_is_copy_for_struct(fkind)) {
+                diag_emit(DIAG_ERROR, field_type_form->span,
+                          "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
+                          field_name_form->as.sym->name, tname);
+                return NULL;
+            }
+            def->fields[fi].name = field_name_form->as.sym->name;
+            def->fields[fi].kind = fkind;
+            def->fields[fi].inner_kind = finner;
+            def->fields[fi].effect_row = NULL;
+            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+                def->needs_drop_glue = true;
+            }
+            fi++;
+        }
+    } else {
+        /* Old-style: flat [name :type name :type ...] vector */
+        uint32_t n_items = fields_form->as.list.len;
         uint32_t scan = 0;
         for (uint32_t fi = 0; fi < actual_n_fields; fi++) {
             Form *field_name_form = fields_form->as.list.items[scan++];
@@ -396,6 +500,9 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     def->needs_drop_glue = false;
     def->is_opaque = true;
     def->origin_file_id = call->span.file_id;
+    /* Phase TM0: opaque types have no type params */
+    def->type_params = NULL;
+    def->n_type_params = 0;
     Type struct_type = type_struct(def);
     Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
     scope_add(&e->global, b);

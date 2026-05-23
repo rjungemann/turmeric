@@ -82,7 +82,12 @@ def render_page(text: str, source: str, out_dir: Path) -> None:
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
-    sidebar_html = f'<h3>On this page</h3>\n      <ul>{sidebar_items}</ul>'
+    sidebar_html = (
+        '<div style="margin-bottom:1.25rem">'
+        '<a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a>'
+        '</div>\n      '
+        f'<h3>On this page</h3>\n      <ul>{sidebar_items}</ul>'
+    )
 
     html = f'''<!DOCTYPE html>
 <html lang="en">

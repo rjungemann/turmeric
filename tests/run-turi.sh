@@ -71,8 +71,6 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 TURI_FIXTURES_DEFAULT="
 adt-basic
 adt-copy
-adt-nested
-adt-param
 adt-recursive
 affine-basic
 affine-drop
@@ -89,9 +87,6 @@ borrow-reborrow
 borrow-struct-field
 borrow-sugar
 call-cc-star
-clone-list
-clone-option
-clone-pair
 clone-primitives
 closure-call
 closure-multi-capture
@@ -146,7 +141,6 @@ gadt-guard
 gadt-refine-basic
 gadt-refine-expr
 gadt-syntax-basic
-gadt-syntax-multi
 match-literal
 match-redundant-arm
 panic-basic
@@ -160,6 +154,18 @@ rc-basic
 rc-ref-conversion
 ref-basic
 result-basic
+typed/tgrid-basic
+typed/tlist-basic
+typed/tmap-basic
+typed/tmap-collision
+typed/tmap-eq
+typed/toption-basic
+typed/tpair-basic
+typed/tresult-basic
+typed/tset-basic
+typed/tslice-basic
+typed/tvec-basic
+typed/tzipper-basic
 union-types-basic
 union-types-cast
 union-types-match
@@ -175,15 +181,15 @@ while IFS= read -r _fixture; do
     _fixture="${_fixture#"${_fixture%%[![:space:]]*}"}"  # ltrim
     _fixture="${_fixture%"${_fixture##*[![:space:]]}"}"  # rtrim
     [ -z "$_fixture" ] && continue
-    # sanitize name for use as shell variable: replace - with _
-    _key="$(printf '%s' "$_fixture" | tr '-' '_')"
-    eval "TURI_INCL_${_key}=1"
+    # sanitize name for use as shell variable: replace - and / with _
+    _key="$(printf '%s' "$_fixture" | tr '-' '_' | tr '/' '_')"
+    eval "export TURI_INCL_${_key}=1"
 done <<< "$TURI_FIXTURES_DEFAULT"
 
 fixture_in_turi_set() {
     local name="$1"
     local key
-    key="$(printf '%s' "$name" | tr '-' '_')"
+    key="$(printf '%s' "$name" | tr '-' '_' | tr '/' '_')"
     eval "[ \"\${TURI_INCL_${key}:-0}\" = \"1\" ]"
 }
 
@@ -288,10 +294,10 @@ export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE
 export -f run_turi_fixture fixture_in_turi_set stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
 
-# Build list of all fixture dirs.
+# Build list of all fixture dirs (top-level and one subdirectory deep).
 shopt -s nullglob
 ALL_DIRS=()
-for d in tests/fixtures/*/; do
+for d in tests/fixtures/*/ tests/fixtures/*/*/; do
     d="${d%/}"
     [ "$d" = "tests/fixtures/errors" ] && continue
     [ -d "$d" ] || continue

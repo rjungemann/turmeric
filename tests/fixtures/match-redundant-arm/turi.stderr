@@ -1,0 +1,8 @@
+tests/fixtures/match-redundant-arm/input.tur:7:5: warning: match: arm for constructor 'Red' is unreachable -- already covered by an earlier arm
+4 | (defn main [] :int
+5 |   (let [result (match (Green)
+6 |     (Red) 1
+7 |     (Red) 2
+  |     ^^^^^
+8 |     (Green) 3
+9 |     (Blue) 4)]

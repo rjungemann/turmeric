@@ -220,6 +220,9 @@ typedef struct StructDef {
     /* Phase HKT-P4: file that defined this struct (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
     uint16_t origin_file_id;
+    /* Phase TM0: type parameters for parameterized structs (e.g. Map[K V], Vec[A]). */
+    const char **type_params;   /* arena-allocated array of type param name strings */
+    uint8_t     n_type_params;
 } StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this

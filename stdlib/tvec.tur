@@ -1,0 +1,173 @@
+;; Phase TC1-A: Typed Vec[A]
+;; Parameterized growable array. Runtime layout identical to vec.tur.
+;; Type parameter A is tracked by the type-checker at call sites only.
+
+;;; Vec -- parameterized growable array with element type A.
+;;;
+;;; Since: Phase TC1
+(defstruct Vec [A]
+  (data :ptr<void>)
+  (len  :int)
+  (cap  :int))
+
+;;; tvec-new -- allocate a new empty Vec[A].
+;;;
+;;; Returns:
+;;;   A new empty Vec[A] with len=0 and cap=0.
+;;;
+;;; Example:
+;;;   (tvec-new)  ; => empty Vec
+;;;
+;;; Since: Phase TC1
+(defn tvec-new [] #{} :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL;
+  v->len = 0;
+  v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;;; tvec-len -- return the number of elements in a Vec[A].
+;;;
+;;; Parameters:
+;;;   v -- Vec[A] pointer
+;;;
+;;; Returns:
+;;;   Element count.
+;;;
+;;; Example:
+;;;   (tvec-len my-vec)  ; => 3
+;;;
+;;; Since: Phase TC1
+(defn tvec-len [v :int] #{} :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  return (int)vec->len;
+  ```)
+
+;;; tvec-get -- return the element at index i (bounds-checked).
+;;;
+;;; Parameters:
+;;;   v -- Vec[A] pointer
+;;;   i -- zero-based index
+;;;
+;;; Returns:
+;;;   The element at index i (typed A, stored as int64_t).
+;;;
+;;; Example:
+;;;   (tvec-get my-vec 0)  ; => first element
+;;;
+;;; Since: Phase TC1
+(defn tvec-get [v :int i :int] #{} :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
+  fprintf(stderr, "tvec index out of bounds\n");
+  exit(1);
+  return 0;
+  ```)
+
+;;; tvec-push! -- append an element to the Vec[A].
+;;;
+;;; Parameters:
+;;;   v   -- Vec[A] pointer
+;;;   val -- element of type A to append
+;;;
+;;; Example:
+;;;   (tvec-push! my-vec 42)
+;;;
+;;; Since: Phase TC1
+(defn tvec-push! [v :int val :int] #{} :nil
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->len >= vec->cap) {
+    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+    free(vec->data);
+    vec->data = new_data;
+    vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;;; tvec-pop! -- remove and return the last element of a Vec[A].
+;;;
+;;; Parameters:
+;;;   v -- Vec[A] pointer
+;;;
+;;; Returns:
+;;;   The last element of type A (as int64_t), or 0 if empty.
+;;;
+;;; Example:
+;;;   (tvec-pop! my-vec)  ; => last element
+;;;
+;;; Since: Phase TC1
+(defn tvec-pop! [v :int] #{} :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->len == 0) return 0;
+  return (int64_t)vec->data[--vec->len];
+  ```)
+
+;;; tvec-set! -- overwrite the element at index i.
+;;;
+;;; Parameters:
+;;;   v   -- Vec[A] pointer
+;;;   i   -- zero-based index
+;;;   val -- new element value of type A
+;;;
+;;; Example:
+;;;   (tvec-set! my-vec 0 99)
+;;;
+;;; Since: Phase TC1
+(defn tvec-set! [v :int i :int val :int] #{} :void
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
+  fprintf(stderr, "tvec-set! index out of bounds\n");
+  exit(1);
+  ```)
+
+;;; tvec-free -- free a Vec[A] and its data buffer.
+;;;
+;;; Parameters:
+;;;   v -- Vec[A] pointer to free
+;;;
+;;; Example:
+;;;   (tvec-free my-vec)
+;;;
+;;; Since: Phase TC1
+(defn tvec-free [v :int] #{} :void
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->data) free(vec->data);
+  free(vec);
+  ```)
+
+;;; tvec-eq? -- compare two Vec[A] element-wise using a comparator.
+;;;
+;;; Parameters:
+;;;   v1     -- first Vec[A]
+;;;   v2     -- second Vec[A]
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both vecs have the same length and all element pairs satisfy cmp-fn.
+;;;
+;;; Example:
+;;;   (tvec-eq? va vb (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn tvec-eq? [v1 :int v2 :int cmp-fn] #{} :bool
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
+  struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
+  if (a->len != b->len) return false;
+  for (size_t i = 0; i < a->len; i++) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i]))
+          return false;
+  }
+  return true;
+  ```)

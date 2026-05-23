@@ -305,6 +305,9 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = f'''\
+      <div style="margin-bottom:0.5rem">
+        <a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a>
+      </div>
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
@@ -414,6 +417,9 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
 {SIDEBAR_TOGGLE_JS}
   <div class="page-layout">
     <div class="sidebar">
+      <div style="margin-bottom:1.25rem">
+        <a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a>
+      </div>
       <h3>Categories</h3>
       <ul>{sidebar_cats}</ul>
     </div>

@@ -1,0 +1,148 @@
+;; Phase TC1-B: Typed List[A]
+;; Typed singly-linked list. List[A] = Option[Cons[A]].
+;; At runtime, nil is 0 and a cons cell is a heap-allocated { int64_t head; int64_t tail; }.
+
+;;; Cons -- parameterized cons cell with typed head and tail.
+;;;
+;;; Since: Phase TC1
+(defstruct Cons [A]
+  (head :int)
+  (tail :int))
+
+;;; tcons -- prepend a value to a typed list.
+;;;
+;;; Parameters:
+;;;   h -- head element of type A
+;;;   t -- tail list (another typed list or tnil)
+;;;
+;;; Returns:
+;;;   A new List[A] (cons cell) with h at the front.
+;;;
+;;; Example:
+;;;   (tcons 1 (tcons 2 (tnil)))  ; => [1, 2]
+;;;
+;;; Since: Phase TC1
+(defn tcons [h :int t :int] #{} :int
+  ```c
+  struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
+  cell->head = h;
+  cell->tail = t;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+;;; tnil -- return an empty typed list.
+;;;
+;;; Returns:
+;;;   0, representing the empty List[A].
+;;;
+;;; Example:
+;;;   (tnil)  ; => empty list
+;;;
+;;; Since: Phase TC1
+(defn tnil [] :int
+  0)
+
+;;; tnil? -- check whether a typed list is empty.
+;;;
+;;; Parameters:
+;;;   l -- List[A]
+;;;
+;;; Returns:
+;;;   true if l is the empty list, false otherwise.
+;;;
+;;; Example:
+;;;   (tnil? (tnil))         ; => true
+;;;   (tnil? (tcons 1 (tnil)))  ; => false
+;;;
+;;; Since: Phase TC1
+(defn tnil? [l :int] :bool
+  (= l 0))
+
+;;; thead -- return the head element of a typed list; panics if empty.
+;;;
+;;; Parameters:
+;;;   l -- List[A] (must be non-empty)
+;;;
+;;; Returns:
+;;;   The head element of type A.
+;;;
+;;; Example:
+;;;   (thead (tcons 42 (tnil)))  ; => 42
+;;;
+;;; Since: Phase TC1
+(defn thead [l :int] #{} :int
+  ```c
+  struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
+  if (!cell) tur_panic("thead called on empty list");
+  return (int64_t)cell->head;
+  ```)
+
+;;; ttail -- return the tail of a typed list; panics if empty.
+;;;
+;;; Parameters:
+;;;   l -- List[A] (must be non-empty)
+;;;
+;;; Returns:
+;;;   The tail List[A].
+;;;
+;;; Example:
+;;;   (ttail (tcons 1 (tcons 2 (tnil))))  ; => [2]
+;;;
+;;; Since: Phase TC1
+(defn ttail [l :int] #{} :int
+  ```c
+  struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
+  if (!cell) tur_panic("ttail called on empty list");
+  return (int64_t)cell->tail;
+  ```)
+
+;;; tlist-length -- count the number of elements in a typed list.
+;;;
+;;; Parameters:
+;;;   l -- List[A]
+;;;
+;;; Returns:
+;;;   Integer length.
+;;;
+;;; Example:
+;;;   (tlist-length (tcons 1 (tcons 2 (tnil))))  ; => 2
+;;;
+;;; Since: Phase TC1
+(defn tlist-length [l :int] #{} :int
+  ```c
+  struct __tur_cell_t { int64_t head; int64_t tail; };
+  struct __tur_cell_t *cell = (void*)(intptr_t)l;
+  int64_t count = 0;
+  while (cell) {
+      count++;
+      cell = (void*)(intptr_t)cell->tail;
+  }
+  return count;
+  ```)
+
+;;; tlist-eq? -- compare two typed lists element-wise.
+;;;
+;;; Parameters:
+;;;   l1     -- first List[A]
+;;;   l2     -- second List[A]
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both lists have the same elements in the same order.
+;;;
+;;; Example:
+;;;   (tlist-eq? (tcons 1 (tnil)) (tcons 1 (tnil)) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn tlist-eq? [l1 :int l2 :int cmp-fn] #{} :bool
+  ```c
+  struct __tur_cons_t { int64_t head; int64_t tail; };
+  struct __tur_cons_t *a = (void*)(intptr_t)l1;
+  struct __tur_cons_t *b = (void*)(intptr_t)l2;
+  while (a && b) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
+      a = (void*)(intptr_t)a->tail;
+      b = (void*)(intptr_t)b->tail;
+  }
+  return (void*)a == (void*)b;
+  ```)

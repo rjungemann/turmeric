@@ -1,0 +1,41 @@
+;;
+;; Phase TC1: tslice basic operations test
+
+(extern-c free [p :ptr<void>] :void)
+
+(defn make-arr [] :ptr<void>
+  ```c
+  int64_t *arr = malloc(3 * sizeof(int64_t));
+  arr[0] = 10;
+  arr[1] = 20;
+  arr[2] = 30;
+  return arr;
+  ```)
+
+(defn test-slice-len [] :int
+  (let [arr (make-arr)]
+    (let [s (tslice-new arr 3)]
+      (let [len (tslice-len s)]
+        (tslice-free s)
+        (free arr)
+        len))))
+
+(defn test-slice-get-0 [] :int
+  (let [arr (make-arr)]
+    (let [s (tslice-new arr 3)]
+      (let [x (tslice-get s 0)]
+        (tslice-free s)
+        (free arr)
+        x))))
+
+(defn test-slice-get-1 [] :int
+  (let [arr (make-arr)]
+    (let [s (tslice-new arr 3)]
+      (let [x (tslice-get s 1)]
+        (tslice-free s)
+        (free arr)
+        x))))
+
+(println (test-slice-len))
+(println (test-slice-get-0))
+(println (test-slice-get-1))

@@ -533,6 +533,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             stub->needs_drop_glue = false;
             stub->is_opaque = true;
             stub->origin_file_id = name_f->span.file_id;
+            /* Phase TM0: opaque types have no type params */
+            stub->type_params = NULL;
+            stub->n_type_params = 0;
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
@@ -546,6 +549,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             stub->is_linear = false;
             stub->needs_drop_glue = false;
             stub->origin_file_id = name_f->span.file_id;
+            /* Phase TM0: initialize type_params for stub; filled in during elab_defstruct. */
+            stub->type_params = NULL;
+            stub->n_type_params = 0;
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);

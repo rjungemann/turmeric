@@ -1,0 +1,14 @@
+/tmp/tur-build/tests_fixtures_clone-list_input_tur.c:2049:16: error: redefinition of 'Cons'
+ 2049 | typedef struct Cons {
+      |                ^
+/tmp/tur-build/tests_fixtures_clone-list_input_tur.c:2024:16: note: previous definition is here
+ 2024 | typedef struct Cons {
+      |                ^
+/tmp/tur-build/tests_fixtures_clone-list_input_tur.c:2052:3: error: typedef redefinition with different types ('struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-list_input_tur.c:2049:16)' vs 'struct Cons')
+ 2052 | } Cons;
+      |   ^
+/tmp/tur-build/tests_fixtures_clone-list_input_tur.c:2027:3: note: previous definition is here
+ 2027 | } Cons;
+      |   ^
+2 errors generated.
+tur: cc invocation failed (status 256)

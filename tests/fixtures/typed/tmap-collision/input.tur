@@ -1,0 +1,37 @@
+;;
+;; Phase TM0: tmap collision test
+;; Two distinct integer keys that both hash to the same value should each be
+;; stored independently (different pointer identities).
+
+(defn test-collision-count [] :int
+  (let [m (tmap-new)]
+    ;; Use keys 1 and 2 -- distinct values, different pointer-casts
+    (let [m2 (tmap-assoc m 1 10)]
+      (let [m3 (tmap-assoc m2 2 20)]
+        (let [c (tmap-count m3)]
+          (tmap-free m)
+          (tmap-free m2)
+          (tmap-free m3)
+          c)))))
+
+(defn test-get-after-assoc [] :int
+  (let [m (tmap-new)]
+    (let [m2 (tmap-assoc m 100 999)]
+      (let [v (tmap-get m2 100 100)]
+        (tmap-free m)
+        (tmap-free m2)
+        v))))
+
+(defn test-overwrite [] :int
+  (let [m (tmap-new)]
+    (let [m2 (tmap-assoc m 5 100)]
+      (let [m3 (tmap-assoc m2 5 200)]
+        (let [v (tmap-get m3 5 5)]
+          (tmap-free m)
+          (tmap-free m2)
+          (tmap-free m3)
+          v)))))
+
+(println (test-collision-count))
+(println (test-get-after-assoc))
+(println (test-overwrite))

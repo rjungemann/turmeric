@@ -1,0 +1,170 @@
+;; Phase TC1-E: Typed Result[A B]
+;; ok value of type A, err value of type B.
+;; Runtime layout: { bool is_ok; int64_t ok_val; int64_t err_val; }
+
+;;; Result -- parameterized result type with ok type A and err type B.
+;;;
+;;; Since: Phase TC1
+(defstruct Result [A B]
+  (is-ok   :bool)
+  (ok-val  :int)
+  (err-val :int))
+
+;;; tok -- wrap a success value of type A in a Result[A B].
+;;;
+;;; Parameters:
+;;;   x -- the ok value (type A)
+;;;
+;;; Returns:
+;;;   A heap-allocated Result[A B] with is-ok=true.
+;;;
+;;; Example:
+;;;   (tok 42)  ; => ok(42)
+;;;
+;;; Since: Phase TC1
+(defn tok [x :int] #{} :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true;
+  r->ok_val = x;
+  r->err_val = 0;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; terr -- wrap an error value of type B in a Result[A B].
+;;;
+;;; Parameters:
+;;;   e -- the error value (type B)
+;;;
+;;; Returns:
+;;;   A heap-allocated Result[A B] with is-ok=false.
+;;;
+;;; Example:
+;;;   (terr 404)  ; => err(404)
+;;;
+;;; Since: Phase TC1
+(defn terr [e :int] #{} :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false;
+  r->ok_val = 0;
+  r->err_val = e;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; tok? -- check whether a Result[A B] is ok.
+;;;
+;;; Parameters:
+;;;   r -- Result[A B]
+;;;
+;;; Returns:
+;;;   true if r is ok, false if r is err.
+;;;
+;;; Example:
+;;;   (tok? (tok 1))   ; => true
+;;;   (tok? (terr 0))  ; => false
+;;;
+;;; Since: Phase TC1
+(defn tok? [r :int] #{} :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return res && res->is_ok;
+  ```)
+
+;;; terr? -- check whether a Result[A B] is err.
+;;;
+;;; Parameters:
+;;;   r -- Result[A B]
+;;;
+;;; Returns:
+;;;   true if r is err, false if r is ok.
+;;;
+;;; Example:
+;;;   (terr? (terr 1))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn terr? [r :int] #{} :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return !res || !res->is_ok;
+  ```)
+
+;;; tok-val -- extract the ok value; panics if err.
+;;;
+;;; Parameters:
+;;;   r -- Result[A B]
+;;;
+;;; Returns:
+;;;   The ok value of type A.
+;;;
+;;; Example:
+;;;   (tok-val (tok 7))  ; => 7
+;;;
+;;; Since: Phase TC1
+(defn tok-val [r :int] #{} :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res || !res->is_ok) tur_panic("tok-val called on err");
+  return (int64_t)res->ok_val;
+  ```)
+
+;;; terr-val -- extract the error value; panics if ok.
+;;;
+;;; Parameters:
+;;;   r -- Result[A B]
+;;;
+;;; Returns:
+;;;   The error value of type B.
+;;;
+;;; Example:
+;;;   (terr-val (terr 404))  ; => 404
+;;;
+;;; Since: Phase TC1
+(defn terr-val [r :int] #{} :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res || res->is_ok) tur_panic("terr-val called on ok");
+  return (int64_t)res->err_val;
+  ```)
+
+;;; tresult-free -- free a heap-allocated Result[A B].
+;;;
+;;; Parameters:
+;;;   r -- Result[A B] to free
+;;;
+;;; Example:
+;;;   (tresult-free my-result)
+;;;
+;;; Since: Phase TC1
+(defn tresult-free [r :int] #{} :void
+  ```c
+  if (r) free((void*)(intptr_t)r);
+  ```)
+
+;;; tresult-eq? -- compare two Result[A B] values.
+;;;
+;;; Parameters:
+;;;   r1      -- first Result[A B]
+;;;   r2      -- second Result[A B]
+;;;   ok-cmp  -- comparator for ok values fn [a :int b :int] :bool
+;;;   err-cmp -- comparator for err values fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both ok with equal ok values, or both err with equal err values.
+;;;
+;;; Example:
+;;;   (tresult-eq? (tok 1) (tok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn tresult-eq? [r1 :int r2 :int ok-cmp err-cmp] #{} :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a->is_ok != b->is_ok) return false;
+  if (a->is_ok)
+      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+  else
+      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
+  ```)

@@ -1,0 +1,11 @@
+/tmp/tur-build/tests_fixtures_effect-abort_input_tur.c:3086:18: warning: equality comparison with extraneous parentheses [-Wparentheses-equality]
+ 3086 |         if (((d) == (INT64_C(0)))) {
+      |              ~~~~^~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-abort_input_tur.c:3086:18: note: remove extraneous parentheses around the comparison to silence this warning
+ 3086 |         if (((d) == (INT64_C(0)))) {
+      |             ~    ^              ~
+/tmp/tur-build/tests_fixtures_effect-abort_input_tur.c:3086:18: note: use '=' to turn this equality comparison into an assignment
+ 3086 |         if (((d) == (INT64_C(0)))) {
+      |                  ^~
+      |                  =
+1 warning generated.

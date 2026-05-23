@@ -1,0 +1,127 @@
+;; Phase TC2-A: Typed Grid[A]
+;; 2D row-major grid parameterized over element type A.
+;; Runtime layout: { int64_t *data; int width; int height; int cx; int cy; }
+
+;;; Grid -- parameterized 2D grid with element type A.
+;;;
+;;; Since: Phase TC2
+(defstruct Grid [A]
+  (data   :ptr<void>)
+  (width  :int)
+  (height :int)
+  (cx     :int)
+  (cy     :int))
+
+;;; tgrid-new -- create a new zero-filled Grid[A].
+;;;
+;;; Parameters:
+;;;   width  -- number of columns
+;;;   height -- number of rows
+;;;
+;;; Returns:
+;;;   A new Grid[A] with all elements initialized to 0.
+;;;
+;;; Example:
+;;;   (tgrid-new 8 8)  ; => 8x8 grid
+;;;
+;;; Since: Phase TC2
+(defn tgrid-new [width :int height :int] #{} :int
+  ```c
+  struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+  g->width  = (int)width;
+  g->height = (int)height;
+  g->cx = 0;
+  g->cy = 0;
+  g->data = calloc((size_t)(width * height), sizeof(int64_t));
+  return (int64_t)(intptr_t)g;
+  ```)
+
+;;; tgrid-get -- return the element at (x, y).
+;;;
+;;; Parameters:
+;;;   g -- Grid[A]
+;;;   x -- column index
+;;;   y -- row index
+;;;
+;;; Returns:
+;;;   The element of type A at (x, y).
+;;;
+;;; Example:
+;;;   (tgrid-get g 0 0)  ; => element at (0,0)
+;;;
+;;; Since: Phase TC2
+(defn tgrid-get [g :int x :int y :int] #{} :int
+  ```c
+  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  return (int64_t)grid->data[(size_t)(y * grid->width + x)];
+  ```)
+
+;;; tgrid-set! -- set the element at (x, y).
+;;;
+;;; Parameters:
+;;;   g -- Grid[A]
+;;;   x -- column index
+;;;   y -- row index
+;;;   v -- new element value of type A
+;;;
+;;; Example:
+;;;   (tgrid-set! g 0 0 1)
+;;;
+;;; Since: Phase TC2
+(defn tgrid-set! [g :int x :int y :int v :int] #{} :void
+  ```c
+  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  grid->data[(size_t)(y * grid->width + x)] = v;
+  ```)
+
+;;; tgrid-width -- return the width of a Grid[A].
+;;;
+;;; Parameters:
+;;;   g -- Grid[A]
+;;;
+;;; Returns:
+;;;   Width (number of columns).
+;;;
+;;; Example:
+;;;   (tgrid-width g)  ; => 8
+;;;
+;;; Since: Phase TC2
+(defn tgrid-width [g :int] #{} :int
+  ```c
+  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  return (int64_t)grid->width;
+  ```)
+
+;;; tgrid-height -- return the height of a Grid[A].
+;;;
+;;; Parameters:
+;;;   g -- Grid[A]
+;;;
+;;; Returns:
+;;;   Height (number of rows).
+;;;
+;;; Example:
+;;;   (tgrid-height g)  ; => 8
+;;;
+;;; Since: Phase TC2
+(defn tgrid-height [g :int] #{} :int
+  ```c
+  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  return (int64_t)grid->height;
+  ```)
+
+;;; tgrid-free -- free a Grid[A] and its data buffer.
+;;;
+;;; Parameters:
+;;;   g -- Grid[A] to free
+;;;
+;;; Example:
+;;;   (tgrid-free g)
+;;;
+;;; Since: Phase TC2
+(defn tgrid-free [g :int] #{} :void
+  ```c
+  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+  if (grid->data) free(grid->data);
+  free(grid);
+  ```)

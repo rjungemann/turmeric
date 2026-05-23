@@ -1,0 +1,165 @@
+;; Phase TC1-D: Typed Option[A]
+;; First-class parameterized optional value type.
+;; Runtime layout identical to option.tur: { bool is_some; int64_t value; }
+
+;;; Option -- parameterized optional value containing either some A or none.
+;;;
+;;; Since: Phase TC1
+(defstruct Option [A]
+  (is-some :bool)
+  (value   :int))
+
+;;; tsome -- wrap a value of type A in a some Option[A].
+;;;
+;;; Parameters:
+;;;   x -- the value to wrap (type A, stored as int64_t)
+;;;
+;;; Returns:
+;;;   A heap-allocated Option[A] with is-some=true.
+;;;
+;;; Example:
+;;;   (tsome 42)  ; => some(42)
+;;;
+;;; Since: Phase TC1
+(defn tsome [x :int] #{} :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true;
+  opt->value = x;
+  return (int64_t)(intptr_t)opt;
+  ```)
+
+;;; tnone -- return the none Option[A] (NULL).
+;;;
+;;; Returns:
+;;;   0 (NULL) representing the absent option.
+;;;
+;;; Example:
+;;;   (tnone)  ; => none
+;;;
+;;; Since: Phase TC1
+(defn tnone [] #{} :int
+  ```c
+  return 0;
+  ```)
+
+;;; tsome? -- check whether an Option[A] contains a value.
+;;;
+;;; Parameters:
+;;;   o -- Option[A]
+;;;
+;;; Returns:
+;;;   true if o is some, false if o is none.
+;;;
+;;; Example:
+;;;   (tsome? (tsome 1))  ; => true
+;;;   (tsome? (tnone))    ; => false
+;;;
+;;; Since: Phase TC1
+(defn tsome? [o :int] #{} :bool
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  return opt != NULL && opt->is_some;
+  ```)
+
+;;; tunwrap -- extract the value from a some Option[A], panicking if none.
+;;;
+;;; Parameters:
+;;;   o -- Option[A]
+;;;
+;;; Returns:
+;;;   The contained value of type A.
+;;;
+;;; Example:
+;;;   (tunwrap (tsome 7))  ; => 7
+;;;
+;;; Since: Phase TC1
+(defn tunwrap [o :int] #{} :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  if (!opt || !opt->is_some) tur_panic("tunwrap called on none");
+  return (int64_t)opt->value;
+  ```)
+
+;;; tunwrap-or -- extract the value or return a default.
+;;;
+;;; Parameters:
+;;;   o    -- Option[A]
+;;;   dflt -- value to return if o is none (type A)
+;;;
+;;; Returns:
+;;;   The contained value, or default if none.
+;;;
+;;; Example:
+;;;   (tunwrap-or (tnone) 99)   ; => 99
+;;;   (tunwrap-or (tsome 7) 99) ; => 7
+;;;
+;;; Since: Phase TC1
+(defn tunwrap-or [o :int dflt :int] #{} :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  if (!opt || !opt->is_some) return dflt;
+  return (int64_t)opt->value;
+  ```)
+
+;;; toption-free -- free a heap-allocated Option[A].
+;;;
+;;; Parameters:
+;;;   o -- Option[A] to free (may be none / 0)
+;;;
+;;; Example:
+;;;   (toption-free my-opt)
+;;;
+;;; Since: Phase TC1
+(defn toption-free [o :int] #{} :void
+  ```c
+  if (o) free((void*)(intptr_t)o);
+  ```)
+
+;;; toption-map -- apply a function to the contained value if some.
+;;;
+;;; Parameters:
+;;;   o -- Option[A]
+;;;   f -- function A -> B
+;;;
+;;; Returns:
+;;;   Option[B] with f applied if some, or none.
+;;;
+;;; Example:
+;;;   (toption-map (tsome 3) (fn [x] (* x 2)))  ; => some(6)
+;;;
+;;; Since: Phase TC1
+(defn toption-map [o :int f] #{} :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  if (!opt || !opt->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)f)(opt->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; toption-eq? -- compare two Option[A] values using a comparator.
+;;;
+;;; Parameters:
+;;;   o1     -- first Option[A]
+;;;   o2     -- second Option[A]
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both none, or both some with equal values.
+;;;
+;;; Example:
+;;;   (toption-eq? (tsome 1) (tsome 1) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn toption-eq? [o1 :int o2 :int cmp-fn] #{} :bool
+  ```c
+  struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
+  struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
+  bool a_some = a && a->is_some;
+  bool b_some = b && b->is_some;
+  if (!a_some && !b_some) return true;
+  if (a_some != b_some)   return false;
+  return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
+  ```)

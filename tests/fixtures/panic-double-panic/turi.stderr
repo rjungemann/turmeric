@@ -1,0 +1,2 @@
+panic at /tmp/tur-build/tests_fixtures_panic-double-panic_input_tur.c:377: outer panic
+double panic: aborting

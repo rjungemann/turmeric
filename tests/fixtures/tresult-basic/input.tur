@@ -1,0 +1,34 @@
+;;
+;; Phase TC1: tresult basic operations test
+
+(defn test-ok [] :bool
+  (tok? (tok 1)))
+
+(defn test-err-not-ok [] :bool
+  (tok? (terr 0)))
+
+(defn test-ok-val [] :int
+  (tok-val (tok 42)))
+
+(defn test-err-val [] :int
+  (terr-val (terr 404)))
+
+(defn test-result-eq-ok [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (tresult-eq? (tok 1) (tok 1) eq eq)))
+
+(defn test-result-eq-err [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (tresult-eq? (terr 5) (terr 5) eq eq)))
+
+(defn test-result-neq [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (tresult-eq? (tok 1) (tok 2) eq eq)))
+
+(println (test-ok))
+(println (test-err-not-ok))
+(println (test-ok-val))
+(println (test-err-val))
+(println (test-result-eq-ok))
+(println (test-result-eq-err))
+(println (test-result-neq))
