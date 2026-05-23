@@ -1,0 +1,74 @@
+;; stdlib/vec-existential.tur -- Vec[A] as a size-hiding existential.
+;;
+;; Phase EX2-4 closes Option B from typed-collections-plan.md:
+;;
+;;     (deftype Vec [A] = (exists n. SizedVec[n A]))
+;;
+;; A Vec[A] is a SizedVec whose length index n has been sealed away by
+;; `pack`.  Code that does not need to track the length statically can
+;; pass values around as Vec; code that needs the index can `open` the
+;; Vec to recover the underlying SizedVec under a fresh abstract n.
+;;
+;; The macros below sit on top of native pack/open (EX1c/EX1d) plus the
+;; EX2-2 phantom-binder support in `open`.  Like stdlib/existential.tur,
+;; this file is NOT auto-loaded -- load it explicitly after stdlib/sized
+;; and compile with -Xgadt so the underlying SizedVec defgadt is in
+;; scope:
+;;
+;;     (load "stdlib/sized.tur")
+;;     (load "stdlib/vec-existential.tur")
+;;
+;; In the current SizedVec encoding the element type is fixed to int and
+;; the size index n is a phantom GADT parameter (see stdlib/sized.tur);
+;; once SizedVec is parameterised over element type, the macros below
+;; carry over unchanged because the element type lives in the body, not
+;; in the existential binder.
+
+;;; vec-of-sized -- wrap a SizedVec into a Vec, hiding the size index.
+;;;
+;;; Implements the `pack` half of the SizedVec <-> Vec round-trip.
+;;; At runtime this is a plain pack -- the SizedVec payload is reboxed
+;;; as an opaque existential carrying no constraint witnesses.
+;;;
+;;; Parameters:
+;;;   sv -- a SizedVec value whose size index will be sealed
+;;;
+;;; Returns:
+;;;   A value of type (exists [n] (SizedVec n int)) -- representable
+;;;   uniformly regardless of the original size index.
+;;;
+;;; Example:
+;;;   (vec-of-sized (SVCons 1 (SVCons 2 (SVNil))))
+;;;     ; => packed Vec; opening it recovers a length-2 SizedVec.
+;;;
+;;; Since: Phase EX2-4
+(defmacro vec-of-sized [sv]
+  (list pack sv (list exists [n] (list SizedVec n int))))
+
+;;; open-vec -- bind the hidden size index and the underlying SizedVec.
+;;;
+;;; Expands to a native `open` whose binder vector is [n-name sv-name].
+;;; The first symbol becomes the phantom binder for the size index
+;;; (used only by the type-checker -- no runtime presence); the second
+;;; binds the underlying SizedVec value for use in the body.
+;;;
+;;; The EX1d/EX2-3 escape checks still apply: the body's tail must not
+;;; return sv-name (or an alias) and must not surface a type carrying
+;;; the phantom binder.
+;;;
+;;; Parameters:
+;;;   vec-expr -- a Vec value (typically produced by vec-of-sized)
+;;;   n-name   -- symbol that names the fresh abstract size index
+;;;   sv-name  -- symbol that names the underlying SizedVec
+;;;   body     -- one or more body forms evaluated in the binders' scope
+;;;
+;;; Returns:
+;;;   The value of the last body form.
+;;;
+;;; Example:
+;;;   (open-vec (vec-of-sized (SVCons 1 (SVNil))) n sv
+;;;     (sized-vec-len sv))   ; => 1
+;;;
+;;; Since: Phase EX2-4
+(defmacro open-vec [vec-expr n-name sv-name & body]
+  (cons open (cons vec-expr (cons (vec n-name sv-name) body))))

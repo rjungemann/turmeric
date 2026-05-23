@@ -1,0 +1,20 @@
+; Phase EX2-3: positive case -- a phantom-indexed open whose body
+; consumes the value into a concrete tail type must pass the escape
+; check.  This complements the negative fixtures by demonstrating that
+; the EX2-3 type-level check does not false-positive on legitimate uses.
+(defgadt SizedVec [n a]
+  (SVNil : (SizedVec int int))
+  (SVCons int (SizedVec int int) : (SizedVec int int)))
+
+(defn sized-vec-len [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (sized-vec-len xs))))
+
+(defn main [] :int
+  (let [sv (SVCons 1 (SVCons 2 (SVNil)))]
+    (let [e (pack sv (exists [n] (SizedVec n int)))]
+      (open e [n v]
+        ; Tail is :int -- no phantom residue, escape check passes.
+        (println (sized-vec-len v)))))
+  0)

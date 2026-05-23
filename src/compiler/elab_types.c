@@ -1671,6 +1671,55 @@ static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
     }
 }
 
+/* EX2-2: Peel a TY_APP chain to expose the underlying concrete carrier.
+ * When the existential body has the shape (Ctor i1 i2 ... in), the indices
+ * i1..in are phantom at runtime; the value carries only the Ctor itself.
+ * Used by elab_open to derive a usable v_type that callers expecting the
+ * bare Ctor (e.g. :SizedVec) will accept. */
+static Type ex2_peel_phantom_app(const Type *t) {
+    while (t && t->kind == TY_APP && t->as.app.fn) {
+        t = t->as.app.fn;
+    }
+    return t ? *t : TYPE_INT;
+}
+
+/* EX2-3: Type-level escape check for phantom skolems.
+ *
+ * Companion to ex1d_tail_leaks, which catches the case where the body's
+ * tail value is the existentially-bound binding.  This helper catches
+ * the type-level analog: when the body's inferred tail type carries a
+ * partially-applied constructor whose argument is a raw, unresolved
+ * type variable (TY_STRUCT with def==NULL).  In the EX2 phantom-binder
+ * setting that residue could only come from the open's bound type
+ * variable, since no other tyvar is in lexical scope inside the body --
+ * letting it flow out of the open would be exactly the array-length
+ * escape the plan warns about.
+ *
+ * The check only runs when the existential body itself is a TY_APP
+ * (i.e. a phantom-indexed shape); plain (exists [a] a) opens are
+ * unaffected.  Depth-limited to avoid pathological recursion. */
+static bool ex2_3_type_has_phantom_residue(const Type *t, int depth) {
+    if (!t || depth > 16) return false;
+    switch (t->kind) {
+        case TY_APP:
+            /* A TY_APP whose argument is a raw tyvar means an index slot
+             * survived elaboration -- treat as phantom-skolem escape. */
+            if (t->as.app.arg
+                    && t->as.app.arg->kind == TY_STRUCT
+                    && t->as.app.arg->as.struct_.def == NULL) {
+                return true;
+            }
+            if (ex2_3_type_has_phantom_residue(t->as.app.fn,  depth + 1)) return true;
+            if (ex2_3_type_has_phantom_residue(t->as.app.arg, depth + 1)) return true;
+            return false;
+        case TY_FORALL:
+        case TY_EXISTS:
+            return ex2_3_type_has_phantom_residue(t->as.forall_.body, depth + 1);
+        default:
+            return false;
+    }
+}
+
 /* Phase HRT2: (open packed [a v] body) — existential elimination.
  * Unboxes the existential value, binding v to the inner value.
  * Syntax: (open packed-expr [abstract-type-var value-name] body...) */
@@ -1713,13 +1762,26 @@ Expr *elab_open(Elab *e, const Form *call) {
     const Symbol *val_sym = val_name_form->as.sym;
 
     /* Determine type of v from the existential body type.
-     * Type variables (TY_STRUCT with def=NULL) resolve to TY_INT (int64_t at runtime). */
+     * Type variables (TY_STRUCT with def=NULL) resolve to TY_INT (int64_t at runtime).
+     * EX2-2: Bodies of the form (Ctor i1 .. in) -- where i1..in are phantom
+     * type indices bound by the existential -- peel through the TY_APP chain
+     * so that v gets the underlying carrier (e.g. the ADT for SizedVec).  The
+     * indices have no runtime representation, so this exposes the type a
+     * caller expecting `:SizedVec` would accept while still keeping the
+     * existential variable abstract at the type level. */
     Type v_type = TYPE_INT;  /* default: int64_t */
     if (packed->type.kind == TY_EXISTS) {
         const Type *T = packed->type.as.forall_.body;
         if (T) {
             if (T->kind == TY_STRUCT && T->as.struct_.def == NULL) {
                 v_type = TYPE_INT;  /* type variable → int64_t */
+            } else if (T->kind == TY_APP) {
+                v_type = ex2_peel_phantom_app(T);
+                /* If the peeled head is itself a free type variable, fall
+                 * back to int64_t (consistent with the bare-tyvar case). */
+                if (v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL) {
+                    v_type = TYPE_INT;
+                }
             } else {
                 v_type = *T;  /* use body type directly (by value) */
             }
@@ -1777,6 +1839,20 @@ Expr *elab_open(Elab *e, const Form *call) {
                   "(the body returns the bound value '%s' or an alias)",
                   abs_sym && abs_sym->name ? abs_sym->name : "a",
                   val_sym && val_sym->name ? val_sym->name : "v");
+        return NULL;
+    }
+
+    /* EX2-3: type-level escape check for phantom skolems.  Only meaningful
+     * when the existential body is itself a TY_APP (phantom-indexed
+     * shape); other shapes can't leak a phantom binder by construction. */
+    if (packed->type.kind == TY_EXISTS
+            && packed->type.as.forall_.body
+            && packed->type.as.forall_.body->kind == TY_APP
+            && ex2_3_type_has_phantom_residue(&body->type, 0)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "open: existential phantom type variable '%s' escapes "
+                  "through the tail expression's type",
+                  abs_sym && abs_sym->name ? abs_sym->name : "a");
         return NULL;
     }
     (void)my_skolem_id; /* reserved for EX1e runtime dispatch */
