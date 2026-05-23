@@ -1,9 +1,14 @@
 # Existential Types -- GC Integration, Follow-up Plan
 
 > **Status:** EXG4 partial, EXG5 walker infrastructure, and EXG6
-> `:linear` discipline all shipped 2026-05-23.  Remaining open: EXG4-3
-> storage-site auto-clone, EXG5 smart drop hook for RC payloads (blocks
-> the cycle-construction test), EXG6 escape-from-defn diagnostic.
+> `:linear` discipline all shipped 2026-05-23.  Remaining open: EXG5
+> smart drop hook for RC payloads (blocks the cycle-construction
+> test).  EXG6 escape-from-defn diagnostic and EXG4-5 parser-blocked
+> fixtures shipped via the cross-plan followups (F1-1, F2-1).  EXG4-3
+> storage-site auto-clone is **retired** -- see F1-3 in
+> `docs/upcoming/cross-plan-followups-plan.md` for the reasoning
+> (the rc<T> baseline also requires explicit clones at struct/vec
+> sites; auto-clone was never the established policy).
 > **Last Updated:** 2026-05-23
 > **Type:** Runtime / Memory Management
 
@@ -275,7 +280,7 @@ so EXG4 and EXG5 do not apply.
 |--------|-------|-------------|
 | EXG4-1 | EXG4  | Move tracking for existential bindings (return / arg / store) -- **shipped (let-tail propagation)** |
 | EXG4-2 | EXG4  | `(exists/clone e)` form, lowers to `rc_strong_increment` -- **shipped (rc/clone relaxed to accept constrained existentials)** |
-| EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites -- **open** (current rc<T> baseline also uses explicit clone at these sites; will revisit when the underlying policy changes) |
+| EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites -- **retired** (cross-plan-followups F1-3): the rc<T> baseline requires explicit `rc/clone` at storage sites, so constrained existentials follow the same explicit-clone discipline.  Users wanting to store a packed existential in a struct field or vec slot must call `rc/clone` at the storage site.  If the project ever switches rc<T> to auto-clone semantics, EXG4-3 should be revisited at the same time. |
 | EXG4-4 | EXG4  | Return-value move semantics -- **shipped (let-tail propagation covers fn-return-via-let)** |
 | EXG4-5 | EXG4  | Cross-scope-flow runtime tests -- **partial:** `exg4-pack-let-tail`, `exg4-exists-clone`, `exg4-pack-share` shipped; the plan's `exg4-pack-return` / `exg4-pack-into-fn` / `exg4-pack-into-struct` cases are blocked on a separate parser limitation (constrained existential return / param type annotations crash `elab_open`) -- track that fix independently |
 | EXG5-1 | EXG5  | Kind tag in `RcControlBlock::reserved` -- **shipped** (`reserved[0]` = `RCK_*`, `reserved[1]` = `RCEXP_*`; mirrored in `emit_module.c` so generated code sees identical layout) |
@@ -297,13 +302,15 @@ so EXG4 and EXG5 do not apply.
   from `rc_cb_alloc`).  This plan picks up EXG2-2/EXG2-4 (folded into
   EXG5) and EXG3 (folded into EXG6), plus the cross-scope-ownership
   gap explicitly called out in EXG1-5's followup notes.
-- **`existential-types-plan.md`** (EX1--EX2).  EXG4-3 mirrors the
-  storage-site insertion logic already used for `rc<T>` in structs
-  and collections; the change is purely additive (extend the
-  type-kind check) rather than a redesign.
+- **`existential-types-plan.md`** (EX1--EX2).  EXG4-3 was retired
+  (see status banner); the cross-plan followups F1-3 reasoning
+  applies.
 - **`refinement-types-plan.md`** -- independent.  Refinements narrow
   the hidden type's range at the open boundary but do not change the
   storage discipline.
-- **`typed-collections-plan.md`** -- EXG4-3 is what unblocks
-  `Vec[Showable]` storing constrained existentials; without it, vec
-  inserts UAF on the originating binding.
+- **`typed-collections-plan.md`** -- storing a packed constrained
+  existential in `Vec[Showable]` requires an explicit `rc/clone` at
+  the insert site (matching the `rc<T>` discipline); without the
+  clone, the originating binding's drop and the vec's drop both fire
+  against the same control block.  EXG4-3 was retired (see status
+  banner).

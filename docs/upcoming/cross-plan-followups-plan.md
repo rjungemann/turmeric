@@ -1,12 +1,15 @@
 # Cross-Plan Followups
 
-> **Status:** F1-1 + F2-1 shipped.  F1-1 = constrained-existential
-> return/param SEGV fix (new fixtures `ex-exists-return-type`,
-> `ex-exists-param-type`, `exg4-pack-return`, `exg4-pack-into-fn`).
-> F2-1 = defn-boundary diagnostic for escaping `:linear` existentials
-> (new fixture `errors/exg6-linear-escape`).  `exg4-pack-into-struct`
-> remains blocked on a separate `defstruct` parser limitation
-> (compound field type annotations) -- track separately.
+> **Status:** F1-1, F1-3 (retire), F2-1 shipped.  F1-1 =
+> constrained-existential return/param SEGV fix (new fixtures
+> `ex-exists-return-type`, `ex-exists-param-type`,
+> `exg4-pack-return`, `exg4-pack-into-fn`).  F1-3 = formally retired
+> EXG4-3 (rc<T> baseline requires explicit clones; constrained
+> existentials follow suit).  F2-1 = defn-boundary diagnostic for
+> escaping `:linear` existentials (new fixture
+> `errors/exg6-linear-escape`).  `exg4-pack-into-struct` remains
+> blocked on a separate `defstruct` parser limitation (compound
+> field type annotations) -- track separately.
 > **Last Updated:** 2026-05-23
 > **Type:** Compiler / Runtime / Stdlib / Docs
 
@@ -145,9 +148,9 @@ apply to `rc<T>` first, then extend to constrained existentials.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F1-3-1 | Decide whether `rc<T>` should auto-clone at struct/vec/async storage sites (changes from move to clone semantics; user-visible).  Either bring back the EXG4-3 design or formally retire it. | design decision |
-| F1-3-2 | If auto-clone: implement in `elab_structs.c`, `elab_collections.c`, `elab_async.c` -- inject `EX_RC_CLONE` when the source is a CK_MOVE binding being stored.  Extend the type check to fire on constrained `TY_EXISTS` too. | `src/compiler/elab_*` |
-| F1-3-3 | If retire: update both `existential-gc-followup-plan.md` and any user docs that hint at "auto-clone at storage sites" to say "explicit `rc/clone` required". | docs |
+| F1-3-1 | Decision: **retire** EXG4-3 -- **shipped**.  The original EXG4-3 design proposed auto-cloning constrained existentials at storage sites on the premise that `rc<T>` already does so.  The premise is wrong: `rc<T>` requires explicit `rc/clone` at struct/vec/async storage sites.  Bringing the `rc<T>` policy to auto-clone is a much larger user-visible change and is out of scope for this plan.  Constrained existentials follow the established `rc<T>` discipline: explicit `rc/clone` at storage sites. | design decision |
+| F1-3-2 | Implementation: not needed -- **n/a** (retire path chosen). | -- |
+| F1-3-3 | Doc updates: backfill `existential-gc-followup-plan.md` to flip EXG4-3 from "open" to "retired" and update the Relation-to-Other-Plans section to drop the "EXG4-3 is what unblocks Vec[Showable]" framing in favour of explicit-clone -- **shipped**. | docs |
 
 ---
 
