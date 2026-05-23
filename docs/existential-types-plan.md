@@ -445,6 +445,10 @@ inside an `open` block.
 
 - [ ] **EX1e-4** Add a GC root for the `tur_existential` record so the GC does
   not collect the vtables while the value is live inside an `open` block.
+  *(EX1e-4 broke out as a separate phase: see
+  [`existential-gc-plan.md`](existential-gc-plan.md). EX1e shipped the
+  allocation; that plan covers the freeing, borrow-check integration,
+  cycle-collector visibility, and an optional `:linear` variant.)*
 
 - [ ] **EX1e-5** Add runtime tests (integration-level, run through the
   interpreter):
