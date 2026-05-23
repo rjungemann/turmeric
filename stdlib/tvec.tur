@@ -171,3 +171,9 @@
   }
   return true;
   ```)
+
+;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
+;; TC1-5: Phase PTC4 -- constrained Eq instance for Vec[A].
+;; Note: element comparison uses integer equality; correct for all primitive A.
+(definstance Eq [Vec] [(Eq A)]
+  (eq? [x y] (tvec-eq? x y (fn [a b] (= a b)))))

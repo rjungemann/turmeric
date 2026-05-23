@@ -393,7 +393,10 @@ static int compile_to_c(const char *path, Buf *out_c,
         /* "stdlib/gen.tur" - GF2 generator stdlib; not auto-loaded to avoid polluting
          * all programs.  Load explicitly with (load "stdlib/gen.tur"). */
         /* "stdlib/vec.tur" - has typeclass dependencies, not auto-loaded */
-        /* "stdlib/typeclass.tur" loaded on demand via (require typeclass) - Phase 15 */
+        /* Phase PTC4: typeclass-eq.tur defines only the Eq class skeleton so that
+         * typed-collection definstances (Eq[Vec], Eq[Map], etc.) have Eq in scope.
+         * The full typeclass.tur (with all primitive instances) remains on-demand. */
+        "stdlib/typeclass-eq.tur",
         /* Phase TM0/TC1/TC2: typed parameterized collection stdlib files. */
         "stdlib/tmap.tur",
         "stdlib/tvec.tur",

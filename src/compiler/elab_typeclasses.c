@@ -280,12 +280,12 @@ Expr *elab_defclass(Elab *e, const Form *call) {
      * defined (in stdlib/typeclass.tur), not reserved.  The only guard remaining
      * is the standard "already defined" check below. */
 
-    /* Check if already defined */
+    /* Check if already defined — idempotent: skip silently if already in scope.
+     * This allows stdlib/typeclass-eq.tur to pre-declare Eq without conflicting
+     * with user programs or test fixtures that also define it. */
     TypeClass *existing = typeclass_env_lookup_typeclass(&e->typeclass_env, name);
     if (existing) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "typeclass '%s' is already defined", name->name);
-        return NULL;
+        return e_nil(e, call->span);
     }
     
     /* Parse type parameters (optional) */
@@ -1120,11 +1120,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             const char *type_component = NULL;
             char ctor_name_buf[32];  /* for TY_STRUCT/constructor names */
             switch (type_args[j].kind) {
-                case TY_INT: type_component = "int"; break;
-                case TY_BOOL: type_component = "bool"; break;
-                case TY_CSTR: type_component = "cstr"; break;
-                case TY_NIL: type_component = "nil"; break;
+                case TY_INT:     type_component = "int";     break;
+                case TY_BOOL:    type_component = "bool";    break;
+                case TY_CSTR:    type_component = "cstr";    break;
+                case TY_NIL:     type_component = "nil";     break;
                 case TY_PTR_VOID: type_component = "ptr_void"; break;
+                case TY_INT8:    type_component = "int8";    break;
+                case TY_INT16:   type_component = "int16";   break;
+                case TY_INT32:   type_component = "int32";   break;
+                case TY_UINT8:   type_component = "uint8";   break;
+                case TY_UINT16:  type_component = "uint16";  break;
+                case TY_UINT32:  type_component = "uint32";  break;
+                case TY_UINT64:  type_component = "uint64";  break;
+                case TY_FLOAT32: type_component = "float32"; break;
+                case TY_FLOAT64: type_component = "float64"; break;
                 case TY_STRUCT:
                     /* Phase HKT H3: use the original symbol name when available,
                      * falling back to "T" for unnamed struct type args. */
@@ -1948,16 +1957,25 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                 }
             }
             /* Phase PTC3/PTC4: Check type parameter constraints on this instance.
-             * Extract TY_APP elem types for param_idx substitution. */
+             * Extract TY_APP elem types in type_params order (innermost first)
+             * to support multi-param types like Map[K V]. */
             if (inst->type_param_constraints && inst->n_type_param_constraints > 0) {
                 Type obj_type = obj->type;
                 const Type *elem_types = NULL;
                 uint8_t n_elem = 0;
                 Type elem_buf[8];
-                if (obj->type.kind == TY_APP && obj->type.as.app.arg) {
-                    elem_buf[0] = *obj->type.as.app.arg;
-                    elem_types = elem_buf;
-                    n_elem = 1;
+                if (obj->type.kind == TY_APP) {
+                    Type raw[8];
+                    uint8_t n_raw = 0;
+                    for (const Type *tx = &obj->type;
+                         tx && tx->kind == TY_APP && n_raw < 8;
+                         tx = tx->as.app.fn) {
+                        if (tx->as.app.arg) raw[n_raw++] = *tx->as.app.arg;
+                    }
+                    for (uint8_t ri = 0; ri < n_raw; ri++)
+                        elem_buf[ri] = raw[n_raw - 1 - ri];
+                    n_elem = n_raw;
+                    if (n_elem > 0) elem_types = elem_buf;
                 }
                 if (!typeclass_instance_constraints_satisfied(inst, &obj_type, 1,
                                                               elem_types, n_elem,

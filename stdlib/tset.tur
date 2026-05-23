@@ -246,3 +246,9 @@
   ```c
   free((void*)(intptr_t)s);
   ```)
+
+;;; Eq [Set] -- membership equality using the HAMT structure.
+;; TC2-15: Phase PTC4 -- constrained Eq instance for Set[A].
+;; Constraint (Eq A) ensures elements are comparable; HAMT uses hash-based lookup.
+(definstance Eq [Set] [(Eq A)]
+  (eq? [x y] (tset-eq? x y)))

@@ -1,13 +1,218 @@
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2967:12: warning: initialization of 'int8_t (*)(int8_t,  int8_t)' {aka 'signed char (*)(signed char,  signed char)'} from incompatible pointer type 'int64_t (*)(int8_t,  int8_t)' {aka 'long int (*)(signed char,  signed char)'} [-Wincompatible-pointer-types]
+ 2967 |     .add = __inst_Num_add_int8,
+      |            ^~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2967:12: note: (near initialization for 'dict_Num_int8_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2968:12: warning: initialization of 'int8_t (*)(int8_t,  int8_t)' {aka 'signed char (*)(signed char,  signed char)'} from incompatible pointer type 'int64_t (*)(int8_t,  int8_t)' {aka 'long int (*)(signed char,  signed char)'} [-Wincompatible-pointer-types]
+ 2968 |     .sub = __inst_Num_sub_int8,
+      |            ^~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2968:12: note: (near initialization for 'dict_Num_int8_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2969:12: warning: initialization of 'int8_t (*)(int8_t,  int8_t)' {aka 'signed char (*)(signed char,  signed char)'} from incompatible pointer type 'int64_t (*)(int8_t,  int8_t)' {aka 'long int (*)(signed char,  signed char)'} [-Wincompatible-pointer-types]
+ 2969 |     .mul = __inst_Num_mul_int8,
+      |            ^~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2969:12: note: (near initialization for 'dict_Num_int8_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2970:12: warning: initialization of 'int8_t (*)(int8_t,  int8_t)' {aka 'signed char (*)(signed char,  signed char)'} from incompatible pointer type 'int64_t (*)(int8_t,  int8_t)' {aka 'long int (*)(signed char,  signed char)'} [-Wincompatible-pointer-types]
+ 2970 |     .div = __inst_Num_div_int8,
+      |            ^~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2970:12: note: (near initialization for 'dict_Num_int8_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2971:12: warning: initialization of 'int8_t (*)(int8_t)' {aka 'signed char (*)(signed char)'} from incompatible pointer type 'int64_t (*)(int8_t)' {aka 'long int (*)(signed char)'} [-Wincompatible-pointer-types]
+ 2971 |     .neg = __inst_Num_neg_int8,
+      |            ^~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:2971:12: note: (near initialization for 'dict_Num_int8_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3003:12: warning: initialization of 'int16_t (*)(int16_t,  int16_t)' {aka 'short int (*)(short int,  short int)'} from incompatible pointer type 'int64_t (*)(int16_t,  int16_t)' {aka 'long int (*)(short int,  short int)'} [-Wincompatible-pointer-types]
+ 3003 |     .add = __inst_Num_add_int16,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3003:12: note: (near initialization for 'dict_Num_int16_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3004:12: warning: initialization of 'int16_t (*)(int16_t,  int16_t)' {aka 'short int (*)(short int,  short int)'} from incompatible pointer type 'int64_t (*)(int16_t,  int16_t)' {aka 'long int (*)(short int,  short int)'} [-Wincompatible-pointer-types]
+ 3004 |     .sub = __inst_Num_sub_int16,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3004:12: note: (near initialization for 'dict_Num_int16_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3005:12: warning: initialization of 'int16_t (*)(int16_t,  int16_t)' {aka 'short int (*)(short int,  short int)'} from incompatible pointer type 'int64_t (*)(int16_t,  int16_t)' {aka 'long int (*)(short int,  short int)'} [-Wincompatible-pointer-types]
+ 3005 |     .mul = __inst_Num_mul_int16,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3005:12: note: (near initialization for 'dict_Num_int16_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3006:12: warning: initialization of 'int16_t (*)(int16_t,  int16_t)' {aka 'short int (*)(short int,  short int)'} from incompatible pointer type 'int64_t (*)(int16_t,  int16_t)' {aka 'long int (*)(short int,  short int)'} [-Wincompatible-pointer-types]
+ 3006 |     .div = __inst_Num_div_int16,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3006:12: note: (near initialization for 'dict_Num_int16_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3007:12: warning: initialization of 'int16_t (*)(int16_t)' {aka 'short int (*)(short int)'} from incompatible pointer type 'int64_t (*)(int16_t)' {aka 'long int (*)(short int)'} [-Wincompatible-pointer-types]
+ 3007 |     .neg = __inst_Num_neg_int16,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3007:12: note: (near initialization for 'dict_Num_int16_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3039:12: warning: initialization of 'int32_t (*)(int32_t,  int32_t)' {aka 'int (*)(int,  int)'} from incompatible pointer type 'int64_t (*)(int32_t,  int32_t)' {aka 'long int (*)(int,  int)'} [-Wincompatible-pointer-types]
+ 3039 |     .add = __inst_Num_add_int32,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3039:12: note: (near initialization for 'dict_Num_int32_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3040:12: warning: initialization of 'int32_t (*)(int32_t,  int32_t)' {aka 'int (*)(int,  int)'} from incompatible pointer type 'int64_t (*)(int32_t,  int32_t)' {aka 'long int (*)(int,  int)'} [-Wincompatible-pointer-types]
+ 3040 |     .sub = __inst_Num_sub_int32,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3040:12: note: (near initialization for 'dict_Num_int32_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3041:12: warning: initialization of 'int32_t (*)(int32_t,  int32_t)' {aka 'int (*)(int,  int)'} from incompatible pointer type 'int64_t (*)(int32_t,  int32_t)' {aka 'long int (*)(int,  int)'} [-Wincompatible-pointer-types]
+ 3041 |     .mul = __inst_Num_mul_int32,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3041:12: note: (near initialization for 'dict_Num_int32_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3042:12: warning: initialization of 'int32_t (*)(int32_t,  int32_t)' {aka 'int (*)(int,  int)'} from incompatible pointer type 'int64_t (*)(int32_t,  int32_t)' {aka 'long int (*)(int,  int)'} [-Wincompatible-pointer-types]
+ 3042 |     .div = __inst_Num_div_int32,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3042:12: note: (near initialization for 'dict_Num_int32_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3043:12: warning: initialization of 'int32_t (*)(int32_t)' {aka 'int (*)(int)'} from incompatible pointer type 'int64_t (*)(int32_t)' {aka 'long int (*)(int)'} [-Wincompatible-pointer-types]
+ 3043 |     .neg = __inst_Num_neg_int32,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3043:12: note: (near initialization for 'dict_Num_int32_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3075:12: warning: initialization of 'uint8_t (*)(uint8_t,  uint8_t)' {aka 'unsigned char (*)(unsigned char,  unsigned char)'} from incompatible pointer type 'int64_t (*)(uint8_t,  uint8_t)' {aka 'long int (*)(unsigned char,  unsigned char)'} [-Wincompatible-pointer-types]
+ 3075 |     .add = __inst_Num_add_uint8,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3075:12: note: (near initialization for 'dict_Num_uint8_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3076:12: warning: initialization of 'uint8_t (*)(uint8_t,  uint8_t)' {aka 'unsigned char (*)(unsigned char,  unsigned char)'} from incompatible pointer type 'int64_t (*)(uint8_t,  uint8_t)' {aka 'long int (*)(unsigned char,  unsigned char)'} [-Wincompatible-pointer-types]
+ 3076 |     .sub = __inst_Num_sub_uint8,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3076:12: note: (near initialization for 'dict_Num_uint8_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3077:12: warning: initialization of 'uint8_t (*)(uint8_t,  uint8_t)' {aka 'unsigned char (*)(unsigned char,  unsigned char)'} from incompatible pointer type 'int64_t (*)(uint8_t,  uint8_t)' {aka 'long int (*)(unsigned char,  unsigned char)'} [-Wincompatible-pointer-types]
+ 3077 |     .mul = __inst_Num_mul_uint8,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3077:12: note: (near initialization for 'dict_Num_uint8_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3078:12: warning: initialization of 'uint8_t (*)(uint8_t,  uint8_t)' {aka 'unsigned char (*)(unsigned char,  unsigned char)'} from incompatible pointer type 'int64_t (*)(uint8_t,  uint8_t)' {aka 'long int (*)(unsigned char,  unsigned char)'} [-Wincompatible-pointer-types]
+ 3078 |     .div = __inst_Num_div_uint8,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3078:12: note: (near initialization for 'dict_Num_uint8_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3079:12: warning: initialization of 'uint8_t (*)(uint8_t)' {aka 'unsigned char (*)(unsigned char)'} from incompatible pointer type 'int64_t (*)(uint8_t)' {aka 'long int (*)(unsigned char)'} [-Wincompatible-pointer-types]
+ 3079 |     .neg = __inst_Num_neg_uint8,
+      |            ^~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3079:12: note: (near initialization for 'dict_Num_uint8_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3111:12: warning: initialization of 'uint16_t (*)(uint16_t,  uint16_t)' {aka 'short unsigned int (*)(short unsigned int,  short unsigned int)'} from incompatible pointer type 'int64_t (*)(uint16_t,  uint16_t)' {aka 'long int (*)(short unsigned int,  short unsigned int)'} [-Wincompatible-pointer-types]
+ 3111 |     .add = __inst_Num_add_uint16,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3111:12: note: (near initialization for 'dict_Num_uint16_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3112:12: warning: initialization of 'uint16_t (*)(uint16_t,  uint16_t)' {aka 'short unsigned int (*)(short unsigned int,  short unsigned int)'} from incompatible pointer type 'int64_t (*)(uint16_t,  uint16_t)' {aka 'long int (*)(short unsigned int,  short unsigned int)'} [-Wincompatible-pointer-types]
+ 3112 |     .sub = __inst_Num_sub_uint16,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3112:12: note: (near initialization for 'dict_Num_uint16_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3113:12: warning: initialization of 'uint16_t (*)(uint16_t,  uint16_t)' {aka 'short unsigned int (*)(short unsigned int,  short unsigned int)'} from incompatible pointer type 'int64_t (*)(uint16_t,  uint16_t)' {aka 'long int (*)(short unsigned int,  short unsigned int)'} [-Wincompatible-pointer-types]
+ 3113 |     .mul = __inst_Num_mul_uint16,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3113:12: note: (near initialization for 'dict_Num_uint16_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3114:12: warning: initialization of 'uint16_t (*)(uint16_t,  uint16_t)' {aka 'short unsigned int (*)(short unsigned int,  short unsigned int)'} from incompatible pointer type 'int64_t (*)(uint16_t,  uint16_t)' {aka 'long int (*)(short unsigned int,  short unsigned int)'} [-Wincompatible-pointer-types]
+ 3114 |     .div = __inst_Num_div_uint16,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3114:12: note: (near initialization for 'dict_Num_uint16_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3115:12: warning: initialization of 'uint16_t (*)(uint16_t)' {aka 'short unsigned int (*)(short unsigned int)'} from incompatible pointer type 'int64_t (*)(uint16_t)' {aka 'long int (*)(short unsigned int)'} [-Wincompatible-pointer-types]
+ 3115 |     .neg = __inst_Num_neg_uint16,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3115:12: note: (near initialization for 'dict_Num_uint16_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3147:12: warning: initialization of 'uint32_t (*)(uint32_t,  uint32_t)' {aka 'unsigned int (*)(unsigned int,  unsigned int)'} from incompatible pointer type 'int64_t (*)(uint32_t,  uint32_t)' {aka 'long int (*)(unsigned int,  unsigned int)'} [-Wincompatible-pointer-types]
+ 3147 |     .add = __inst_Num_add_uint32,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3147:12: note: (near initialization for 'dict_Num_uint32_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3148:12: warning: initialization of 'uint32_t (*)(uint32_t,  uint32_t)' {aka 'unsigned int (*)(unsigned int,  unsigned int)'} from incompatible pointer type 'int64_t (*)(uint32_t,  uint32_t)' {aka 'long int (*)(unsigned int,  unsigned int)'} [-Wincompatible-pointer-types]
+ 3148 |     .sub = __inst_Num_sub_uint32,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3148:12: note: (near initialization for 'dict_Num_uint32_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3149:12: warning: initialization of 'uint32_t (*)(uint32_t,  uint32_t)' {aka 'unsigned int (*)(unsigned int,  unsigned int)'} from incompatible pointer type 'int64_t (*)(uint32_t,  uint32_t)' {aka 'long int (*)(unsigned int,  unsigned int)'} [-Wincompatible-pointer-types]
+ 3149 |     .mul = __inst_Num_mul_uint32,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3149:12: note: (near initialization for 'dict_Num_uint32_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3150:12: warning: initialization of 'uint32_t (*)(uint32_t,  uint32_t)' {aka 'unsigned int (*)(unsigned int,  unsigned int)'} from incompatible pointer type 'int64_t (*)(uint32_t,  uint32_t)' {aka 'long int (*)(unsigned int,  unsigned int)'} [-Wincompatible-pointer-types]
+ 3150 |     .div = __inst_Num_div_uint32,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3150:12: note: (near initialization for 'dict_Num_uint32_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3151:12: warning: initialization of 'uint32_t (*)(uint32_t)' {aka 'unsigned int (*)(unsigned int)'} from incompatible pointer type 'int64_t (*)(uint32_t)' {aka 'long int (*)(unsigned int)'} [-Wincompatible-pointer-types]
+ 3151 |     .neg = __inst_Num_neg_uint32,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3151:12: note: (near initialization for 'dict_Num_uint32_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3183:12: warning: initialization of 'uint64_t (*)(uint64_t,  uint64_t)' {aka 'long unsigned int (*)(long unsigned int,  long unsigned int)'} from incompatible pointer type 'int64_t (*)(uint64_t,  uint64_t)' {aka 'long int (*)(long unsigned int,  long unsigned int)'} [-Wincompatible-pointer-types]
+ 3183 |     .add = __inst_Num_add_uint64,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3183:12: note: (near initialization for 'dict_Num_uint64_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3184:12: warning: initialization of 'uint64_t (*)(uint64_t,  uint64_t)' {aka 'long unsigned int (*)(long unsigned int,  long unsigned int)'} from incompatible pointer type 'int64_t (*)(uint64_t,  uint64_t)' {aka 'long int (*)(long unsigned int,  long unsigned int)'} [-Wincompatible-pointer-types]
+ 3184 |     .sub = __inst_Num_sub_uint64,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3184:12: note: (near initialization for 'dict_Num_uint64_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3185:12: warning: initialization of 'uint64_t (*)(uint64_t,  uint64_t)' {aka 'long unsigned int (*)(long unsigned int,  long unsigned int)'} from incompatible pointer type 'int64_t (*)(uint64_t,  uint64_t)' {aka 'long int (*)(long unsigned int,  long unsigned int)'} [-Wincompatible-pointer-types]
+ 3185 |     .mul = __inst_Num_mul_uint64,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3185:12: note: (near initialization for 'dict_Num_uint64_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3186:12: warning: initialization of 'uint64_t (*)(uint64_t,  uint64_t)' {aka 'long unsigned int (*)(long unsigned int,  long unsigned int)'} from incompatible pointer type 'int64_t (*)(uint64_t,  uint64_t)' {aka 'long int (*)(long unsigned int,  long unsigned int)'} [-Wincompatible-pointer-types]
+ 3186 |     .div = __inst_Num_div_uint64,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3186:12: note: (near initialization for 'dict_Num_uint64_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3187:12: warning: initialization of 'uint64_t (*)(uint64_t)' {aka 'long unsigned int (*)(long unsigned int)'} from incompatible pointer type 'int64_t (*)(uint64_t)' {aka 'long int (*)(long unsigned int)'} [-Wincompatible-pointer-types]
+ 3187 |     .neg = __inst_Num_neg_uint64,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3187:12: note: (near initialization for 'dict_Num_uint64_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3219:12: warning: initialization of 'float (*)(float,  float)' from incompatible pointer type 'int64_t (*)(float,  float)' {aka 'long int (*)(float,  float)'} [-Wincompatible-pointer-types]
+ 3219 |     .add = __inst_Num_add_float32,
+      |            ^~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3219:12: note: (near initialization for 'dict_Num_float32_singleton.add')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3220:12: warning: initialization of 'float (*)(float,  float)' from incompatible pointer type 'int64_t (*)(float,  float)' {aka 'long int (*)(float,  float)'} [-Wincompatible-pointer-types]
+ 3220 |     .sub = __inst_Num_sub_float32,
+      |            ^~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3220:12: note: (near initialization for 'dict_Num_float32_singleton.sub')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3221:12: warning: initialization of 'float (*)(float,  float)' from incompatible pointer type 'int64_t (*)(float,  float)' {aka 'long int (*)(float,  float)'} [-Wincompatible-pointer-types]
+ 3221 |     .mul = __inst_Num_mul_float32,
+      |            ^~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3221:12: note: (near initialization for 'dict_Num_float32_singleton.mul')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3222:12: warning: initialization of 'float (*)(float,  float)' from incompatible pointer type 'int64_t (*)(float,  float)' {aka 'long int (*)(float,  float)'} [-Wincompatible-pointer-types]
+ 3222 |     .div = __inst_Num_div_float32,
+      |            ^~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3222:12: note: (near initialization for 'dict_Num_float32_singleton.div')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3223:12: warning: initialization of 'float (*)(float)' from incompatible pointer type 'int64_t (*)(float)' {aka 'long int (*)(float)'} [-Wincompatible-pointer-types]
+ 3223 |     .neg = __inst_Num_neg_float32,
+      |            ^~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3223:12: note: (near initialization for 'dict_Num_float32_singleton.neg')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3247:14: warning: initialization of '_Bool (*)(_Bool)' from incompatible pointer type 'int64_t (*)(_Bool)' {aka 'long int (*)(_Bool)'} [-Wincompatible-pointer-types]
+ 3247 |     .clone = __inst_Clone_clone_bool,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3247:14: note: (near initialization for 'dict_Clone_bool_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c: In function '__inst_Clone_clone_cstr':
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3251:16: warning: returning 'const char *' from a function with return type 'int64_t' {aka 'long int'} makes integer from pointer without a cast [-Wint-conversion]
+ 3251 |         return x;
+      |                ^
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c: At top level:
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3259:14: warning: initialization of 'const char * (*)(const char *)' from incompatible pointer type 'int64_t (*)(const char *)' {aka 'long int (*)(const char *)'} [-Wincompatible-pointer-types]
+ 3259 |     .clone = __inst_Clone_clone_cstr,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3259:14: note: (near initialization for 'dict_Clone_cstr_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3271:14: warning: initialization of 'int8_t (*)(int8_t)' {aka 'signed char (*)(signed char)'} from incompatible pointer type 'int64_t (*)(int8_t)' {aka 'long int (*)(signed char)'} [-Wincompatible-pointer-types]
+ 3271 |     .clone = __inst_Clone_clone_int8,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3271:14: note: (near initialization for 'dict_Clone_int8_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3283:14: warning: initialization of 'int16_t (*)(int16_t)' {aka 'short int (*)(short int)'} from incompatible pointer type 'int64_t (*)(int16_t)' {aka 'long int (*)(short int)'} [-Wincompatible-pointer-types]
+ 3283 |     .clone = __inst_Clone_clone_int16,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3283:14: note: (near initialization for 'dict_Clone_int16_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3295:14: warning: initialization of 'int32_t (*)(int32_t)' {aka 'int (*)(int)'} from incompatible pointer type 'int64_t (*)(int32_t)' {aka 'long int (*)(int)'} [-Wincompatible-pointer-types]
+ 3295 |     .clone = __inst_Clone_clone_int32,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3295:14: note: (near initialization for 'dict_Clone_int32_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3307:14: warning: initialization of 'uint8_t (*)(uint8_t)' {aka 'unsigned char (*)(unsigned char)'} from incompatible pointer type 'int64_t (*)(uint8_t)' {aka 'long int (*)(unsigned char)'} [-Wincompatible-pointer-types]
+ 3307 |     .clone = __inst_Clone_clone_uint8,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3307:14: note: (near initialization for 'dict_Clone_uint8_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3319:14: warning: initialization of 'uint16_t (*)(uint16_t)' {aka 'short unsigned int (*)(short unsigned int)'} from incompatible pointer type 'int64_t (*)(uint16_t)' {aka 'long int (*)(short unsigned int)'} [-Wincompatible-pointer-types]
+ 3319 |     .clone = __inst_Clone_clone_uint16,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3319:14: note: (near initialization for 'dict_Clone_uint16_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3331:14: warning: initialization of 'uint32_t (*)(uint32_t)' {aka 'unsigned int (*)(unsigned int)'} from incompatible pointer type 'int64_t (*)(uint32_t)' {aka 'long int (*)(unsigned int)'} [-Wincompatible-pointer-types]
+ 3331 |     .clone = __inst_Clone_clone_uint32,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3331:14: note: (near initialization for 'dict_Clone_uint32_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3343:14: warning: initialization of 'uint64_t (*)(uint64_t)' {aka 'long unsigned int (*)(long unsigned int)'} from incompatible pointer type 'int64_t (*)(uint64_t)' {aka 'long int (*)(long unsigned int)'} [-Wincompatible-pointer-types]
+ 3343 |     .clone = __inst_Clone_clone_uint64,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3343:14: note: (near initialization for 'dict_Clone_uint64_singleton.clone')
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3355:14: warning: initialization of 'float (*)(float)' from incompatible pointer type 'int64_t (*)(float)' {aka 'long int (*)(float)'} [-Wincompatible-pointer-types]
+ 3355 |     .clone = __inst_Clone_clone_float32,
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3355:14: note: (near initialization for 'dict_Clone_float32_singleton.clone')
 
 =================================================================
-==31896==ERROR: LeakSanitizer: detected memory leaks
+==28167==ERROR: LeakSanitizer: detected memory leaks
 
 Direct leak of 128 byte(s) in 2 object(s) allocated from:
-    #0 0x7f33886fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
-    #1 0x5576dc1f2b0d in collect_free_vars /home/user/turmeric/src/compiler/elab_core.c:442
+    #0 0x7f42388fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x5639b6f4ab36 in collect_free_vars /home/user/turmeric/src/compiler/elab_core.c:442
 
 Direct leak of 48 byte(s) in 2 object(s) allocated from:
-    #0 0x7f33886fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
-    #1 0x5576dc370f55 in fresh_tmp /home/user/turmeric/src/compiler/emit_core.c:194
+    #0 0x7f42388fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x5639b70c968f in fresh_tmp /home/user/turmeric/src/compiler/emit_core.c:194
 
 SUMMARY: AddressSanitizer: 176 byte(s) leaked in 4 allocation(s).

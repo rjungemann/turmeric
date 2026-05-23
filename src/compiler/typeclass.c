@@ -111,15 +111,25 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
         if (!match) continue;
         
         /* Phase PTC3/PTC4: Check type parameter constraints on this instance.
-         * Extract concrete element types from TY_APP for param_idx substitution. */
+         * Extract concrete element types from TY_APP for param_idx substitution.
+         * For multi-param types (Map[K V] → TY_APP(TY_APP(Map,K),V)), collect
+         * args in type_params order (innermost first) by reversing the app chain. */
         {
             const Type *elem_types = NULL;
             uint8_t n_elem = 0;
             Type elem_buf[8];
-            if (n_type_args > 0 && type_args[0].kind == TY_APP && type_args[0].as.app.arg) {
-                elem_buf[0] = *type_args[0].as.app.arg;
-                elem_types = elem_buf;
-                n_elem = 1;
+            if (n_type_args > 0 && type_args[0].kind == TY_APP) {
+                Type raw[8];
+                uint8_t n_raw = 0;
+                for (const Type *tx = &type_args[0];
+                     tx && tx->kind == TY_APP && n_raw < 8;
+                     tx = tx->as.app.fn) {
+                    if (tx->as.app.arg) raw[n_raw++] = *tx->as.app.arg;
+                }
+                for (uint8_t ri = 0; ri < n_raw; ri++)
+                    elem_buf[ri] = raw[n_raw - 1 - ri];
+                n_elem = n_raw;
+                if (n_elem > 0) elem_types = elem_buf;
             }
             if (!typeclass_instance_constraints_satisfied(inst, type_args, n_type_args,
                                                           elem_types, n_elem, env)) {

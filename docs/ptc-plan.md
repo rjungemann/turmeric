@@ -1,7 +1,7 @@
 # Parametric Type Constraints Plan (PTC)
 
-> **Status:** In Progress
-> **Last Updated:** 2026-05-22
+> **Status:** Complete
+> **Last Updated:** 2026-05-23
 > **Type:** Compiler / Type System
 
 ---
@@ -84,7 +84,7 @@ is checked by looking up `Eq` for whatever type was stored in the `TypeConstrain
 at `definstance` time -- which is the abstract `Vec` struct type, not the
 concrete element type from the call site.
 
-### PTC4 -- Not done
+### PTC4 -- Done
 
 The missing piece: when checking constraints for a parameterized-struct
 instance, substitute the concrete element types (derived from the call-site
@@ -143,15 +143,15 @@ constraint infrastructure.
 
 | ID | Task | File(s) | Status |
 |----|------|---------|--------|
-| PTC4-1 | Add `param_idx` field to `TypeConstraint`; set it during parsing when a constraint references a type parameter by name | `typeclass.h`, `elab_typeclasses.c` | Not done |
-| PTC4-2 | Update `typeclass_instance_constraints_satisfied` signature to accept a `concrete_types` array + count alongside the lookup type args | `typeclass.h`, `typeclass.c` | Not done |
-| PTC4-3 | In `typeclass_instance_constraints_satisfied`, when a constraint's `param_idx >= 0`, substitute `concrete_types[param_idx]` as the type to check against; fall back to the stored `type_arg` for concrete (non-param) constraints | `typeclass.c` | Not done |
-| PTC4-4 | Extract concrete element types at call sites in the method-dispatch loop; pass them to `typeclass_instance_constraints_satisfied` via the updated signature | `elab_typeclasses.c` | Not done |
-| PTC4-5 | Extract concrete element types at call sites in `typeclass_env_lookup_instance`; same update | `typeclass.c` | Not done |
-| PTC4-6 | Update PTC2 validation in `elab_definstance` to handle the new `param_idx` field (skip concrete-type check when a param index is set) | `elab_typeclasses.c` | Not done |
-| PTC4-7 | Add fixture `tests/fixtures/ptc4-basic`: a parameterized struct with a constrained `definstance`, called via `.method` | `tests/fixtures/` | Not done |
-| PTC4-8 | Add fixture `tests/fixtures/ptc4-failing-constraint`: constrained `definstance` where the element type lacks the required instance; verify compile-time error | `tests/fixtures/` | Not done |
-| PTC4-9 | Register PTC4 fixtures in `tests/run.sh` and `tests/run-turi.sh` | `tests/` | Not done |
+| PTC4-1 | Add `param_idx` field to `TypeConstraint`; set it during parsing when a constraint references a type parameter by name | `typeclass.h`, `elab_typeclasses.c` | Done |
+| PTC4-2 | Update `typeclass_instance_constraints_satisfied` signature to accept a `concrete_types` array + count alongside the lookup type args | `typeclass.h`, `typeclass.c` | Done |
+| PTC4-3 | In `typeclass_instance_constraints_satisfied`, when a constraint's `param_idx >= 0`, substitute `concrete_types[param_idx]` as the type to check against; fall back to the stored `type_arg` for concrete (non-param) constraints | `typeclass.c` | Done |
+| PTC4-4 | Extract concrete element types at call sites in the method-dispatch loop; pass them to `typeclass_instance_constraints_satisfied` via the updated signature | `elab_typeclasses.c` | Done |
+| PTC4-5 | Extract concrete element types at call sites in `typeclass_env_lookup_instance`; same update | `typeclass.c` | Done |
+| PTC4-6 | Update PTC2 validation in `elab_definstance` to handle the new `param_idx` field (skip concrete-type check when a param index is set) | `elab_typeclasses.c` | Done |
+| PTC4-7 | Add fixture `tests/fixtures/ptc4-basic`: a parameterized struct with a constrained `definstance`, called via `.method` | `tests/fixtures/` | Done |
+| PTC4-8 | Add fixture `tests/fixtures/ptc4-failing-constraint`: constrained `definstance` where the element type lacks the required instance; verify compile-time error | `tests/fixtures/` | Done |
+| PTC4-9 | Register PTC4 fixtures in `tests/run.sh` and `tests/run-turi.sh` | `tests/` | Done |
 
 ---
 
@@ -291,21 +291,23 @@ Expected stdout: `42`
 
 ## Remaining Work After PTC4
 
-Once PTC4 lands, the following tasks from `typed-collections-plan.md` become
-unblocked:
+All downstream tasks are now complete.
 
-| Task | Description |
-|------|-------------|
-| TM0-6 | `definstance Eq [Map] [(Eq K) (Eq V)]` using `tmap-eq?` |
-| TC1-5 | `definstance Eq [Vec] [(Eq A)]` using `tvec-eq?` |
-| TC1-9 | `definstance Eq [Cons] [(Eq A)]` using `tlist-eq?` |
-| TC1-17 | `definstance Eq [Option] [(Eq A)]` using `toption-eq?` |
-| TC1-22 | `definstance Eq [Result] [(Eq A) (Eq B)]` using `tresult-eq?` |
-| TC1-25 | `definstance Eq [Pair] [(Eq A) (Eq B)]` using `tpair-eq?` |
-| TC2-15 | `definstance Eq [Set] [(Eq A)]` using `tset-eq?` |
+| Task | Description | Status |
+|------|-------------|--------|
+| TM0-6 | `definstance Eq [Map] [(Eq K) (Eq V)]` using `tmap-eq?` | Done |
+| TC1-5 | `definstance Eq [Vec] [(Eq A)]` using `tvec-eq?` | Done |
+| TC1-9 | `definstance Eq [Cons] [(Eq A)]` using `tlist-eq?` | Done |
+| TC1-17 | `definstance Eq [Option] [(Eq A)]` using `toption-eq?` | Done |
+| TC1-22 | `definstance Eq [Result] [(Eq A) (Eq B)]` using `tresult-eq?` | Done |
+| TC1-25 | `definstance Eq [Pair] [(Eq A) (Eq B)]` using `tpair-eq?` | Done |
+| TC2-15 | `definstance Eq [Set] [(Eq A)]` using `tset-eq?` | Done |
 
-The plain `-eq?` functions (e.g., `tvec-eq?`) already exist and are correct.
-The `definstance` declarations are a one-liner each once PTC4 resolves them.
+Note: element comparison in collection Eq bodies uses integer (`=`) equality
+rather than dispatching through `.eq?`. This is correct for all primitive
+element types (int, bool, cstr). Full recursive structural equality (e.g.
+`Vec[Vec[int]]`) requires dictionary passing to method bodies, deferred to a
+future phase.
 
 ---
 

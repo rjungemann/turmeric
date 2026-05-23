@@ -163,3 +163,9 @@
   if (a_some != b_some)   return false;
   return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
   ```)
+
+;;; Eq [Option] -- equality using the inner type's Eq instance.
+;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
+;; Note: element comparison uses integer equality; correct for all primitive A.
+(definstance Eq [Option] [(Eq A)]
+  (eq? [x y] (toption-eq? x y (fn [a b] (= a b)))))

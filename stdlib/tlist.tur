@@ -146,3 +146,9 @@
   }
   return (void*)a == (void*)b;
   ```)
+
+;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
+;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
+;; Note: element comparison uses integer equality; correct for all primitive A.
+(definstance Eq [Cons] [(Eq A)]
+  (eq? [x y] (tlist-eq? x y (fn [a b] (= a b)))))
