@@ -88,9 +88,24 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_REC) {
         return a.as.rec.name == b.as.rec.name;
     }
-    /* Phase HRT0: Quantified types — structural equality on n_vars and body */
+    /* Phase HRT0/EX1b: Quantified types — structural equality on n_vars, body, and
+     * constraint set.  Bound variable names are not significant (alpha-renaming);
+     * constraints are compared by (typeclass identity, bound-var index) tuple. */
     if (a.kind == TY_FORALL || a.kind == TY_EXISTS) {
         if (a.as.forall_.n_vars != b.as.forall_.n_vars) return 0;
+        if (a.as.forall_.n_constraints != b.as.forall_.n_constraints) return 0;
+        for (uint8_t i = 0; i < a.as.forall_.n_constraints; i++) {
+            TypeClass *ca = a.as.forall_.constraint_classes
+                                ? a.as.forall_.constraint_classes[i] : NULL;
+            TypeClass *cb = b.as.forall_.constraint_classes
+                                ? b.as.forall_.constraint_classes[i] : NULL;
+            if (ca != cb) return 0;
+            uint8_t ia = a.as.forall_.constraint_var_idx
+                                ? a.as.forall_.constraint_var_idx[i] : 0;
+            uint8_t ib = b.as.forall_.constraint_var_idx
+                                ? b.as.forall_.constraint_var_idx[i] : 0;
+            if (ia != ib) return 0;
+        }
         if (!a.as.forall_.body || !b.as.forall_.body)
             return a.as.forall_.body == b.as.forall_.body;
         return type_eq(*a.as.forall_.body, *b.as.forall_.body);
@@ -338,7 +353,8 @@ const char *type_name(Type t) {
         /* Phase X3: Set literal */
         case TY_SET:
             return "set";
-        /* Phase HRT0: Quantified types */
+        /* Phase HRT0: Quantified types.
+         * Phase EX1b: print constraint vector when present. */
         case TY_FORALL:
         case TY_EXISTS: {
             Buf tmp;
@@ -350,6 +366,28 @@ const char *type_name(Type t) {
                                 ? t.as.forall_.var_names[i] : "?");
             }
             buf_puts(&tmp, "] ");
+            if (t.as.forall_.n_constraints > 0
+                    && t.as.forall_.constraint_classes
+                    && t.as.forall_.constraint_var_idx) {
+                buf_putc(&tmp, '[');
+                for (uint8_t i = 0; i < t.as.forall_.n_constraints; i++) {
+                    if (i > 0) buf_putc(&tmp, ' ');
+                    buf_putc(&tmp, '(');
+                    TypeClass *tc = t.as.forall_.constraint_classes[i];
+                    buf_puts(&tmp, (tc && tc->name && tc->name->name) ? tc->name->name : "?");
+                    buf_putc(&tmp, ' ');
+                    uint8_t vi = t.as.forall_.constraint_var_idx[i];
+                    if (vi < t.as.forall_.n_vars
+                            && t.as.forall_.var_names
+                            && t.as.forall_.var_names[vi]) {
+                        buf_puts(&tmp, t.as.forall_.var_names[vi]);
+                    } else {
+                        buf_putc(&tmp, '?');
+                    }
+                    buf_putc(&tmp, ')');
+                }
+                buf_puts(&tmp, "] ");
+            }
             if (t.as.forall_.body) {
                 buf_puts(&tmp, type_name(*t.as.forall_.body));
             } else {
@@ -726,7 +764,8 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, "set");
             break;
         }
-        /* Phase HRT0: Quantified types — always print quantifiers explicitly */
+        /* Phase HRT0: Quantified types — always print quantifiers explicitly.
+         * Phase EX1b: print optional constraint vector. */
         case TY_FORALL:
         case TY_EXISTS: {
             buf_puts(b, t.kind == TY_FORALL ? "(forall [" : "(exists [");
@@ -736,6 +775,28 @@ static void type_name_buf(Buf *b, Type t) {
                              ? t.as.forall_.var_names[i] : "?");
             }
             buf_puts(b, "] ");
+            if (t.as.forall_.n_constraints > 0
+                    && t.as.forall_.constraint_classes
+                    && t.as.forall_.constraint_var_idx) {
+                buf_putc(b, '[');
+                for (uint8_t i = 0; i < t.as.forall_.n_constraints; i++) {
+                    if (i > 0) buf_putc(b, ' ');
+                    buf_putc(b, '(');
+                    TypeClass *tc = t.as.forall_.constraint_classes[i];
+                    buf_puts(b, (tc && tc->name && tc->name->name) ? tc->name->name : "?");
+                    buf_putc(b, ' ');
+                    uint8_t vi = t.as.forall_.constraint_var_idx[i];
+                    if (vi < t.as.forall_.n_vars
+                            && t.as.forall_.var_names
+                            && t.as.forall_.var_names[vi]) {
+                        buf_puts(b, t.as.forall_.var_names[vi]);
+                    } else {
+                        buf_putc(b, '?');
+                    }
+                    buf_putc(b, ')');
+                }
+                buf_puts(b, "] ");
+            }
             if (t.as.forall_.body) type_name_buf(b, *t.as.forall_.body);
             else buf_puts(b, "?");
             buf_putc(b, ')');

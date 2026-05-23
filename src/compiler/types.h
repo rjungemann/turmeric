@@ -408,12 +408,19 @@ typedef struct Type {
         struct {
             AdtDef *def;
         } adt_;
-        /* Phase HRT0: Universally/existentially quantified types */
+        /* Phase HRT0: Universally/existentially quantified types.
+         * Phase EX1b: constraint storage for `(exists [a] [(C a) ...] body)`. */
         struct {
             const char **var_names; /* bound variable names (interned, arena-allocated) */
             Kind        *var_kinds; /* kinds of bound variables (arena-allocated) */
             uint8_t      n_vars;
             struct Type *body;      /* body type (arena-allocated) */
+            /* EX1b: Optional typeclass constraints on the bound variables.
+             * Each entry: (typeclass, var_idx) meaning "(typeclass var_names[var_idx])".
+             * n_constraints==0 means no constraints (back-compat with HRT0). */
+            TypeClass  **constraint_classes; /* arena-allocated; length n_constraints */
+            uint8_t     *constraint_var_idx; /* arena-allocated; length n_constraints */
+            uint8_t      n_constraints;
         } forall_;
         /* IT0: Union types — (A | B | C) */
         struct {

@@ -2383,7 +2383,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ASCRIBE: {
             return emit_value(ctx, body, e->as.ascribe_.inner);
         }
-        /* Phase HRT2: existential pack — box value as void* */
+        /* Phase HRT2: existential pack — box value as void*.
+         * Phase EX1c: e->as.exists_pack_.witnesses holds the resolved
+         * typeclass instances for each constraint on the target existential.
+         * EX1e (runtime vtable layout) will read these to allocate a
+         * tur_existential record carrying the value plus vtable pointers;
+         * the current implementation still emits a bare scalar cast for
+         * back-compat with HRT2 fixtures. */
         case EX_EXISTS_PACK: {
             char *val = emit_value(ctx, body, e->as.exists_pack_.value);
             Buf out; buf_init(&out);

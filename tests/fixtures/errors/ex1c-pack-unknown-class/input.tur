@@ -1,0 +1,5 @@
+; Phase EX1c: constraint referencing an undefined typeclass must be rejected
+; at parse time.
+(defn main [] :int
+  (let [e (pack 42 (exists [a] [(NoSuchClass a)] a))]
+    0))
