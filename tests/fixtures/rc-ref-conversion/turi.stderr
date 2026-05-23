@@ -1,9 +1,9 @@
 
 =================================================================
-==14738==ERROR: LeakSanitizer: detected memory leaks
+==3698==ERROR: LeakSanitizer: detected memory leaks
 
 Direct leak of 24 byte(s) in 1 object(s) allocated from:
-    #0 0x7f8307cfd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
-    #1 0x5614fb9b9208 in fresh_defer_env /home/user/turmeric/src/compiler/emit_core.c:218
+    #0 0x7fdfb68fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55bbe47593c9 in fresh_defer_env /home/user/turmeric/src/compiler/emit_core.c:218
 
 SUMMARY: AddressSanitizer: 24 byte(s) leaked in 1 allocation(s).

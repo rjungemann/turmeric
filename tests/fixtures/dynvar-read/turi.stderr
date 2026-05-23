@@ -1,9 +1,9 @@
 
 =================================================================
-==11890==ERROR: LeakSanitizer: detected memory leaks
+==362==ERROR: LeakSanitizer: detected memory leaks
 
 Direct leak of 64 byte(s) in 1 object(s) allocated from:
-    #0 0x7fe07e6fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
-    #1 0x563af80c2c81 in elab_defdynamic /home/user/turmeric/src/compiler/elab_dynvars.c:141
+    #0 0x7f89592fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x561094996b0f in elab_defdynamic /home/user/turmeric/src/compiler/elab_dynvars.c:141
 
 SUMMARY: AddressSanitizer: 64 byte(s) leaked in 1 allocation(s).
