@@ -1,21 +1,16 @@
 # Cross-Plan Followups
 
-> **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2 shipped.
-> Existential safety completeness phase done.  F1-1 =
-> constrained-existential return/param SEGV fix.  F1-2 = move-at-pack
-> + smart drop hook for RCEXP_RC payloads (fixture
-> `exg5-rc-in-exists`).  F1-3 = formally retired EXG4-3.  F2-1 =
-> defn-boundary diagnostic for escaping `:linear` existentials.
-> Remaining open:
->   - `exg4-pack-into-struct` (blocked on `defstruct` compound-type
->     parser),
->   - F2-2-1 cycle-construction fixture (same parser blocker),
->   - F3 dictionary passing (largest item, independent),
->   - F4 ^deprecated attribute,
->   - F5 MutableMap[K V],
->   - F6 turi gaps,
->   - F7 doc hygiene (partially done as fix-and-flip in the affected
->     plans).
+> **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F7 (doc
+> hygiene) all shipped.  Existential safety completeness phase done.
+> Remaining open phases (each ~1 session of work; independent):
+>   - F3 -- dictionary passing for recursive typeclass dispatch
+>     (the plan's "largest item"),
+>   - F4 -- `^deprecated` attribute system,
+>   - F5 -- `MutableMap[K V]`,
+>   - F6 -- interpreter (turi) fixture gaps.
+> Blocked on `defstruct` compound-annotation parser extension
+> (separate work item):
+>   - `exg4-pack-into-struct`, F2-2-1 cycle-construction fixture.
 > **Last Updated:** 2026-05-23
 > **Type:** Compiler / Runtime / Stdlib / Docs
 
@@ -296,9 +291,9 @@ nobody re-investigates already-shipped work.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F7-1 | In `docs/existential-types-plan.md`, backfill `[x]` on EX1a-1..EX1f-5 (all shipped during the EX1 wave; the EX2 entries were updated when EX2 landed and EX1 entries were missed).  Mark EX0 (struct-encoded helper macros) as **superseded** with a note that EX1 ships native `pack`/`open` instead. | `docs/existential-types-plan.md` |
-| F7-2 | In `docs/existential-gc-plan.md`, flip EXG2-2, EXG2-4, EXG3-1, EXG3-2, EXG3-3, EXG3-4 from `defer` to `done` with cross-references to the EXG5/EXG6 commits in the followup plan.  Add a banner at the top: "Superseded by `docs/upcoming/existential-gc-followup-plan.md` for the cross-scope ownership, cycle-walker, and `:linear` work that originally lived in EXG2/EXG3." | `docs/existential-gc-plan.md` |
-| F7-3 | Once F1-1 + F1-2 + F2 + F3 land, retire the corresponding sections from `docs/upcoming/existential-gc-followup-plan.md` and update its status banner to reflect the closed gaps. | `docs/upcoming/existential-gc-followup-plan.md` |
+| F7-1 | Backfill `[x]` on EX1a-1..EX1f-5 in `existential-types-plan.md`; mark EX0 superseded -- **shipped** (27 EX1 entries flipped, EX0 banner added). | `docs/existential-types-plan.md` |
+| F7-2 | Flip EXG2-2..EXG3-4 from `defer` to `done` with cross-refs; add superseded banner -- **shipped** (banner added, 6 entries flipped, task-summary cross-refs added). | `docs/existential-gc-plan.md` |
+| F7-3 | Update `existential-gc-followup-plan.md` status to reflect cross-plan-followups closures -- **shipped** (status banner rewritten; EXG4-5, EXG5-5, EXG6-5 task-summary rows flipped from `partial` to `shipped (mostly)` / `shipped` with cross-refs to F1-1, F1-2, F2-1; EXG4-3 already marked retired via F1-3). | `docs/upcoming/existential-gc-followup-plan.md` |
 
 ---
 

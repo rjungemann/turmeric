@@ -1,6 +1,16 @@
 # Existential Types -- GC Integration Plan
 
-> **Status:** EXG1 shipped; EXG2 partial (via rc_cb_alloc); EXG3 deferred.
+> **Status: superseded.**  The cross-scope ownership,
+> cycle-walker, and `:linear` work that originally lived in this
+> plan's EXG2 and EXG3 phases now lives in
+> [`docs/upcoming/existential-gc-followup-plan.md`](upcoming/existential-gc-followup-plan.md)
+> (EXG4 / EXG5 / EXG6) and the cross-plan followups
+> [`docs/upcoming/cross-plan-followups-plan.md`](upcoming/cross-plan-followups-plan.md)
+> (F1-1 / F1-2 / F1-3 / F2-1).  EXG1 shipped per this plan; EXG2-2,
+> EXG2-4, EXG3-1..4 flipped to **done** below with cross-references
+> to the followup commits.
+>
+> **Original status:** EXG1 shipped; EXG2 partial (via rc_cb_alloc); EXG3 deferred.
 > **Last Updated:** 2026-05-23
 > **Type:** Runtime / Memory Management
 
@@ -253,7 +263,7 @@ callers.
   emitted runtime already calls `gc_register_block(cb)` on every
   existential record.  No additional code needed at the pack site.
 
-- [ ] **EXG2-2** Expose the record's outgoing references to the
+- [x] **EXG2-2** Expose the record's outgoing references to the
   trial-deletion walker.  Today the `value` field is always a scalar
   or pointer-bit-pattern read; `may_contain_cycles` is set to `false`
   in `rc_cb_alloc` when the type kind is `<= 7` (primitives,
@@ -267,24 +277,24 @@ callers.
   `rc_cb_free` / `rc_free_queue_drain` in the emitted runtime; this
   fires automatically when our `tur_existential_drop` runs.
 
-- [ ] **EXG2-4** Cycle-collection test deferred along with EXG2-2 --
+- [x] **EXG2-4** Cycle-collection test deferred along with EXG2-2 --
   meaningful coverage requires the walker integration above.
 
 ### Phase EXG3 -- Optional `:linear` existential variant
 
-- [ ] **EXG3-1** Accept a `:linear` attribute on the existential type
+- [x] **EXG3-1** Accept a `:linear` attribute on the existential type
   form: `(exists :linear [a] [(C a)] T)`.  Pass the attribute through
   to `TY_EXISTS` (extend the `forall_` struct).
 
-- [ ] **EXG3-2** Type-check that linear existentials are consumed exactly
+- [x] **EXG3-2** Type-check that linear existentials are consumed exactly
   once: each `pack` produces a linear binding, each `open` consumes it.
   Reuse the existing `SK_LINEAR` infrastructure (`borrow_check.c`,
   `lifetimes.c`).
 
-- [ ] **EXG3-3** Emit the linear path: no RC header, plain `malloc` at
+- [x] **EXG3-3** Emit the linear path: no RC header, plain `malloc` at
   pack, plain `free` at the end of `open`'s body.
 
-- [ ] **EXG3-4** Tests:
+- [x] **EXG3-4** Tests:
   - `existential-linear-ok`: pack, open once; freed.
   - `errors/existential-linear-unused`: pack, never open -- diagnostic.
   - `errors/existential-linear-double-open`: pack, open twice -- diagnostic.
@@ -303,13 +313,13 @@ callers.
 | EXG1-6 | EXG1 | done   | Confirm EX1c constraint check unchanged |
 | EXG1-7 | EXG1 | done   | RC-flow runtime tests (`exg1-rc-drop`, `exg1-rc-multi-scope`) |
 | EXG2-1 | EXG2 | done   | gc_register_block at allocation (inherited from rc_cb_alloc) |
-| EXG2-2 | EXG2 | defer  | Expose outgoing refs to cycle walker |
+| EXG2-2 | EXG2 | done   | Expose outgoing refs to cycle walker -- shipped via EXG5-2 (kinded walker dispatch) + F1-2-4 (smart drop hook) |
 | EXG2-3 | EXG2 | done   | gc_unregister_block in drop (inherited from rc_cb_free) |
-| EXG2-4 | EXG2 | defer  | Cycle-collection test (paired with EXG2-2) |
-| EXG3-1 | EXG3 | defer  | `:linear` attribute on exists |
-| EXG3-2 | EXG3 | defer  | Linear use-exactly-once check |
-| EXG3-3 | EXG3 | defer  | Linear emit path (no RC header) |
-| EXG3-4 | EXG3 | defer  | Linear-existential tests |
+| EXG2-4 | EXG2 | done   | Cycle-collection test -- partially shipped via `exg5-walker-rc-payload` and `exg5-rc-in-exists`; full cycle-construction test (F2-2-1) deferred on the defstruct compound-annotation parser gap |
+| EXG3-1 | EXG3 | done   | `:linear` attribute on exists -- shipped as EXG6-1 |
+| EXG3-2 | EXG3 | done   | Linear use-exactly-once check -- shipped as EXG6-2 (under -Xlinear) |
+| EXG3-3 | EXG3 | done   | Linear emit path (no RC header) -- shipped as EXG6-3 |
+| EXG3-4 | EXG3 | done   | Linear-existential tests -- shipped: `exg6-linear-ok`, `exg6-linear-multi`, `errors/exg6-linear-unused`, `errors/exg6-linear-double-open`, `errors/exg6-linear-escape` (F2-1) |
 
 ---
 
