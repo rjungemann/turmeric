@@ -1604,6 +1604,25 @@ Expr *elab_pack(Elab *e, const Form *call) {
         n_witnesses = nc;
     }
 
+    /* F1-2-3: move-at-pack for RC-payload existentials.  If the packed
+     * value is a bare EX_VAR over an rc-managed binding (TY_RC, TY_WEAK,
+     * or a constrained existential), ownership of that rc reference now
+     * lives inside the new existential record.  The smart drop hook in
+     * rc_cb_free (F1-2-4) will decrement that inner reference when the
+     * outer existential is freed.  Mark the source binding as moved so
+     * the surrounding scope's auto-drop pass does not also decrement it
+     * (which would double-free or, in zombie-with-weaks scenarios, race
+     * the GC walker).
+     *
+     * Users who want to keep the source binding alive should clone
+     * explicitly:  (pack (rc/clone src) (exists ...)). */
+    if (val->kind == EX_VAR && val->as.var.binding) {
+        TypeKind vk = val->type.kind;
+        if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
+            (void)binding_mark_moved(val->as.var.binding, val_form->span);
+        }
+    }
+
     /* Result type is the full TY_EXISTS type node (void* at codegen) */
     Expr *out = expr_new(e->arena, EX_EXISTS_PACK, *ex_type, call->span);
     out->as.exists_pack_.value = val;

@@ -2478,6 +2478,14 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "                (rc_free_queue_count - 1) * sizeof(RcControlBlock *));\n");
     buf_puts(out, "        rc_free_queue_count--;\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
+    /* F1-2-4: smart drop dispatch for RCK_EXISTENTIAL blocks whose
+     * payload is itself an rc reference (RCEXP_RC).  See rc_cb_free in
+     * src/runtime/rc.c for the matching runtime-library code. */
+    buf_puts(out, "        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {\n");
+    buf_puts(out, "            int64_t __raw = *(const int64_t *)cb->value;\n");
+    buf_puts(out, "            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;\n");
+    buf_puts(out, "            if (__inner) rc_strong_decrement(__inner);\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "        if (cb->value) cb->drop_fn(cb->value);\n");
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        freed++;\n");
@@ -2565,6 +2573,16 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->weak_count--;\n");
     buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
+    /* F1-2-4: same smart-drop dispatch as rc_free_queue_drain.  The
+     * weak path runs when the last weak ref is released after the
+     * value already reached zombie state; if the zombie's payload is
+     * an RCEXP_RC pointer, we still need to decrement the inner ref
+     * before freeing the outer block. */
+    buf_puts(out, "        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {\n");
+    buf_puts(out, "            int64_t __raw = *(const int64_t *)cb->value;\n");
+    buf_puts(out, "            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;\n");
+    buf_puts(out, "            if (__inner) rc_strong_decrement(__inner);\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "        /* Free zombie value if GC did not already collect it */\n");
     buf_puts(out, "        if (cb->value && cb->drop_fn) {\n");
     buf_puts(out, "            cb->drop_fn(cb->value);\n");

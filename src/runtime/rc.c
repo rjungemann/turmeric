@@ -115,15 +115,37 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
  */
 void rc_cb_free(RcControlBlock *cb) {
     if (!cb) return;
-    
+
     /* Unregister from GC tracking */
     gc_unregister_block(cb);
-    
+
+    /* F1-2-4: smart drop for RCK_EXISTENTIAL blocks whose payload is
+     * itself an rc reference (RCEXP_RC).  The packed value's first 8
+     * bytes hold the inner RcControlBlock pointer (laid out by
+     * emit_expr.c's EX_EXISTS_PACK path; mirrored by the cycle walker
+     * in gc.c).  Decrement that inner reference *before* the
+     * existential's own drop hook fires so the inner allocation does
+     * not leak when the outer existential is reclaimed.
+     *
+     * F1-2-5: the drop dispatch lives here rather than in
+     * tur_existential_drop because rc_cb_free is the single
+     * teardown entry point that is guaranteed to run once per
+     * block; the per-program drop hook in emit_module.c stays a
+     * no-op (preserving the original layout-free interface). */
+    if (cb->value && cb->reserved[0] == RCK_EXISTENTIAL &&
+            cb->reserved[1] == RCEXP_RC) {
+        int64_t raw = *(const int64_t *)cb->value;
+        RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
+        if (inner) {
+            (void)rc_strong_decrement(inner);
+        }
+    }
+
     /* Call the drop function on the value */
     if (cb->value) {
         cb->drop_fn(cb->value);
     }
-    
+
     /* Free the entire block (header + value) */
     free(cb);
 }

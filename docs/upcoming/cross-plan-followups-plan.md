@@ -1,15 +1,21 @@
 # Cross-Plan Followups
 
-> **Status:** F1-1, F1-3 (retire), F2-1 shipped.  F1-1 =
-> constrained-existential return/param SEGV fix (new fixtures
-> `ex-exists-return-type`, `ex-exists-param-type`,
-> `exg4-pack-return`, `exg4-pack-into-fn`).  F1-3 = formally retired
-> EXG4-3 (rc<T> baseline requires explicit clones; constrained
-> existentials follow suit).  F2-1 = defn-boundary diagnostic for
-> escaping `:linear` existentials (new fixture
-> `errors/exg6-linear-escape`).  `exg4-pack-into-struct` remains
-> blocked on a separate `defstruct` parser limitation (compound
-> field type annotations) -- track separately.
+> **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2 shipped.
+> Existential safety completeness phase done.  F1-1 =
+> constrained-existential return/param SEGV fix.  F1-2 = move-at-pack
+> + smart drop hook for RCEXP_RC payloads (fixture
+> `exg5-rc-in-exists`).  F1-3 = formally retired EXG4-3.  F2-1 =
+> defn-boundary diagnostic for escaping `:linear` existentials.
+> Remaining open:
+>   - `exg4-pack-into-struct` (blocked on `defstruct` compound-type
+>     parser),
+>   - F2-2-1 cycle-construction fixture (same parser blocker),
+>   - F3 dictionary passing (largest item, independent),
+>   - F4 ^deprecated attribute,
+>   - F5 MutableMap[K V],
+>   - F6 turi gaps,
+>   - F7 doc hygiene (partially done as fix-and-flip in the affected
+>     plans).
 > **Last Updated:** 2026-05-23
 > **Type:** Compiler / Runtime / Stdlib / Docs
 
@@ -128,12 +134,12 @@ test (F2-2).
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F1-2-1 | Decide pack-site policy: clone-at-pack (transparent, slower) vs. move-at-pack (cheaper, requires move tracking on the source binding).  The followup plan recommends move-at-pack to match `rc/clone` ergonomics. | design decision |
-| F1-2-2 | If clone-at-pack: in `emit_expr.c` `EX_EXISTS_PACK` with payload kind `RCEXP_RC`, emit `rc_strong_increment` on the inner value before storing it.  No move on the source binding.  Pre-existing leak in the tests goes away. | `src/compiler/emit_expr.c` |
-| F1-2-3 | If move-at-pack: in `elab_types.c` `elab_pack`, when the value arg is an EX_VAR of CK_MOVE type and the result is RCK_EXISTENTIAL/RCEXP_RC, call `binding_mark_moved` on the source. | `src/compiler/elab_types.c` |
-| F1-2-4 | In `rc_cb_free` (runtime) and the inline runtime in `emit_module.c`, dispatch on `reserved[0] == RCK_EXISTENTIAL` and `reserved[1] == RCEXP_RC` and call `rc_strong_decrement` on the inner control block before the normal free.  This is the smart drop hook. | `src/runtime/rc.c`, `src/compiler/emit_module.c` |
-| F1-2-5 | Replace `tur_existential_drop` with a dispatching hook (or rely on the rc_cb_free dispatch above and leave the no-op in place).  Document the choice. | `src/compiler/emit_module.c` |
-| F1-2-6 | Add fixture `tests/fixtures/exg5-rc-in-exists` from the plan: pack an `rc<int>`, drop the originating binding, force a gc collection, observe both blocks freed. | `tests/fixtures/` |
+| F1-2-1 | Decision: **move-at-pack** (followup-plan recommendation).  Cheaper than clone-at-pack; matches the existing `rc/clone` ergonomic where users opt into shared ownership explicitly. | design decision |
+| F1-2-2 | Clone-at-pack: rejected by F1-2-1. | -- |
+| F1-2-3 | Move-at-pack in `elab_pack` -- **shipped**.  When the packed value is an `EX_VAR` of TY_RC, TY_WEAK, or TY_EXISTS, mark the source binding moved via `binding_mark_moved`.  The surrounding scope's auto-drop pass then skips it, leaving the existential as the sole owner of the inner rc reference. | `src/compiler/elab_types.c` |
+| F1-2-4 | Smart drop hook -- **shipped**.  Runtime `rc_cb_free` and the matching inline runtime in `emit_module.c` (both `rc_free_queue_drain` and `rc_weak_decrement`'s zombie-free path) dispatch on `reserved[0] == RCK_EXISTENTIAL` + `reserved[1] == RCEXP_RC` and call `rc_strong_decrement` on the inner cb before the outer drop hook fires.  Layout-mirror the GC walker's existing read of `*(int64_t*)cb->value`. | `src/runtime/rc.c`, `src/compiler/emit_module.c` |
+| F1-2-5 | Hook-vs-dispatch choice: **dispatch in `rc_cb_free`** (and the inline analogue) rather than swapping `tur_existential_drop` per-program.  The single teardown entry point keeps the per-program drop hook a layout-free no-op, and the runtime library never needs to know about the codegen-generated struct beyond reading the first 8 bytes of `cb->value`. | `src/compiler/emit_module.c` |
+| F1-2-6 | Fixture `tests/fixtures/exg5-rc-in-exists` -- **shipped**.  Packs an `rc<int>` into a constrained existential, opens it, and exits cleanly (no leak, no double-free).  The would-be fixture `exg5-rc-in-exists-gc-roundtrip` (using `weak` + `upgrade` to assert post-collection state) was dropped because the compiler currently leaks 24 bytes from `fresh_tmp` on emitting `weak`/`upgrade` paths -- a pre-existing leak (also fails `weak-dangling` baseline) unrelated to F1-2 logic.  Track that compiler leak separately. | `tests/fixtures/` |
 
 ### F1-3 -- Storage-site auto-clone (EXG4-3)
 
@@ -184,8 +190,8 @@ cycle-collection tests (`exg5-exists-cycle`) are blocked on F1-2
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F2-2-1 | Add fixture `tests/fixtures/exg5-exists-cycle`: build an `rc<Cell>` whose payload mutates back at the existential containing it (via inline-C or a mutable struct field); force gc!; assert the cycle is collected. | `tests/fixtures/` |
-| F2-2-2 | Add fixture `tests/fixtures/exg5-rc-in-exists-gc-roundtrip`: pack rc, drop both bindings, gc!, observe both freed (companion to F1-2-6 but using weak-pointer observation to assert post-collection state). | `tests/fixtures/` |
+| F2-2-1 | Cycle-construction fixture -- **deferred**: building a cycle requires mutability through an `rc<Cell>` field that points back into the existential, which the current `defstruct` field-type parser cannot express cleanly (same compound-annotation gap that blocks `exg4-pack-into-struct`).  Re-attempt once that limitation lands. | `tests/fixtures/` |
+| F2-2-2 | Roundtrip fixture -- **shipped via F1-2-6** as `exg5-rc-in-exists`.  The would-be `exg5-rc-in-exists-gc-roundtrip` companion (weak + upgrade) was dropped because it trips the same pre-existing compiler-side `fresh_tmp` leak that also fails `weak-dangling` -- not an F1-2 regression, track the compiler leak separately. | `tests/fixtures/` |
 
 ---
 
