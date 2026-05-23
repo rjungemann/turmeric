@@ -1,6 +1,13 @@
 ;; Option type for Turmeric
 ;; Represents optional values: some(value) or none
 
+;;
+;; DEPRECATED: Phase TC1-D
+;; The functions in this module are deprecated in favor of the typed
+;; API in stdlib/toption.tur.  They will be removed in the
+;; release cycle following Phase TC1-D.
+;;
+
 (extern-c malloc [^int size] :ptr<void>)
 (extern-c free [^ptr<void> p] :void)
 (extern-c exit [^int code] :void)
@@ -17,6 +24,8 @@
 ;;; Example:
 ;;;   (some 42)  ; => some(42)
 ;;;
+;;;
+;;; Deprecated: Use tsome from stdlib/toption.tur instead.
 ;;; Since: Phase B1
 (defn some [x] #{Unsafe}
   ```c
@@ -35,6 +44,8 @@
 ;;; Example:
 ;;;   (none)  ; => none (NULL)
 ;;;
+;;;
+;;; Deprecated: Use tnone from stdlib/toption.tur instead.
 ;;; Since: Phase B1
 (defn none [] #{Unsafe}
   ```c
@@ -54,6 +65,8 @@
 ;;;   (some? (some 1))  ; => true
 ;;;   (some? (none))    ; => false
 ;;;
+;;;
+;;; Deprecated: Use tsome? from stdlib/toption.tur instead.
 ;;; Since: Phase B1
 (defn some? [o] #{Unsafe} :bool
   ```c
@@ -73,6 +86,8 @@
 ;;; Example:
 ;;;   (option-unwrap (some 7))  ; => 7
 ;;;
+;;;
+;;; Deprecated: Use tunwrap from stdlib/toption.tur instead.
 ;;; Since: Phase B1
 (defn option-unwrap [o] #{Unsafe} :int
   ```c
@@ -93,6 +108,8 @@
 ;;; Example:
 ;;;   (option-free my-opt)
 ;;;
+;;;
+;;; Deprecated: Use toption-free from stdlib/toption.tur instead.
 ;;; Since: Phase B1
 (defn option-free [o] #{Unsafe}
   ```c
@@ -112,6 +129,8 @@
 ;;; Example:
 ;;;   (option-must (some 3))  ; => 3
 ;;;
+;;;
+;;; Deprecated: Use tunwrap from stdlib/toption.tur instead.
 ;;; Since: Phase R4
 (defn option-must [o :ptr<void>] #{Unsafe} :int
   ```c
@@ -135,6 +154,8 @@
 ;;; Example:
 ;;;   (option-expect my-opt "expected a value")  ; => value or panic
 ;;;
+;;;
+;;; Deprecated: Use tunwrap (or a future toption-expect) from stdlib/toption.tur.
 ;;; Since: Phase R4
 (defn option-expect [o :ptr<void> msg :cstr] #{Unsafe} :int
   ```c
@@ -353,6 +374,8 @@
 ;;; Example:
 ;;;   (option-eq? (some 1) (some 1) (fn [a b] (= a b)))  ; => true
 ;;;
+;;;
+;;; Deprecated: Use toption-eq? from stdlib/toption.tur instead (or the Eq[Option] instance).
 ;;; Since: Phase E1
 (defn option-eq? [o1 o2 cmp-fn] #{Unsafe} :bool
   ```c

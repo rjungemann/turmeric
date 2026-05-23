@@ -9,6 +9,13 @@
 ;; -- Constructors -------------------------------------------------------------
 
 ;; Create an ok value
+;;
+;; DEPRECATED: Phase TC1-E
+;; The functions in this module are deprecated in favor of the typed
+;; API in stdlib/tresult.tur.  They will be removed in the
+;; release cycle following Phase TC1-E.
+;;
+
 ;;; ok -- wrap a value in an ok result.
 ;;;
 ;;; Parameters:
@@ -19,6 +26,8 @@
 ;;;
 ;;; Example:
 ;;;   (ok 42)  ; => ok(42)
+;;;
+;;; Deprecated: Use tok from stdlib/tresult.tur instead.
 (defn ok [x :int] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -39,6 +48,8 @@
 ;;;
 ;;; Example:
 ;;;   (err 1)  ; => err(1)
+;;;
+;;; Deprecated: Use terr from stdlib/tresult.tur instead.
 (defn err [e :int] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -62,6 +73,8 @@
 ;;; Example:
 ;;;   (ok? (ok 1))   ; => true
 ;;;   (ok? (err 0))  ; => false
+;;;
+;;; Deprecated: Use tok? from stdlib/tresult.tur instead.
 (defn ok? [r :ptr<void>] #{Unsafe} :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -80,6 +93,8 @@
 ;;; Example:
 ;;;   (err? (err 0))  ; => true
 ;;;   (err? (ok 1))   ; => false
+;;;
+;;; Deprecated: Use terr? from stdlib/tresult.tur instead.
 (defn err? [r :ptr<void>] #{Unsafe} :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -99,6 +114,8 @@
 ;;;
 ;;; Example:
 ;;;   (ok-val (ok 5))  ; => 5
+;;;
+;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
 (defn ok-val [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -116,6 +133,8 @@
 ;;;
 ;;; Example:
 ;;;   (err-val (err 99))  ; => 99
+;;;
+;;; Deprecated: Use terr-val from stdlib/tresult.tur instead.
 (defn err-val [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -135,6 +154,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-unwrap (ok 7))  ; => 7
+;;;
+;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
 (defn result-unwrap [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -157,6 +178,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-unwrap-or (err 0) 99)  ; => 99
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-unwrap-or [r :ptr<void> default_val :int] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -176,6 +199,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-expect r "parse failed")  ; => ok value or abort
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-expect [r :ptr<void> msg :cstr] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -201,6 +226,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-map (ok 3) (fn [x] (* x 2)))  ; => ok(6)
+;;;
+;;; Deprecated: Use tresult-map from stdlib/tresult.tur instead.
 (defn result-map [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -226,6 +253,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-map-err (err 1) (fn [e] (+ e 100)))  ; => err(101)
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-map-err [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -251,6 +280,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-flat-map (ok 5) (fn [x] (if (> x 0) (ok x) (err -1))))  ; => ok(5)
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-flat-map [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -270,6 +301,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-or (err 0) (ok 99))  ; => ok(99)
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-or [r :ptr<void> alt :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -290,6 +323,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-or-else (err 1) (fn [e] (ok 0)))  ; => ok(0)
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-or-else [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -313,6 +348,8 @@
 ;;; Example:
 ;;;   (ok-or (some 7) -1)  ; => ok(7)
 ;;;   (ok-or (none) -1)    ; => err(-1)
+;;;
+;;; Deprecated: Use the typed Result[A B] / Option[A] API in stdlib/tresult.tur and stdlib/toption.tur.
 (defn ok-or [opt :ptr<void> e :int] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *o = (void*)opt;
@@ -345,6 +382,8 @@
 ;;;
 ;;; Example:
 ;;;   (err-context (err my-msg) "loading config")
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn err-context [r :ptr<void> ctx :cstr] #{Unsafe} :ptr<void>
   ```c
   extern size_t strlen(const char*);
@@ -384,6 +423,8 @@
 ;;; Example:
 ;;;   (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
 ;;;
+;;;
+;;; Deprecated: Use tresult-eq? from stdlib/tresult.tur instead (or the Eq[Result] instance).
 ;;; Since: Phase E1
 (defn result-eq? [r1 r2 ok-cmp err-cmp] #{Unsafe} :bool
   ```c
@@ -413,6 +454,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-free my-result)
+;;;
+;;; Deprecated: Use tresult-free from stdlib/tresult.tur instead.
 (defn result-free [r :ptr<void>] #{Unsafe}
   ```c
   free(r);
@@ -435,6 +478,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-collect my-results-vec)  ; => ok(vec) or err(e)
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-collect [v :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
@@ -486,6 +531,8 @@
 ;;; Example:
 ;;;   (let [pair (result-partition my-vec)]
 ;;;     (result-partition-ok pair))
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-partition [v :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
@@ -537,6 +584,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-partition-ok (result-partition my-vec))
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-partition-ok [pair :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
@@ -554,6 +603,8 @@
 ;;;
 ;;; Example:
 ;;;   (result-partition-err (result-partition my-vec))
+;;;
+;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn result-partition-err [pair :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
@@ -572,6 +623,8 @@
 ;;; Example:
 ;;;   (result-must (ok 5))  ; => 5
 ;;;
+;;;
+;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
 ;;; Since: Phase R4
 (defn result-must [r :ptr<void>] #{Unsafe} :int
   ```c
@@ -595,6 +648,8 @@
 ;;; Example:
 ;;;   (result-must-msg r "expected ok result")  ; => value or panic
 ;;;
+;;;
+;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
 ;;; Since: Phase R4
 (defn result-must-msg [r :ptr<void> msg :cstr] #{Unsafe} :int
   ```c

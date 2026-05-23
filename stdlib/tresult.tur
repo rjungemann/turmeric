@@ -141,6 +141,38 @@
   if (r) free((void*)(intptr_t)r);
   ```)
 
+;;; tresult-map -- apply a function to the ok value if ok.
+;;;
+;;; Parameters:
+;;;   r -- Result[A B]
+;;;   f -- function A -> C
+;;;
+;;; Returns:
+;;;   Result[C B] with f applied to the ok value if ok, or the
+;;;   unchanged err otherwise. The returned value is a freshly
+;;;   allocated Result; the input r is not modified.
+;;;
+;;; Example:
+;;;   (tresult-map (tok 3) (fn [x] (* x 2)))  ; => ok(6)
+;;;   (tresult-map (terr 5) (fn [x] (* x 2))) ; => err(5)
+;;;
+;;; Since: Phase TC1
+(defn tresult-map [r :int f] #{} :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res) return 0;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = res->is_ok;
+  if (res->is_ok) {
+      out->ok_val = ((int64_t(*)(int64_t))(intptr_t)f)(res->ok_val);
+      out->err_val = 0;
+  } else {
+      out->ok_val = 0;
+      out->err_val = res->err_val;
+  }
+  return (int64_t)(intptr_t)out;
+  ```)
+
 ;;; tresult-eq? -- compare two Result[A B] values.
 ;;;
 ;;; Parameters:
