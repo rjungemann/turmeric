@@ -1,0 +1,19 @@
+; Phase EX2-5: returning the underlying SizedVec directly from an open-vec
+; lets the abstract size index n leak out of the existential's scope, so
+; the EX1d/EX2-3 escape checks must reject it.
+;
+; Concretely: open-vec binds n (phantom) and sv (the SizedVec carrier).
+; Yielding sv as the body's tail would surface a type containing the
+; phantom binder, which is exactly what existential abstraction forbids.
+(load "stdlib/sized.tur")
+(load "stdlib/vec-existential.tur")
+
+(defn leak [v :ptr<void>] :SizedVec
+  (let [vec (:: v (exists [n] (SizedVec n int)))]
+    (open-vec vec n s
+      s)))
+
+(defn main [] :int
+  (let [v (vec-of-sized (SVCons 1 (SVCons 2 (SVCons 3 (SVNil)))))]
+    (println (sized-vec-len (leak v))))
+  0)

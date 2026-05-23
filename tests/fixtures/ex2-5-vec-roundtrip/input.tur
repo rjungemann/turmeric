@@ -1,0 +1,16 @@
+; Phase EX2-5: Vec[A] round-trip -- pack a length-3 SizedVec into a Vec,
+; open it, and verify the recovered length.  This is the basic positive
+; test for the (exists [n] (SizedVec n int)) encoding shipped by EX2-4.
+;
+; The Vec value hides the size index, but inside open-vec the body sees
+; the underlying SizedVec carrier and can call sized-vec-len against the
+; fresh abstract index n -- a length that "comes out" only as an :int.
+(load "stdlib/sized.tur")
+(load "stdlib/vec-existential.tur")
+
+(defn main [] :int
+  (let [sv (SVCons 10 (SVCons 20 (SVCons 30 (SVNil))))]
+    (let [v (vec-of-sized sv)]
+      (open-vec v n s
+        (println (sized-vec-len s)))))
+  0)
