@@ -871,6 +871,260 @@ static Form *read_set(Reader *r) {
     return read_seq(r, '(', ')', F_SET, "unterminated set (missing ')')");
 }
 
+/* RR: Is form an operator symbol (<, <=, >, >=, =)? */
+static bool rr_is_op(const Form *f) {
+    if (f->tag != F_SYM) return false;
+    const char *n = f->as.sym->name;
+    return (strcmp(n, "<") == 0 || strcmp(n, "<=") == 0 ||
+            strcmp(n, ">") == 0 || strcmp(n, ">=") == 0 ||
+            strcmp(n, "=") == 0);
+}
+
+/* RR: Is form a single-letter variable (a-z or A-Z, not an operator)? */
+static bool rr_is_var(const Form *f) {
+    if (f->tag != F_SYM) return false;
+    const char *n = f->as.sym->name;
+    return (n[1] == '\0' &&
+            ((n[0] >= 'a' && n[0] <= 'z') || (n[0] >= 'A' && n[0] <= 'Z')));
+}
+
+/* RR0/RR1/RR2/RR4: Read a #r{...} range literal and desugar to a constructor call. */
+static Form *read_range_literal(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'r' */
+
+    if (peek(r) != '{') {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "#r must be followed by '{' for range literal");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume '{' */
+
+    Form *toks[5];
+    size_t ntoks = 0;
+
+    for (;;) {
+        skip_ws_and_comments(r);
+        int c = peek(r);
+        if (c == -1) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s,
+                      "#r{...}: unterminated range literal (missing '}')");
+            r->error = true;
+            return NULL;
+        }
+        if (c == '}') {
+            advance(r);
+            break;
+        }
+        if (ntoks == 5) {
+            Span s = span_point(r);
+            diag_emit(DIAG_ERROR, s,
+                      "#r{...} expects 'var op form' or 'form op var op form', "
+                      "got more than 5 tokens");
+            r->error = true;
+            return NULL;
+        }
+        Form *child = read_form(r);
+        if (!child) return NULL;
+        toks[ntoks++] = child;
+    }
+
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+
+    if (ntoks == 0) {
+        diag_emit(DIAG_ERROR, span, "#r{} requires a range expression");
+        r->error = true;
+        return NULL;
+    }
+    if (ntoks != 3 && ntoks != 5) {
+        diag_emit(DIAG_ERROR, span,
+                  "#r{...} expects 'var op form' or 'form op var op form', "
+                  "got %zu tokens", ntoks);
+        r->error = true;
+        return NULL;
+    }
+
+/* Intern a C string as an F_SYM using the whole range span. */
+#define RR_SYM(name_cstr) \
+    form_sym(r->arena, span, \
+             symtab_intern(r->st, strslice((name_cstr), \
+                                           (uint32_t)strlen(name_cstr))))
+
+/* Promote an F_INT bound to F_FLOAT when use_float is set. */
+#define RR_PROMOTE(fp) \
+    ((use_float && (fp)->tag == F_INT) \
+        ? form_float(r->arena, (fp)->span, (double)(fp)->as.i) \
+        : (fp))
+
+    if (ntoks == 3) {
+        /* One-sided: var op form  |  form op var */
+        Form *a = toks[0], *op_f = toks[1], *b = toks[2];
+
+        if (!rr_is_op(op_f)) {
+            diag_emit(DIAG_ERROR, op_f->span,
+                      "#r{...}: expected a comparison operator, got '%s'",
+                      op_f->tag == F_SYM ? op_f->as.sym->name : "<expr>");
+            r->error = true;
+            return NULL;
+        }
+        const char *op = op_f->as.sym->name;
+
+        bool a_var = rr_is_var(a);
+        bool b_var = rr_is_var(b);
+
+        if (!a_var && !b_var) {
+            diag_emit(DIAG_ERROR, span,
+                      "#r{...}: expected a single-letter variable on one side");
+            r->error = true;
+            return NULL;
+        }
+
+        /* If both look like vars, treat left as var, right as the bound form. */
+        Form *bound = a_var ? b : a;
+        bool var_first = a_var;
+
+        /* Canonicalize to var-op-form: flip operator when form is on the left. */
+        if (!var_first) {
+            if      (strcmp(op, ">")  == 0) op = "<";
+            else if (strcmp(op, ">=") == 0) op = "<=";
+            else if (strcmp(op, "<")  == 0) op = ">";
+            else if (strcmp(op, "<=") == 0) op = ">=";
+            /* "=" is symmetric -- no flip needed */
+        }
+
+        bool use_float = (bound->tag == F_FLOAT);
+        bound = RR_PROMOTE(bound);
+
+        const char *ctor;
+        if      (strcmp(op, "=")  == 0) ctor = use_float ? "float-singleton-range"    : "singleton-range";
+        else if (strcmp(op, "<")  == 0) ctor = use_float ? "float-less-than-range"    : "less-than-range";
+        else if (strcmp(op, "<=") == 0) ctor = use_float ? "float-at-most-range"      : "at-most-range";
+        else if (strcmp(op, ">")  == 0) ctor = use_float ? "float-greater-than-range" : "greater-than-range";
+        else                             ctor = use_float ? "float-at-least-range"     : "at-least-range";
+
+        const Symbol *var_sym = (a_var ? a : b)->as.sym;
+        Form **out = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+        out[0] = RR_SYM(ctor);
+        out[1] = bound;
+        Form *range = form_list(r->arena, span, out, 2);
+        return form_range_var(r->arena, span, var_sym, range);
+    }
+
+    /* ntoks == 5: two-sided: left_f op1 var op2 right_f */
+    Form *left_f  = toks[0];
+    Form *op1_f   = toks[1];
+    Form *var_f   = toks[2];
+    Form *op2_f   = toks[3];
+    Form *right_f = toks[4];
+
+    if (!rr_is_op(op1_f)) {
+        diag_emit(DIAG_ERROR, op1_f->span,
+                  "#r{...}: expected a comparison operator, got '%s'",
+                  op1_f->tag == F_SYM ? op1_f->as.sym->name : "<expr>");
+        r->error = true;
+        return NULL;
+    }
+    if (!rr_is_op(op2_f)) {
+        diag_emit(DIAG_ERROR, op2_f->span,
+                  "#r{...}: expected a comparison operator, got '%s'",
+                  op2_f->tag == F_SYM ? op2_f->as.sym->name : "<expr>");
+        r->error = true;
+        return NULL;
+    }
+    if (!rr_is_var(var_f)) {
+        diag_emit(DIAG_ERROR, var_f->span,
+                  "#r{...}: expected a single-letter variable in the middle position");
+        r->error = true;
+        return NULL;
+    }
+
+    const char *op1 = op1_f->as.sym->name;
+    const char *op2 = op2_f->as.sym->name;
+
+    if (strcmp(op1, "=") == 0 || strcmp(op2, "=") == 0) {
+        diag_emit(DIAG_ERROR, span, "#r{...}: '=' is only valid in a one-sided range");
+        r->error = true;
+        return NULL;
+    }
+
+    bool op1_fwd = (strcmp(op1, "<") == 0 || strcmp(op1, "<=") == 0);
+    bool op2_fwd = (strcmp(op2, "<") == 0 || strcmp(op2, "<=") == 0);
+
+    if (op1_fwd != op2_fwd) {
+        diag_emit(DIAG_ERROR, span,
+                  "#r{...}: cannot mix '<'/'<=' and '>'/>=' in a two-sided range");
+        r->error = true;
+        return NULL;
+    }
+
+    bool use_float = (left_f->tag == F_FLOAT || right_f->tag == F_FLOAT);
+
+    /* Note when one literal bound is float but the other is a runtime expression. */
+    if (use_float && (left_f->tag != F_INT && left_f->tag != F_FLOAT)) {
+        diag_emit(DIAG_NOTE, span,
+                  "#r{...}: mixed literal types; using float constructors -- "
+                  "ensure the expression produces a float");
+    } else if (use_float && (right_f->tag != F_INT && right_f->tag != F_FLOAT)) {
+        diag_emit(DIAG_NOTE, span,
+                  "#r{...}: mixed literal types; using float constructors -- "
+                  "ensure the expression produces a float");
+    }
+
+    Form *ctor_lo, *ctor_hi;
+    bool lo_incl, hi_incl;
+
+    if (op1_fwd) {
+        /* Left-to-right: left_f op1 var op2 right_f  (e.g. 0 <= n < 10) */
+        ctor_lo = left_f;
+        ctor_hi = right_f;
+        lo_incl = (strcmp(op1, "<=") == 0);
+        hi_incl = (strcmp(op2, "<=") == 0);
+    } else {
+        /* Right-to-left: left_f op1 var op2 right_f  (e.g. 10 > n >= 0)
+         * left_f is the hi bound in the source; right_f is the lo bound.
+         * Constructor always receives (ctor lo hi). */
+        ctor_lo = right_f;
+        ctor_hi = left_f;
+        hi_incl = (strcmp(op1, ">=") == 0); /* op1: hi op1 var */
+        lo_incl = (strcmp(op2, ">=") == 0); /* op2: var op2 lo */
+    }
+
+    /* Compile-time empty-range warning for integer literal bounds (RR1). */
+    if (ctor_lo->tag == F_INT && ctor_hi->tag == F_INT) {
+        int64_t lo_v = ctor_lo->as.i;
+        int64_t hi_v = ctor_hi->as.i;
+        bool empty = (lo_incl && hi_incl) ? (lo_v > hi_v) : (lo_v >= hi_v);
+        if (empty) {
+            diag_emit(DIAG_WARNING, span, "#r{...}: range is provably empty");
+        }
+    }
+
+    ctor_lo = RR_PROMOTE(ctor_lo);
+    ctor_hi = RR_PROMOTE(ctor_hi);
+
+    const char *ctor;
+    if      (lo_incl && hi_incl)   ctor = use_float ? "float-closed-range"      : "closed-range";
+    else if (!lo_incl && !hi_incl)  ctor = use_float ? "float-open-range"        : "open-range";
+    else if (lo_incl && !hi_incl)   ctor = use_float ? "float-closed-open-range" : "closed-open-range";
+    else                             ctor = use_float ? "float-open-closed-range" : "open-closed-range";
+
+    Form **out = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    out[0] = RR_SYM(ctor);
+    out[1] = ctor_lo;
+    out[2] = ctor_hi;
+    Form *range = form_list(r->arena, span, out, 3);
+    return form_range_var(r->arena, span, var_f->as.sym, range);
+
+#undef RR_SYM
+#undef RR_PROMOTE
+}
+
 /* Phase R5: Read an attribute form: #[...] */
 static Form *read_attribute(Reader *r) {
     uint32_t start_line = r->line;
@@ -1288,6 +1542,10 @@ static Form *read_form(Reader *r) {
     }
     if (c == '#' && peek2(r) == 's' && peek3(r) == '(') {
         return read_set(r);
+    }
+    /* RR0: Range literal #r{...} */
+    if (c == '#' && peek2(r) == 'r' && peek3(r) == '{') {
+        return read_range_literal(r);
     }
     /* Phase R5: Attribute syntax #[...] */
     if (c == '#' && peek2(r) == '[') {

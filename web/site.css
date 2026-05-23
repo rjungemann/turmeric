@@ -3,6 +3,8 @@
  * ========================================================================== */
 
 @import './vars.css';
+@import '@fontsource/iosevka/400.css';
+@import '@fontsource/iosevka/500.css';
 
 /* ── RESET ─────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -218,7 +220,7 @@ nav {
 .wd-g { background: #1E3020; }
 
 .code-card-filename {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   font-size: 11px;
   color: var(--text-dim);
   margin-left: 8px;
@@ -226,7 +228,7 @@ nav {
 
 .code-card-body {
   padding: 24px 28px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   font-size: 13px;
   line-height: 1.75;
   white-space: pre;
@@ -303,7 +305,7 @@ nav {
   border: 1px solid var(--border-mid);
   border-radius: 6px;
   overflow: hidden;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   font-size: 11px;
 }
 .seg-btn {
@@ -322,7 +324,7 @@ nav {
 }
 .code-version {
   white-space: pre;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   font-size: 13px;
   line-height: 1.75;
   overflow-x: auto;
@@ -332,7 +334,7 @@ nav {
 .feat-badge {
   display: inline-block;
   margin-top: 16px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   font-size: 10px;
   color: var(--gold-dim);
   background: var(--gold-subtle);

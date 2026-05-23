@@ -70,6 +70,8 @@ typedef enum FormTag {
     F_CONTRACT_TYPE,    /* { var : base-type | predicate } */
     /* INT-1: Reader conditional #?(:tur expr :turi expr) */
     F_READER_COND,     /* #?(:tur <tur-form> :turi <turi-form>) */
+    /* RR3: Range literal with variable name preserved for shadowing check */
+    F_RANGE_VAR,       /* [var_sym_form, desugared_range_form] */
 } FormTag;
 
 struct Form;
@@ -115,6 +117,8 @@ Form *form_type_ann(Arena *a, Span span, Form *inner);
 Form *form_contract_type(Arena *a, Span span, Form **items, uint32_t len);
 /* INT-1: Reader conditional form. items = [tur_key, tur_form, turi_key, turi_form] */
 Form *form_reader_cond(Arena *a, Span span, Form **items, uint32_t len);
+/* RR3: Range literal variable annotation. items = [var_sym_form, range_form] */
+Form *form_range_var(Arena *a, Span span, const Symbol *var_sym, Form *range);
 Form *form_quasiquote  (Arena *a, Span span, Form *quoted);
 Form *form_unquote  (Arena *a, Span span, Form *quoted);
 Form *form_unquote_splicing  (Arena *a, Span span, Form *quoted);

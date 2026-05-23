@@ -90,6 +90,8 @@ static bool ct_form_equal(const Form *a, const Form *b) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals compare structurally */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation compares structurally */
+        case F_RANGE_VAR:
         case F_LIST:
         case F_VEC:
         case F_MAP:
@@ -232,6 +234,8 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals don't contain CT builtins */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation doesn't contain CT builtins */
+        case F_RANGE_VAR:
             return false;
     }
     return false;
@@ -605,6 +609,8 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals are compile-time literals */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation is a compile-time literal */
+        case F_RANGE_VAR:
             /* Type annotations are compile-time literals */
             return ct_value_form(f);
         case F_SYM: {
@@ -741,6 +747,8 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals are passed through in quasiquote */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation is passed through in quasiquote */
+        case F_RANGE_VAR:
             return f;
         case F_QUASIQUOTE:
             /* Expand the quasiquoted form */
@@ -765,6 +773,8 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals are returned as-is in macro substitution */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation is returned as-is in macro substitution */
+        case F_RANGE_VAR:
             /* Literals, quote forms, and type annotations are returned as-is */
             return f;
         case F_QUASIQUOTE:

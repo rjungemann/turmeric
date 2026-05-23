@@ -32,7 +32,8 @@ reconfigure:
 # ---------------------------------------------------------------------------
 
 test: build doctest
-    ctest --output-on-failure --progress --test-dir build
+    # NOTE: Run with a 5-minute timeout for now, due to some minor hang issues
+    timeout 300 ctest --output-on-failure --progress --test-dir build
 
 # Run stdlib doctests (generate + run).
 doctest: build

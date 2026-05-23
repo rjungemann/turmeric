@@ -598,7 +598,7 @@ a:hover { text-decoration: underline; }
 .sidebar h3:first-child { margin-top: 0; }
 .sidebar ul { list-style: none; }
 .sidebar li { margin: 0.15rem 0; }
-.sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'Iosevka', 'Fira Code', monospace; }
 .sidebar a:hover { color: var(--gold-bright); text-decoration: none; }
 
 /* Content */
@@ -616,7 +616,7 @@ a:hover { text-decoration: underline; }
 .module-heading h1 {
   font-size: 1.75rem;
   color: var(--gold-bright);
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
 }
 .module-path {
   font-size: 0.85rem;
@@ -645,7 +645,7 @@ a:hover { text-decoration: underline; }
 }
 .def-card-header h2 {
   font-size: 1rem;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   color: var(--gold-bright);
   font-weight: 600;
 }
@@ -655,7 +655,7 @@ a:hover { text-decoration: underline; }
   padding: 0.15rem 0.55rem;
   border-radius: 99px;
   font-size: 0.7rem;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   font-weight: 600;
   text-transform: lowercase;
 }
@@ -670,7 +670,7 @@ a:hover { text-decoration: underline; }
   padding: 0.15rem 0.55rem;
   border-radius: 99px;
   font-size: 0.7rem;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   font-weight: 600;
   text-transform: lowercase;
   background: rgba(80,200,232,0.12);
@@ -678,7 +678,7 @@ a:hover { text-decoration: underline; }
 }
 
 .def-signature {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   font-size: 0.875rem;
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -709,7 +709,7 @@ a:hover { text-decoration: underline; }
 .param-table { border-collapse: collapse; width: 100%; font-size: 0.875rem; }
 .param-table td { padding: 0.2rem 0.75rem 0.2rem 0; vertical-align: top; }
 .param-table td:first-child {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   color: var(--gold-bright);
   white-space: nowrap;
   width: 1%;
@@ -723,7 +723,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.6rem 0.75rem;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   font-size: 0.8rem;
   overflow-x: auto;
   white-space: pre;
@@ -747,7 +747,7 @@ details.internal-section summary {
 }
 .internal-list { margin-top: 0.75rem; }
 .internal-item {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   font-size: 0.8rem;
   color: var(--text-sec);
   padding: 0.2rem 0;
@@ -770,7 +770,7 @@ details.internal-section summary {
 }
 .index-card:hover { background: var(--bg-hover); border-color: var(--border-mid); text-decoration: none; }
 .index-card h3 {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: 'Iosevka', 'Fira Code', monospace;
   font-size: 0.95rem;
   color: var(--gold-bright);
   margin-bottom: 0.35rem;
@@ -787,7 +787,7 @@ details.internal-section summary {
   color: var(--text-dim);
   margin-top: 4rem;
 }
-.site-footer code { color: var(--text-sec); font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.site-footer code { color: var(--text-sec); font-family: 'Iosevka', 'Fira Code', monospace; }
 
 /* Hamburger button */
 .hamburger {
@@ -932,7 +932,10 @@ def _html_header(title, css_path='style.css'):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{html_module.escape(title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
 <link rel="stylesheet" href="{css_path}">
 </head>
 <body>

@@ -340,6 +340,18 @@ Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "contract type '{ var : T | pred }' is only valid as a parameter or return type annotation");
             return NULL;
+        /* RR3: Range literal variable annotation -- check for shadowing, then elaborate inner form. */
+        case F_RANGE_VAR: {
+            const Symbol *var_sym = f->as.list.items[0]->as.sym;
+            Form *range_form = f->as.list.items[1];
+            if (scope_lookup(e->scope, var_sym)) {
+                diag_emit(DIAG_WARNING, f->span,
+                          "#r{...}: variable '%s' shadows a binding in scope; "
+                          "the name is not used in the expansion",
+                          var_sym->name);
+            }
+            return elab_form(e, range_form);
+        }
         /* INT-1: Reader conditional -- pick :tur or :turi branch based on g_interpret_mode */
         case F_READER_COND: {
             Form *tur_form = NULL, *turi_form = NULL;

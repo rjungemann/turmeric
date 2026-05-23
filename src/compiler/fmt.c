@@ -193,6 +193,10 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             }
             buf_putc(b, ')');
             break;
+        /* RR3: Range literal variable annotation -- format the desugared range form */
+        case F_RANGE_VAR:
+            if (f->as.list.len > 1) fmt_form_flat(b, f->as.list.items[1]);
+            break;
     }
 }
 
@@ -763,6 +767,10 @@ static void fmt_form(FmtState *s, const Form *f) {
             break;
         case F_READER_COND:
             fmt_emit_inline(s, f);
+            break;
+        /* RR3: Range literal variable annotation -- format the desugared range form */
+        case F_RANGE_VAR:
+            if (f->as.list.len > 1) fmt_form(s, f->as.list.items[1]);
             break;
     }
 }

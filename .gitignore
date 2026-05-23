@@ -54,6 +54,12 @@ web/test-results/
 
 # Playwright MCP browser session artifacts
 .playwright-mcp/
+
+# clangd LSP index (machine-specific, regenerated automatically)
+.cache/
+
+# Claude Code session memory (developer-local)
+memory/
 core
 
 # Performance comparison build artifacts and generated output

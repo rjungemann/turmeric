@@ -184,14 +184,14 @@
   border-top: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-dim);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   line-height: 1.5;
 }
 
 /* Inline code style for roadmap card descriptions */
 .card-desc code,
 .card-desc .code-ref {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Iosevka', monospace;
   font-size: 12px;
   color: var(--teal);
 }

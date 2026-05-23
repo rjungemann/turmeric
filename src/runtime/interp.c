@@ -155,6 +155,9 @@ Form *interp_eval(Env *e, Form *f) {
         case F_READER_COND:
             /* Vectors, maps, sets, C blocks, and type annotations evaluate to themselves */
             return f;
+        /* RR3: Range literal variable annotation -- eval inner form (shadowing warned by elaborator) */
+        case F_RANGE_VAR:
+            return interp_eval(e, f->as.list.items[1]);
     }
     return f;
 }
@@ -217,6 +220,8 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals are passed through in quasiquote */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation -- passed through in quasiquote */
+        case F_RANGE_VAR:
             return f;
         case F_QUASIQUOTE:
             /* This is the main case: expand the quasiquoted form */
@@ -248,6 +253,8 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
         case F_CONTRACT_TYPE:
         /* INT-1: Reader conditionals don't expand */
         case F_READER_COND:
+        /* RR3: Range literal variable annotation -- don't expand, eval handles it */
+        case F_RANGE_VAR:
             /* Atoms, quote forms, and type annotations don't expand */
             return f;
         case F_QUASIQUOTE:

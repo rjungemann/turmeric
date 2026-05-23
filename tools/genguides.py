@@ -199,7 +199,7 @@ GUIDE_CSS = '''\
     .guide-content p  { margin-bottom:1rem; }
     .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
     .guide-content li { margin:0.25rem 0; }
-    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
     .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
     .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
     .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
@@ -215,7 +215,7 @@ GUIDE_CSS = '''\
     .hl-type    { color:#7AC4B8; }
     .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
     .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
-    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"JetBrains Mono","Fira Code",monospace; font-size:11px; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
     .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
     .seg-btn:hover { color:var(--text-primary); }
     .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
@@ -320,6 +320,11 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title} | Turmeric Guides</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>
 {GUIDE_CSS}
@@ -405,6 +410,11 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guides | Turmeric</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}

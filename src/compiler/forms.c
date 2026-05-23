@@ -150,6 +150,18 @@ Form *form_reader_cond(Arena *a, Span span, Form **items, uint32_t len) {
     return f;
 }
 
+/* RR3: Range literal with variable name for shadowing check.
+ * items[0] = var_sym form, items[1] = desugared range form. */
+Form *form_range_var(Arena *a, Span span, const Symbol *var_sym, Form *range) {
+    Form *f = form_new(a, F_RANGE_VAR, span);
+    Form **items = (Form **)arena_alloc(a, 2 * sizeof(Form *));
+    items[0] = form_sym(a, span, var_sym);
+    items[1] = range;
+    f->as.list.items = items;
+    f->as.list.len = 2;
+    return f;
+}
+
 /* Return the name of a FormTag as a string */
 const char *form_tag_name(FormTag tag) {
     switch (tag) {
@@ -172,6 +184,7 @@ const char *form_tag_name(FormTag tag) {
         case F_TYPE_ANN: return "type-ann";
         case F_CONTRACT_TYPE: return "contract-type";
         case F_READER_COND: return "reader-cond";
+        case F_RANGE_VAR: return "range-var";
         default: return "unknown";
     }
 }
@@ -300,6 +313,10 @@ void form_print(Buf *b, const Form *f) {
                 form_print(b, f->as.list.items[i]);
             }
             buf_putc(b, ')');
+            break;
+        /* RR3: Range literal variable annotation -- print the desugared range form */
+        case F_RANGE_VAR:
+            if (f->as.list.len > 1) form_print(b, f->as.list.items[1]);
             break;
     }
 }

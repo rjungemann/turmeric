@@ -645,7 +645,7 @@ async function initEditor() {
         },
         suggestOnTriggerCharacters: true,
         wordBasedSuggestions: true,
-        fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', 'Fira Mono', Consolas, monospace",
+        fontFamily: "'Iosevka', 'SF Mono', 'Fira Code', 'Fira Mono', Consolas, monospace",
         fontSize: 13,
         fontLigatures: true,
         fontWeight: '400'

@@ -12,6 +12,7 @@
     "test:prod": "playwright test --config playwright.config.prod.js"
   },
   "dependencies": {
+    "@fontsource/iosevka": "^5.2.5",
     "monaco-editor": "^0.45.0",
     "prismjs": "^1.30.0"
   },

@@ -2,7 +2,9 @@
  * CSS Variables — Dark Spice Market
  * ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap');
+@import '@fontsource/iosevka/400.css';
+@import '@fontsource/iosevka/500.css';
 
 :root {
     /* Background layers */
@@ -90,7 +92,7 @@
     /* Fonts */
     --font-family:  'DM Sans', sans-serif;
     --font-serif:   'Cormorant Garamond', Georgia, serif;
-    --font-mono:    'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+    --font-mono:    'Iosevka', 'SF Mono', 'Fira Code', monospace;
     --font-size-sm: 12px;
     --font-size-md: 13px;
     --font-size-lg: 15px;
