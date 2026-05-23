@@ -2,6 +2,50 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.9.0] -- 2026-05-22
+
+### Added
+
+- **LSP intelligence (LD0-LD4)** (#67)
+  - `textDocument/hover` -- returns a Markdown snippet with the symbol's type signature and `;;;` docstring
+  - `textDocument/definition` -- returns the source location for the symbol under the cursor
+  - `textDocument/completion` -- prefix-filtered `CompletionItem` list from the symbol index; also completes stdlib module paths inside `(import ...)` forms
+  - New LSP helpers: `lsp_scan_docs` (re-scans `;;;` blocks without invoking the compiler), `tur_collect_symbols` (elaboration-based symbol index)
+
+- **`Show` typeclass (SI0-SI2)** (#68)
+  - `Show [bool]` -- returns `"true"` or `"false"`
+  - Fixed `Display [int]` -- was `"<int>"`, now decimal via `snprintf %lld`
+  - Fixed `Debug [int]` -- was `"<int>"`, now `"int(N)"` format
+  - Fixed `Display/Debug [ptr<void>]` -- correct `ok(N)` / `err(N)` / `Result::ok(N)` / `Result::err(N)` formatting
+  - `derive-show` macro: generates a `Show` instance for any struct from a field descriptor list
+  - New compile-time built-ins powering `derive-show`: `vec?`, `symbol-name`, `dot-sym`, `str-append`
+
+- **`name : type` annotations** -- the parser now accepts a space before the colon (`name : type`) in addition to the existing `name :type` form
+
+- **Datum comments** (`#;`) -- `#;expr` suppresses the next form without removing it from the source, matching standard Scheme/Racket convention
+
+- **Sweet-expression syntax** (`#lang sweet-exp`) -- opt-in indentation-sensitive syntax; `#lang sweet-exp` at the top of a file (or a `.tursweet` extension) enables full t-expression + neoteric + curly-infix mode
+
+- **Devcontainer** -- `.devcontainer/devcontainer.json` for one-click VS Code Remote / GitHub Codespaces setup
+
+- **Spices directory page** -- `tools/genspices.py` generates `docs/html/spices/index.html` from the `turmeric-spices` README (local `../turmeric-spices/` or GitHub fallback) with full Turmeric syntax highlighting; `just spices` runs it; `just docs` now depends on it
+
+- **New guides**
+  - `lsp-guide.md` -- setting up the LSP server with VS Code, Neovim, and Emacs
+  - `advanced-type-system-rationale.md` -- design rationale for HKTs, GADTs, session types, and sized types
+  - `arrows-guide.md` -- composable `Arrow` abstractions and the `>>>` / `***` / `&&&` combinators
+  - `sandboxing-guide.md` -- capability-restricted interpreter environments and step-fuel limits
+
+### Fixed
+
+- LSP server: fixed a crash when the client sent a request before the workspace root was known
+- `Display [int]` / `Debug [int]` / `Display/Debug [ptr<void>]` now produce correct output (see Show typeclass above)
+
+### Changed
+
+- Guide code examples reformatted throughout to follow the new Clojure-style indentation rules and sweet-exp style guide (Guides, API Docs, and Spices pages all updated)
+- Documentation reorganised: several plan documents moved to `docs/archive/`
+
 ## [0.8.0] -- 2026-05-22
 
 ### Added
