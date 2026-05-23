@@ -1,0 +1,21 @@
+; Phase EX1f: stdlib/existential.tur provides the `showable` and
+; `show-it` macros built on native pack/open.  This fixture defines Show
+; locally (the stdlib typeclass is load-on-demand), loads the helpers,
+; and verifies the roundtrip prints the inner int.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(load "stdlib/existential.tur")
+
+(defn main [] :int
+  (let [e (showable 42)]
+    (println (show-it e)))
+  0)

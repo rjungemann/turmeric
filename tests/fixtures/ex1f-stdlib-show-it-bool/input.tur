@@ -1,0 +1,17 @@
+; Phase EX1f: showable/show-it work for any concrete type with a Show
+; instance.  This fixture uses bool to exercise a non-int payload.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [bool]
+  (show [x] :cstr
+    (if x "true" "false")))
+
+(load "stdlib/existential.tur")
+
+(defn main [] :int
+  (let [e (showable true)]
+    (println (show-it e)))
+  (let [e (showable false)]
+    (println (show-it e)))
+  0)
