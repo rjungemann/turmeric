@@ -529,12 +529,23 @@ representation).
   `sv` has the bare carrier type and the EX2-3 escape checks still
   apply.  Verified end-to-end by `tests/fixtures/ex2-4-vec-existential`.*
 
-- [ ] **EX2-5** Add fixture tests for `Vec[A]`:
+- [x] **EX2-5** Add fixture tests for `Vec[A]`:
   - Wrap a `SizedVec[3 :int]` into a `Vec[:int]`; open it; verify the length.
   - Attempt to return the `SizedVec` directly from the `open` block; verify
     that the escape check rejects this.
   - Pass a `Vec[:int]` to a function that does not know its length; verify that
     the function can still call `sv-length` inside an `open` block.
+  *Shipped three fixtures covering the bullets:
+  `tests/fixtures/ex2-5-vec-roundtrip` packs a length-3 `SizedVec` via
+  `vec-of-sized` and reports `(sized-vec-len s)` inside `open-vec`;
+  `tests/fixtures/errors/ex2-5-vec-escape` returns the bound `SizedVec`
+  carrier directly from the body and confirms the EX1d/EX2-3 escape
+  check fires (`open: existential type variable 'n' escapes its scope`);
+  `tests/fixtures/ex2-5-vec-passthrough` exercises the function-boundary
+  case -- the callee receives the size-erased Vec as `:ptr<void>`,
+  re-ascribes it to `(exists [n] (SizedVec n int))`, and calls
+  `sized-vec-len` inside `open-vec` against three different runtime
+  lengths. All three pass under `-Xgadt`.*
 
 ---
 
