@@ -1595,6 +1595,82 @@ Expr *elab_pack(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase EX1d: scope-escape check helpers.
+ *
+ * After elaborating an `open` body, we verify that the existentially-bound
+ * value `v` (or anything that aliases it through `let`) does not flow out of
+ * the body's tail position.  This catches the canonical leak patterns:
+ *
+ *   (open e [a v] v)                             ; direct leak
+ *   (open e [a v] (do step v))                   ; tail of `do`
+ *   (open e [a v] (let [w v] w))                 ; aliased through let
+ *   (open e [a v] (if cond v 0))                 ; one branch of `if`
+ *
+ * Indirect leaks via opaque function-return paths (e.g. `(identity v)`) are
+ * deliberately not flagged here -- the EX1 spec leaves general inference of
+ * skolem-tainted return types to a future pass.  When v is leaked through
+ * such a path the runtime payload is still a plain int64_t, so soundness
+ * relies only on the type-level check at the open boundary.
+ *
+ * The tainted set starts as { v } and grows as we walk through `let`s
+ * whose initializer is itself tainted. */
+
+#define EX1D_MAX_TAINTED 32
+
+typedef struct ExistsEscapeCtx {
+    Binding *tainted[EX1D_MAX_TAINTED];
+    uint8_t  n_tainted;
+    bool     overflowed;     /* set if we hit MAX_TAINTED; check becomes conservative */
+} ExistsEscapeCtx;
+
+static bool ex1d_is_tainted(const ExistsEscapeCtx *ctx, const Binding *b) {
+    if (!b) return false;
+    for (uint8_t i = 0; i < ctx->n_tainted; i++) {
+        if (ctx->tainted[i] == b) return true;
+    }
+    return false;
+}
+
+static void ex1d_add_tainted(ExistsEscapeCtx *ctx, Binding *b) {
+    if (!b || ex1d_is_tainted(ctx, b)) return;
+    if (ctx->n_tainted >= EX1D_MAX_TAINTED) { ctx->overflowed = true; return; }
+    ctx->tainted[ctx->n_tainted++] = b;
+}
+
+/* Returns true if the expression's tail value can be the existentially-bound
+ * binding (or any binding aliased to it through `let`). */
+static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_VAR:
+            return ex1d_is_tainted(ctx, e->as.var.binding);
+        case EX_DO:
+            if (e->as.do_.n == 0) return false;
+            return ex1d_tail_leaks(ctx, e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET: {
+            /* First, propagate taint through let-binding initializers so
+             * later references see the alias. */
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                LetBinding *lb = &e->as.let_.bindings[i];
+                if (lb->init && ex1d_tail_leaks(ctx, lb->init)) {
+                    ex1d_add_tainted(ctx, lb->binding);
+                }
+            }
+            return ex1d_tail_leaks(ctx, e->as.let_.body);
+        }
+        case EX_IF:
+            return ex1d_tail_leaks(ctx, e->as.if_.then_)
+                || ex1d_tail_leaks(ctx, e->as.if_.else_or_null);
+        case EX_EXISTS_OPEN:
+            /* The value flowing out of a nested `open` is the tail of its
+             * body.  Recurse so that a leak of an outer binding through an
+             * inner open is still caught by the outer's check. */
+            return ex1d_tail_leaks(ctx, e->as.exists_open_.body);
+        default:
+            return false;
+    }
+}
+
 /* Phase HRT2: (open packed [a v] body) — existential elimination.
  * Unboxes the existential value, binding v to the inner value.
  * Syntax: (open packed-expr [abstract-type-var value-name] body...) */
@@ -1633,6 +1709,7 @@ Expr *elab_open(Elab *e, const Form *call) {
                   "open: binders must be symbols");
         return NULL;
     }
+    const Symbol *abs_sym = abstract_form->as.sym;
     const Symbol *val_sym = val_name_form->as.sym;
 
     /* Determine type of v from the existential body type.
@@ -1648,6 +1725,11 @@ Expr *elab_open(Elab *e, const Form *call) {
             }
         }
     }
+
+    /* EX1d: mint a fresh skolem id and push the depth counter so nested
+     * `open` forms cannot confuse each other's escape checks. */
+    uint32_t my_skolem_id = e->open_skolem_next++;
+    e->open_skolem_depth++;
 
     /* Create binding for v in the open body */
     Binding *v_binding = binding_new(e, val_sym, v_type, false, false, val_name_form->span);
@@ -1678,11 +1760,26 @@ Expr *elab_open(Elab *e, const Form *call) {
         }
     }
 
-    /* Restore scope */
+    /* Restore scope and depth */
     e->scope = inner.parent;
     scope_free(&inner);
+    e->open_skolem_depth--;
 
     if (!body_ok || !body) return NULL;
+
+    /* EX1d: scope-escape check.  Verify that the body's tail position does
+     * not leak the existentially-bound value out of the open scope. */
+    ExistsEscapeCtx ctx = (ExistsEscapeCtx){0};
+    ex1d_add_tainted(&ctx, v_binding);
+    if (ex1d_tail_leaks(&ctx, body)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "open: existential type variable '%s' escapes its scope "
+                  "(the body returns the bound value '%s' or an alias)",
+                  abs_sym && abs_sym->name ? abs_sym->name : "a",
+                  val_sym && val_sym->name ? val_sym->name : "v");
+        return NULL;
+    }
+    (void)my_skolem_id; /* reserved for EX1e runtime dispatch */
 
     Expr *out = expr_new(e->arena, EX_EXISTS_OPEN, body->type, call->span);
     out->as.exists_open_.packed      = packed;
