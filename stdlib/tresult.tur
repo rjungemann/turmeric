@@ -168,3 +168,9 @@
   else
       return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
   ```)
+
+;;; Eq [Result] -- equality using the ok and err types' Eq instances.
+;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
+;; Note: element comparison uses integer equality; correct for all primitive A/B.
+(definstance Eq [Result] [(Eq A) (Eq B)]
+  (eq? [x y] (tresult-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

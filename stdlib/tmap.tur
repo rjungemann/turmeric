@@ -241,3 +241,10 @@
   tur_hamt_iter_free(iter_buf);
   return true;
   ```)
+
+;;; Eq [Map] -- structural equality using the value type's Eq instance.
+;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
+;; Constraints: (Eq K) ensures keys are comparable; (Eq V) uses integer equality.
+;; Note: element comparison uses integer equality; correct for all primitive K/V.
+(definstance Eq [Map] [(Eq K) (Eq V)]
+  (eq? [x y] (tmap-eq? x y (fn [a b] (= a b)))))

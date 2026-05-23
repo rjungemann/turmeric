@@ -1,0 +1,31 @@
+;; PTC4 basic test: type-parameter constraint substitution.
+;;
+;; Measurable[Box[A]] requires Measurable[A].
+;; When dispatching (.measure (box-new 42)), the concrete type of A
+;; is extracted from the TY_APP(Box,int) result type of box-new and
+;; used to satisfy the (Measurable A) constraint.
+
+(defclass Measurable [a]
+  (measure [x] :int))
+
+(definstance Measurable [int]
+  (measure [x] x))
+
+(defstruct Box [A]
+  (v :int))
+
+;; Constrained instance: Measurable[Box] given Measurable[A]
+(definstance Measurable [Box] [(Measurable A)]
+  (measure [b] :int
+    ```c
+    return *(int64_t*)(intptr_t)b;
+    ```))
+
+(defn box-new [x :int] :(Box int)
+  ```c
+  int64_t *p = (int64_t*)malloc(sizeof(int64_t));
+  *p = x;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(println (.measure (box-new 42)))

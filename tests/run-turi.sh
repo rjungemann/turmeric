@@ -150,6 +150,7 @@ panic-downcast
 panic-ref
 panic-trace
 panic-with-typed
+ptc4-basic
 rc-basic
 rc-ref-conversion
 ref-basic

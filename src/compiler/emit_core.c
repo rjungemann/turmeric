@@ -939,6 +939,15 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
             case TY_CSTR:     component = "cstr";     break;
             case TY_NIL:      component = "nil";      break;
             case TY_PTR_VOID: component = "ptr_void"; break;
+            case TY_INT8:     component = "int8";     break;
+            case TY_INT16:    component = "int16";    break;
+            case TY_INT32:    component = "int32";    break;
+            case TY_UINT8:    component = "uint8";    break;
+            case TY_UINT16:   component = "uint16";   break;
+            case TY_UINT32:   component = "uint32";   break;
+            case TY_UINT64:   component = "uint64";   break;
+            case TY_FLOAT32:  component = "float32";  break;
+            case TY_FLOAT64:  component = "float64";  break;
             case TY_STRUCT:
                 if (inst->type_arg_syms && inst->type_arg_syms[i])
                     component = inst->type_arg_syms[i]->name;

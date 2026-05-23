@@ -109,7 +109,7 @@ Two typeclasses must exist (or be extended) before TM0 can ship:
 | TM0-3 | Implement `tmap-new`, `tmap-assoc`, `tmap-dissoc`, `tmap-count`, `tmap-merge` | Done |
 | TM0-4 | Implement `tmap-get` returning `Option[V]` (depends on TC1-option or a stub) | Done |
 | TM0-5 | Implement `tmap-has?` | Done |
-| TM0-6 | Add constrained `Eq[Map[K V]]` instance using `Hash[K]` + `Eq[K]` + `Eq[V]` | Blocked (PTC4) |
+| TM0-6 | Add constrained `Eq[Map[K V]]` instance using `Hash[K]` + `Eq[K]` + `Eq[V]` | Done |
 | TM0-7 | Deprecation notice on untyped `map.tur` (`assoc`, `dissoc`, `get`, `has?`, `count`, `merge`) -- keep for one release cycle | Done (comment only; compile-time warning deferred, see DEP-1) |
 | TM0-8 | Update `gendocs.py` / doc tooling to render type parameters in `defstruct` | Done |
 | TM0-9 | Add fixtures in `tests/fixtures/` covering: empty map, single assoc, dissoc, merge, collision (two keys with same hash), `tmap-eq?` | Done |
@@ -155,7 +155,7 @@ Replace the `int64_t`-only vector with a parameterized growable array.
 | TC1-2 | Implement `tvec-new`, `tvec-len`, `tvec-get` | Done |
 | TC1-3 | Implement `tvec-push!`, `tvec-pop!` | Done |
 | TC1-4 | Implement `tvec-set!`, `tvec-free` | Done |
-| TC1-5 | Add constrained `Eq[Vec[A]]` instance | Blocked (PTC4) |
+| TC1-5 | Add constrained `Eq[Vec[A]]` instance | Done |
 
 ### TC1-B: `List[A]`
 
@@ -180,7 +180,7 @@ typed wrapper casts at boundaries.
 | TC1-6 | Define `Cons[A]` struct (`head`, `tail`) | Done |
 | TC1-7 | Implement `tcons`, `tnil`, `tnil?`, `thead`, `ttail` | Done |
 | TC1-8 | Implement `tlist-length`, `tlist-eq?` | Done |
-| TC1-9 | Add constrained `Eq[List[A]]` instance | Blocked (PTC4) |
+| TC1-9 | Add constrained `Eq[List[A]]` instance | Done |
 
 ### TC1-C: `Slice[A]`
 
@@ -224,7 +224,7 @@ Already used above; make it first-class:
 | TC1-14 | Implement `tsome`, `tnone`, `tsome?`, `tunwrap`, `tunwrap-or` | Done |
 | TC1-15 | Implement `toption-free` | Done |
 | TC1-16 | Implement `toption-map` | Done |
-| TC1-17 | Add constrained `Eq[Option[A]]` instance | Blocked (PTC4) |
+| TC1-17 | Add constrained `Eq[Option[A]]` instance | Done |
 
 ### TC1-E: `Result[A B]`
 
@@ -247,7 +247,7 @@ Already used above; make it first-class:
 | TC1-19 | Implement `tok`, `terr`, `tok?`, `terr?`, `tok-val`, `terr-val` | Done |
 | TC1-20 | Implement `tresult-free` | Done |
 | TC1-21 | Implement `tresult-map` | **Not done** |
-| TC1-22 | Add constrained `Eq[Result[A B]]` instance | Blocked (PTC4) |
+| TC1-22 | Add constrained `Eq[Result[A B]]` instance | Done |
 
 ### TC1-F: `Pair[A B]`
 
@@ -265,7 +265,7 @@ Already used above; make it first-class:
 |----|------|--------|
 | TC1-23 | Define `Pair[A B]` struct (`fst`, `snd`) | Done |
 | TC1-24 | Implement `tpair`, `tpair-fst`, `tpair-snd`, `tpair-free` | Done |
-| TC1-25 | Add constrained `Eq[Pair[A B]]` instance | Blocked (PTC4) |
+| TC1-25 | Add constrained `Eq[Pair[A B]]` instance | Done |
 
 ---
 
@@ -345,7 +345,7 @@ Does not exist at all today.
 | TC2-12 | Implement `tset-union`, `tset-intersect`, `tset-diff` | Done |
 | TC2-13 | Implement `tset-eq?`, `tset-free` | Done |
 | TC2-14 | Add fixture `tests/fixtures/typed/tset-basic` | Done |
-| TC2-15 | Add constrained `Eq[Set[A]]` instance | Blocked (PTC4) |
+| TC2-15 | Add constrained `Eq[Set[A]]` instance | Done |
 
 ---
 

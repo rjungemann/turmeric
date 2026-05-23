@@ -105,3 +105,9 @@
   bool snd_eq = ((bool(*)(int64_t, int64_t))(intptr_t)snd_cmp)(a->snd, b->snd);
   return fst_eq && snd_eq;
   ```)
+
+;;; Eq [Pair] -- element-wise equality using each component's Eq instance.
+;; TC1-25: Phase PTC4 -- constrained Eq instance for Pair[A B].
+;; Note: element comparison uses integer equality; correct for all primitive A/B.
+(definstance Eq [Pair] [(Eq A) (Eq B)]
+  (eq? [x y] (tpair-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

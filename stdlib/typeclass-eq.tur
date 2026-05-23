@@ -1,0 +1,12 @@
+;; Phase PTC4: Minimal Eq class stub for typed-collection definstances.
+;; Auto-loaded so that tvec.tur, tlist.tur, tset.tur, tmap.tur, toption.tur,
+;; tresult.tur, and tpair.tur can declare (definstance Eq [...] ...) without
+;; requiring the user to import stdlib/typeclass.tur.
+;; The full typeclass.tur (Eq + Ord + Show + Num + primitive instances) is
+;; still available on demand via (load "stdlib/typeclass.tur").
+
+;;; Eq -- typeclass for equality comparison.
+;;;
+;;; Since: Phase 15
+(defclass Eq [a]
+  (eq? [x y] :bool))

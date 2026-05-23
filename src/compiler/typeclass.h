@@ -106,10 +106,12 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args);
 
-/* Phase PTC3: Check if an instance's type parameter constraints are satisfied
- * for the given type arguments. */
+/* Phase PTC3/PTC4: Check if an instance's type parameter constraints are satisfied.
+ * concrete_elem_types/n_concrete: elem types extracted from TY_APP at dispatch;
+ * used to substitute constraints where param_idx >= 0. Pass NULL/0 when unavailable. */
 bool typeclass_instance_constraints_satisfied(const TypeClassInstance *inst,
                                               Type *lookup_type_args, uint8_t n_lookup_args,
+                                              const Type *concrete_elem_types, uint8_t n_concrete,
                                               const TypeClassEnv *env);
 
 /* Phase HKT H2: Structured dispatch-table key.
@@ -132,7 +134,8 @@ TypeClassInstance *typeclass_env_lookup_instance_by_key(const TypeClassEnv *env,
 /* Constraint on a type variable */
 typedef struct TypeConstraint {
     TypeClass *typeclass;
-    Type type_arg;  /* The type that must satisfy the constraint */
+    Type       type_arg;   /* concrete type (used when param_idx < 0) */
+    int8_t     param_idx;  /* >= 0: index into TY_APP elem types; -1: use type_arg directly */
 } TypeConstraint;
 
 /* Constraint set for a function */
