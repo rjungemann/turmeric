@@ -1,0 +1,17 @@
+; RR2 fixture: #r{...} with runtime expression bounds.
+
+(load "stdlib/range.tur")
+
+(defn main [] :void
+  (let [lo 0
+        hi 10]
+    ; expression bounds pass through to constructor
+    (println (range-contains? #r{lo <= n < hi} 0))    ; true
+    (println (range-contains? #r{lo <= n < hi} 9))    ; true
+    (println (range-contains? #r{lo <= n < hi} 10))   ; false
+    (println (range-contains? #r{lo <= n < hi} -1))   ; false
+    ; one-sided with expression bound
+    (println (range-contains? #r{n < hi} 9))           ; true
+    (println (range-contains? #r{n < hi} 10))          ; false
+    (println (range-contains? #r{n >= lo} 0))          ; true
+    (println (range-contains? #r{n >= lo} -1))))       ; false

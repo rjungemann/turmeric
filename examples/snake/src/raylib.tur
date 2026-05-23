@@ -1,0 +1,141 @@
+;; examples/snake/src/raylib.tur -- Turmeric FFI bindings for the Raylib game shim
+;;
+;; All functions are implemented in examples/snake/src/rayLibShim.c.
+;; Integer parameters and return values use :int (Turmeric's int64_t).
+;; Void returns use :void.
+;;
+;; Key codes (subset matching Raylib defaults)
+(def KEY_RIGHT  262)
+(def KEY_LEFT   263)
+(def KEY_UP     265)
+(def KEY_DOWN   264)
+(def KEY_ESCAPE 256)
+(def KEY_ENTER  257)
+
+;; -- Window management -------------------------------------------------------
+;;; tur-init-window -- open a window of size w x h with the given title.
+;;;
+;;; Parameters:
+;;;   w     -- window width in pixels
+;;;   h     -- window height in pixels
+;;;   title -- window title string
+(extern-c tur-init-window         [w :int h :int title :cstr] :void)
+
+;;; tur-close-window -- close the current window and release its resources.
+(extern-c tur-close-window        [] :void)
+
+;;; tur-window-should-close -- return non-zero when the user has requested window close.
+;;;
+;;; Returns:
+;;;   1 if the window close event is pending, 0 otherwise.
+(extern-c tur-window-should-close [] :int)
+
+;; -- Drawing -----------------------------------------------------------------
+;;; tur-begin-drawing -- begin a new drawing frame (must be paired with tur-end-drawing).
+(extern-c tur-begin-drawing [] :void)
+
+;;; tur-end-drawing -- end the current drawing frame and present the buffer to the screen.
+(extern-c tur-end-drawing   [] :void)
+
+;;; tur-clear-bg -- fill the background with an RGB colour.
+;;;
+;;; Parameters:
+;;;   r -- red channel (0-255)
+;;;   g -- green channel (0-255)
+;;;   b -- blue channel (0-255)
+(extern-c tur-clear-bg      [r :int g :int b :int] :void)
+
+;;; tur-draw-text -- draw text on screen at (x, y) with a given font size and RGB colour.
+;;;
+;;; Parameters:
+;;;   text -- string to render
+;;;   x    -- left edge in pixels
+;;;   y    -- top edge in pixels
+;;;   size -- font size in points
+;;;   r    -- red channel (0-255)
+;;;   g    -- green channel (0-255)
+;;;   b    -- blue channel (0-255)
+(extern-c tur-draw-text     [text :cstr x :int y :int size :int
+                              r :int g :int b :int] :void)
+
+;;; tur-set-fps -- cap the rendering loop to fps frames per second.
+;;;
+;;; Parameters:
+;;;   fps -- target frame rate
+(extern-c tur-set-fps       [fps :int] :void)
+
+;; -- Input -------------------------------------------------------------------
+;;; tur-is-key-down -- return non-zero if the specified key is currently held down.
+;;;
+;;; Parameters:
+;;;   key -- key code constant (e.g. KEY_RIGHT)
+;;;
+;;; Returns:
+;;;   1 if the key is held, 0 otherwise.
+(extern-c tur-is-key-down    [key :int] :int)
+
+;; -- Frame time (integer milliseconds) --------------------------------------
+;;; tur-get-frame-ms -- return the elapsed time for the last frame in milliseconds.
+;;;
+;;; Returns:
+;;;   Frame delta time as an integer number of milliseconds.
+(extern-c tur-get-frame-ms [] :int)
+
+;; -- Snake game state (owned by rayLibShim.c) --------------------------------
+;;   grid-w, grid-h : number of grid cells
+;;; tur-snake-init -- initialise the snake game state with a grid of grid-w x grid-h cells.
+;;;
+;;; Parameters:
+;;;   grid-w -- number of columns in the play-field grid
+;;;   grid-h -- number of rows in the play-field grid
+(extern-c tur-snake-init    [grid-w :int grid-h :int] :void)
+
+;;; tur-snake-set-dir -- set the snake's movement direction.
+;;;
+;;; Parameters:
+;;;   dir -- direction constant (use KEY_RIGHT / KEY_LEFT / KEY_UP / KEY_DOWN)
+(extern-c tur-snake-set-dir [dir :int] :void)
+
+;;   returns 1 = alive, 0 = dead (wall or self collision)
+;;; tur-snake-step -- advance the snake by one step; return 1 if alive, 0 if dead.
+;;;
+;;; Returns:
+;;;   1 if the snake is still alive, 0 on wall or self collision.
+(extern-c tur-snake-step    [] :int)
+
+;;; tur-snake-score -- return the current snake game score.
+;;;
+;;; Returns:
+;;;   The player's score as an integer.
+(extern-c tur-snake-score   [] :int)
+
+;; -- Render helpers ----------------------------------------------------------
+;;; tur-draw-snake -- draw the snake body cell at grid position cell with the given RGB colour.
+;;;
+;;; Parameters:
+;;;   cell -- linear grid index of the cell to draw
+;;;   r    -- red channel (0-255)
+;;;   g    -- green channel (0-255)
+;;;   b    -- blue channel (0-255)
+(extern-c tur-draw-snake    [cell :int r :int g :int b :int] :void)
+
+;;; tur-draw-food -- draw the food token at grid position cell with the given RGB colour.
+;;;
+;;; Parameters:
+;;;   cell -- linear grid index of the food cell
+;;;   r    -- red channel (0-255)
+;;;   g    -- green channel (0-255)
+;;;   b    -- blue channel (0-255)
+(extern-c tur-draw-food     [cell :int r :int g :int b :int] :void)
+
+;;; tur-score-text -- return a formatted score string for display.
+;;;
+;;; Returns:
+;;;   A :cstr like "Score: 42".
+(extern-c tur-score-text    [] :cstr)
+
+;;; tur-game-over-text -- return the game-over message string.
+;;;
+;;; Returns:
+;;;   A :cstr such as "Game Over".
+(extern-c tur-game-over-text [] :cstr)

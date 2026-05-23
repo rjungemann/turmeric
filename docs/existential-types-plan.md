@@ -1,7 +1,7 @@
 # Existential Types Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-22
+> **Status:** Draft Plan -- Option B Implementation Tasks
+> **Last Updated:** 2026-05-23
 > **Type:** Language Design
 
 ---
@@ -14,8 +14,8 @@ telling you which one." The outside world can only use the type through an
 agreed-upon interface (a typeclass constraint or an explicit operation set).
 
 This plan covers the motivation, design options, and complexity of adding
-existential types to Turmeric. It is a **design-only draft** -- no
-implementation is started here.
+existential types to Turmeric. The implementation is oriented toward
+**Option B -- `pack`/`open` with typeclass constraints**, executed in phases.
 
 ---
 
@@ -233,3 +233,319 @@ dependent-type elaboration.
   interact at the boundary where a refinement narrows the hidden type.
 - `currying-plan.md` -- curried functions as existentials (`exists a b. a -> b`)
   is a known encoding; keep compatible.
+
+---
+
+## Detailed Implementation Tasks (Option B)
+
+Tasks are grouped by phase. Each phase builds on the previous. All parser and
+type-checker work targets the C interpreter core (`src/`).
+
+---
+
+### Phase EX0 -- Struct-encoded existentials (stdlib only)
+
+No interpreter changes. Adds stdlib infrastructure and documents the manual
+encoding pattern so code written today can migrate to EX1 later.
+
+- [ ] **EX0-1** Add `stdlib/existential.tur` with:
+  - `defmacro make-existential-struct` -- generates a `defstruct` with a boxed
+    `value :int` field and one function-pointer field per constraint method.
+  - `defmacro pack-existential` -- fills the struct fields from the concrete
+    type's typeclass instance.
+  - Document that each macro-generated type must be migrated to `pack`/`open`
+    once EX1 lands.
+
+- [ ] **EX0-2** Add `Showable` as the canonical worked example in
+  `stdlib/existential.tur`, including:
+  - `defstruct Showable`
+  - `pack-showable` macro
+  - `showable-show` accessor
+  - A `;;; Since: Phase EX0` docstring block on each exported name.
+
+- [ ] **EX0-3** Add fixture tests in `tests/existential/`:
+  - `tests/existential/showable_test.tur` -- pack integers, strings, and floats
+    into `Showable`; call `showable-show`; verify output.
+  - `tests/existential/handle_test.tur` -- demonstrate an opaque handle using
+    the struct encoding.
+
+- [ ] **EX0-4** Update `docs/guides/README.md` with a brief entry for
+  existential types pointing at the new stdlib file.
+
+---
+
+### Phase EX1a -- Parser: `exists`, `pack`, `open` syntax
+
+Adds the three new syntactic forms. No type-checking yet; newly parsed nodes
+are left as unresolved AST nodes.
+
+- [ ] **EX1a-1** Extend the lexer (`src/lex.c` or equivalent) to recognize
+  `exists`, `pack`, and `open` as reserved keywords. Add token types
+  `TK_EXISTS`, `TK_PACK`, `TK_OPEN`.
+
+- [ ] **EX1a-2** Extend the type-expression parser to handle:
+  ```
+  (exists <var>. (<Constraint> <var>) => <type>)
+  (exists <var>. (<C1> <var>) (<C2> <var>) => <type>)
+  ```
+  Produce an `AST_EXISTS_TYPE` node carrying: bound variable name, constraint
+  list, and body type.
+
+- [ ] **EX1a-3** Extend the expression parser to handle:
+  ```
+  (pack <expr> as <exists-type>)
+  ```
+  Produce an `AST_PACK` node carrying: expression, target existential type.
+  Require the `as` keyword between expression and type.
+
+- [ ] **EX1a-4** Extend the expression parser to handle the `open` elimination
+  form:
+  ```
+  (open <expr> ([<type-var>] [<val-var> : <body-type>])
+    <body>)
+  ```
+  Produce an `AST_OPEN` node carrying: scrutinee expression, bound type
+  variable name, bound value variable name, expected body type annotation, and
+  body expression.
+
+- [ ] **EX1a-5** Add round-trip pretty-printer support for `AST_EXISTS_TYPE`,
+  `AST_PACK`, and `AST_OPEN` so that `--print-ast` output is readable.
+
+- [ ] **EX1a-6** Add parse-error tests (fixture files that must fail to parse):
+  - `pack` missing `as` keyword
+  - `exists` without a constraint
+  - `open` with wrong binding arity
+
+---
+
+### Phase EX1b -- Type representation: existential types in the type IR
+
+Extends the internal type representation before wiring up type-checking.
+
+- [ ] **EX1b-1** Add a new type kind `TY_EXISTS` to the type IR (e.g.
+  `src/types.h`). Fields:
+  - `bound_var`: unique type variable ID (a fresh skolem level slot)
+  - `constraints`: list of `(typeclass_id, type_arg)` pairs
+  - `body`: the body type (a `Type*` that may reference `bound_var`)
+
+- [ ] **EX1b-2** Extend the type printer / unparser to emit
+  `(exists a. (C a) => T)` syntax for `TY_EXISTS` nodes.
+
+- [ ] **EX1b-3** Extend the type comparison and structural equality functions
+  to handle `TY_EXISTS` -- alpha-rename bound variables before comparing (bound
+  variable name is irrelevant; the structure must match).
+
+- [ ] **EX1b-4** Extend the type substitution function to correctly skip
+  substitution of the bound variable inside a `TY_EXISTS` body (it is locally
+  bound and must not be replaced by an outer unification).
+
+---
+
+### Phase EX1c -- Type-checker: `pack` introduction
+
+Implement type-checking for `pack` expressions. At a `pack` site the concrete
+type is known from context; the type-checker must verify that the concrete type
+satisfies all constraints named in the target existential.
+
+- [ ] **EX1c-1** In the type-checker's expression handler, add a case for
+  `AST_PACK`:
+  1. Infer the type `T_conc` of the inner expression.
+  2. Parse the target `(exists a. (C a) => U)`.
+  3. Unify `T_conc` with `U[a := T_conc]` (substitute `a` with `T_conc` in the
+     body).
+  4. For each constraint `(C a)`, look up the typeclass instance for `C T_conc`.
+     Emit a type error if no instance exists.
+  5. Return type `(exists a. (C a) => U)` for the overall `pack` expression.
+
+- [ ] **EX1c-2** At runtime, `pack` must bundle:
+  - The boxed value (already `int64_t`).
+  - A pointer to the vtable for each constraint instance discovered in step 4.
+  Store these in a small heap-allocated record; the runtime type of the `pack`
+  result is a pointer to this record.
+
+- [ ] **EX1c-3** Add type-checker tests:
+  - `pack 42 as (exists a. (Show a) => a)` -- should type-check.
+  - `pack (fn [] 0) as (exists a. (Show a) => a)` -- should fail (no `Show`
+    instance for functions).
+  - `pack "hello" as (exists a. (Show a) (Eq a) => a)` -- multi-constraint,
+    should succeed if both instances exist.
+
+---
+
+### Phase EX1d -- Type-checker: `open` elimination and scope escape check
+
+Implement type-checking for `open` expressions. This is the hardest part of
+Option B.
+
+- [ ] **EX1d-1** In the type-checker's expression handler, add a case for
+  `AST_OPEN`:
+  1. Infer the type of the scrutinee. It must be `(exists a. constraints => U)`.
+  2. Generate a fresh **skolem constant** `s` (a rigid type variable that
+     unifies only with itself). Record `s` at the current scope level.
+  3. Bind the type variable name from the `open` binder to `s` in the local
+     type environment.
+  4. Substitute `a := s` throughout `U` to get `U_s`. Bind the value variable
+     to `U_s` in the local term environment.
+  5. Resolve all constraints `(C a)` against `s` and add the resulting
+     witnesses to the local instance environment (so that methods of `C` are
+     callable on the value variable inside the body).
+  6. Type-check the body expression, yielding type `T_body`.
+  7. **Scope escape check**: verify that `s` does not appear free in `T_body`.
+     If it does, emit an error: "existential type variable `a` escapes its
+     scope."
+  8. Remove `s` from the local type environment. Return `T_body` as the type
+     of the `open` expression.
+
+- [ ] **EX1d-2** Implement the free-variable scanner used in step 7. Walk the
+  `T_body` type tree and collect all skolem constants. Check membership against
+  the set of skolems introduced by the current `open` (nested `open` forms
+  introduce their own skolems at a deeper level).
+
+- [ ] **EX1d-3** Implement skolem level tracking so that nested `open` forms
+  do not confuse each other's escape checks. Each `open` increments a skolem
+  depth counter; skolems are tagged with their depth; the escape check at depth
+  `d` only looks for skolems tagged `d`.
+
+- [ ] **EX1d-4** Add type-checker tests:
+  - Basic roundtrip: `pack` then `open`, call `show` on the inner value,
+    return a `:cstr`. Should type-check.
+  - Escape attempt: open an existential, try to return the inner value directly
+    (its type contains the skolem). Should fail with the escape error.
+  - Nested opens: two independent existentials opened in sequence. Should
+    type-check.
+  - Nested opens with cross-reference: try to use the skolem from the outer
+    `open` as the annotation in the inner `open`'s body type. Should fail.
+
+---
+
+### Phase EX1e -- Runtime: vtable layout and constraint dispatch
+
+Wire up the runtime representation so that constraint methods can be called
+inside an `open` block.
+
+- [ ] **EX1e-1** Define the heap layout for a packed existential value. Proposed
+  layout (similar to the existing typeclass witness records):
+  ```c
+  struct tur_existential {
+    int64_t  value;        /* boxed payload */
+    int32_t  n_witnesses;  /* number of constraint vtables */
+    void**   witnesses;    /* vtable pointers, one per constraint */
+  };
+  ```
+
+- [ ] **EX1e-2** Emit allocation and initialization of `tur_existential` records
+  at each `pack` site. The vtable pointers are resolved at compile time (they
+  are static for a given concrete type and typeclass pair).
+
+- [ ] **EX1e-3** Inside an `open` block, method calls on the bound value
+  variable must be dispatched through the stored vtable pointer rather than
+  through the normal typeclass resolution path. Implement this by inserting an
+  "existential dispatch" indirection in the code generator for method calls
+  whose receiver type is a skolem constant.
+
+- [ ] **EX1e-4** Add a GC root for the `tur_existential` record so the GC does
+  not collect the vtables while the value is live inside an `open` block.
+
+- [ ] **EX1e-5** Add runtime tests (integration-level, run through the
+  interpreter):
+  - Build a `list` of `Showable` existentials, map `show` over them, verify
+    the output strings.
+  - Verify that the vtable pointer for a multi-constraint existential correctly
+    dispatches both methods.
+
+---
+
+### Phase EX1f -- Stdlib integration and documentation
+
+- [ ] **EX1f-1** Rewrite `stdlib/existential.tur` to use native `pack`/`open`
+  instead of the struct encoding from EX0. Keep the same exported names
+  (`Showable`, etc.) so existing code does not break.
+
+- [ ] **EX1f-2** Add `exists`/`pack`/`open` to the language reference in
+  `docs/guides/README.md` with a short worked example (the `Showable` list from
+  motivation section 2).
+
+- [ ] **EX1f-3** Add docstrings to any stdlib helpers introduced in EX1f-1.
+  Follow the `;;; Since: Phase EX1` convention.
+
+- [ ] **EX1f-4** Run `just docs` and verify that the generated API docs include
+  the new entries without errors.
+
+- [ ] **EX1f-5** Ensure `just test` passes with all EX0 and EX1 fixture tests.
+
+---
+
+### Phase EX2 -- Phantom type variables (`Vec[A]` / `SizedVec[n A]`)
+
+Depends on TC2 (typed collections) being shipped. Extends Option B to support
+existentials over phantom type-level variables (indices with no runtime
+representation).
+
+- [ ] **EX2-1** Audit the type-checker change from EX1b-4 to verify that
+  substitution correctly handles phantom type variables (variables that appear
+  only in index positions, not in value-carrying fields).
+
+- [ ] **EX2-2** Extend `AST_OPEN` to allow the bound type variable annotation
+  to be a phantom (no runtime binding). The value variable still has a concrete
+  runtime type; only the index is hidden.
+
+- [ ] **EX2-3** Extend the escape check (EX1d-2) to handle phantom skolem
+  variables. A phantom skolem escaping through an array length is as dangerous
+  as a value-carrying skolem escaping through a return type; both must be
+  rejected.
+
+- [ ] **EX2-4** Implement `Vec[A]` as `(exists n. SizedVec[n A])` in
+  `stdlib/vec.tur` (or the typed-collections module from TC2). Provide:
+  - `vec-of-sized` -- wraps a `SizedVec[n A]` into a `Vec[A]` via `pack`.
+  - `open-vec` -- macro that eliminates a `Vec[A]` into a fresh abstract `n`
+    and a `SizedVec[n A]` via `open`.
+
+- [ ] **EX2-5** Add fixture tests for `Vec[A]`:
+  - Wrap a `SizedVec[3 :int]` into a `Vec[:int]`; open it; verify the length.
+  - Attempt to return the `SizedVec` directly from the `open` block; verify
+    that the escape check rejects this.
+  - Pass a `Vec[:int]` to a function that does not know its length; verify that
+    the function can still call `sv-length` inside an `open` block.
+
+---
+
+## Task Summary
+
+| ID | Phase | Description |
+|----|-------|-------------|
+| EX0-1 | EX0 | `make-existential-struct` / `pack-existential` macros |
+| EX0-2 | EX0 | `Showable` worked example in stdlib |
+| EX0-3 | EX0 | Fixture tests for struct-encoded existentials |
+| EX0-4 | EX0 | Update `docs/guides/README.md` |
+| EX1a-1 | EX1a | Lexer: `exists`, `pack`, `open` tokens |
+| EX1a-2 | EX1a | Parser: `exists` type expression |
+| EX1a-3 | EX1a | Parser: `pack` expression |
+| EX1a-4 | EX1a | Parser: `open` binding form |
+| EX1a-5 | EX1a | Pretty-printer for new AST nodes |
+| EX1a-6 | EX1a | Parse-error fixture tests |
+| EX1b-1 | EX1b | `TY_EXISTS` type kind in type IR |
+| EX1b-2 | EX1b | Type printer for `TY_EXISTS` |
+| EX1b-3 | EX1b | Type equality / alpha-rename for `TY_EXISTS` |
+| EX1b-4 | EX1b | Type substitution respects bound variable |
+| EX1c-1 | EX1c | Type-check `pack` introduction |
+| EX1c-2 | EX1c | Runtime vtable bundling at `pack` site |
+| EX1c-3 | EX1c | Type-checker tests for `pack` |
+| EX1d-1 | EX1d | Type-check `open` elimination + skolemization |
+| EX1d-2 | EX1d | Free-variable scanner for escape check |
+| EX1d-3 | EX1d | Skolem depth tracking for nested opens |
+| EX1d-4 | EX1d | Type-checker tests for `open` |
+| EX1e-1 | EX1e | `tur_existential` heap layout |
+| EX1e-2 | EX1e | Emit `tur_existential` allocation at `pack` |
+| EX1e-3 | EX1e | Existential dispatch in code generator |
+| EX1e-4 | EX1e | GC root for `tur_existential` records |
+| EX1e-5 | EX1e | Runtime integration tests |
+| EX1f-1 | EX1f | Rewrite stdlib to use native `pack`/`open` |
+| EX1f-2 | EX1f | Language reference docs |
+| EX1f-3 | EX1f | Docstrings for new stdlib helpers |
+| EX1f-4 | EX1f | Verify `just docs` |
+| EX1f-5 | EX1f | Full test suite pass |
+| EX2-1 | EX2 | Audit phantom variable handling in substitution |
+| EX2-2 | EX2 | Phantom-variable support in `open` binder |
+| EX2-3 | EX2 | Escape check for phantom skolems |
+| EX2-4 | EX2 | `Vec[A]` as `exists n. SizedVec[n A]` |
+| EX2-5 | EX2 | Fixture tests for `Vec[A]` |

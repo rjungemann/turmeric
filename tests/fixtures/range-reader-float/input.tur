@@ -1,0 +1,18 @@
+; RR4 fixture: #r{...} float range reader shorthand.
+
+(load "stdlib/float-range.tur")
+
+(defn main [] :void
+  ; closed float range [0.0, 1.0]
+  (println (float-range-contains? #r{0.0 <= n <= 1.0} 0.0))   ; true
+  (println (float-range-contains? #r{0.0 <= n <= 1.0} 1.0))   ; true
+  (println (float-range-contains? #r{0.0 <= n <= 1.0} 0.5))   ; true
+  (println (float-range-contains? #r{0.0 <= n <= 1.0} 1.1))   ; false
+  ; closed-open float range [0.0, 1.0)
+  (println (float-range-contains? #r{0.0 <= n < 1.0} 0.0))    ; true
+  (println (float-range-contains? #r{0.0 <= n < 1.0} 1.0))    ; false
+  ; one-sided float ranges
+  (println (float-range-contains? #r{n >= 0.0} 0.0))           ; true
+  (println (float-range-contains? #r{n >= 0.0} -0.1))          ; false
+  (println (float-range-contains? #r{n < 1.0} 0.999))          ; true
+  (println (float-range-contains? #r{n < 1.0} 1.0)))           ; false

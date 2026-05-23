@@ -130,15 +130,6 @@ run-guestbook: guestbook
 run-cellular-automata: build
     ./build/tur run examples/cellular-automata.tur
 
-run-scscm-basic: build
-    ./build/tur run examples/scscm/basic.tur
-
-run-scscm-live-coding: build
-    ./build/tur run examples/scscm/live-coding.tur
-
-run-scscm-pattern-demo: build
-    ./build/tur run examples/scscm/pattern-demo.tur
-
 run-signal-processing-basics: build
     ./build/tur run examples/signal-processing/01_basics.tur
 
@@ -147,21 +138,6 @@ run-signal-processing-signals: build
 
 run-signal-processing-dsp: build
     ./build/tur run examples/signal-processing/03_dsp.tur
-
-run-tidal-basic: build
-    ./build/tur run examples/tidal/basic.tur
-
-run-tidal-drums: build
-    ./build/tur run examples/tidal/drums.tur
-
-run-tidal-generative: build
-    ./build/tur run examples/tidal/generative.tur
-
-run-tidal-livecoding: build
-    ./build/tur run examples/tidal/livecoding.tur
-
-run-tidal-melody: build
-    ./build/tur run examples/tidal/melody.tur
 
 # ---------------------------------------------------------------------------
 # Full rebuild

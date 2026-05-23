@@ -37,7 +37,7 @@ add_custom_command(
   OUTPUT  "${TUR_OUTDIR}/snake_gen.c"
   COMMAND /bin/sh -c "$<TARGET_FILE:tur> emit-c \"${TUR_SRCDIR}/main.tur\" > \"${TUR_OUTDIR}/snake_gen.c\""
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  DEPENDS tur "${TUR_SRCDIR}/main.tur"
+  DEPENDS tur "${TUR_SRCDIR}/main.tur" "${TUR_SRCDIR}/raylib.tur"
   COMMENT "Compiling main.tur → snake_gen.c"
   VERBATIM
 )

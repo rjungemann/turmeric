@@ -31,51 +31,10 @@
 (def WIN_H   400)   ;; GRID_H * CELL
 
 ;; ============================================================
-;; Key codes  (must match Raylib's KEY_* defines)
-;; ============================================================
-(def KEY_RIGHT  262)
-(def KEY_LEFT   263)
-(def KEY_UP     265)
-(def KEY_DOWN   264)
-(def KEY_ESCAPE 256)
-
-;; ============================================================
 ;; Raylib + game-state FFI  (implemented in rayLibShim.c)
-;;
-;; extern-c syntax:  (extern-c c-fn-name [param :type …] :rettype)
-;; All integer params use :int  (→ int64_t in generated C).
+;; Key codes, window, drawing, input, and snake state bindings.
 ;; ============================================================
-
-;; Window
-(extern-c tur-init-window         [w :int h :int title :cstr] :void)
-(extern-c tur-close-window        [] :void)
-(extern-c tur-window-should-close [] :int)
-
-;; Drawing
-(extern-c tur-begin-drawing [] :void)
-(extern-c tur-end-drawing   [] :void)
-(extern-c tur-clear-bg      [r :int g :int b :int] :void)
-(extern-c tur-draw-text     [text :cstr x :int y :int size :int
-                              r :int g :int b :int] :void)
-(extern-c tur-set-fps       [fps :int] :void)
-
-;; Input  (returns 1 if key held, 0 otherwise)
-(extern-c tur-is-key-down  [key :int] :int)
-
-;; Frame time in whole milliseconds
-(extern-c tur-get-frame-ms [] :int)
-
-;; Snake game state
-(extern-c tur-snake-init    [grid-w :int grid-h :int] :void)
-(extern-c tur-snake-set-dir [dir :int] :void)
-(extern-c tur-snake-step    [] :int)    ;; 1 = alive, 0 = dead
-(extern-c tur-snake-score   [] :int)
-
-;; Render helpers
-(extern-c tur-draw-snake     [cell :int r :int g :int b :int] :void)
-(extern-c tur-draw-food      [cell :int r :int g :int b :int] :void)
-(extern-c tur-score-text     [] :cstr)
-(extern-c tur-game-over-text [] :cstr)
+(import examples/snake/src/raylib)
 
 ;; ============================================================
 ;; Typeclass demonstration — Describable

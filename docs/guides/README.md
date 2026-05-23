@@ -68,21 +68,32 @@ see the task plan for progress.
 
 ## Language Features
 
+### Core Language
+
 - **[structs-guide.md](structs-guide.md)** -- Struct types: `defstruct`, field access, ownership kinds, typeclasses, RC, linear fields
-- **[arrows-guide.md](arrows-guide.md)** -- Arrows: `arr`/`>>>`/`first`/`second`, composition combinators, and DSP signal graphs with `stdlib/signal/`
-- **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
-- **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
-- **[generators-guide.md](generators-guide.md)** -- Zero-overhead generators (`gen`/`yield`), lazy `Seq` combinators, and `Range` types
 - **[cli-args-guide.md](cli-args-guide.md)** -- CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
-- **[effects-vs-monads.md](effects-vs-monads.md)** -- Design rationale: why effects instead of Haskell-style monads
-- **[advanced-type-system-rationale.md](advanced-type-system-rationale.md)** -- Design rationale: why Turmeric chose the advanced type system features it did, and why dependent and refinement types were deferred
+
+### Type System
+
 - **[type-annotations-guide.md](type-annotations-guide.md)** -- Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
+- **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
+- **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[gadts-guide.md](gadts-guide.md)** -- GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** -- GADTs cookbook: practical patterns and recipes
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** -- Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
 - **[sized-types-guide.md](sized-types-guide.md)** -- Sized types: compile-time size tracking, stack allocation, `SizedBuf`, `SizedMatrix`, `SizedBitVec` (`-Xsized-types`)
+
+### Functional Abstractions
+
+- **[arrows-guide.md](arrows-guide.md)** -- Arrows: `arr`/`>>>`/`first`/`second`, composition combinators, and DSP signal graphs with `stdlib/signal/`
+- **[generators-guide.md](generators-guide.md)** -- Zero-overhead generators (`gen`/`yield`), lazy `Seq` combinators, and `Range` types
+
+### Design Rationale
+
+- **[effects-vs-monads.md](effects-vs-monads.md)** -- Design rationale: why effects instead of Haskell-style monads
+- **[advanced-type-system-rationale.md](advanced-type-system-rationale.md)** -- Design rationale: why Turmeric chose the advanced type system features it did, and why dependent and refinement types were deferred
 
 ## Type Safety
 

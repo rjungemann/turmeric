@@ -1,0 +1,300 @@
+;; stdlib/float-range.tur -- Float Range type (RR4)
+;;
+;; A FloatRange represents a continuous interval with inclusive, exclusive, or
+;; unbounded float64 endpoints.  It mirrors stdlib/range.tur but uses double
+;; instead of int64_t for bound values.
+;;
+;; Internal representation
+;;   FloatRangeBound: heap struct { bool is_inclusive; double value; }
+;;                    The null pointer (0) means unbounded.
+;;   FloatRange:      heap struct { int64_t lower; int64_t upper; }
+;;                    Each field is 0 (unbounded) or a pointer to a FloatRangeBound.
+
+;; -------------------------------------------------------------------
+;; FloatRangeBound allocation and accessors (inline-C)
+;; -------------------------------------------------------------------
+
+;;; float-range-bound-new -- allocate a FloatRangeBound with given inclusivity and value.
+;;;
+;;; Parameters:
+;;;   inclusive -- 1 for inclusive, 0 for exclusive
+;;;   value     -- the endpoint value (float64)
+;;;
+;;; Returns:
+;;;   int64_t pointer to a heap FloatRangeBound.
+;;;
+;;; Since: RR4
+(defn float-range-bound-new [inclusive :int value :float] :int
+  ```c
+  struct { bool is_inclusive; double value; } *b =
+    (struct { bool is_inclusive; double value; } *)malloc(sizeof(*b));
+  b->is_inclusive = (bool)inclusive;
+  b->value = value;
+  return (int64_t)(intptr_t)b;
+  ```)
+
+;;; float-range-bound-inclusive? -- true if the bound is inclusive.
+;;;
+;;; Parameters:
+;;;   b -- int64_t pointer to a FloatRangeBound (must not be 0)
+;;;
+;;; Since: RR4
+(defn float-range-bound-inclusive? [b :int] :bool
+  ```c
+  return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->is_inclusive;
+  ```)
+
+;;; float-range-bound-value -- return the endpoint value of a bound.
+;;;
+;;; Parameters:
+;;;   b -- int64_t pointer to a FloatRangeBound (must not be 0)
+;;;
+;;; Since: RR4
+(defn float-range-bound-value [b :int] :float
+  ```c
+  return ((struct { bool is_inclusive; double value; } *)(intptr_t)b)->value;
+  ```)
+
+;; -------------------------------------------------------------------
+;; FloatRange allocation and accessors (inline-C)
+;; -------------------------------------------------------------------
+
+;;; float-range-new -- allocate a FloatRange from lower and upper bound pointers.
+;;;
+;;; Parameters:
+;;;   lower -- 0 for unbounded below, else FloatRangeBound pointer
+;;;   upper -- 0 for unbounded above, else FloatRangeBound pointer
+;;;
+;;; Returns:
+;;;   int64_t pointer to a heap FloatRange.
+;;;
+;;; Since: RR4
+(defn float-range-new [lower :int upper :int] :int
+  ```c
+  struct { int64_t lower; int64_t upper; } *r =
+    (struct { int64_t lower; int64_t upper; } *)malloc(sizeof(*r));
+  r->lower = lower;
+  r->upper = upper;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; float-range-lower -- return the lower bound pointer (0 = unbounded).
+;;;
+;;; Parameters:
+;;;   r -- int64_t pointer to a FloatRange
+;;;
+;;; Since: RR4
+(defn float-range-lower [r :int] :int
+  ```c
+  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
+  ```)
+
+;;; float-range-upper -- return the upper bound pointer (0 = unbounded).
+;;;
+;;; Parameters:
+;;;   r -- int64_t pointer to a FloatRange
+;;;
+;;; Since: RR4
+(defn float-range-upper [r :int] :int
+  ```c
+  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
+  ```)
+
+;; -------------------------------------------------------------------
+;; Internal comparison helpers
+;; -------------------------------------------------------------------
+
+;;; float-range-val-in-lower? -- check value against a lower bound.
+(defn float-range-val-in-lower? [lower :int v :float] :bool
+  (if (= lower 0)
+    true
+    (let [bv (float-range-bound-value lower)]
+      (if (float-range-bound-inclusive? lower)
+        (>= v bv)
+        (> v bv)))))
+
+;;; float-range-val-in-upper? -- check value against an upper bound.
+(defn float-range-val-in-upper? [upper :int v :float] :bool
+  (if (= upper 0)
+    true
+    (let [bv (float-range-bound-value upper)]
+      (if (float-range-bound-inclusive? upper)
+        (<= v bv)
+        (< v bv)))))
+
+;; -------------------------------------------------------------------
+;; Constructors
+;; -------------------------------------------------------------------
+
+;;; float-closed-range -- [lo, hi] both endpoints inclusive.
+;;;
+;;; Parameters:
+;;;   lo -- lower bound value
+;;;   hi -- upper bound value
+;;;
+;;; Returns:
+;;;   A FloatRange representing [lo, hi].
+;;;
+;;; Example:
+;;;   (float-closed-range 0.0 1.0)  ; => [0.0, 1.0]
+;;;
+;;; Since: RR4
+(defn float-closed-range [lo :float hi :float] :int
+  (float-range-new (float-range-bound-new 1 lo) (float-range-bound-new 1 hi)))
+
+;;; float-open-range -- (lo, hi) both endpoints exclusive.
+;;;
+;;; Parameters:
+;;;   lo -- lower bound value (excluded)
+;;;   hi -- upper bound value (excluded)
+;;;
+;;; Returns:
+;;;   A FloatRange representing (lo, hi).
+;;;
+;;; Example:
+;;;   (float-open-range 0.0 1.0)  ; => (0.0, 1.0)
+;;;
+;;; Since: RR4
+(defn float-open-range [lo :float hi :float] :int
+  (float-range-new (float-range-bound-new 0 lo) (float-range-bound-new 0 hi)))
+
+;;; float-closed-open-range -- [lo, hi) inclusive lower, exclusive upper.
+;;;
+;;; Parameters:
+;;;   lo -- lower bound value (included)
+;;;   hi -- upper bound value (excluded)
+;;;
+;;; Returns:
+;;;   A FloatRange representing [lo, hi).
+;;;
+;;; Example:
+;;;   (float-closed-open-range 0.0 1.0)  ; => [0.0, 1.0)
+;;;
+;;; Since: RR4
+(defn float-closed-open-range [lo :float hi :float] :int
+  (float-range-new (float-range-bound-new 1 lo) (float-range-bound-new 0 hi)))
+
+;;; float-open-closed-range -- (lo, hi] exclusive lower, inclusive upper.
+;;;
+;;; Parameters:
+;;;   lo -- lower bound value (excluded)
+;;;   hi -- upper bound value (included)
+;;;
+;;; Returns:
+;;;   A FloatRange representing (lo, hi].
+;;;
+;;; Example:
+;;;   (float-open-closed-range 0.0 1.0)  ; => (0.0, 1.0]
+;;;
+;;; Since: RR4
+(defn float-open-closed-range [lo :float hi :float] :int
+  (float-range-new (float-range-bound-new 0 lo) (float-range-bound-new 1 hi)))
+
+;;; float-at-least-range -- [lo, +inf) inclusive lower, unbounded above.
+;;;
+;;; Parameters:
+;;;   lo -- lower bound value (included)
+;;;
+;;; Returns:
+;;;   A FloatRange representing [lo, +inf).
+;;;
+;;; Example:
+;;;   (float-at-least-range 0.0)  ; => [0.0, +inf)
+;;;
+;;; Since: RR4
+(defn float-at-least-range [lo :float] :int
+  (float-range-new (float-range-bound-new 1 lo) 0))
+
+;;; float-greater-than-range -- (lo, +inf) exclusive lower, unbounded above.
+;;;
+;;; Parameters:
+;;;   lo -- lower bound value (excluded)
+;;;
+;;; Returns:
+;;;   A FloatRange representing (lo, +inf).
+;;;
+;;; Example:
+;;;   (float-greater-than-range 0.0)  ; => (0.0, +inf)
+;;;
+;;; Since: RR4
+(defn float-greater-than-range [lo :float] :int
+  (float-range-new (float-range-bound-new 0 lo) 0))
+
+;;; float-at-most-range -- (-inf, hi] unbounded below, inclusive upper.
+;;;
+;;; Parameters:
+;;;   hi -- upper bound value (included)
+;;;
+;;; Returns:
+;;;   A FloatRange representing (-inf, hi].
+;;;
+;;; Example:
+;;;   (float-at-most-range 1.0)  ; => (-inf, 1.0]
+;;;
+;;; Since: RR4
+(defn float-at-most-range [hi :float] :int
+  (float-range-new 0 (float-range-bound-new 1 hi)))
+
+;;; float-less-than-range -- (-inf, hi) unbounded below, exclusive upper.
+;;;
+;;; Parameters:
+;;;   hi -- upper bound value (excluded)
+;;;
+;;; Returns:
+;;;   A FloatRange representing (-inf, hi).
+;;;
+;;; Example:
+;;;   (float-less-than-range 1.0)  ; => (-inf, 1.0)
+;;;
+;;; Since: RR4
+(defn float-less-than-range [hi :float] :int
+  (float-range-new 0 (float-range-bound-new 0 hi)))
+
+;;; float-singleton-range -- [v, v] a range containing exactly one value.
+;;;
+;;; Parameters:
+;;;   v -- the single value
+;;;
+;;; Returns:
+;;;   A FloatRange representing [v, v].
+;;;
+;;; Example:
+;;;   (float-singleton-range 0.5)  ; => [0.5, 0.5]
+;;;
+;;; Since: RR4
+(defn float-singleton-range [v :float] :int
+  (float-range-new (float-range-bound-new 1 v) (float-range-bound-new 1 v)))
+
+;;; float-unbounded-range -- (-inf, +inf) no bounds at all.
+;;;
+;;; Returns:
+;;;   A FloatRange representing all float values.
+;;;
+;;; Example:
+;;;   (float-unbounded-range)  ; => (-inf, +inf)
+;;;
+;;; Since: RR4
+(defn float-unbounded-range [] :int
+  (float-range-new 0 0))
+
+;; -------------------------------------------------------------------
+;; Predicates
+;; -------------------------------------------------------------------
+
+;;; float-range-contains? -- true if value v falls within float range r.
+;;;
+;;; Parameters:
+;;;   r -- int64_t pointer to a FloatRange
+;;;   v -- float value to test
+;;;
+;;; Returns:
+;;;   true if v satisfies both the lower and upper bounds of r.
+;;;
+;;; Example:
+;;;   (float-range-contains? (float-closed-range 0.0 1.0) 0.5)  ; => true
+;;;   (float-range-contains? (float-open-range 0.0 1.0) 0.0)    ; => false
+;;;
+;;; Since: RR4
+(defn float-range-contains? [r :int v :float] :bool
+  (and (float-range-val-in-lower? (float-range-lower r) v)
+       (float-range-val-in-upper? (float-range-upper r) v)))

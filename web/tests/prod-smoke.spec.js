@@ -256,9 +256,6 @@ const GUIDES = [
     '/docs/html/guides/stm-tutorial.html',
     '/docs/html/guides/test-runner-contract.html',
     '/docs/html/guides/threading-guide.html',
-    '/docs/html/guides/tidal-api.html',
-    '/docs/html/guides/tidal-cookbook.html',
-    '/docs/html/guides/tidal-guide.html',
 ];
 
 test.describe('Guides — HTTP 200', () => {
