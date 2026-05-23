@@ -243,9 +243,9 @@ bump-patch:
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD"
     NEW="$MAJOR.$MINOR.$((PATCH + 1))"
     echo "$NEW" > VERSION
-    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/wasm_glue.h
-    rm -f src/wasm_glue.h.bak
-    git add VERSION src/wasm_glue.h
+    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/web/wasm_glue.h
+    rm -f src/web/wasm_glue.h.bak
+    git add VERSION src/web/wasm_glue.h
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"
@@ -258,9 +258,9 @@ bump-minor:
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD"
     NEW="$MAJOR.$((MINOR + 1)).0"
     echo "$NEW" > VERSION
-    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/wasm_glue.h
-    rm -f src/wasm_glue.h.bak
-    git add VERSION src/wasm_glue.h
+    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/web/wasm_glue.h
+    rm -f src/web/wasm_glue.h.bak
+    git add VERSION src/web/wasm_glue.h
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"
@@ -273,9 +273,9 @@ bump-major:
     IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD"
     NEW="$((MAJOR + 1)).0.0"
     echo "$NEW" > VERSION
-    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/wasm_glue.h
-    rm -f src/wasm_glue.h.bak
-    git add VERSION src/wasm_glue.h
+    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/web/wasm_glue.h
+    rm -f src/web/wasm_glue.h.bak
+    git add VERSION src/web/wasm_glue.h
     git commit -m "chore: bump version to v$NEW"
     git tag -a "v$NEW" -m "Release v$NEW"
     git push origin HEAD "v$NEW"
