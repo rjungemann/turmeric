@@ -110,12 +110,21 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
         }
         if (!match) continue;
         
-        /* Phase PTC3: Check type parameter constraints on this instance.
-         * If the instance has constraints like [Clone a, Clone b] for Clone[Pair a b],
-         * verify that Clone[int] and Clone[bool] exist when looking up Clone[Pair int bool]. */
-        if (!typeclass_instance_constraints_satisfied(inst, type_args, n_type_args, env)) {
-            /* Constraints not satisfied - skip this instance */
-            continue;
+        /* Phase PTC3/PTC4: Check type parameter constraints on this instance.
+         * Extract concrete element types from TY_APP for param_idx substitution. */
+        {
+            const Type *elem_types = NULL;
+            uint8_t n_elem = 0;
+            Type elem_buf[8];
+            if (n_type_args > 0 && type_args[0].kind == TY_APP && type_args[0].as.app.arg) {
+                elem_buf[0] = *type_args[0].as.app.arg;
+                elem_types = elem_buf;
+                n_elem = 1;
+            }
+            if (!typeclass_instance_constraints_satisfied(inst, type_args, n_type_args,
+                                                          elem_types, n_elem, env)) {
+                continue;
+            }
         }
         
         return inst;
@@ -141,6 +150,7 @@ void constraint_set_add(ConstraintSet *cs, TypeClass *typeclass, Type type_arg) 
     }
     cs->constraints[cs->n_constraints].typeclass = typeclass;
     cs->constraints[cs->n_constraints].type_arg = type_arg;
+    cs->constraints[cs->n_constraints].param_idx = -1;
     cs->n_constraints++;
 }
 
@@ -182,32 +192,29 @@ bool constraint_set_satisfied(const ConstraintSet *cs, Type type, const TypeClas
  */
 bool typeclass_instance_constraints_satisfied(const TypeClassInstance *inst,
                                               Type *lookup_type_args, uint8_t n_lookup_args,
+                                              const Type *concrete_elem_types, uint8_t n_concrete,
                                               const TypeClassEnv *env) {
     if (!inst->type_param_constraints || inst->n_type_param_constraints == 0) {
-        /* No constraints - instance is always valid */
         return true;
     }
-    
+
     for (uint8_t i = 0; i < inst->n_type_param_constraints; i++) {
         TypeClass *required_tc = inst->type_param_constraints[i].typeclass;
-        Type required_type = inst->type_param_constraints[i].type_arg;
-        
-        /* The required_type might be a type parameter of the instance.
-         * We need to substitute it with the corresponding lookup type argument.
-         * 
-         * For Phase PTC3 v1: We handle the case where required_type is a
-         * concrete type (primitive or struct). The constraint is checked by
-         * looking up an instance of required_tc for required_type.
-         * 
-         * Phase PTC4 will handle substitution of type parameters with
-         * their concrete types from the lookup. */
+        int8_t pidx = inst->type_param_constraints[i].param_idx;
+        Type required_type;
+        /* PTC4: if param_idx >= 0, substitute with concrete element type from TY_APP */
+        if (pidx >= 0 && concrete_elem_types && (uint8_t)pidx < n_concrete) {
+            required_type = concrete_elem_types[(uint8_t)pidx];
+        } else {
+            required_type = inst->type_param_constraints[i].type_arg;
+        }
         TypeClassInstance *constraint_inst = typeclass_env_lookup_instance(
             env, required_tc, &required_type, 1);
         if (!constraint_inst) {
             return false;
         }
     }
-    
+
     return true;
 }
 

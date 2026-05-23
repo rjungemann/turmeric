@@ -542,6 +542,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
     StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
     Type *return_session_type = NULL; /* SS3a/SS7: full session/role return type */
+    Type *return_app_type = NULL; /* PTC4: full TY_APP return type for concrete type threading */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -669,6 +670,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * TY_SESSION shell with a NULL protocol pointer. */
                     if (g_sessions_enabled && (ann->kind == TY_SESSION || ann->kind == TY_ROLE)) {
                         return_session_type = ann;
+                    }
+                    /* PTC4: capture full TY_APP return type so dispatch can extract elem types. */
+                    if (ann->kind == TY_APP) {
+                        return_app_type = ann;
                     }
                 }
             }
@@ -1036,6 +1041,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * returned channel is used in subsequent session operations. */
     if (return_session_type) {
         fn_type.as.fn.result_full_type = return_session_type;
+    }
+    /* PTC4: attach full TY_APP return type so call sites can extract concrete elem types. */
+    if (return_app_type) {
+        fn_type.as.fn.result_full_type = return_app_type;
     }
 
     /* Phase HRT1: attach full poly types for rank-2 params */

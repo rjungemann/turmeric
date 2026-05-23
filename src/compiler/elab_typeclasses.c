@@ -818,35 +818,55 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         
                         /* Type argument being constrained (optional, at index 1) */
                         Type constrained_type = TYPE_INT; /* Default */
+                        int8_t p_idx = -1;
                         if (constraint_form->as.list.len >= 2) {
                             Form *type_arg_form = constraint_form->as.list.items[1];
                             if (type_arg_form->tag == F_SYM) {
                                 const Symbol *type_param_name = type_arg_form->as.sym;
+                                bool found = false;
                                 for (uint8_t j = 0; j < n_type_args; j++) {
                                     if (type_arg_syms && type_arg_syms[j] &&
                                         type_arg_syms[j] == type_param_name) {
                                         constrained_type = type_args[j];
+                                        found = true;
                                         break;
                                     }
                                 }
-                                if (constrained_type.kind == TY_INT) {
+                                if (!found) {
                                     if (type_arg_form->as.sym->len == 3 &&
                                         memcmp(type_arg_form->as.sym->name, "int", 3) == 0) {
-                                        constrained_type = TYPE_INT;
+                                        constrained_type = TYPE_INT; found = true;
                                     } else if (type_arg_form->as.sym->len == 4 &&
                                                memcmp(type_arg_form->as.sym->name, "bool", 4) == 0) {
-                                        constrained_type = TYPE_BOOL;
+                                        constrained_type = TYPE_BOOL; found = true;
                                     } else if (type_arg_form->as.sym->len == 4 &&
                                                memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
-                                        constrained_type = TYPE_CSTR;
+                                        constrained_type = TYPE_CSTR; found = true;
+                                    }
+                                }
+                                /* PTC4: unresolved symbol may be a struct type param */
+                                if (!found) {
+                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
+                                        if (type_args[j].kind == TY_STRUCT &&
+                                            type_args[j].as.struct_.def) {
+                                            StructDef *sdef = type_args[j].as.struct_.def;
+                                            for (uint8_t k = 0; k < sdef->n_type_params; k++) {
+                                                if (strcmp(sdef->type_params[k],
+                                                           type_param_name->name) == 0) {
+                                                    p_idx = (int8_t)k;
+                                                    break;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                        
+
                         type_param_constraints[i] = (TypeConstraint){
                             .typeclass = constraint_tc,
-                            .type_arg = constrained_type
+                            .type_arg = constrained_type,
+                            .param_idx = p_idx
                         };
                     }
                 } else {
@@ -881,35 +901,55 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         }
                         
                         Type constrained_type = TYPE_INT;
+                        int8_t p_idx = -1;
                         if (idx + 1 < n_items) {
                             Form *type_arg_form = next_form->as.list.items[idx + 1];
                             if (type_arg_form->tag == F_SYM) {
                                 const Symbol *type_param_name = type_arg_form->as.sym;
+                                bool found = false;
                                 for (uint8_t j = 0; j < n_type_args; j++) {
                                     if (type_arg_syms && type_arg_syms[j] &&
                                         type_arg_syms[j] == type_param_name) {
                                         constrained_type = type_args[j];
+                                        found = true;
                                         break;
                                     }
                                 }
-                                if (constrained_type.kind == TY_INT) {
+                                if (!found) {
                                     if (type_arg_form->as.sym->len == 3 &&
                                         memcmp(type_arg_form->as.sym->name, "int", 3) == 0) {
-                                        constrained_type = TYPE_INT;
+                                        constrained_type = TYPE_INT; found = true;
                                     } else if (type_arg_form->as.sym->len == 4 &&
                                                memcmp(type_arg_form->as.sym->name, "bool", 4) == 0) {
-                                        constrained_type = TYPE_BOOL;
+                                        constrained_type = TYPE_BOOL; found = true;
                                     } else if (type_arg_form->as.sym->len == 4 &&
                                                memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
-                                        constrained_type = TYPE_CSTR;
+                                        constrained_type = TYPE_CSTR; found = true;
+                                    }
+                                }
+                                /* PTC4: unresolved symbol may be a struct type param */
+                                if (!found) {
+                                    for (uint8_t j = 0; j < n_type_args && p_idx < 0; j++) {
+                                        if (type_args[j].kind == TY_STRUCT &&
+                                            type_args[j].as.struct_.def) {
+                                            StructDef *sdef = type_args[j].as.struct_.def;
+                                            for (uint8_t k = 0; k < sdef->n_type_params; k++) {
+                                                if (strcmp(sdef->type_params[k],
+                                                           type_param_name->name) == 0) {
+                                                    p_idx = (int8_t)k;
+                                                    break;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                        
+
                         type_param_constraints[i] = (TypeConstraint){
                             .typeclass = constraint_tc,
-                            .type_arg = constrained_type
+                            .type_arg = constrained_type,
+                            .param_idx = p_idx
                         };
                     }
                 }
@@ -921,6 +961,9 @@ Expr *elab_definstance(Elab *e, const Form *call) {
     /* Phase PTC2: Validate type parameter constraints */
     if (type_param_constraints && n_type_param_constraints > 0) {
         for (uint8_t i = 0; i < n_type_param_constraints; i++) {
+            /* PTC4/PTC6: constraints with param_idx >= 0 refer to struct type params
+             * whose concrete types are not known at definstance time; skip PTC2. */
+            if (type_param_constraints[i].param_idx >= 0) continue;
             TypeClass *constraint_tc = type_param_constraints[i].typeclass;
             Type constrained_type = type_param_constraints[i].type_arg;
             bool is_primitive = (constrained_type.kind == TY_INT ||
@@ -1904,14 +1947,21 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     continue;
                 }
             }
-            /* Phase PTC3: Check type parameter constraints on this instance.
-             * If the instance has constraints, verify they are satisfied before
-             * selecting it. For v1, we use the obj type as the only type argument.
-             * Phase PTC4 will handle full parameterized type matching. */
+            /* Phase PTC3/PTC4: Check type parameter constraints on this instance.
+             * Extract TY_APP elem types for param_idx substitution. */
             if (inst->type_param_constraints && inst->n_type_param_constraints > 0) {
                 Type obj_type = obj->type;
-                if (!typeclass_instance_constraints_satisfied(inst, &obj_type, 1, &e->typeclass_env)) {
-                    /* Constraints not satisfied - skip this instance */
+                const Type *elem_types = NULL;
+                uint8_t n_elem = 0;
+                Type elem_buf[8];
+                if (obj->type.kind == TY_APP && obj->type.as.app.arg) {
+                    elem_buf[0] = *obj->type.as.app.arg;
+                    elem_types = elem_buf;
+                    n_elem = 1;
+                }
+                if (!typeclass_instance_constraints_satisfied(inst, &obj_type, 1,
+                                                              elem_types, n_elem,
+                                                              &e->typeclass_env)) {
                     continue;
                 }
             }

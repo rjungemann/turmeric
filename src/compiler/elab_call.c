@@ -666,6 +666,12 @@ Expr *elab_call(Elab *e, Form *call) {
             fn_binding->type.as.fn.result_full_type) {
             call_expr->type = *fn_binding->type.as.fn.result_full_type;
         }
+        /* PTC4: patch TY_APP return type so dispatch can extract concrete elem types. */
+        if (call_expr && fn_binding->type.kind == TY_FN &&
+            fn_binding->type.as.fn.result_kind == TY_APP &&
+            fn_binding->type.as.fn.result_full_type) {
+            call_expr->type = *fn_binding->type.as.fn.result_full_type;
+        }
         return call_expr;
     }
 
