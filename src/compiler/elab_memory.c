@@ -206,6 +206,11 @@ Expr *elab_rc_of(Elab *e, const Form *call) {
 
 /* (rc/clone r) - Increment strong count, return new rc<T> pointing to same value.
  * Returns: rc<T>
+ *
+ * EXG4-2: Also accepts a constrained existential (`(exists [a] [(C a) ...] T)`)
+ * value, since at runtime that is an rc-managed pointer.  The result preserves
+ * the same existential type so the cloned reference is open-able just like the
+ * original.
  */
 Expr *elab_rc_clone(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
@@ -217,15 +222,19 @@ Expr *elab_rc_clone(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
 
-    /* Argument must be rc<T> */
-    if (inner->type.kind != TY_RC) {
+    /* Argument must be rc<T> or a constrained existential. */
+    bool is_rc = (inner->type.kind == TY_RC);
+    bool is_constrained_exists = (inner->type.kind == TY_EXISTS
+                                  && inner->type.as.forall_.n_constraints > 0);
+    if (!is_rc && !is_constrained_exists) {
         diag_emit(DIAG_ERROR, call->span,
-                  "rc/clone requires rc<T>, got %s", type_name(inner->type));
+                  "rc/clone requires rc<T> or a constrained existential, got %s",
+                  type_name(inner->type));
         return NULL;
     }
 
-    /* rc/clone returns rc<T> with the same inner type */
-    Type rc_type = inner->type;  /* Same type as input */
+    /* rc/clone returns the same type as input */
+    Type rc_type = inner->type;
 
     /* Create EX_RC_CLONE expression */
     Expr *out = expr_new(e->arena, EX_RC_CLONE, rc_type, call->span);
@@ -247,10 +256,16 @@ Expr *elab_rc_drop(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
 
-    /* Argument must be rc<T> */
-    if (inner->type.kind != TY_RC) {
+    /* Argument must be rc<T> or a constrained existential.
+     * EXG4-2: constrained existentials are rc-managed at runtime, so the
+     * same decrement applies. */
+    bool is_rc = (inner->type.kind == TY_RC);
+    bool is_constrained_exists = (inner->type.kind == TY_EXISTS
+                                  && inner->type.as.forall_.n_constraints > 0);
+    if (!is_rc && !is_constrained_exists) {
         diag_emit(DIAG_ERROR, call->span,
-                  "rc/drop requires rc<T>, got %s", type_name(inner->type));
+                  "rc/drop requires rc<T> or a constrained existential, got %s",
+                  type_name(inner->type));
         return NULL;
     }
 
@@ -303,10 +318,16 @@ Expr *elab_rc_strong_count(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
 
-    /* Argument must be rc<T> */
-    if (inner->type.kind != TY_RC) {
+    /* Argument must be rc<T> or a constrained existential.
+     * EXG4-2: constrained existentials are rc-managed at runtime, so the
+     * same strong-count read applies. */
+    bool is_rc = (inner->type.kind == TY_RC);
+    bool is_constrained_exists = (inner->type.kind == TY_EXISTS
+                                  && inner->type.as.forall_.n_constraints > 0);
+    if (!is_rc && !is_constrained_exists) {
         diag_emit(DIAG_ERROR, call->span,
-                  "rc/strong-count requires rc<T>, got %s", type_name(inner->type));
+                  "rc/strong-count requires rc<T> or a constrained existential, got %s",
+                  type_name(inner->type));
         return NULL;
     }
 

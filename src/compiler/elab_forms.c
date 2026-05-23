@@ -522,7 +522,45 @@ Expr *elab_let(Elab *e, const Form *call) {
                 body->as.do_.n = body_count;
             }
         }
-        
+
+        /* EXG4-1/EXG4-4: ownership transfer through let-tail position.
+         *
+         * If the body's tail expression is a direct EX_VAR of one of this
+         * let's own bindings, the let's result IS that binding's value.
+         * Whoever consumes the let's result (an outer let init, a function
+         * return, a call arg, etc.) takes ownership.  Mark the binding as
+         * moved so the auto-drop pass below skips it -- the consumer is
+         * responsible for the eventual drop.
+         *
+         * Without this, the inner let auto-drops the rc-block before its
+         * value escapes, producing use-after-free at the consumer site
+         * (e.g. `(let [outer (let [e (pack ...)] e)] ...)`).  Only fires
+         * for move-typed bindings; copy types are unaffected. */
+        if (rc == 0 && body && n_binds > 0) {
+            Expr *cur = body;
+            while (cur) {
+                if (cur->kind == EX_VAR) {
+                    Binding *bv = cur->as.var.binding;
+                    for (uint32_t k = 0; k < n_binds; k++) {
+                        if (binds[k].binding == bv &&
+                            type_is_move(bv->type) &&
+                            !bv->is_moved) {
+                            binding_mark_moved(bv, cur->span);
+                            break;
+                        }
+                    }
+                    break;
+                } else if (cur->kind == EX_DO) {
+                    if (cur->as.do_.n == 0) break;
+                    cur = cur->as.do_.items[cur->as.do_.n - 1];
+                } else if (cur->kind == EX_LET) {
+                    cur = cur->as.let_.body;
+                } else {
+                    break;
+                }
+            }
+        }
+
         /* Phase 5: If we have ref bindings and the body is a single expression
          * (not a do), wrap it in a do so we can add defers */
         if (has_ref_bindings && body && body->kind != EX_DO) {

@@ -1,6 +1,8 @@
 # Existential Types -- GC Integration, Follow-up Plan
 
-> **Status:** Not started.  Follow-on to EXG1 (shipped 2026-05-23).
+> **Status:** EXG4 partial (let-tail move tracking + rc/clone relaxation
+> + 3 fixtures shipped 2026-05-23).  EXG5, EXG6, and the EXG4 storage-site
+> auto-clone (EXG4-3) remain open.
 > **Last Updated:** 2026-05-23
 > **Type:** Runtime / Memory Management
 
@@ -270,11 +272,11 @@ so EXG4 and EXG5 do not apply.
 
 | ID     | Phase | Description |
 |--------|-------|-------------|
-| EXG4-1 | EXG4  | Move tracking for existential bindings (return / arg / store) |
-| EXG4-2 | EXG4  | `(exists/clone e)` form, lowers to `rc_strong_increment` |
-| EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites |
-| EXG4-4 | EXG4  | Return-value move semantics |
-| EXG4-5 | EXG4  | Cross-scope-flow runtime tests |
+| EXG4-1 | EXG4  | Move tracking for existential bindings (return / arg / store) -- **shipped (let-tail propagation)** |
+| EXG4-2 | EXG4  | `(exists/clone e)` form, lowers to `rc_strong_increment` -- **shipped (rc/clone relaxed to accept constrained existentials)** |
+| EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites -- **open** (current rc<T> baseline also uses explicit clone at these sites; will revisit when the underlying policy changes) |
+| EXG4-4 | EXG4  | Return-value move semantics -- **shipped (let-tail propagation covers fn-return-via-let)** |
+| EXG4-5 | EXG4  | Cross-scope-flow runtime tests -- **partial:** `exg4-pack-let-tail`, `exg4-exists-clone`, `exg4-pack-share` shipped; the plan's `exg4-pack-return` / `exg4-pack-into-fn` / `exg4-pack-into-struct` cases are blocked on a separate parser limitation (constrained existential return / param type annotations crash `elab_open`) -- track that fix independently |
 | EXG5-1 | EXG5  | Kind tag in `RcControlBlock::reserved` |
 | EXG5-2 | EXG5  | Cycle-walker dispatch on the kind tag |
 | EXG5-3 | EXG5  | Pack-site writes payload descriptor |

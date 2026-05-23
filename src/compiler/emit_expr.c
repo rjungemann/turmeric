@@ -1542,8 +1542,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "rc_strong_increment(%s);\n", inner);
             }
-            /* Return the same pointer (now with incremented count, or elided) */
-            return strdup(inner);
+            /* Return the same pointer (now with incremented count, or elided).
+             * Duplicate the string because the caller takes ownership of the
+             * returned buffer and `inner` is freed locally here. */
+            char *result = strdup(inner);
+            free(inner);
+            return result;
         }
         case EX_RC_DROP: {
             /* (rc/drop r) - decrement strong count */
