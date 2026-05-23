@@ -13,11 +13,12 @@
     return (const char *)buf;
     ```))
 
-(defn show-existential [e :ptr<void>] :cstr
-  (open e [a v]
-    (.show v)))
-
+; Inline the open at the use site so the constrained existential's type
+; flows directly into `open`.  Passing the value through a function param
+; typed `:ptr<void>` would strip the constraint info and the open would
+; not know to unbox the EX1e tur_existential_t record.
 (defn main [] :int
   (let [e (pack 42 (exists [a] [(Show a)] a))]
-    (println (show-existential e)))
+    (println (open e [a v]
+               (.show v))))
   0)

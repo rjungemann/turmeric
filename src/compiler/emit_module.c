@@ -732,6 +732,19 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */
     buf_puts(out, "/* Phase HRT2: existential type (opaque void* box) */\n");
     buf_puts(out, "typedef void * tur_exists_t;\n");
+    /* Phase EX1e: heap layout for constrained existentials.
+     * Unconstrained `(exists [a] T)` values still flow as plain
+     * `tur_exists_t` (an int64_t reinterpreted as void*), unchanged from
+     * HRT2.  Constrained `(exists [a] [(C a) ...] T)` values are pointers
+     * to a `tur_existential_t` record that bundles the boxed value with
+     * one vtable pointer per constraint.  The witnesses array is laid
+     * out in the same order as the constraints on the existential type. */
+    buf_puts(out, "/* Phase EX1e: constrained-existential heap record */\n");
+    buf_puts(out, "typedef struct tur_existential {\n");
+    buf_puts(out, "    int64_t  value;\n");
+    buf_puts(out, "    int32_t  n_witnesses;\n");
+    buf_puts(out, "    void   **witnesses;\n");
+    buf_puts(out, "} tur_existential_t;\n");
     /* Inline STM runtime - Phase 21 with per-TVar locking */
     buf_puts(out, "/* STM types (Phase 21) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");
