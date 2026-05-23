@@ -1,7 +1,10 @@
 # Cross-Plan Followups
 
-> **Status:** Not started.  Aggregates loose ends from EXG4/EXG5/EXG6,
-> EX1/EX2, PTC4, and the typed-collections rollout.
+> **Status:** F1-1 shipped (constrained-existential return/param SEGV
+> fixed; new fixtures `ex-exists-return-type`, `ex-exists-param-type`,
+> `exg4-pack-return`, `exg4-pack-into-fn`).  `exg4-pack-into-struct`
+> remains blocked on a separate `defstruct` parser limitation
+> (compound field type annotations) -- track separately.
 > **Last Updated:** 2026-05-23
 > **Type:** Compiler / Runtime / Stdlib / Docs
 
@@ -91,12 +94,12 @@ This blocks:
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F1-1-1 | Audit `type_expr_from_form` for the `:(exists ...)` compound case.  Confirm the produced `Type` has its full `forall_` payload populated (`var_names`, `var_kinds`, `n_vars`, `body`, `n_constraints` -- everything `elab_open` reads). | `src/compiler/elab_types.c` |
-| F1-1-2 | Fix any field the audit shows uninitialised.  Likely fix: route through the same code path as the inline `(exists ...)` annotation in `pack` (`elab_types.c` lines 426-610) rather than constructing a fresh `Type` ad-hoc. | `src/compiler/elab_types.c` |
-| F1-1-3 | Mirror the fix in `elab_fns.c`'s F_TYPE_ANN handling so the function's `result_full_type` carries the same payload. | `src/compiler/elab_fns.c` |
-| F1-1-4 | Add fixture `tests/fixtures/ex-exists-return-type`: positive case, fn returning constrained existential, caller opens. | `tests/fixtures/` |
-| F1-1-5 | Add fixture `tests/fixtures/ex-exists-param-type`: positive case, fn taking constrained existential by value, opens inside. | `tests/fixtures/` |
-| F1-1-6 | Once F1-1-1..F1-1-5 land, retire `EXG4-5 partial` and ship the three blocked fixtures (`exg4-pack-return`, `exg4-pack-into-fn`, `exg4-pack-into-struct`) from the followup plan. | `tests/fixtures/` |
+| F1-1-1 | Audit `type_expr_from_form` for the `:(exists ...)` compound case -- **done** (the compound case parses fine; the payload was populated correctly inside `type_expr_from_form`).  The bug was downstream in `elab_fns.c` losing the payload at return-type capture time. | `src/compiler/elab_types.c` |
+| F1-1-2 | Fix any field the audit shows uninitialised -- **done** via F1-1-3 (no fix needed in `elab_types.c`). | `src/compiler/elab_types.c` |
+| F1-1-3 | Mirror the fix in `elab_fns.c`'s F_TYPE_ANN handling so the function's `result_full_type` carries the full TY_EXISTS/TY_FORALL payload -- **shipped** (`elab_fns.c`: capture `return_exists_type`, attach to `result_full_type`; `elab_call.c`: patch call-expression type from `result_full_type` on TY_EXISTS/TY_FORALL).  Same change also gives constrained-existential parameters a value-typed path (was previously mis-routed through the rank-2 branch which rejected `pack` arguments). | `src/compiler/elab_fns.c`, `src/compiler/elab_call.c` |
+| F1-1-4 | Add fixture `tests/fixtures/ex-exists-return-type` -- **shipped**. | `tests/fixtures/` |
+| F1-1-5 | Add fixture `tests/fixtures/ex-exists-param-type` -- **shipped**. | `tests/fixtures/` |
+| F1-1-6 | Ship the previously blocked EXG4-5 fixtures -- **partial:** `exg4-pack-return` and `exg4-pack-into-fn` shipped.  `exg4-pack-into-struct` blocked on `defstruct`'s field-type parser only accepting simple keyword/sym types, not compound `(exists ...)` annotations -- track that fix separately. | `tests/fixtures/` |
 
 ### F1-2 -- Smart drop hook for existential RC payloads + pack semantics
 

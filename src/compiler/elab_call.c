@@ -672,6 +672,16 @@ Expr *elab_call(Elab *e, Form *call) {
             fn_binding->type.as.fn.result_full_type) {
             call_expr->type = *fn_binding->type.as.fn.result_full_type;
         }
+        /* F1-1: patch TY_EXISTS / TY_FORALL return type with the full
+         * forall_ payload so `open` (and any other downstream consumer
+         * that dereferences `as.forall_.body`) sees a populated struct
+         * instead of a zero-initialised type_from_kind() shell. */
+        if (call_expr && fn_binding->type.kind == TY_FN &&
+            (fn_binding->type.as.fn.result_kind == TY_EXISTS ||
+             fn_binding->type.as.fn.result_kind == TY_FORALL) &&
+            fn_binding->type.as.fn.result_full_type) {
+            call_expr->type = *fn_binding->type.as.fn.result_full_type;
+        }
         return call_expr;
     }
 
@@ -1123,7 +1133,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (fn_binding->closure_fn_binding) fn_arg_idx2 = i + 1;
             if (fn_arg_idx2 < fn_type.as.fn.arity) {
                 Type *aft = fn_type.as.fn.arg_full_types[fn_arg_idx2];
-                if (aft && (aft->kind == TY_FORALL || aft->kind == TY_EXISTS)) {
+                /* F1-1: TY_EXISTS-typed params are constrained existential
+                 * values, not rank-2 functions; pass the arg through as-is
+                 * and let the regular kind check accept the matching
+                 * TY_EXISTS argument from `pack`. */
+                if (aft && aft->kind == TY_FORALL) {
                     is_rank2_param = true;
                 }
             }

@@ -331,12 +331,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 params[n_params - 1]->type = *ann->as.contract_.base_type;
                 continue;
             }
-            if (ann->kind == TY_FORALL || ann->kind == TY_EXISTS) {
+            if (ann->kind == TY_FORALL) {
                 /* Rank-2 polymorphic parameter: represented as tur_poly_fn_t at C level */
                 param_kinds[n_params - 1] = TY_PTR_VOID;
                 params[n_params - 1]->type = TYPE_PTR_VOID;
                 params[n_params - 1]->is_poly_fn = true;
                 params[n_params - 1]->poly_type = ann;
+                param_poly_types[n_params - 1] = ann;
+            } else if (ann->kind == TY_EXISTS) {
+                /* F1-1: TY_EXISTS is a value type (produced by `pack`), not a
+                 * rank-2 function.  Keep the full TY_EXISTS payload on the
+                 * binding so `open` inside the body finds a valid
+                 * `as.forall_.body`, and stash the full type in
+                 * param_poly_types so call sites can subtype-check the
+                 * argument against the declared existential.  Earlier code
+                 * misrouted this into the rank-2 branch, which then
+                 * rejected `(pack ...)` arguments with "rank-2 argument
+                 * must be a named function". */
+                param_kinds[n_params - 1] = TY_EXISTS;
+                params[n_params - 1]->type = *ann;
                 param_poly_types[n_params - 1] = ann;
             } else if (ann->kind == TY_FN) {
                 /* Plain function type annotation */
@@ -543,6 +556,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
     Type *return_session_type = NULL; /* SS3a/SS7: full session/role return type */
     Type *return_app_type = NULL; /* PTC4: full TY_APP return type for concrete type threading */
+    Type *return_exists_type = NULL; /* F1-1: full TY_EXISTS/TY_FORALL return type so callers see the forall_ payload (without it elab_open SEGVs reading body) */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -674,6 +688,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     /* PTC4: capture full TY_APP return type so dispatch can extract elem types. */
                     if (ann->kind == TY_APP) {
                         return_app_type = ann;
+                    }
+                    /* F1-1: capture full TY_EXISTS / TY_FORALL return type so
+                     * call sites can patch the resulting expression's type
+                     * with the complete forall_ payload (var_names, var_kinds,
+                     * body, constraints).  Without this, type_fn() leaves the
+                     * union uninitialised and elab_open later dereferences a
+                     * garbage `body` pointer. */
+                    if (ann->kind == TY_EXISTS || ann->kind == TY_FORALL) {
+                        return_exists_type = ann;
                     }
                 }
             }
@@ -1045,6 +1068,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* PTC4: attach full TY_APP return type so call sites can extract concrete elem types. */
     if (return_app_type) {
         fn_type.as.fn.result_full_type = return_app_type;
+    }
+    /* F1-1: attach full TY_EXISTS / TY_FORALL return type.  Mirrors the
+     * ADT/struct/session/TY_APP paths above; consumed by elab_call.c to
+     * patch the call expression's type. */
+    if (return_exists_type) {
+        fn_type.as.fn.result_full_type = return_exists_type;
     }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
