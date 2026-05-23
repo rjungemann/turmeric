@@ -1,0 +1,25 @@
+; Phase EXG6: multiple `:linear` packs in sequence -- each scope must
+; malloc its record at pack and free it at open exit, with no leaks
+; under ASAN.  Exercises the per-call lifecycle (pack inside a helper,
+; opened inside the same helper, called repeatedly from main).
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    static char buf[24];
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn show-one [n :int] :nil
+  (let [e (pack n (exists :linear [a] [(Show a)] a))]
+    (open e [_ v]
+      (println (.show v)))))
+
+(defn main [] :int
+  (show-one 1)
+  (show-one 2)
+  (show-one 3)
+  0)

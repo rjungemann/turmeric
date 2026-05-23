@@ -682,8 +682,12 @@ Expr *elab_let(Elab *e, const Form *call) {
     bool has_rc_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
         Type bt = binds[k].binding->type;
+        /* EXG6: linear existentials use the plain malloc emit path and
+         * are freed at the open site, so they do NOT participate in the
+         * rc-based scope-exit auto-drop. */
         bool is_rc_managed = bt.kind == TY_RC ||
-            (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0);
+            (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0
+             && !bt.as.forall_.is_linear);
         if (is_rc_managed) {
             has_rc_bindings = true;
             break;
@@ -705,7 +709,8 @@ Expr *elab_let(Elab *e, const Form *call) {
         for (uint32_t k = 0; k < n_binds; k++) {
             Type bt = binds[k].binding->type;
             bool is_rc_managed = bt.kind == TY_RC ||
-                (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0);
+                (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0
+                 && !bt.as.forall_.is_linear);
             if (is_rc_managed &&
                 !binding_moved_during_init[k] &&
                 !binds[k].binding->is_moved &&
@@ -728,7 +733,8 @@ Expr *elab_let(Elab *e, const Form *call) {
                 /* Skip RC bindings that are moved or consumed */
                 Type bt = binds[k].binding->type;
                 bool is_rc_managed = bt.kind == TY_RC ||
-                    (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0);
+                    (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0
+                     && !bt.as.forall_.is_linear);
                 if (is_rc_managed &&
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&

@@ -1,0 +1,25 @@
+; Phase EXG6: a constrained `:linear` existential bypasses rc_cb_alloc
+; entirely.  The pack emits a plain malloc; the open emits a free at
+; the end of its body.  LT1's exactly-once check (under -Xlinear)
+; enforces that the binding is consumed by exactly one open.
+;
+; Codegen invariants exercised here:
+;   - no `rc_cb_alloc_kinded` for the linear pack
+;   - no auto-drop / defer chain on the let binding
+;   - the open's body ends with `free((void *)(e))`
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn main [] :int
+  (let [e (pack 7 (exists :linear [a] [(Show a)] a))]
+    (open e [_ v]
+      (println (.show v))))
+  0)

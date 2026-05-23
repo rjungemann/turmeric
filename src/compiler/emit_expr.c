@@ -2415,7 +2415,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * packed value is itself an RC-managed pointer, mark the
                  * payload as RCEXP_RC.  The cycle walker reads these tags
                  * to follow the inner rc through the existential record
-                 * (see gc_mark_phase). */
+                 * (see gc_mark_phase).
+                 *
+                 * EXG6-3: `(exists :linear ...)` opts out of rc allocation
+                 * entirely -- the linear discipline guarantees a single
+                 * open consumer, so we malloc the bare record and let
+                 * EX_EXISTS_OPEN emit a free() at the end of its body. */
+                bool is_linear =
+                    e->type.kind == TY_EXISTS &&
+                    e->type.as.forall_.is_linear;
                 bool payload_is_rc =
                     (vk == TY_RC) ||
                     (vk == TY_WEAK) ||
@@ -2423,16 +2431,28 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      e->as.exists_pack_.value->type.as.forall_.n_constraints > 0);
                 int payload_kind_const = payload_is_rc ? 1 /* RCEXP_RC */
                                                        : 0 /* RCEXP_OPAQUE */;
-                char *cb_tmp = fresh_tmp(ctx);
+                char *cb_tmp = NULL;
                 char *rec_tmp = fresh_tmp(ctx);
-                indent_buf(body, ctx->indent);
-                buf_printf(body,
-                    "RcControlBlock *%s = rc_cb_alloc_kinded(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *), %d, tur_existential_drop, 1 /* RCK_EXISTENTIAL */, %d);\n",
-                    cb_tmp, (unsigned)n_w, (int)TY_PTR_VOID, payload_kind_const);
-                indent_buf(body, ctx->indent);
-                buf_printf(body,
-                    "tur_existential_t *%s = (tur_existential_t *)(%s->value);\n",
-                    rec_tmp, cb_tmp);
+                if (is_linear) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "tur_existential_t *%s = (tur_existential_t *)malloc(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *));\n",
+                        rec_tmp, (unsigned)n_w);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "if (!%s) { fprintf(stderr, \"rc: out of memory\\n\"); abort(); }\n",
+                        rec_tmp);
+                } else {
+                    cb_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "RcControlBlock *%s = rc_cb_alloc_kinded(sizeof(tur_existential_t) + (size_t)%u * sizeof(void *), %d, tur_existential_drop, 1 /* RCK_EXISTENTIAL */, %d);\n",
+                        cb_tmp, (unsigned)n_w, (int)TY_PTR_VOID, payload_kind_const);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "tur_existential_t *%s = (tur_existential_t *)(%s->value);\n",
+                        rec_tmp, cb_tmp);
+                }
                 indent_buf(body, ctx->indent);
                 if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
                     buf_printf(body, "%s->value = (int64_t)(intptr_t)(%s);\n",
@@ -2450,8 +2470,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "%s->witnesses[%u] = (void *)(&%s_singleton);\n",
                                rec_tmp, (unsigned)wi, dict_name);
                 }
-                buf_printf(&out, "(tur_exists_t)(%s)", cb_tmp);
-                free(cb_tmp);
+                /* EXG6-3: linear packs return the bare record pointer;
+                 * non-linear packs return the rc-block cast (the open
+                 * site reads through cb->value to reach the record). */
+                if (is_linear) {
+                    buf_printf(&out, "(tur_exists_t)(%s)", rec_tmp);
+                } else {
+                    buf_printf(&out, "(tur_exists_t)(%s)", cb_tmp);
+                }
+                if (cb_tmp) free(cb_tmp);
                 free(rec_tmp);
             } else if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
                 /* Already a pointer — cast directly */
@@ -2491,9 +2518,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool packed_is_record =
                 e->as.exists_open_.packed->type.kind == TY_EXISTS
                 && e->as.exists_open_.packed->type.as.forall_.n_constraints > 0;
+            /* EXG6-3: for a `:linear` existential, the packed value is the
+             * tur_existential_t* itself (no surrounding rc-block), and the
+             * open must free that record at the end of its body. */
+            bool packed_is_linear_record =
+                packed_is_record
+                && e->as.exists_open_.packed->type.as.forall_.is_linear;
             indent_buf(body, ctx->indent);
             TypeKind vk = e->as.exists_open_.var_binding->type.kind;
-            if (packed_is_record) {
+            if (packed_is_linear_record) {
+                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+                    buf_printf(body,
+                        "void *%s = (void *)(intptr_t)((tur_existential_t *)(%s))->value;\n",
+                        var_name, packed_val);
+                } else {
+                    buf_printf(body,
+                        "int64_t %s = ((tur_existential_t *)(%s))->value;\n",
+                        var_name, packed_val);
+                }
+            } else if (packed_is_record) {
                 if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
                     buf_printf(body,
                         "void *%s = (void *)(intptr_t)((tur_existential_t *)((RcControlBlock *)(%s))->value)->value;\n",
@@ -2510,7 +2553,6 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                            var_name, packed_val);
             }
-            free(packed_val);
 
             /* Suppress unused-variable warning */
             indent_buf(body, ctx->indent);
@@ -2526,6 +2568,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s = %s;\n", tmp, bv);
                 free(bv);
             }
+
+            /* EXG6-3: free the bare record now that the (only) open has
+             * consumed it.  The linear discipline guarantees this is the
+             * single use, so the free is unconditional. */
+            if (packed_is_linear_record) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "free((void *)(%s));\n", packed_val);
+            }
+            free(packed_val);
 
             ctx->indent -= 4;
             indent_buf(body, ctx->indent);

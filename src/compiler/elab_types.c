@@ -428,25 +428,38 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                  *   (forall [a b ...] body-type)
                  *   (exists [a b ...] body-type)
                  *   (exists [a b ...] [(C a) ...] body-type)   -- EX1b
+                 *   (exists :linear [a b ...] [(C a) ...] body-type)   -- EXG6
                  *
                  * The optional constraint vector (EX1b) is only accepted on
-                 * `exists`; constraints on `forall` are tracked separately. */
-                if (form->as.list.len != 3 && form->as.list.len != 4) {
+                 * `exists`; constraints on `forall` are tracked separately.
+                 * EXG6: an optional `:linear` keyword may appear immediately
+                 * after `exists` to opt the type into use-exactly-once. */
+                uint32_t cursor = 1;
+                bool is_linear_attr = false;
+                if (is_exists_form && cursor < form->as.list.len) {
+                    Form *maybe_attr = form->as.list.items[cursor];
+                    if (maybe_attr->tag == F_KEYWORD && maybe_attr->as.sym == e->kw_linear) {
+                        is_linear_attr = true;
+                        cursor++;
+                    }
+                }
+                uint32_t remaining = form->as.list.len - cursor;
+                if (remaining != 2 && remaining != 3) {
                     diag_emit(DIAG_ERROR, form->span,
                               "'%s' requires a variable list, an optional constraint vector, "
                               "and a body type",
                               is_forall_form ? "forall" : "exists");
                     return NULL;
                 }
-                Form *vars_form = form->as.list.items[1];
+                Form *vars_form = form->as.list.items[cursor];
                 Form *constraint_form = NULL;
                 Form *body_form = NULL;
-                if (form->as.list.len == 3) {
-                    body_form = form->as.list.items[2];
+                if (remaining == 2) {
+                    body_form = form->as.list.items[cursor + 1];
                 } else {
-                    /* 4 items: middle slot is the constraint vector. */
-                    constraint_form = form->as.list.items[2];
-                    body_form = form->as.list.items[3];
+                    /* Middle slot is the constraint vector. */
+                    constraint_form = form->as.list.items[cursor + 1];
+                    body_form = form->as.list.items[cursor + 2];
                     if (is_forall_form) {
                         diag_emit(DIAG_ERROR, constraint_form->span,
                                   "'forall' does not accept a constraint vector "
@@ -598,7 +611,10 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 memset(t, 0, sizeof(Type));
                 t->kind = is_forall_form ? TY_FORALL : TY_EXISTS;
-                t->copy_kind = CK_MOVE;
+                /* EXG6: linear existentials use CK_LINEAR so the type-system
+                 * machinery already routes them through LT1's exactly-once
+                 * tracking when bound by a let. */
+                t->copy_kind = is_linear_attr ? CK_LINEAR : CK_MOVE;
                 t->hkt_kind = KIND_STAR;
                 t->as.forall_.var_names = var_names;
                 t->as.forall_.var_kinds = var_kinds;
@@ -607,6 +623,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 t->as.forall_.constraint_classes = cclasses;
                 t->as.forall_.constraint_var_idx = cvar_idx;
                 t->as.forall_.n_constraints = n_constraints;
+                t->as.forall_.is_linear = is_linear_attr;
                 return t;
             }
         }
