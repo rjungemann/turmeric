@@ -1201,8 +1201,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                      * use the first type arg */
                     if (param_type.kind == TY_INT && n_type_args > 0) {
                         param_type = type_args[0];
+                        /* PTC4: KIND_ARROW struct type-constructors (have type params) are
+                         * applied as TY_APP at call sites, which lowers to int64_t in C.
+                         * Use int64_t so the method signature matches the dispatch ABI. */
+                        if (param_type.kind == TY_STRUCT && param_type.as.struct_.def &&
+                            param_type.as.struct_.def->n_type_params > 0) {
+                            param_type = TYPE_INT;
+                        }
                     }
-                    
+
                     /* Phase HRT3: if the param type is TY_FORALL, treat it as a poly fn param.
                      * Phase CCL: also treat :fn-annotated params (param_is_fn) as poly fn. */
                     bool param_is_poly = (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);

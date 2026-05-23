@@ -1,0 +1,27 @@
+;; PTC4 failing-constraint test: dispatch must fail when the constraint
+;; (Measurable A) cannot be satisfied for the concrete element type.
+;;
+;; box-of-bool returns TY_APP(Box, bool).  No Measurable[bool] instance
+;; exists, so the constraint on Measurable[Box] is not satisfied and
+;; the dispatch for (.measure (box-of-bool #true)) must be rejected.
+
+(defclass Measurable [a]
+  (measure [x] :int))
+
+(defstruct Box [A]
+  (v :int))
+
+(definstance Measurable [Box] [(Measurable A)]
+  (measure [b] :int
+    ```c
+    return *(int64_t*)(intptr_t)b;
+    ```))
+
+(defn box-of-bool [x :bool] :(Box bool)
+  ```c
+  int64_t *p = (int64_t*)malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(println (.measure (box-of-bool true)))
