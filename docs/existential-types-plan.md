@@ -485,13 +485,23 @@ Depends on TC2 (typed collections) being shipped. Extends Option B to support
 existentials over phantom type-level variables (indices with no runtime
 representation).
 
-- [ ] **EX2-1** Audit the type-checker change from EX1b-4 to verify that
+- [x] **EX2-1** Audit the type-checker change from EX1b-4 to verify that
   substitution correctly handles phantom type variables (variables that appear
-  only in index positions, not in value-carrying fields).
+  only in index positions, not in value-carrying fields). *Audit complete:
+  `type_expr_from_form` (`src/compiler/elab_types.c`) extends `type_params`
+  with each `exists` binder before parsing the body, so a phantom variable
+  appearing nested in a TY_APP resolves to a fresh local tyvar (TY_STRUCT
+  with `def = NULL`) and does not leak into outer unification scope.
+  Verified by `tests/fixtures/ex2-1-phantom-substitution`.*
 
-- [ ] **EX2-2** Extend `AST_OPEN` to allow the bound type variable annotation
+- [x] **EX2-2** Extend `AST_OPEN` to allow the bound type variable annotation
   to be a phantom (no runtime binding). The value variable still has a concrete
-  runtime type; only the index is hidden.
+  runtime type; only the index is hidden. *Implemented in `elab_open` via
+  `ex2_peel_phantom_app`: when the existential body is a `TY_APP` chain, the
+  value variable's type is derived by peeling to the head carrier, so callers
+  expecting the bare carrier (e.g. `:SizedVec`) accept the opened value while
+  the phantom binder remains unbound at runtime. Verified by
+  `tests/fixtures/ex2-2-phantom-open`.*
 
 - [ ] **EX2-3** Extend the escape check (EX1d-2) to handle phantom skolem
   variables. A phantom skolem escaping through an array length is as dangerous

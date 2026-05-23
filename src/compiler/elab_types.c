@@ -1671,6 +1671,18 @@ static bool ex1d_tail_leaks(ExistsEscapeCtx *ctx, const Expr *e) {
     }
 }
 
+/* EX2-2: Peel a TY_APP chain to expose the underlying concrete carrier.
+ * When the existential body has the shape (Ctor i1 i2 ... in), the indices
+ * i1..in are phantom at runtime; the value carries only the Ctor itself.
+ * Used by elab_open to derive a usable v_type that callers expecting the
+ * bare Ctor (e.g. :SizedVec) will accept. */
+static Type ex2_peel_phantom_app(const Type *t) {
+    while (t && t->kind == TY_APP && t->as.app.fn) {
+        t = t->as.app.fn;
+    }
+    return t ? *t : TYPE_INT;
+}
+
 /* Phase HRT2: (open packed [a v] body) — existential elimination.
  * Unboxes the existential value, binding v to the inner value.
  * Syntax: (open packed-expr [abstract-type-var value-name] body...) */
@@ -1713,13 +1725,26 @@ Expr *elab_open(Elab *e, const Form *call) {
     const Symbol *val_sym = val_name_form->as.sym;
 
     /* Determine type of v from the existential body type.
-     * Type variables (TY_STRUCT with def=NULL) resolve to TY_INT (int64_t at runtime). */
+     * Type variables (TY_STRUCT with def=NULL) resolve to TY_INT (int64_t at runtime).
+     * EX2-2: Bodies of the form (Ctor i1 .. in) -- where i1..in are phantom
+     * type indices bound by the existential -- peel through the TY_APP chain
+     * so that v gets the underlying carrier (e.g. the ADT for SizedVec).  The
+     * indices have no runtime representation, so this exposes the type a
+     * caller expecting `:SizedVec` would accept while still keeping the
+     * existential variable abstract at the type level. */
     Type v_type = TYPE_INT;  /* default: int64_t */
     if (packed->type.kind == TY_EXISTS) {
         const Type *T = packed->type.as.forall_.body;
         if (T) {
             if (T->kind == TY_STRUCT && T->as.struct_.def == NULL) {
                 v_type = TYPE_INT;  /* type variable → int64_t */
+            } else if (T->kind == TY_APP) {
+                v_type = ex2_peel_phantom_app(T);
+                /* If the peeled head is itself a free type variable, fall
+                 * back to int64_t (consistent with the bare-tyvar case). */
+                if (v_type.kind == TY_STRUCT && v_type.as.struct_.def == NULL) {
+                    v_type = TYPE_INT;
+                }
             } else {
                 v_type = *T;  /* use body type directly (by value) */
             }
