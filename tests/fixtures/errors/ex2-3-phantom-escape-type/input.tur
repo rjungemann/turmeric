@@ -1,0 +1,21 @@
+; Phase EX2-3: a phantom skolem 'n' must not leak into a type annotation
+; inside the open body.  The binder is in scope only at the term level
+; (as the binder name) -- it is deliberately NOT added to the body's
+; type-elaboration context, so any attempt to reference 'n' as a type
+; expression must fail at elaboration time.
+;
+; This protects against the "array-length escape" the plan warns about:
+; if 'n' were a usable type variable inside the body, the user could
+; ascribe a value as (SizedVec n int) and let the phantom index flow
+; out of the open scope through the value's type.
+(defgadt SizedVec [n a]
+  (SVNil : (SizedVec int int))
+  (SVCons int (SizedVec int int) : (SizedVec int int)))
+
+(defn main [] :int
+  (let [sv (SVCons 1 (SVNil))]
+    (let [e (pack sv (exists [n] (SizedVec n int)))]
+      (open e [n v]
+        ; Attempt to use 'n' as a type-level variable -- must be rejected.
+        (ascribe v (SizedVec n int)))))
+  0)

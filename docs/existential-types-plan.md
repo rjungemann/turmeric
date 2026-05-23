@@ -503,16 +503,31 @@ representation).
   the phantom binder remains unbound at runtime. Verified by
   `tests/fixtures/ex2-2-phantom-open`.*
 
-- [ ] **EX2-3** Extend the escape check (EX1d-2) to handle phantom skolem
+- [x] **EX2-3** Extend the escape check (EX1d-2) to handle phantom skolem
   variables. A phantom skolem escaping through an array length is as dangerous
   as a value-carrying skolem escaping through a return type; both must be
-  rejected.
+  rejected. *Implemented two complementary protections in `elab_open`
+  (`src/compiler/elab_types.c`): (a) the binder symbol is intentionally
+  not added to the body's type-elaboration scope, so a phantom variable
+  cannot be referenced in any type annotation inside the body (negative
+  fixture `errors/ex2-3-phantom-escape-type`); (b) the new
+  `ex2_3_type_has_phantom_residue` walker fires on phantom-indexed
+  bodies and rejects any tail type that carries a `TY_APP` with an
+  unresolved tyvar argument -- a defensive net for paths that could
+  surface a phantom binder through inferred types. Positive fixture
+  `ex2-3-phantom-escape-ok` verifies the check is not overly broad.*
 
-- [ ] **EX2-4** Implement `Vec[A]` as `(exists n. SizedVec[n A])` in
+- [x] **EX2-4** Implement `Vec[A]` as `(exists n. SizedVec[n A])` in
   `stdlib/vec.tur` (or the typed-collections module from TC2). Provide:
   - `vec-of-sized` -- wraps a `SizedVec[n A]` into a `Vec[A]` via `pack`.
   - `open-vec` -- macro that eliminates a `Vec[A]` into a fresh abstract `n`
     and a `SizedVec[n A]` via `open`.
+  *Shipped as `stdlib/vec-existential.tur` (opt-in, like
+  `stdlib/existential.tur`).  `vec-of-sized` expands to a native `pack`
+  against `(exists [n] (SizedVec n int))`; `open-vec` expands to a
+  native `open` with a `[n sv]` binder vector, riding the EX2-2 peel so
+  `sv` has the bare carrier type and the EX2-3 escape checks still
+  apply.  Verified end-to-end by `tests/fixtures/ex2-4-vec-existential`.*
 
 - [ ] **EX2-5** Add fixture tests for `Vec[A]`:
   - Wrap a `SizedVec[3 :int]` into a `Vec[:int]`; open it; verify the length.
