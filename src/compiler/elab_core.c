@@ -954,6 +954,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
     e->sym_caret_unsafe_multishot = intern_cstr(st, "^unsafe-multishot"); /* LC0 */
     e->sym_caret_multishot        = intern_cstr(st, "^multishot");        /* MS1 */
+    e->sym_caret_deprecated       = intern_cstr(st, "^deprecated");       /* F4 */
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");

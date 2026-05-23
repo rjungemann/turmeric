@@ -4134,6 +4134,18 @@ static bool parse_warn_unused_result(int argc, char **argv) {
     return enabled;
 }
 
+/* F4 (cross-plan-followups): --Werror=deprecated flag promotes
+ * ^deprecated use-site warnings to errors. */
+static bool parse_werror_deprecated(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--Werror=deprecated") == 0 ||
+            strcmp(argv[i], "-Werror=deprecated") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Phase R6: Handle --lint-panic flag */
 static bool parse_lint_panic(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -4229,6 +4241,8 @@ int main(int argc, char **argv) {
     g_panic_trace = parse_panic_trace(argc, argv);
     g_warn_unused_result = parse_warn_unused_result(argc, argv);
     g_lint_panic = parse_lint_panic(argc, argv);
+    /* F4: --Werror=deprecated promotes ^deprecated warnings to errors */
+    g_werror_deprecated = parse_werror_deprecated(argc, argv);
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
@@ -4248,6 +4262,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--warn-unused-result") == 0 ||
                    strcmp(argv[i], "--no-warn-unused-result") == 0) {
             /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--Werror=deprecated") == 0 ||
+                   strcmp(argv[i], "-Werror=deprecated") == 0) {
+            /* F4: already parsed into g_werror_deprecated; remove from argv. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

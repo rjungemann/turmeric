@@ -36,6 +36,38 @@ Expr *elab_defn(Elab *e, const Form *call) {
         name_f = call->as.list.items[name_idx];
     }
 
+    /* F4 (cross-plan-followups): ^deprecated attribute before name.
+     * Syntax: (defn ^deprecated "message" name [...] :ret body...)
+     *         (defn ^deprecated name [...] :ret body...)            ; no message
+     * Each use site of the defined binding emits a DIAG_WARNING with
+     * the message (or a generic note if the message is omitted). */
+    bool is_deprecated_attr = false;
+    const char *deprecation_msg = NULL;
+    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_deprecated) {
+        is_deprecated_attr = true;
+        name_idx++;
+        if (name_idx >= call->as.list.len) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "^deprecated must be followed by an optional message string "
+                      "and the function name");
+            return NULL;
+        }
+        Form *next = call->as.list.items[name_idx];
+        if (next->tag == F_STR) {
+            char *msg_buf = (char *)arena_alloc(e->arena, next->as.s.len + 1);
+            memcpy(msg_buf, next->as.s.p, next->as.s.len);
+            msg_buf[next->as.s.len] = '\0';
+            deprecation_msg = msg_buf;
+            name_idx++;
+            if (name_idx >= call->as.list.len) {
+                diag_emit(DIAG_ERROR, next->span,
+                          "^deprecated message must be followed by the function name");
+                return NULL;
+            }
+        }
+        name_f = call->as.list.items[name_idx];
+    }
+
     /* Minimum: (defn name []) or (defn #[no-unwind] name []) */
     if (name_idx + 2 >= call->as.list.len) {  /* need name, params, body */
         diag_emit(DIAG_ERROR, call->span,
@@ -1188,6 +1220,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->no_unwind = no_unwind;
     /* Phase M6: Store ^:export-as C name on the binding */
     b->c_export_name = c_export_name;
+    /* F4: Store ^deprecated attribute on the binding */
+    b->is_deprecated = is_deprecated_attr;
+    b->deprecation_message = deprecation_msg;
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
@@ -1782,7 +1817,9 @@ Expr *elab_def(Elab *e, const Form *call) {
     /* Syntax: (def ^persistent name init) */
     uint32_t name_idx = 1;
     bool is_persistent = false;
-    
+    bool is_deprecated_attr = false;
+    const char *deprecation_msg = NULL;
+
     if (call->as.list.len > 3) {
         Form *first = call->as.list.items[name_idx];
         if (first->tag == F_SYM && first->as.sym == e->sym_caret_persistent) {
@@ -1790,9 +1827,26 @@ Expr *elab_def(Elab *e, const Form *call) {
             name_idx++;
         }
     }
-    
+
+    /* F4: ^deprecated ["message"] before the name (after ^persistent) */
+    if (call->as.list.len > name_idx + 2 &&
+        call->as.list.items[name_idx]->tag == F_SYM &&
+        call->as.list.items[name_idx]->as.sym == e->sym_caret_deprecated) {
+        is_deprecated_attr = true;
+        name_idx++;
+        if (call->as.list.items[name_idx]->tag == F_STR) {
+            Form *msg_f = call->as.list.items[name_idx];
+            char *msg_buf = (char *)arena_alloc(e->arena, msg_f->as.s.len + 1);
+            memcpy(msg_buf, msg_f->as.s.p, msg_f->as.s.len);
+            msg_buf[msg_f->as.s.len] = '\0';
+            deprecation_msg = msg_buf;
+            name_idx++;
+        }
+    }
+
     if (name_idx + 2 != call->as.list.len) {
-        diag_emit(DIAG_ERROR, call->span, "def takes (def [^persistent] name init)");
+        diag_emit(DIAG_ERROR, call->span,
+                  "def takes (def [^persistent] [^deprecated [\"msg\"]] name init)");
         return NULL;
     }
     
@@ -1825,6 +1879,9 @@ Expr *elab_def(Elab *e, const Form *call) {
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/false, /*is_global=*/true, name_f->span);
     b->is_persistent = is_persistent;
+    /* F4: ^deprecated on def */
+    b->is_deprecated = is_deprecated_attr;
+    b->deprecation_message = deprecation_msg;
     scope_add(&e->global, b);
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);

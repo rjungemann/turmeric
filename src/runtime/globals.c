@@ -76,3 +76,8 @@ bool g_dynvar_enabled = false;
 
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
+
+/* F4 (cross-plan-followups): --Werror=deprecated promotes deprecation
+ * warnings emitted by elab_lookup_sym to errors so a clean build can
+ * gate against new uses of deprecated APIs. */
+bool g_werror_deprecated = false;
