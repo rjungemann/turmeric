@@ -107,7 +107,7 @@ defmodule app
 
   defn main [] :int
     let [p v/make-vector(3 4)]
-      println(v/magnitude(p))
+      println $ v/magnitude(p)
       0
 ```
 
@@ -132,7 +132,7 @@ import attempt:
 error: circular import: module 'a' is already being loaded
 ```
 
-There is no lazy resolution in v1 — break the cycle by factoring a shared
+There is no lazy resolution in v1 -- break the cycle by factoring a shared
 helper module.
 
 ---
@@ -168,7 +168,7 @@ defmodule list-utils
 
 - **Same module**: all bindings (public and private) are visible.
 - **Other module, qualified or `:refer`'d**: only exported names are visible.
-- **Stdlib (`tur/...`) bindings**: globally visible — see §6.
+- **Stdlib (`tur/...`) bindings**: globally visible -- see §6.
 
 ### Macros are exported the same way
 
@@ -188,7 +188,7 @@ defmodule control-flow
     list(if test do(a b))
 ```
 
-Imported macros expand correctly in the consumer module — recursive macro
+Imported macros expand correctly in the consumer module -- recursive macro
 calls inside an exported macro can still reach private helpers of the
 defining module (the elaborator tracks the "expansion module" for this).
 
@@ -242,7 +242,7 @@ mangled module name to prevent linker collisions:
 - `/` in module name → `__` (double underscore)
 - `-`, `.`, and any other non-`[A-Za-z0-9_]` character → `_`
 - The module prefix is followed by `__` and then the (sanitized) binding name
-- Parameters and locals are NOT prefixed — they are local to the function and
+- Parameters and locals are NOT prefixed -- they are local to the function and
   inline-C bodies reference them by their source names.
 
 ### Collision detection
@@ -252,7 +252,7 @@ module `my_lib` both exporting `foo`), the compiler emits a hard error at
 elaboration time and tells you which two definitions collide. Rename one or
 use `(export-as ...)` to override the C name (see below).
 
-### `(export-as "c_name")` — explicit C name override
+### `(export-as "c_name")` -- explicit C name override
 
 For FFI scenarios where you need a specific C symbol name (matching a C
 header, registering with a runtime, etc.), use `(export-as "...")` before
@@ -289,9 +289,9 @@ The argument must be a string literal.
 
 Two stdlib files are auto-loaded into every program:
 
-- `stdlib/macros.tur` — `(defmodule tur/macros ...)`: `cond`, `when`,
+- `stdlib/macros.tur` -- `(defmodule tur/macros ...)`: `cond`, `when`,
   `unless`, `must!`, `must-msg!`, `ignore!`, `do-m`, `for`.
-- `stdlib/safe.tur`   — `(defmodule tur/safe ...)`: `array-get`, `array-set`,
+- `stdlib/safe.tur`   -- `(defmodule tur/safe ...)`: `array-get`, `array-set`,
   `array-slice`, `with-c-string`, `from-c-string`, `box`, `unbox`.
 
 After loading, the elaborator **promotes** every export from any module under
@@ -299,7 +299,7 @@ the `tur/` namespace back to "stdlib pre-module" status (its
 `defining_module_name` is reset to NULL). This means:
 
 - You can call `(when test body)` from user code without writing an `import`.
-- The emitted C name has no `tur__macros__` prefix — `when` is `when`.
+- The emitted C name has no `tur__macros__` prefix -- `when` is `when`.
 - You can shadow stdlib names in user code without conflict.
 
 The `tur/` namespace is reserved for stdlib. User code should not declare
@@ -310,7 +310,7 @@ modules under `tur/`.
 ## 7. Building Multi-Module Programs
 
 For a single-file program, `./build/tur build app.tur -o app` works as before
-— the elaborator finds and inlines any `(import ...)` targets.
+-- the elaborator finds and inlines any `(import ...)` targets.
 
 For a multi-file build, place modules under the same directory tree as
 the main file:
@@ -354,7 +354,7 @@ own dependencies' headers.
 ### `defmodule must be the first form in the file`
 
 Move any other top-level forms inside the `defmodule` body, or below it (the
-latter is also rejected — `defmodule` must wrap everything).
+latter is also rejected -- `defmodule` must wrap everything).
 
 ### `symbol 'foo' is private to module 'mymod'`
 
@@ -446,7 +446,7 @@ defmodule app
 
   defn main [] :int
     let [p make-vector(3 4)]
-      println(magnitude(p))   ;; 5
+      println $ magnitude(p)   ;; 5
       0
 ```
 

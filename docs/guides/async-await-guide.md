@@ -57,20 +57,20 @@ A **fiber** is a user-space thread (lightweight thread) that:
 
 ### Async Blocks
 
-- **`(async body)`** — Creates a fiber that executes `body`. Returns a `Future<T>` that can be awaited.
-- **`(await fut)`** — Suspends the current fiber until `fut` completes. Used only inside `async` blocks.
+- **`(async body)`** -- Creates a fiber that executes `body`. Returns a `Future<T>` that can be awaited.
+- **`(await fut)`** -- Suspends the current fiber until `fut` completes. Used only inside `async` blocks.
 
 ### Futures
 
-- **`Future<T>`** — Represents a computation that may not be done yet.
+- **`Future<T>`** -- Represents a computation that may not be done yet.
 - Can be awaited with `(await fut)`.
 - Composable: multiple `await`s sequence operations.
 
 ### Scheduling
 
-**v1 (Phase 20):** Single-threaded scheduler — all fibers run on one OS thread. Simpler; no data races.
+**v1 (Phase 20):** Single-threaded scheduler -- all fibers run on one OS thread. Simpler; no data races.
 
-**v2 (Phase 21+):** Multi-threaded scheduler — fibers run on a thread pool. Higher throughput.
+**v2 (Phase 21+):** Multi-threaded scheduler -- fibers run on a thread pool. Higher throughput.
 
 ## Design Decisions
 
@@ -211,7 +211,7 @@ async
 
 ## See Also
 
-- [Effects System Guide](effects-system-guide.md) — Effects foundation
-- [Threading Guide](threading-guide.md) — OS-level threads and primitives
-- [STM Tutorial](stm-tutorial.md) — Composable concurrent transactions
-- [turmeric-plan.md](../turmeric-plan.md) §18 — Delimited continuations (foundation)
+- [Effects System Guide](effects-system-guide.md) -- Effects foundation
+- [Threading Guide](threading-guide.md) -- OS-level threads and primitives
+- [STM Tutorial](stm-tutorial.md) -- Composable concurrent transactions
+- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations (foundation)

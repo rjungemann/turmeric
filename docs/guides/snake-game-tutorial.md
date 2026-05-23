@@ -4,7 +4,7 @@ category: Tutorials and Examples
 description: Building the snake game example
 ---
 
-# Snake Game Tutorial — Step-by-Step Implementation
+# Snake Game Tutorial -- Step-by-Step Implementation
 
 A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turmeric. Each step builds on the previous one, introducing Turmeric features incrementally. By the end, you'll have a fully working game that showcases algebraic effects, typeclasses, FFI, and more.
 
@@ -172,7 +172,7 @@ defn -main []
 - `-main` is the entry point
 - Window opens and stays open until you close it
 
-**Test:** Run `./examples/snake/snake` — you should see a black window.
+**Test:** Run `./examples/snake/snake` -- you should see a black window.
 
 ---
 
@@ -345,8 +345,8 @@ defn -main []
 ```
 
 **Turmeric features:**
-- `defstruct` — defines a record type
-- `module` + `import` — code organization
+- `defstruct` -- defines a record type
+- `module` + `import` -- code organization
 - Struct field access with `.` syntax
 
 ---
@@ -400,12 +400,16 @@ def KEY_DOWN  264
 
 defn update-state [^state/GameState s] : state/GameState
   let [speed 5
-       new-x if is-key-down(KEY_RIGHT) {s.snake-x + speed}
-               if is-key-down(KEY_LEFT) {s.snake-x - speed}
-               s.snake-x
-       new-y if is-key-down(KEY_DOWN) {s.snake-y + speed}
-               if is-key-down(KEY_UP) {s.snake-y - speed}
-               s.snake-y]
+       new-x if is-key-down(KEY_RIGHT)
+               {s.snake-x + speed}
+               if is-key-down(KEY_LEFT)
+                 {s.snake-x - speed}
+                 s.snake-x
+       new-y if is-key-down(KEY_DOWN)
+               {s.snake-y + speed}
+               if is-key-down(KEY_UP)
+                 {s.snake-y - speed}
+                 s.snake-y]
     state/GameState(new-x new-y s.snake-w s.snake-h)
 
 defn -main []
@@ -542,11 +546,15 @@ defn update-snake [^state/Snake snake] : state/Snake
     state/Snake(vec-conj(vec-rest(snake.segments) new-head) snake.direction)
 
 defn update-state [^state/GameState s] : state/GameState
-  if is-key-down(KEY_RIGHT) update(s { snake.direction: 1 })
-   if is-key-down(KEY_LEFT) update(s { snake.direction: 3 })
-    if is-key-down(KEY_UP) update(s { snake.direction: 0 })
-     if is-key-down(KEY_DOWN) update(s { snake.direction: 2 })
-      s
+  if is-key-down(KEY_RIGHT)
+    update(s { snake.direction: 1 })
+    if is-key-down(KEY_LEFT)
+      update(s { snake.direction: 3 })
+      if is-key-down(KEY_UP)
+        update(s { snake.direction: 0 })
+        if is-key-down(KEY_DOWN)
+          update(s { snake.direction: 2 })
+          s
   state/GameState(update-snake(s.snake))
 
 defn -main []
@@ -563,17 +571,17 @@ defn -main []
 ```
 
 **Turmeric features:**
-- `vec` — persistent vectors
-- `vec-get` / `vec-rest` / `vec-conj` — vector operations
-- `match` — pattern matching on direction
-- `for` — iteration over segments
-- `update` — struct field update syntax
+- `vec` -- persistent vectors
+- `vec-get` / `vec-rest` / `vec-conj` -- vector operations
+- `match` -- pattern matching on direction
+- `for` -- iteration over segments
+- `update` -- struct field update syntax
 
 ---
 
 ## Step 7: Typeclasses for Drawing
 
-Use typeclasses to make drawing polymorphic — any type that implements `Drawable` can be drawn.
+Use typeclasses to make drawing polymorphic -- any type that implements `Drawable` can be drawn.
 
 ```turmeric
 ;; fith/examples/snake/src/state.tur
@@ -670,8 +678,8 @@ defn draw-state [^state/GameState s]
 ```
 
 **Turmeric features:**
-- `defclass` — define a typeclass
-- `definstance` — implement a typeclass for a type
+- `defclass` -- define a typeclass
+- `definstance` -- implement a typeclass for a type
 - Polymorphic `draw` function works on any `Drawable`
 
 ---
@@ -840,10 +848,10 @@ defn -main []
 ```
 
 **Turmeric features:**
-- `defeffect` — define a new effect
-- `perform` — raise/perform an effect
-- `handle` — handle effects with pattern matching
-- `resume` — continue after handling
+- `defeffect` -- define a new effect
+- `perform` -- raise/perform an effect
+- `handle` -- handle effects with pattern matching
+- `resume` -- continue after handling
 
 > **Note**: This is a simplified version. The full effect system will be more sophisticated.
 
@@ -1007,11 +1015,15 @@ import effects
 defeffect Game-Over [score : int] : void
 
 defn update-state [^state/GameState s] : state/GameState
-  if is-key-down(KEY_RIGHT) update(s { snake.direction: 1 })
-   if is-key-down(KEY_LEFT) update(s { snake.direction: 3 })
-    if is-key-down(KEY_UP) update(s { snake.direction: 0 })
-     if is-key-down(KEY_DOWN) update(s { snake.direction: 2 })
-      s
+  if is-key-down(KEY_RIGHT)
+    update(s { snake.direction: 1 })
+    if is-key-down(KEY_LEFT)
+      update(s { snake.direction: 3 })
+      if is-key-down(KEY_UP)
+        update(s { snake.direction: 0 })
+        if is-key-down(KEY_DOWN)
+          update(s { snake.direction: 2 })
+          s
   let [new-snake update-snake(s.snake)]
     state/GameState(new-snake s.width s.height)
 
@@ -1026,7 +1038,7 @@ defn game-loop [^state/GameState state]
       handle-render(obj)
       resume(k)
     (Game-Over [score] k)
-      println(concat("Game Over! Score: " itoa(score)))
+      println $ concat("Game Over! Score: " itoa(score))
       resume(k)
 
 defn -main []
@@ -1042,7 +1054,7 @@ defn -main []
 
 **Turmeric features:**
 - `and` / `or` -- boolean logic
-- `any?` — higher-order function on collections
+- `any?` -- higher-order function on collections
 - Nested effect handling
 
 ---
@@ -1260,7 +1272,7 @@ defn game-loop [^state/GameState state]
     (Get-Time [] k)
       resume(k 0.0)
     (Game-Over [score] k)
-      println(concat("Game Over! Score: " itoa(score)))
+      println $ concat("Game Over! Score: " itoa(score))
       resume(k)
 
 defn -main []
@@ -1277,7 +1289,7 @@ defn -main []
 **Turmeric features:**
 - `option` type -- `some` / `none` for maybe values
 - `match` on `option` types
-- `do` — sequential evaluation
+- `do` -- sequential evaluation
 - State updates with multiple fields
 
 ---
@@ -1635,7 +1647,7 @@ defn game-loop [^state/GameState state]
         (state/GameState updated) game-loop(updated)
         _ do
             draw(new-state)
-            perform(Draw-Text(concat("Score: " itoa(new-state.score)) 10 10))
+            perform $ Draw-Text(concat("Score: " itoa(new-state.score)) 10 10)
             game-loop(new-state)
     ;; ... existing handlers ...
     (Draw-Text [text x y] k)
@@ -1835,7 +1847,7 @@ defn game-loop [^state/GameState state]
         (state/GameState updated) game-loop(updated)
         _ do
             draw(new-state)
-            perform(Draw-Text(concat("Score: " itoa(new-state.score)) 10 10))
+            perform $ Draw-Text(concat("Score: " itoa(new-state.score)) 10 10)
             game-loop(new-state)
     (Render [obj] k)
       handle-render(obj)
@@ -1912,12 +1924,12 @@ fith/
 
 Once you've completed this tutorial, consider:
 
-1. **Add sound effects** — Use Raylib's audio functions via FFI
-2. **Add a pause menu** — Use nested effect handlers
-3. **Add levels** — Different speeds, obstacles
-4. **Add high scores** — Save to a file
-5. **Port to WASM** — Use Emscripten
-6. **Multiplayer** — Two snakes, different controls
+1. **Add sound effects** -- Use Raylib's audio functions via FFI
+2. **Add a pause menu** -- Use nested effect handlers
+3. **Add levels** -- Different speeds, obstacles
+4. **Add high scores** -- Save to a file
+5. **Port to WASM** -- Use Emscripten
+6. **Multiplayer** -- Two snakes, different controls
 
 ---
 

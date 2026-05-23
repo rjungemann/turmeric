@@ -87,6 +87,19 @@ self.addEventListener('message', function (e) {
     const msg = e.data;
 
     if (msg.type === 'init') {
+        // The pthreads-capable WASM binary requires SharedArrayBuffer, which is
+        // only available in cross-origin isolated contexts.  Safari < 15.4 has a
+        // bug where dedicated Workers do not inherit cross-origin isolation from
+        // the page, so SharedArrayBuffer is undefined even when the page is
+        // isolated.  Detect this early and report a clear error.
+        if (typeof SharedArrayBuffer === 'undefined') {
+            self.postMessage({
+                type: 'init-error',
+                error: 'shared-array-buffer-unavailable',
+            });
+            return;
+        }
+
         importScripts('/turmeric.js');
 
         const factory = self.TurmericModule;

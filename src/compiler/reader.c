@@ -1251,6 +1251,38 @@ static Form *read_form(Reader *r) {
     int c = peek(r);
     if (c == -1) return NULL;
 
+    /* DC1/DC2: Datum comment #;datum -- read and discard one form */
+    if (c == '#' && peek2(r) == ';') {
+        Span s = span_point(r);
+        advance(r); advance(r);  /* consume '#' and ';' */
+        skip_ws_and_comments(r);
+        int next = peek(r);
+        if (next == -1) {
+            diag_emit(DIAG_ERROR, s,
+                      "datum comment #; requires a following form, "
+                      "got end of input");
+            r->error = true;
+            return NULL;
+        }
+        if (next == ')' || next == ']' || next == '}') {
+            diag_emit(DIAG_ERROR, s,
+                      "datum comment #; requires a following form, got '%c'",
+                      (char)next);
+            r->error = true;
+            return NULL;
+        }
+        Form *discarded = read_form(r);
+        if (r->error) return NULL;
+        if (!discarded) {
+            diag_emit(DIAG_ERROR, s,
+                      "datum comment #; requires a following form, "
+                      "got end of input");
+            r->error = true;
+            return NULL;
+        }
+        (void)discarded;
+        return read_form(r);
+    }
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);
     }

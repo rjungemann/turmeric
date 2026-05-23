@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Turmeric — A Taste of Functional Programming</title>
+<title>Turmeric -- A Taste of Functional Programming</title>
 <meta name="description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://turmeric-lang.com/">
-<meta property="og:title" content="Turmeric — A Taste of Functional Programming">
+<meta property="og:title" content="Turmeric -- A Taste of Functional Programming">
 <meta property="og:description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
 <meta property="og:image" content="https://turmeric-lang.com/og-image.png">
 <meta property="og:image:width" content="1200">
@@ -19,7 +19,7 @@
 <!-- Twitter / X -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:url" content="https://turmeric-lang.com/">
-<meta name="twitter:title" content="Turmeric — A Taste of Functional Programming">
+<meta name="twitter:title" content="Turmeric -- A Taste of Functional Programming">
 <meta name="twitter:description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
 <meta name="twitter:image" content="https://turmeric-lang.com/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,7 +40,7 @@
   <div class="hero-inner">
     <div class="hero-eyebrow">
       <span class="eyebrow-dot"></span>
-      Now in public alpha — v%TURMERIC_VERSION%
+      Now in public alpha -- v%TURMERIC_VERSION%
     </div>
     <h1>A <em>taste</em> of<br>functional programming</h1>
     <p class="hero-subtitle">Lightning-fast, expressive, and a joy to write.</p>
@@ -124,7 +124,7 @@ println
   <div class="feature-card">
     <div class="feat-icon">⚡</div>
     <div class="feat-title">Lightning Compilation</div>
-    <p class="feat-desc">Turmeric compiles to native code with whole-program optimization. Incremental builds are fast by design — spend more time writing, less time waiting.</p>
+    <p class="feat-desc">Turmeric compiles to native code with whole-program optimization. Incremental builds are fast by design -- spend more time writing, less time waiting.</p>
     <span class="feat-badge">sub-second builds</span>
   </div>
 
@@ -138,7 +138,7 @@ println
   <div class="feature-card">
     <div class="feat-icon">✦</div>
     <div class="feat-title">Algebraic Effects</div>
-    <p class="feat-desc">Model side effects as first-class values. Compose, intercept, and resume them with handlers — no monad transformers required.</p>
+    <p class="feat-desc">Model side effects as first-class values. Compose, intercept, and resume them with handlers -- no monad transformers required.</p>
     <span class="feat-badge">defeffect · perform · handle</span>
   </div>
 
@@ -172,7 +172,7 @@ println
   <div>
     <p class="section-label">Typeclasses</p>
     <h2 class="section-title">Polymorphism<br>that <em>scales.</em></h2>
-    <p class="section-desc mb-24">Define behavior once, use it everywhere. Turmeric's typeclass system handles dispatch at compile time — no virtual tables, no runtime cost.</p>
+    <p class="section-desc mb-24">Define behavior once, use it everywhere. Turmeric's typeclass system handles dispatch at compile time -- no virtual tables, no runtime cost.</p>
     <p class="section-desc">Write instances for any type with complete type inference. Typeclass constraints keep your functions general without losing precision.</p>
   </div>
   <div class="code-card code-card--sm">
@@ -243,7 +243,7 @@ defn color-name [c] :cstr
   <div>
     <p class="section-label">Algebraic Effects</p>
     <h2 class="section-title">Side effects,<br><em>tamed.</em></h2>
-    <p class="section-desc mb-24">Declare what your functions can do, not how they do it. Handlers let you swap implementations — test, log, mock — without touching your core logic.</p>
+    <p class="section-desc mb-24">Declare what your functions can do, not how they do it. Handlers let you swap implementations -- test, log, mock -- without touching your core logic.</p>
     <p class="section-desc">Compose effects freely. The type system ensures you never forget to handle one.</p>
   </div>
   <div class="code-card code-card--sm">
@@ -378,14 +378,14 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
 
   <div class="started-grid">
     <div class="step-card">
-      <div class="step-num">01 — Install</div>
+      <div class="step-num">01 -- Install</div>
       <div class="step-title">One command install</div>
       <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-      <p class="step-desc">Installs <code>tur</code> via the Homebrew formula. Requires <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a>. Or build from source — see the <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">GitHub repo</a>.</p>
+      <p class="step-desc">Installs <code>tur</code> via the Homebrew formula. Requires <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a>. Or build from source -- see the <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">GitHub repo</a>.</p>
     </div>
 
     <div class="step-card">
-      <div class="step-num">02 — New Project</div>
+      <div class="step-num">02 -- New Project</div>
       <div class="step-title">Scaffold a project</div>
       <div class="step-code">tur new my-project
 cd my-project
@@ -394,7 +394,7 @@ tur run</div>
     </div>
 
     <div class="step-card">
-      <div class="step-num">03 — Write Code</div>
+      <div class="step-num">03 -- Write Code</div>
       <div class="step-title">Your first function</div>
       <div class="step-code">(defn factorial [n] :int
   (if (&lt;= n 1) 1
@@ -405,12 +405,12 @@ tur run</div>
     </div>
 
     <div class="step-card">
-      <div class="step-num">04 — Add Packages</div>
+      <div class="step-num">04 -- Add Packages</div>
       <div class="step-title">Rich package ecosystem</div>
       <div class="step-code">tur add spice/http
 tur add spice/json
 tur add spice/postgres</div>
-      <p class="step-desc">The Spice registry hosts packages for HTTP, JSON, databases, parsing, and more — all with effect-typed APIs.</p>
+      <p class="step-desc">The Spice registry hosts packages for HTTP, JSON, databases, parsing, and more -- all with effect-typed APIs.</p>
     </div>
   </div>
 </div>
@@ -419,7 +419,7 @@ tur add spice/postgres</div>
 <div class="cta-section reveal">
   <div class="cta-box">
     <h2 class="cta-title">Ready to add some<br><em>spice</em> to your stack?</h2>
-    <p class="cta-desc">Try Turmeric in your browser — no install required.</p>
+    <p class="cta-desc">Try Turmeric in your browser -- no install required.</p>
     <div class="cta-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>
       <a href="/docs/html/api/" class="btn-hero btn-hero-secondary">Read the Docs</a>

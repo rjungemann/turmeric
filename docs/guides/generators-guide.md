@@ -73,7 +73,7 @@ when a value was yielded, NULL when exhausted. Use the `gen.tur` helpers:
 ```turmeric
 ;; gen-for-each macro -- preferred for side effects
 (gen-for-each (range-gen 0 5)
-  (fn [x] (println x)))
+              (fn [x] (println x)))
 ; prints 0 1 2 3 4
 ```
 

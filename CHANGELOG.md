@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [0.8.0] — 2026-05-22
+## [0.8.0] -- 2026-05-22
 
 ### Added
 
@@ -54,16 +54,16 @@ All notable changes to Turmeric are documented here.
   - CLI args guide (`docs/guides/cli-args-guide.md`) -- structured argument parsing with `stdlib/args.tur`
   - Cloudflare deployment guide (`docs/guides/cloudflare-deployment-guide.md`) -- deploying the web REPL to Cloudflare Pages
 
-## [0.7.0] — 2026-05-21
+## [0.7.0] -- 2026-05-21
 
 ### Added
 
 - **Sized types (SZ0–SZ1)** (`-Xsized-types`) (#50)
   - `StaticInt` and size arithmetic (`static-int-add`, `static-int-mul`, `static-int-eq`) for phantom size annotations
-  - `SizedVec` — length-indexed vector; `sized-vec-new`, `sized-vec-push`, `sized-vec-get`, `sized-vec-set`
-  - `SizedBuf` — flat byte/word buffers with heap and stack allocation dispatch; `sized-buf-alloc`, `sized-buf-stack`, `sized-buf-get`, `sized-buf-set`
-  - `SizedMatrix` — sized 2-D matrix with row/column shape annotations; `sized-matrix-new`, `sized-matrix-ref`, `sized-matrix-set`
-  - `SizedBitVec` — compact bit array with size annotation; `sized-bitvec-new`, `sized-bitvec-get`, `sized-bitvec-set`, `sized-bitvec-popcount`
+  - `SizedVec` -- length-indexed vector; `sized-vec-new`, `sized-vec-push`, `sized-vec-get`, `sized-vec-set`
+  - `SizedBuf` -- flat byte/word buffers with heap and stack allocation dispatch; `sized-buf-alloc`, `sized-buf-stack`, `sized-buf-get`, `sized-buf-set`
+  - `SizedMatrix` -- sized 2-D matrix with row/column shape annotations; `sized-matrix-new`, `sized-matrix-ref`, `sized-matrix-set`
+  - `SizedBitVec` -- compact bit array with size annotation; `sized-bitvec-new`, `sized-bitvec-get`, `sized-bitvec-set`, `sized-bitvec-popcount`
   - Stdlib in `stdlib/sized.tur`, `stdlib/sized-buf.tur`, `stdlib/sized-matrix.tur`, `stdlib/sized-bits.tur`
   - Full user guide: [docs/guides/sized-types-guide.md](docs/guides/sized-types-guide.md)
 
@@ -83,7 +83,7 @@ All notable changes to Turmeric are documented here.
   - `setjmp`/`longjmp` panic boundary exposed as `EX_CATCH_UNWIND`; `panic?` native predicate
 
 - **Weak pointer upgrade returns Option** (#50)
-  - `(weak-upgrade r)` now returns `(some value)` on success and `(none)` on dangling — previously returned a raw value or zero
+  - `(weak-upgrade r)` now returns `(some value)` on success and `(none)` on dangling -- previously returned a raw value or zero
 
 - **Args parser stdlib** (`stdlib/args.tur`) (#50)
   - Builder-pattern CLI argument parsing: flags (`--verbose`), options (`--input=file` or `--input file`), positional args, and arbitrarily nested subcommands
@@ -110,14 +110,14 @@ All notable changes to Turmeric are documented here.
 - **Tier 3 worker pool** (#45)
   - Persistent interpreter processes for test fixtures; dramatically reduces per-test process-spawn overhead
 
-- **`emit_effects.c`** — effects codegen extracted from `emit_expr.c` into a dedicated translation unit (#50)
+- **`emit_effects.c`** -- effects codegen extracted from `emit_expr.c` into a dedicated translation unit (#50)
 
 - **EAVT / Datalog database tutorial series** (`docs/guides/datalog-*.md`, `examples/datalog/`)
   - Four-part guide: EAVT concepts, minimal implementation, query API, B-tree indexing
   - Five progressive example programs in `examples/datalog/`: `minimal.tur`, `indexed.tur`, `query.tur`, `blog.tur`, `datalog.tur`
 
 - **New and expanded guides**
-  - Performance guide (`docs/guides/performance-guide.md`) — numerical, data structures, concurrency, memory, recursion, I/O, benchmarking methodology
+  - Performance guide (`docs/guides/performance-guide.md`) -- numerical, data structures, concurrency, memory, recursion, I/O, benchmarking methodology
   - Sized types guide (`docs/guides/sized-types-guide.md`)
   - Building for the Web with Emscripten (`docs/guides/web-emscripten-tutorial.md`)
   - Structs guide (`docs/guides/structs-guide.md`)
@@ -131,18 +131,18 @@ All notable changes to Turmeric are documented here.
 - Memory leaks and stale codegen snapshots from perf-comparison branch
 - `weak-dangling` test updated to reflect Option-returning `weak-upgrade`
 
-## [0.6.0] — 2026-05-19
+## [0.6.0] -- 2026-05-19
 
 ### Changed
 
 - Documentation refresh and cleanup
 - Regenerated stdlib API reference
 
-## [0.5.0] — 2026-05-19
+## [0.5.0] -- 2026-05-19
 
 ### Added
 
-- **Session types — binary (SS0–SS4)** (`-Xsessions`) (#38, #36, SS0a–SS3c)
+- **Session types -- binary (SS0–SS4)** (`-Xsessions`) (#38, #36, SS0a–SS3c)
   - `Session[P]` type; `make-session`, `send`, `recv`, `close` channel operations
   - `Choose`/`Branch` for internal/external choice; `choose-left`/`choose-right`/`offer`
   - `Rec` equirecursive protocols (co-inductive equality with seen-set guard)
@@ -153,7 +153,7 @@ All notable changes to Turmeric are documented here.
   - Debug builds embed initial protocol name as `const char* dbg_proto`
   - Error codes `TUR_E0210`–`TUR_E0212`; `tur explain` entries
 
-- **Session types — multi-party (SS5–SS8)** (`-Xsessions`) (#39, #40, #41, #42)
+- **Session types -- multi-party (SS5–SS8)** (`-Xsessions`) (#39, #40, #41, #42)
   - `defprotocol` global protocol declaration with role list and interaction forms
   - `(-> From To MsgType)`, `(choice From [label branch ...])`, `(loop label body)`, `(continue label)`
   - Well-formedness checks (undeclared roles, non-guarded recursion): `TUR_E0223`
@@ -181,72 +181,72 @@ All notable changes to Turmeric are documented here.
 ### Fixed
 - Scheduler multithread codegen snapshot (#63906e87)
 
-## [0.4.0] — 2026-05-17
+## [0.4.0] -- 2026-05-17
 
 ### Added
 - Algebraic effects with delimited continuations and handler syntax (#25)
 - WASM threads planning and infrastructure
 
-## [0.3.2] — 2026-05-17
+## [0.3.2] -- 2026-05-17
 
 ### Changed
 - Syntax highlighter improvements
 - Documentation cleanup and reorganisation
 
-## [0.3.1] — 2026-05-17
+## [0.3.1] -- 2026-05-17
 
 ### Changed
 - Homepage layout and copy updates
 - Documentation improvements
 
-## [0.3.0] — 2026-05-17
+## [0.3.0] -- 2026-05-17
 
 ### Added
-- GADTs — generalised algebraic data types with full elaboration and codegen support (#24)
-- Linear types — linearity constraints enforced by the type system
+- GADTs -- generalised algebraic data types with full elaboration and codegen support (#24)
+- Linear types -- linearity constraints enforced by the type system
 
 ### Fixed
 - Homepage horizontal scroll on mobile (#23)
 
-## [0.2.0] — 2026-05-16
+## [0.2.0] -- 2026-05-16
 
 ### Added
-- Package manager — CPM-based dependency management (#22)
-- Effect rows — row-polymorphic effect types
+- Package manager -- CPM-based dependency management (#22)
+- Effect rows -- row-polymorphic effect types
 - Substructural and uniqueness types
 - Linear types (initial support)
 - "Solve this" button in the web REPL
 
-## [0.1.0] — 2026-05-14
+## [0.1.0] -- 2026-05-14
 
 ### Added
-- Higher-ranked types — rank-N polymorphism (#18)
-- GADTs — initial implementation (#21)
-- Arrows — generalised computation abstractions
-- Structural equality — deep equality for all types (#17)
-- Serialisable continuations — capture and restore delimited continuations (#16)
-- Contracts — `require!`, `ensure!`, `invariant!`, and `assert!` macros
-- Set literals — `#s(...)` reader syntax
-- HAMTs — persistent hash-array-mapped tries
-- STM — software transactional memory
-- Comonads — comonad typeclass and standard instances
-- Numeric types — fixed-width integers and floats with explicit cast operators
-- Auto-formatter — source code pretty-printer
-- Async/await — fibre-based structured concurrency (#10)
-- Unsafe effects — escape-hatch unsafe block form (#11)
-- HKT — higher-kinded types, kind inference, and type application syntax
-- Docstrings — `;;;` doc-comment standard and `doc` macro
+- Higher-ranked types -- rank-N polymorphism (#18)
+- GADTs -- initial implementation (#21)
+- Arrows -- generalised computation abstractions
+- Structural equality -- deep equality for all types (#17)
+- Serialisable continuations -- capture and restore delimited continuations (#16)
+- Contracts -- `require!`, `ensure!`, `invariant!`, and `assert!` macros
+- Set literals -- `#s(...)` reader syntax
+- HAMTs -- persistent hash-array-mapped tries
+- STM -- software transactional memory
+- Comonads -- comonad typeclass and standard instances
+- Numeric types -- fixed-width integers and floats with explicit cast operators
+- Auto-formatter -- source code pretty-printer
+- Async/await -- fibre-based structured concurrency (#10)
+- Unsafe effects -- escape-hatch unsafe block form (#11)
+- HKT -- higher-kinded types, kind inference, and type application syntax
+- Docstrings -- `;;;` doc-comment standard and `doc` macro
 - Markdown Turmeric block syntax highlighting in the web REPL
 
-## [0.0.4] — 2026-05-09
+## [0.0.4] -- 2026-05-09
 
 ### Added
 - Algebraic effects infrastructure (v1) with delimited continuations
 - Capability-passing effects (v1 effect system)
-- Exceptions — `try`/`throw` via `setjmp`/`longjmp`
-- Defer expressions — unified runtime-list-on-frame model
+- Exceptions -- `try`/`throw` via `setjmp`/`longjmp`
+- Defer expressions -- unified runtime-list-on-frame model
 - Multi-file support and mutual recursion across files
-- Async/await foundation — fibre context switching (x64/arm64 asm)
+- Async/await foundation -- fibre context switching (x64/arm64 asm)
 - Compile-time macro evaluation via procedural elaboration
 - `cond` as a variadic `defmacro` (removed built-in `elab_cond`) (#4)
 - miniKanren-style logic programming example and guide

@@ -1,4 +1,4 @@
-# Haskell-Style Currying — Implementation Plan (CY0–CY4)
+# Haskell-Style Currying -- Implementation Plan (CY0–CY4)
 
 > **Status:** CY0–CY3 complete. CY4 not started.
 >
@@ -53,12 +53,12 @@ If `f : (-> A B C)` and we write `(f a)` where `a : A`, the result has type
 `elab_fn` / `emit.c` handles the rest.
 
 For a fully curried chain `(f a b)` where `f : (-> A B C)`, this is just the
-normal fully-saturated call — no wrapper is needed.
+normal fully-saturated call -- no wrapper is needed.
 
 ### Over-application
 
 `(f a b c)` where `f : (-> A B)` and `(f a b) : C` and `C` is itself a
-function type `(-> D E)` — the result is called with `c`. The elaborator
+function type `(-> D E)` -- the result is called with `c`. The elaborator
 handles this by elaborating `f` with as many args as it will accept, then
 treating the result as the new callee for the remaining arguments, recursively.
 This requires detecting that the intermediate result type is callable.
@@ -74,12 +74,12 @@ calling it with 1 argument now synthesises a wrapper instead of an error.
 ## Architecture Overview
 
 ```
-src/elab.c          — elab_call_fn: partial-application synthesis (CY1)
+src/elab.c          -- elab_call_fn: partial-application synthesis (CY1)
                       elab_form:    over-application chaining (CY2)
-src/emit.c          — no changes needed; uses existing closure emit path
-src/types.h         — no changes needed; partial-app type is TY_FN
-tests/fixtures/     — currying-*.tur fixtures (CY0–CY3)
-stdlib/             — update map/filter/fold/zip signatures (CY3)
+src/emit.c          -- no changes needed; uses existing closure emit path
+src/types.h         -- no changes needed; partial-app type is TY_FN
+tests/fixtures/     -- currying-*.tur fixtures (CY0–CY3)
+stdlib/             -- update map/filter/fold/zip signatures (CY3)
 ```
 
 The existing closure infrastructure (`EX_CLOSURE`, `Closure`, `FnDef` with env
@@ -89,7 +89,7 @@ inserts.
 
 ---
 
-## Phase CY0 — Specification and fixtures
+## Phase CY0 -- Specification and fixtures
 
 **Goal:** Define the surface semantics with runnable examples before touching
 the compiler. All fixtures in this phase are expected to *fail* until CY1 is
@@ -107,15 +107,15 @@ complete.
 
 ### Fixtures
 
-- [x] `tests/fixtures/currying/partial-basic.tur` — `(f a)` on a 2-arg function
+- [x] `tests/fixtures/currying/partial-basic.tur` -- `(f a)` on a 2-arg function
   produces the correct closure; calling the closure gives the right answer.
-- [x] `tests/fixtures/currying/partial-chain.tur` — `(((+ ) 3) 4)` gives `7`
+- [x] `tests/fixtures/currying/partial-chain.tur` -- `(((+ ) 3) 4)` gives `7`
   (operator section style).
-- [x] `tests/fixtures/currying/over-apply.tur` — `(f a b c)` where `f` returns
+- [x] `tests/fixtures/currying/over-apply.tur` -- `(f a b c)` where `f` returns
   a function; result is the composed call.
-- [x] `tests/fixtures/currying/point-free.tur` — `(map (+ 1) xs)` without an
+- [x] `tests/fixtures/currying/point-free.tur` -- `(map (+ 1) xs)` without an
   explicit `fn` wrapper.
-- [x] `tests/fixtures/errors/currying-over-apply-bad.tur` — over-applying past
+- [x] `tests/fixtures/errors/currying-over-apply-bad.tur` -- over-applying past
   a non-function return type produces `TUR-E0002` with improved message.
 
 **Exit criterion:** Fixtures exist and are documented; all currently produce
@@ -123,7 +123,7 @@ complete.
 
 ---
 
-## Phase CY1 — Under-saturated call sites (partial application)
+## Phase CY1 -- Under-saturated call sites (partial application)
 
 **Goal:** When `elab_call_fn` detects that the number of provided arguments is
 less than the function's arity, synthesise a closure instead of erroring.
@@ -157,7 +157,7 @@ Given `f : (-> A B C)` called as `(f a)`:
 1. Collect elaborated supplied args: `[a_expr]` with types `[A]`.
 2. Compute remaining parameter types: `[B]` with result `C`.
 3. Build a fresh `fn` form in the arena equivalent to:
-   `(fn [b] :C (f a b))` — but using `EX_VAR` / `EX_CALL` nodes directly,
+   `(fn [b] :C (f a b))` -- but using `EX_VAR` / `EX_CALL` nodes directly,
    not re-parsing source text.
 4. The synthesised `fn` has `n_captures = n_provided` (the supplied args are
    its free variables).
@@ -186,7 +186,7 @@ must carry the remaining full-type slots. Copy
 
 - No new error code. Under-saturation is now valid.
 - Over-saturation of a non-function return type still emits `TUR-E0002`; improve
-  the message: *"function returns `int`, which is not callable — did you mean to
+  the message: *"function returns `int`, which is not callable -- did you mean to
   pass all N arguments?"*
 
 ### Tasks
@@ -203,10 +203,10 @@ existing tests continue to pass.
 
 ---
 
-## Phase CY2 — Over-application
+## Phase CY2 -- Over-application
 
 **Goal:** Allow `(f a b c)` where `f : (-> A B)`, `(f a b) : C`, and `C` is
-itself a function type — the elaborator chains the calls.
+itself a function type -- the elaborator chains the calls.
 
 ### Changes to `elab_form` / `elab_call_fn`
 
@@ -240,17 +240,17 @@ improved diagnostic.
 
 ---
 
-## Phase CY3 — Standard library integration
+## Phase CY3 -- Standard library integration
 
 **Goal:** Update `stdlib/` functions that take higher-order arguments so they
-work naturally with curried calls. No type-system changes needed — just
+work naturally with curried calls. No type-system changes needed -- just
 signature adjustments and new fixtures.
 
 ### Functions to audit
 
 | File | Function | Current signature | Currying-friendly? |
 |---|---|---|---|
-| `stdlib/list.tur` | `map` | `(-> (-> :int :int) (List :int) (List :int))` | No — specialised to `int` |
+| `stdlib/list.tur` | `map` | `(-> (-> :int :int) (List :int) (List :int))` | No -- specialised to `int` |
 | `stdlib/list.tur` | `filter` | similar | No |
 | `stdlib/list.tur` | `fold` | `(-> (-> :int :int :int) :int (List :int) :int)` | No |
 | `stdlib/vec.tur` | `vec/map` | specialised | No |
@@ -302,7 +302,7 @@ documented.
 
 ---
 
-## Phase CY4 — Effect rows and rank-2 interaction
+## Phase CY4 -- Effect rows and rank-2 interaction
 
 **Goal:** Ensure partial applications correctly propagate effect rows and that
 rank-2 polymorphic functions (`forall`-quantified parameters) interact soundly
@@ -320,7 +320,7 @@ synthesised closure in `elab_partial_apply` has no effect annotation. Fix:
 
 ### Rank-2 parameters
 
-`(forall [a] (-> (-> a a) a a))` — a function taking a polymorphic function
+`(forall [a] (-> (-> a a) a a))` -- a function taking a polymorphic function
 argument. If this is partially applied, the resulting closure must retain the
 `forall` binder. This requires:
 
@@ -332,9 +332,9 @@ argument. If this is partially applied, the resulting closure must retain the
 
 - [ ] Propagate `effect_row` through `elab_partial_apply`.
 - [ ] Propagate `arg_full_types` fully through partial application.
-- [ ] Fixture: `currying-effect-partial.tur` — partial application of an
+- [ ] Fixture: `currying-effect-partial.tur` -- partial application of an
   effectful function retains the effect annotation.
-- [ ] Fixture: `currying-rank2-partial.tur` — partial application of a rank-2
+- [ ] Fixture: `currying-rank2-partial.tur` -- partial application of a rank-2
   function.
 
 **Exit criterion:** Both fixtures pass; effect-check pass produces no spurious
@@ -344,19 +344,19 @@ argument. If this is partially applied, the resulting closure must retain the
 
 ## Open Questions
 
-1. **`MAX_FN_ARITY = 8`** — the partial-application closure's remaining
+1. **`MAX_FN_ARITY = 8`** -- the partial-application closure's remaining
    parameter list must also fit within 8 args. This is automatically satisfied
    since `rem_arity = arity - n_provided < arity <= 8`. No change needed.
 
-2. **Type inference for `:...`** — the `curry` macro uses placeholder return
+2. **Type inference for `:...`** -- the `curry` macro uses placeholder return
    types. Full return-type inference is not currently in scope; for CY3, the
    macro requires explicit annotations or a future type-inference phase.
 
-3. **Performance** — each partial application allocates a heap closure. A
+3. **Performance** -- each partial application allocates a heap closure. A
    future optimisation pass could detect when the partial-application closure
    is immediately fully applied (e.g., `((f a) b)`) and collapse it to a direct
    call with no allocation. This is out of scope for CY0–CY4.
 
-4. **`defn` currying** — should `(defn f [a b] :int ...)` automatically define
+4. **`defn` currying** -- should `(defn f [a b] :int ...)` automatically define
    a curried entry point `f/1 : (-> A (-> B C))`? This would allow `f` to be
    used in point-free style without a call site. Deferred; no decision made.

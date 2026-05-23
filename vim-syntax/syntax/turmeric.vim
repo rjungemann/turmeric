@@ -91,7 +91,17 @@ syn keyword turmericBuiltin  string? vector? list? number? symbol?
 syn keyword turmericBuiltin  boolean? null? atom? pair? empty? extern-c
 
 " ---- Delimiters ----
-syn match   turmericDelim  /[()[\]{}]/
+syn match   turmericDelim      /[()[\]]/
+
+" ---- Sweet-exp / Curly-infix delimiters { } ----
+syn match   turmericCurlyInfix /[{}]/
+
+" ---- #lang directive: #lang sweet-exp / #lang turmeric/curly-infix / etc. ----
+syn match   turmericLangDir    /^#lang/
+syn match   turmericLangName   /^#lang\s\+\zs\S\+/
+
+" ---- Sweet-exp / Neoteric: identifier immediately before ( ----
+syn match   turmericNeotericCall /\<[a-zA-Z_][a-zA-Z0-9_*!?-]*\ze(/
 
 " ---- Reader conditional: #?(:tur ... :turi ...) ----
 syn match turmericReaderCondPrefix /#?/ contained
@@ -131,7 +141,11 @@ hi def link turmericEffect        Keyword
 hi def link turmericExcept        Exception
 hi def link turmericSpecial       Special
 hi def link turmericBuiltin       Function
-hi def link turmericDelim         Delimiter
+hi def link turmericDelim            Delimiter
+hi def link turmericCurlyInfix       Special
+hi def link turmericLangDir          PreProc
+hi def link turmericLangName         Type
+hi def link turmericNeotericCall     Function
 hi def link turmericReaderCondDelim  Special
 hi def link turmericReaderCondKey    Keyword
 

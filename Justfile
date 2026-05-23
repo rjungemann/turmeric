@@ -179,12 +179,17 @@ rebuild: clean configure build
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup,
 # and web/public/doc-names.json for the web REPL search bar.
-docs: guides
+docs: guides spices
     python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json
 
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
     python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+
+# Generate the Spices directory page.
+# Reads ../turmeric-spices/README.md (local) or fetches from GitHub as fallback.
+spices:
+    python3 tools/genspices.py --out docs/html/spices/
 
 
 # Check that every turmeric+sweet-exp toggle pair in the guides is valid.

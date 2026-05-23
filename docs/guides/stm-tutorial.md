@@ -553,7 +553,7 @@ defn merge-sort-stm [vec]
 
 ## See Also
 
-- [Threading Guide](threading-guide.md) — Locks, mutexes, atomic types
-- [Async/Await Guide](async-await-guide.md) — Lightweight concurrency with fibers
-- [Effects System Guide](effects-system-guide.md) — Exception handling in transactions
-- [turmeric-plan.md](../turmeric-plan.md) §19 — Thread primitives (prerequisite)
+- [Threading Guide](threading-guide.md) -- Locks, mutexes, atomic types
+- [Async/Await Guide](async-await-guide.md) -- Lightweight concurrency with fibers
+- [Effects System Guide](effects-system-guide.md) -- Exception handling in transactions
+- [turmeric-plan.md](../turmeric-plan.md) §19 -- Thread primitives (prerequisite)

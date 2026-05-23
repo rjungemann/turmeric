@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(turmeric LANGUAGES C ASM)
 
+# Export compile_commands.json for clangd.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # ---------------------------------------------------------------------------
 # CPM: package manager for fetching Raylib (and any future C dependencies).
 # ---------------------------------------------------------------------------

@@ -53,16 +53,22 @@ defgadt Expr [a]
 defn eval-expr [e] :int
   match e
     (IntLit  n)   n
-    (BoolLit b)   if(b 1 0)
+    (BoolLit b)
+      if b
+        1
+        0
     (Add     l r) {eval-expr(l) + eval-expr(r)}
-    (IsZero  n)   if({eval-expr(n) = 0} 1 0)
+    (IsZero  n)
+      if {eval-expr(n) = 0}
+        1
+        0
 
 defn main [] :int
   ; (2 + (IsZero 0)) -- only valid at type (Expr ???) mismatch, caught statically
-  println(eval-expr((IntLit 42)))
-  println(eval-expr(Add((IntLit 3) (IntLit 4))))
-  println(eval-expr(IsZero((IntLit 0))))
-  println(eval-expr(IsZero(Add((IntLit 1) (IntLit 0)))))
+  println $ eval-expr((IntLit 42))
+  println $ eval-expr(Add((IntLit 3) (IntLit 4)))
+  println $ eval-expr(IsZero((IntLit 0)))
+  println $ eval-expr(IsZero(Add((IntLit 1) (IntLit 0))))
   0
 ```
 
@@ -157,9 +163,9 @@ defn vzip-add [xs ys] :int
 
 defn main [] :int
   let [v VCons(1 VCons(2 VCons(3 (VNil))))]
-    println(vec-len(v))
-    println(vec-head(v))
-    println(vzip-add(v v))
+    println $ vec-len(v)
+    println $ vec-head(v)
+    println $ vzip-add(v v)
   0
 ```
 
@@ -216,7 +222,9 @@ defn sprintf2 [fmt a b] :int
                   0
     (FIntBool)  do
                   println(a)
-                  if(b println(1) println(0))
+                  if b
+                    println(1)
+                    println(0)
                   0
 
 defn main [] :int
@@ -305,8 +313,8 @@ defn use-eq [eq x] :int
 defn main [] :int
   ; Construct a proof that int = int
   let [proof (Refl)]
-    println(use-eq(proof 41))
-    println(coerce(proof 100))
+    println $ use-eq(proof 41)
+    println $ coerce(proof 100)
   0
 ```
 
@@ -350,7 +358,7 @@ defn open-int-box [box eq] :int
 
 defn main [] :int
   let [b MkBox(99)]
-    println(open-int-box(b (Refl)))
+    println $ open-int-box(b (Refl))
   0
 ```
 
@@ -404,8 +412,8 @@ defn accept-either [x : ((Tag int) | int)] :int
     (n : int)       n
 
 defn main [] :int
-  println(accept-either((IntTag)))
-  println(accept-either(42))
+  println $ accept-either((IntTag))
+  println $ accept-either(42)
   0
 ```
 

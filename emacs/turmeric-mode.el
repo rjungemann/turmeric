@@ -120,6 +120,11 @@
     ;; Doc comments (;;;) -- override the syntax-based comment face
     (";;;.*$" 0 font-lock-doc-face t)
 
+    ;; #lang directive: #lang sweet-exp / #lang turmeric/curly-infix / etc.
+    ("\\(#lang\\)\\s-+\\([a-zA-Z][a-zA-Z0-9_/.+-]*\\)"
+     (1 font-lock-preprocessor-face)
+     (2 font-lock-type-face))
+
     ;; C inline blocks: ```c ... ``` (single-line form)
     ;; Multi-line blocks are left to Emacs string/comment handling.
     ("```c?[^`]*```" 0 font-lock-preprocessor-face t)
@@ -192,7 +197,13 @@
 
     ;; Variable name in a bare (def name ...) -- not (defn/defdata/etc.)
     ("(def[[:space:]]+\\(\\_<[a-zA-Z_][a-zA-Z0-9_*!?-]*\\_>\\)"
-     1 font-lock-variable-name-face))
+     1 font-lock-variable-name-face)
+
+    ;; Curly-infix delimiters { } (sweet-exp infix context)
+    ("[{}]" 0 font-lock-builtin-face)
+
+    ;; Neoteric function application: identifier(args) without space
+    ("\\([a-zA-Z_][a-zA-Z0-9_*!?/-]*\\)(" 1 font-lock-function-name-face))
   "Font-lock keywords for `turmeric-mode'.")
 
 ;;; Indentation
@@ -264,6 +275,7 @@ Highlights:
   - Hex/binary/float number literals
   - C inline blocks (```c ... ```)
   - Built-in functions
+  - Sweet-exp: #lang directive, curly-infix {a + b}, neoteric calls foo(args)
 
 Indentation follows standard Lisp conventions; forms listed in
 `turmeric--body-indent-forms' use defun-style body indentation.

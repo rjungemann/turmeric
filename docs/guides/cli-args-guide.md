@@ -90,7 +90,9 @@ Build a spec with the `args/spec-*` functions, then call `args/parse`:
                  (args/spec-option "--output" "string" (cstr "out.txt")))
         result (args/parse spec *args*)]
     (if (args/error? result)
-      (do (println "error:" (args/error-msg result)) 1)
+      (do
+        (println "error:" (args/error-msg result))
+        1)
       (do
         (when (args/has? result "--verbose")
           (println "verbose mode on"))
@@ -159,7 +161,9 @@ flags, options, and nested subcommands:
                        (args/spec-subcommand "test"  test-spec))
         result     (args/parse spec *args*)]
     (if (args/error? result)
-      (do (args/print-help spec) 1)
+      (do
+        (args/print-help spec)
+        1)
       (let [sub (args/subcommand result)]
         (cond
           (cstr= sub "build")
@@ -171,7 +175,9 @@ flags, options, and nested subcommands:
               (println "testing, filter:" (args/get-str r "--filter"))
               0)
           true
-            (do (args/print-help spec) 1))))))
+            (do
+              (args/print-help spec)
+              1))))))
 ```
 
 ```sh

@@ -354,8 +354,8 @@ when ok?(tup-result)
 ;; Race a computation against a deadline
 (def result (future-get (future-with-timeout task-future 5000)))
 (if (future-cancelled? result)
-    (println "timed out")
-    (println (ok-val result)))
+  (println "timed out")
+  (println (ok-val result)))
 
 ;; Stand-alone timeout future (rejects with exn = -1 after ms)
 (def t (future-timeout 1000))
@@ -1096,8 +1096,8 @@ task-group-free(g)
   (fn [fut]
     (let [r (future-get fut)]
       (if (ok? r)
-          (collect (ok-val r))
-          (log-error (err-val r))))))
+        (collect (ok-val r))
+        (log-error (err-val r))))))
 
 (thread-pool-shutdown tp)
 (thread-pool-free tp)

@@ -62,8 +62,8 @@ requests to it.
 
 (defn http-ok [body :cstr len :int] :cstr
   (str-concat "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: "
-    (str-concat (int->str len)
-      (str-concat "\r\n\r\n" body))))
+              (str-concat (int->str len)
+                          (str-concat "\r\n\r\n" body))))
 
 (defn handle-client [fd :int] :nil
   (async-socket-recv fd 4096)

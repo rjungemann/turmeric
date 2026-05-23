@@ -195,7 +195,9 @@ Type this:
 ```
 ```sweet-exp
 defn abs [n :int] :int
-  if {n < 0} {0 - n} n
+  if {n < 0}
+    {0 - n}
+    n
 ```
 
 Then:
@@ -217,9 +219,10 @@ Now try a multi-branch form:
 
 ```turmeric
 (defn sign [n :int] :int
-  (cond (> n 0) 1
-        (< n 0) -1
-        :else   0))
+  (cond
+    (> n 0) 1
+    (< n 0) -1
+    :else   0))
 ```
 ```sweet-exp
 defn sign [n :int] :int
@@ -264,7 +267,9 @@ Type this:
 ```
 ```sweet-exp
 defn factorial [n :int] :int
-  if {n <= 1} 1 {n * factorial({n - 1})}
+  if {n <= 1}
+    1
+    {n * factorial({n - 1})}
 ```
 
 Then:
@@ -301,7 +306,8 @@ Type this:
 (when true (println "yes"))
 ```
 ```sweet-exp
-when true println("yes")
+when true
+  println("yes")
 ```
 
 Expected output:
@@ -316,7 +322,8 @@ Then:
 (unless false (println "also yes"))
 ```
 ```sweet-exp
-unless false println("also yes")
+unless false
+  println("also yes")
 ```
 
 Expected output:
@@ -438,7 +445,9 @@ Now define a division function that never crashes:
 ```
 ```sweet-exp
 defn safe-div [a :int b :int]
-  if {b = 0} option-none() option-some({a / b})
+  if {b = 0}
+    option-none()
+    option-some({a / b})
 ```
 
 ```turmeric
@@ -547,9 +556,10 @@ Type this:
 
 ```turmeric
 (defn describe-result [r]
-  (cond (ok? r)  (println "ok!")
-        (err? r) (println "err!")
-        :else    (println "unknown")))
+  (cond
+    (ok? r)  (println "ok!")
+    (err? r) (println "err!")
+    :else    (println "unknown")))
 ```
 ```sweet-exp
 defn describe-result [r]
@@ -576,9 +586,10 @@ Then:
 
 ```turmeric
 (defn describe-option [o]
-  (cond (option-some? o) (println "some!")
-        (option-none? o) (println "none!")
-        :else            (println "unknown")))
+  (cond
+    (option-some? o) (println "some!")
+    (option-none? o) (println "none!")
+    :else            (println "unknown")))
 ```
 ```sweet-exp
 defn describe-option [o]
@@ -632,8 +643,8 @@ let [v vec-new()]
   vec-push!(v 10)
   vec-push!(v 20)
   vec-push!(v 30)
-  println(vec-len(v))
-  println(vec-get(v 1))
+  println $ vec-len(v)
+  println $ vec-get(v 1)
 ```
 
 Expected output:
@@ -806,8 +817,8 @@ Then construct an instance and read its fields:
 ```
 ```sweet-exp
 let [p Point(3 4)]
-  println(Point-x(p))
-  println(Point-y(p))
+  println $ Point-x(p)
+  println $ Point-y(p)
 ```
 
 Expected output:
@@ -943,7 +954,7 @@ Type this:
 handle do-work()
   (Log [msg] k)
     do
-      println(str-concat("[LOG] " msg))
+      println $ str-concat("[LOG] " msg)
       resume(k nil-value())
 ```
 
@@ -1028,7 +1039,7 @@ directory:
 ```
 ```sweet-exp
 defn greet [name :cstr] :void
-  println(str-concat("Hello, " str-concat(name "!")))
+  println $ str-concat("Hello, " str-concat(name "!"))
 ```
 
 Then in the REPL:

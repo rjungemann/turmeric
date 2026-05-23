@@ -536,7 +536,7 @@ defn parse-form-field [body : cstr, field : cstr] : (Option cstr)
       def val-start {idx + cstr-len(prefix)}
       def rest      cstr-drop(body val-start)
       def end       or(cstr-find(rest "&") cstr-len(rest))
-      Some(percent-decode(cstr-take(rest end)))
+      Some $ percent-decode $ cstr-take(rest end)
 ```
 
 The `percent-decode` helper converts `%XX` sequences and replaces `+` with space:
@@ -1083,7 +1083,7 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
 ;;; Serializes as a Vec of three cstr values.
 definstance Serializable GuestEntry
   serialize [e]
-    serialize(Vec.of([e.name e.message int64->cstr(e.posted-at)]))
+    serialize $ Vec.of([e.name e.message int64->cstr(e.posted-at)])
   deserialize [b]
     match deserialize(b : (Result (Vec cstr) cstr))
       Err(msg) -> Err(msg)
@@ -1093,7 +1093,7 @@ definstance Serializable GuestEntry
           Ok(GuestEntry
               :name      Vec.get(parts 0)
               :message   Vec.get(parts 1)
-              :posted-at cstr->int64(Vec.get(parts 2)))
+              :posted-at cstr->int64 $ Vec.get(parts 2))
 ```
 
 ### 7.3 The Store API
@@ -1230,7 +1230,7 @@ defn run-guestbook-flow [req : HttpRequest] : unit
                   :message   html-escape(message)
                   :posted-at unix-now())
     perform HttpEffect
-      send-html(render-thankyou(store-all()))
+      send-html $ render-thankyou $ store-all()
 ```
 
 > **How confirm vs. back is handled:** The preview page has two forms pointing to two different tokens. The router dispatches entirely based on which token was POSTed. No `action` field inspection is needed in the flow itself.
@@ -1249,8 +1249,9 @@ defn run-guestbook-flow [req : HttpRequest] : unit
 ;;; Since: Guestbook example
 (defn render-thankyou [entries : (Vec GuestEntry)] : cstr
   (def rows
-    (Vec.map entries (fn [e]
-      (str "<li><strong>" e.name "</strong>: " e.message "</li>"))))
+    (Vec.map entries
+             (fn [e]
+               (str "<li><strong>" e.name "</strong>: " e.message "</li>"))))
   (str "<html><body>"
        "<h2>Thank you! Your entry has been posted.</h2>"
        "<h3>Guestbook</h3>"
@@ -1335,7 +1336,7 @@ Random tokens prevent guessing, but they do not prevent token forgery if an atta
 ;;;
 ;;; Since: Guestbook example
 defn sign-token [token : cstr, secret : bytes] : cstr
-  def sig hex-encode(hmac-sha256(secret cstr->bytes(token)))
+  def sig hex-encode $ hmac-sha256(secret cstr->bytes(token))
   str(token "." sig)
 
 ;;; verify-token -- check the signature and return the raw token.
@@ -1352,7 +1353,7 @@ defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
   def parts cstr-split(signed ".")
   match parts
     [token sig] ->
-      def expected hex-encode(hmac-sha256(secret cstr->bytes(token)))
+      def expected hex-encode $ hmac-sha256(secret cstr->bytes(token))
       if cstr-eq?(sig expected)
         Some(token)
         None

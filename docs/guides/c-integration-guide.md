@@ -6,17 +6,17 @@ description: Foreign function interface (FFI) and C interop
 
 # Turmeric ↔ C Integration Guide
 
-Turmeric compiles to C99. This means C integration is not a plugin API — it is
+Turmeric compiles to C99. This means C integration is not a plugin API -- it is
 the compilation target itself. There is no runtime library to link against and
 no interpreter to embed. Instead, you write Turmeric code that reaches into C
 (and vice-versa) by making the generated C source do what you need.
 
 This guide covers the two directions:
 
-1. **Calling C from Turmeric** — importing symbols with `extern-c`, writing
+1. **Calling C from Turmeric** -- importing symbols with `extern-c`, writing
    inline C blocks, and understanding how the generated code interacts with
    your C headers.
-2. **Calling Turmeric from C** — using the generated C output as a static
+2. **Calling Turmeric from C** -- using the generated C output as a static
    library or including the emitted source directly in a larger C project.
 
 ---
@@ -49,7 +49,7 @@ exactly what the C side of the equation looks like.
 
 ## 2. Calling C from Turmeric
 
-### 2.1 `extern-c` — Importing a C symbol
+### 2.1 `extern-c` -- Importing a C symbol
 
 ```turmeric
 (extern-c function-name [arg-types...] return-type)
@@ -60,7 +60,7 @@ extern-c function-name [arg-types...] return-type
 ```
 
 `extern-c` declares that a C function (or global) with the given name is
-available at link time. The elaborator trusts the signature entirely — there
+available at link time. The elaborator trusts the signature entirely -- there
 is no validation against an actual header file.
 
 **Examples from the stdlib:**
@@ -146,7 +146,7 @@ extern-c stderr [^] :ptr   ;; FILE* stderr -- accessed as stderr()
 extern-c rand   [^] :int   ;; int rand(void)
 ```
 
-### 2.2 Inline C blocks — Arbitrary C inside a Turmeric expression
+### 2.2 Inline C blocks -- Arbitrary C inside a Turmeric expression
 
 Surround C source with triple backticks and an optional `c` tag:
 
@@ -193,14 +193,14 @@ documentation.
 - The generated code is `c99 -pedantic`. Avoid GCC/Clang extensions unless
   you know the target will always use an extension-compatible compiler.
 - Local `typedef`s and `struct` definitions inside inline C are fine (see
-  `stdlib/random.tur` — it defines `typedef struct Random Random` inside the
+  `stdlib/random.tur` -- it defines `typedef struct Random Random` inside the
   inline block). They are scoped to that function.
 - Do not rely on identifier names that look like Turmeric-mangled names
-  (e.g. `tur__0`) — these are unstable implementation details.
+  (e.g. `tur__0`) -- these are unstable implementation details.
 - `static` helpers defined inside an inline block work, but be aware of ODR
   if the same function name is used in multiple inline blocks across files.
 
-### 2.3 Capability structs — The idiomatic pattern for C APIs
+### 2.3 Capability structs -- The idiomatic pattern for C APIs
 
 The stdlib uses **capability structs** to wrap C APIs behind a Turmeric-visible
 interface. This pattern keeps the unsafe pointer juggling isolated:
@@ -270,7 +270,7 @@ defn Real-Random-free [rng]
 ```
 
 The struct is returned as `:ptr` (opaque `void *`) and freed explicitly. This
-is intentionally manual — `rc<T>` and `weak<T>` cannot track arbitrary C heap
+is intentionally manual -- `rc<T>` and `weak<T>` cannot track arbitrary C heap
 memory yet, so the caller is responsible for cleanup.
 
 ---
@@ -337,9 +337,9 @@ essential when crossing the C boundary.
 ### 4.1 Arena (compile-time only)
 
 The compiler itself uses a bump-allocator arena (`src/arena.h`). This is
-**compiler-internal only** — generated programs do not use it.
+**compiler-internal only** -- generated programs do not use it.
 
-### 4.2 Reference counting — `rc<T>`
+### 4.2 Reference counting -- `rc<T>`
 
 `rc<T>` is Turmeric's primary heap type. In generated C it is represented as a
 pointer to an `RcControlBlock` followed immediately by the value. The control
@@ -369,12 +369,12 @@ collector, but only Turmeric-managed `rc<T>` nodes are tracked. If you create
 a cycle that involves a raw C pointer (e.g. a C struct that holds a `void *`
 back to an `rc<T>`), the cycle collector will not see it and memory will leak.
 
-### 4.3 Weak pointers — `weak<T>`
+### 4.3 Weak pointers -- `weak<T>`
 
 A `weak<T>` holds only the control block pointer (strong count = 0 is allowed).
 `upgrade` returns a value wrapped in `Option`; if the strong count has reached
 zero it returns `nil`. Weak pointers crossing the C boundary have the same
-concern as `rc<T>` — do not `free()` them directly.
+concern as `rc<T>` -- do not `free()` them directly.
 
 ### 4.4 Manual heap (`malloc`/`free` via `extern-c`)
 
@@ -444,15 +444,19 @@ Exceptions are non-resumable and use `setjmp`/`longjmp`:
 ```turmeric
 (try
   (throw 42)
-  (catch [e :int] (println e))
-  (finally (println "always")))
+  (catch [e :int]
+    (println e))
+  (finally
+    (println "always")))
 ```
 
 ```sweet-exp
 try
   throw(42)
-  catch [e :int] println(e)
-  finally println("always")
+  catch [e :int]
+    println(e)
+  finally
+    println("always")
 ```
 
 Generated C for the `try` block calls `setjmp`. The `throw` form calls
@@ -512,7 +516,7 @@ block as a black box and trusts the annotated return type. This means:
 ### 9.1 Building the compiler
 
 ```sh
-make           # debug build — -Og, ASan+UBSan, -DTUR_DEBUG=1
+make           # debug build -- -Og, ASan+UBSan, -DTUR_DEBUG=1
 make release   # -O2, -DNDEBUG
 ```
 
@@ -558,7 +562,7 @@ build script or `Makefile` wrapper.
 
 Each required module emits its own `.c` + `.h` pair. A generated `_main.c`
 `#include`s all modules and defines `main()`. `extern-c` declarations in one
-module are visible to C but not automatically shared between Turmeric modules —
+module are visible to C but not automatically shared between Turmeric modules --
 repeat the declaration in each module that needs it, or factor them into a
 shared `.tur` file.
 
@@ -581,7 +585,7 @@ shared `.tur` file.
 
 ---
 
-## 11. Worked Example — Wrapping a C Library
+## 11. Worked Example -- Wrapping a C Library
 
 This example wraps a hypothetical `libmath` C library with a Turmeric module.
 
@@ -671,13 +675,13 @@ LDFLAGS="-L. -lmath" ./build/tur build math_wrap.tur
 
 These are not yet available in v1 but are planned:
 
-- **`extern-struct`** — import a C struct layout into the Turmeric type system,
+- **`extern-struct`** -- import a C struct layout into the Turmeric type system,
   eliminating the need for opaque `:ptr` wrappers.
-- **`rc<T>` with custom drop** — the `RcDropFn` field in `RcControlBlock` is
+- **`rc<T>` with custom drop** -- the `RcDropFn` field in `RcControlBlock` is
   already wired; future phases will let user code register a custom destructor
   so an `rc<T>` can own a C-allocated resource directly.
-- **Algebraic effects across the boundary** — Phase 18+ effects (`perform`/
+- **Algebraic effects across the boundary** -- Phase 18+ effects (`perform`/
   `handle`) are implemented using delimited continuations (`tur_cont`). Crossing
   the C boundary inside a `handle` block is not yet safe.
-- **Embedding API** — a `libtur.a` with `tur_eval()` and a value API is
+- **Embedding API** -- a `libtur.a` with `tur_eval()` and a value API is
   described in the v2 roadmap but does not exist in v1.

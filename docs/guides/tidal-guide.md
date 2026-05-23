@@ -358,11 +358,11 @@ def one-shot once(const(1) 0)
 
 ```sweet-exp
 ;; Mirror pattern within its cycle
-def mirrored mirror(cycle(1 2 3))
+def mirrored mirror $ cycle(1 2 3)
 ;; In a 1-beat cycle: [0, 0.5) forward, [0.5, 1) backward
 
 ;; Reverse time within each cycle
-def reversed rev(cycle(1 2 3))
+def reversed rev $ cycle(1 2 3)
 ```
 
 ---
@@ -1052,7 +1052,7 @@ def cached-pat cached(cycle(1 2 3) 1024)
 
 ```sweet-exp
 ;; Inline simple patterns for better performance
-def inlined inline-pattern(slow(2 cycle(1 2)))
+def inlined inline-pattern $ slow(2 cycle(1 2))
 ```
 
 ### Pattern Fusion
@@ -1065,7 +1065,7 @@ def inlined inline-pattern(slow(2 cycle(1 2)))
 
 ```sweet-exp
 ;; Fuse consecutive operations into one function
-def fused fuse-pattern(slow(2 fast(2 cycle(1 2))))
+def fused fuse-pattern $ slow(2 fast(2 cycle(1 2)))
 ;; slow 2 * fast 2 = identity, so fuses to cycle(1 2)
 ```
 

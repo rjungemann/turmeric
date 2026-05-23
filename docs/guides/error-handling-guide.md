@@ -324,8 +324,8 @@ These are the underlying functions used by `must!` and `must-msg!`:
 (option-expect (none)    "want value")  ;; panic: want value
 ```
 ```sweet-exp
-option-must(some(42))               ;; => 42
-option-must(none())                 ;; panic: option-must: called on none
+option-must $ some(42)               ;; => 42
+option-must $ none()                 ;; panic: option-must: called on none
 option-expect(some(42) "want value") ;; => 42
 option-expect(none()   "want value") ;; panic: want value
 ```
@@ -416,7 +416,10 @@ Postcondition check before returning from a function:
 ```
 ```sweet-exp
 defn abs [n :int] :int
-  let [result if({n < 0} {0 - n} n)]
+  let [result
+       if {n < 0}
+         {0 - n}
+         n]
     ensure!({result >= 0})
     result
 ;; panics with "Postcondition failed" if the result is somehow negative

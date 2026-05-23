@@ -8,7 +8,7 @@ Turmeric is a statically-typed Lisp compiler that targets C99. Write expressive 
 
 ## Why
 
-Turmeric exists to explore the intersection of Lisp expressiveness and systems-level control — closures, algebraic effects, borrow checking, reference counting, and typeclasses — without a runtime VM or garbage collector as the default execution model. The generated C is readable and can be embedded in any C project.
+Turmeric exists to explore the intersection of Lisp expressiveness and systems-level control -- closures, algebraic effects, borrow checking, reference counting, and typeclasses -- without a runtime VM or garbage collector as the default execution model. The generated C is readable and can be embedded in any C project.
 
 ## Install
 
@@ -209,19 +209,6 @@ for C/CMake dependency details.
     (println (hamt-get m2 1))))
 ```
 
-**EAVT / Datalog immutable database (Datomic-style):**
-
-```lisp
-; Each fact is a four-tuple: [entity attribute value tx]
-(let [db (db-new)]
-  (db-assert! db 1 ":user/name"  (StrVal  "Alice") 1)
-  (db-assert! db 1 ":user/email" (StrVal  "alice@example.com") 2)
-  (db-assert! db 2 ":user/name"  (StrVal  "Bob") 3)
-  ; Temporal query: find all :user/name datums at or before tx 3
-  (let [results (db-datoms-for-attr db ":user/name" 3)]
-    (for-each results (fn [d] (println (datum-value d))))))
-```
-
 **Sized types (size-indexed vectors and buffers):**
 
 ```lisp
@@ -380,7 +367,7 @@ for C/CMake dependency details.
 ```lisp
 ; Requires: -Xsessions
 
-; Binary: two-party echo — one side sends int, other echoes it back
+; Binary: two-party echo -- one side sends int, other echoes it back
 (defn echo-client [^linear ch :(Session (Send int (Recv int Close)))] :int
   (let [ch       (send ch 42)]
     (let [[v ch] (recv ch)]
@@ -489,7 +476,7 @@ for C/CMake dependency details.
 
 ## Status
 
-**v0.7.0** — The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), dynamic vars (DV0–DV4), and sized types (SZ0–SZ1).
+**v0.7.0** -- The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), dynamic vars (DV0–DV4), and sized types (SZ0–SZ1).
 
 New in this release: sized types (`-Xsized-types`) with `SizedVec`, `SizedBuf`, `SizedMatrix`, and `SizedBitVec`; literal match patterns for int/bool/float/str arms; `async-race` and `with-timeout` in the interpreter; tail call optimization in `turi`; `stdlib/args.tur` CLI argument parser; `stdlib/math.tur` and `stdlib/bits.tur`; a cross-language performance comparison suite benchmarking C, Turmeric, Rust, Clojure, Racket, and Python; and a four-part Datalog-style database tutorial.
 

@@ -188,7 +188,7 @@ let [x : int 42]
   println(x)
 
 let [f : (-> int int) fn [n] {n * 2}]
-  println(f(21))
+  println $ f(21)
 ```
 
 ---

@@ -89,9 +89,10 @@ The tutorial implementation does not evict tokens automatically. For a productio
 ```turmeric
 (defn evict-expired-conts [] : unit
   (def dir-entries (dir-list "data/conts/"))
-  (Vec.for-each dir-entries (fn [entry]
-    (when (> (- (unix-now) (file-mtime entry)) CONT-TTL-SECONDS)
-      (file-delete entry)))))
+  (Vec.for-each dir-entries
+                (fn [entry]
+                  (when (> (- (unix-now) (file-mtime entry)) CONT-TTL-SECONDS)
+                    (file-delete entry)))))
 ```
 
 ```sweet-exp
@@ -133,9 +134,9 @@ Any value captured inside a `serial-reset` boundary must implement `Serializable
 ;; Pattern: serialize as a Vec cstr (one field per element).
 definstance Serializable MyStruct
   serialize [s]
-    serialize(Vec.of([s.field-a
-                      s.field-b
-                      int64->cstr(s.field-c)]))
+    serialize $ Vec.of([s.field-a
+                        s.field-b
+                        int64->cstr(s.field-c)])
   deserialize [b]
     match deserialize(b) : (Result (Vec cstr) cstr)
       (Err msg) -> Err(msg)
@@ -145,7 +146,7 @@ definstance Serializable MyStruct
           Ok(MyStruct
               :field-a Vec.get(parts 0)
               :field-b Vec.get(parts 1)
-              :field-c cstr->int64(Vec.get(parts 2)))
+              :field-c cstr->int64 $ Vec.get(parts 2))
 ```
 
 **Rules:**

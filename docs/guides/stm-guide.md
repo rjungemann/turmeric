@@ -6,7 +6,7 @@ description: Software transactional memory -- API reference and mechanics
 
 # STM Guide
 
-Reference guide for Software Transactional Memory — composable, deadlock-free concurrent state.
+Reference guide for Software Transactional Memory -- composable, deadlock-free concurrent state.
 
 ## Overview
 
@@ -175,13 +175,13 @@ Both branches see the same transactional snapshot. If both retry, the outer tran
 
 Each call to `atomically` runs a retry loop:
 
-1. **Begin** — allocate a transaction context; record thread-local pointer.
-2. **Execute** — run the closure; all `tvar/read` and `tvar/write` calls are journaled (read set / write set).
-3. **Validate** — check that every read TVar still has the version seen during step 2.
-4. **Commit** — apply the write set atomically; bump versions; notify waiters. Fire commit defers.
-5. **Abort** — if validation fails or `retry` was called, discard the write set, fire abort defers, then go to step 1.
+1. **Begin** -- allocate a transaction context; record thread-local pointer.
+2. **Execute** -- run the closure; all `tvar/read` and `tvar/write` calls are journaled (read set / write set).
+3. **Validate** -- check that every read TVar still has the version seen during step 2.
+4. **Commit** -- apply the write set atomically; bump versions; notify waiters. Fire commit defers.
+5. **Abort** -- if validation fails or `retry` was called, discard the write set, fire abort defers, then go to step 1.
 
-The read set holds up to 256 entries; the write set holds up to 128. Transactions exceeding these limits will panic — keep transactions focused.
+The read set holds up to 256 entries; the write set holds up to 128. Transactions exceeding these limits will panic -- keep transactions focused.
 
 ## Defers
 
@@ -215,7 +215,7 @@ defn register-abort-defer [env-ptr fn-ptr] :void
   ```)
 ```
 
-Commit defers run once, in registration order, after the write set is applied. Abort defers run on every failed attempt, including retries — design them to be idempotent.
+Commit defers run once, in registration order, after the write set is applied. Abort defers run on every failed attempt, including retries -- design them to be idempotent.
 
 Up to 32 defers per transaction; exceeding this panics.
 
@@ -365,7 +365,7 @@ atomically
 
 ## Limitations (v1)
 
-- **No nested `atomically`:** Calling `atomically` inside `atomically` is an error. Compose by calling `tvar/read`/`tvar/write` directly in nested functions — they share the caller's transaction context.
+- **No nested `atomically`:** Calling `atomically` inside `atomically` is an error. Compose by calling `tvar/read`/`tvar/write` directly in nested functions -- they share the caller's transaction context.
 - **Read set limit:** 256 TVars per transaction.
 - **Write set limit:** 128 TVars per transaction.
 - **Defer limit:** 32 defers per transaction.
@@ -386,8 +386,8 @@ atomically
 
 ## See Also
 
-- [STM Tutorial](stm-tutorial.md) — Conceptual overview and worked examples
-- [Threading Guide](threading-guide.md) — Locks, mutexes, `Arc<T>` for contrast
-- [HAMT Guide](hamt-guide.md) — Persistent maps suitable for storage inside TVars
-- [Effects System Guide](effects-system-guide.md) — Exception handling within transactions
-- [src/stm.h](../../src/stm.h) — Full C API with implementation notes
+- [STM Tutorial](stm-tutorial.md) -- Conceptual overview and worked examples
+- [Threading Guide](threading-guide.md) -- Locks, mutexes, `Arc<T>` for contrast
+- [HAMT Guide](hamt-guide.md) -- Persistent maps suitable for storage inside TVars
+- [Effects System Guide](effects-system-guide.md) -- Exception handling within transactions
+- [src/stm.h](../../src/stm.h) -- Full C API with implementation notes

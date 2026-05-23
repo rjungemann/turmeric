@@ -109,7 +109,7 @@ defn read-config [path :cstr] :Config @ {Throw Io}
 handle read-config("/etc/foo.toml")
   (Throw [e]  _)
     do
-      eprintln(str-concat("config error: " .what(e)))
+      eprintln $ str-concat("config error: " .what(e))
       default-config()
   (Io    [op] k)  resume(k do-io(op))
 ```
@@ -230,7 +230,7 @@ For these, write a per-type `bind` and use a `do-monadic` macro:
 ;; Per-type bind functions -- no Monad typeclass needed.
 defn opt-bind [m :(option a) f :(-> a (option b))] :(option b)
   cond
-    some?(m)  f(unwrap(m))
+    some?(m)  f $ unwrap(m)
     :else     none
 
 defn opt-pure [x] :(option a)
@@ -238,7 +238,7 @@ defn opt-pure [x] :(option a)
 
 defn res-bind [m :(result a e) f :(-> a (result b e))] :(result b e)
   cond
-    ok?(m)  f(unwrap-ok(m))
+    ok?(m)  f $ unwrap-ok(m)
     :else   m
 
 defn res-pure [x] :(result a e)

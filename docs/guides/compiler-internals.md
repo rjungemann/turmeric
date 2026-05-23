@@ -76,15 +76,15 @@ The compiler driver. Responsibilities:
 - Dispatch subcommands: `build`, `run`, `emit-c`, `emit-h`, `check`, `format`,
   `repl`, `test`, and the Spice package manager commands (`new`, `add`, `fetch`,
   `emit-cmake`, ...).
-- `compile_to_c()` — the main compilation path. Reads the source file, loads
+- `compile_to_c()` -- the main compilation path. Reads the source file, loads
   the auto-loaded stdlib files (`stdlib/macros.tur`, `stdlib/contract.tur`,
   `stdlib/hamt.tur`, `stdlib/map.tur`), prepends them to the user forms, builds
   a `PassContext`, runs `run_core_passes()`, then calls `emit_program()`.
-- `compile_to_h()` / `compile_to_implementation()` — separate-compilation
+- `compile_to_h()` / `compile_to_implementation()` -- separate-compilation
   variants that emit a `.h` / `.c` pair for each module.
-- `cmd_build()` — writes generated C to a deterministic path under
+- `cmd_build()` -- writes generated C to a deterministic path under
   `/tmp/tur-build/` so ccache can cache repeated builds, then invokes `cc`.
-- `cmd_run()` — builds to a temp file and exec's the result. In project mode it
+- `cmd_run()` -- builds to a temp file and exec's the result. In project mode it
   reads `build.tur` (via `pkg.c`) to resolve the entry point and spice
   dependencies.
 
@@ -97,15 +97,15 @@ The compiler driver. Responsibilities:
 Converts raw text into a flat array of `Form*` values. Supports three reader
 modes selected by file extension or a `#lang` directive:
 
-- `READER_TURMERIC` — standard S-expression syntax (default for `.tur`)
-- `READER_SWEET` — neoteric/indentation-sensitive syntax (`.sweet`)
-- `READER_SCHEME` — Scheme-compatible S-expressions (not yet implemented)
+- `READER_TURMERIC` -- standard S-expression syntax (default for `.tur`)
+- `READER_SWEET` -- neoteric/indentation-sensitive syntax (`.sweet`)
+- `READER_SCHEME` -- Scheme-compatible S-expressions (not yet implemented)
 
 Key entry point: `read_all(arena, st, file, &nforms)` returns a `Form**`.
 
 ### forms.c / forms.h
 
-Defines the `Form` union — the raw parsed representation before type-checking:
+Defines the `Form` union -- the raw parsed representation before type-checking:
 
 | Kind | Description |
 |------|-------------|
@@ -135,9 +135,9 @@ instead of `strcmp`.
 
 The typed intermediate representation (IR). Every `Expr` carries:
 
-- `ExprKind kind` — one of 215+ `EX_*` constants
-- `Type *ty` — the elaborated type of this expression
-- `Span span` — source location
+- `ExprKind kind` -- one of 215+ `EX_*` constants
+- `Type *ty` -- the elaborated type of this expression
+- `Span span` -- source location
 - A union of kind-specific payload fields
 
 Important `ExprKind` groups:
@@ -202,11 +202,11 @@ types. `FnDef` carries a function signature with closure capture info.
 
 Typeclass registry and dictionary-passing implementation.
 
-- `TypeClass` — a typeclass with a list of `TypeClassMethod` entries (each has
+- `TypeClass` -- a typeclass with a list of `TypeClassMethod` entries (each has
   a name, signature, and optional default body).
-- `TypeClassInstance` — a concrete instance for a specific type, with a method
+- `TypeClassInstance` -- a concrete instance for a specific type, with a method
   implementation table.
-- `TypeClassEnv` — the global registry; consulted by the elaborator and emitter
+- `TypeClassEnv` -- the global registry; consulted by the elaborator and emitter
   to resolve method calls and emit dictionary structs.
 
 Typeclasses compile to static C structs (dictionaries) passed as implicit
@@ -382,7 +382,7 @@ deep recursion during large tree teardowns.
 
 ### hamt.c / hamt.h
 
-Persistent Hash Array Mapped Trie — the data structure backing `hamt<K,V>` and
+Persistent Hash Array Mapped Trie -- the data structure backing `hamt<K,V>` and
 `map<K,V>` in Turmeric. Structural sharing makes `insert`, `remove`, and
 `lookup` O(log₃₂ n) with no mutation of existing nodes.
 
@@ -580,8 +580,8 @@ propagate kind info from source nodes to replacement nodes.
 
 ## Further reading
 
-- `docs/guides/effects-system-guide.md` — algebraic effects in depth
-- `docs/guides/hkt-guide.md` — higher-kinded types
-- `docs/guides/substructural-types-guide.md` — linear, affine, relevant types
-- `docs/guides/module-system-guide.md` — separate compilation
-- `docs/design/design-notes.md` — architectural decisions and rationale
+- `docs/guides/effects-system-guide.md` -- algebraic effects in depth
+- `docs/guides/hkt-guide.md` -- higher-kinded types
+- `docs/guides/substructural-types-guide.md` -- linear, affine, relevant types
+- `docs/guides/module-system-guide.md` -- separate compilation
+- `docs/design/design-notes.md` -- architectural decisions and rationale

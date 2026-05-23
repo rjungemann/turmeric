@@ -1154,7 +1154,7 @@ def cached-melody cached(complex-generative-pattern() 1024)
 
 ```sweet-exp
 ;; Inline simple patterns
-def inlined inline-pattern(slow(2 cycle(1 2)))
+def inlined inline-pattern $ slow(2 cycle(1 2))
 ```
 
 ### Pattern Fusion
@@ -1166,7 +1166,7 @@ def inlined inline-pattern(slow(2 cycle(1 2)))
 
 ```sweet-exp
 ;; Fuse consecutive operations
-def fused fuse-pattern(slow(2 fast(2 cycle(1 2))))
+def fused fuse-pattern $ slow(2 fast(2 cycle(1 2)))
 ```
 
 ### Avoid Unnecessary Computations
@@ -1181,7 +1181,7 @@ def fused fuse-pattern(slow(2 fast(2 cycle(1 2))))
 
 ```sweet-exp
 ;; Pre-compute values
-def precomputed const(map(fn([x] {x * 2}) range(100)))
+def precomputed const $ map(fn([x] {x * 2}) range(100))
 
 ;; Use simple patterns when possible
 def simple const(440.0)  ;; Faster than (cycle 440.0)

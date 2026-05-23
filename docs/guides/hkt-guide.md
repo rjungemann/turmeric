@@ -15,15 +15,15 @@ A **type constructor** takes one or more types and produces a new type.
 For example, `Option` is a type constructor: given `int`, it produces `Option<int>`.
 
 In Turmeric's kind system:
-- `*` — a plain type (e.g. `int`, `bool`)
-- `* -> *` — a unary type constructor (e.g. `Option`, `Vec`)
-- `* -> * -> *` — a binary type constructor (e.g. `Either`, `Pair`)
+- `*` -- a plain type (e.g. `int`, `bool`)
+- `* -> *` -- a unary type constructor (e.g. `Option`, `Vec`)
+- `* -> * -> *` -- a binary type constructor (e.g. `Either`, `Pair`)
 
 Typeclasses can be parameterised over type constructors using the `^f` or `^^f` syntax.
 
 ## Defining HKT Typeclasses
 
-### Unary type constructor (`^f` — kind `* -> *`)
+### Unary type constructor (`^f` -- kind `* -> *`)
 
 ```turmeric
 (defclass Functor [^f]
@@ -64,7 +64,7 @@ definstance Functor [int]
   fmap [c f] c
 ```
 
-### Binary type constructor (`^^f` — kind `* -> * -> *`)
+### Binary type constructor (`^^f` -- kind `* -> * -> *`)
 
 ```turmeric
 (defclass Bifunctor [^^f]
@@ -293,13 +293,13 @@ defn main [] :int
     ;; Identity law: fmap id x = x
     let [opt    __opt_some(42)
          result __fmap_option(opt id)]
-      println(__opt_unwrap(result))  ;; 42
+      println $ __opt_unwrap(result)  ;; 42
 
     ;; Composition law: fmap (f . g) x = fmap f (fmap g x)
     let [opt __opt_some(5)
          lhs __fmap_option(opt fn([x] times2(inc(x))))
          rhs __fmap_option(__fmap_option(opt inc) times2)]
-      println(=(__opt_unwrap(lhs) __opt_unwrap(rhs)))  ;; true
+      println $ =(__opt_unwrap(lhs) __opt_unwrap(rhs))  ;; true
     0
 ```
 
@@ -318,7 +318,7 @@ Use `bind` directly to chain monadic operations:
 ;; Sequence two Option computations
 let [step1  __bind_option(__opt_some(3) fn([x] __opt_some({x * 2})))  ;; step1 = some 6
      result __bind_option(step1 fn([y] __opt_some({y + 1})))]         ;; result = some 7
-  println(__opt_unwrap(result))  ;; 7
+  println $ __opt_unwrap(result)  ;; 7
 ```
 
 ## do-m Notation
@@ -360,15 +360,15 @@ definstance Monad [option]
 
 ;; Single expression: returned as-is
 let [r do-m(__opt_some(42))]
-  println(__opt_unwrap(r))  ;; 42
+  println $ __opt_unwrap(r)  ;; 42
 
 ;; One binding: desugars to .bind call
 let [r do-m(x __opt_some(5) __opt_some({x * 3}))]
-  println(__opt_unwrap(r))  ;; 15
+  println $ __opt_unwrap(r)  ;; 15
 
 ;; None propagates automatically
 let [r do-m(x __opt_none() __opt_some({x * 3}))]
-  println(__opt_some?(r))  ;; false
+  println $ __opt_some?(r)  ;; false
 ```
 
 ## Closures with fmap
@@ -405,25 +405,25 @@ typeclass dispatch.
 ;; Non-capturing closure
 let [opt    __opt_some(10)
      result .fmap(opt fn([x] {x * x}))]
-  println(__opt_unwrap(result))  ;; 100
+  println $ __opt_unwrap(result)  ;; 100
 
 ;; Capturing closure -- delta is captured from the enclosing scope
 let [delta  5
      opt    __opt_some(10)
      result .fmap(opt fn([x] {x + delta}))]
-  println(__opt_unwrap(result))  ;; 15
+  println $ __opt_unwrap(result)  ;; 15
 
 ;; Multi-capture
 let [a      2
      b      3
      opt    __opt_some(10)
      result .fmap(opt fn([x] {(x * a) + b}))]
-  println(__opt_unwrap(result))  ;; 23
+  println $ __opt_unwrap(result)  ;; 23
 
 ;; Capturing closure through .bind
 let [scale 3
      r     .bind(__opt_some(4) fn([x] __opt_some({x * scale})))]
-  println(__opt_unwrap(r))  ;; 12
+  println $ __opt_unwrap(r)  ;; 12
 ```
 
 Named functions (non-closures) also work unchanged:
@@ -441,7 +441,7 @@ defn double [x] :int {x * 2}
 
 let [opt    __opt_some(7)
      result .fmap(opt double)]
-  println(__opt_unwrap(result))  ;; 14
+  println $ __opt_unwrap(result)  ;; 14
 ```
 
 `do-m` with captured variables works too:
@@ -455,7 +455,7 @@ let [opt    __opt_some(7)
 ```sweet-exp
 let [factor 3
      r      do-m(x __opt_some(5) __opt_some({x * factor}))]
-  println(__opt_unwrap(r))  ;; 15
+  println $ __opt_unwrap(r)  ;; 15
 ```
 
 ## Binary Type Constructors (Bifunctor)
@@ -547,7 +547,7 @@ for the concrete type known at the call site, eliminating the dictionary
 indirection entirely:
 
 ```sh
-# planned syntax — not yet available
+# planned syntax -- not yet available
 tur build -O app.tur -o app
 ```
 
@@ -691,7 +691,7 @@ defn run-op [op :int] :int
 
 defn main [] :int
   let [prog calc-add(3 4)]
-    println(free-run(fn([op] let([_ prog] run-op(op))) prog))
+    println $ free-run(fn([op] let([_ prog] run-op(op))) prog)
     0
 ```
 
@@ -723,5 +723,5 @@ and `free-run`.
 
 ## See also
 
-- `docs/gadts-guide.md` — GADTs, `defgadt`, and equality witnesses
-- `docs/archive/hkt-deferred-tasks.md` — completed and open items for the HKT implementation
+- `docs/gadts-guide.md` -- GADTs, `defgadt`, and equality witnesses
+- `docs/archive/hkt-deferred-tasks.md` -- completed and open items for the HKT implementation

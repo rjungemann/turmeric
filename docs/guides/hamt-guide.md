@@ -12,7 +12,7 @@ Persistent, immutable hash maps with structural sharing via Hash Array Mapped Tr
 
 A **Hash Array Mapped Trie (HAMT)** is an immutable hash map where every modification produces a new version of the map rather than mutating the original. Old and new versions share unmodified subtrees, so both time and space costs of updates are O(log N) rather than O(N).
 
-Turmeric's HAMT uses xxHash64 for hashing, 5-bit hash chunks (32 slots per level), and reference counting for memory management. Keys and values are untyped pointers — the caller owns their lifetimes.
+Turmeric's HAMT uses xxHash64 for hashing, 5-bit hash chunks (32 slots per level), and reference counting for memory management. Keys and values are untyped pointers -- the caller owns their lifetimes.
 
 ## Creating and Freeing
 
@@ -43,7 +43,7 @@ def m2 hamt/retain(m)
 
 ### Memory model
 
-The HAMT itself does **not** free keys or values — the caller owns those lifetimes. Each operation that returns a new `Hamt*` has `ref_count = 1`; the old map is unchanged and must be freed independently.
+The HAMT itself does **not** free keys or values -- the caller owns those lifetimes. Each operation that returns a new `Hamt*` has `ref_count = 1`; the old map is unchanged and must be freed independently.
 
 ## Core Operations
 
@@ -345,7 +345,7 @@ def config hamt/merge(defaults user-config)
 
 ## See Also
 
-- [C Integration Guide](c-integration-guide.md) — Passing C function pointers and inline C
-- [Threading Guide](threading-guide.md) — Sharing immutable HAMTs across threads safely
-- [STM Guide](stm-guide.md) — Storing HAMTs inside TVars for concurrent updates
-- [src/hamt.h](../../src/hamt.h) — Full C API with inline documentation
+- [C Integration Guide](c-integration-guide.md) -- Passing C function pointers and inline C
+- [Threading Guide](threading-guide.md) -- Sharing immutable HAMTs across threads safely
+- [STM Guide](stm-guide.md) -- Storing HAMTs inside TVars for concurrent updates
+- [src/hamt.h](../../src/hamt.h) -- Full C API with inline documentation

@@ -6,13 +6,13 @@ description: Cellular automata with comonads
 
 # Cellular Automata with Comonads in Turmeric
 
-This tutorial builds Conway's Game of Life using **comonads** — a functional abstraction that makes cellular automata rules both composable and easy to reason about.
+This tutorial builds Conway's Game of Life using **comonads** -- a functional abstraction that makes cellular automata rules both composable and easy to reason about.
 
 We start with the theory, build the abstractions step by step, and end with a fully working Game of Life implementation.
 
 ---
 
-## Part 1 — Why Comonads?
+## Part 1 -- Why Comonads?
 
 A cellular automaton has one key operation: given the current state of the whole grid and a particular cell's position, compute the next state of that cell.
 
@@ -33,7 +33,7 @@ For Game of Life, `f` is just "count Moore neighbours and apply the four rules".
 
 ---
 
-## Part 2 — The Comonad Typeclass in Turmeric
+## Part 2 -- The Comonad Typeclass in Turmeric
 
 Turmeric declares typeclasses with `defclass`. Higher-kinded type constructor parameters use the `[^w]` syntax:
 
@@ -57,7 +57,7 @@ The implementation lives in [`stdlib/comonad.tur`](../../stdlib/comonad.tur), wh
 
 ---
 
-## Part 3 — The Zipper: 1D Cellular Automata
+## Part 3 -- The Zipper: 1D Cellular Automata
 
 Before tackling 2D grids, it helps to understand the simpler 1D case. A **Zipper** is a list with a cursor:
 
@@ -75,9 +75,9 @@ right = [next, next-next, ...]   -- nearest first
 
 The Comonad instance for Zipper:
 
-- **`extract z`** — returns `z.focus`
-- **`extend f z`** — creates a new Zipper where each position holds `f(z_i)`, where `z_i` is the Zipper shifted to position `i`
-- **`duplicate z`** — each position holds the Zipper focused there (extend identity)
+- **`extract z`** -- returns `z.focus`
+- **`extend f z`** -- creates a new Zipper where each position holds `f(z_i)`, where `z_i` is the Zipper shifted to position `i`
+- **`duplicate z`** -- each position holds the Zipper focused there (extend identity)
 
 ### 1D XOR automaton
 
@@ -139,7 +139,7 @@ The full Zipper implementation lives in [`stdlib/zipper.tur`](../../stdlib/zippe
 
 ---
 
-## Part 4 — GridCtx: 2D Cellular Automata
+## Part 4 -- GridCtx: 2D Cellular Automata
 
 For a 2D grid we use a flat row-major array with a focus position `(cx, cy)`:
 
@@ -259,7 +259,7 @@ The full implementation lives in [`stdlib/grid.tur`](../../stdlib/grid.tur).
 
 ---
 
-## Part 5 — Conway's Game of Life
+## Part 5 -- Conway's Game of Life
 
 The Game of Life rule is a pure function from a focused grid to the next cell state:
 
@@ -316,7 +316,7 @@ A full generation step is then just:
   ...)
 ```
 
-That's it — the Comonad abstracts away all index management.
+That's it -- the Comonad abstracts away all index management.
 
 ### Blinker demo
 
@@ -354,7 +354,7 @@ let [g0 grid-new(5 5)]
 
 ---
 
-## Part 6 — Putting It Together
+## Part 6 -- Putting It Together
 
 The full runnable example is in [`examples/cellular-automata.tur`](../../examples/cellular-automata.tur). It contains both the imperative version (Part 1) and the comonadic version (Part 2) side by side, so you can compare approaches.
 
@@ -390,7 +390,7 @@ For correctness, `extend` and `extract` must satisfy three laws:
 2. **Right identity:** `extend extract w = w`
 3. **Associativity:** `extend f (extend g w) = extend (fn [w'] (f (extend g w'))) w`
 
-These mirror the Monad laws (with arrows reversed). They guarantee that `extend` composes predictably — multi-step CA simulations chain as expected.
+These mirror the Monad laws (with arrows reversed). They guarantee that `extend` composes predictably -- multi-step CA simulations chain as expected.
 
 ---
 
@@ -404,4 +404,4 @@ These mirror the Monad laws (with arrows reversed). They guarantee that `extend`
 | `(duplicate wa)` | `.duplicate grid` | Grid of grids, each focused differently |
 | `definstance Comonad [gridctx]` | 2D grid instance | `extend` = walk all `(x, y)` positions |
 
-Comonads let you write the rule once, at a single cell, and apply it everywhere. No loops, no index arithmetic — just `extend`.
+Comonads let you write the rule once, at a single cell, and apply it everywhere. No loops, no index arithmetic -- just `extend`.

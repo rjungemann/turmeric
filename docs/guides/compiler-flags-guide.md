@@ -18,20 +18,20 @@ between flags.
 
 | Flag | Status | What it enables | Implies |
 |---|---|---|---|
-| `-Xlinear` | ✅ Complete | `^linear` annotation; `CK_LINEAR` capability kind; linearity tracking in elaborator | — |
+| `-Xlinear` | ✅ Complete | `^linear` annotation; `CK_LINEAR` capability kind; linearity tracking in elaborator | -- |
 | `-Xsubstructural` | ✅ Complete | `^linear`, `^affine`, `^relevant` capability kinds; full substructural framework | `-Xlinear` |
-| `-Xunique` | ✅ Partial (UT0–UT1) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type | — |
-| `-Xgadt` | ✅ Substantial (G0–G4) | `defgadt`; GADT constructor return-type annotations; skolem refinement in `match` arms; `Equal`/`coerce`/`sym`/`trans` in stdlib | — |
-| `-Xhkt` | ✅ Complete | Higher-kinded types; kind `* -> *`; HKT typeclass parameters (`^f`/`^^f`); `--dump-kinds` | — |
-| `-Xhrt` | ✅ Complete | Higher-ranked types; `forall` inside function arguments (rank-2/rank-3); skolem variables | — |
+| `-Xunique` | ✅ Partial (UT0–UT1) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type | -- |
+| `-Xgadt` | ✅ Substantial (G0–G4) | `defgadt`; GADT constructor return-type annotations; skolem refinement in `match` arms; `Equal`/`coerce`/`sym`/`trans` in stdlib | -- |
+| `-Xhkt` | ✅ Complete | Higher-kinded types; kind `* -> *`; HKT typeclass parameters (`^f`/`^^f`); `--dump-kinds` | -- |
+| `-Xhrt` | ✅ Complete | Higher-ranked types; `forall` inside function arguments (rank-2/rank-3); skolem variables | -- |
 | `-Ximpredicative` | ✅ Complete | Impredicative polymorphism; instantiate type variables with polymorphic types | `-Xhrt` |
-| `-Xunion-types` | ✅ Substantial (IT0–IT4) | Union types `(A \| B)`; `any` top type; `(cast x T)`; `(type-of x)`; union pattern matching; typeclass dispatch on unions | — |
-| `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | — |
+| `-Xunion-types` | ✅ Substantial (IT0–IT4) | Union types `(A \| B)`; `any` top type; `(cast x T)`; `(type-of x)`; union pattern matching; typeclass dispatch on unions | -- |
+| `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | -- |
 | `-Xeffect-types` | ✅ Complete (ET0–ET4, LC0–LC3, MS0–MS4) | Row-polymorphic effect types; `forall [e]` quantification; `TY_HANDLER`; effect hierarchy (`Write ≤ IO`); linear continuations; multi-shot continuations | `--strict-effects` |
-| `-Xcontracts` | 📋 Planned (v4) | Contract types; `assert!`/`require!`/`ensure!` at the type level; contract checking in debug builds | — |
+| `-Xcontracts` | 📋 Planned (v4) | Contract types; `assert!`/`require!`/`ensure!` at the type level; contract checking in debug builds | -- |
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
-| `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | — |
-| `-Xsized-types` | 📋 Planned | Sized / dependent types | — |
+| `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
+| `-Xsized-types` | 📋 Planned | Sized / dependent types | -- |
 
 ### Diagnostic and debug flags
 
@@ -63,7 +63,7 @@ Flags that stand alone (no implications): `-Xunique`, `-Xgadt`, `-Xhkt`,
 
 ## Flag Details
 
-### `-Xlinear` — Linear Types
+### `-Xlinear` -- Linear Types
 
 Enables the `^linear` type annotation and the `CK_LINEAR` capability kind.
 A `^linear` value must be consumed exactly once: passing it to a function,
@@ -86,7 +86,7 @@ duplicating a linear value is a compile-time error.
 
 ---
 
-### `-Xsubstructural` — Substructural Types
+### `-Xsubstructural` -- Substructural Types
 
 Extends `-Xlinear` with the full three-annotation substructural framework:
 
@@ -106,7 +106,7 @@ stronger-than-affine ones. A `^linear` value used in a context that expects
 
 ---
 
-### `-Xunique` — Uniqueness Types
+### `-Xunique` -- Uniqueness Types
 
 Makes uniqueness (`CK_UNIQUE`, `ref<T>`) an explicit first-class type-system
 concept. Without this flag, `ref<T>` unique ownership is enforced by the borrow
@@ -121,7 +121,7 @@ are deferred.
 
 ---
 
-### `-Xgadt` — Generalized Algebraic Data Types
+### `-Xgadt` -- Generalized Algebraic Data Types
 
 Enables `defgadt` and GADT pattern matching. In a GADT, each constructor may
 specialize the type parameters of the data type it returns. The type-checker
@@ -153,7 +153,7 @@ dependent features require `-Xhkt`.
 
 ---
 
-### `-Xhkt` — Higher-Kinded Types
+### `-Xhkt` -- Higher-Kinded Types
 
 Enables type constructors as typeclass parameters. With `-Xhkt` you can write
 typeclasses that are polymorphic over `Option`, `Vec`, or any user-defined
@@ -172,7 +172,7 @@ Also enables the `--dump-kinds` debugging flag.
 
 ---
 
-### `-Xhrt` — Higher-Ranked Types
+### `-Xhrt` -- Higher-Ranked Types
 
 Enables `forall` inside function argument types (rank-2 and rank-3
 polymorphism). Without this flag, `forall` is permitted only at the outermost
@@ -191,7 +191,7 @@ Required by `-Ximpredicative`. Also required by `-Xeffect-types` for
 
 ---
 
-### `-Ximpredicative` — Impredicative Polymorphism
+### `-Ximpredicative` -- Impredicative Polymorphism
 
 Allows type variables to be instantiated with polymorphic types (types
 containing `forall`). Without this flag, type variables may only be
@@ -204,7 +204,7 @@ without wrapping them in a newtype.
 
 ---
 
-### `-Xunion-types` — Union Types
+### `-Xunion-types` -- Union Types
 
 Enables structural union types and the `any` top type.
 
@@ -236,7 +236,7 @@ that requires *both* `-Xunion-types` and `-Xgadt`.
 
 ---
 
-### `-Xintersection-types` — Intersection Types
+### `-Xintersection-types` -- Intersection Types
 
 Enables intersection types `(A & B)`, representing values that satisfy both
 `A` and `B` simultaneously. The primary use case is combining a concrete type
@@ -249,13 +249,13 @@ with a typeclass constraint at a call site.
 
 When a typeclass method is called on a union value, the elaborator checks that
 all members of the union carry the required instance and generates a
-tag-dispatched call — this is the intersection-on-unions dispatch path.
+tag-dispatched call -- this is the intersection-on-unions dispatch path.
 
 **See also:** [union-intersection-types-guide.md](union-intersection-types-guide.md)
 
 ---
 
-### `-Xeffect-types` — Effect Row Polymorphism
+### `-Xeffect-types` -- Effect Row Polymorphism
 
 Enables the full row-polymorphic effect type system on top of the base
 algebraic effects (Phase 19). With this flag:
@@ -280,7 +280,7 @@ algebraic effects (Phase 19). With this flag:
 
 ---
 
-### `-Xcontracts` — Contract Types *(planned, v4)*
+### `-Xcontracts` -- Contract Types *(planned, v4)*
 
 Will enable first-class contract types: `assert!`, `require!` (preconditions),
 and `ensure!` (postconditions) that are checked in debug builds and stripped in
@@ -291,7 +291,7 @@ builds.
 
 ---
 
-### `-Xsessions` — Session Types
+### `-Xsessions` -- Session Types
 
 Enables session types for type-safe, protocol-verified message passing.
 Binary and multi-party sessions (SS0--SS8) are both shipped.
@@ -327,7 +327,7 @@ compiler projects each role's local type and verifies it at compile time.
 
 ---
 
-### `-Xdynamic-vars` — Dynamic Vars
+### `-Xdynamic-vars` -- Dynamic Vars
 
 Enables typed, thread-local, dynamically-scoped mutable cells. All of
 DV0--DV4 are shipped.
@@ -362,7 +362,7 @@ are forbidden in dynamic vars (`TUR-E0603`).
 
 ---
 
-### `-Xsized-types` — Sized / Dependent Types *(planned)*
+### `-Xsized-types` -- Sized / Dependent Types *(planned)*
 
 Reserved for a future sized/dependent type system. No phases have started.
 
@@ -430,11 +430,11 @@ turc -Xsubstructural -Xgadt -Xhkt -Xhrt -Xunion-types -Xintersection-types -Xeff
 | `-Xgadt` | G0–G4 | ✅ Substantial (`equal-cong` needs `-Xhkt`) |
 | `-Xhkt` | HKT phases | ✅ Complete |
 | `-Xhrt` | HRT phases | ✅ Complete |
-| `-Ximpredicative` | — | ✅ Complete |
+| `-Ximpredicative` | -- | ✅ Complete |
 | `-Xunion-types` | IT0–IT4 | ✅ Substantial (some IT4 items deferred) |
 | `-Xintersection-types` | IT0–IT4 | ✅ Substantial |
 | `-Xeffect-types` | ET0–ET4, LC0–LC3, MS0–MS4 | ✅ Complete |
 | `-Xcontracts` | CT phases | 📋 Planned (v4) |
 | `-Xsessions` | SS0–SS8 | ✅ Complete |
 | `-Xdynamic-vars` | DV0–DV4 | ✅ Complete |
-| `-Xsized-types` | — | 📋 Planned |
+| `-Xsized-types` | -- | 📋 Planned |

@@ -173,7 +173,7 @@ A backtracking parser tries multiple production rules:
 ;; Token parser
 defn parse-token [t input]
   if {car(input) = t}
-    return(cdr(input))
+    return $ cdr(input)
     mzero
 
 ;; Choice: try parseA, then parseB if parseA fails
@@ -401,7 +401,7 @@ cloneable-reset
     defer-with-close open-file("data.txt")
       fn [f]
         let [data read(f)]
-          choice-point(parse(data))
+          choice-point $ parse(data)
 ```
 
 This is safe but can be expensive. Prefer immutable snapshots where possible.
@@ -475,7 +475,7 @@ bind(f xs)          ; flatMap: sequence computations
 do-backtrack
   def x goal1()
   def y goal2(x)
-  return(list(x y))
+  return $ list(x y)
 ```
 
 ## Performance Considerations
@@ -495,7 +495,7 @@ Unlike Prolog's stack-based choice points, Turmeric's cloneable continuations al
 
 ## See Also
 
-- [Effects System Guide](effects-system-guide.md) — Algebraic effects foundation
-- [Async/Await Guide](async-await-guide.md) — Single-shot continuations for I/O
-- [Checkpointing with Serializable Continuations](checkpointing-guide.md) — Persisting computations
-- [turmeric-plan.md](../turmeric-plan.md) §18 — Delimited continuations
+- [Effects System Guide](effects-system-guide.md) -- Algebraic effects foundation
+- [Async/Await Guide](async-await-guide.md) -- Single-shot continuations for I/O
+- [Checkpointing with Serializable Continuations](checkpointing-guide.md) -- Persisting computations
+- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations

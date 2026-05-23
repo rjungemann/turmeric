@@ -316,7 +316,7 @@ defeffect Ask [] :int
 
 defn deferred-ask [] :int
   do
-    defer(println("cleanup"))
+    defer $ println("cleanup")
     perform(Ask())
 
 println(handle deferred-ask()
@@ -469,7 +469,7 @@ try
 ; something went wrong
 ```
 
-Not calling `resume` at all is valid — the computation past the `perform` is simply abandoned. This lets you implement abort-style error signalling over the exception mechanism.
+Not calling `resume` at all is valid -- the computation past the `perform` is simply abandoned. This lets you implement abort-style error signalling over the exception mechanism.
 
 ---
 
@@ -650,7 +650,7 @@ defmacro with-warn-log [body]
         do(println(msg) resume(k nil))
         resume(k nil)
 
-with-stderr-log println(process(21))
+with-stderr-log println $ process(21)
 ; starting
 ; done
 ; 42
@@ -688,7 +688,7 @@ with-stderr-log println(process(21))
 
 ### Further reading
 
-- `docs/turmeric-plan.md` §10.18–10.19 — Phase 18 (shift/reset) and Phase 19 (algebraic effects) design details
-- `tests/fixtures/effect-*` — full fixture test suite for every effect feature
-- `docs/archive/async-await-plan.md` — planned async/await built on the effect substrate
-- `docs/archive/stm-plan.md` — planned STM built on the effect substrate
+- `docs/turmeric-plan.md` §10.18–10.19 -- Phase 18 (shift/reset) and Phase 19 (algebraic effects) design details
+- `tests/fixtures/effect-*` -- full fixture test suite for every effect feature
+- `docs/archive/async-await-plan.md` -- planned async/await built on the effect substrate
+- `docs/archive/stm-plan.md` -- planned STM built on the effect substrate

@@ -64,6 +64,7 @@ PAGE_HEADER = '''\
     <nav>
       <a href="/docs/html/guides/" class="active">Guides</a>
       <a href="/docs/html/api/">API Docs</a>
+      <a href="/docs/html/spices/">Spices</a>
       <a href="/try">Try It</a>
     </nav>
   </header>'''

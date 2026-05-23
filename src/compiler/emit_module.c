@@ -59,6 +59,10 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.handle_captures = NULL;
     ctx.n_handle_captures = 0;
     ctx.handle_env_name = NULL;
+    /* GF1: generator struct context (NULL outside a _next function) */
+    ctx.gen_struct_bindings = NULL;
+    ctx.n_gen_struct_bindings = 0;
+    ctx.gen_var_name = NULL;
 
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
@@ -3109,6 +3113,10 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     ctx.handle_captures = NULL;
     ctx.n_handle_captures = 0;
     ctx.handle_env_name = NULL;
+    /* GF1: generator struct context (NULL outside a _next function) */
+    ctx.gen_struct_bindings = NULL;
+    ctx.n_gen_struct_bindings = 0;
+    ctx.gen_var_name = NULL;
 
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));

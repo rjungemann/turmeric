@@ -166,7 +166,7 @@ v2 adds compile-time checking via exception types:
 
 ## Panic Vs. Assert
 
-**`panic`** — Programmer explicitly signals unrecoverable failure:
+**`panic`** -- Programmer explicitly signals unrecoverable failure:
 
 ```turmeric
 (defn divide [a b]
@@ -175,7 +175,7 @@ v2 adds compile-time checking via exception types:
     (/ a b)))
 ```
 
-**`assert`** — Programmer documents an invariant; panics if violated:
+**`assert`** -- Programmer documents an invariant; panics if violated:
 
 ```turmeric
 (defn safe-divide [a b]
@@ -216,6 +216,6 @@ This allows custom exception handling logic without language support; useful for
 
 ## See Also
 
-- [Effects System Guide](../guides/effects-system-guide.md) — Exception handling with effects (v3)
-- [Threading Guide](../guides/threading-guide.md) — Exception handling in threads
-- [turmeric-plan.md](../turmeric-plan.md) §17 — Exception system architecture
+- [Effects System Guide](../guides/effects-system-guide.md) -- Exception handling with effects (v3)
+- [Threading Guide](../guides/threading-guide.md) -- Exception handling in threads
+- [turmeric-plan.md](../turmeric-plan.md) §17 -- Exception system architecture

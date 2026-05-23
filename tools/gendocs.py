@@ -935,6 +935,7 @@ def _html_header(title, css_path='style.css'):
   <nav>
     <a href="/docs/html/guides/">Guides</a>
     <a href="index.html" class="active">API Docs</a>
+    <a href="/docs/html/spices/">Spices</a>
     <a href="/try">Try It</a>
   </nav>
   <div class="search-wrap">

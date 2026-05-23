@@ -4,11 +4,11 @@ category: Reference
 description: C embedding API for evaluating Turmeric expressions and calling Turmeric functions from within a C program using libturi.a
 ---
 
-# libturi — C Embedding API Reference
+# libturi -- C Embedding API Reference
 
 `libturi` is the Turmeric eval runtime packaged as a static library (`libturi.a`).
 It lets C programs evaluate Turmeric expressions, call Turmeric functions, and
-expose C functions to Turmeric code — all without spawning a subprocess.
+expose C functions to Turmeric code -- all without spawning a subprocess.
 
 ---
 
@@ -43,7 +43,7 @@ cc -o demo demo.c -I/usr/local/include/turi \
 
 | Header | Purpose |
 |--------|---------|
-| `turi/eval.h`  | Main API — eval, init, async helpers |
+| `turi/eval.h`  | Main API -- eval, init, async helpers |
 | `turi/env.h`   | `TuriEnv` type and environment operations |
 | `turi/value.h` | `TuriValue` tagged union and constructors |
 
@@ -68,7 +68,7 @@ arenas.  Closures captured from an environment must not outlive it.
 
 ### `TuriEnv *turi_env_new(void)`
 
-Creates an unrestricted environment.  All builtins — including I/O — are
+Creates an unrestricted environment.  All builtins -- including I/O -- are
 available.
 
 ### `TuriEnv *turi_env_new_sandboxed(void)`
@@ -122,7 +122,7 @@ if the file cannot be opened.
 
 ---
 
-## Values — `TuriValue`
+## Values -- `TuriValue`
 
 `TuriValue` is a tagged union:
 
@@ -148,8 +148,8 @@ typedef struct TuriValue {
 
 | Tag | Meaning |
 |-----|---------|
-| `TURI_NIL`    | Unit / void — `()`, `nil` |
-| `TURI_BOOL`   | Boolean — `true` / `false` |
+| `TURI_NIL`    | Unit / void -- `()`, `nil` |
+| `TURI_BOOL`   | Boolean -- `true` / `false` |
 | `TURI_INT`    | 64-bit signed integer |
 | `TURI_FLOAT`  | 64-bit float (double) |
 | `TURI_CSTR`   | NUL-terminated C string |
@@ -167,7 +167,7 @@ TuriValue turi_nil(void);
 TuriValue turi_bool(bool b);
 TuriValue turi_int(int64_t i);
 TuriValue turi_float(double f);
-TuriValue turi_cstr(const char *s);   /* borrows s — caller keeps it alive */
+TuriValue turi_cstr(const char *s);   /* borrows s -- caller keeps it alive */
 TuriValue turi_error(const char *msg);
 TuriValue turi_errorf(const char *fmt, ...);
 ```
@@ -214,8 +214,8 @@ typedef TuriValue (*TuriNativeFn)(TuriEnv *env, TuriValue *args,
                                    uint32_t n, void *ud);
 ```
 
-- `args` — array of evaluated arguments (length `n`).
-- `ud` — the `void *ud` passed to `turi_env_register_native`.
+- `args` -- array of evaluated arguments (length `n`).
+- `ud` -- the `void *ud` passed to `turi_env_register_native`.
 - Return `turi_nil()` for void functions; return an appropriate `TuriValue`
   for functions that produce results.
 - To raise a catchable exception call `turi_native_throw` then return
@@ -265,7 +265,7 @@ callbacks complete.  Call after any `turi_eval` that starts async tasks.
 ```c
 turi_eval(env, "(defn work [] :int (await (async (fn [] :int 42))))");
 TuriValue r = turi_eval(env, "(work)");
-/* r.as_int == 42  — (await ...) in main context drives the loop inline */
+/* r.as_int == 42  -- (await ...) in main context drives the loop inline */
 ```
 
 ### `TuriValue turi_task_spawn(TuriEnv *env, const char *src)`
@@ -313,7 +313,7 @@ from `turi_eval`; check with `turi_is_throw(v)`.
 
 ---
 
-## Full example — sandboxed calculator
+## Full example -- sandboxed calculator
 
 ```c
 #include <stdio.h>

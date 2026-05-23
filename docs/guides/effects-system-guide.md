@@ -18,9 +18,9 @@ Turmeric implements **algebraic effect handlers** inspired by OCaml 5, enabling 
 
 Three core primitives:
 
-- **`(defeffect Name [param :type ...] :return-type)`** — Declares a new effect `Name`.
-- **`(perform (Name arg ...))`** — Raises the effect, searching the dynamic handler stack for a matching handler.
-- **`(handle expr (Name [p ...] k) body ...)`** — Installs a handler. When the effect fires, `k` is the captured continuation; call `(resume k value)` to continue.
+- **`(defeffect Name [param :type ...] :return-type)`** -- Declares a new effect `Name`.
+- **`(perform (Name arg ...))`** -- Raises the effect, searching the dynamic handler stack for a matching handler.
+- **`(handle expr (Name [p ...] k) body ...)`** -- Installs a handler. When the effect fires, `k` is the captured continuation; call `(resume k value)` to continue.
 
 ```turmeric
 ;; Declare an effect
@@ -45,7 +45,7 @@ def name perform(Read())
 ;; Handle the effect
 handle
   let [name perform(Read())]
-    println(str("Hello " name))
+    println $ str("Hello " name)
   (Read [] k) resume(k "World")
 ```
 
@@ -55,9 +55,9 @@ Continuations in Turmeric are **one-shot**: calling `(resume k v)` consumes `k`,
 
 ### Properties
 
-- **Effects are not in the type system** — Whether `perform` is handled is checked dynamically. Unhandled effects raise an exception at runtime.
-- **Dynamic dispatch** — The closest matching handler in the call stack handles the effect.
-- **Composable** — Handlers can chain; inner handlers shadow outer ones for the same effect.
+- **Effects are not in the type system** -- Whether `perform` is handled is checked dynamically. Unhandled effects raise an exception at runtime.
+- **Dynamic dispatch** -- The closest matching handler in the call stack handles the effect.
+- **Composable** -- Handlers can chain; inner handlers shadow outer ones for the same effect.
 
 ## Common Use Cases
 
@@ -72,7 +72,7 @@ Effects enable ergonomic async/await (see [Async/Await Guide](async-await-guide.
 ```
 ```sweet-exp
 async
-  await(read-file("data.txt"))
+  await $ read-file("data.txt")
   println("done")
 ```
 
@@ -234,9 +234,9 @@ Other modules import it with `:refer [(effect Write)]`.
 
 ### Benefits
 
-- **Polymorphism** — row variables let higher-order functions propagate caller effects.
-- **Compile-time checking** — the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
-- **Auditing** — `--dump-effects` shows the full effect signature of every function.
+- **Polymorphism** -- row variables let higher-order functions propagate caller effects.
+- **Compile-time checking** -- the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
+- **Auditing** -- `--dump-effects` shows the full effect signature of every function.
 
 ## Integration with Ownership and Defer
 
@@ -247,8 +247,8 @@ Effects interact with Turmeric's `defer` mechanism:
 
 ## See Also
 
-- [Async/Await Guide](async-await-guide.md) — Effects-based async/await syntax
-- [Logic Programming Guide](logic-programming-guide.md) — Backtracking via cloneable continuations
-- [STM Tutorial](stm-tutorial.md) — Composable transactions with effects
-- [Custom Effects Tutorial](custom-effects-tutorial.md) — Step-by-step walkthrough of all effect patterns
-- [Effects vs. Monads](effects-vs-monads.md) — Why effects replace monadic chaining in Turmeric
+- [Async/Await Guide](async-await-guide.md) -- Effects-based async/await syntax
+- [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations
+- [STM Tutorial](stm-tutorial.md) -- Composable transactions with effects
+- [Custom Effects Tutorial](custom-effects-tutorial.md) -- Step-by-step walkthrough of all effect patterns
+- [Effects vs. Monads](effects-vs-monads.md) -- Why effects replace monadic chaining in Turmeric

@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Language Tour — Turmeric</title>
+<title>Language Tour -- Turmeric</title>
 <meta name="description" content="A hands-on tour of Turmeric's ten most interesting features -- from algebraic effects to the Spice package manager.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://turmeric-lang.com/tour">
-<meta property="og:title" content="Language Tour — Turmeric">
+<meta property="og:title" content="Language Tour -- Turmeric">
 <meta property="og:description" content="A hands-on tour of Turmeric's ten most interesting features.">
 <meta property="og:image" content="https://turmeric-lang.com/og-image.png">
 
@@ -20,7 +20,7 @@
 <style>
 /* ── PAGE-SPECIFIC: TOUR ───────────────── */
 
-/* Hero — compact, text-centred */
+/* Hero -- compact, text-centred */
 .hero {
   padding: 140px 48px 96px;
   position: relative;
@@ -236,7 +236,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 01 ALGEBRAIC EFFECTS ──────────── -->
 <div class="split-section reveal" id="effects">
   <div>
-    <p class="section-label">01 — Algebraic Effects</p>
+    <p class="section-label">01 -- Algebraic Effects</p>
     <h2 class="section-title">Side effects,<br><em>tamed.</em></h2>
     <p class="section-desc">Declare what your functions can do, not how they do it. Effects are first-class operations that any caller can intercept and handle, without touching your core logic.</p>
     <p class="section-desc">Swap between production, test, and mock handlers at the call site. The type system ensures you never forget to handle an effect.</p>
@@ -276,7 +276,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 02 TYPECLASSES ─────────────────── -->
 <div class="split-section reverse reveal" id="typeclasses">
   <div>
-    <p class="section-label">02 — Typeclasses</p>
+    <p class="section-label">02 -- Typeclasses</p>
     <h2 class="section-title">Polymorphism<br>that <em>scales.</em></h2>
     <p class="section-desc">Define a typeclass once, implement it for any type, and let the compiler verify that every call site has a valid instance. Zero virtual tables, zero runtime cost.</p>
     <p class="section-desc">Typeclass constraints keep your functions general without sacrificing precision. The <code>^Show</code> syntax reads "must implement Show."</p>
@@ -315,7 +315,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 03 ADTs & PATTERN MATCHING ─────── -->
 <div class="split-section reveal" id="adts">
   <div>
-    <p class="section-label">03 — ADTs, GADTs &amp; Pattern Matching</p>
+    <p class="section-label">03 -- ADTs, GADTs &amp; Pattern Matching</p>
     <h2 class="section-title">Data that<br><em>speaks.</em></h2>
     <p class="section-desc">Algebraic data types let you model your domain precisely. <code>defdata</code> declares a plain sum type; <code>defgadt</code> goes further, letting each constructor specialize its own type parameters.</p>
     <p class="section-desc">The type-checker learns those specializations inside each <code>match</code> arm. No casts, no runtime tags, no missing branches -- every case is statically verified.</p>
@@ -355,7 +355,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 04 DELIMITED CONTINUATIONS ─────── -->
 <div class="split-section reverse reveal" id="continuations">
   <div>
-    <p class="section-label">04 — Delimited Continuations</p>
+    <p class="section-label">04 -- Delimited Continuations</p>
     <h2 class="section-title">Control that<br><em>bends.</em></h2>
     <p class="section-desc">Delimited continuations let you capture, store, and resume a slice of the call stack as an ordinary value. Coroutines, generators, and backtracking are just library code.</p>
     <p class="section-desc"><code>reset</code> delimits a region; <code>shift</code> captures the continuation up to that boundary and lets you reify it as a function you call at will.</p>
@@ -394,7 +394,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 05 MACRO SYSTEM ────────────────── -->
 <div class="split-section reveal" id="macros">
   <div>
-    <p class="section-label">05 — Macro System</p>
+    <p class="section-label">05 -- Macro System</p>
     <h2 class="section-title">Syntax that<br><em>grows.</em></h2>
     <p class="section-desc">Turmeric's macro system runs at compile time and operates directly on the syntax tree. Define new control flow, DSLs, or syntactic sugar without any runtime overhead.</p>
     <p class="section-desc">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make template-style code construction natural and readable. The result is indistinguishable from hand-written code.</p>
@@ -432,7 +432,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 06 REFERENCE COUNTING ──────────── -->
 <div class="split-section reverse reveal" id="rc">
   <div>
-    <p class="section-label">06 — Reference Counting</p>
+    <p class="section-label">06 -- Reference Counting</p>
     <h2 class="section-title">Memory without<br><em>compromise.</em></h2>
     <p class="section-desc">Turmeric manages heap values through explicit reference counting with compiler-assisted elision. You get deterministic cleanup -- no GC pauses, no dangling pointers, no runtime surprises.</p>
     <p class="section-desc"><code>rc/clone</code> increments the count; <code>rc/drop</code> decrements it. When the count hits zero, the value is freed immediately -- right there, at that line.</p>
@@ -465,7 +465,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 07 HIGHER-ORDER FUNCTIONS ─────── -->
 <div class="split-section reveal" id="hof">
   <div>
-    <p class="section-label">07 — Higher-Order Functions</p>
+    <p class="section-label">07 -- Higher-Order Functions</p>
     <h2 class="section-title">Functions as<br><em>values.</em></h2>
     <p class="section-desc">Functions are first-class in Turmeric -- pass them, return them, store them, compose them. Closures capture their environment lexically, with full type inference.</p>
     <p class="section-desc">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure -- not just lists.</p>
@@ -502,7 +502,7 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 08 NEOTERIC SYNTAX ─────────────── -->
 <div class="split-section reverse reveal" id="neoteric">
   <div>
-    <p class="section-label">08 — Neoteric Syntax</p>
+    <p class="section-label">08 -- Neoteric Syntax</p>
     <h2 class="section-title">Two syntaxes,<br>one <em>language.</em></h2>
     <p class="section-desc">Not a fan of nested parentheses? Switch to Neoteric mode with a single <code>#lang</code> declaration. Function calls use <code>f(args)</code> notation while keeping all of Turmeric's semantics intact.</p>
     <p class="section-desc">Both syntaxes compile to the same AST. Mix and match across files in the same project -- or share libraries between Turmeric and Neoteric code freely.</p>
@@ -549,7 +549,7 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <!-- ── 09 RUNTIME CONTRACTS ──────────── -->
 <div class="split-section reveal" id="contracts">
   <div>
-    <p class="section-label">09 — Runtime Contracts</p>
+    <p class="section-label">09 -- Runtime Contracts</p>
     <h2 class="section-title">Correctness<br>by <em>contract.</em></h2>
     <p class="section-desc">When the type system can't catch every invariant, contracts step in. <code>require!</code> asserts preconditions at the call site; <code>ensure!</code> checks postconditions on return. Both produce clear, structured errors in development and can be stripped in release builds.</p>
     <p class="section-desc">Contracts are opt-in and composable -- layer them wherever correctness matters most without changing function signatures.</p>
@@ -588,7 +588,7 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <!-- ── 10 SPICE PACKAGE MANAGER ───────── -->
 <div class="split-section reverse reveal" id="spice">
   <div>
-    <p class="section-label">10 — Spice Package Manager</p>
+    <p class="section-label">10 -- Spice Package Manager</p>
     <h2 class="section-title">Dependencies,<br><em>simplified.</em></h2>
     <p class="section-desc">One <code>build.tur</code> file describes your package and every dependency -- called <em>spices</em>. Git URLs and version refs are all you need. No separate binary, no lock file ceremony.</p>
     <p class="section-desc">Need a C library? Add it under <code>:cmake-deps</code>. Turmeric fetches, builds, and links it automatically via CPM -- no manual CMake required.</p>
@@ -629,7 +629,7 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
 <!-- ── 11 STRUCTURAL TYPING ──────────── -->
 <div class="split-section reveal" id="structural">
   <div>
-    <p class="section-label">11 — Structural Typing</p>
+    <p class="section-label">11 -- Structural Typing</p>
     <h2 class="section-title">Types that<br><em>flow.</em></h2>
     <p class="section-desc">Union types let a function accept several concrete types without boxing. <code>(int | bool)</code> is a structural union -- the compiler generates exhaustiveness-checked tag dispatch for you, and every union member must be handled.</p>
     <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Enable both features with <code>-Xunion-types</code>.</p>

@@ -344,9 +344,21 @@ async function initWasm() {
     } catch (error) {
         console.error('Failed to initialize WASM:', error);
         wasmState = WASM_STATE.ERROR;
-        showStatus('Failed to load WASM', 'error');
-        appendToConsole('<span class="console-error">Error: Failed to load WASM module. Please refresh the page.</span>');
         if (loadingOverlay) loadingOverlay.style.display = 'none';
+
+        if (error.message === 'shared-array-buffer-unavailable') {
+            showStatus('Browser not supported', 'error');
+            appendToConsole(
+                '<span class="console-error">The Try Turmeric playground requires a browser with ' +
+                '<a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer#browser_compatibility" ' +
+                'target="_blank" rel="noopener" style="color:inherit">SharedArrayBuffer</a> support.<br>' +
+                'On iOS, please update to iOS 15.4 or later and use Safari.<br>' +
+                'On desktop, Chrome, Firefox, and Edge all work.</span>'
+            );
+        } else {
+            showStatus('Failed to load WASM', 'error');
+            appendToConsole('<span class="console-error">Error: Failed to load WASM module. Please refresh the page.</span>');
+        }
     }
 }
 

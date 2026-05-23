@@ -259,7 +259,9 @@ overridden, never intercepted) or an interceptable operation.
 defdynamic *log-level* :int 1
 
 defn log-info [msg :cstr] :int
-  if {*log-level* >= 1} println(msg) 0
+  if {*log-level* >= 1}
+    println(msg)
+    0
 
 defn process [] :int
   log-info("processing")
@@ -331,7 +333,9 @@ bodies and `perform` may appear inside `binding` bodies without interaction.
 defdynamic *log-level* :int 1
 
 defn log-debug [msg :cstr] :int
-  if {*log-level* = 0} println(msg) 0
+  if {*log-level* = 0}
+    println(msg)
+    0
 
 defn run-verbose [thunk] :int
   binding [*log-level* 0]

@@ -19,15 +19,15 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
 
 | Function | Signature | Description |
 |---|---|---|
-| `mzero` | `() → :int` | The empty list — zero alternatives (failure) |
-| `mreturn` | `(x) → :int` | Wrap a single value — one alternative (success) |
+| `mzero` | `() → :int` | The empty list -- zero alternatives (failure) |
+| `mreturn` | `(x) → :int` | Wrap a single value -- one alternative (success) |
 | `mplus` | `(xs ys) → :int` | Concatenate two alternative lists |
 | `mbind` | `(ma f) → :int` | Flatmap: apply `f` to each alternative |
 | `guard` | `(pred :bool) → :int` | Keep current branch if `pred` is true, else fail |
 | `fresh` | `(lo hi) → :int` | Return all integers in `[lo, hi)` as alternatives |
 | `once` | `(xs) → :int` | Truncate to first alternative |
 | `interleave` | `(xs ys) → :int` | Fair interleaving of two streams |
-| `run-backtrack` | `(xs) → :int` | Identity — return all results |
+| `run-backtrack` | `(xs) → :int` | Identity -- return all results |
 | `run-backtrack-depth` | `(xs n) → :int` | Return first N results only |
 
 ---
@@ -36,30 +36,39 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
 
 ```turmeric
 ;; Return all even numbers from 1..10
-(let [evens (mbind (fresh 1 11) (fn [x]
-               (if (= (mod x 2) 0)
-                 (mreturn x)
-                 (mzero))))]
+(let [evens (mbind (fresh 1 11)
+                   (fn [x]
+                     (if (= (mod x 2) 0)
+                       (mreturn x)
+                       (mzero))))]
   (bt-print (run-backtrack evens)))
+
+; Outputs:
+;
+; 2
+; 4
+; 6
+; 8
+; 10
 ```
 
 ```sweet-exp
 ;; Return all even numbers from 1..10
-let [evens mbind(fresh(1 11) fn [x]
-               if {mod(x 2) = 0}
-                 mreturn(x)
-                 mzero())]
+let [evens mbind(fresh(1 11)
+                 fn [x]
+                   if {mod(x 2) = 0}
+                     mreturn x
+                     mzero())]
   bt-print(run-backtrack(evens))
-```
 
-Output:
+; Outputs:
+;
+; 2
+; 4
+; 6
+; 8
+; 10
 ```
-2
-4
-6
-8
-10
-```text
 
 ---
 
@@ -68,7 +77,7 @@ Output:
 The `backtrack-do` macro provides Haskell-`do`-notation-style sequencing for
 the backtracking monad:
 
-```
+```turmeric
 ;; Pythagorean triples with a+b+c = 24
 (backtrack-do
   a (fresh 1 24)
@@ -76,6 +85,16 @@ the backtracking monad:
   c (mreturn (- 24 (+ a b)))
   _ (guard (= (* a a) (+ (* b b) (* c c))))
   (mreturn (list a b c)))
+```
+
+```sweet-exp
+;; Pythagorean triples with a+b+c = 24
+backtrack-do
+  a fresh(1 24)
+  b fresh(a 24)
+  c mreturn $ {24 - {a + b}}
+  _ guard $ {{a * a} = {{b * b} + {c * c}}}
+  mreturn $ list(a b c)
 ```
 
 Each `var expr` line binds `var` to each alternative produced by `expr`. The
@@ -95,11 +114,11 @@ Use `run-backtrack-depth` when you only need the first N results:
 
 ```sweet-exp
 ;; Take only the first 5 solutions
-bt-print(run-backtrack-depth(all-solutions 5))
+bt-print $ run-backtrack-depth(all-solutions 5)
 ```
 
 You can also pass `--backtrack-depth N` to the compiler as a flag, which emits
-`#define BACKTRACK_DEPTH_DEFAULT N` in the generated C preamble — useful for
+`#define BACKTRACK_DEPTH_DEFAULT N` in the generated C preamble -- useful for
 runtime dispatch when the stdlib is extended to check this constant.
 
 ---
@@ -193,7 +212,7 @@ produces the unique solution to the given puzzle.
   `benchmarks/bench-backtrack-n-queens.tur` as a baseline.
 - The `--dump-clone-plan` compiler flag prints a summary of every
   `cloneable-shift` site with its captured bindings and resolved `Clone`
-  instance methods — useful for debugging continuation capture overhead.
+  instance methods -- useful for debugging continuation capture overhead.
 
 ---
 
@@ -208,7 +227,7 @@ produces the unique solution to the given puzzle.
 
 ## See Also
 
-- `stdlib/backtrack.tur` — standard library implementation
-- `tests/fixtures/backtrack-*/` — test fixtures for all backtracking features
-- `benchmarks/bench-backtrack-*.tur` — performance benchmarks
-- `docs/archive/backtracking-cloneable-continuations-plan.md` — design history
+- `stdlib/backtrack.tur` -- standard library implementation
+- `tests/fixtures/backtrack-*/` -- test fixtures for all backtracking features
+- `benchmarks/bench-backtrack-*.tur` -- performance benchmarks
+- `docs/archive/backtracking-cloneable-continuations-plan.md` -- design history

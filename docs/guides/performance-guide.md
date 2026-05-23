@@ -59,24 +59,32 @@ Iterative is faster for large N because it avoids stack growth:
 ; iterative -- O(n) time, O(1) space
 (defn fib-iter [n] :int
   (let [loop (fn [i a b] :int
-               (if (= i 0) a (loop (- i 1) b (+ a b))))]
+               (if (= i 0)
+                 a
+                 (loop (- i 1) b (+ a b))))]
     (loop n 0 1)))
 
 ; recursive -- O(2^n) time, avoid for n > ~30
 (defn fib-rec [n] :int
-  (if (< n 2) n (+ (fib-rec (- n 1)) (fib-rec (- n 2)))))
+  (if (< n 2)
+    n
+    (+ (fib-rec (- n 1)) (fib-rec (- n 2)))))
 ```
 
 ```sweet-exp
 ; iterative -- O(n) time, O(1) space
 defn fib-iter [n] :int
   let [loop fn [i a b] :int
-              if ={i 0} a loop({i - 1} b {a + b})]
+              if ={i 0}
+                a
+                loop({i - 1} b {a + b})]
     loop(n 0 1)
 
 ; recursive -- O(2^n) time, avoid for n > ~30
 defn fib-rec [n] :int
-  if {n < 2} n {fib-rec({n - 1}) + fib-rec({n - 2})}
+  if {n < 2}
+    n
+    {fib-rec({n - 1}) + fib-rec({n - 2})}
 ```
 
 ### Prime sieve
@@ -135,12 +143,13 @@ inline-C so the compiler can see through calls and optimise the loop:
 (defn estimate-pi [samples] :float
   (let [loop (fn [i inside] :float
                (if (= i 0)
-                   (* 4.0 (/ (int->float inside) (int->float samples)))
-                   (let [x (rand/float) y (rand/float)]
-                     (loop (- i 1)
-                           (if (<= (+ (* x x) (* y y)) 1.0)
-                               (+ inside 1)
-                               inside)))))]
+                 (* 4.0 (/ (int->float inside) (int->float samples)))
+                 (let [x (rand/float)
+                       y (rand/float)]
+                   (loop (- i 1)
+                         (if (<= (+ (* x x) (* y y)) 1.0)
+                           (+ inside 1)
+                           inside)))))]
     (loop samples 0)))
 ```
 
@@ -187,9 +196,11 @@ For hot paths that need mutable semantics, combine `hamt` with `ref`:
 
 (defn freq-count [words] :hamt
   (let [m (ref (hamt/empty))]
-    (list/for-each words (fn [w] :void
-      (ref/update! m (fn [h] :hamt
-        (hamt/insert h w (+ 1 (hamt/get-or h w 0)))))))
+    (list/for-each words
+                   (fn [w] :void
+                     (ref/update! m
+                                  (fn [h] :hamt
+                                    (hamt/insert h w (+ 1 (hamt/get-or h w 0)))))))
     (ref/get m)))
 ```
 
@@ -247,9 +258,11 @@ many pieces, use `str/builder`:
 
 (defn join [sep parts] :str
   (let [b (str/builder)]
-    (list/for-each-indexed parts (fn [i s] :void
-      (when (> i 0) (str/builder/append! b sep))
-      (str/builder/append! b s)))
+    (list/for-each-indexed parts
+                           (fn [i s] :void
+                             (when (> i 0)
+                               (str/builder/append! b sep))
+                             (str/builder/append! b s)))
     (str/builder/finish b)))
 ```
 
@@ -259,7 +272,8 @@ import "stdlib/str.tur"
 defn join [sep parts] :str
   let [b str/builder()]
     list/for-each-indexed(parts fn [i s] :void
-      when {i > 0} str/builder/append!(b sep)
+      when {i > 0}
+        str/builder/append!(b sep)
       str/builder/append!(b s))
     str/builder/finish(b)
 ```
@@ -405,7 +419,8 @@ aggressively against one that reuses buffers:
 (defn churn [n] :void
   (let [loop (fn [i] :void
                (when (> i 0)
-                 (let [_ (list/range 0 1000)] (loop (- i 1)))))]
+                 (let [_ (list/range 0 1000)]
+                   (loop (- i 1)))))]
     (loop n)))
 
 ; low churn -- reuses a vec
@@ -423,7 +438,8 @@ aggressively against one that reuses buffers:
 defn churn [n] :void
   let [loop fn [i] :void
               when {i > 0}
-                let [_ list/range(0 1000)] loop({i - 1})]
+                let [_ list/range(0 1000)]
+                  loop({i - 1})]
     loop(n)
 
 ; low churn -- reuses a vec
@@ -449,7 +465,9 @@ and uses O(1) stack:
 ```turmeric
 ; tail-recursive -- safe for any n
 (defn factorial [n acc] :int
-  (if (= n 0) acc (factorial (- n 1) (* n acc))))
+  (if (= n 0)
+    acc
+    (factorial (- n 1) (* n acc))))
 
 (factorial 1000000 1)
 ```
@@ -457,7 +475,9 @@ and uses O(1) stack:
 ```sweet-exp
 ; tail-recursive -- safe for any n
 defn factorial [n acc] :int
-  if ={n 0} acc factorial({n - 1} {n * acc})
+  if ={n 0}
+    acc
+    factorial({n - 1} {n * acc})
 
 factorial(1000000 1)
 ```
@@ -476,10 +496,14 @@ discriminant, or use a trampoline:
 (import "stdlib/trampoline.tur")
 
 (defn even? [n] :thunk
-  (if (= n 0) (done true) (bounce (fn [] :thunk (odd? (- n 1))))))
+  (if (= n 0)
+    (done true)
+    (bounce (fn [] :thunk (odd? (- n 1))))))
 
 (defn odd? [n] :thunk
-  (if (= n 0) (done false) (bounce (fn [] :thunk (even? (- n 1))))))
+  (if (= n 0)
+    (done false)
+    (bounce (fn [] :thunk (even? (- n 1))))))
 
 (trampoline/run (even? 100000))   ; => true, O(1) stack
 ```
@@ -488,10 +512,14 @@ discriminant, or use a trampoline:
 import "stdlib/trampoline.tur"
 
 defn even? [n] :thunk
-  if ={n 0} done(true) bounce(fn [] :thunk odd?({n - 1}))
+  if ={n 0}
+    done(true)
+    bounce(fn [] :thunk odd?({n - 1}))
 
 defn odd? [n] :thunk
-  if ={n 0} done(false) bounce(fn [] :thunk even?({n - 1}))
+  if ={n 0}
+    done(false)
+    bounce(fn [] :thunk even?({n - 1}))
 
 trampoline/run(even?(100000))   ; => true, O(1) stack
 ```
@@ -612,11 +640,11 @@ Each benchmark file should follow this template so that the automated runner
   )
 
 (defn main [] :void
-  (let [n (args/parse-int (args/get 1) 1000)]
-    (let [t0 (time/now-ns)]
-      (benchmark n)
-      (let [elapsed (- (time/now-ns) t0)]
-        (println (str/format "elapsed_ns={}" elapsed))))))
+  (let [n (args/parse-int (args/get 1) 1000)
+        t0 (time/now-ns)]
+    (benchmark n)
+    (let [elapsed (- (time/now-ns) t0)]
+      (println (str/format "elapsed_ns={}" elapsed)))))
 ```
 
 ```sweet-exp
@@ -627,11 +655,11 @@ defn benchmark [n] :void
   ; ... work under test ...
 
 defn main [] :void
-  let [n args/parse-int(args/get(1) 1000)]
-    let [t0 time/now-ns()]
-      benchmark(n)
-      let [elapsed {time/now-ns() - t0}]
-        println(str/format("elapsed_ns={}" elapsed))
+  let [n  args/parse-int(args/get(1) 1000)
+       t0 time/now-ns()]
+    benchmark(n)
+    let [elapsed {time/now-ns() - t0}]
+      println $ str/format("elapsed_ns={}" elapsed)
 ```
 
 Pass problem size via `*args*` (never hardcode), so the runner can sweep

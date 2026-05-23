@@ -13,18 +13,18 @@ Save and resume computations across process boundaries using serializable contin
 Turmeric's **serializable continuations** enable suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This builds on Phase 18's delimited continuations (`shift`/`reset`) which reify the call stack as a heap-allocated closure chain.
 
 Use cases include:
-- **Persistent workflows** — Pause and resume multi-step business processes
-- **Distributed task migration** — Send half-finished computations to other nodes
-- **Checkpointing** — Save state periodically; restart from last checkpoint on crash
-- **Web continuations** — Racket-style: serialize "what to do next" as a URL token
-- **Mobile agents** — Send code + state to a remote peer for execution
-- **Debugger snapshots** — Freeze and replay running program state
+- **Persistent workflows** -- Pause and resume multi-step business processes
+- **Distributed task migration** -- Send half-finished computations to other nodes
+- **Checkpointing** -- Save state periodically; restart from last checkpoint on crash
+- **Web continuations** -- Racket-style: serialize "what to do next" as a URL token
+- **Mobile agents** -- Send code + state to a remote peer for execution
+- **Debugger snapshots** -- Freeze and replay running program state
 
 ## Core Concepts
 
 ### What is a Serializable Continuation?
 
-A **continuation** represents "the rest of the computation" — a suspended state that can be resumed later. A **serializable continuation** can be converted to bytes and restored, even in a different process.
+A **continuation** represents "the rest of the computation" -- a suspended state that can be resumed later. A **serializable continuation** can be converted to bytes and restored, even in a different process.
 
 ```turmeric
 ;; Capture a serializable continuation
@@ -486,7 +486,7 @@ serial-reset
 - `ref<T>` may be captured only if `T: Serializable`
 - On serialization, the **current value** is snapshotted
 - On resume, a **fresh** `ref` cell is created with that value
-- Sharing between multiple captures of the same `ref` is **not** preserved — each resumed continuation gets its own independent copy
+- Sharing between multiple captures of the same `ref` is **not** preserved -- each resumed continuation gets its own independent copy
 
 ## Standard Library Support
 
@@ -516,10 +516,12 @@ A higher-level API for persistent workflows:
 ```turmeric
 ;; Define a workflow step that can be suspended and resumed
 defworkflow-step process-approval [order-id : int64] : bool
-  (def approved? (serial-shift [k]
-                   (db-save-continuation order-id k)
-                   false))
-  (when approved? (fulfill-order! order-id))
+  (def approved?
+    (serial-shift [k]
+      (db-save-continuation order-id k)
+      false))
+  (when approved?
+    (fulfill-order! order-id))
   approved?
 
 ;; Resume a workflow from the database
@@ -633,8 +635,8 @@ Deserializing from an untrusted source is analogous to Java deserialization vuln
 
 ## See Also
 
-- [Checkpointing Guide](checkpointing-guide.md) — More examples of persistent workflows
-- [Async/Await Guide](async-await-guide.md) — One-shot continuations for async I/O
-- [Logic Programming Guide](logic-programming-guide.md) — Cloneable continuations for backtracking
-- [Effects System Guide](effects-system-guide.md) — Algebraic effects and custom control flow
-- [turmeric-plan.md](../turmeric-plan.md) §18 — Delimited continuations (foundation)
+- [Checkpointing Guide](checkpointing-guide.md) -- More examples of persistent workflows
+- [Async/Await Guide](async-await-guide.md) -- One-shot continuations for async I/O
+- [Logic Programming Guide](logic-programming-guide.md) -- Cloneable continuations for backtracking
+- [Effects System Guide](effects-system-guide.md) -- Algebraic effects and custom control flow
+- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations (foundation)

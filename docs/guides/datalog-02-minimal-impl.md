@@ -55,7 +55,7 @@ Constructors wrap the raw int:
 defn long-val [n :int] :int
   LongVal(n)
 defn str-val [s :cstr] :int
-  StrVal(cstr->int(s))
+  StrVal $ cstr->int(s)
 defn entity-val [e :int] :int
   EntityVal(e)
 ```
@@ -263,30 +263,30 @@ result vec of all matching datums:
 
 ```turmeric
 (defn db-q [db :int pred] :ptr<void>
-  (let [n (db-count db)]
-    (let [result (rvec-new)]
-      (let [^mut i 0]
-        (while (< i n)
-          (do
-            (let [d (db-ref db i)]
-              (when (pred d)
-                (rvec-push! result d)))
-            (set! i (+ i 1))))
-        result))))
+  (let [n (db-count db)
+        result (rvec-new)
+        ^mut i 0]
+    (while (< i n)
+      (do
+        (let [d (db-ref db i)]
+          (when (pred d)
+            (rvec-push! result d)))
+        (set! i (+ i 1))))
+    result))
 ```
 
 ```sweet-exp
 defn db-q [db :int pred] :ptr<void>
-  let [n db-count(db)]
-    let [result rvec-new()]
-      let [^mut i 0]
-        while {i < n}
-          do
-            let [d db-ref(db i)]
-              when pred(d)
-                rvec-push!(result d)
-            set! i {i + 1}
-        result
+  let [n db-count(db)
+       result rvec-new()
+       ^mut i 0]
+    while {i < n}
+      do
+        let [d db-ref(db i)]
+          when pred(d)
+            rvec-push!(result d)
+        set! i {i + 1}
+    result
 ```
 
 Higher-level combinators return closures suitable as `pred`:
@@ -303,21 +303,21 @@ Higher-level combinators return closures suitable as `pred`:
 Example -- find all names:
 
 ```turmeric
-(let [names (db-q db (q-attr ":user/name"))]
-  (let [^mut i 0]
-    (while (< i (rvec-len names))
-      (do
-        (print-value (datum-value (rvec-get names i)))
-        (set! i (+ i 1))))))
+(let [names (db-q db (q-attr ":user/name"))
+      ^mut i 0]
+  (while (< i (rvec-len names))
+    (do
+      (print-value (datum-value (rvec-get names i)))
+      (set! i (+ i 1)))))
 ```
 
 ```sweet-exp
-let [names db-q(db q-attr(":user/name"))]
-  let [^mut i 0]
-    while {i < rvec-len(names)}
-      do
-        print-value(datum-value(rvec-get(names i)))
-        set! i {i + 1}
+let [names db-q(db q-attr(":user/name"))
+     ^mut i 0]
+  while {i < rvec-len(names)}
+    do
+      print-value $ datum-value $ rvec-get(names i)
+      set! i {i + 1}
 ```
 
 ---

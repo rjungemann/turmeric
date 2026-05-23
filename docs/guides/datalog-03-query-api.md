@@ -231,39 +231,39 @@ transaction:
 
 ```turmeric
 (defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
-  (let [n (db-count db)]
-    (let [^mut i 0]
-      (let [^mut found false]
-        (while (< i n)
-          (do
-            (let [d (db-ref db i)]
-              (when (and (= (datum-entity d) entity)
-                         (cstr-eq? (datum-attr d) (cstr->int ":db/retract"))
-                         (<= (datum-tx d) as-of-tx))
-                (match (datum-value d)
-                  (StrVal s) (when (cstr-eq? s (cstr->int attr)) (set! found true))
-                  _ nil)))
-            (set! i (+ i 1))))
-        found))))
+  (let [n (db-count db)
+        ^mut i 0
+        ^mut found false]
+    (while (< i n)
+      (do
+        (let [d (db-ref db i)]
+          (when (and (= (datum-entity d) entity)
+                     (cstr-eq? (datum-attr d) (cstr->int ":db/retract"))
+                     (<= (datum-tx d) as-of-tx))
+            (match (datum-value d)
+              (StrVal s) (when (cstr-eq? s (cstr->int attr)) (set! found true))
+              _ nil)))
+        (set! i (+ i 1))))
+    found))
 ```
 
 ```sweet-exp
 defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
-  let [n db-count(db)]
-    let [^mut i 0]
-      let [^mut found false]
-        while {i < n}
-          do
-            let [d db-ref(db i)]
-              when and({datum-entity(d) = entity}
-                       cstr-eq?(datum-attr(d) cstr->int(":db/retract"))
-                       {datum-tx(d) <= as-of-tx})
-                match datum-value(d)
-                  (StrVal s) when cstr-eq?(s cstr->int(attr))
-                               set! found true
-                  _ nil
-            set! i {i + 1}
-        found
+  let [n db-count(db)
+       ^mut i 0
+       ^mut found false]
+    while {i < n}
+      do
+        let [d db-ref(db i)]
+          when and({datum-entity(d) = entity}
+                   cstr-eq?(datum-attr(d) cstr->int(":db/retract"))
+                   {datum-tx(d) <= as-of-tx})
+            match datum-value(d)
+              (StrVal s) when cstr-eq?(s cstr->int(attr))
+                           set! found true
+              _ nil
+        set! i {i + 1}
+    found
 ```
 
 Usage -- retract Bob's email and verify:
@@ -276,7 +276,7 @@ Usage -- retract Bob's email and verify:
 
 ```sweet-exp
 db-retract!(db 2 ":user/email")
-println(retracted?(db 2 ":user/email" db-count(db)))
+println $ retracted?(db 2 ":user/email" db-count(db))
 ; => true
 ```
 

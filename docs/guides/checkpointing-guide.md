@@ -410,8 +410,8 @@ try-with
   fn [e k]
     match e
       (schema-mismatch _ old-version) ->
-        throw(error(str("Cannot resume: checkpoint uses version " old-version
-                        " but current code is version " current-version())))
+        throw $ error $ str("Cannot resume: checkpoint uses version " old-version
+                            " but current code is version " current-version())
 ```
 
 ### Partial Reconstruction
@@ -444,10 +444,10 @@ def opt-value
 
 ### Strategies
 
-1. **Limit continuation depth** — Design workflows to have shallow call stacks.
-2. **Minimize captured state** — Use identifiers (e.g., order ID) instead of entire objects.
-3. **Lazy serialization** — For large state, write once, reference by ID on resumption.
-4. **Incremental checkpointing** — Save deltas instead of full continuation.
+1. **Limit continuation depth** -- Design workflows to have shallow call stacks.
+2. **Minimize captured state** -- Use identifiers (e.g., order ID) instead of entire objects.
+3. **Lazy serialization** -- For large state, write once, reference by ID on resumption.
+4. **Incremental checkpointing** -- Save deltas instead of full continuation.
 
 ## API Summary
 
@@ -489,7 +489,7 @@ unmarshal(token : resource-token) : a
 
 ## See Also
 
-- [Logic Programming Guide](logic-programming-guide.md) — Cloneable continuations for backtracking
-- [Async/Await Guide](async-await-guide.md) — One-shot continuations for async I/O
-- [Effects System Guide](effects-system-guide.md) — Dynamic effect handling
-- [turmeric-plan.md](../turmeric-plan.md) §18 — Delimited continuations
+- [Logic Programming Guide](logic-programming-guide.md) -- Cloneable continuations for backtracking
+- [Async/Await Guide](async-await-guide.md) -- One-shot continuations for async I/O
+- [Effects System Guide](effects-system-guide.md) -- Dynamic effect handling
+- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations

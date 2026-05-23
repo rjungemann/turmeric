@@ -4,7 +4,7 @@ category: Getting Started
 description: Reference guide for the `tur repl` interactive read-eval-print loop, covering startup, expression evaluation, meta-commands, and configuration
 ---
 
-# tur repl — REPL Reference
+# tur repl -- REPL Reference
 
 `tur repl` launches an interactive Turmeric read-eval-print loop.
 
@@ -106,9 +106,9 @@ Prints brief documentation for a known builtin or user-defined symbol.
 
 ```
 > :doc println
-println — print a value followed by a newline
+println -- print a value followed by a newline
 > :doc +
-+ — integer or float addition
++ -- integer or float addition
 ```
 
 For user-defined functions the signature is printed:
@@ -142,7 +142,7 @@ the session continues.
 | Float | `3.14` |
 | Boolean | `true` / `false` |
 | String (`:cstr`) | `"hello"` |
-| Nil | (nothing printed — nil results are silent) |
+| Nil | (nothing printed -- nil results are silent) |
 | Closure | `#<fn square>` |
 | Struct | `#<struct Point>` |
 | Future | `#<future pending>` / `#<future resolved>` |
@@ -169,9 +169,9 @@ tur repl 2>/dev/null | cat
 If the binary was built with `editline` support (the default on macOS and
 most Linux distributions), the REPL provides:
 
-- **Line editing** — arrow keys, `Ctrl-A`/`Ctrl-E`, `Ctrl-K`, etc.
-- **History** — `Up`/`Down` arrows cycle through previous entries.
-- **Completion** — `Tab` completes known symbol names (when implemented).
+- **Line editing** -- arrow keys, `Ctrl-A`/`Ctrl-E`, `Ctrl-K`, etc.
+- **History** -- `Up`/`Down` arrows cycle through previous entries.
+- **Completion** -- `Tab` completes known symbol names (when implemented).
 
 Without editline, raw `fgets` input is used with no history or editing.
 
@@ -195,5 +195,5 @@ printf ':reload myfile.tur\n:quit\n' | tur repl 2>/dev/null \
 
 ## See also
 
-- `docs/eval-api.md` — C embedding API for programmatic use of libturi.
-- `man tur-repl` — man page with a concise option reference.
+- `docs/eval-api.md` -- C embedding API for programmatic use of libturi.
+- `man tur-repl` -- man page with a concise option reference.

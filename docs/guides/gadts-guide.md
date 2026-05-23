@@ -230,9 +230,9 @@ defn eval-expr [e] :int
     (Add l r) {eval-expr(l) + eval-expr(r)}
 
 defn main [] :int
-  println(color-to-int((Red)))
-  println(eval-expr(Add((Lit 10) (Lit 20))))
-  println(color-to-int((Green)))
+  println $ color-to-int((Red))
+  println $ eval-expr(Add((Lit 10) (Lit 20)))
+  println $ color-to-int((Green))
   0
 ```
 
@@ -273,7 +273,7 @@ defn eval-expr [e] :int
 defn main [] :int
   ; (2 + (3 * 4)) = 14
   let [e Add((Lit 2) Mul((Lit 3) (Lit 4)))]
-    println(eval-expr(e))
+    println $ eval-expr(e)
     0
 ```
 
@@ -320,7 +320,7 @@ defn main [] :int
   match (Refl)
     (Refl)
       do
-        println(coerce((Refl) 42))
+        println $ coerce((Refl) 42)
         0
 ```
 
@@ -470,7 +470,7 @@ definstance Show [bool]
   show [x] "a-bool"
 
 defn print-any [x : (int | bool)] :int
-  println(.show(x))
+  println $ .show(x)
   0
 ```
 
@@ -496,7 +496,7 @@ boxed into `any` carry a runtime tag so their type can be recovered:
 
 ```sweet-exp
 defn consume [x : any] :int
-  println(type-of(x))   ; prints "int", "bool", "cstr", etc.
+  println $ type-of(x)   ; prints "int", "bool", "cstr", etc.
   0
 
 defn main [] :int
@@ -518,7 +518,7 @@ only when you know the type):
 
 ```sweet-exp
 defn print-as-int [x : any] :int
-  println(cast(x int))
+  println $ cast(x int)
   0
 ```
 
@@ -645,7 +645,7 @@ defn describe [x : (int | bool)] :int
 
 ; Gradual typing  (requires -Xunion-types)
 defn show-type [x : any] :int
-  println(type-of(x))
+  println $ type-of(x)
   0
 ```
 

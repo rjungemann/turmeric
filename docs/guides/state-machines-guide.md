@@ -77,9 +77,9 @@ making the machine testable with mock handlers.
   (match state
     (Running n) (match event
                   (Tick x) (do
-                             (perform (Emit "tick"))
-                             (perform (Store "count" (+ n x)))
-                             (Running (+ n x)))
+                    (perform (Emit "tick"))
+                    (perform (Store "count" (+ n x)))
+                    (Running (+ n x)))
                   ...)
     ...))
 ```

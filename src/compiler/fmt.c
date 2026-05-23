@@ -808,6 +808,55 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
             continue;
         }
 
+        /* Datum comment #;datum -- re-emit verbatim */
+        if (*p == '#' && p + 1 < end && p[1] == ';') {
+            const char *blk = p;
+            p += 2;
+            /* skip whitespace between #; and the datum */
+            while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+            if (p < end) {
+                if (*p == '(' || *p == '[' || *p == '{') {
+                    char open = *p;
+                    char close = (open == '(') ? ')' : (open == '[') ? ']' : '}';
+                    int depth = 0;
+                    while (p < end) {
+                        if (*p == '"') {
+                            p++;
+                            while (p < end && *p != '"') {
+                                if (*p == '\\' && p + 1 < end) p++;
+                                p++;
+                            }
+                            if (p < end) p++;
+                        } else if (*p == open) {
+                            depth++; p++;
+                        } else if (*p == close) {
+                            depth--; p++;
+                            if (depth == 0) break;
+                        } else {
+                            p++;
+                        }
+                    }
+                } else if (*p == '"') {
+                    p++;
+                    while (p < end && *p != '"') {
+                        if (*p == '\\' && p + 1 < end) p++;
+                        p++;
+                    }
+                    if (p < end) p++;
+                } else {
+                    while (p < end && *p != ' ' && *p != '\t' && *p != '\r'
+                           && *p != '\n' && *p != '(' && *p != ')' && *p != '['
+                           && *p != ']' && *p != '{' && *p != '}') {
+                        p++;
+                    }
+                }
+            }
+            if (s->col > 0) fs_putc(s, '\n');
+            fs_write(s, blk, (size_t)(p - blk));
+            emitted = true;
+            continue;
+        }
+
         /* Anything else is part of a form — stop */
         break;
     }

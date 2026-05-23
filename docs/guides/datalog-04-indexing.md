@@ -266,7 +266,7 @@ let [results idb-q-ea(idb 1 ":user/name")]
 
 ; Entity 3 has no email -- should return empty result
 let [results idb-q-ea(idb 3 ":user/email")]
-  println(rvec-len(results))  ; => 0
+  println $ rvec-len(results)  ; => 0
 ```
 
 Expected output:

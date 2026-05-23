@@ -1,0 +1,2 @@
+#;(defn unused [] :int 42)
+(println "ok")

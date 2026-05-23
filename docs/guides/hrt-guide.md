@@ -12,7 +12,7 @@ This guide explains how to use higher-ranked types (HRTs) in Turmeric: what they
 
 A **rank-1 type** is a normal monomorphic function type: `(-> int int)`.
 
-A **rank-2 type** introduces a `forall` *inside* a function argument. The classic example is `(forall [a] (-> a a))` — a function that works for any type `a`. When you pass such a function as an argument, the *callee* gets to choose `a` for each use, not the caller.
+A **rank-2 type** introduces a `forall` *inside* a function argument. The classic example is `(forall [a] (-> a a))` -- a function that works for any type `a`. When you pass such a function as an argument, the *callee* gets to choose `a` for each use, not the caller.
 
 ```turmeric
 ; apply-poly works for any type -- the callee instantiates `a`
@@ -118,7 +118,7 @@ apply-to-both(inc 3 7)  ; => 12
 
 ### Pattern 2: Church-numeral iteration
 
-Apply a polymorphic function n times — the essence of Church numerals:
+Apply a polymorphic function n times -- the essence of Church numerals:
 
 ```turmeric
 (defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
@@ -204,7 +204,7 @@ defn apply-twice [f (forall [a] (-> a a)) x :int] :int
   apply-once(f apply-once(f x))  ; f forwarded directly
 ```
 
-No wrapper is created when forwarding — the existing `tur_poly_fn_t` is passed through.
+No wrapper is created when forwarding -- the existing `tur_poly_fn_t` is passed through.
 
 ### Pattern 6: Typeclass methods with rank-N parameters
 
@@ -234,7 +234,7 @@ definstance Transform []
 
 ### Pattern 7: Rank-3 types
 
-A function whose parameter is itself rank-2 — it accepts a "polymorphic function handler":
+A function whose parameter is itself rank-2 -- it accepts a "polymorphic function handler":
 
 ```turmeric
 (defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] :int
@@ -318,10 +318,10 @@ The compiler automatically:
 
 ## See also
 
-- `docs/higher-ranked-types-plan.md` — Implementation plan and phase history
-- `tests/fixtures/hrt-*/` — Working examples of every HRT feature
-- `docs/gadts-guide.md` — GADTs and equality witnesses; skolem equalities produced
+- `docs/higher-ranked-types-plan.md` -- Implementation plan and phase history
+- `tests/fixtures/hrt-*/` -- Working examples of every HRT feature
+- `docs/gadts-guide.md` -- GADTs and equality witnesses; skolem equalities produced
   by GADT `match` arms interact with HRT bidirectional checking to enable type
   refinement without casts (see `gadts-plan.md` §Non-Goals item 4 for the
   boundary between HRT and GADT phases)
-- `tests/fixtures/errors/hrt-*/` — Error cases with expected diagnostics
+- `tests/fixtures/errors/hrt-*/` -- Error cases with expected diagnostics

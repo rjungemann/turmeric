@@ -1,0 +1,29 @@
+{
+  "name": "Turmeric",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  // Add build/ to PATH so `tur`, `tur_eval_basic`, etc. are directly runnable.
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}/build"
+  },
+
+  // Configure and build on first container start.
+  "postCreateCommand": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build build -j",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // C/C++ language intelligence via clangd (uses compile_commands.json)
+        "llvm-vs-code-extensions.vscode-clangd",
+        // Python support for doc-gen / doctest scripts
+        "ms-python.python"
+      ],
+      "settings": {
+        // Disable the built-in IntelliSense engine so it doesn't conflict with clangd.
+        "C_Cpp.intelliSenseEngine": "disabled"
+      }
+    }
+  }
+}
