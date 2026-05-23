@@ -1,6 +1,9 @@
 # Existential Types -- GC Integration, Follow-up Plan
 
-> **Status:** Not started.  Follow-on to EXG1 (shipped 2026-05-23).
+> **Status:** EXG4 partial, EXG5 walker infrastructure, and EXG6
+> `:linear` discipline all shipped 2026-05-23.  Remaining open: EXG4-3
+> storage-site auto-clone, EXG5 smart drop hook for RC payloads (blocks
+> the cycle-construction test), EXG6 escape-from-defn diagnostic.
 > **Last Updated:** 2026-05-23
 > **Type:** Runtime / Memory Management
 
@@ -270,21 +273,21 @@ so EXG4 and EXG5 do not apply.
 
 | ID     | Phase | Description |
 |--------|-------|-------------|
-| EXG4-1 | EXG4  | Move tracking for existential bindings (return / arg / store) |
-| EXG4-2 | EXG4  | `(exists/clone e)` form, lowers to `rc_strong_increment` |
-| EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites |
-| EXG4-4 | EXG4  | Return-value move semantics |
-| EXG4-5 | EXG4  | Cross-scope-flow runtime tests |
-| EXG5-1 | EXG5  | Kind tag in `RcControlBlock::reserved` |
-| EXG5-2 | EXG5  | Cycle-walker dispatch on the kind tag |
-| EXG5-3 | EXG5  | Pack-site writes payload descriptor |
-| EXG5-4 | EXG5  | `rc_cb_alloc_kinded` to honour `may_contain_cycles` |
-| EXG5-5 | EXG5  | Cycle-collection tests for existential payloads |
-| EXG6-1 | EXG6  | `:linear` attribute on `exists` |
-| EXG6-2 | EXG6  | Substructural use-exactly-once check |
-| EXG6-3 | EXG6  | Linear emit path (no RC header) |
-| EXG6-4 | EXG6  | (Confirm no EXG4/EXG5 interaction) |
-| EXG6-5 | EXG6  | Linear-existential tests |
+| EXG4-1 | EXG4  | Move tracking for existential bindings (return / arg / store) -- **shipped (let-tail propagation)** |
+| EXG4-2 | EXG4  | `(exists/clone e)` form, lowers to `rc_strong_increment` -- **shipped (rc/clone relaxed to accept constrained existentials)** |
+| EXG4-3 | EXG4  | Auto-clone at struct/vec/async storage sites -- **open** (current rc<T> baseline also uses explicit clone at these sites; will revisit when the underlying policy changes) |
+| EXG4-4 | EXG4  | Return-value move semantics -- **shipped (let-tail propagation covers fn-return-via-let)** |
+| EXG4-5 | EXG4  | Cross-scope-flow runtime tests -- **partial:** `exg4-pack-let-tail`, `exg4-exists-clone`, `exg4-pack-share` shipped; the plan's `exg4-pack-return` / `exg4-pack-into-fn` / `exg4-pack-into-struct` cases are blocked on a separate parser limitation (constrained existential return / param type annotations crash `elab_open`) -- track that fix independently |
+| EXG5-1 | EXG5  | Kind tag in `RcControlBlock::reserved` -- **shipped** (`reserved[0]` = `RCK_*`, `reserved[1]` = `RCEXP_*`; mirrored in `emit_module.c` so generated code sees identical layout) |
+| EXG5-2 | EXG5  | Cycle-walker dispatch on the kind tag -- **shipped** (`gc_mark_phase` propagates from strong roots through `RCK_EXISTENTIAL` blocks whose `RCEXP_RC` payload points at another `RcControlBlock`; same logic in the inline runtime) |
+| EXG5-3 | EXG5  | Pack-site writes payload descriptor -- **shipped** (`emit_expr.c` `EX_EXISTS_PACK` uses `rc_cb_alloc_kinded`; payload kind is `RCEXP_RC` when the packed value's type is `TY_RC`, `TY_WEAK`, or a constrained `TY_EXISTS`, else `RCEXP_OPAQUE`) |
+| EXG5-4 | EXG5  | `rc_cb_alloc_kinded` to honour `may_contain_cycles` -- **shipped** (variant added in `rc.{h,c}`; `rc_cb_alloc` now forwards to it with `RCK_OPAQUE`).  The `may_contain_cycles=false` short-circuit for primitives is unchanged: the existing `value_type_kind<=7` rule already covers all scalar payloads |
+| EXG5-5 | EXG5  | Cycle-collection tests for existential payloads -- **partial:** `exg5-kind-tag-opaque`, `exg5-kind-tag-rc`, `exg5-walker-rc-payload` shipped (verify the kind/payload bytes via inline-C and run gc! over a live existential).  The plan's `exg5-rc-in-exists` and `exg5-exists-cycle` tests are blocked on a smart drop hook for RC payloads and on `pack` not yet incrementing / move-tracking RC arguments; both pieces should land together in a follow-up |
+| EXG6-1 | EXG6  | `:linear` attribute on `exists` -- **shipped** (parsed in `elab_types.c`; flag stored on `forall_.is_linear`; the type's `copy_kind` is upgraded to `CK_LINEAR` so let-binding sites pick it up via the existing `^linear`/CK_LINEAR path) |
+| EXG6-2 | EXG6  | Substructural use-exactly-once check -- **shipped** (reuses LT1: the let binding inherits `is_linear`; `open` consumes via the existing EX_VAR lookup; zero opens trip `TUR_E0100`, two opens trip `TUR_E0101`).  Requires `-Xlinear` |
+| EXG6-3 | EXG6  | Linear emit path (no RC header) -- **shipped** (linear pack uses plain `malloc(sizeof(tur_existential_t) + ...)`; `EX_EXISTS_OPEN` reads the record directly and emits `free((void *)(packed))` at the end of its body) |
+| EXG6-4 | EXG6  | (Confirm no EXG4/EXG5 interaction) -- **shipped** by construction: the EXG4 let-tail-move scan only fires for `CK_MOVE` bindings, linear existentials are `CK_LINEAR`; EXG5's walker only follows `RCK_EXISTENTIAL` blocks allocated via `rc_cb_alloc_kinded`, linear packs go through plain `malloc` and are never registered with the GC.  Also: the EXG1-5 auto-drop is skipped for linear existentials so the per-open `free()` is the sole release |
+| EXG6-5 | EXG6  | Linear-existential tests -- **partial:** `exg6-linear-ok`, `exg6-linear-multi`, `errors/exg6-linear-unused`, `errors/exg6-linear-double-open` shipped.  The plan's `errors/exg6-linear-escape` is **open** -- detecting "linear pack returned from defn" cleanly needs more parser work (no current way to spell a linear existential as a return type) and a check that catches the erased-to-`:ptr<void>` escape path; track separately |
 
 ---
 

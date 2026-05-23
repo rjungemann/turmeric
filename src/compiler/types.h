@@ -421,6 +421,11 @@ typedef struct Type {
             TypeClass  **constraint_classes; /* arena-allocated; length n_constraints */
             uint8_t     *constraint_var_idx; /* arena-allocated; length n_constraints */
             uint8_t      n_constraints;
+            /* EXG6: `:linear` attribute on `(exists :linear [a] [(C a) ...] body)`.
+             * When set, the existential bypasses rc_cb_alloc and the let binding
+             * for a pack of this type is treated as a linear value (use-exactly-
+             * once via LT1's substructural machinery). */
+            bool         is_linear;
         } forall_;
         /* IT0: Union types — (A | B | C) */
         struct {
