@@ -698,6 +698,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (ann->kind == TY_EXISTS || ann->kind == TY_FORALL) {
                         return_exists_type = ann;
                     }
+                    /* F2-1: a `:linear` existential cannot escape past the
+                     * scope that packs it -- the linear discipline relies on
+                     * a single `open` in the same scope freeing the bare
+                     * malloc'd record (no rc, no defer chain).  Returning
+                     * one from a defn breaks that guarantee silently.
+                     * Reject at the annotation parsing point so the
+                     * diagnostic fires regardless of how the body returns
+                     * the value (direct pack, let-tail, conditional). */
+                    if (ann->kind == TY_EXISTS && ann->as.forall_.is_linear) {
+                        diag_emit(DIAG_ERROR, ret_f->span,
+                                  "defn: a :linear existential cannot escape "
+                                  "its packing scope -- it must be opened in "
+                                  "the same scope that packed it (no return, "
+                                  "no struct/collection storage)");
+                        e->scope = inner.parent;
+                        scope_free(&inner);
+                        return NULL;
+                    }
                 }
             }
             body_start++;

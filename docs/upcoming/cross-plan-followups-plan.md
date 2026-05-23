@@ -1,8 +1,10 @@
 # Cross-Plan Followups
 
-> **Status:** F1-1 shipped (constrained-existential return/param SEGV
-> fixed; new fixtures `ex-exists-return-type`, `ex-exists-param-type`,
-> `exg4-pack-return`, `exg4-pack-into-fn`).  `exg4-pack-into-struct`
+> **Status:** F1-1 + F2-1 shipped.  F1-1 = constrained-existential
+> return/param SEGV fix (new fixtures `ex-exists-return-type`,
+> `ex-exists-param-type`, `exg4-pack-return`, `exg4-pack-into-fn`).
+> F2-1 = defn-boundary diagnostic for escaping `:linear` existentials
+> (new fixture `errors/exg6-linear-escape`).  `exg4-pack-into-struct`
 > remains blocked on a separate `defstruct` parser limitation
 > (compound field type annotations) -- track separately.
 > **Last Updated:** 2026-05-23
@@ -163,10 +165,10 @@ discipline, leaking the record.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F2-1-1 | Decide the diagnostic point: at the `pack` site (when the pack expression flows directly to a function return), or at the `defn` boundary (when the return type is a `:linear` existential). | design decision |
-| F2-1-2 | If at pack: in `elab_pack`, when the parent context is `EX_RETURN` or the let-tail of a `defn` body, and the result type has `is_linear=true`, emit a diagnostic. | `src/compiler/elab_types.c` |
-| F2-1-3 | If at defn: in `elab_fns.c` return-type parsing, when the annotation resolves to a `TY_EXISTS` with `is_linear=true`, emit a diagnostic. | `src/compiler/elab_fns.c` |
-| F2-1-4 | Add fixture `tests/fixtures/errors/exg6-linear-escape` per the EXG6-5 entry in the followup plan. | `tests/fixtures/errors/` |
+| F2-1-1 | Decision: **defn-boundary check** -- a single deterministic check at return-type annotation parsing, independent of body shape (direct pack, let-tail, conditional return).  Simpler than flow analysis at the pack site, and the linear-escape contract is naturally a property of the function's return type. | design decision |
+| F2-1-2 | If at pack: rejected by F2-1-1 decision. | -- |
+| F2-1-3 | At defn: in `elab_fns.c` return-type parsing, when the annotation resolves to a `TY_EXISTS` with `is_linear=true`, emit a diagnostic -- **shipped**. | `src/compiler/elab_fns.c` |
+| F2-1-4 | Add fixture `tests/fixtures/errors/exg6-linear-escape` -- **shipped**. | `tests/fixtures/errors/` |
 
 ### F2-2 -- Cycle-construction tests for existentials
 
