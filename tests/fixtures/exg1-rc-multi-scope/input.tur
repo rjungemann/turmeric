@@ -1,0 +1,27 @@
+; Phase EXG1: multiple constrained packs in nested let scopes.  Each
+; pack's record must be auto-dropped at its enclosing scope's exit.  This
+; exercises the EXG1-3/EXG1-4 emit path with multiple control blocks
+; alive at the same time, and verifies the open scrutinee reads through
+; the rc payload pointer correctly.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn main [] :int
+  (let [a (pack 1 (exists [a] [(Show a)] a))]
+    (let [b (pack 2 (exists [a] [(Show a)] a))]
+      (let [c (pack 3 (exists [a] [(Show a)] a))]
+        (open a [_ va]
+          (open b [_ vb]
+            (open c [_ vc]
+              (println (.show va))
+              (println (.show vb))
+              (println (.show vc))))))))
+  0)

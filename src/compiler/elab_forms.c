@@ -628,19 +628,30 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
     }
 
-    /* Phase 5b: RC auto-drop injection with consumption detection.
+    /* Phase 5b / EXG1-5: RC auto-drop injection with consumption detection.
      * Inject (defer (rc/drop x)) for let-bound rc/of values that are:
      * 1. Not consumed by ref/from-rc (which would transfer ownership and cause double-free)
      * 2. Not explicitly dropped via (rc/drop x)
-     * 3. Not moved to another binding */
+     * 3. Not moved to another binding
+     *
+     * EXG1-5: constrained existentials (`(exists [a] [(C a) ...] T)`) are
+     * allocated through rc_cb_alloc by emit_expr.c, so their bindings need
+     * the same scope-exit decrement.  We piggy-back on the same EX_RC_DROP
+     * mechanism: at codegen time the binding's value is a void* that
+     * implicitly converts to RcControlBlock* for rc_strong_decrement.
+     * Unconstrained existentials (no witnesses) are unchanged — they do
+     * not allocate, so they need no drop. */
     bool has_rc_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
-        if (binds[k].binding->type.kind == TY_RC) {
+        Type bt = binds[k].binding->type;
+        bool is_rc_managed = bt.kind == TY_RC ||
+            (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0);
+        if (is_rc_managed) {
             has_rc_bindings = true;
             break;
         }
     }
-    
+
     /* If we have rc bindings, wrap body in do if needed and inject defers */
     if (has_rc_bindings && body && body->kind != EX_DO) {
         Expr **items = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
@@ -649,32 +660,38 @@ Expr *elab_let(Elab *e, const Form *call) {
         body->as.do_.items = items;
         body->as.do_.n = 1;
     }
-    
+
     if (has_rc_bindings && body && body->kind == EX_DO) {
         /* Count rc bindings that need auto-drop (excluding consumed/moved ones) */
         uint32_t n_rc_drops = 0;
         for (uint32_t k = 0; k < n_binds; k++) {
-            if (binds[k].binding->type.kind == TY_RC && 
+            Type bt = binds[k].binding->type;
+            bool is_rc_managed = bt.kind == TY_RC ||
+                (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0);
+            if (is_rc_managed &&
                 !binding_moved_during_init[k] &&
                 !binds[k].binding->is_moved &&
                 !is_binding_consumed(body, binds[k].binding)) {
                 n_rc_drops++;
             }
         }
-        
+
         if (n_rc_drops > 0) {
             /* Create new items array with space for rc drop defers */
             uint32_t new_n = body->as.do_.n + n_rc_drops;
             Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
-            
+
             /* Copy existing items */
             memcpy(new_items, body->as.do_.items, body->as.do_.n * sizeof(Expr *));
-            
+
             /* Add defer expressions for each unconsumed rc binding */
             uint32_t defer_idx = body->as.do_.n;
             for (uint32_t k = 0; k < n_binds; k++) {
                 /* Skip RC bindings that are moved or consumed */
-                if (binds[k].binding->type.kind == TY_RC && 
+                Type bt = binds[k].binding->type;
+                bool is_rc_managed = bt.kind == TY_RC ||
+                    (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0);
+                if (is_rc_managed &&
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
                     !is_binding_consumed(body, binds[k].binding)) {
