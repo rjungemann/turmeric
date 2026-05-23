@@ -3,6 +3,13 @@
 ;; Phase B1: Clone trait infrastructure
 ;; SI4-C: PairPtr is an opaque int64_t newtype for heap-allocated Pair pointers.
 
+;;
+;; DEPRECATED: Phase TC1-F
+;; The functions in this module are deprecated in favor of the typed
+;; API in stdlib/tpair.tur.  They will be removed in the
+;; release cycle following Phase TC1-F.
+;;
+
 (defstruct Pair [first :int second :int])
 (defopaque PairPtr :int)
 
@@ -18,6 +25,8 @@
 ;;; Example:
 ;;;   (pair-new 1 2)  ; => (1, 2)
 ;;;
+;;;
+;;; Deprecated: Use tpair from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Create a new Pair
 (defn pair-new [a b] #{Unsafe} :PairPtr
@@ -39,6 +48,8 @@
 ;;; Example:
 ;;;   (pair-first (pair-new 10 20))  ; => 10
 ;;;
+;;;
+;;; Deprecated: Use tpair-fst from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Get first element
 (defn pair-first [p] #{Unsafe} :int
@@ -58,6 +69,8 @@
 ;;; Example:
 ;;;   (pair-second (pair-new 10 20))  ; => 20
 ;;;
+;;;
+;;; Deprecated: Use tpair-snd from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Get second element
 (defn pair-second [p] #{Unsafe} :int
@@ -74,6 +87,8 @@
 ;;; Example:
 ;;;   (pair-free my-pair)
 ;;;
+;;;
+;;; Deprecated: Use tpair-free from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Free a Pair (does NOT free the contained values - shallow free)
 (defn pair-free [p] #{Unsafe}
@@ -122,6 +137,8 @@
 ;;; Example:
 ;;;   (pair-eq? (pair-new 1 2) (pair-new 1 2) (fn [a b] (= a b)))  ; => true
 ;;;
+;;;
+;;; Deprecated: Use tpair-eq? from stdlib/tpair.tur instead (or the Eq[Pair] instance).
 ;;; Since: Phase E1
 ;; Phase E1: pair-eq? -- compare two Pairs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool

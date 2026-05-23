@@ -3,6 +3,13 @@
 ;; Phase B1: Clone trait infrastructure
 ;; SI4-C: ConsPtr is an opaque int64_t newtype for heap-allocated Cons pointers.
 
+;;
+;; DEPRECATED: Phase TC1-B
+;; The functions in this module are deprecated in favor of the typed
+;; API in stdlib/tlist.tur.  They will be removed in the
+;; release cycle following Phase TC1-B.
+;;
+
 (defstruct Cons [value :int next :int])
 (defopaque ConsPtr :int)
 
@@ -15,6 +22,8 @@
 ;;; Example:
 ;;;   (nil-value)  ; => []
 ;;;
+;;;
+;;; Deprecated: Use tnil from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
 (defn nil-value [] #{Unsafe} :ConsPtr
   ```c
@@ -33,6 +42,8 @@
 ;;; Example:
 ;;;   (list-nil? (nil-value))  ; => true
 ;;;
+;;;
+;;; Deprecated: Use tnil? from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
 (defn list-nil? [lst] #{Unsafe} :bool
   ```c
@@ -52,6 +63,8 @@
 ;;; Example:
 ;;;   (cons 1 (cons 2 (nil-value)))  ; => [1, 2]
 ;;;
+;;;
+;;; Deprecated: Use tcons from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
 (defn cons [value next] #{Unsafe} :ConsPtr
   ```c
@@ -73,6 +86,8 @@
 ;;; Example:
 ;;;   (head (cons 42 (nil-value)))  ; => 42
 ;;;
+;;;
+;;; Deprecated: Use thead from stdlib/tlist.tur instead (returns Option[A]).
 ;;; Since: Phase B1
 (defn head [lst] #{Unsafe} :int
   ```c
@@ -96,6 +111,8 @@
 ;;; Example:
 ;;;   (tail (cons 1 (cons 2 (nil-value))))  ; => list [2]
 ;;;
+;;;
+;;; Deprecated: Use ttail from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
 (defn tail [lst] #{Unsafe} :int
   ```c
@@ -116,6 +133,8 @@
 ;;; Example:
 ;;;   (list-free my-list)
 ;;;
+;;;
+;;; Deprecated: Use the typed List[A] API in stdlib/tlist.tur.
 ;;; Since: Phase B1
 (defn list-free [lst] #{Unsafe}
   ```c
@@ -139,6 +158,8 @@
 ;;; Example:
 ;;;   (list-length (cons 1 (cons 2 (nil-value))))  ; => 2
 ;;;
+;;;
+;;; Deprecated: Use tlist-length from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
 (defn list-length [lst] #{Unsafe} :int
   ```c
@@ -403,6 +424,8 @@
 ;;; Example:
 ;;;   (list-eq? xs ys (fn [a b] (= a b)))  ; => true/false
 ;;;
+;;;
+;;; Deprecated: Use tlist-eq? from stdlib/tlist.tur instead (or the Eq[Cons] instance).
 ;;; Since: Phase E1
 (defn list-eq? [l1 l2 cmp-fn] #{Unsafe} :bool
   ```c

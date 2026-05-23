@@ -2,6 +2,13 @@
 ;; Borrowed view into a contiguous sequence
 
 ;; Create a slice from pointer and length
+;;
+;; DEPRECATED: Phase TC1-C
+;; The functions in this module are deprecated in favor of the typed
+;; API in stdlib/tslice.tur.  They will be removed in the
+;; release cycle following Phase TC1-C.
+;;
+
 ;;; slice-new -- create a slice view over an existing contiguous int64 array.
 ;;;
 ;;; Parameters:
@@ -13,6 +20,8 @@
 ;;;
 ;;; Example:
 ;;;   (def s (slice-new arr 4))  ; view of first 4 elements
+;;;
+;;; Deprecated: Use tslice-new from stdlib/tslice.tur instead.
 (defn slice-new [data length]
   ```c
   struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
@@ -32,6 +41,8 @@
 ;;;
 ;;; Example:
 ;;;   (slice-len s)  ; => 4
+;;;
+;;; Deprecated: Use tslice-len from stdlib/tslice.tur instead.
 (defn slice-len [s] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
@@ -50,6 +61,8 @@
 ;;;
 ;;; Example:
 ;;;   (slice-get s 0)  ; => first element
+;;;
+;;; Deprecated: Use tslice-get from stdlib/tslice.tur instead.
 (defn slice-get [s i] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
@@ -64,6 +77,8 @@
 ;;;
 ;;; Parameters:
 ;;;   s -- slice handle from slice-new
+;;;
+;;; Deprecated: Use tslice-free from stdlib/tslice.tur instead.
 (defn slice-free [s]
   ```c
   free(s);

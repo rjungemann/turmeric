@@ -1,6 +1,13 @@
 ;; Vec type for Turmeric
 ;; Growable owning array
 
+;;
+;; DEPRECATED: Phase TC1-A
+;; The functions in this module are deprecated in favor of the typed
+;; API in stdlib/tvec.tur.  They will be removed in the
+;; release cycle following Phase TC1-A.
+;;
+
 ;;; vec-new -- allocate a new empty vec.
 ;;;
 ;;; Returns:
@@ -9,6 +16,8 @@
 ;;; Example:
 ;;;   (vec-new)  ; => <vec ptr>
 ;;;
+;;;
+;;; Deprecated: Use tvec-new from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Create a new empty vec
 (defn vec-new [] #{Unsafe} :int
@@ -31,6 +40,8 @@
 ;;; Example:
 ;;;   (vec-len my-vec)  ; => 3
 ;;;
+;;;
+;;; Deprecated: Use tvec-len from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Get vec length - v is a pointer from vec-new
 (defn vec-len [v] #{Unsafe} :int
@@ -51,6 +62,8 @@
 ;;; Example:
 ;;;   (vec-get my-vec 0)  ; => <element>
 ;;;
+;;;
+;;; Deprecated: Use tvec-get from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Get element at index (bounds-checked)
 (defn vec-get [v i] #{Unsafe} :int
@@ -71,6 +84,8 @@
 ;;; Example:
 ;;;   (vec-push! my-vec 42)
 ;;;
+;;;
+;;; Deprecated: Use tvec-push! from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Push an element to the vec
 (defn vec-push! [^unique ^mut v val] #{Unsafe} :nil
@@ -98,6 +113,8 @@
 ;;; Example:
 ;;;   (vec-pop! my-vec)  ; => <last element>
 ;;;
+;;;
+;;; Deprecated: Use tvec-pop! from stdlib/tvec.tur instead (returns Option[A]).
 ;;; Since: Phase B1
 ;; Pop an element from the vec
 (defn vec-pop! [^unique ^mut v] #{Unsafe} :int
@@ -118,6 +135,8 @@
 ;;; Example:
 ;;;   (vec-free my-vec)
 ;;;
+;;;
+;;; Deprecated: Use tvec-free from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Free the vec and its data
 (defn vec-free [^unique v] #{Unsafe} :nil
@@ -392,6 +411,8 @@
 ;;; Example:
 ;;;   (vec-eq? va vb (fn [a b] (= a b)))  ; => true
 ;;;
+;;;
+;;; Deprecated: Use tvec-eq? from stdlib/tvec.tur instead (or the Eq[Vec] instance).
 ;;; Since: Phase E1
 ;; Phase E1: vec-eq? -- compare two vecs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
@@ -487,6 +508,8 @@
 ;;; Example:
 ;;;   (vec-sort! my-vec)
 ;;;
+;;;
+;;; Deprecated: Use the typed Vec[A] API in stdlib/tvec.tur once a tvec-sort! lands.
 ;;; Since: Phase B2
 (defn vec-sort! [v] :nil
   ```c
@@ -513,6 +536,8 @@
 ;;; Example:
 ;;;   (vec-set! my-vec 0 42)
 ;;;
+;;;
+;;; Deprecated: Use tvec-set! from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 (defn vec-set! [v :int i :int val :int] #{Unsafe} :nil
   ```c
@@ -533,6 +558,8 @@
 ;;; Example:
 ;;;   (vec-new-filled 10 0)  ; => vec of ten zeros
 ;;;
+;;;
+;;; Deprecated: Use tvec-new from stdlib/tvec.tur then tvec-push! in a loop, or add tvec-new-filled.
 ;;; Since: Phase B1
 (defn vec-new-filled [n :int val :int] #{Unsafe} :int
   ```c

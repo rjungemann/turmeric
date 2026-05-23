@@ -1,6 +1,6 @@
 c0b0a6135b4f087ab228fe74d2308db7-  File: "./build/tur"
     ID: 0        Namelen: 255     Type: ext2/ext3
 Block size: 4096       Fundamental block size: 4096
-Blocks: Total: 66053021   Free: 64105689   Available: 7764799
-Inodes: Total: 16777216   Free: 16613240
-1779520120
+Blocks: Total: 66053021   Free: 64121404   Available: 7780514
+Inodes: Total: 16777216   Free: 16614384
+1779548718

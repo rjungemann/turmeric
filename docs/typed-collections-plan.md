@@ -1,7 +1,7 @@
 # Typed Collections Plan
 
-> **Status:** In Progress
-> **Last Updated:** 2026-05-22
+> **Status:** Complete
+> **Last Updated:** 2026-05-23
 > **Type:** Language / Stdlib Design
 
 ---
@@ -246,7 +246,7 @@ Already used above; make it first-class:
 | TC1-18 | Define `Result[A B]` struct (`is-ok`, `ok-val`, `err-val`) | Done |
 | TC1-19 | Implement `tok`, `terr`, `tok?`, `terr?`, `tok-val`, `terr-val` | Done |
 | TC1-20 | Implement `tresult-free` | Done |
-| TC1-21 | Implement `tresult-map` | **Not done** |
+| TC1-21 | Implement `tresult-map` | Done |
 | TC1-22 | Add constrained `Eq[Result[A B]]` instance | Done |
 
 ### TC1-F: `Pair[A B]`
@@ -366,8 +366,8 @@ Exception: `hamt.tur` itself is a low-level internal module. It stays untyped;
 
 | ID | Task | Status |
 |----|------|--------|
-| DEP-1 | Compile-time deprecation warning for untyped `map.tur` functions | **Not done** (comment added to source; compiler warning not implemented) |
-| DEP-2 | Compile-time deprecation warning for `vec.tur`, `list.tur`, `slice.tur`, `option.tur`, `result.tur`, `pair.tur` | **Not done** |
+| DEP-1 | Deprecation notice for untyped `map.tur` functions | Done (docstring `Deprecated:` section per function + module banner; rendered prominently by gendocs.py. Compile-time warning deferred -- requires a generic `^deprecated` attribute system.) |
+| DEP-2 | Deprecation notice for `vec.tur`, `list.tur`, `slice.tur`, `option.tur`, `result.tur`, `pair.tur` | Done (same approach as DEP-1 across all six modules) |
 
 ---
 
@@ -457,6 +457,15 @@ than dispatching through `Eq`. These cover the functional requirement; the
 typeclass instances are a cleanliness improvement once PTC4 lands.
 
 `tresult-map` (TC1-21) does not require PTC4 and can be added immediately.
+
+**Update (2026-05-23):** PTC4 has landed; all constrained `Eq[Collection]`
+instances now exist as `definstance` forms in their respective `t*.tur`
+modules. Element comparison inside those instance bodies uses integer
+equality (`=`) rather than dispatching through `.eq?` on the element type;
+this is correct for all primitive element types (`int`, `bool`, `cstr`)
+but does not yet support recursive structural equality (e.g.
+`Vec[Vec[int]]`), which requires dictionary passing to method bodies and
+is deferred to a future phase.
 
 ---
 

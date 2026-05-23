@@ -123,7 +123,8 @@ def _parse_docstring(lines):
     # but keep the full text for raw
 
     sections = {'summary': summary, 'params': [], 'returns': '',
-                 'example': '', 'since': '', 'raw': '\n'.join(stripped)}
+                 'example': '', 'since': '', 'deprecated': '',
+                 'raw': '\n'.join(stripped)}
 
     current_section = None
     buf = []
@@ -139,6 +140,8 @@ def _parse_docstring(lines):
             sections['returns'] = flush()
         elif current_section == 'example':
             sections['example'] = flush()
+        elif current_section == 'deprecated':
+            sections['deprecated'] = flush()
 
     for line in stripped[1:]:
         if line.startswith('Parameters:'):
@@ -158,6 +161,13 @@ def _parse_docstring(lines):
             sections['since'] = line[len('Since:'):].strip()
             current_section = None
             continue
+        elif line.startswith('Deprecated:'):
+            _flush_section()
+            current_section = 'deprecated'
+            rest = line[len('Deprecated:'):].strip()
+            if rest:
+                buf.append(rest)
+            continue
 
         if current_section == 'params':
             stripped_line = line.strip()
@@ -171,6 +181,8 @@ def _parse_docstring(lines):
         elif current_section == 'returns':
             buf.append(line)
         elif current_section == 'example':
+            buf.append(line)
+        elif current_section == 'deprecated':
             buf.append(line)
 
     _flush_section()
@@ -732,6 +744,23 @@ a:hover { text-decoration: underline; }
 
 .def-since { font-size: 0.8rem; color: var(--text-sec); margin-top: 0.5rem; }
 
+.def-deprecated {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid #d97706;
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+.def-deprecated-label {
+  font-weight: 700;
+  color: #d97706;
+  margin-right: 0.4rem;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
 /* Internal section */
 details.internal-section {
   margin-top: 2rem;
@@ -1049,6 +1078,10 @@ def _render_def_card(defn, anchor_prefix=''):
         if summary:
             h += f'  <p class="def-summary">{html_module.escape(summary)}</p>\n'
 
+        if doc['deprecated']:
+            h += '  <p class="def-deprecated"><span class="def-deprecated-label">Deprecated</span> '
+            h += f'{html_module.escape(doc["deprecated"])}</p>\n'
+
         if doc['params']:
             h += '  <div class="def-section">\n'
             h += '    <div class="def-section-label">Parameters</div>\n'
@@ -1246,6 +1279,12 @@ def _build_doc_entry(defn):
         summary = '[linear] ' + summary
 
     parts = [summary]
+
+    if doc['deprecated']:
+        parts.append('')
+        parts.append('Deprecated:')
+        for line in doc['deprecated'].splitlines():
+            parts.append(f'  {line}')
 
     if doc['params']:
         parts.append('')
