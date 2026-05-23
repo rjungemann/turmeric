@@ -1,6 +1,6 @@
 # Existential Types -- GC Integration Plan
 
-> **Status:** Draft Plan -- follow-on to EX1e
+> **Status:** EXG1 shipped; EXG2 partial (via rc_cb_alloc); EXG3 deferred.
 > **Last Updated:** 2026-05-23
 > **Type:** Runtime / Memory Management
 
@@ -178,8 +178,8 @@ callers.
 
 ### Phase EXG1 -- RC-managed existential records
 
-- [ ] **EXG1-1** Define a combined-allocation layout. The record and its
-  witnesses share one heap block laid out as:
+- [x] **EXG1-1** Defined a combined-allocation layout.  The record and
+  its witnesses share one heap block laid out as:
   ```c
   typedef struct tur_existential {
       int64_t  value;
@@ -188,76 +188,87 @@ callers.
   } tur_existential_t;
   ```
   Total size = `sizeof(tur_existential_t) + n_witnesses * sizeof(void *)`.
-  Replace the current `void **witnesses` indirection so there is one
-  pointer to free, not two.
+  The two-malloc indirection has been removed: there is now one pointer
+  to free (and that free happens through the rc subsystem, not the
+  pack-site code).  See `src/compiler/emit_module.c` (typedef emit).
 
-- [ ] **EXG1-2** Add a drop function `tur_existential_drop(void *p)`
-  registered with the RC subsystem.  Bodies of constrained existentials
-  are scalars (no nested owning fields), so the drop is just `free(p)`
-  for the combined block.
+- [x] **EXG1-2** Added drop hook `tur_existential_drop(void *p)`.  The
+  payload sits inline in the `RcControlBlock` allocation, so freeing the
+  block itself (via `free(cb)` in `rc_free_queue_drain`) reclaims
+  everything; the witnesses array stores stable pointers into static
+  dict singletons and never needs disposal.  The hook is therefore a
+  no-op -- it just overrides the default `free(value)` drop so the inline
+  payload is not double-freed.  See `src/compiler/emit_module.c`.
 
-- [ ] **EXG1-3** Update `emit_expr.c` `EX_EXISTS_PACK`:
-  - Replace the two `malloc` calls with a single `rc_cb_alloc(payload_size,
-    TY_PTR_VOID, tur_existential_drop)` call.
-  - Initialize the payload (value, n_witnesses, witnesses[i] = &dict_*_singleton).
-  - Emit `rc_strong_increment(cb)` on the returned control block so the
-    pack expression has strong count = 1.
-  - Return `(tur_exists_t)cb` (the control block pointer, which carries
-    the payload immediately after the header).
+- [x] **EXG1-3** Updated `emit_expr.c` `EX_EXISTS_PACK`:
+  - Replaced the two `malloc` calls with a single `rc_cb_alloc(
+    sizeof(tur_existential_t) + n*sizeof(void*), TY_PTR_VOID,
+    tur_existential_drop)` call.  Strong count starts at 1 (default in
+    `rc_cb_alloc`).
+  - Initializes the payload (value, n_witnesses, witnesses[i] =
+    &dict_*_singleton) through the `cb->value` indirection.
+  - Returns `(tur_exists_t)cb` (the control block pointer).
 
-- [ ] **EXG1-4** Update `emit_expr.c` `EX_EXISTS_OPEN`:
-  - The scrutinee value is the control-block pointer; the payload is at
-    `(tur_existential_t *)((char *)cb + RC_CB_HEADER_SIZE)`.
-  - Read `payload->value` into `v` as today.
+- [x] **EXG1-4** Updated `emit_expr.c` `EX_EXISTS_OPEN`:
+  - The scrutinee value is the control-block pointer; the payload is
+    reached via `((tur_existential_t *)((RcControlBlock *)cb)->value)`.
+  - Reads `payload->value` into `v` as before.
   - Inside the `open` body, the scrutinee is a borrow (no count change);
-    drop the scrutinee at the end of the `open` only when the `open` is
-    the consuming use (see EXG1-5).
+    drop happens at the end of the enclosing scope via EXG1-5.
 
-- [ ] **EXG1-5** Borrow-check pass.  Add `EX_EXISTS_PACK` and
-  `EX_EXISTS_OPEN` to `borrow_check.c`:
-  - `EX_EXISTS_PACK` produces an owning reference (`rc<tur_existential>`),
-    increments the binding's "owning" count.
-  - `EX_EXISTS_OPEN` borrows the scrutinee; the scrutinee's drop runs
-    at the end of the enclosing scope as for any owning reference.
-  - Passing a packed existential as a function argument or storing it in
-    a struct increments the strong count (like `rc/clone` does today).
+- [x] **EXG1-5** Wired auto-drop into the let-binding elaborator.  In
+  `src/compiler/elab_forms.c` the existing TY_RC auto-drop block was
+  generalised to also fire for constrained existentials (`bt.kind ==
+  TY_EXISTS && bt.as.forall_.n_constraints > 0`).  This injects a
+  `(defer (rc/drop x))` at let-scope exit which the EX_RC_DROP emitter
+  lowers to `rc_strong_decrement(...)` + `rc_free_queue_drain(...)`.
+  The implicit `void* -> RcControlBlock*` conversion at the call site
+  is permitted by C and avoids a dedicated EX_EXISTS_DROP kind.
 
-- [ ] **EXG1-6** Update `EX1c` constraint check.  The `n_witnesses` set
-  on the AST node is already correct; only the emit changes.
+  Cross-function ownership transfer (pack -> return, pack -> arg) still
+  needs an `EX_EXISTS_CLONE` analogue and explicit borrow-check rules;
+  v1 closes the leak for local `(let [e (pack ...)] (open e ...))`
+  patterns and defers the rest.
 
-- [ ] **EXG1-7** Tests:
-  - `existential-rc-drop`: a constrained pack inside a `(let ...)` whose
-    scope exits without an `open`.  Verify the control-block strong count
-    reaches zero and the drop function runs (assert via a counter).
-  - `existential-rc-clone`: pass a packed existential to two consumers;
-    confirm both can open it and the record is freed after both scopes
-    exit.
-  - `existential-rc-return`: a function returns a packed existential to
-    its caller; the caller opens it; record is freed after the caller's
-    scope.
-  - `existential-rc-leak-check`: run under `-fsanitize=address`; no leaks
-    reported (existing `tests/check-span-unknown.sh` style runner).
+- [x] **EXG1-6** Confirmed `EX1c` constraint check unchanged.  Only the
+  emit changes; `n_witnesses` and constraint resolution on the AST are
+  identical.
+
+- [x] **EXG1-7** Tests:
+  - `tests/fixtures/exg1-rc-drop` -- a constrained pack inside a
+    `(let ...)` whose scope exits without an `open`.  Verifies the auto-
+    drop fires (no leak under ASan).
+  - `tests/fixtures/exg1-rc-multi-scope` -- multiple nested constrained
+    packs whose lifetimes overlap; all records freed in LIFO order at
+    scope exit.
+  - `existential-rc-clone` / `existential-rc-return` -- deferred; both
+    require cross-scope ownership-transfer plumbing not yet present.
+  - `existential-rc-leak-check` -- exercised manually under
+    `-fsanitize=address`; both new fixtures run leak-clean.
 
 ### Phase EXG2 -- Cycle-collector visibility
 
-- [ ] **EXG2-1** Register each new `tur_existential_t` record with
-  `gc_register_block` at allocation time so the cycle collector can
-  reach it.
+- [x] **EXG2-1** Block registration -- inherited from `rc_cb_alloc`.
+  Because EXG1 routes pack-site allocation through `rc_cb_alloc`, the
+  emitted runtime already calls `gc_register_block(cb)` on every
+  existential record.  No additional code needed at the pack site.
 
 - [ ] **EXG2-2** Expose the record's outgoing references to the
-  trial-deletion walker.  The `value` field can be a packed pointer
-  (e.g. an rc<T> stored as int64_t); the walker needs to know to follow
-  it.  For v1, restrict cycle-collected existentials to ones whose body
-  type is itself a heap-managed type (`rc<T>`, `lref<T>`, `:ptr<void>`
-  carrying RC); document the restriction in `gc.h`.
+  trial-deletion walker.  Today the `value` field is always a scalar
+  or pointer-bit-pattern read; `may_contain_cycles` is set to `false`
+  in `rc_cb_alloc` when the type kind is `<= 7` (primitives,
+  TY_PTR_VOID), which matches the pass we use, so existential records
+  are correctly excluded from the cycle walker for now.  Lifting that
+  restriction (e.g. for `rc<T>` packed inside a constrained existential)
+  requires a layout descriptor the walker can follow, plus a kind tag
+  on the control block distinguishing existential payloads.  Deferred.
 
-- [ ] **EXG2-3** Add `gc_unregister_block` to the drop function so the
-  collector does not retain freed records in its suspect buffer.
+- [x] **EXG2-3** `gc_unregister_block` is already called from
+  `rc_cb_free` / `rc_free_queue_drain` in the emitted runtime; this
+  fires automatically when our `tur_existential_drop` runs.
 
-- [ ] **EXG2-4** Tests:
-  - `existential-rc-cycle`: pack a value whose body contains an rc back
-    to the existential itself (constructed via mutation); confirm
-    `gc_force` reclaims both.
+- [ ] **EXG2-4** Cycle-collection test deferred along with EXG2-2 --
+  meaningful coverage requires the walker integration above.
 
 ### Phase EXG3 -- Optional `:linear` existential variant
 
@@ -282,23 +293,23 @@ callers.
 
 ## Task Summary
 
-| ID | Phase | Description |
-|----|-------|-------------|
-| EXG1-1 | EXG1 | Flexible-array tur_existential_t layout |
-| EXG1-2 | EXG1 | tur_existential_drop helper |
-| EXG1-3 | EXG1 | Pack emit -> rc_cb_alloc |
-| EXG1-4 | EXG1 | Open emit reads through RC payload |
-| EXG1-5 | EXG1 | Borrow-check EX_EXISTS_PACK / EX_EXISTS_OPEN |
-| EXG1-6 | EXG1 | Confirm EX1c constraint check unchanged |
-| EXG1-7 | EXG1 | RC-flow runtime tests + AddressSanitizer leak check |
-| EXG2-1 | EXG2 | gc_register_block at allocation |
-| EXG2-2 | EXG2 | Expose outgoing refs to cycle walker |
-| EXG2-3 | EXG2 | gc_unregister_block in drop |
-| EXG2-4 | EXG2 | Cycle-collection test |
-| EXG3-1 | EXG3 | `:linear` attribute on exists |
-| EXG3-2 | EXG3 | Linear use-exactly-once check |
-| EXG3-3 | EXG3 | Linear emit path (no RC header) |
-| EXG3-4 | EXG3 | Linear-existential tests |
+| ID | Phase | Status | Description |
+|----|-------|--------|-------------|
+| EXG1-1 | EXG1 | done   | Flexible-array tur_existential_t layout |
+| EXG1-2 | EXG1 | done   | tur_existential_drop helper (no-op for inline payload) |
+| EXG1-3 | EXG1 | done   | Pack emit -> rc_cb_alloc |
+| EXG1-4 | EXG1 | done   | Open emit reads through RC payload |
+| EXG1-5 | EXG1 | done   | Auto-drop at let-scope exit (TY_EXISTS w/ constraints) |
+| EXG1-6 | EXG1 | done   | Confirm EX1c constraint check unchanged |
+| EXG1-7 | EXG1 | done   | RC-flow runtime tests (`exg1-rc-drop`, `exg1-rc-multi-scope`) |
+| EXG2-1 | EXG2 | done   | gc_register_block at allocation (inherited from rc_cb_alloc) |
+| EXG2-2 | EXG2 | defer  | Expose outgoing refs to cycle walker |
+| EXG2-3 | EXG2 | done   | gc_unregister_block in drop (inherited from rc_cb_free) |
+| EXG2-4 | EXG2 | defer  | Cycle-collection test (paired with EXG2-2) |
+| EXG3-1 | EXG3 | defer  | `:linear` attribute on exists |
+| EXG3-2 | EXG3 | defer  | Linear use-exactly-once check |
+| EXG3-3 | EXG3 | defer  | Linear emit path (no RC header) |
+| EXG3-4 | EXG3 | defer  | Linear-existential tests |
 
 ---
 

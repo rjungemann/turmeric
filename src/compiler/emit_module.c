@@ -732,19 +732,32 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */
     buf_puts(out, "/* Phase HRT2: existential type (opaque void* box) */\n");
     buf_puts(out, "typedef void * tur_exists_t;\n");
-    /* Phase EX1e: heap layout for constrained existentials.
+    /* Phase EX1e / EXG1: heap layout for constrained existentials.
      * Unconstrained `(exists [a] T)` values still flow as plain
      * `tur_exists_t` (an int64_t reinterpreted as void*), unchanged from
      * HRT2.  Constrained `(exists [a] [(C a) ...] T)` values are pointers
      * to a `tur_existential_t` record that bundles the boxed value with
      * one vtable pointer per constraint.  The witnesses array is laid
-     * out in the same order as the constraints on the existential type. */
-    buf_puts(out, "/* Phase EX1e: constrained-existential heap record */\n");
+     * out in the same order as the constraints on the existential type.
+     * EXG1: the record lives inline in an RcControlBlock payload (flexible
+     * array member for the witnesses) so a single rc_cb_alloc covers both
+     * the record and its witnesses; the wrapping control block is what
+     * `tur_exists_t` actually points to at runtime. */
+    buf_puts(out, "/* Phase EX1e/EXG1: constrained-existential heap record */\n");
     buf_puts(out, "typedef struct tur_existential {\n");
     buf_puts(out, "    int64_t  value;\n");
     buf_puts(out, "    int32_t  n_witnesses;\n");
-    buf_puts(out, "    void   **witnesses;\n");
+    buf_puts(out, "    void    *witnesses[];   /* flexible array; length = n_witnesses */\n");
     buf_puts(out, "} tur_existential_t;\n");
+    /* EXG1-2: drop hook for rc-managed existential records.  The payload
+     * sits inline in the RcControlBlock allocation, so freeing the block
+     * itself (via free(cb) in rc_free_queue_drain) reclaims everything;
+     * the witnesses array stores stable pointers into static dict
+     * singletons and never needs disposal.  This hook is therefore a
+     * no-op — it just suppresses the default `free(value)` path that
+     * would otherwise double-free the inline payload. */
+    buf_puts(out, "/* EXG1-2: drop hook for constrained-existential rc records */\n");
+    buf_puts(out, "static void tur_existential_drop(void *value) { (void)value; }\n");
     /* Inline STM runtime - Phase 21 with per-TVar locking */
     buf_puts(out, "/* STM types (Phase 21) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");

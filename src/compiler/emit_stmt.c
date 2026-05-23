@@ -173,6 +173,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
                         free(env_tmp);
+                        free(env_name);
                     }
                 } else {
                     emit_stmt(ctx, body, it);
