@@ -1,2 +1,1 @@
-/Users/rjungemann/Projects/turmeric/src/compiler/elab_core.c:1306:16: runtime error: load of value 190, which is not a valid value for type 'bool'
-SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /Users/rjungemann/Projects/turmeric/src/compiler/elab_core.c:1306:16 
+/home/user/turmeric/src/compiler/elab_core.c:1306:14: runtime error: load of value 190, which is not a valid value for type '_Bool'

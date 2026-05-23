@@ -1,0 +1,13 @@
+
+=================================================================
+==11174==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 128 byte(s) in 2 object(s) allocated from:
+    #0 0x7f62448fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x55c7818dfb0d in collect_free_vars /home/user/turmeric/src/compiler/elab_core.c:442
+
+Direct leak of 48 byte(s) in 2 object(s) allocated from:
+    #0 0x7f62448fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55c781a5cd94 in fresh_tmp /home/user/turmeric/src/compiler/emit_core.c:194
+
+SUMMARY: AddressSanitizer: 176 byte(s) leaked in 4 allocation(s).

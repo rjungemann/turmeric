@@ -1,0 +1,9 @@
+
+=================================================================
+==15905==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 64 byte(s) in 2 object(s) allocated from:
+    #0 0x7fee9dcfc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x558d92d10d33 in scope_add /home/user/turmeric/src/compiler/elab_core.c:237
+
+SUMMARY: AddressSanitizer: 64 byte(s) leaked in 2 allocation(s).
