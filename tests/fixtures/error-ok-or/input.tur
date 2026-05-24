@@ -1,33 +1,33 @@
-;; Phase R3: error-ok-or — convert option to result using ok-or
+;; Phase R3: error-ok-or — convert option to result using u-ok-or
 
 ;; ─── inline option helpers ───────────────────────────────────────────────────
-(defn some [x :int] :ptr<void>
+(defn u-some [x :int] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true; opt->value = x; return (void*)opt;
   ```)
 
-(defn none [] :ptr<void>
+(defn u-none [] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = false; opt->value = 0; return (void*)opt;
   ```)
 
 ;; ─── inline result helpers ───────────────────────────────────────────────────
-(defn ok? [r :ptr<void>] :bool
+(defn u-ok? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return res->is_ok;
   ```)
 
-(defn ok-val [r :ptr<void>] :int
+(defn u-ok-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (int)res->ok_val;
   ```)
 
-;; ok-or — convert option to result: some(v) → ok(v), none → err(e)
-(defn ok-or [opt :ptr<void> e :int] :ptr<void>
+;; u-ok-or — convert option to result: u-some(v) → u-ok(v), u-none → u-err(e)
+(defn u-ok-or [opt :ptr<void> e :int] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *o = (void*)opt;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -55,25 +55,25 @@
 
 (defn main [] :int
   (do
-    ;; some option → ok result
-    (let [opt1 (some 42)]
-      (let [r1 (ok-or opt1 1)]
-        (if (ok? r1)
-          (println (ok-val r1))
-          (println "unexpected err"))))
+    ;; u-some option → u-ok result
+    (let [opt1 (u-some 42)]
+      (let [r1 (u-ok-or opt1 1)]
+        (if (u-ok? r1)
+          (println (u-ok-val r1))
+          (println "unexpected u-err"))))
 
-    ;; none option with err code 1 → err result
-    (let [opt2 (none)]
-      (let [r2 (ok-or opt2 1)]
-        (if (ok? r2)
-          (println "unexpected ok")
+    ;; u-none option with u-err code 1 → u-err result
+    (let [opt2 (u-none)]
+      (let [r2 (u-ok-or opt2 1)]
+        (if (u-ok? r2)
+          (println "unexpected u-ok")
           (println (show-err-code 1)))))
 
-    ;; none option with err code 2 → err result
-    (let [opt3 (none)]
-      (let [r3 (ok-or opt3 2)]
-        (if (ok? r3)
-          (println "unexpected ok")
+    ;; u-none option with u-err code 2 → u-err result
+    (let [opt3 (u-none)]
+      (let [r3 (u-ok-or opt3 2)]
+        (if (u-ok? r3)
+          (println "unexpected u-ok")
           (println (show-err-code 2)))))
 
     0))

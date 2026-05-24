@@ -2,14 +2,14 @@
 ;; This fixture discards a result value, which should trigger a warning
 ;; when --warn-unused-result is enabled.
 
-(defn ok [x :int] :ptr<void>
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
   ```)
 
 (defn may-fail [] :ptr<void>
-  (ok 42))
+  (u-ok 42))
 
 (defn main [] :int
   (may-fail)  ;; Discarding result - should warn with --warn-unused-result

@@ -1,55 +1,57 @@
 ;;
 ;; Phase R1: Test the ? operator for unwrapping results
 ;;
-;; The ? operator unwraps a result, returning the ok value if ok,
-;; or returning early with the err value if err.
+;; The ? operator unwraps a result, returning the u-ok value if u-ok,
+;; or returning early with the u-err value if u-err.
 
-;; Define ok and err inline (self-contained, like result-basic fixture)
-(defn ok [x :int] :ptr<void>
+;; Define u-ok and u-err inline (self-contained, like result-basic fixture)
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
   ```)
 
-(defn err [e :int] :ptr<void>
+(defn u-err [e :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = false; result->ok_val = 0; result->err_val = e; return result;
   ```)
 
-(defn ok? [r :ptr<void>] :bool
+(defn u-ok? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result != NULL && result->is_ok;
   ```)
 
-(defn err? [r :ptr<void>] :bool
+(defn u-err? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result == NULL || !result->is_ok;
   ```)
 
-(defn ok-val [r :ptr<void>] :int
+(defn u-ok-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->ok_val;
   ```)
 
-(defn err-val [r :ptr<void>] :int
+(defn u-err-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->err_val;
   ```)
 
 (defn get-value [b :bool] :ptr<void>
-  (if b (ok 42) (err 1)))
+  (if b (u-ok 42) (u-err 1)))
 
 (defn use-question [b :bool] :ptr<void>
-  (let [x (? (get-value b))]
-    (ok (* x 2))))
+  ;; The ? operator lowers to stdlib err?/err/err-val/ok-val, all of which
+  ;; are #{Unsafe} -- so wrap the expression in (unsafe ...).
+  (let [x (unsafe (? (get-value b)))]
+    (u-ok (* x 2))))
 
 (defn main [] :int
   (let [r1 (use-question true)]
-    (let [v1 (ok-val r1)]
+    (let [v1 (u-ok-val r1)]
       (println v1)
       0)))

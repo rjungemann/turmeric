@@ -1,10 +1,10 @@
-;; SI3: Show [Pair] formats as "(first, second)".
-(defclass Show [a]
+;; SI3: MyShow [MyPair] formats as "(first, second)".
+(defclass MyShow [a]
   (show [x] :cstr))
 
-(defstruct Pair :copy [first :int second :int])
+(defstruct MyPair :copy [first :int second :int])
 
-(definstance Show [Pair]
+(definstance MyShow [MyPair]
   (show [x] :cstr
     ```c
     int64_t fst = x.first;
@@ -21,8 +21,8 @@
     ```))
 
 (defn main [] :int
-  (let [p (make-struct Pair 1 2)]
+  (let [p (make-struct MyPair 1 2)]
     (println (.show p)))
-  (let [p2 (make-struct Pair 10 20)]
+  (let [p2 (make-struct MyPair 10 20)]
     (println (.show p2)))
   0)

@@ -1,10 +1,10 @@
-; Test a simplified GADT-based Vec demonstrating recursive operations.
+; Test a simplified GADT-based MyVec demonstrating recursive operations.
 ; Uses defgadt with -Xgadt flag. Avoids reuse of moved bindings by
-; constructing fresh Vec values for each operation.
+; constructing fresh MyVec values for each operation.
 
-(defgadt Vec [a]
-  (VNil : (Vec int))
-  (VCons int (Vec int) : (Vec int)))
+(defgadt MyVec [a]
+  (VNil : (MyVec int))
+  (VCons int (MyVec int) : (MyVec int)))
 
 (defn vec-len [v] :int
   (match v

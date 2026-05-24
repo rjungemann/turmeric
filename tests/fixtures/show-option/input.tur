@@ -1,10 +1,10 @@
-;; SI3: Show [Option] formats as "some(v)" or "none".
-;; Uses a user-defined Option struct to avoid conflicts with the built-in option type.
-(defclass Show [a]
+;; SI3: MyShow [MyOption] formats as "some(v)" or "none".
+;; Uses a user-defined MyOption struct to avoid conflicts with the built-in option type.
+(defclass MyShow [a]
   (show [x] :cstr))
 
-;; Option struct: is_some=1 means some(value), is_some=0 means none.
-(defstruct Option :copy [is_some :int value :int])
+;; MyOption struct: is_some=1 means some(value), is_some=0 means none.
+(defstruct MyOption :copy [is_some :int value :int])
 
 (defn option-some [x] :int
   ```c
@@ -24,10 +24,10 @@
   return (int64_t)(intptr_t)opt;
   ```)
 
-(definstance Show [Option]
+(definstance MyShow [MyOption]
   (show [x] :cstr
     ```c
-    // x is an Option struct value; x.is_some and x.value are int64_t.
+    // x is an MyOption struct value; x.is_some and x.value are int64_t.
     if (!x.is_some) return "none";
     char *buf = (char *)malloc(48);
     snprintf(buf, 48, "some(%lld)", (long long)x.value);
@@ -35,8 +35,8 @@
     ```))
 
 (defn main [] :int
-  (let [s (make-struct Option 1 99)]
+  (let [s (make-struct MyOption 1 99)]
     (println (.show s)))
-  (let [n (make-struct Option 0 0)]
+  (let [n (make-struct MyOption 0 0)]
     (println (.show n)))
   0)

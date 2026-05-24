@@ -1,6 +1,6 @@
-(defgadt Vec [n]
-  (VNil : (Vec int))
-  (VCons int (Vec int) : (Vec int)))
+(defgadt MyVec [n]
+  (VNil : (MyVec int))
+  (VCons int (MyVec int) : (MyVec int)))
 
 (defn vec-head [v] :int
   (match v

@@ -1,11 +1,11 @@
 ;; Phase B1: Clone trait for a vec-like struct type
 ;;
-;; Uses a user-defined Vec struct holding a heap data pointer and length
+;; Uses a user-defined HVec struct holding a heap data pointer and length
 ;; to demonstrate that Clone performs a deep copy of the element array,
 ;; giving the clone independent ownership of its data.
 
-;; Vec stores a heap data pointer (as int64_t) and element count.
-(defstruct Vec [ptr :int len :int])
+;; HVec stores a heap data pointer (as int64_t) and element count.
+(defstruct HVec [ptr :int len :int])
 
 (defclass Clone [a]
   (clone [x] :int))
@@ -13,10 +13,10 @@
 (definstance Clone [int]
   (clone [x] x))
 
-;; Clone [Vec]: allocate a new data array and copy all elements.
-;; x has type Vec (struct value) in the generated C function;
+;; Clone [HVec]: allocate a new data array and copy all elements.
+;; x has type HVec (struct value) in the generated C function;
 ;; x.ptr is the int64_t-cast data pointer, x.len is element count.
-(definstance Clone [Vec]
+(definstance Clone [HVec]
   (clone [x] :int
     ```c
     int64_t *src = (int64_t *)(intptr_t)x.ptr;
@@ -37,7 +37,7 @@
   return (int64_t)(intptr_t)data;
   ```)
 
-;; Access element i of a heap Vec pointer (returned by Clone.clone).
+;; Access element i of a heap HVec pointer (returned by Clone.clone).
 (defn heap-vec-get [p i] :int
   ```c
   struct { int64_t ptr; int64_t len; } *v = (void *)(intptr_t)p;
@@ -46,9 +46,9 @@
   ```)
 
 (defn main [] :int
-  ;; Build Vec([10, 20, 30]), clone it, verify the clone's element sum is 60.
+  ;; Build HVec([10, 20, 30]), clone it, verify the clone's element sum is 60.
   (let [data (make-data 10 20 30)]
-    (let [v  (make-struct Vec data 3)]
+    (let [v  (make-struct HVec data 3)]
       (let [v2 (.clone v)]
         (println (+ (heap-vec-get v2 0)
                     (+ (heap-vec-get v2 1)

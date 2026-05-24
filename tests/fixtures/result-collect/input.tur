@@ -1,31 +1,31 @@
-;; Phase R1: result-collect and result-partition tests
+;; Phase R1: u-result-collect and u-result-partition tests
 
 ;; ── result constructors / accessors ──────────────────────────────────────────
-(defn ok [x :int] :ptr<void>
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
   ```)
 
-(defn err [e :int] :ptr<void>
+(defn u-err [e :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
   ```)
 
-(defn ok? [r :ptr<void>] :bool
+(defn u-ok? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return res != NULL && res->is_ok;
   ```)
 
-(defn err? [r :ptr<void>] :bool
+(defn u-err? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return res == NULL || !res->is_ok;
   ```)
 
-(defn ok-val [r :ptr<void>] :int
+(defn u-ok-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (int)res->ok_val;
@@ -37,7 +37,7 @@
   return (void *)(intptr_t)res->ok_val;
   ```)
 
-(defn err-val [r :ptr<void>] :int
+(defn u-err-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (int)res->err_val;
@@ -94,8 +94,8 @@
   vec->data[vec->len++] = (int64_t)(intptr_t)val;
   ```)
 
-;; ── result-collect ────────────────────────────────────────────────────────────
-(defn result-collect [v :ptr<void>] :ptr<void>
+;; ── u-result-collect ────────────────────────────────────────────────────────────
+(defn u-result-collect [v :ptr<void>] :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
@@ -120,8 +120,8 @@
   return out;
   ```)
 
-;; ── result-partition ─────────────────────────────────────────────────────────
-(defn result-partition [v :ptr<void>] :ptr<void>
+;; ── u-result-partition ─────────────────────────────────────────────────────────
+(defn u-result-partition [v :ptr<void>] :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
@@ -149,13 +149,13 @@
   return pair;
   ```)
 
-(defn result-partition-ok [pair :ptr<void>] :ptr<void>
+(defn u-result-partition-ok [pair :ptr<void>] :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->ok_vec;
   ```)
 
-(defn result-partition-err [pair :ptr<void>] :ptr<void>
+(defn u-result-partition-err [pair :ptr<void>] :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->err_vec;
@@ -163,42 +163,42 @@
 
 (defn main [] :int
   (do
-    ;; result-collect: all ok
+    ;; u-result-collect: all u-ok
     (let [v1 (vec-new)]
       (do
-        (vec-push-ptr! v1 (ok 10))
-        (vec-push-ptr! v1 (ok 20))
-        (vec-push-ptr! v1 (ok 30))
-        (let [c1 (result-collect v1)]
+        (vec-push-ptr! v1 (u-ok 10))
+        (vec-push-ptr! v1 (u-ok 20))
+        (vec-push-ptr! v1 (u-ok 30))
+        (let [c1 (u-result-collect v1)]
           (do
-            (println (ok? c1))
+            (println (u-ok? c1))
             (let [ov (ok-val-ptr c1)]
               (do
                 (println (vec-len ov))
                 (println (vec-get ov 0))
                 (println (vec-get ov 1))
                 (println (vec-get ov 2))))))))
-    ;; result-collect: first err wins
+    ;; u-result-collect: first u-err wins
     (let [v2 (vec-new)]
       (do
-        (vec-push-ptr! v2 (ok 1))
-        (vec-push-ptr! v2 (err 99))
-        (vec-push-ptr! v2 (ok 2))
-        (let [c2 (result-collect v2)]
+        (vec-push-ptr! v2 (u-ok 1))
+        (vec-push-ptr! v2 (u-err 99))
+        (vec-push-ptr! v2 (u-ok 2))
+        (let [c2 (u-result-collect v2)]
           (do
-            (println (err? c2))
-            (println (err-val c2))))))
-    ;; result-partition
+            (println (u-err? c2))
+            (println (u-err-val c2))))))
+    ;; u-result-partition
     (let [v3 (vec-new)]
       (do
-        (vec-push-ptr! v3 (ok 10))
-        (vec-push-ptr! v3 (err 1))
-        (vec-push-ptr! v3 (ok 20))
-        (vec-push-ptr! v3 (err 2))
-        (let [p (result-partition v3)]
+        (vec-push-ptr! v3 (u-ok 10))
+        (vec-push-ptr! v3 (u-err 1))
+        (vec-push-ptr! v3 (u-ok 20))
+        (vec-push-ptr! v3 (u-err 2))
+        (let [p (u-result-partition v3)]
           (do
-            (let [oks  (result-partition-ok  p)]
-              (let [errs (result-partition-err p)]
+            (let [oks  (u-result-partition-ok  p)]
+              (let [errs (u-result-partition-err p)]
                 (do
                   (println (vec-len oks))
                   (println (vec-get oks 0))

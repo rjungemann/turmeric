@@ -12,14 +12,15 @@
   return arr;
   ```)
 
+;; NOTE: tzipper-free already frees the neighbor arrays (left/right);
+;; do not call free again here.
+
 (defn test-focus [] :int
   (let [left (make-arr3)]
     (let [right (make-arr3)]
       (let [z (tzipper-new left 2 10 right 2)]
         (let [f (tzipper-focus z)]
           (tzipper-free z)
-          (free left)
-          (free right)
           f)))))
 
 (defn test-move-right-focus [] :int
@@ -30,8 +31,6 @@
           (let [z2 (tunwrap opt)]
             (let [f (tzipper-focus z2)]
               (tzipper-free z)
-              (free left)
-              (free right)
               f)))))))
 
 (println (test-focus))

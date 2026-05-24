@@ -1,26 +1,26 @@
-;; Phase R4: must-expect — option-expect and result-expect success paths
+;; Phase R4: must-expect — u-option-expect and u-result-expect success paths
 ;; Tests Rust-aligned .expect() API for both option and result types.
 
-(defn some [x :int] :ptr<void>
+(defn u-some [x :int] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true; opt->value = x; return (void*)opt;
   ```)
 
-(defn ok [x :int] :ptr<void>
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return (void*)r;
   ```)
 
-(defn option-expect [o :ptr<void> msg :cstr] :int
+(defn u-option-expect [o :ptr<void> msg :cstr] :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) { tur_panic(msg); }
   return (int)opt->value;
   ```)
 
-(defn result-expect [r :ptr<void> msg :cstr] :int
+(defn u-result-expect [r :ptr<void> msg :cstr] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) { tur_panic(msg); }
@@ -29,17 +29,17 @@
 
 (defn main [] :int
   (do
-    ;; option-expect on some succeeds and returns value
-    (let [a (option-expect (some 7) "expected some(7)")]
+    ;; u-option-expect on u-some succeeds and returns value
+    (let [a (u-option-expect (u-some 7) "expected u-some(7)")]
       (println a))
 
-    ;; result-expect on ok succeeds and returns value
-    (let [b (result-expect (ok 13) "expected ok(13)")]
+    ;; u-result-expect on u-ok succeeds and returns value
+    (let [b (u-result-expect (u-ok 13) "expected u-ok(13)")]
       (println b))
 
-    ;; chaining: option-expect result fed into result-expect context
-    (let [x (option-expect (some 100) "expected some")]
-      (let [y (result-expect (ok x) "expected ok")]
+    ;; chaining: u-option-expect result fed into u-result-expect context
+    (let [x (u-option-expect (u-some 100) "expected u-some")]
+      (let [y (u-result-expect (u-ok x) "expected u-ok")]
         (println y)))
 
     0))
