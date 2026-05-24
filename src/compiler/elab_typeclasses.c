@@ -116,6 +116,15 @@ static const Symbol *helper_eq_symbol_for_struct(Elab *e, const StructDef *sd,
         if (out_n_comparators) *out_n_comparators = 2;
         return intern_cstr(e->st, "tresult-eq?");
     }
+    if (strcmp(sd->name, "Set") == 0) {
+        /* `tset-eq?` itself takes no comparator (relies on HAMT hash
+         * equality, wrong for non-primitive elements).  The synth path
+         * routes to a comparator-taking variant `tset-eq-cmp?` instead
+         * so structural equality of Set[Vec[int]] etc. works
+         * correctly. */
+        if (out_n_comparators) *out_n_comparators = 1;
+        return intern_cstr(e->st, "tset-eq-cmp?");
+    }
     return NULL;
 }
 

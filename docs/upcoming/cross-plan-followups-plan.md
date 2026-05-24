@@ -2,18 +2,13 @@
 
 > **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F4 (infra +
 > --Werror=deprecated; full stdlib sweep deferred), F7 (doc
-> hygiene), F3-1 (design), F3-5 (recursive dispatcher synthesis
-> for `Eq[Vec]`, `Eq[Map]`, `Eq[Option]`, `Eq[Cons]`, `Eq[Pair]`,
-> `Eq[Result]`), F3-6 (recursive-equality fixtures), F3-7 (sticky
-> ascription + struct-identity dispatch) all shipped.  Recursive
-> `(.eq? v v)` works correctly across all the typed collections
-> whose `Eq` instance is constrained and whose helper takes 1 or 2
-> comparators -- arbitrarily deep `Vec[Vec[...]]`, `Map[K (Vec V)]`,
-> `Cons[Cons[...]]`, `Option[Vec[T]]`, `Pair[A B]`, `Result[A B]`.
-> Only `Set` remains -- `tset-eq?` has no comparator parameter
-> (uses hash equality entirely), so even single-level non-primitive
-> dispatch is wrong; fixing it requires changes to `tset-eq?`
-> itself, not the dispatcher.
+> hygiene), F3 (design + recursive dispatcher synthesis for ALL
+> typed collections including Set, fixtures, sticky ascription)
+> all shipped.  Recursive `(.eq? v v)` now works correctly across
+> the entire typed-collection stdlib -- arbitrarily deep
+> `Vec[Vec[...]]`, `Map[K (Vec V)]`, `Cons[Cons[...]]`,
+> `Option[Vec[T]]`, `Pair[A B]`, `Result[A B]`, and
+> `Set[Vec[T]]` (via the new `tset-eq-cmp?` stdlib helper).
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -417,8 +412,8 @@ backwards-compatibility issue.
 | F3-2 | Extend `elab_typeclasses.c` to elaborate constrained-instance methods with hidden dictionary parameters in scope, accessible by the constrained typeclass name. | `src/compiler/elab_typeclasses.c` |
 | F3-3 | Extend the method-dispatch loop to recursively resolve inner constraints and thread dictionaries from the call site into the hidden parameters. | `src/compiler/elab_typeclasses.c` |
 | F3-4 | Update `emit_fns.c` to emit the extra parameters and `emit_expr.c` to pass the dictionaries at the call.  Also extend the EX_METHOD_CALL emit to choose between the static-singleton path (unconstrained) and the dict-pointer-arg path (constrained). | `src/compiler/emit_fns.c`, `emit_expr.c` |
-| F3-5 | Per-call-site dispatcher rewrite -- **shipped for Vec / Map / Option / Cons / Pair / Result** (all the typed collections whose `Eq` instance has at least one constraint and whose helper takes 1 or 2 comparators).  `elab_method_call` (`src/compiler/elab_typeclasses.c`) recognises `.eq?` on a typed-collection TY_APP receiver and synthesises a direct call to the helper (`tvec-eq?` / `tmap-eq?` / `toption-eq?` / `tlist-eq?` / `tpair-eq?` / `tresult-eq?`) with inline comparator lambdas whose params are ascribed to the element type(s).  Recursion bottoms out at primitive elements where the F3-7 single-level path takes over.  Helpers `type_to_form`, `build_comparator_lambda`, `helper_eq_symbol_for_struct`, and `try_synth_recursive_eq` live in `elab_typeclasses.c`.  1- vs 2-comparator dispatch is driven by `helper_eq_symbol_for_struct`'s `out_n_comparators` flag.  Remaining: `Set` -- `tset-eq?` takes no comparator (uses hash equality entirely), so even single-level dispatch is wrong for non-primitive elements; fixing requires changes to the helper itself, not the dispatcher. | `src/compiler/elab_typeclasses.c` |
-| F3-6 | Recursive structural-equality fixtures -- **shipped**: `tvec-of-tvec-eq` (two- and three-level deep `Vec[Vec[int]]` / `Vec[Vec[Vec[int]]]`), `tmap-of-tvec-eq` (`Map[int (Vec int)]`), `tcons-of-tcons-eq` (`Cons[Cons[int]]`), `toption-of-tvec-eq` (`Option[Vec[int]]` + None case), `tpair-of-typed-eq` (2-comparator: `Pair[Vec[int] Option[int]]`), `tresult-of-typed-eq` (2-comparator with mixed recursive + primitive: `Result[Vec[int] cstr]`).  The companion `tvec-of-tvec-eq-manual` from session 2 is kept as the manual-rewrite reference. | `tests/fixtures/` |
+| F3-5 | Per-call-site dispatcher rewrite -- **shipped for all typed collections** (Vec, Map, Option, Cons, Pair, Result, Set).  `elab_method_call` (`src/compiler/elab_typeclasses.c`) recognises `.eq?` on a typed-collection TY_APP receiver and synthesises a direct call to the helper (`tvec-eq?` / `tmap-eq?` / `toption-eq?` / `tlist-eq?` / `tpair-eq?` / `tresult-eq?` / `tset-eq-cmp?`) with inline comparator lambdas whose params are ascribed to the element type(s).  Set's original helper `tset-eq?` takes no comparator and is hash-only (wrong for non-primitive elements), so F3-5 added a new `tset-eq-cmp?` to `stdlib/tset.tur` that does O(n*m) structural comparison and routes Set dispatch through it.  Recursion bottoms out at primitive elements where the F3-7 single-level path takes over.  Helpers `type_to_form`, `build_comparator_lambda`, `helper_eq_symbol_for_struct`, and `try_synth_recursive_eq` live in `elab_typeclasses.c`.  1- vs 2-comparator dispatch is driven by `helper_eq_symbol_for_struct`'s `out_n_comparators` flag. | `src/compiler/elab_typeclasses.c`, `stdlib/tset.tur` |
+| F3-6 | Recursive structural-equality fixtures -- **shipped**: `tvec-of-tvec-eq` (two- and three-level deep `Vec[Vec[int]]` / `Vec[Vec[Vec[int]]]`), `tmap-of-tvec-eq` (`Map[int (Vec int)]`), `tcons-of-tcons-eq` (`Cons[Cons[int]]`), `toption-of-tvec-eq` (`Option[Vec[int]]` + None case), `tpair-of-typed-eq` (2-comparator: `Pair[Vec[int] Option[int]]`), `tresult-of-typed-eq` (2-comparator with mixed recursive + primitive: `Result[Vec[int] cstr]`), `tset-of-tvec-eq` (`Set[Vec[int]]` via `tset-eq-cmp?`).  The companion `tvec-of-tvec-eq-manual` from session 2 is kept as the manual-rewrite reference. | `tests/fixtures/` |
 | F3-7 | Receiver-type recovery for typed-collection helpers -- **shipped** (option b "sticky ascription").  Three pieces: (1) primitive `Eq` instances for the full numeric stack (`int`, `bool`, `cstr`, `float`, `int8`/`int16`/`int32`/`uint8`/`uint16`/`uint32`/`uint64`/`float32`) added to the auto-loaded `stdlib/typeclass-eq.tur` so `(Eq A)` constraints satisfy for any primitive element type without requiring `(load "stdlib/typeclass.tur")`; (2) `typeclass_env_lookup_instance` in `src/compiler/typeclass.c` walks a TY_APP receiver to its struct head and checks struct identity so `Eq[TY_APP(Vec, int)]` resolves to `Eq[Vec]` (not `Eq[Map]` etc.); (3) the matching KIND_ARROW path in `elab_method_call` in `src/compiler/elab_typeclasses.c` does the same struct-identity check so the call site picks the right vtable.  Single-level `.eq?` dispatch on `(:: v (Vec int))` returns correct answers across all primitive element types (fixtures `tvec-eq-ascribed`, `tvec-eq-ascribed-multi`).  Recursive `.eq?` on `(:: v (Vec (Vec int)))` still falls through to the wrong comparator (the instance body hardcodes `(fn [a b] (= a b))`) -- see F3-2..F3-6 below. | `stdlib/typeclass-eq.tur`, `src/compiler/typeclass.c`, `src/compiler/elab_typeclasses.c` |
 
 ---

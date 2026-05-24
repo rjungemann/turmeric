@@ -233,6 +233,60 @@
   return true;
   ```)
 
+;;; tset-eq-cmp? -- structural equality with a user-supplied element
+;;; comparator.  Use this variant when the element type is not
+;;; primitive (e.g. Set[Vec[int]]) because the hash-based tset-eq?
+;;; compares elements by hash + pointer equality, which is wrong for
+;;; structurally-equal-but-distinctly-allocated values.
+;;;
+;;; Parameters:
+;;;   a       -- Set[A]
+;;;   b       -- Set[A]
+;;;   cmp-fn  -- comparator fn [a :int b :int] :bool applied to element pairs
+;;;
+;;; Returns:
+;;;   true iff both sets have the same count and every element of `a`
+;;;   has at least one structurally-equal counterpart in `b` per cmp-fn.
+;;;
+;;; Since: Phase F3-5 (cross-plan-followups)
+(defn tset-eq-cmp? [a :int b :int cmp-fn] #{} :bool
+  ```c
+  /* O(n*m) comparison: iterate a's elements, scan b for a structural
+   * match per element.  Bigger constant than tset-eq?'s hash lookup
+   * but correct for arbitrarily-structured element types.  Used by
+   * the F3-5 dispatcher synthesis for Set[T] where T is a TY_APP. */
+  struct { void *hamt; } *sa = (void*)(intptr_t)a;
+  struct { void *hamt; } *sb = (void*)(intptr_t)b;
+  if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
+  uint64_t iter_a[32];
+  for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
+  tur_hamt_iter_init(iter_a, sa->hamt);
+  uint64_t hash_a;
+  void *key_a = NULL, *val_a = NULL;
+  while (tur_hamt_iter_next(iter_a, &hash_a, &key_a, &val_a)) {
+      bool found = false;
+      uint64_t iter_b[32];
+      for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
+      tur_hamt_iter_init(iter_b, sb->hamt);
+      uint64_t hash_b;
+      void *key_b = NULL, *val_b = NULL;
+      while (tur_hamt_iter_next(iter_b, &hash_b, &key_b, &val_b)) {
+          if (((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(
+                (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
+              found = true;
+              break;
+          }
+      }
+      tur_hamt_iter_free(iter_b);
+      if (!found) {
+          tur_hamt_iter_free(iter_a);
+          return false;
+      }
+  }
+  tur_hamt_iter_free(iter_a);
+  return true;
+  ```)
+
 ;;; tset-free -- free the Set wrapper struct.
 ;;;
 ;;; Parameters:
