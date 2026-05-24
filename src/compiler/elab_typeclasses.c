@@ -1936,18 +1936,35 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             }
             /* Name matched.  Now check if this instance's first type_arg
              * matches the obj type.  For KIND_STAR we compare TypeKind
-             * exactly; for KIND_ARROW we accept any non-primitive. */
+             * exactly; for KIND_ARROW we accept any non-primitive whose
+             * struct constructor matches (when known via TY_APP). */
             if (inst->n_type_args > 0 && obj->type.kind != TY_UNKNOWN) {
                 bool type_ok;
                 if (obj_ck == KIND_STAR) {
                     type_ok = (inst->type_args[0].kind == obj->type.kind);
                 } else {
-                    /* KIND_ARROW: accept non-primitive instance type_args */
+                    /* KIND_ARROW: accept non-primitive instance type_args.
+                     * F3-7 (cross-plan-followups): when the receiver is a
+                     * TY_APP, walk to its head and use the struct identity
+                     * to discriminate Eq[Vec] from Eq[Map] etc.  Without
+                     * this, a TY_APP(Vec, int) receiver matches the first
+                     * KIND_ARROW Eq instance in registration order
+                     * (typically Eq[Set]) and we silently dispatch through
+                     * the wrong vtable. */
                     TypeKind itk = inst->type_args[0].kind;
                     bool inst_is_primitive =
                         (itk == TY_INT  || itk == TY_BOOL || itk == TY_CSTR ||
                          itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID);
                     type_ok = !inst_is_primitive;
+                    if (type_ok && obj->type.kind == TY_APP && itk == TY_STRUCT) {
+                        const Type *head = &obj->type;
+                        while (head && head->kind == TY_APP) head = head->as.app.fn;
+                        if (head && head->kind == TY_STRUCT &&
+                            inst->type_args[0].as.struct_.def != NULL &&
+                            inst->type_args[0].as.struct_.def != head->as.struct_.def) {
+                            type_ok = false;
+                        }
+                    }
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */

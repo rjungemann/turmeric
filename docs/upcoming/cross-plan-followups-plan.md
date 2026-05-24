@@ -2,12 +2,14 @@
 
 > **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F4 (infra +
 > --Werror=deprecated; full stdlib sweep deferred), F7 (doc
-> hygiene) all shipped.  F3-1 (design) shipped, plus a tracking
-> fixture (`tvec-of-tvec-eq-manual`) that documents both the bug
-> and the working manual-recursion workaround; F3-2..F3-7
-> implementation deferred (session-2 confirmed the receiver-type
-> recovery wall and narrowed F3-7 to "sticky ascription" as the
-> smallest viable approach).
+> hygiene), F3-1 (design), F3-7 (receiver-type recovery via
+> sticky ascription + struct-identity dispatch) all shipped.
+> Single-level `(.eq? v v)` on `(:: (tvec-new) (Vec int))` now
+> dispatches correctly (new fixture `tvec-eq-ascribed`).
+> Recursive `(.eq? v v)` on `(Vec (Vec int))` still gives the
+> wrong answer because the `Eq[Vec][(Eq A)]` instance body
+> hardcodes `(fn [a b] (= a b))` on elements -- F3-2..F3-6
+> (dictionary-passing for method bodies) is the remaining work.
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -369,7 +371,7 @@ backwards-compatibility issue.
 | F3-4 | Update `emit_fns.c` to emit the extra parameters and `emit_expr.c` to pass the dictionaries at the call.  Also extend the EX_METHOD_CALL emit to choose between the static-singleton path (unconstrained) and the dict-pointer-arg path (constrained). | `src/compiler/emit_fns.c`, `emit_expr.c` |
 | F3-5 | Replace the integer-`=` element comparison in each `t*.tur` constrained `Eq` instance with a dispatch through the element's `.eq?`. | `stdlib/t*.tur` |
 | F3-6 | Add fixture `tests/fixtures/typed/tvec-of-tvec-eq` and `tests/fixtures/typed/tmap-of-tvec-eq` covering recursive structural equality. | `tests/fixtures/typed/` |
-| F3-7 | **New.**  Pick option (a) or (b) for receiver-type recovery on typed-collection helpers (see "Additional blocker" above) and implement it.  Without F3-7, F3-5/F3-6 cannot exercise the dict-passing path through `.eq?`.  Session-2 finding (see below) narrows the recommended path to (b) "sticky ascription" -- smaller change than rewriting every typed helper's signature. | `src/compiler/elab_call.c`, `src/compiler/elab_types.c` (`EX_ASCRIBE` lowering), `stdlib/t*.tur` (only signature audit, not rewrite, under option b) |
+| F3-7 | Receiver-type recovery for typed-collection helpers -- **shipped** (option b "sticky ascription").  Three pieces: (1) primitive `Eq[int|bool|cstr|float]` instances added to the auto-loaded `stdlib/typeclass-eq.tur` so `(Eq A)` constraints satisfy for primitive elements; (2) `typeclass_env_lookup_instance` in `src/compiler/typeclass.c` walks a TY_APP receiver to its struct head and checks struct identity so `Eq[TY_APP(Vec, int)]` resolves to `Eq[Vec]` (not `Eq[Map]` etc.); (3) the matching KIND_ARROW path in `elab_method_call` in `src/compiler/elab_typeclasses.c` does the same struct-identity check so the call site picks the right vtable.  Single-level `.eq?` dispatch on `(:: v (Vec int))` now returns correct answers (fixture `tvec-eq-ascribed`).  Recursive `.eq?` on `(:: v (Vec (Vec int)))` still falls through to the wrong comparator (the instance body hardcodes `(fn [a b] (= a b))`) -- that is the F3-5 work. | `stdlib/typeclass-eq.tur`, `src/compiler/typeclass.c`, `src/compiler/elab_typeclasses.c` |
 
 ---
 
