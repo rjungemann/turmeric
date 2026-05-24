@@ -2313,6 +2313,18 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
                 return NULL;
             }
         }
+
+        /* Move-at-make-struct for rc-managed payloads, mirroring the
+         * F1-2-3 scan in elab_pack.  Ownership of an rc / weak / existential
+         * reference transfers into the new struct field; the source binding
+         * must not auto-drop at its enclosing scope's exit too. */
+        if (fv->kind == EX_VAR && fv->as.var.binding) {
+            TypeKind vk = fv->type.kind;
+            if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
+                (void)binding_mark_moved(fv->as.var.binding,
+                                         call->as.list.items[2 + i]->span);
+            }
+        }
     }
 
     /* Build the result type */
