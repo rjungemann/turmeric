@@ -248,6 +248,52 @@ is real undefined behaviour.
 | DS5-1 | Audit Binding allocation sites for direct `arena_alloc(... sizeof(Binding))` that skip the `binding_new` helper.  Either route them through `binding_new` or add an explicit `memset`. | `src/compiler/` (grep `arena_alloc.*Binding`) |
 | DS5-2 | Run the F8 smoke tests under UBSan after DS5-1 lands to confirm the trip is gone. | -- |
 
+### Phase DS6 -- struct drop glue for free-floating bindings & compound rc fields
+
+**Problem.**  Surfaced while implementing DS2: when a struct holds an
+rc-managed payload in a compound field annotation
+(`(exists [a] [(C a)] a)`, `(rc Node)`, etc.) and the struct binding is
+not itself rc-wrapped, the payload silently leaks at scope exit.  Two
+distinct gaps compose to produce the leak:
+
+1. **`needs_drop_glue` doesn't see compound rc fields.**  The F8
+   lowering in `elab_structs.c` (new-style ~line 422, old-style
+   ~line 532) sets `fkind = TY_INT` for TY_APP / TY_EXISTS / TY_FORALL
+   field annotations -- so the `fkind == TY_RC || fkind == TY_REF ||
+   fkind == TY_WEAK` check that flips `def->needs_drop_glue` on
+   silently misses every compound rc payload.  The real type lives on
+   `StructField.full_type` but the drop-glue trigger ignores it.
+
+2. **Free-floating struct bindings get no scope-exit defer.**  The
+   auto-drop pass in `elab_forms.c` (~line 682) only injects defers
+   for bindings whose type is TY_RC or a constrained TY_EXISTS.
+   Structs with rc-managed fields don't qualify -- so even when their
+   drop glue exists (DS6-1 above), it is never invoked unless the
+   struct is wrapped in `rc/of` (which switches the codegen to attach
+   `drop_glue_<Name>` via `emit_expr.c` ~line 1520).
+
+Together: `(defstruct Box :move [payload (exists [a] [(Show a)] a)])`
+followed by `(let [b (make-struct Box ...)] ...)` leaks the
+existential record on every invocation.  The same is true for any
+`(defstruct Wrapper :move [v :rc<int>])` whose binding is not
+rc-wrapped.
+
+The DS2 fix (move-at-make-struct) is still correct -- it prevents the
+*double-decrement* that would otherwise happen if the struct's drop
+glue ever did fire.  DS6 closes the other direction (the leak that
+exists today) and makes the DS2 fixture's "no leak" assertion
+actually verifiable.
+
+**Tasks.**
+
+| ID | Task | File(s) |
+|----|------|---------|
+| DS6-1 | At both `needs_drop_glue` trigger sites in `elab_structs.c`, also flip the flag when `full_type` is set and the parsed Type is rc-managed (TY_RC / TY_WEAK / TY_REF / constrained TY_EXISTS).  Helper: a small `type_is_rc_managed(const Type *)` predicate that the auto-drop pass in `elab_forms.c` can reuse. | `src/compiler/elab_structs.c`, `src/compiler/types.{h,c}` |
+| DS6-2 | Extend the drop-glue emitter in `emit_module.c` (~line 124) to handle compound rc fields.  For TY_EXISTS payloads the C-level slot is `RcControlBlock *` (opaque `void *` in the typedef), released via `rc_strong_decrement` + `rc_free_queue_drain` -- analogous to the existing TY_RC branch.  For nested TY_RC inside TY_APP (e.g. `(Vec (rc T))`), fall back to a conservative no-op until container types provide their own drop hook. | `src/compiler/emit_module.c` |
+| DS6-3 | In the let auto-drop pass (`elab_forms.c` ~line 669), inject a scope-exit drop for TY_STRUCT bindings whose `StructDef.needs_drop_glue` is true and that haven't been moved/consumed.  Emit calls `drop_glue_<Name>(&binding)` (so the same drop glue serves both rc-wrapped and free-floating struct uses).  The struct itself is stack-allocated for free-floating bindings, so the drop must not `free()` the storage -- split the existing `drop_glue_<Name>` into a field-releasing helper and the current `free(ptr)`-suffixed wrapper, or pass a "don't free" flag. | `src/compiler/elab_forms.c`, `src/compiler/emit_module.c` |
+| DS6-4 | Add fixture `tests/fixtures/exg4-pack-into-struct-leak-free` that uses a weak ref to observe the existential's lifecycle across the make-struct scope: `(let [w (let [b (make-struct Box (pack ...))] (rc/downgrade (.payload b)))] (assert (none? (weak/upgrade w))))`.  Without DS6, the weak upgrade succeeds (the existential outlives its struct).  With DS6, it returns `none` (the struct's smart-drop ran and decremented to 0). | `tests/fixtures/` |
+| DS6-5 | Re-check the existing `exg4-pack-into-struct` and `exg4-pack-into-struct-via-let` fixtures under ASAN with `detect_leaks=1` (the CMake configuration currently disables leak detection via `ASAN_OPTIONS=detect_leaks=0`); confirm zero leaks post-DS6. | `tests/fixtures/`, `CMakeLists.txt` |
+
 ---
 
 ## Sequencing notes
@@ -261,6 +307,10 @@ is real undefined behaviour.
 - **DS4** is diagnostic polish; nice-to-have.
 - **DS5** is an unrelated hygiene fix but surfaced during F8 work;
   worth closing so future struct-field changes don't get blamed.
+- **DS6** depends on DS2 being in place (the move-at-make-struct
+  marking is what keeps DS6's new drop-glue path from
+  double-decrementing).  Once DS6 lands, the DS2 fixture's "no leak"
+  assertion can be tightened to actually observe collection.
 
 ---
 
