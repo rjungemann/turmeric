@@ -320,21 +320,18 @@ the caller-owned inputs at the call sites.
 
 ### External dependency missing (left failing intentionally)
 
-#### `scscm-compile`
+#### `scscm-compile` [FIXED]
 
 The fixture does `(load "../turmeric-spices/tur-scscm/src/scscm/...")`,
 which requires the `turmeric-spices` repo to be checked out as a
-sibling directory. In CI / fresh containers it isn't. Two options:
+sibling directory. In CI / fresh containers it isn't.
 
-* gate the fixture behind a `requires.spices` marker (analogous to
-  `requires.tsan`) so it auto-skips when the dependency isn't present;
-* document a setup step in `CLAUDE.md` / `README.md`.
-
-**Decision:** Add the `requires.spices` skip marker. Mirror the
-existing `requires.tsan` plumbing; the runner detects the missing
-sibling `../turmeric-spices/` directory and skips. Also add a short
-"Optional dependencies" note in `CLAUDE.md` / `README.md` so
-developers who want the test to run know how to enable it.
+**Decision (implemented):** Added the `requires.spices` skip marker.
+Mirrors the existing `requires.tsan` plumbing; `tests/run.sh` detects
+the missing sibling `../turmeric-spices/` directory and skips.
+Marker file at `tests/fixtures/scscm-compile/requires.spices`.
+`CLAUDE.md` now lists all `requires.*` markers and has an "Optional
+dependencies" section describing how to enable.
 
 ### Compiler memory leaks (uncovered while executing this plan)
 

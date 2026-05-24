@@ -248,6 +248,14 @@ run_happy() {
         return
     fi
 
+    # Skip fixtures that load from the optional sibling turmeric-spices
+    # repo when that directory isn't present. See CLAUDE.md "Optional
+    # dependencies" for how to enable.
+    if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
+        write_result "PASS" "$name" "(spices-skipped)" ""
+        return
+    fi
+
     # T19: Read per-fixture timeout (default: 10 seconds; 0 = unlimited).
     local fixture_timeout=10
     if [ -f "$dir/expected.timeout" ]; then
