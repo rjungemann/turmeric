@@ -599,6 +599,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_WHILE:    emit_while_stmt(ctx, body, e); return atom_nil();
         case EX_SET:      emit_set_stmt(ctx, body, e);   return atom_nil();
         case EX_SET_DEREF: emit_set_deref_stmt(ctx, body, e); return atom_nil();
+        case EX_SET_FIELD: emit_set_field_stmt(ctx, body, e); return atom_nil();
         case EX_DEF:      /* handled at top level — shouldn't appear nested. */
         case EX_PROGRAM:
         case EX_DEFMODULE: /* Phase M0: module metadata node */
@@ -1512,18 +1513,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             char *cb_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            /* Phase 11: if the inner value is a struct with RC fields, pass its drop glue */
+            /* Phase 11 / DS3: if the inner value is a struct with rc fields,
+             * pass its drop glue and -- so the cycle walker can trace
+             * through -- its walk glue via rc_cb_alloc_struct. */
             const char *drop_fn_name = "NULL";
             char dg_name_buf[256];
+            char wg_name_buf[256];
+            bool struct_with_rc_fields = false;
             if (e->as.rc_of_.expr->type.kind == TY_STRUCT) {
                 StructDef *sdef = e->as.rc_of_.expr->type.as.struct_.def;
                 if (sdef && sdef->needs_drop_glue) {
                     snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_%s", sdef->name);
+                    snprintf(wg_name_buf, sizeof(wg_name_buf), "walk_glue_%s", sdef->name);
                     drop_fn_name = dg_name_buf;
+                    struct_with_rc_fields = true;
                 }
             }
-            buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(0, %d, %s);\n",
-                       cb_tmp, e->as.rc_of_.expr->type.kind, drop_fn_name);
+            if (struct_with_rc_fields) {
+                buf_printf(body, "RcControlBlock *%s = rc_cb_alloc_struct(0, %d, %s, %s);\n",
+                           cb_tmp, e->as.rc_of_.expr->type.kind,
+                           drop_fn_name, wg_name_buf);
+            } else {
+                buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(0, %d, %s);\n",
+                           cb_tmp, e->as.rc_of_.expr->type.kind, drop_fn_name);
+            }
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s->value = %s;\n", cb_tmp, val_tmp);
 
@@ -2334,13 +2347,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return result;
         }
         case EX_GET_FIELD: {
-            /* (.field s) - emit s.field_name */
+            /* (.field s) - emit s.field_name; for rc<Struct> receivers,
+             * auto-deref through the rc-block's value pointer. */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             StructDef *def = e->as.get_field_.def;
             const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
             char *fname = mangle_field_name(fname_raw);
+            bool through_rc = e->as.get_field_.struct_expr->type.kind == TY_RC;
             Buf lit; buf_init(&lit);
-            buf_printf(&lit, "(%s).%s", sv, fname);
+            if (through_rc) {
+                buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
+                           def->name, sv, fname);
+            } else {
+                buf_printf(&lit, "(%s).%s", sv, fname);
+            }
             buf_putc(&lit, '\0');
             free(sv);
             free(fname);

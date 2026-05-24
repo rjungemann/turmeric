@@ -219,6 +219,12 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             if (!borrow_check_expr_recursive(ctx, e->as.set_deref_.ref)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.set_deref_.value)) return false;
             return true;
+
+        case EX_SET_FIELD:
+            /* DS3: (set! (.field s) v) -- struct field write. */
+            if (!borrow_check_expr_recursive(ctx, e->as.set_field_.receiver)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.set_field_.value)) return false;
+            return true;
             
         case EX_DEF:
             if (e->as.def_.init && !borrow_check_expr_recursive(ctx, e->as.def_.init)) {

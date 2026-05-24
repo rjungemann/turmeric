@@ -316,6 +316,10 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 case EX_DEFER:   ls[lsp++] = cur->as.defer_.body;      break;
                 case EX_RC_OF:   ls[lsp++] = cur->as.rc_of_.expr;      break;
                 case EX_GET_FIELD: ls[lsp++] = cur->as.get_field_.struct_expr; break;
+                case EX_SET_FIELD:
+                    ls[lsp++] = cur->as.set_field_.value;
+                    ls[lsp++] = cur->as.set_field_.receiver;
+                    break;
                 case EX_MAKE_STRUCT:
                     for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
                         ls[lsp++] = cur->as.make_struct_.field_values[i-1];
@@ -555,6 +559,10 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             case EX_GET_FIELD:
                 stack[sp++] = cur->as.get_field_.struct_expr;
+                break;
+            case EX_SET_FIELD:
+                stack[sp++] = cur->as.set_field_.receiver;
+                stack[sp++] = cur->as.set_field_.value;
                 break;
             /* Phase 19: Algebraic effects */
             case EX_PERFORM:
@@ -900,6 +908,10 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
                 break;
             case EX_GET_FIELD:
                 stack[sp++] = cur->as.get_field_.struct_expr;
+                break;
+            case EX_SET_FIELD:
+                stack[sp++] = cur->as.set_field_.receiver;
+                stack[sp++] = cur->as.set_field_.value;
                 break;
             default:
                 break;

@@ -31,6 +31,11 @@ typedef struct RcControlBlock RcControlBlock;
 /* Custom drop function type for rc<T> where T has a destructor */
 typedef void (*RcDropFn)(void *value);
 
+/* DS3: walker callback invoked once per rc-typed child of `value`.
+ * Used by gc_mark_phase for RCK_STRUCT blocks to enumerate children. */
+typedef void (*RcWalkChildFn)(RcControlBlock *child, void *ctx);
+typedef void (*RcWalkFn)(void *value, RcWalkChildFn cb, void *ctx);
+
 /* The control block layout for rc<T> and weak<T>.
  * 
  * Memory layout (for cache efficiency):
@@ -62,6 +67,11 @@ struct RcControlBlock {
     /* Custom drop function (NULL for types that use free()) */
     RcDropFn drop_fn;
 
+    /* DS3: walker function -- enumerates rc-typed children for the cycle
+     * collector.  NULL when the value has no rc children to follow
+     * (the default for RCK_OPAQUE / RCK_EXISTENTIAL blocks). */
+    RcWalkFn walk_fn;
+
     /* Type information for debugging */
     TypeKind value_type_kind;
 
@@ -80,6 +90,9 @@ struct RcControlBlock {
  * existing call sites do not need to change. */
 #define RCK_OPAQUE        0  /* value is a scalar / bit pattern (default) */
 #define RCK_EXISTENTIAL   1  /* value points at a tur_existential_t record */
+/* DS3: value points at a struct with rc-typed fields.  cb->walk_fn (if
+ * non-NULL) enumerates them so the cycle walker can trace through. */
+#define RCK_STRUCT        2
 
 /* EXG5-1: Payload descriptor for RCK_EXISTENTIAL blocks.
  * Describes the type of bits stored in tur_existential_t::value, so the
@@ -111,6 +124,13 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
 RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
                                    RcDropFn drop_fn, uint8_t kind,
                                    uint8_t payload_kind);
+
+/* DS3: allocate a control block for a struct payload with an attached
+ * walker function.  Tags the block as RCK_STRUCT so the cycle walker
+ * invokes `walk_fn` to enumerate rc-typed children.  `drop_fn` runs
+ * normally on the final strong decrement. */
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, TypeKind value_type,
+                                   RcDropFn drop_fn, RcWalkFn walk_fn);
 
 /* Free a control block and its value.
  * Called when both strong_count and weak_count reach 0.

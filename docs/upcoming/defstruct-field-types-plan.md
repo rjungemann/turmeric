@@ -190,13 +190,86 @@ struct fields of `rc<T>` type:
 - the cycle requires *mutability* (the back-edge field can't be
   fixed at construction because the other half isn't allocated yet).
 
+**DS3-1 survey findings.**  Performed against the post-DS2 tree:
+
+- **`set!` syntax (`src/compiler/elab_forms.c:1122`).**  `elab_set`
+  accepts two target shapes:
+  1. `(set! name v)` -- mutates a `^mut` binding.  Rejects moved /
+     immutable bindings, type-checks via `type_eq`.
+  2. `(set! (@ borrow) v)` -- routes to `elab_set_deref` (mutable-
+     borrow write at `elab_forms.c:1515`).
+  Anything else fires `set! target must be a symbol or (@ borrow)`.
+  No `(set! (.field s) v)` path exists; no `EX_SET_FIELD` kind in
+  `expr.h` either.
+
+- **Field read (`src/compiler/elab_typeclasses.c:1941`).**
+  `elab_method_call` handles `(.field s)` when `s.type.kind ==
+  TY_STRUCT` (also unwrapping `TY_REF_IMMUT` / `TY_REF_MUT`).  It
+  prefers `def->fields[i].full_type` when set (the F8 plumbing).
+  It does **not** auto-deref `rc<Struct>` receivers -- `TY_RC`
+  carries only an `inner` `TypeKind` (no `StructDef *`), so the
+  struct identity is lost the moment the field type is `rc<Cell>`.
+
+- **`rc<Cell>` field parsing (`elab_structs.c:65` --
+  `parse_struct_field_type`).**  Recurses with `inner_name = "Cell"`,
+  which is not a known primitive, so `inner_kind = TY_UNKNOWN`.  The
+  outer fkind is set to `TY_RC` and finner to `TY_UNKNOWN`.  Codegen
+  emits the slot as `RcControlBlock *` correctly and the new-style
+  `needs_drop_glue` trigger (`elab_structs.c:422`) flips on, so
+  `drop_glue_<Name>` releases the field.  But the struct identity
+  is gone -- there is no `StructDef *` reachable from the parsed
+  `Type` for the field.
+
+- **F_LIST form `(rc Cell)` (`elab_structs.c:365`).**  Routes
+  through `type_expr_from_form`.  Currently this produces a
+  full_type that codegen renders as `int64_t` (opaque) and skips
+  drop glue entirely -- worse than `rc<Cell>` for the cycle test.
+  Stick with the keyword form for DS3.
+
+- **`(@ rc-of-struct)` (`elab_memory.c:68`).**  Returns
+  `type_from_kind(rc.inner)`, i.e. a `Type` whose kind is the
+  inner kind but whose `as.struct_.def` is NULL.  So even an
+  explicit deref cannot recover the `StructDef *`.
+
+- **GC walker (`src/runtime/gc.c:232 gc_mark_phase`).**  Only
+  follows `RCK_EXISTENTIAL` blocks whose `RCEXP_*` payload tag is
+  `RCEXP_RC` (one inner `RcControlBlock *` at a known offset).
+  There is no `RCK_STRUCT`; the walker has no way to enumerate
+  rc-typed fields inside a struct value, so a cycle through
+  `rc<Struct>` fields **leaks today** even when `set!` is
+  implemented.
+
+**Implication for DS3-2.**  Three layers of work, all required for
+the cycle fixture:
+
+1. Compiler: `(set! (.field s) v)` against a `TY_STRUCT` receiver
+   (the easy case -- needs a `^mut` binding).
+2. Compiler: extend `TY_RC` to optionally carry a `StructDef *` so
+   `(.field rc-of-struct)` and `(set! (.field rc-of-struct) v)`
+   can resolve fields without losing the def.  Field-type parser
+   sets the def when it sees `rc<Name>`.  rc-receiver auto-deref
+   in `elab_method_call` and the new `elab_set_field` reads the
+   def back out.
+3. Runtime: add `RCK_STRUCT` kind + `walk_fn` pointer to
+   `RcControlBlock`; codegen emits `walk_glue_<Name>` (sibling of
+   `drop_glue_<Name>`); `rc/of`-of-struct in `emit_expr.c:1518`
+   passes both; `gc_mark_phase` handles `RCK_STRUCT` by invoking
+   `walk_fn`.
+
+DS3-2 is therefore split into 2a (set! direct), 2b (rc<Struct>
+auto-deref via `StructDef *` on TY_RC), 2c (runtime walker
+extension + codegen of walk_glue).  DS3-3 cycle fixture depends
+on all three.
+
 **Tasks.**
 
 | ID | Task | File(s) |
 |----|------|---------|
-| DS3-1 | Survey current support for `(set! (.field s) new-value)` on rc-typed fields in `elab_structs.c` / `emit_expr.c`.  Document what works and what doesn't. | survey |
-| DS3-2 | Implement whatever's missing for the back-edge install (likely an emit path for rc-field assignment that increments the new rc's strong count and decrements the old). | `src/compiler/emit_expr.c` |
-| DS3-3 | Add fixture `tests/fixtures/exg5-exists-cycle` that builds the back-edge, drops the strong root, runs `gc!`, and asserts the cycle is reclaimed.  Uses a weak<S> witness to observe post-collection state. | `tests/fixtures/` |
+| DS3-1 | ✓ Survey above. | -- |
+| DS3-2a | ✓ Added `EX_SET_FIELD` in `expr.h:212`; routed `(set! (.field s) v)` through new `elab_set_field` in `elab_forms.c`.  Type-checks against `full_type` (preferred) or kind summary, requires `^mut` on direct `TY_STRUCT` receivers, mirrors the DS2 move-at-pack scan for rc payloads.  Emit in `emit_stmt.c emit_set_field_stmt`: for `TY_RC`/`TY_WEAK`/`TY_REF`/`TY_LREF` fields, releases the prior pointer before storing the new one. | `src/compiler/expr.h`, `src/compiler/elab_forms.c`, `src/compiler/emit_stmt.c` |
+| DS3-2b | ✓ Extended `Type.as.rc` with `StructDef *struct_def` (`types.h:382`); `lookup_rc_inner_struct_def` resolves `rc<Name>` at field-type parse time.  `elab_method_call` (`elab_typeclasses.c:1949`) auto-derefs `TY_RC` receivers with non-NULL `struct_def`; `elab_rc_of` propagates the def through `type_rc_struct`.  `emit_expr.c EX_GET_FIELD` and `emit_set_field_stmt` emit `((<Name>*)((RcControlBlock*)s)->value)->field` when the receiver is `TY_RC`. | `src/compiler/types.h`, `src/compiler/elab_structs.c`, `src/compiler/elab_typeclasses.c`, `src/compiler/elab_forms.c`, `src/compiler/emit_expr.c`, `src/compiler/emit_stmt.c`, `src/compiler/elab_memory.c` |
+| DS3-2c | ✓ `RCK_STRUCT` and `RcWalkFn` / `RcWalkChildFn` typedefs added (`src/runtime/rc.h`).  `walk_fn` field added to `RcControlBlock`; new `rc_cb_alloc_struct` entry point sets the RCK_STRUCT tag + walker.  `gc_mark_phase` in `src/runtime/gc.c` (and the inlined runtime in `emit_module.c`) invokes `walk_fn` to enumerate rc children for RCK_STRUCT blocks.  Codegen emits `walk_glue_<Name>` alongside `drop_glue_<Name>` (`emit_module.c:126`); `rc/of` of a struct with rc fields routes through `rc_cb_alloc_struct` (`emit_expr.c:1518`). | `src/runtime/rc.{h,c}`, `src/runtime/gc.c`, `src/compiler/emit_module.c`, `src/compiler/emit_expr.c` |
+| DS3-3 | ✓ Fixture `tests/fixtures/exg5-exists-cycle` builds the `s1 <-> s2` cycle through `(set! (.next s1) (rc/clone s2))` and asserts the strong counts.  **Reclaim verification deferred to DS7** -- see below.  The fixture demonstrates the walker is exercised end-to-end (RCK_STRUCT walk_glue_S is called during `gc_mark_phase`) but the cycle remains live afterwards because trial deletion is still zombie-only. | `tests/fixtures/` |
 
 ### Phase DS4 -- diagnostic hygiene
 
@@ -221,8 +294,8 @@ follow-up:
 
 | ID | Task | File(s) |
 |----|------|---------|
-| DS4-1 | Improve the `:copy non-copy compound type` diagnostic by formatting the parsed `Type` (via `type_name(*full_type)` or similar) so users see the actual type they wrote. | `src/compiler/elab_structs.c` |
-| DS4-2 | Reject `(defstruct X ...)` where X is already bound by an auto-loaded stdlib struct.  Today the elaborator accepts the redefinition silently and codegen produces a duplicate C-level typedef.  This unblocks removing the user-side fixture renames added in F6-2 (`Cell` / `Opt` / `Pr` -> back to original names).  Alternative: continue requiring users to pick distinct names (current state). | `src/compiler/elab_structs.c` |
+| DS4-1 | ✓ Both `:copy`/non-copy diagnostics (new-style ~line 434, old-style ~line 529 in `elab_structs.c`) now format the parsed `Type` via `type_name(*full_type)` when `full_type` is set -- so `(lref int)` reads as `lref<int>` in the message instead of the generic "non-copy compound type".  Fixture: `tests/fixtures/errors/defstruct-copy-noncopy-compound-field`. | `src/compiler/elab_structs.c` |
+| DS4-2 | ✓ `elab_defstruct`'s forward-stub re-elaboration path (`elab_structs.c:247`) now rejects when the stub has already been filled in (`n_fields > 0`).  This catches both intra-file double-defines and the stdlib name-collision case (e.g. user `(defstruct Cons ...)` shadowing `stdlib/list.tur`).  Users now get an elaborator diagnostic instead of a duplicate-typedef cc error.  Fixture: `tests/fixtures/errors/defstruct-redef-stdlib-name`. | `src/compiler/elab_structs.c` |
 
 ### Phase DS5 -- UBSan-flagged uninitialised binding field
 
@@ -245,8 +318,84 @@ is real undefined behaviour.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| DS5-1 | Audit Binding allocation sites for direct `arena_alloc(... sizeof(Binding))` that skip the `binding_new` helper.  Either route them through `binding_new` or add an explicit `memset`. | `src/compiler/` (grep `arena_alloc.*Binding`) |
-| DS5-2 | Run the F8 smoke tests under UBSan after DS5-1 lands to confirm the trip is gone. | -- |
+| DS5-1 | ✓ The actual UBSan trip was on `MacroDef::is_referred`, not a Binding field -- `elab_macros.c:1047` allocated MacroDef via `arena_alloc` without zeroing, so the `is_referred` bool was indeterminate until the `:refer` alias path later wrote it.  Added `memset(macro, 0, sizeof(MacroDef))` at that site.  Audit of `StructDef` / `AdtDef` arena_alloc sites (`elab_toplevel.c:539,556,572,586`, `elab_structs.c:363,624,761,1147`) surfaced a second matching trip on `StructDef::is_opaque` -- the prepass stubs and the non-forward `defstruct` / `defdata` / `defgadt` paths set named fields one by one but never initialised `is_opaque`, so emit_module.c's `if (def->is_opaque) continue` (pass 0) tripped UBSan.  Added `memset(..., 0, sizeof(*...))` at all eight sites so future field additions don't reintroduce the same bug. | `src/compiler/elab_macros.c`, `src/compiler/elab_structs.c`, `src/compiler/elab_toplevel.c` |
+| DS5-2 | ✓ Re-ran `tests/run.sh` (which builds Debug -- ASan+UBSan).  Pre-DS5 the suite emitted two distinct trips (`elab_core.c:1322` macro lookup, `emit_module.c:91` opaque check); post-DS5 the suite emits zero UBSan trips.  Same PASS/FAIL counts as DS4 (no regressions). | -- |
+
+### Phase DS6 -- struct drop glue for free-floating bindings & compound rc fields
+
+**Problem.**  Surfaced while implementing DS2: when a struct holds an
+rc-managed payload in a compound field annotation
+(`(exists [a] [(C a)] a)`, `(rc Node)`, etc.) and the struct binding is
+not itself rc-wrapped, the payload silently leaks at scope exit.  Two
+distinct gaps compose to produce the leak:
+
+1. **`needs_drop_glue` doesn't see compound rc fields.**  The F8
+   lowering in `elab_structs.c` (new-style ~line 422, old-style
+   ~line 532) sets `fkind = TY_INT` for TY_APP / TY_EXISTS / TY_FORALL
+   field annotations -- so the `fkind == TY_RC || fkind == TY_REF ||
+   fkind == TY_WEAK` check that flips `def->needs_drop_glue` on
+   silently misses every compound rc payload.  The real type lives on
+   `StructField.full_type` but the drop-glue trigger ignores it.
+
+2. **Free-floating struct bindings get no scope-exit defer.**  The
+   auto-drop pass in `elab_forms.c` (~line 682) only injects defers
+   for bindings whose type is TY_RC or a constrained TY_EXISTS.
+   Structs with rc-managed fields don't qualify -- so even when their
+   drop glue exists (DS6-1 above), it is never invoked unless the
+   struct is wrapped in `rc/of` (which switches the codegen to attach
+   `drop_glue_<Name>` via `emit_expr.c` ~line 1520).
+
+Together: `(defstruct Box :move [payload (exists [a] [(Show a)] a)])`
+followed by `(let [b (make-struct Box ...)] ...)` leaks the
+existential record on every invocation.  The same is true for any
+`(defstruct Wrapper :move [v :rc<int>])` whose binding is not
+rc-wrapped.
+
+The DS2 fix (move-at-make-struct) is still correct -- it prevents the
+*double-decrement* that would otherwise happen if the struct's drop
+glue ever did fire.  DS6 closes the other direction (the leak that
+exists today) and makes the DS2 fixture's "no leak" assertion
+actually verifiable.
+
+**Tasks.**
+
+| ID | Task | File(s) |
+|----|------|---------|
+| DS6-1 | At both `needs_drop_glue` trigger sites in `elab_structs.c`, also flip the flag when `full_type` is set and the parsed Type is rc-managed (TY_RC / TY_WEAK / TY_REF / constrained TY_EXISTS).  Helper: a small `type_is_rc_managed(const Type *)` predicate that the auto-drop pass in `elab_forms.c` can reuse. | `src/compiler/elab_structs.c`, `src/compiler/types.{h,c}` |
+| DS6-2 | Extend the drop-glue emitter in `emit_module.c` (~line 124) to handle compound rc fields.  For TY_EXISTS payloads the C-level slot is `RcControlBlock *` (opaque `void *` in the typedef), released via `rc_strong_decrement` + `rc_free_queue_drain` -- analogous to the existing TY_RC branch.  For nested TY_RC inside TY_APP (e.g. `(Vec (rc T))`), fall back to a conservative no-op until container types provide their own drop hook. | `src/compiler/emit_module.c` |
+| DS6-3 | In the let auto-drop pass (`elab_forms.c` ~line 669), inject a scope-exit drop for TY_STRUCT bindings whose `StructDef.needs_drop_glue` is true and that haven't been moved/consumed.  Emit calls `drop_glue_<Name>(&binding)` (so the same drop glue serves both rc-wrapped and free-floating struct uses).  The struct itself is stack-allocated for free-floating bindings, so the drop must not `free()` the storage -- split the existing `drop_glue_<Name>` into a field-releasing helper and the current `free(ptr)`-suffixed wrapper, or pass a "don't free" flag. | `src/compiler/elab_forms.c`, `src/compiler/emit_module.c` |
+| DS6-4 | Add fixture `tests/fixtures/exg4-pack-into-struct-leak-free` that uses a weak ref to observe the existential's lifecycle across the make-struct scope: `(let [w (let [b (make-struct Box (pack ...))] (rc/downgrade (.payload b)))] (assert (none? (weak/upgrade w))))`.  Without DS6, the weak upgrade succeeds (the existential outlives its struct).  With DS6, it returns `none` (the struct's smart-drop ran and decremented to 0). | `tests/fixtures/` |
+| DS6-5 | Re-check the existing `exg4-pack-into-struct` and `exg4-pack-into-struct-via-let` fixtures under ASAN with `detect_leaks=1` (the CMake configuration currently disables leak detection via `ASAN_OPTIONS=detect_leaks=0`); confirm zero leaks post-DS6. | `tests/fixtures/`, `CMakeLists.txt` |
+
+### Phase DS7 -- live-cycle trial deletion for the Bacon-Rajan walker
+
+**Problem.**  DS3 shipped the cycle-walker hooks
+(`RCK_STRUCT` + `walk_fn`) so the mark phase can trace through
+struct rc fields.  Independently, the *suspect-tracking* side of
+the Bacon-Rajan collector is still incomplete: `gc_on_strong_decrement`
+in `src/runtime/gc.c:364` only adds blocks to the suspect set when
+their strong count reaches 0 with weak refs outstanding
+(zombie state).  Live cycles -- where every node has strong > 0
+solely because the *other* cycle nodes hold references to it --
+are never added to the suspect set, so trial deletion never sees
+them.  The mark phase additionally treats every block with
+`strong_count > 0` as an unconditional GC_BLACK root, which would
+keep cycle members alive even if they did become suspects.
+
+The `exg5-exists-cycle` fixture demonstrates the gap: after
+`(set! (.next s1) (rc/clone s2))` and the let scope exits, both
+nodes have `strong_count == 1` and are kept alive by each other.
+`gc!` runs without reclaiming them.
+
+**Tasks.**
+
+| ID | Task | File(s) |
+|----|------|---------|
+| DS7-1 | Extend `gc_on_strong_decrement` (and the inlined runtime copy in `emit_module.c`) so that any decrement leaving `strong_count > 0` on a block marked `may_contain_cycles` adds the block to the suspect set with color `GC_PURPLE`.  Limit the additions to RCK_EXISTENTIAL / RCK_STRUCT blocks (RCK_OPAQUE / primitives can't participate in a cycle through Turmeric-defined edges). | `src/runtime/gc.c`, `src/compiler/emit_module.c` |
+| DS7-2 | Add a `uint32_t buffered_count` field to `RcControlBlock` (consume one of the `reserved` bytes, or grow the struct).  Update `rc_cb_alloc_*` to zero it.  This is the trial-decrement counter from the Bacon-Rajan paper. | `src/runtime/rc.{h,c}`, `src/compiler/emit_module.c` |
+| DS7-3 | Rewrite `gc_trial_deletion_phase` as the three-pass Bacon-Rajan algorithm: (1) MarkRoots seeds `buffered_count = strong_count` on each suspect and trial-decrements internal edges via `walk_fn` / the RCEXP_RC follow path, marking reachable suspects WHITE; (2) ScanRoots: any suspect still with `buffered_count > 0` is real -- re-mark BLACK and restore via a second walk; (3) CollectRoots: free everything still WHITE.  The mark phase's initial "color BLACK if strong > 0" pass needs to skip suspects so the trial outcome controls their color. | `src/runtime/gc.c`, `src/compiler/emit_module.c` |
+| DS7-4 | Tighten the `exg5-exists-cycle` fixture's expected output -- after `(gc!)`, both nodes are reclaimed and an outer `weak<S>` upgrade returns none.  May require lifting `:rc<S>` as a `defn` return type (currently rejected in `elab_fns.c`) so the weak handle can be passed back out cleanly. | `tests/fixtures/exg5-exists-cycle/`, possibly `src/compiler/elab_fns.c` |
+| DS7-5 | Add a TSan run with several intertwined cycles to confirm the new suspect-management path does not race with `rc_strong_decrement` on the hot path. | -- |
 
 ---
 
@@ -261,6 +410,13 @@ is real undefined behaviour.
 - **DS4** is diagnostic polish; nice-to-have.
 - **DS5** is an unrelated hygiene fix but surfaced during F8 work;
   worth closing so future struct-field changes don't get blamed.
+- **DS6** depends on DS2 being in place (the move-at-make-struct
+  marking is what keeps DS6's new drop-glue path from
+  double-decrementing).  Once DS6 lands, the DS2 fixture's "no leak"
+  assertion can be tightened to actually observe collection.
+- **DS7** depends on DS3 (the walker hooks).  Once DS7 lands, the
+  `exg5-exists-cycle` fixture's "post-gc" assertion can be tightened
+  to actually observe cycle reclaim.
 
 ---
 

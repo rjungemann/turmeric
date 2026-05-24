@@ -535,63 +535,44 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         if (scope_lookup(&e.global, type_name)) continue;
         /* Pre-allocate a stub def and register a forward binding */
         elab_add_forward_type(&e, type_name);
+        /* DS5: memset each stub before populating named fields so newly
+         * added bool / scalar fields default to 0 -- arena_alloc returns
+         * uninitialised memory and UBSan tripped on reads of
+         * `is_opaque` / other bools that subsequent passes (e.g. emit
+         * pass 0 in emit_module.c) consult. */
         if (is_defopaque) {
             StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
+            memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
-            stub->n_fields = 0;
-            stub->fields = NULL;
             stub->is_copy = true;
-            stub->is_linear = false;
-            stub->needs_drop_glue = false;
             stub->is_opaque = true;
             stub->origin_file_id = name_f->span.file_id;
-            /* Phase TM0: opaque types have no type params */
-            stub->type_params = NULL;
-            stub->n_type_params = 0;
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else if (is_defstruct) {
             StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
+            memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
-            stub->n_fields = 0;
-            stub->fields = NULL;
-            stub->is_copy = false;
-            stub->is_linear = false;
-            stub->needs_drop_glue = false;
             stub->origin_file_id = name_f->span.file_id;
-            /* Phase TM0: initialize type_params for stub; filled in during elab_defstruct. */
-            stub->type_params = NULL;
-            stub->n_type_params = 0;
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else if (is_defgadt) {
             AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
+            memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
-            stub->n_ctors = 0;
-            stub->ctors = NULL;
-            stub->is_copy = false;
-            stub->needs_drop_glue = false;
             stub->is_gadt = true;
-            stub->type_params = NULL;
-            stub->n_type_params = 0;
             elab_register_adt_def(&e, stub);
             Type t = type_adt(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else {
             AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
+            memset(stub, 0, sizeof(*stub));
             stub->name = type_name->name;
-            stub->n_ctors = 0;
-            stub->ctors = NULL;
-            stub->is_copy = false;
-            stub->needs_drop_glue = false;
-            stub->is_gadt = false;
-            stub->type_params = NULL;
-            stub->n_type_params = 0;
             elab_register_adt_def(&e, stub);
             Type t = type_adt(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);

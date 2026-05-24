@@ -407,6 +407,9 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_GET_FIELD:
             buf_puts(b, "<get-field>");
             break;
+        case EX_SET_FIELD:
+            buf_puts(b, "<set-field>");
+            break;
         /* Phase 20: Software Transactional Memory */
         case EX_STM:
             buf_puts(b, "<stm>");

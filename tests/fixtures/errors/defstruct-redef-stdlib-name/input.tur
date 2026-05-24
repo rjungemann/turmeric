@@ -1,0 +1,14 @@
+;; DS4-2: redefining a struct name that an auto-loaded stdlib module
+;; already defined (`Cons` comes from stdlib/list.tur) used to slip
+;; past the elaborator -- the prepass registered Cons as a forward
+;; stub during stdlib processing, so the user defstruct hit the
+;; "is_forward_stub" path and silently re-elaborated.  Codegen then
+;; emitted a duplicate `typedef struct Cons` and `cc` rejected it
+;; with a confusing error pointing at generated C.
+;;
+;; DS4-2 rejects the redefinition at elaboration time when the stub
+;; has already been filled (n_fields > 0), so the user gets a
+;; clear diagnostic instead of a cc invocation failure.
+(defstruct Cons :move [x :int])
+
+(defn main [] :int 0)

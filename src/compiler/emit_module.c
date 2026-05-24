@@ -143,6 +143,27 @@ int emit_program(Buf *out, const Expr *program) {
                 }
                 buf_printf(&early_file, "    free(ptr);\n");
                 buf_printf(&early_file, "}\n\n");
+
+                /* DS3: walk glue -- mirrors drop glue but calls a child
+                 * callback for each rc-typed field instead of releasing.
+                 * The cycle walker uses this to trace through struct
+                 * payloads tagged RCK_STRUCT.  Weak / ref / lref fields
+                 * are not strong owners and are not enumerated. */
+                buf_printf(&early_file,
+                           "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
+                           def->name);
+                buf_printf(&early_file, "    if (!ptr || !cb) return;\n");
+                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
+                for (uint32_t j = 0; j < def->n_fields; j++) {
+                    StructField *f = &def->fields[j];
+                    if (f->kind == TY_RC) {
+                        char *mfn = mangle_field_name(f->name);
+                        buf_printf(&early_file, "    if (s->%s) cb(s->%s, ctx);\n",
+                                   mfn, mfn);
+                        free(mfn);
+                    }
+                }
+                buf_printf(&early_file, "}\n\n");
             }
         }
         /* Phase G0/G1: ADT typedef + constructor functions */
@@ -2370,11 +2391,16 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "typedef enum { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } GcColor;\n\n");
     buf_puts(out, "typedef void (*RcDropFn)(void *value);\n\n");
     buf_puts(out, "typedef struct RcControlBlock RcControlBlock;\n\n");
+    /* DS3: walker callbacks for the cycle collector (RCK_STRUCT). */
+    buf_puts(out, "typedef void (*RcWalkChildFn)(RcControlBlock *child, void *ctx);\n");
+    buf_puts(out, "typedef void (*RcWalkFn)(void *value, RcWalkChildFn cb, void *ctx);\n\n");
     buf_puts(out, "struct RcControlBlock {\n");
     buf_puts(out, "    uint64_t strong_count;\n");
     buf_puts(out, "    uint64_t weak_count;\n");
     buf_puts(out, "    void *value;\n");
     buf_puts(out, "    RcDropFn drop_fn;\n");
+    /* DS3: walker function for RCK_STRUCT blocks (NULL otherwise). */
+    buf_puts(out, "    RcWalkFn walk_fn;\n");
     buf_puts(out, "    uint8_t value_type_kind;\n");
     /* Phase 10: Bacon-Rajan GC fields */
     buf_puts(out, "    uint8_t color;           /* GC color */\n");
@@ -2524,6 +2550,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* EXG5: layout-tag constants kept in sync with runtime/rc.h. */
     buf_puts(out, "#define RCK_OPAQUE       0\n");
     buf_puts(out, "#define RCK_EXISTENTIAL  1\n");
+    buf_puts(out, "#define RCK_STRUCT       2\n");
     buf_puts(out, "#define RCEXP_OPAQUE     0\n");
     buf_puts(out, "#define RCEXP_RC         1\n");
     buf_puts(out, "RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {\n");
@@ -2534,6 +2561,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->weak_count = 0;\n");
     buf_puts(out, "    cb->value = (void *)(cb + 1);\n");
     buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);\n");
+    buf_puts(out, "    cb->walk_fn = NULL;\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
     buf_puts(out, "    cb->reserved[0] = kind;\n");
@@ -2545,6 +2573,12 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n");
     buf_puts(out, "    return rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_OPAQUE, RCEXP_OPAQUE);\n");
+    buf_puts(out, "}\n\n");
+    /* DS3: RCK_STRUCT variant -- attaches a walk_fn for the cycle collector. */
+    buf_puts(out, "RcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {\n");
+    buf_puts(out, "    RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_STRUCT, 0);\n");
+    buf_puts(out, "    cb->walk_fn = walk_fn;\n");
+    buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "uint64_t rc_strong_increment(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return 0;\n");
@@ -2647,6 +2681,16 @@ int emit_program(Buf *out, const Expr *program) {
     
     /* Phase 10: Emit remaining GC runtime — mark + trial deletion phases */
     buf_puts(out, "/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */\n");
+    /* DS3: child-mark callback used by RCK_STRUCT walk_fns inside gc_mark_phase. */
+    buf_puts(out, "static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {\n");
+    buf_puts(out, "    (void)ctx;\n");
+    buf_puts(out, "    if (child && child->color != GC_BLACK) {\n");
+    buf_puts(out, "        child->color = GC_BLACK;\n");
+    buf_puts(out, "        if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "            gc_grey_queue[gc_grey_count++] = child;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_mark_phase(void) {\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        gc_all_blocks[i]->color = GC_WHITE;\n");
@@ -2679,6 +2723,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "                    gc_grey_queue[gc_grey_count++] = inner;\n");
     buf_puts(out, "                }\n");
     buf_puts(out, "            }\n");
+    buf_puts(out, "        } else if (cb && cb->value && cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {\n");
+    buf_puts(out, "            cb->walk_fn(cb->value, __gc_mark_struct_child, NULL);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");

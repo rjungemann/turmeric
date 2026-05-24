@@ -1,0 +1,9 @@
+;; DS4-1: when a defstruct ':copy' field is annotated with a compound
+;; non-copy type (parsed via type_expr_from_form -> StructField.full_type),
+;; the diagnostic must include the actual type the user wrote.  Before
+;; DS4-1 the message said "non-copy compound type" with no type info,
+;; which was less helpful for compound annotations than the
+;; corresponding simple-keyword path that already printed e.g. ":rc<int>".
+(defstruct Bad :copy [r (lref int)])
+
+(defn main [] :int 0)

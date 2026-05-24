@@ -110,6 +110,25 @@ static Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     return NULL;
 }
 
+/* Phase DS3: when a defstruct field is annotated `rc<Name>`, look up `Name`
+ * as a struct so the resulting Type can carry the StructDef alongside the
+ * inner TypeKind.  Returns NULL when Name isn't an in-scope struct (the
+ * field still works as an opaque RcControlBlock *, just without field-
+ * resolution support through the rc wrapper). */
+static StructDef *lookup_rc_inner_struct_def(Elab *e, const char *tname, uint32_t tlen) {
+    if (tlen <= 4 || memcmp(tname, "rc<", 3) != 0 || tname[tlen - 1] != '>') {
+        return NULL;
+    }
+    const char *inner_name = tname + 3;
+    uint32_t inner_len = tlen - 4;  /* strip "rc<" and ">" */
+    const Symbol *sym = symtab_intern(e->st, strslice(inner_name, inner_len));
+    Binding *tb = scope_lookup_type_def(e->scope, sym);
+    if (tb && tb->type.kind == TY_STRUCT) {
+        return tb->type.as.struct_.def;
+    }
+    return NULL;
+}
+
 /* Phase RF0: Check if a symbol was registered as a forward-declared type stub */
 static bool elab_is_forward_type(Elab *e, const Symbol *sym) {
     for (uint32_t i = 0; i < e->n_forward_type_syms; i++) {
@@ -226,6 +245,25 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     Binding *existing_b = scope_lookup(e->scope, name);
     if (existing_b) {
         if (elab_is_forward_type(e, name)) {
+            /* DS4-2: a forward-registered stub is only re-elaborable while
+             * it is still an empty placeholder (n_fields == 0).  Once
+             * another defstruct has filled it in -- whether earlier in
+             * this file or, more commonly, in an auto-loaded stdlib
+             * module -- a second defstruct of the same name would also
+             * emit a duplicate `typedef struct <Name>` at codegen.  Reject
+             * here so the user gets an elaborator diagnostic instead of a
+             * cc error. */
+            StructDef *existing_def = (existing_b->type.kind == TY_STRUCT)
+                ? existing_b->type.as.struct_.def : NULL;
+            if (existing_def && existing_def->n_fields > 0) {
+                diag_emit(DIAG_ERROR, name_form->span,
+                          "defstruct: '%s' is already defined "
+                          "(an auto-loaded stdlib module or earlier "
+                          "form in this file defines a struct with "
+                          "this name; pick a distinct name)",
+                          name->name);
+                return NULL;
+            }
             is_forward_stub = true;
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
@@ -323,13 +361,13 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero is_opaque and any future bool fields */
         def->name = name->name;
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
         memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
-        def->needs_drop_glue = false;
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
         /* Phase TM0 */
@@ -391,6 +429,17 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                                   field_name_form->as.sym->name, tname);
                         return NULL;
                     }
+                } else if (fkind == TY_RC && finner == TY_UNKNOWN) {
+                    /* DS3: rc<Name> over a user-defined struct -- carry the
+                     * StructDef so receivers of rc<Name>-typed values can do
+                     * field access / set! through the rc wrapper. */
+                    StructDef *inner_def = lookup_rc_inner_struct_def(e, tname, tlen);
+                    if (inner_def) {
+                        finner = TY_STRUCT;
+                        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *t = type_rc_struct(inner_def);
+                        full_type = t;
+                    }
                 }
             }
             if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
@@ -404,8 +453,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
                 if (full_type) {
                     diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy compound type and cannot be used in :copy struct",
-                              field_name_form->as.sym->name);
+                              "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
+                              field_name_form->as.sym->name,
+                              type_name(*full_type));
                 } else {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
@@ -473,6 +523,14 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                                   field_name_form->as.sym->name, tname);
                         return NULL;
                     }
+                } else if (fkind == TY_RC && finner == TY_UNKNOWN) {
+                    StructDef *inner_def = lookup_rc_inner_struct_def(e, tname, tlen);
+                    if (inner_def) {
+                        finner = TY_STRUCT;
+                        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *t = type_rc_struct(inner_def);
+                        full_type = t;
+                    }
                 }
             }
 
@@ -489,13 +547,11 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             }
             /* :copy struct validation: all fields must be copy */
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                /* F8: when the field was parsed via type_expr_from_form
-                 * the original simple type name isn't captured; fall back
-                 * to a generic message. */
-                if (type_name_form->tag == F_LIST) {
+                if (full_type) {
                     diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy compound type and cannot be used in :copy struct",
-                              field_name_form->as.sym->name);
+                              "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
+                              field_name_form->as.sym->name,
+                              type_name(*full_type));
                 } else {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
@@ -566,17 +622,11 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
         return NULL;
     }
     StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+    memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
     def->name = name->name;
-    def->n_fields = 0;
-    def->fields = NULL;
     def->is_copy = true;
-    def->is_linear = false;
-    def->needs_drop_glue = false;
     def->is_opaque = true;
     def->origin_file_id = call->span.file_id;
-    /* Phase TM0: opaque types have no type params */
-    def->type_params = NULL;
-    def->n_type_params = 0;
     Type struct_type = type_struct(def);
     Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
     scope_add(&e->global, b);
@@ -709,13 +759,12 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero is_gadt and any future bool fields */
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
-        def->needs_drop_glue = false;
         /* Phase RF1: store type parameters */
-        def->is_gadt = false;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
 
@@ -1096,11 +1145,10 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        def->is_copy = false;
-        def->needs_drop_glue = false;
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
@@ -2295,6 +2343,36 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
         Expr *fv = elab_form(e, call->as.list.items[2 + i]);
         if (!fv) return NULL;
         field_values[i] = fv;
+
+        /* Compound field annotations (TY_APP / TY_EXISTS / TY_FORALL) all
+         * lower to TY_INT at the C level, so without this check a raw `42`
+         * passed where `(exists [a] [(Show a)] a)` is expected slips through
+         * and codegen reads the int as a `tur_existential_t *`.  TY_PTR_VOID
+         * values are treated as a wildcard so inline-C escape hatches that
+         * return an opaque pointer keep working. */
+        if (def->fields[i].full_type) {
+            Type expected = *def->fields[i].full_type;
+            Type actual   = fv->type;
+            if (actual.kind != TY_PTR_VOID && !type_eq(actual, expected)) {
+                diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
+                          "make-struct '%s': field '%s' expects %s, got %s",
+                          def->name, def->fields[i].name,
+                          type_name(expected), type_name(actual));
+                return NULL;
+            }
+        }
+
+        /* Move-at-make-struct for rc-managed payloads, mirroring the
+         * F1-2-3 scan in elab_pack.  Ownership of an rc / weak / existential
+         * reference transfers into the new struct field; the source binding
+         * must not auto-drop at its enclosing scope's exit too. */
+        if (fv->kind == EX_VAR && fv->as.var.binding) {
+            TypeKind vk = fv->type.kind;
+            if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
+                (void)binding_mark_moved(fv->as.var.binding,
+                                         call->as.list.items[2 + i]->span);
+            }
+        }
     }
 
     /* Build the result type */

@@ -35,6 +35,47 @@ void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     free(ref); free(val);
 }
 
+/* Phase DS3: emit (set! (.field s) v) - struct field write.
+ * For rc-typed fields, releases the prior pointer before storing the new
+ * one (the new value carries its own +1).  For rc<Struct> receivers,
+ * accesses the field through the rc-block's value pointer. */
+void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
+    StructDef *def = e->as.set_field_.def;
+    uint32_t fi = e->as.set_field_.field_idx;
+    char *rv = emit_value(ctx, body, e->as.set_field_.receiver);
+    char *vv = emit_value(ctx, body, e->as.set_field_.value);
+    char *mfn = mangle_field_name(def->fields[fi].name);
+
+    /* Build the lvalue expression for the field slot. */
+    Buf lhs; buf_init(&lhs);
+    if (e->as.set_field_.receiver_is_rc) {
+        buf_printf(&lhs, "((%s *)((RcControlBlock *)(%s))->value)->%s",
+                   def->name, rv, mfn);
+    } else {
+        buf_printf(&lhs, "(%s).%s", rv, mfn);
+    }
+    buf_putc(&lhs, '\0');
+
+    TypeKind fk = def->fields[fi].kind;
+    if (fk == TY_RC) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) { rc_strong_decrement(%s); rc_free_queue_drain(); }\n",
+                   lhs.data, lhs.data);
+    } else if (fk == TY_WEAK) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) rc_weak_decrement(%s);\n", lhs.data, lhs.data);
+    } else if (fk == TY_REF || fk == TY_LREF) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s) free(%s);\n", lhs.data, lhs.data);
+    }
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", lhs.data, vv);
+
+    buf_free(&lhs);
+    free(rv); free(vv); free(mfn);
+}
+
 
 void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Run e for side effects, discard value. */
@@ -86,6 +127,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
         case EX_SET:      emit_set_stmt(ctx, body, e);       return;
         case EX_SET_DEREF: emit_set_deref_stmt(ctx, body, e); return;
+        case EX_SET_FIELD: emit_set_field_stmt(ctx, body, e); return;
         case EX_DO: {
             /* v1 lowering: use same frame-based approach as emit_do_value */
             uint32_t n = e->as.do_.n;

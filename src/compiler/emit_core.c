@@ -1237,6 +1237,11 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                 PUSH_EXPR(cur->as.get_field_.struct_expr);
                 break;
             }
+            case EX_SET_FIELD: {
+                PUSH_EXPR(cur->as.set_field_.value);
+                PUSH_EXPR(cur->as.set_field_.receiver);
+                break;
+            }
             case EX_BORROW_IMMUT: {
                 PUSH_EXPR(cur->as.borrow_immut_.expr);
                 break;

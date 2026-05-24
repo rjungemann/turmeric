@@ -379,6 +379,12 @@ typedef struct Type {
         /* Phase 9: rc<T> and weak<T> store the inner type T */
         struct {
             TypeKind inner;   /* The type T that rc<T> or weak<T> points to */
+            /* Phase DS3: when inner == TY_STRUCT and the rc<T> was parsed from
+             * an `rc<Name>` defstruct field annotation, this is the StructDef *
+             * for `Name`.  NULL otherwise.  Used so that `(.field rc-of-s)` and
+             * `(set! (.field rc-of-s) v)` can resolve struct fields without
+             * losing the def through the rc wrapper. */
+            struct StructDef *struct_def;
         } rc;
         /* Phase 12: Borrow types store the referenced type T */
         struct {
@@ -779,6 +785,19 @@ static inline Type type_rc(TypeKind inner) {
     t.kind = TY_RC;
     t.copy_kind = CK_MOVE;  /* rc<T> is move-only by default */
     t.as.rc.inner = inner;
+    t.as.rc.struct_def = NULL;
+    t.n_lifetimes = 0;
+    return t;
+}
+
+/* Phase DS3: rc<Struct> with the struct def carried alongside so that
+ * field access through the rc can resolve the layout. */
+static inline Type type_rc_struct(struct StructDef *def) {
+    Type t;
+    t.kind = TY_RC;
+    t.copy_kind = CK_MOVE;
+    t.as.rc.inner = TY_STRUCT;
+    t.as.rc.struct_def = def;
     t.n_lifetimes = 0;
     return t;
 }
@@ -789,6 +808,7 @@ static inline Type type_weak(TypeKind inner) {
     t.kind = TY_WEAK;
     t.copy_kind = CK_MOVE;  /* weak<T> is move-only */
     t.as.rc.inner = inner;  /* Reuse the same field as rc */
+    t.as.rc.struct_def = NULL;
     t.n_lifetimes = 0;
     return t;
 }

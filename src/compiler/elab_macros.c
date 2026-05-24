@@ -1043,8 +1043,13 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Create the macro definition */
+    /* Create the macro definition.  arena_alloc returns uninitialised
+     * memory, so memset first -- the `is_referred` bool is set lazily
+     * by the :refer alias path in elab_module.c and would otherwise
+     * read as garbage at lookup time (UBSan: "load of value X which
+     * is not a valid value for type _Bool"). */
     MacroDef *macro = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+    memset(macro, 0, sizeof(MacroDef));
     macro->name = name_f->as.sym;
     macro->params = params;
     macro->n_params = n_fixed;

@@ -195,8 +195,16 @@ Expr *elab_rc_of(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* rc<T> where T is the inner expression's type */
-    Type rc_type = type_rc(inner->type.kind);
+    /* rc<T> where T is the inner expression's type.  DS3: when wrapping a
+     * struct, carry the StructDef on the rc type so consumers
+     * (e.g. `(.field rc-of-struct)`, `(set! (.field rc-of-s) v)`) can
+     * resolve fields without losing the def. */
+    Type rc_type;
+    if (inner->type.kind == TY_STRUCT && inner->type.as.struct_.def) {
+        rc_type = type_rc_struct(inner->type.as.struct_.def);
+    } else {
+        rc_type = type_rc(inner->type.kind);
+    }
 
     /* Create EX_RC_OF expression */
     Expr *out = expr_new(e->arena, EX_RC_OF, rc_type, call->span);

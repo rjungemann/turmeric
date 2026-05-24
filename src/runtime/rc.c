@@ -97,6 +97,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type);
+    cb->walk_fn = NULL;
     cb->value_type_kind = value_type;
 
     cb->color = GC_WHITE;
@@ -107,6 +108,16 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
 
     gc_register_block(cb);
 
+    return cb;
+}
+
+/* DS3: as rc_cb_alloc_kinded with RCK_STRUCT + a walker function so the
+ * cycle walker can enumerate the struct's rc-typed children. */
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, TypeKind value_type,
+                                   RcDropFn drop_fn, RcWalkFn walk_fn) {
+    RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type, drop_fn,
+                                            RCK_STRUCT, 0);
+    cb->walk_fn = walk_fn;
     return cb;
 }
 

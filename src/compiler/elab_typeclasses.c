@@ -1946,6 +1946,14 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
             base = type_from_kind(base.as.ref_borrow.target);
         }
+        /* DS3-2b: auto-deref rc<Struct> receivers so (.field rc-of-s)
+         * resolves through the struct def carried on the rc type. */
+        StructDef *rc_struct_def = NULL;
+        if (base.kind == TY_RC && base.as.rc.struct_def) {
+            rc_struct_def = base.as.rc.struct_def;
+            base.kind = TY_STRUCT;
+            base.as.struct_.def = rc_struct_def;
+        }
         if (base.kind == TY_STRUCT) {
             /* Object is a struct — try field lookup */
             StructDef *def = base.as.struct_.def;
