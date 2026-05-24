@@ -204,6 +204,15 @@ typedef struct StructField {
     const char *name;            /* field name (interned string, NUL-terminated) */
     /* Phase 16 v2: effect-row annotation for :fn fields (NULL = no annotation) */
     struct EffectRow *effect_row;
+    /* F8 (cross-plan-followups): full Type for compound field annotations
+     * (TY_EXISTS, TY_APP, TY_FORALL).  NULL when the field's type is a
+     * simple keyword/sym that the kind/inner_kind summary already
+     * captures fully; consumers that only need the summary kind keep
+     * working unchanged.  Field-access elaboration uses this to return
+     * the full type at use sites (e.g. so `(open (.field s) ...)` sees
+     * the right TY_EXISTS payload instead of falling into the
+     * TY_PTR_VOID branch of EX_EXISTS_OPEN). */
+    struct Type *full_type;
 } StructField;
 
 /* Phase 11: Struct type descriptor.

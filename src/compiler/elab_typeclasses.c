@@ -1,10 +1,284 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "forms.h"
 
 /* ---- file-local helper forward declarations ---- */
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
+
+/* F3-5 (cross-plan-followups): convert a runtime Type back to its
+ * source-form representation so the dispatcher can synthesise inline
+ * ascription forms.  Supports only the kinds the dispatch synthesis
+ * actually needs: primitives + TY_STRUCT (named) + TY_APP.  Returns
+ * NULL for unsupported kinds. */
+static Form *type_to_form(Elab *e, const Type *t, Span span) {
+    if (!t) return NULL;
+    const char *kw = NULL;
+    switch (t->kind) {
+        case TY_INT:      kw = "int";      break;
+        case TY_BOOL:     kw = "bool";     break;
+        case TY_CSTR:     kw = "cstr";     break;
+        case TY_FLOAT:    kw = "float";    break;
+        case TY_INT8:     kw = "int8";     break;
+        case TY_INT16:    kw = "int16";    break;
+        case TY_INT32:    kw = "int32";    break;
+        case TY_UINT8:    kw = "uint8";    break;
+        case TY_UINT16:   kw = "uint16";   break;
+        case TY_UINT32:   kw = "uint32";   break;
+        case TY_UINT64:   kw = "uint64";   break;
+        case TY_FLOAT32:  kw = "float32";  break;
+        case TY_PTR_VOID: kw = "ptr<void>"; break;
+        default: break;
+    }
+    if (kw) {
+        return form_keyword(e->arena, span,
+            intern_cstr(e->st, kw));
+    }
+    if (t->kind == TY_STRUCT && t->as.struct_.def && t->as.struct_.def->name) {
+        /* Bare struct name: just an F_SYM. */
+        return form_sym(e->arena, span,
+            intern_cstr(e->st, t->as.struct_.def->name));
+    }
+    if (t->kind == TY_APP) {
+        /* Walk the TY_APP chain to collect [head, arg1, arg2, ...]
+         * (left-associative -- arg1 is the innermost). */
+        const Type *args[8];
+        uint8_t n_args = 0;
+        const Type *head = t;
+        while (head && head->kind == TY_APP && n_args < 8) {
+            if (head->as.app.arg) args[n_args++] = head->as.app.arg;
+            head = head->as.app.fn;
+        }
+        if (!head || head->kind != TY_STRUCT ||
+            !head->as.struct_.def || !head->as.struct_.def->name) {
+            return NULL;
+        }
+        /* Build (StructName arg1-form arg2-form ...) in original order. */
+        uint32_t n_items = 1 + n_args;
+        Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
+        items[0] = form_sym(e->arena, span,
+            intern_cstr(e->st, head->as.struct_.def->name));
+        /* args were collected innermost-first; reverse to original order. */
+        for (uint8_t i = 0; i < n_args; i++) {
+            Form *af = type_to_form(e, args[n_args - 1 - i], span);
+            if (!af) return NULL;
+            items[1 + i] = af;
+        }
+        return form_list(e->arena, span, items, n_items);
+    }
+    return NULL;
+}
+
+/* F3-5: map a typed-collection struct identity to its eq-helper symbol
+ * and the number of element-comparator parameters the helper expects.
+ *
+ * Helpers split into two shapes:
+ *   1-comparator: (helper m1 m2 elem-cmp)               -- Vec, Map,
+ *                                                          Option, Cons
+ *   2-comparator: (helper m1 m2 cmp-A cmp-B)            -- Pair, Result
+ *
+ * For Map's keys the helper relies on the HAMT's hash lookup -- key
+ * equality is via the hash + pointer/memcmp, which is correct for
+ * primitive keys.  Recursive Map[K (Vec V)] etc. only need the
+ * V-comparator threaded recursively.
+ *
+ * Set is intentionally not listed: `tset-eq?` takes no comparator
+ * (relies on hash equality entirely), so even single-level dispatch
+ * is wrong for non-primitive elements; fixing it requires changes to
+ * the helper itself, not just the dispatcher.
+ *
+ * Returns NULL if the struct is not a recognised typed collection. */
+static const Symbol *helper_eq_symbol_for_struct(Elab *e, const StructDef *sd,
+                                                  uint8_t *out_n_comparators) {
+    if (!sd || !sd->name) return NULL;
+    if (strcmp(sd->name, "Vec") == 0) {
+        if (out_n_comparators) *out_n_comparators = 1;
+        return intern_cstr(e->st, "tvec-eq?");
+    }
+    if (strcmp(sd->name, "Map") == 0) {
+        if (out_n_comparators) *out_n_comparators = 1;
+        return intern_cstr(e->st, "tmap-eq?");
+    }
+    if (strcmp(sd->name, "Option") == 0) {
+        if (out_n_comparators) *out_n_comparators = 1;
+        return intern_cstr(e->st, "toption-eq?");
+    }
+    if (strcmp(sd->name, "Cons") == 0) {
+        if (out_n_comparators) *out_n_comparators = 1;
+        return intern_cstr(e->st, "tlist-eq?");
+    }
+    if (strcmp(sd->name, "Pair") == 0) {
+        if (out_n_comparators) *out_n_comparators = 2;
+        return intern_cstr(e->st, "tpair-eq?");
+    }
+    if (strcmp(sd->name, "Result") == 0) {
+        if (out_n_comparators) *out_n_comparators = 2;
+        return intern_cstr(e->st, "tresult-eq?");
+    }
+    if (strcmp(sd->name, "Set") == 0) {
+        /* `tset-eq?` itself takes no comparator (relies on HAMT hash
+         * equality, wrong for non-primitive elements).  The synth path
+         * routes to a comparator-taking variant `tset-eq-cmp?` instead
+         * so structural equality of Set[Vec[int]] etc. works
+         * correctly. */
+        if (out_n_comparators) *out_n_comparators = 1;
+        return intern_cstr(e->st, "tset-eq-cmp?");
+    }
+    return NULL;
+}
+
+/* F3-5: build a comparator lambda Form for a single type argument.
+ * The lambda has shape `(fn [a b] (.eq? (:: a TYPE) (:: b TYPE)))`
+ * where TYPE is the source-form of `elem_type`.  At elaboration time
+ * the inner `.eq?` dispatches on the ascribed receiver type, which
+ * (thanks to F3-7's sticky ascription) terminates the recursion at
+ * the right level.  Returns NULL if `elem_type` cannot be
+ * round-tripped to a Form. */
+static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) {
+    Form *elem_form = type_to_form(e, elem_type, span);
+    if (!elem_form) return NULL;
+
+    const Symbol *sym_a       = intern_cstr(e->st, "__cmp_a");
+    const Symbol *sym_b       = intern_cstr(e->st, "__cmp_b");
+    const Symbol *sym_dot_eq  = intern_cstr(e->st, ".eq?");
+
+    Form **asc_a_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    asc_a_items[0] = form_sym(e->arena, span, e->sym_ascribe);
+    asc_a_items[1] = form_sym(e->arena, span, sym_a);
+    asc_a_items[2] = elem_form;
+    Form *asc_a = form_list(e->arena, span, asc_a_items, 3);
+
+    Form **asc_b_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    asc_b_items[0] = form_sym(e->arena, span, e->sym_ascribe);
+    asc_b_items[1] = form_sym(e->arena, span, sym_b);
+    asc_b_items[2] = elem_form;
+    Form *asc_b = form_list(e->arena, span, asc_b_items, 3);
+
+    Form **dot_eq_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    dot_eq_items[0] = form_sym(e->arena, span, sym_dot_eq);
+    dot_eq_items[1] = asc_a;
+    dot_eq_items[2] = asc_b;
+    Form *dot_eq_call = form_list(e->arena, span, dot_eq_items, 3);
+
+    Form **params_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    params_items[0] = form_sym(e->arena, span, sym_a);
+    params_items[1] = form_sym(e->arena, span, sym_b);
+    Form *params_vec = form_vec(e->arena, span, params_items, 2);
+
+    Form **lambda_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    lambda_items[0] = form_sym(e->arena, span, e->sym_fn);
+    lambda_items[1] = params_vec;
+    lambda_items[2] = dot_eq_call;
+    return form_list(e->arena, span, lambda_items, 3);
+}
+
+/* F3-5: synthesise the dispatcher rewrite for `(.eq? obj other)` when
+ * `obj` has TY_APP receiver type AND the outer instance is a known
+ * typed-collection whose element type(s) include at least one TY_APP
+ * (recursive structural equality).  Returns NULL if conditions aren't
+ * met or synthesis isn't applicable.
+ *
+ * 1-comparator helpers (Vec, Map, Option, Cons) synthesise:
+ *   (<helper> obj other (fn [a b] (.eq? (:: a <elem>) (:: b <elem>))))
+ *
+ * 2-comparator helpers (Pair, Result) synthesise:
+ *   (<helper> obj other
+ *     (fn [a b] (.eq? (:: a <fst>) (:: b <fst>)))
+ *     (fn [a b] (.eq? (:: a <snd>) (:: b <snd>))))
+ *
+ * The synthesised closures re-enter elab_method_call with `(:: a <T>)`
+ * as the receiver, which (thanks to F3-7's sticky ascription) dispatches
+ * to the right inner instance.  Recursion terminates at primitive
+ * element types where F3-7's single-level path takes over. */
+static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
+                                     Expr *obj, Expr *other_arg, Span span) {
+    if (!outer_inst || outer_inst->n_type_args == 0) return NULL;
+    if (obj->type.kind != TY_APP || !obj->type.as.app.arg) return NULL;
+    /* Look up the helper for this typed-collection. */
+    const StructDef *sd = outer_inst->type_args[0].as.struct_.def;
+    uint8_t n_comparators = 0;
+    const Symbol *helper_sym = helper_eq_symbol_for_struct(e, sd, &n_comparators);
+    if (!helper_sym || (n_comparators != 1 && n_comparators != 2)) return NULL;
+    Binding *helper_b = scope_lookup(&e->global, helper_sym);
+    if (!helper_b) return NULL;
+
+    /* Collect the type-arg(s) the helper's comparator(s) target.
+     *
+     * For 1-comparator helpers the comparator targets the OUTERMOST
+     * arg of the TY_APP chain.  This matches every typed-collection
+     * helper signature we currently support:
+     *   Vec[A]     -> tvec-eq?  with cmp for A     (only arg)
+     *   Cons[A]    -> tlist-eq? with cmp for A     (only arg)
+     *   Option[A]  -> toption-eq? with cmp for A   (only arg)
+     *   Map[K V]   -> tmap-eq?  with cmp for V     (outermost = V;
+     *                                                K rides on HAMT hash)
+     *
+     * For 2-comparator helpers (Pair[A B], Result[A B]) the helpers
+     * expect args in source order: (fst-cmp, snd-cmp) and
+     * (ok-cmp, err-cmp).  TY_APP storage is innermost-first so we
+     * reverse: source-order arg[0] = A (innermost in storage). */
+    const Type *args_collected[2] = {0};
+    uint8_t n_collected = 0;
+    if (n_comparators == 1) {
+        args_collected[0] = obj->type.as.app.arg;
+        n_collected = 1;
+    } else {
+        const Type *raw[4];
+        uint8_t n_raw = 0;
+        for (const Type *tx = &obj->type;
+             tx && tx->kind == TY_APP && n_raw < 4;
+             tx = tx->as.app.fn) {
+            if (tx->as.app.arg) raw[n_raw++] = tx->as.app.arg;
+        }
+        /* raw is innermost-first; reverse to source order. */
+        for (uint8_t i = 0; i < n_raw && n_collected < 2; i++) {
+            args_collected[n_collected++] = raw[n_raw - 1 - i];
+        }
+    }
+    if (n_collected < n_comparators) return NULL;
+
+    /* Only fire when at least one arg type is recursive (TY_APP).
+     * If all the relevant args are primitive, the single-level F3-7
+     * path already produces the right answer and we should not
+     * intercept (the existing dispatch is potentially more
+     * efficient via the static singleton vtable). */
+    bool any_recursive = false;
+    for (uint8_t i = 0; i < n_comparators; i++) {
+        if (args_collected[i] && args_collected[i]->kind == TY_APP) {
+            any_recursive = true;
+            break;
+        }
+    }
+    if (!any_recursive) return NULL;
+
+    /* Build a comparator lambda per arg.  Elaborate them now so any
+     * type errors surface before we commit to the synthesised call. */
+    Expr *lambdas[2] = {0};
+    for (uint8_t i = 0; i < n_comparators; i++) {
+        Form *lf = build_comparator_lambda(e, args_collected[i], span);
+        if (!lf) return NULL;
+        lambdas[i] = elab_form(e, lf);
+        if (!lambdas[i]) return NULL;
+    }
+
+    /* Build EX_CALL to helper with [obj, other, lambda0, ...]. */
+    uint32_t total_args = 2 + (uint32_t)n_comparators;
+    Expr **call_args = (Expr **)arena_alloc(e->arena, total_args * sizeof(Expr *));
+    call_args[0] = obj;
+    call_args[1] = other_arg;
+    for (uint8_t i = 0; i < n_comparators; i++) {
+        call_args[2 + i] = lambdas[i];
+    }
+
+    Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
+    out->as.call_.fn_binding = helper_b;
+    out->as.call_.fn_expr    = NULL;
+    out->as.call_.args       = call_args;
+    out->as.call_.n_args     = total_args;
+    out->as.call_.dict_arg   = NULL;
+    return out;
+}
 
 /* Phase 15: Typeclasses */
 
@@ -1681,7 +1955,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     TypeKind fkind = def->fields[i].kind;
                     TypeKind finner = def->fields[i].inner_kind;
                     Type field_type;
-                    if (fkind == TY_REF || fkind == TY_LREF || fkind == TY_RC || fkind == TY_WEAK) {
+                    /* F8 (cross-plan-followups): when a struct field was
+                     * declared with a compound type (TY_EXISTS / TY_APP /
+                     * TY_FORALL), `full_type` carries the source-form Type
+                     * and we use it directly so consumers (open, .eq?,
+                     * sticky ascription) see the full payload instead of
+                     * the bare int64 storage kind. */
+                    if (def->fields[i].full_type) {
+                        field_type = *def->fields[i].full_type;
+                    } else if (fkind == TY_REF || fkind == TY_LREF || fkind == TY_RC || fkind == TY_WEAK) {
                         field_type.kind = fkind;
                         field_type.copy_kind = typekind_default_copy_kind(fkind);
                         field_type.as.ref.inner = finner;
@@ -1936,18 +2218,35 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             }
             /* Name matched.  Now check if this instance's first type_arg
              * matches the obj type.  For KIND_STAR we compare TypeKind
-             * exactly; for KIND_ARROW we accept any non-primitive. */
+             * exactly; for KIND_ARROW we accept any non-primitive whose
+             * struct constructor matches (when known via TY_APP). */
             if (inst->n_type_args > 0 && obj->type.kind != TY_UNKNOWN) {
                 bool type_ok;
                 if (obj_ck == KIND_STAR) {
                     type_ok = (inst->type_args[0].kind == obj->type.kind);
                 } else {
-                    /* KIND_ARROW: accept non-primitive instance type_args */
+                    /* KIND_ARROW: accept non-primitive instance type_args.
+                     * F3-7 (cross-plan-followups): when the receiver is a
+                     * TY_APP, walk to its head and use the struct identity
+                     * to discriminate Eq[Vec] from Eq[Map] etc.  Without
+                     * this, a TY_APP(Vec, int) receiver matches the first
+                     * KIND_ARROW Eq instance in registration order
+                     * (typically Eq[Set]) and we silently dispatch through
+                     * the wrong vtable. */
                     TypeKind itk = inst->type_args[0].kind;
                     bool inst_is_primitive =
                         (itk == TY_INT  || itk == TY_BOOL || itk == TY_CSTR ||
                          itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID);
                     type_ok = !inst_is_primitive;
+                    if (type_ok && obj->type.kind == TY_APP && itk == TY_STRUCT) {
+                        const Type *head = &obj->type;
+                        while (head && head->kind == TY_APP) head = head->as.app.fn;
+                        if (head && head->kind == TY_STRUCT &&
+                            inst->type_args[0].as.struct_.def != NULL &&
+                            inst->type_args[0].as.struct_.def != head->as.struct_.def) {
+                            type_ok = false;
+                        }
+                    }
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
@@ -2047,6 +2346,25 @@ found_method:;
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[2 + i]);
         if (!args[i]) return NULL;
+    }
+
+    /* F3-5 (cross-plan-followups): per-call-site synthesis for the
+     * recursive case of typed-collection `.eq?` dispatch.  When the
+     * outer instance is a constrained typed-collection (e.g. Eq[Vec])
+     * and the receiver's element type is itself a TY_APP (e.g.
+     * Vec[Vec[int]]), bypass the constrained instance's hardcoded
+     * `(fn [a b] (= a b))` body and synthesise a direct call to the
+     * helper (tvec-eq?) with an inline comparator lambda whose
+     * params are ascribed to the element type.  The inner `.eq?`
+     * re-enters this dispatcher at the next level, terminating at
+     * primitives where F3-7 takes over. */
+    if (best_inst &&
+        best_inst->n_type_param_constraints > 0 &&
+        method_name_len == 3 &&
+        memcmp(method_name, "eq?", 3) == 0 &&
+        n_args == 1) {
+        Expr *synth = try_synth_recursive_eq(e, best_inst, obj, args[0], call->span);
+        if (synth) return synth;
     }
 
     /* Phase HRT3/HRT4: For methods with rank-N (poly fn) parameters, wrap matching args

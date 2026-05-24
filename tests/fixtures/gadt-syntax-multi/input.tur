@@ -1,8 +1,10 @@
-(defgadt Pair [a b]
-  (MkPair int int : (Pair a b)))
+;; Renamed Pair -> P2 to avoid colliding with the auto-loaded
+;; stdlib `Pair` struct from stdlib/tpair.tur.
+(defgadt P2 [a b]
+  (MkP2 int int : (P2 a b)))
 
 (defn main [] :int
-  (let [p (MkPair 3 4)]
+  (let [p (MkP2 3 4)]
     (match p
-      (MkPair x y) (println (+ x y)))
+      (MkP2 x y) (println (+ x y)))
     0))

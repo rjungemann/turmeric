@@ -1,0 +1,25 @@
+; F1-1: a function whose return type is a constrained existential
+; spelled directly (rather than erased to :ptr<void>).  Before the
+; F1-1 fix, the return-type annotation parsed but only the `kind`
+; field survived into the function type; the as.forall_ payload was
+; left uninitialised, so the first downstream consumer (`elab_open`)
+; SEGV'd dereferencing a garbage `body` pointer.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn make-ex [] : (exists [a] [(Show a)] a)
+  (pack 42 (exists [a] [(Show a)] a)))
+
+(defn main [] :int
+  (let [e (make-ex)]
+    (open e [_ v]
+      (println (.show v))))
+  0)

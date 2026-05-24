@@ -71,6 +71,8 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 TURI_FIXTURES_DEFAULT="
 adt-basic
 adt-copy
+adt-nested
+adt-param
 adt-recursive
 affine-basic
 affine-drop
@@ -89,6 +91,9 @@ borrow-sugar
 call-cc-star
 clone-primitives
 closure-call
+clone-list
+clone-option
+clone-pair
 closure-multi-capture
 closure-multi-capture-ref
 continuation-advanced
@@ -141,6 +146,7 @@ gadt-guard
 gadt-refine-basic
 gadt-refine-expr
 gadt-syntax-basic
+gadt-syntax-multi
 match-literal
 match-redundant-arm
 panic-basic

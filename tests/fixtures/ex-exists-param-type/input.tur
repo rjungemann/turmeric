@@ -1,0 +1,25 @@
+; F1-1: a function taking a constrained existential by value, opening
+; it inside the body.  Before F1-1, the param annotation routed
+; through the rank-2-poly branch in elab_fns.c and the call site
+; rejected `(pack ...)` arguments with "rank-2 argument must be a
+; named function".  The fix gives constrained existentials their own
+; value-typed param path with the full forall_ payload preserved.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn consume [e : (exists [a] [(Show a)] a)] :int
+  (open e [_ v]
+    (println (.show v)))
+  0)
+
+(defn main [] :int
+  (consume (pack 42 (exists [a] [(Show a)] a)))
+  0)

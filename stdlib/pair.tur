@@ -29,7 +29,7 @@
 ;;; Deprecated: Use tpair from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Create a new Pair
-(defn pair-new [a b] #{Unsafe} :PairPtr
+(defn ^deprecated "use tpair from stdlib/tpair.tur instead" pair-new [a b] #{Unsafe} :PairPtr
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = a;
@@ -52,7 +52,7 @@
 ;;; Deprecated: Use tpair-fst from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Get first element
-(defn pair-first [p] #{Unsafe} :int
+(defn ^deprecated "use tpair-fst from stdlib/tpair.tur instead" pair-first [p] #{Unsafe} :int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
   return pair->first;
@@ -73,7 +73,7 @@
 ;;; Deprecated: Use tpair-snd from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Get second element
-(defn pair-second [p] #{Unsafe} :int
+(defn ^deprecated "use tpair-snd from stdlib/tpair.tur instead" pair-second [p] #{Unsafe} :int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
   return pair->second;
@@ -91,7 +91,7 @@
 ;;; Deprecated: Use tpair-free from stdlib/tpair.tur instead.
 ;;; Since: Phase B1
 ;; Free a Pair (does NOT free the contained values - shallow free)
-(defn pair-free [p] #{Unsafe}
+(defn ^deprecated "use tpair-free from stdlib/tpair.tur instead" pair-free [p] #{Unsafe}
   ```c
   free((void*)(intptr_t)p);
   ```)
@@ -142,7 +142,7 @@
 ;;; Since: Phase E1
 ;; Phase E1: pair-eq? -- compare two Pairs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
-(defn pair-eq? [p1 p2 cmp-fn] #{Unsafe} :bool
+(defn ^deprecated "use tpair-eq? from stdlib/tpair.tur instead" pair-eq? [p1 p2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { int64_t first; int64_t second; } *a = (void*)(intptr_t)p1;
   struct { int64_t first; int64_t second; } *b = (void*)(intptr_t)p2;

@@ -89,7 +89,15 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
         if (inst->n_type_args != n_type_args) continue;
 
         /* Match element-wise by TypeKind (kind erasure: only the top-level kind
-         * is compared; inner types are not inspected in H2). */
+         * is compared; inner types are not inspected in H2).
+         *
+         * F3-7 (cross-plan-followups): TY_APP receivers (e.g. Vec[int],
+         * Vec[Vec[int]]) need to match TY_STRUCT instances (e.g. Eq[Vec])
+         * because the type constructor head IS a struct.  Treat
+         * TY_APP receiver as if it had the head struct's kind for the
+         * primary match; the subsequent constraint-satisfaction check
+         * (below) walks the TY_APP's args to validate inner constraints
+         * recursively. */
         bool match = true;
         bool all_unknown = (n_type_args == 0);
         for (uint8_t i = 0; i < n_type_args; i++) {
@@ -98,7 +106,30 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                 all_unknown = true;
                 break;
             }
-            if (inst->type_args[i].kind != type_args[i].kind) {
+            TypeKind eff_kind = type_args[i].kind;
+            const StructDef *eff_struct_def = NULL;
+            if (eff_kind == TY_APP) {
+                /* Walk to the head of the TY_APP chain (which should be a
+                 * TY_STRUCT type-constructor). */
+                const Type *head = &type_args[i];
+                while (head && head->kind == TY_APP) head = head->as.app.fn;
+                if (head && head->kind == TY_STRUCT) {
+                    eff_kind = TY_STRUCT;
+                    eff_struct_def = head->as.struct_.def;
+                }
+            }
+            if (inst->type_args[i].kind != eff_kind) {
+                match = false;
+                break;
+            }
+            /* Additional struct-identity check: a TY_APP'd receiver must
+             * match the instance's struct constructor (Eq[Vec] vs Eq[Map],
+             * etc.).  Without this, Eq[TY_APP(Vec, int)] would match
+             * Eq[Map] because both have type_args[0].kind == TY_STRUCT. */
+            if (eff_struct_def &&
+                inst->type_args[i].kind == TY_STRUCT &&
+                inst->type_args[i].as.struct_.def != NULL &&
+                inst->type_args[i].as.struct_.def != eff_struct_def) {
                 match = false;
                 break;
             }

@@ -1166,6 +1166,36 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             *t = type_from_kind(k);
             return t;
         }
+        /* F6-1 (cross-plan-followups): look up unknown keyword as a
+         * user-defined ADT or struct name so callers that round-trip a
+         * declared `:MyADT` field type get a real TY_ADT (with def) /
+         * TY_STRUCT (with def) back, not a NULL-def placeholder.  This
+         * fixes the `match inner ...` nested-ADT path: previously the
+         * extracted binding had TY_STRUCT/def=NULL ("got struct").
+         *
+         * Walk the scope manually (we don't have access to the
+         * scope_lookup_type_def helper that's static in elab_structs.c). */
+        const Symbol *type_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
+        for (Scope *cur = e->scope; cur; cur = cur->parent) {
+            for (uint32_t i = 0; i < cur->n; i++) {
+                Binding *cand = cur->bindings[i];
+                if (cand->name != type_sym) continue;
+                if (cand->type.kind == TY_ADT && cand->type.as.adt_.def) {
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *t = type_adt(cand->type.as.adt_.def);
+                    return t;
+                }
+                if (cand->type.kind == TY_STRUCT && cand->type.as.struct_.def) {
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    memset(t, 0, sizeof(Type));
+                    t->kind = TY_STRUCT;
+                    t->copy_kind = CK_MOVE;
+                    t->hkt_kind = KIND_STAR;
+                    t->as.struct_.def = cand->type.as.struct_.def;
+                    return t;
+                }
+            }
+        }
         /* Unknown keyword type — return opaque struct placeholder */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
@@ -1602,6 +1632,25 @@ Expr *elab_pack(Elab *e, const Form *call) {
             witnesses[i] = inst;
         }
         n_witnesses = nc;
+    }
+
+    /* F1-2-3: move-at-pack for RC-payload existentials.  If the packed
+     * value is a bare EX_VAR over an rc-managed binding (TY_RC, TY_WEAK,
+     * or a constrained existential), ownership of that rc reference now
+     * lives inside the new existential record.  The smart drop hook in
+     * rc_cb_free (F1-2-4) will decrement that inner reference when the
+     * outer existential is freed.  Mark the source binding as moved so
+     * the surrounding scope's auto-drop pass does not also decrement it
+     * (which would double-free or, in zombie-with-weaks scenarios, race
+     * the GC walker).
+     *
+     * Users who want to keep the source binding alive should clone
+     * explicitly:  (pack (rc/clone src) (exists ...)). */
+    if (val->kind == EX_VAR && val->as.var.binding) {
+        TypeKind vk = val->type.kind;
+        if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
+            (void)binding_mark_moved(val->as.var.binding, val_form->span);
+        }
     }
 
     /* Result type is the full TY_EXISTS type node (void* at codegen) */

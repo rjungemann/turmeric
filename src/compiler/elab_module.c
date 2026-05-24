@@ -793,6 +793,26 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
             *had_error = true;
             return NULL;
         }
+        /* F4 (cross-plan-followups): emit deprecation warning at the use
+         * site.  Suppressed for self-recursive references so a deprecated
+         * function does not warn on its own internal recursion.  Under
+         * --Werror=deprecated the diagnostic is promoted to an error so
+         * the elaborator stops compilation. */
+        if (b->is_deprecated && b->name != e->current_fn_name) {
+            DiagLevel sev = g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING;
+            if (b->deprecation_message) {
+                diag_emit(sev, span,
+                          "'%s' is deprecated: %s",
+                          sym->name, b->deprecation_message);
+            } else {
+                diag_emit(sev, span,
+                          "'%s' is deprecated", sym->name);
+            }
+            if (g_werror_deprecated) {
+                *had_error = true;
+                return NULL;
+            }
+        }
         return b;
     }
 

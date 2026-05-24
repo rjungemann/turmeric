@@ -1,21 +1,28 @@
 ; Phase G0: Nested ADT matching -- an ADT whose field holds another ADT.
 ; Demonstrates extracting an ADT-typed field and sub-matching on it.
+;
+; Renamed Option -> Opt to avoid colliding with the auto-loaded
+; stdlib `Option` struct from stdlib/toption.tur.  F6-1
+; (cross-plan-followups) also extended the elaborator so the
+; declared `:Opt` field type round-trips correctly through
+; pattern extraction (was previously erased to TY_INT and a
+; nested `match inner ...` failed).
 
-(defdata Option
-  (None)
-  (Some :int))
+(defdata Opt
+  (Nada)
+  (Just :int))
 
-; An ADT whose Wrap constructor carries an Option value as a field.
+; An ADT whose Wrap constructor carries an Opt value as a field.
 (defdata Outer
   (Empty)
-  (Wrap :Option))
+  (Wrap :Opt))
 
 (defn main [] :int
-  ; Wrap a Some inside an Outer, then sub-match.
-  (let [v (Wrap (Some 42))]
+  ; Wrap a Just inside an Outer, then sub-match.
+  (let [v (Wrap (Just 42))]
     (match v
       (Empty)      (println "empty")
       (Wrap inner) (match inner
-                     (None)   (println "none")
-                     (Some n) (println n)))
+                     (Nada)   (println "none")
+                     (Just n) (println n)))
     0))

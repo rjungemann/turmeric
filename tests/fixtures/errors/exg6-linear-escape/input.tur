@@ -1,0 +1,22 @@
+; Phase EXG6-5 / F2-1: returning a :linear existential from a defn
+; is rejected at the defn boundary.  A :linear existential's lifetime
+; is pack -> open in the same scope; escape via return would leave
+; the bare malloc'd record unreferenced or doubly freed depending on
+; the caller's behaviour.  The check fires at return-type annotation
+; parsing so the diagnostic does not depend on the body shape.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn escape [] : (exists :linear [a] [(Show a)] a)
+  (pack 1 (exists :linear [a] [(Show a)] a)))
+
+(defn main [] :int
+  0)

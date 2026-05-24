@@ -36,6 +36,38 @@ Expr *elab_defn(Elab *e, const Form *call) {
         name_f = call->as.list.items[name_idx];
     }
 
+    /* F4 (cross-plan-followups): ^deprecated attribute before name.
+     * Syntax: (defn ^deprecated "message" name [...] :ret body...)
+     *         (defn ^deprecated name [...] :ret body...)            ; no message
+     * Each use site of the defined binding emits a DIAG_WARNING with
+     * the message (or a generic note if the message is omitted). */
+    bool is_deprecated_attr = false;
+    const char *deprecation_msg = NULL;
+    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_deprecated) {
+        is_deprecated_attr = true;
+        name_idx++;
+        if (name_idx >= call->as.list.len) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "^deprecated must be followed by an optional message string "
+                      "and the function name");
+            return NULL;
+        }
+        Form *next = call->as.list.items[name_idx];
+        if (next->tag == F_STR) {
+            char *msg_buf = (char *)arena_alloc(e->arena, next->as.s.len + 1);
+            memcpy(msg_buf, next->as.s.p, next->as.s.len);
+            msg_buf[next->as.s.len] = '\0';
+            deprecation_msg = msg_buf;
+            name_idx++;
+            if (name_idx >= call->as.list.len) {
+                diag_emit(DIAG_ERROR, next->span,
+                          "^deprecated message must be followed by the function name");
+                return NULL;
+            }
+        }
+        name_f = call->as.list.items[name_idx];
+    }
+
     /* Minimum: (defn name []) or (defn #[no-unwind] name []) */
     if (name_idx + 2 >= call->as.list.len) {  /* need name, params, body */
         diag_emit(DIAG_ERROR, call->span,
@@ -331,12 +363,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 params[n_params - 1]->type = *ann->as.contract_.base_type;
                 continue;
             }
-            if (ann->kind == TY_FORALL || ann->kind == TY_EXISTS) {
+            if (ann->kind == TY_FORALL) {
                 /* Rank-2 polymorphic parameter: represented as tur_poly_fn_t at C level */
                 param_kinds[n_params - 1] = TY_PTR_VOID;
                 params[n_params - 1]->type = TYPE_PTR_VOID;
                 params[n_params - 1]->is_poly_fn = true;
                 params[n_params - 1]->poly_type = ann;
+                param_poly_types[n_params - 1] = ann;
+            } else if (ann->kind == TY_EXISTS) {
+                /* F1-1: TY_EXISTS is a value type (produced by `pack`), not a
+                 * rank-2 function.  Keep the full TY_EXISTS payload on the
+                 * binding so `open` inside the body finds a valid
+                 * `as.forall_.body`, and stash the full type in
+                 * param_poly_types so call sites can subtype-check the
+                 * argument against the declared existential.  Earlier code
+                 * misrouted this into the rank-2 branch, which then
+                 * rejected `(pack ...)` arguments with "rank-2 argument
+                 * must be a named function". */
+                param_kinds[n_params - 1] = TY_EXISTS;
+                params[n_params - 1]->type = *ann;
                 param_poly_types[n_params - 1] = ann;
             } else if (ann->kind == TY_FN) {
                 /* Plain function type annotation */
@@ -543,6 +588,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
     Type *return_session_type = NULL; /* SS3a/SS7: full session/role return type */
     Type *return_app_type = NULL; /* PTC4: full TY_APP return type for concrete type threading */
+    Type *return_exists_type = NULL; /* F1-1: full TY_EXISTS/TY_FORALL return type so callers see the forall_ payload (without it elab_open SEGVs reading body) */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -674,6 +720,33 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     /* PTC4: capture full TY_APP return type so dispatch can extract elem types. */
                     if (ann->kind == TY_APP) {
                         return_app_type = ann;
+                    }
+                    /* F1-1: capture full TY_EXISTS / TY_FORALL return type so
+                     * call sites can patch the resulting expression's type
+                     * with the complete forall_ payload (var_names, var_kinds,
+                     * body, constraints).  Without this, type_fn() leaves the
+                     * union uninitialised and elab_open later dereferences a
+                     * garbage `body` pointer. */
+                    if (ann->kind == TY_EXISTS || ann->kind == TY_FORALL) {
+                        return_exists_type = ann;
+                    }
+                    /* F2-1: a `:linear` existential cannot escape past the
+                     * scope that packs it -- the linear discipline relies on
+                     * a single `open` in the same scope freeing the bare
+                     * malloc'd record (no rc, no defer chain).  Returning
+                     * one from a defn breaks that guarantee silently.
+                     * Reject at the annotation parsing point so the
+                     * diagnostic fires regardless of how the body returns
+                     * the value (direct pack, let-tail, conditional). */
+                    if (ann->kind == TY_EXISTS && ann->as.forall_.is_linear) {
+                        diag_emit(DIAG_ERROR, ret_f->span,
+                                  "defn: a :linear existential cannot escape "
+                                  "its packing scope -- it must be opened in "
+                                  "the same scope that packed it (no return, "
+                                  "no struct/collection storage)");
+                        e->scope = inner.parent;
+                        scope_free(&inner);
+                        return NULL;
                     }
                 }
             }
@@ -1046,6 +1119,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (return_app_type) {
         fn_type.as.fn.result_full_type = return_app_type;
     }
+    /* F1-1: attach full TY_EXISTS / TY_FORALL return type.  Mirrors the
+     * ADT/struct/session/TY_APP paths above; consumed by elab_call.c to
+     * patch the call expression's type. */
+    if (return_exists_type) {
+        fn_type.as.fn.result_full_type = return_exists_type;
+    }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
     {
@@ -1141,6 +1220,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->no_unwind = no_unwind;
     /* Phase M6: Store ^:export-as C name on the binding */
     b->c_export_name = c_export_name;
+    /* F4: Store ^deprecated attribute on the binding */
+    b->is_deprecated = is_deprecated_attr;
+    b->deprecation_message = deprecation_msg;
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
@@ -1735,7 +1817,9 @@ Expr *elab_def(Elab *e, const Form *call) {
     /* Syntax: (def ^persistent name init) */
     uint32_t name_idx = 1;
     bool is_persistent = false;
-    
+    bool is_deprecated_attr = false;
+    const char *deprecation_msg = NULL;
+
     if (call->as.list.len > 3) {
         Form *first = call->as.list.items[name_idx];
         if (first->tag == F_SYM && first->as.sym == e->sym_caret_persistent) {
@@ -1743,9 +1827,26 @@ Expr *elab_def(Elab *e, const Form *call) {
             name_idx++;
         }
     }
-    
+
+    /* F4: ^deprecated ["message"] before the name (after ^persistent) */
+    if (call->as.list.len > name_idx + 2 &&
+        call->as.list.items[name_idx]->tag == F_SYM &&
+        call->as.list.items[name_idx]->as.sym == e->sym_caret_deprecated) {
+        is_deprecated_attr = true;
+        name_idx++;
+        if (call->as.list.items[name_idx]->tag == F_STR) {
+            Form *msg_f = call->as.list.items[name_idx];
+            char *msg_buf = (char *)arena_alloc(e->arena, msg_f->as.s.len + 1);
+            memcpy(msg_buf, msg_f->as.s.p, msg_f->as.s.len);
+            msg_buf[msg_f->as.s.len] = '\0';
+            deprecation_msg = msg_buf;
+            name_idx++;
+        }
+    }
+
     if (name_idx + 2 != call->as.list.len) {
-        diag_emit(DIAG_ERROR, call->span, "def takes (def [^persistent] name init)");
+        diag_emit(DIAG_ERROR, call->span,
+                  "def takes (def [^persistent] [^deprecated [\"msg\"]] name init)");
         return NULL;
     }
     
@@ -1778,6 +1879,9 @@ Expr *elab_def(Elab *e, const Form *call) {
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/false, /*is_global=*/true, name_f->span);
     b->is_persistent = is_persistent;
+    /* F4: ^deprecated on def */
+    b->is_deprecated = is_deprecated_attr;
+    b->deprecation_message = deprecation_msg;
     scope_add(&e->global, b);
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);

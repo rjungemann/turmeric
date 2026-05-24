@@ -25,7 +25,7 @@
 ;;; Deprecated: Use tmap-new from stdlib/tmap.tur instead.
 ;;; Since: Phase P3
 ;; Create an empty map
-(defn map-new [] #{} :ptr<void>
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" map-new [] #{} :ptr<void>
   (hamt/new))
 
 ;;; assoc -- insert or update a key/value pair; returns a new map.
@@ -47,7 +47,7 @@
 ;; Insert or update a key/value pair. Returns a new map.
 ;; For persistent maps, this creates a new version with structural sharing.
 ;; For mutable maps, this modifies the map in place (future phase).
-(defn assoc [m :ptr<void> key :ptr<void> val :ptr<void>] #{} :ptr<void>
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" assoc [m :ptr<void> key :ptr<void> val :ptr<void>] #{} :ptr<void>
   (hamt/set m (hamt/hash-ptr key) key val))
 
 ;;; dissoc -- remove a key from the map; returns a new map.
@@ -66,7 +66,7 @@
 ;;; Deprecated: Use tmap-dissoc from stdlib/tmap.tur instead.
 ;;; Since: Phase P3
 ;; Delete a key. Returns a new map.
-(defn dissoc [m :ptr<void> key :ptr<void>] #{} :ptr<void>
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" dissoc [m :ptr<void> key :ptr<void>] #{} :ptr<void>
   (hamt/del m (hamt/hash-ptr key) key))
 
 ;;; get -- look up a key and return its value, or NULL if absent.
@@ -85,7 +85,7 @@
 ;;; Deprecated: Use tmap-get from stdlib/tmap.tur instead (returns Option[V]).
 ;;; Since: Phase P3
 ;; Get the value for a key. Returns NULL if not found.
-(defn get [m :ptr<void> key :ptr<void>] #{} :ptr<void>
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" get [m :ptr<void> key :ptr<void>] #{} :ptr<void>
   (hamt/get m (hamt/hash-ptr key) key))
 
 ;;; has? -- check whether a key exists in the map.
@@ -104,7 +104,7 @@
 ;;; Deprecated: Use tmap-has? from stdlib/tmap.tur instead.
 ;;; Since: Phase P3
 ;; Check if a key exists in the map.
-(defn has? [m :ptr<void> key :ptr<void>] #{} :bool
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" has? [m :ptr<void> key :ptr<void>] #{} :bool
   (hamt/has? m (hamt/hash-ptr key) key))
 
 ;;; count -- return the number of key/value pairs in the map.
@@ -122,7 +122,7 @@
 ;;; Deprecated: Use tmap-count from stdlib/tmap.tur instead.
 ;;; Since: Phase P3
 ;; Get the number of key/value pairs in the map.
-(defn count [m :ptr<void>] #{} :int
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" count [m :ptr<void>] #{} :int
   (hamt/count m))
 
 ;;; merge -- merge two maps; values from b win on key collision.
@@ -141,7 +141,7 @@
 ;;; Deprecated: Use tmap-merge from stdlib/tmap.tur instead.
 ;;; Since: Phase P3
 ;; Merge two maps. b wins on collision.
-(defn merge [a :ptr<void> b :ptr<void>] #{} :ptr<void>
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" merge [a :ptr<void> b :ptr<void>] #{} :ptr<void>
   (hamt/merge a b))
 
 ;;; map-eq? -- compare two maps for structural equality using a value comparator.
@@ -167,7 +167,7 @@
 ;; Known limitation: key equality uses pointer identity. Maps keyed by
 ;; value-equal but distinct-address values will not compare correctly.
 ;; A Phase E2 follow-on will accept a key-hash and key-cmp argument.
-(defn map-eq? [m1 m2 val-cmp] #{Unsafe} :bool
+(defn ^deprecated "see tmap-* in stdlib/tmap.tur" map-eq? [m1 m2 val-cmp] #{Unsafe} :bool
   ```c
   if (tur_hamt_count((void*)(intptr_t)m1) !=
       tur_hamt_count((void*)(intptr_t)m2)) return false;

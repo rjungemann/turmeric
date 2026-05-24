@@ -1,0 +1,27 @@
+; EXG4-5 / F1-1-6: a packed constrained existential flows into a
+; function call as an argument.  The callee opens the value in its
+; body; the caller never holds a separate binding to drop.
+;
+; Before F1-1, the param annotation couldn't even be spelled; the
+; elaborator routed it through the rank-2 branch and rejected the
+; pack argument with "rank-2 argument must be a named function".
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn consume [e : (exists [a] [(Show a)] a)] :int
+  (open e [_ v]
+    (println (.show v)))
+  0)
+
+(defn main [] :int
+  (consume (pack 7 (exists [a] [(Show a)] a)))
+  (consume (pack 99 (exists [a] [(Show a)] a)))
+  0)

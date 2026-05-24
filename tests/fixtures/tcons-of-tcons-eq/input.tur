@@ -1,0 +1,13 @@
+;; Phase F3-5/F3-6 (cross-plan-followups): recursive `.eq?` on
+;; `Cons[Cons[int]]` via `tlist-eq?` per-call-site synthesis.
+
+(defn main [] :int
+  (let [a (:: (tcons 1 (tcons 2 0)) (Cons int))
+        b (:: (tcons 1 (tcons 2 0)) (Cons int))
+        c (:: (tcons 9 0) (Cons int))]
+    (let [outer1 (:: (tcons a 0) (Cons (Cons int)))
+          outer2 (:: (tcons b 0) (Cons (Cons int)))
+          outer3 (:: (tcons c 0) (Cons (Cons int)))]
+      (println (.eq? outer1 outer2))   ; true  ([[1 2]] vs [[1 2]])
+      (println (.eq? outer1 outer3))))  ; false ([[1 2]] vs [[9]])
+  0)

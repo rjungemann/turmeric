@@ -274,16 +274,25 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             }
             const Form *type_tok = fields_form->as.list.items[scan];
             if (type_tok->tag == F_TYPE_ANN) type_tok = type_tok->as.list.items[0];
-            if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM) {
+            /* F8 (cross-plan-followups): F_LIST permitted -- compound type
+             * forms like (exists [a] [(Show a)] a), (Vec int), (forall ...).
+             * Actual parsing happens in the main loop via
+             * type_expr_from_form. */
+            if (type_tok->tag != F_KEYWORD && type_tok->tag != F_SYM &&
+                type_tok->tag != F_LIST) {
                 diag_emit(DIAG_ERROR, fields_form->span,
                           "defstruct field list must have [name :type ...] pairs");
                 return NULL;
             }
-            const char *tname = type_tok->as.sym->name;
-            uint32_t tlen = type_tok->as.sym->len;
-            scan++; /* consume type keyword */
+            const char *tname = NULL;
+            uint32_t tlen = 0;
+            if (type_tok->tag == F_KEYWORD || type_tok->tag == F_SYM) {
+                tname = type_tok->as.sym->name;
+                tlen  = type_tok->as.sym->len;
+            }
+            scan++; /* consume type keyword (or compound type form) */
             /* Optional #{...} effect-row only for :fn fields */
-            bool is_fn_field = (tlen == 2 && memcmp(tname, "fn", 2) == 0);
+            bool is_fn_field = (tname && tlen == 2 && memcmp(tname, "fn", 2) == 0);
             if (is_fn_field && scan < n_items &&
                 fields_form->as.list.items[scan]->tag == F_MAP) {
                 scan++; /* consume #{...} annotation */
@@ -303,6 +312,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def = b->type.as.struct_.def;
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
+        memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
@@ -316,6 +326,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->name = name->name;
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
+        memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
@@ -342,21 +353,44 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             Form *field_type_form = ff->as.list.items[1];
             const Form *type_name_form = (field_type_form->tag == F_TYPE_ANN)
                 ? field_type_form->as.list.items[0] : field_type_form;
-            const char *tname = type_name_form->as.sym->name;
-            uint32_t tlen = type_name_form->as.sym->len;
-            TypeKind fkind, finner;
-            parse_struct_field_type(tname, tlen, &fkind, &finner);
-            if (fkind == TY_UNKNOWN) {
-                const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
-                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+            TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
+            Type *full_type = NULL;
+
+            /* F8 (cross-plan-followups): if the field type is a compound
+             * form (F_LIST -- e.g. (exists [a] [(C a)] a), (Vec int)),
+             * route through type_expr_from_form to get a full Type and
+             * derive the C-level kind from that.  TY_APP, TY_EXISTS,
+             * TY_FORALL all lower to int64_t at the C level (opaque
+             * heap pointer), so storage layout is unchanged. */
+            if (type_name_form->tag == F_LIST) {
+                Type *t = type_expr_from_form(e, (Form *)type_name_form,
+                    NULL, NULL, NULL, 0);
+                if (!t) return NULL;
+                full_type = t;
+                if (t->kind == TY_APP || t->kind == TY_EXISTS ||
+                    t->kind == TY_FORALL) {
                     fkind = TY_INT;
                     finner = TY_UNKNOWN;
                 } else {
-                    diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct field '%s' has unrecognized type :%s",
-                              field_name_form->as.sym->name, tname);
-                    return NULL;
+                    fkind = t->kind;
+                    finner = TY_UNKNOWN;
+                }
+            } else {
+                const char *tname = type_name_form->as.sym->name;
+                uint32_t tlen = type_name_form->as.sym->len;
+                parse_struct_field_type(tname, tlen, &fkind, &finner);
+                if (fkind == TY_UNKNOWN) {
+                    const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
+                    Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                    if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                        fkind = TY_INT;
+                        finner = TY_UNKNOWN;
+                    } else {
+                        diag_emit(DIAG_ERROR, field_type_form->span,
+                                  "defstruct field '%s' has unrecognized type :%s",
+                                  field_name_form->as.sym->name, tname);
+                        return NULL;
+                    }
                 }
             }
             if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
@@ -368,15 +402,23 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 return NULL;
             }
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                diag_emit(DIAG_ERROR, field_type_form->span,
-                          "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
-                          field_name_form->as.sym->name, tname);
+                if (full_type) {
+                    diag_emit(DIAG_ERROR, field_type_form->span,
+                              "defstruct: field '%s' has non-copy compound type and cannot be used in :copy struct",
+                              field_name_form->as.sym->name);
+                } else {
+                    diag_emit(DIAG_ERROR, field_type_form->span,
+                              "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
+                              field_name_form->as.sym->name,
+                              type_name_form->as.sym->name);
+                }
                 return NULL;
             }
             def->fields[fi].name = field_name_form->as.sym->name;
             def->fields[fi].kind = fkind;
             def->fields[fi].inner_kind = finner;
             def->fields[fi].effect_row = NULL;
+            def->fields[fi].full_type = full_type;
             if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
                 def->needs_drop_glue = true;
             }
@@ -391,25 +433,46 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             Form *field_type_form = fields_form->as.list.items[scan++];
             const Form *type_name_form = (field_type_form->tag == F_TYPE_ANN)
                 ? field_type_form->as.list.items[0] : field_type_form;
-            const char *tname = type_name_form->as.sym->name;
-            uint32_t tlen = type_name_form->as.sym->len;
-            TypeKind fkind, finner;
-            parse_struct_field_type(tname, tlen, &fkind, &finner);
+            TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
+            Type *full_type = NULL;
 
-            if (fkind == TY_UNKNOWN) {
-                /* Phase RF0: fall back to user-defined type lookup.  Any struct or
-                 * ADT is heap-allocated and stored as an opaque int64_t pointer, so
-                 * it is safe to use as a recursive field type without any layout change. */
-                const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
-                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+            /* F8 (cross-plan-followups): F_LIST compound field type
+             * (e.g. (exists ...), (Vec int)) -- route through
+             * type_expr_from_form and store the full Type on the
+             * StructField for use sites. */
+            if (type_name_form->tag == F_LIST) {
+                Type *t = type_expr_from_form(e, (Form *)type_name_form,
+                    NULL, NULL, NULL, 0);
+                if (!t) return NULL;
+                full_type = t;
+                if (t->kind == TY_APP || t->kind == TY_EXISTS ||
+                    t->kind == TY_FORALL) {
                     fkind = TY_INT;
                     finner = TY_UNKNOWN;
                 } else {
-                    diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct field '%s' has unrecognized type :%s",
-                              field_name_form->as.sym->name, tname);
-                    return NULL;
+                    fkind = t->kind;
+                    finner = TY_UNKNOWN;
+                }
+            } else {
+                const char *tname = type_name_form->as.sym->name;
+                uint32_t tlen = type_name_form->as.sym->len;
+                parse_struct_field_type(tname, tlen, &fkind, &finner);
+
+                if (fkind == TY_UNKNOWN) {
+                    /* Phase RF0: fall back to user-defined type lookup.  Any struct or
+                     * ADT is heap-allocated and stored as an opaque int64_t pointer, so
+                     * it is safe to use as a recursive field type without any layout change. */
+                    const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
+                    Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                    if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                        fkind = TY_INT;
+                        finner = TY_UNKNOWN;
+                    } else {
+                        diag_emit(DIAG_ERROR, field_type_form->span,
+                                  "defstruct field '%s' has unrecognized type :%s",
+                                  field_name_form->as.sym->name, tname);
+                        return NULL;
+                    }
                 }
             }
 
@@ -426,9 +489,19 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             }
             /* :copy struct validation: all fields must be copy */
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                diag_emit(DIAG_ERROR, field_type_form->span,
-                          "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
-                          field_name_form->as.sym->name, tname);
+                /* F8: when the field was parsed via type_expr_from_form
+                 * the original simple type name isn't captured; fall back
+                 * to a generic message. */
+                if (type_name_form->tag == F_LIST) {
+                    diag_emit(DIAG_ERROR, field_type_form->span,
+                              "defstruct: field '%s' has non-copy compound type and cannot be used in :copy struct",
+                              field_name_form->as.sym->name);
+                } else {
+                    diag_emit(DIAG_ERROR, field_type_form->span,
+                              "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
+                              field_name_form->as.sym->name,
+                              type_name_form->as.sym->name);
+                }
                 return NULL;
             }
 
@@ -436,6 +509,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             def->fields[fi].kind = fkind;
             def->fields[fi].inner_kind = finner;
             def->fields[fi].effect_row = NULL;
+            def->fields[fi].full_type = full_type;
 
             /* Phase 16 v2: parse optional #{...} effect-row annotation for :fn fields */
             if (fkind == TY_FN && scan < n_items &&
@@ -687,7 +761,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         ctor->adt = def;
         ctor->tag = ci;
         ctor->result_type_form = NULL; /* Phase G1: NULL for defdata */
-        ctor->field_forms = NULL;      /* Phase G2: NULL for defdata */
+        /* F6-1 (cross-plan-followups): stash the raw field-type forms for
+         * defdata ctors too (was previously NULL).  Without this, pattern
+         * extraction at match time can only recover the C-level TypeKind
+         * (TY_INT for ADT-typed fields), which makes a nested `match
+         * inner ...` fail with "scrutinee must be an ADT type, got int". */
+        ctor->field_forms = n_fields > 0
+            ? (const struct Form **)arena_alloc(e->arena, n_fields * sizeof(const Form *))
+            : NULL;
 
         /* Parse field types */
         for (uint32_t fi = 0; fi < n_fields; fi++) {
@@ -717,6 +798,9 @@ Expr *elab_defdata(Elab *e, const Form *call) {
             }
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = finner;
+            /* F6-1: also stash the raw form so match extraction can
+             * recover the declared ADT/struct type. */
+            if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
             if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
                 def->needs_drop_glue = true;
             }
@@ -1873,6 +1957,21 @@ Expr *elab_match(Elab *e, const Form *call) {
                     /* Phase G2: resolve field type using the skolem env */
                     ftype = gadt_resolve_type_from_form(e, adt,
                                                         ctor->field_forms[bi], &arm_senv);
+                } else if (ctor->field_forms && ctor->field_forms[bi]) {
+                    /* F6-1 (cross-plan-followups): defdata ctor field with
+                     * a stashed type form -- re-parse the type so the binding
+                     * carries the declared ADT/struct, not just the C-level
+                     * `int` collapsed by parse_struct_field_type for ADT-typed
+                     * fields.  Falls back to type_from_kind below if the
+                     * re-parse fails (e.g. unknown type). */
+                    Type *resolved = type_expr_from_form(e,
+                        (Form *)ctor->field_forms[bi],
+                        NULL, NULL, NULL, 0);
+                    if (resolved) {
+                        ftype = *resolved;
+                    } else {
+                        ftype = type_from_kind(ctor->fields[bi].kind);
+                    }
                 } else {
                     ftype = type_from_kind(ctor->fields[bi].kind);
                 }

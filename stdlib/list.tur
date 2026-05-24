@@ -25,7 +25,7 @@
 ;;;
 ;;; Deprecated: Use tnil from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
-(defn nil-value [] #{Unsafe} :ConsPtr
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" nil-value [] #{Unsafe} :ConsPtr
   ```c
   return 0;
   ```)
@@ -45,7 +45,7 @@
 ;;;
 ;;; Deprecated: Use tnil? from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
-(defn list-nil? [lst] #{Unsafe} :bool
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-nil? [lst] #{Unsafe} :bool
   ```c
   return lst == 0;
   ```)
@@ -66,7 +66,7 @@
 ;;;
 ;;; Deprecated: Use tcons from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
-(defn cons [value next] #{Unsafe} :ConsPtr
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" cons [value next] #{Unsafe} :ConsPtr
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = value;
@@ -89,7 +89,7 @@
 ;;;
 ;;; Deprecated: Use thead from stdlib/tlist.tur instead (returns Option[A]).
 ;;; Since: Phase B1
-(defn head [lst] #{Unsafe} :int
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" head [lst] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
   if (!cell) {
@@ -114,7 +114,7 @@
 ;;;
 ;;; Deprecated: Use ttail from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
-(defn tail [lst] #{Unsafe} :int
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" tail [lst] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
   if (!cell) {
@@ -136,7 +136,7 @@
 ;;;
 ;;; Deprecated: Use the typed List[A] API in stdlib/tlist.tur.
 ;;; Since: Phase B1
-(defn list-free [lst] #{Unsafe}
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-free [lst] #{Unsafe}
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
   while (cell) {
@@ -161,7 +161,7 @@
 ;;;
 ;;; Deprecated: Use tlist-length from stdlib/tlist.tur instead.
 ;;; Since: Phase B1
-(defn list-length [lst] #{Unsafe} :int
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-length [lst] #{Unsafe} :int
   ```c
   int len = 0;
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
@@ -427,7 +427,7 @@
 ;;;
 ;;; Deprecated: Use tlist-eq? from stdlib/tlist.tur instead (or the Eq[Cons] instance).
 ;;; Since: Phase E1
-(defn list-eq? [l1 l2 cmp-fn] #{Unsafe} :bool
+(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-eq? [l1 l2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { int64_t value; int64_t next; } *a =
       (struct { int64_t value; int64_t next; } *)(intptr_t)l1;

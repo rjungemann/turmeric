@@ -624,6 +624,16 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             f->as.list.items[name_idx]->as.list.items[0]->as.sym == e.sym_export_as_attr) {
                             name_idx += 1; /* skip (export-as "c_name") */
                         }
+                        /* F4: skip optional ^deprecated [message] attribute */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.sym == e.sym_caret_deprecated) {
+                            name_idx += 1;
+                            if ((uint32_t)f->as.list.len > name_idx &&
+                                f->as.list.items[name_idx]->tag == F_STR) {
+                                name_idx += 1;
+                            }
+                        }
                         if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
                         Form *name_f = f->as.list.items[name_idx];
                         if (name_f->tag == F_SYM) {

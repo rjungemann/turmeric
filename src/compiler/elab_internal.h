@@ -29,6 +29,9 @@ extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;
 /* Phase R6: Result/panic linting flags */
 extern bool g_warn_unused_result;
+/* F4 (cross-plan-followups): --Werror=deprecated promotes ^deprecated
+ * warnings to errors so a clean build can gate against new uses. */
+extern bool g_werror_deprecated;
 extern bool g_lint_panic;
 /* Phase G1: GADT feature flag */
 extern bool g_gadt_enabled;
@@ -189,6 +192,8 @@ typedef struct Elab {
     /* LC0: multi-shot continuation annotations */
     const Symbol *sym_caret_unsafe_multishot; /* ^unsafe-multishot -- multi-shot k (ownership not tracked) */
     const Symbol *sym_caret_multishot;        /* ^multishot -- MS1: safe multi-shot via snapshot semantics */
+    /* F4 (cross-plan-followups): ^deprecated definition annotation */
+    const Symbol *sym_caret_deprecated;
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */

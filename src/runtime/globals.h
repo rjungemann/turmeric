@@ -74,3 +74,7 @@ extern bool g_dynvar_enabled;
 
 /* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
 extern bool g_interpret_mode;
+
+/* F4 (cross-plan-followups): --Werror=deprecated flag — promotes
+ * ^deprecated use-site warnings to errors. */
+extern bool g_werror_deprecated;

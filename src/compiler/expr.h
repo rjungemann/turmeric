@@ -95,6 +95,12 @@ struct Binding {
      * Used by DV1 binding/set! dispatch to distinguish dynamic vars from plain locals. */
     bool          is_dynvar;
     struct DynVarEntry *dynvar_entry; /* non-NULL iff is_dynvar */
+    /* F4 (cross-plan-followups): ^deprecated annotation on a defn/def.
+     * Each use site (EX_VAR resolution) emits a DIAG_WARNING with the
+     * stored message (or a generic one if message is NULL).  Suppressed
+     * for self-recursive references via e->current_fn_name. */
+    bool          is_deprecated;
+    const char   *deprecation_message;   /* NUL-terminated, arena-owned, or NULL */
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */

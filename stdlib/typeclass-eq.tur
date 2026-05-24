@@ -10,3 +10,48 @@
 ;;; Since: Phase 15
 (defclass Eq [a]
   (eq? [x y] :bool))
+
+;; F3-7 (cross-plan-followups): primitive Eq instances must be in
+;; scope for the auto-loaded typed-collection definstances above to
+;; have their `(Eq A)` constraints satisfiable when A bottoms out at
+;; a primitive (the common case for typed-collection dispatch via
+;; (.eq? v v) on an ascribed `:(Vec int)` binding).  Kept to the
+;; four primitive types most likely to appear as collection element
+;; types; richer numeric types (int8..uint64, float32) remain in
+;; stdlib/typeclass.tur so this stub stays small.
+;;
+;;; Eq [int] -- equality on int64_t.
+(definstance Eq [int]
+  (eq? [x y] (= x y)))
+
+;;; Eq [bool] -- equality on bool.
+(definstance Eq [bool]
+  (eq? [x y] (= x y)))
+
+;;; Eq [cstr] -- equality on cstr (null-terminated string).  Uses
+;;; the runtime's string comparator rather than pointer equality.
+(definstance Eq [cstr]
+  (eq? [x y] :bool
+    ```c
+    if (x == NULL && y == NULL) return true;
+    if (x == NULL || y == NULL) return false;
+    return strcmp((const char *)x, (const char *)y) == 0;
+    ```))
+
+;;; Eq [float] -- equality on double.
+(definstance Eq [float]
+  (eq? [x y] (= x y)))
+
+;;; Eq instances for the remaining numeric primitives so typed-collection
+;;; dispatch through `(.eq? v v)` on `Vec[int8]`, `Vec[uint32]`, etc.
+;;; satisfies the (Eq A) constraint without requiring users to import
+;;; stdlib/typeclass.tur.
+
+(definstance Eq [int8]    (eq? [x y] (= x y)))
+(definstance Eq [int16]   (eq? [x y] (= x y)))
+(definstance Eq [int32]   (eq? [x y] (= x y)))
+(definstance Eq [uint8]   (eq? [x y] (= x y)))
+(definstance Eq [uint16]  (eq? [x y] (= x y)))
+(definstance Eq [uint32]  (eq? [x y] (= x y)))
+(definstance Eq [uint64]  (eq? [x y] (= x y)))
+(definstance Eq [float32] (eq? [x y] (= x y)))

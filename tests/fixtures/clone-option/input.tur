@@ -1,9 +1,9 @@
 ;; Phase B1: Clone trait for an option-like struct type
 ;;
-;; Uses a user-defined Option struct (mirroring the built-in option layout)
+;; Uses a user-defined Opt struct (mirroring the built-in option layout)
 ;; to demonstrate that Clone performs an independent deep copy of the value.
 
-(defstruct Option [value :int])
+(defstruct Opt [value :int])
 
 (defclass Clone [a]
   (clone [x] :int))
@@ -11,18 +11,18 @@
 (definstance Clone [int]
   (clone [x] x))
 
-;; Clone [Option]: deep-copy the struct value into a heap allocation.
-;; x has type Option (struct value) inside the generated C function;
+;; Clone [Opt]: deep-copy the struct value into a heap allocation.
+;; x has type Opt (struct value) inside the generated C function;
 ;; field access uses x.value.
-(definstance Clone [Option]
+(definstance Clone [Opt]
   (clone [x] :int
     ```c
-    struct { int64_t value; } *dst = malloc(sizeof(Option));
+    struct { int64_t value; } *dst = malloc(sizeof(Opt));
     dst->value = x.value;
     return (int64_t)(intptr_t)dst;
     ```))
 
-;; Accessor for a heap-allocated Option pointer (returned by Clone.clone).
+;; Accessor for a heap-allocated Opt pointer (returned by Clone.clone).
 (defn heap-option-value [p] :int
   ```c
   struct { int64_t value; } *opt = (void *)(intptr_t)p;
@@ -30,8 +30,8 @@
   ```)
 
 (defn main [] :int
-  ;; Clone an Option(55) and verify the cloned cell has the same value.
-  (let [opt (make-struct Option 55)]
+  ;; Clone an Opt(55) and verify the cloned cell has the same value.
+  (let [opt (make-struct Opt 55)]
     (let [opt2 (.clone opt)]
       (println (heap-option-value opt2))))
   0)

@@ -22,7 +22,7 @@
 ;;;   (def s (slice-new arr 4))  ; view of first 4 elements
 ;;;
 ;;; Deprecated: Use tslice-new from stdlib/tslice.tur instead.
-(defn slice-new [data length]
+(defn ^deprecated "see tslice-* in stdlib/tslice.tur" slice-new [data length]
   ```c
   struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
   s->p = (int64_t*)data;
@@ -43,7 +43,7 @@
 ;;;   (slice-len s)  ; => 4
 ;;;
 ;;; Deprecated: Use tslice-len from stdlib/tslice.tur instead.
-(defn slice-len [s] :int
+(defn ^deprecated "see tslice-* in stdlib/tslice.tur" slice-len [s] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
   return (int)slice->len;
@@ -63,7 +63,7 @@
 ;;;   (slice-get s 0)  ; => first element
 ;;;
 ;;; Deprecated: Use tslice-get from stdlib/tslice.tur instead.
-(defn slice-get [s i] :int
+(defn ^deprecated "see tslice-* in stdlib/tslice.tur" slice-get [s i] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
   if (i >= 0 && (size_t)i < slice->len) return (int)slice->p[i];
@@ -79,7 +79,7 @@
 ;;;   s -- slice handle from slice-new
 ;;;
 ;;; Deprecated: Use tslice-free from stdlib/tslice.tur instead.
-(defn slice-free [s]
+(defn ^deprecated "see tslice-* in stdlib/tslice.tur" slice-free [s]
   ```c
   free(s);
   return 0;
