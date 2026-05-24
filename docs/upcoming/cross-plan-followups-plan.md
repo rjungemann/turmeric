@@ -7,9 +7,12 @@
 > F8 (defstruct compound field-type annotations -- TY_APP /
 > TY_EXISTS / TY_FORALL field declarations and field-access
 > elaboration; F8-5 move-at-pack extension and F8-7 cycle
-> fixture deferred as their own follow-ups) all shipped.
-> Remaining open: F4-4 (mass stdlib `^deprecated` sweep),
-> F6 (turi interpreter fixture gaps).
+> fixture deferred as their own follow-ups), F6 (partial: F6-2
+> via fixture rename + F6-4 for clone-list / clone-option /
+> clone-pair; F6-1 / F6-3 share a deeper compiled-mode
+> ADT-field-type carry-through bug that needs its own session)
+> all shipped.  Remaining open: F4-4 (mass stdlib `^deprecated`
+> sweep), F6-1 (ADT nested-field type loss in compiled mode).
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -471,10 +474,10 @@ cause.
 
 | ID | Task | File(s) | Root cause |
 |----|------|---------|------------|
-| F6-1 | Fix `defdata`-typed `let` bindings in turi -- the tree-walker drops the ADT type tag, so `match` on the binding fails with `scrutinee must be an ADT type, got adt`.  Re-enables `adt-param`, `adt-nested`, `gadt-syntax-multi`. | `src/turi/eval.c` | tag lost on `let` |
-| F6-2 | Disambiguate user-defined `defstruct Cons`/`Option`/`Pair` from the built-in forward declarations the runtime emits.  Either rename the built-in symbols (less invasive) or detect the user redef and skip the builtin emit.  Re-enables `clone-list`, `clone-option`, `clone-pair`. | `src/compiler/emit_module.c` or `src/turi/eval.c` | symbol collision |
-| F6-3 | Add the missing `flags` file to `tests/fixtures/gadt-syntax-multi` (it needs `-Xgadt`).  Independent of F6-1 but the fixture also depends on F6-1 being resolved before it'll pass under turi. | `tests/fixtures/gadt-syntax-multi/flags` | missing flag |
-| F6-4 | Re-add the six fixtures to `TURI_FIXTURES_DEFAULT` in `tests/run-turi.sh`. | `tests/run-turi.sh` | -- |
+| F6-1 | ADT-typed nested field extraction loses the field's ADT type in *compiled* mode (not turi-specific as the plan originally framed it).  `(Wrap inner)` where `inner` was declared `(Wrap :Option)` yields `inner : int` at the elaborator instead of `:Option`, so a nested `match inner ...` fires `match: scrutinee must be an ADT type, got int`.  `adt-param` and `adt-nested` work under `tur --interpret` (tree-walker preserves the tag) but the runner uses `tur run` (compile + execute) where the elab loses it.  **Deferred** -- the root cause is in `elab_call.c`'s ADT-constructor return-type patching which doesn't carry the declared field type through to the extracted binding.  Track separately. | `src/compiler/elab_call.c` (constructor result), `src/compiler/elab_structs.c` (match binding type) |
+| F6-2 | Disambiguate user-defined `defstruct Cons`/`Option`/`Pair` from auto-loaded stdlib structs of the same name -- **shipped** by renaming the user-side structs in the three fixtures (`Cons -> Cell`, `Option -> Opt`, `Pair -> Pr`).  The proper compiler-level fix (catch the redef at elaboration time -- the `(defstruct X ...)` check at `elab_structs.c:227` should fire when X is already in scope from the auto-loaded stdlib) is **deferred** as a separate cleanup, but the user-facing principle "do not shadow stdlib names" is correct.  Regenerated `expected.c` snapshots for the renamed fixtures. | `tests/fixtures/clone-list/`, `tests/fixtures/clone-option/`, `tests/fixtures/clone-pair/` |
+| F6-3 | Add the missing `flags` file to `tests/fixtures/gadt-syntax-multi` -- **n/a** (file already present on the branch; F6-3 was already shipped before this work).  The fixture still fails for a different reason (`match` on GADT-constructor result loses the ADT type tag, same root cause as F6-1).  Track with F6-1. | -- |
+| F6-4 | Re-add the now-working fixtures to `TURI_FIXTURES_DEFAULT` in `tests/run-turi.sh` -- **shipped** (added `clone-list`, `clone-option`, `clone-pair`).  `adt-param` / `adt-nested` / `gadt-syntax-multi` remain excluded pending F6-1. | `tests/run-turi.sh` |
 
 ---
 

@@ -89,6 +89,9 @@ borrow-sugar
 call-cc-star
 clone-primitives
 closure-call
+clone-list
+clone-option
+clone-pair
 closure-multi-capture
 closure-multi-capture-ref
 continuation-advanced
