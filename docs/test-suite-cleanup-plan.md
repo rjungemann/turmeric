@@ -150,38 +150,39 @@ fixture itself changed from `result-must: called on err` to
 
 ### Genuinely missing features (left failing intentionally)
 
-#### Missing Feature 1 -- `defclass` redefinition is not diagnosed
+#### Missing Feature 1 -- `defclass` redefinition is not diagnosed [FIXED]
 
-Tests: `errors/kinds-hkt-reserved`, `errors/typeclass-no-instance`.
+Tests: `errors/kinds-hkt-reserved`, `errors/typeclass-no-instance`
+(both now passing).
 
 These fixtures expect that redefining a typeclass produces a Turmeric
 diagnostic ("typeclass `Functor` is already defined" / "typeclass `MyEq`
-is already defined"). The elaborator currently silently accepts the
-second `defclass` and the test exits 0.
+is already defined"). The elaborator previously silently accepted the
+second `defclass` and the test exited 0.
 
 `defstruct` already has this check (see `clone-vec` diagnostic); the
-same check should be added for `defclass`. Until that lands, these two
-negative-fixture tests stay failing -- they are the documentation for
-the missing diagnostic.
+same check is now in place for `defclass`. Identical-signature
+re-declarations (the stdlib pre-declare case for Eq, Functor, ...)
+remain silent.
 
 **Decision:** Allow idempotent redefinition only if the signatures
-match; otherwise hard-error. The current silent-skip in
-`src/compiler/elab_typeclasses.c:557-563` exists so stdlib can
-pre-declare `Eq` without colliding. The new check should compare the
-second `defclass`'s method set, type-parameter count, and kinds against
-the existing entry: identical = silent skip (preserves the stdlib
-pre-declaration use case); different = `defclass: 'Foo' is already
-defined` diagnostic. A follow-up may introduce an explicit
-`(declare-class ...)` form if the signature-match check turns out to
-permit too much in practice.
+match; otherwise hard-error. Implemented via
+`typeclass_signatures_match` in `src/compiler/elab_typeclasses.c`:
+compares type-parameter count and kinds, method count, and per-method
+name + parameter type-kinds + return type-kind. Identical = silent
+skip (preserves the stdlib pre-declaration of `Eq`, `Functor`, ...);
+different = `typeclass 'Foo' is already defined` diagnostic.
 
-**Fixture follow-up:** Inspect both `errors/kinds-hkt-reserved` and
-`errors/typeclass-no-instance` and confirm their second `defclass`
-genuinely differs from the first (different methods, kinds, or
-arity). If a fixture happens to redefine with an identical signature
-it will now silently succeed and the diagnostic won't fire. Rewrite
-the second definition to differ, or add a new negative fixture
-covering the differing-signature case explicitly.
+The defclass parsing was split into three passes (parse type params /
+parse signatures / elaborate default bodies) so the redefinition
+check happens after enough information exists to compare, but before
+any orphan `__default_*` file-level FnDefs get registered for an
+about-to-be-skipped re-declaration.
+
+**Fixture follow-up [done]:** Both `errors/kinds-hkt-reserved`
+(differs in `[^f]` vs `[a]` + `fmap` vs `map`) and
+`errors/typeclass-no-instance` (differs in `eq?` vs `eq2?`) trip the
+differing-signature branch. Both fixtures now pass.
 
 #### Missing Feature 2 -- `?` operator diagnostic when result helpers are out of scope
 
