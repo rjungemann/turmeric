@@ -128,6 +128,29 @@ static void dir_of_path(const char *path, char *out, size_t cap) {
     }
 }
 
+/* Resolve a stdlib basename like "macros.tur" to a full path.
+ *
+ * Order of precedence:
+ *   1. $TUR_STDLIB_DIR/<basename>  -- explicit env-var override
+ *   2. ./stdlib/<basename>         -- in-repo development default
+ *
+ * Returns a pointer to `out` (NUL-terminated). On overflow, the path is
+ * truncated and a warning is emitted to stderr; callers still get a usable
+ * pointer.
+ */
+static const char *tur_stdlib_path(const char *basename,
+                                   char *out, size_t outlen) {
+    const char *sdir = getenv("TUR_STDLIB_DIR");
+    if (!sdir || !*sdir) sdir = "stdlib";
+    int n = snprintf(out, outlen, "%s/%s", sdir, basename);
+    if (n < 0 || (size_t)n >= outlen) {
+        fprintf(stderr,
+                "tur: stdlib path too long for '%s' (TUR_STDLIB_DIR='%s')\n",
+                basename, sdir);
+    }
+    return out;
+}
+
 static int read_entire_file(const char *path, char **out, size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -379,37 +402,43 @@ static int compile_to_c(const char *path, Buf *out_c,
      * which causes type mismatches when compiled into every file.
      * They're deferred until Phase 11 when :ptr<T> support is added.
      * For Phase 7, we load only macros.tur which contains when/unless macros. */
+    /* Basenames only — resolved at use time via $TUR_STDLIB_DIR (else "stdlib"). */
     const char *stdlib_files[] = {
-        "stdlib/macros.tur",
-        "stdlib/safe.tur",
-        /* stdlib/args.tur is NOT auto-loaded to avoid injecting ~400 lines of args
+        "macros.tur",
+        "safe.tur",
+        /* args.tur is NOT auto-loaded to avoid injecting ~400 lines of args
          * parser stubs into every compiled program.  Load it explicitly with
          * (load "stdlib/args.tur") when args/spec-* functions are needed. */
         /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
-        "stdlib/contract.tur",
+        "contract.tur",
         /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
-        "stdlib/hamt.tur",
-        "stdlib/map.tur",
-        /* "stdlib/gen.tur" - GF2 generator stdlib; not auto-loaded to avoid polluting
+        "hamt.tur",
+        "map.tur",
+        /* "gen.tur" - GF2 generator stdlib; not auto-loaded to avoid polluting
          * all programs.  Load explicitly with (load "stdlib/gen.tur"). */
-        /* "stdlib/vec.tur" - has typeclass dependencies, not auto-loaded */
+        /* "vec.tur" - has typeclass dependencies, not auto-loaded */
         /* Phase PTC4: typeclass-eq.tur defines only the Eq class skeleton so that
          * typed-collection definstances (Eq[Vec], Eq[Map], etc.) have Eq in scope.
          * The full typeclass.tur (with all primitive instances) remains on-demand. */
-        "stdlib/typeclass-eq.tur",
+        "typeclass-eq.tur",
+        /* Bug-5 follow-up: result.tur is auto-loaded so its `ok` / `ok?` /
+         * `ok-val` / `err` / `err?` / `err-val` helpers are globally
+         * available without an explicit `(import result ...)`.  Mirrors how
+         * tresult.tur exposes its typed counterpart. */
+        "result.tur",
         /* Phase TM0/TC1/TC2: typed parameterized collection stdlib files. */
-        "stdlib/tmap.tur",
-        "stdlib/tvec.tur",
-        "stdlib/tslice.tur",
-        "stdlib/toption.tur",
-        "stdlib/tresult.tur",
-        "stdlib/tpair.tur",
-        "stdlib/tlist.tur",
-        "stdlib/tgrid.tur",
-        "stdlib/tzipper.tur",
-        "stdlib/tset.tur",
+        "tmap.tur",
+        "tvec.tur",
+        "tslice.tur",
+        "toption.tur",
+        "tresult.tur",
+        "tpair.tur",
+        "tlist.tur",
+        "tgrid.tur",
+        "tzipper.tur",
+        "tset.tur",
         /* Phase F5 (cross-plan-followups): mutable open-addressed hash table. */
-        "stdlib/tmutmap.tur",
+        "tmutmap.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -418,24 +447,30 @@ static int compile_to_c(const char *path, Buf *out_c,
          * module mechanism (planned post-T21) will provide auto-loading later. */
         NULL
     };
-    
+
     uint32_t total_stdlib_forms = 0;
     Form **all_stdlib_forms = NULL;
     uint8_t file_id = 1;
-    
+
     for (int i = 0; stdlib_files[i] != NULL; i++) {
+        char path_buf[4096];
+        tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
         char *stdlib_src = NULL;
         size_t stdlib_len = 0;
-        if (read_entire_file(stdlib_files[i], &stdlib_src, &stdlib_len) == 0) {
+        if (read_entire_file(path_buf, &stdlib_src, &stdlib_len) == 0) {
             /* strdup the source so it lives in the arena and won't be freed prematurely */
             char *src_copy = (char *)arena_alloc(&arena, stdlib_len);
             memcpy(src_copy, stdlib_src, stdlib_len);
-            
+
+            /* Path also needs to live in the arena since SourceFile stores a pointer. */
+            char *path_copy = (char *)arena_alloc(&arena, strlen(path_buf) + 1);
+            memcpy(path_copy, path_buf, strlen(path_buf) + 1);
+
             /* Allocate a fresh SourceFile per stdlib file — each must have its
              * own stable arena address since diag and reader store pointers.  */
             SourceFile *stdlib_file = (SourceFile *)arena_alloc(&arena, sizeof(SourceFile));
             *stdlib_file = (SourceFile){0};
-            stdlib_file->path = stdlib_files[i];
+            stdlib_file->path = path_copy;
             stdlib_file->src = src_copy;
             stdlib_file->len = stdlib_len;
             stdlib_file->file_id = file_id++;
@@ -1365,12 +1400,141 @@ static int cmd_test(const char *dir) {
 
     qsort(tur_files, (size_t)n_files, sizeof(char *), compare_cstr_ptrs);
 
+    /* Bug 3 fix: derive `-I` include paths from the nearest build.tur so
+     * test files can `(import test/suite ...)`, `(import plutovg/surface ...)`,
+     * etc. without the caller having to pass `-I` flags manually.
+     *
+     * Includes:
+     *   - the project's own `src/` directory (so e.g. plutovg tests can
+     *     import plutovg/surface);
+     *   - for each `:spices` entry in build.tur, the resolved spice's
+     *     `src/` directory (so plutovg can pull in test/assert, etc.).
+     *
+     * The cmake-deps include/link flags are already wired up inside
+     * `cmd_build` via `pkg_cmake_manifest_read`, so we don't redo that.
+     */
+    const char **spice_inc_dirs = NULL;
+    int          n_spice_inc_dirs = 0;
+    {
+        /* find_project_root only walks up from the given path, so it never
+         * finds a build.tur sitting in the current working directory when
+         * `dir` is a relative subpath like "tests/plutovg".  Resolve to an
+         * absolute path first. */
+        char abs_dir[4096];
+        if (!realpath(dir, abs_dir)) {
+            strncpy(abs_dir, dir, sizeof(abs_dir) - 1);
+            abs_dir[sizeof(abs_dir) - 1] = '\0';
+        }
+        char *proj_root = find_project_root(abs_dir);
+        if (proj_root) {
+            char manifest_path[4096];
+            snprintf(manifest_path, sizeof(manifest_path),
+                     "%s/build.tur", proj_root);
+            PkgManifest m;
+            if (pkg_manifest_read(manifest_path, &m)) {
+                /* Capacity: own src + one entry per :spice. */
+                int cap = 1 + m.n_spices;
+                spice_inc_dirs = (const char **)malloc((size_t)cap * sizeof(char *));
+                if (spice_inc_dirs) {
+                    /* Project's own src/, if it exists. */
+                    {
+                        char own_src[4096];
+                        snprintf(own_src, sizeof(own_src), "%s/src", proj_root);
+                        struct stat ss;
+                        if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
+                            spice_inc_dirs[n_spice_inc_dirs++] = strdup(own_src);
+                    }
+                    /* Each declared :spice's resolved src/.  Mirrors the
+                     * convention used by `cmd_run`: spices/<name>-<ref>/
+                     * (optionally /<subdir>) /src, falling back to the
+                     * dep dir if `src/` is absent. */
+                    char spices_dir[4096];
+                    snprintf(spices_dir, sizeof(spices_dir),
+                             "%s/spices", proj_root);
+                    for (int i = 0; i < m.n_spices; i++) {
+                        const PkgSpice *s = &m.spices[i];
+                        char dep_dir[4096];
+                        if (s->path) {
+                            snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
+                                     proj_root, s->path);
+                        } else if (s->ref) {
+                            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                                     spices_dir, s->name, s->ref);
+                        } else {
+                            snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
+                                     spices_dir, s->name);
+                        }
+                        if (s->subdir) {
+                            char tmp[4096];
+                            snprintf(tmp, sizeof(tmp), "%s/%s",
+                                     dep_dir, s->subdir);
+                            strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
+                            dep_dir[sizeof(dep_dir) - 1] = '\0';
+                        }
+                        char src_sub[4096];
+                        snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
+                        struct stat ss;
+                        const char *chosen = NULL;
+                        if (stat(src_sub, &ss) == 0 && S_ISDIR(ss.st_mode))
+                            chosen = src_sub;
+                        else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
+                            chosen = dep_dir;
+
+                        /* Monorepo fallback: when the fetched copy is
+                         * absent (e.g. optional spice never cloned) but a
+                         * workspace ancestor contains the `:subdir` as a
+                         * sibling member, use that instead.  We walk up to
+                         * three directory levels to handle the
+                         * `turmeric-spices/spices/<this>` -> `:subdir
+                         * "spices/test"` -> `turmeric-spices/spices/test`
+                         * shape used by the first-party spices repo. */
+                        bool fallback_added = false;
+                        if (!chosen && s->subdir) {
+                            char ancestor[4096];
+                            strncpy(ancestor, proj_root, sizeof(ancestor) - 1);
+                            ancestor[sizeof(ancestor) - 1] = '\0';
+                            for (int up = 0; up < 4 && !fallback_added; up++) {
+                                char *slash = strrchr(ancestor, '/');
+                                if (!slash || slash == ancestor) break;
+                                *slash = '\0';
+                                char sib_src[4096];
+                                snprintf(sib_src, sizeof(sib_src),
+                                         "%s/%s/src", ancestor, s->subdir);
+                                if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                                    spice_inc_dirs[n_spice_inc_dirs++] = strdup(sib_src);
+                                    fallback_added = true;
+                                    break;
+                                }
+                                char sib_dir[4096];
+                                snprintf(sib_dir, sizeof(sib_dir),
+                                         "%s/%s", ancestor, s->subdir);
+                                if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                                    spice_inc_dirs[n_spice_inc_dirs++] = strdup(sib_dir);
+                                    fallback_added = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (fallback_added) continue;
+
+                        if (chosen)
+                            spice_inc_dirs[n_spice_inc_dirs++] = strdup(chosen);
+                    }
+                }
+                pkg_manifest_free(&m);
+            }
+            free(proj_root);
+        }
+    }
+
     int passed = 0;
     int failed = 0;
     char **failed_files = (char **)calloc((size_t)n_files, sizeof(char *));
     if (!failed_files) {
         fprintf(stderr, "tur: oom\n");
         free_tur_files(tur_files, n_files);
+        for (int j = 0; j < n_spice_inc_dirs; j++) free((char *)spice_inc_dirs[j]);
+        free(spice_inc_dirs);
         return 2;
     }
 
@@ -1385,7 +1549,8 @@ static int cmd_test(const char *dir) {
         }
         close(fd);
 
-        int build_rc = cmd_build(tur_files[i], out_path, NULL, 0, NULL);
+        int build_rc = cmd_build(tur_files[i], out_path,
+                                  spice_inc_dirs, n_spice_inc_dirs, NULL);
         int run_rc = 1;
         if (build_rc == 0) {
             int status = system(out_path);
@@ -1428,6 +1593,8 @@ static int cmd_test(const char *dir) {
 
     free(failed_files);
     free_tur_files(tur_files, n_files);
+    for (int j = 0; j < n_spice_inc_dirs; j++) free((char *)spice_inc_dirs[j]);
+    free(spice_inc_dirs);
     return failed == 0 ? 0 : 1;
 }
 
@@ -1719,7 +1886,9 @@ static int cmd_eval(const char *path, bool use_color,
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
      * This is the minimum stdlib needed for any real Turmeric program to work. */
     {
-        TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
+        char path_buf[4096];
+        tur_stdlib_path("macros.tur", path_buf, sizeof(path_buf));
+        TuriValue sv = turi_eval_file(env, path_buf);
         (void)sv;
     }
     /* Inject typed stubs so the elaborator knows the signatures of native
@@ -3516,27 +3685,33 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
          * hamt.tur and map.tur are needed for ^persistent map lowering (Phase P3).
          * safe.tur is needed for bounds-checked array ops. */
         {
+            /* Basenames only — resolved at use time via tur_stdlib_path. */
             static const char *preload[] = {
-                "stdlib/macros.tur",
-                "stdlib/safe.tur",
-                "stdlib/hamt.tur",
-                "stdlib/map.tur",
+                "macros.tur",
+                "safe.tur",
+                "hamt.tur",
+                "map.tur",
+                /* Bug-5 follow-up: result.tur preloaded so ok/ok?/ok-val are
+                 * globally available in the worker eval path too. */
+                "result.tur",
                 /* Phase TM0/TC1/TC2: typed parameterized collection stdlib files. */
-                "stdlib/tmap.tur",
-                "stdlib/tvec.tur",
-                "stdlib/tslice.tur",
-                "stdlib/toption.tur",
-                "stdlib/tresult.tur",
-                "stdlib/tpair.tur",
-                "stdlib/tlist.tur",
-                "stdlib/tgrid.tur",
-                "stdlib/tzipper.tur",
-                "stdlib/tset.tur",
-                "stdlib/tmutmap.tur",
+                "tmap.tur",
+                "tvec.tur",
+                "tslice.tur",
+                "toption.tur",
+                "tresult.tur",
+                "tpair.tur",
+                "tlist.tur",
+                "tgrid.tur",
+                "tzipper.tur",
+                "tset.tur",
+                "tmutmap.tur",
                 NULL
             };
             for (int pi = 0; preload[pi]; pi++) {
-                TuriValue sv = turi_eval_file(env, preload[pi]);
+                char path_buf[4096];
+                tur_stdlib_path(preload[pi], path_buf, sizeof(path_buf));
+                TuriValue sv = turi_eval_file(env, path_buf);
                 (void)sv;
             }
         }

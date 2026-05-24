@@ -125,6 +125,21 @@ static const Form *map_get_kw(const Form *map, const char *kw) {
     return NULL;
 }
 
+/* Emit a diagnostic when a build.tur keyword expected a map but got something
+ * else. The most common mistake is writing `{...}` (which the reader parses
+ * as a contract-type annotation `F_CONTRACT_TYPE`) instead of `#{...}` (a
+ * real `F_MAP`). Without this, parse_cmake_deps and parse_spices would
+ * silently skip everything and write empty lockfiles. */
+static void report_non_map(const Form *got, const char *what) {
+    if (!got) return;
+    const char *hint =
+        (got->tag == F_CONTRACT_TYPE)
+        ? " (use `#{...}` for map syntax; bare `{...}` is a contract type)"
+        : "";
+    diag_emit(DIAG_ERROR, got->span,
+              "build.tur: %s must be a map%s", what, hint);
+}
+
 /* Extract a string from an F_STR form, or NULL. */
 static char *form_str_dup(const Form *f) {
     if (!f || f->tag != F_STR) return NULL;
@@ -137,9 +152,13 @@ static bool form_bool_val(const Form *f) {
     return f->as.b;
 }
 
-/* Parse the :spices map: {"name" {:url "..." :ref "..."} ...} */
+/* Parse the :spices map: #{"name" #{:url "..." :ref "..."} ...} */
 static bool parse_spices(const Form *map, PkgManifest *m) {
-    if (!map || map->tag != F_MAP) return true; /* empty is OK */
+    if (!map) return true; /* missing keyword is OK */
+    if (map->tag != F_MAP) {
+        report_non_map(map, ":spices");
+        return false;
+    }
     const FormList *fl = &map->as.list;
     int cap = 4;
     m->spices = (PkgSpice *)malloc(cap * sizeof(PkgSpice));
@@ -150,7 +169,11 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         const Form *key = fl->items[i];
         const Form *val = fl->items[i + 1];
         if (key->tag != F_STR) continue;
-        if (!val || val->tag != F_MAP) continue;
+        if (!val) continue;
+        if (val->tag != F_MAP) {
+            report_non_map(val, "entry in :spices");
+            continue;
+        }
 
         if (m->n_spices >= cap) {
             cap *= 2;
@@ -174,12 +197,16 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
 /* Forward declaration (parse_str_vec is defined after parse_cmake_deps). */
 static bool parse_str_vec(const Form *f, char ***out, int *n_out);
 
-/* Parse a single cmake dep options map: {:KEY "VAL" ...} */
+/* Parse a single cmake dep options map: #{:KEY "VAL" ...} */
 static bool parse_cmake_opts(const Form *map,
                               PkgCmakeOpt **out_opts, int *out_n) {
     *out_opts = NULL;
     *out_n    = 0;
-    if (!map || map->tag != F_MAP) return true;
+    if (!map) return true;
+    if (map->tag != F_MAP) {
+        report_non_map(map, ":options");
+        return false;
+    }
     const FormList *fl = &map->as.list;
     int cap = 4;
     *out_opts = (PkgCmakeOpt *)malloc(cap * sizeof(PkgCmakeOpt));
@@ -204,7 +231,11 @@ static bool parse_cmake_opts(const Form *map,
 
 /* Parse the :cmake-deps map */
 static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
-    if (!map || map->tag != F_MAP) return true;
+    if (!map) return true; /* missing keyword is OK */
+    if (map->tag != F_MAP) {
+        report_non_map(map, ":cmake-deps");
+        return false;
+    }
     const FormList *fl = &map->as.list;
     int cap = 4;
     m->cmake_deps = (PkgCmakeDep *)malloc(cap * sizeof(PkgCmakeDep));
@@ -215,7 +246,11 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         const Form *key = fl->items[i];
         const Form *val = fl->items[i + 1];
         if (key->tag != F_STR) continue;
-        if (!val || val->tag != F_MAP) continue;
+        if (!val) continue;
+        if (val->tag != F_MAP) {
+            report_non_map(val, "entry in :cmake-deps");
+            continue;
+        }
 
         if (m->n_cmake_deps >= cap) {
             cap *= 2;
@@ -290,6 +325,13 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
     SymbolTable st;
     symtab_init(&st, &arena);
 
+    /* Copy src into the arena so the registered SourceFile.src stays valid
+     * for the lifetime of any diagnostics emitted from later parsing. */
+    char *src_arena = (char *)arena_alloc(&arena, (size_t)sz + 1);
+    memcpy(src_arena, src, (size_t)sz + 1);
+    free(src);
+    src = src_arena;
+
     SourceFile file = {0};
     file.path    = path;
     file.src     = src;
@@ -300,7 +342,6 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
 
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
-    free(src);
 
     if (!forms || diag_had_error() || nforms == 0) {
         symtab_free(&st);
@@ -371,13 +412,16 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
                 parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
                 parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
                 out->no_stdlib = form_bool_val(nf);
+            } else if (vf) {
+                report_non_map(vf, ":build-opts");
             }
         }
     }
 
+    bool ok = !diag_had_error();
     symtab_free(&st);
     arena_free(&arena);
-    return true;
+    return ok;
 }
 
 /* ================================================================== */

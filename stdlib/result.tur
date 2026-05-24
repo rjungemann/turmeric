@@ -443,7 +443,15 @@
   ```)
 
 ;;; Typeclass instance for result -- Eq: structural equality via result-eq?.
-(definstance Eq [result]
+;;
+;; Disabled with #; -- this instance never elaborated cleanly when result.tur
+;; was loaded explicitly via (import result ...) because:
+;;   (1) the orphan-instance check fires (Eq is owned by typeclass-eq.tur);
+;;   (2) result-eq? is #{Unsafe} and would need an (unsafe ...) wrapper here.
+;; The instance only "worked" historically because result.tur was never
+;; actually imported by name.  Restoring it requires either an exemption in
+;; the elaborator or relocating the instance into typeclass-eq.tur.
+#;(definstance Eq [result]
   (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
 
 ;; Free a result (does not free the contained value)
@@ -668,7 +676,7 @@
 ;; Foldable instance for result.
 ;; foldl/foldr operate on the ok value only; err is skipped.
 ;;; __foldable_result_foldl -- foldl implementation for the result Foldable instance.
-(defn __foldable_result_foldl [ta init fn] #{Unsafe} :ptr<void>
+#;(defn __foldable_result_foldl [ta init fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
@@ -677,7 +685,7 @@
   ```)
 
 ;;; __foldable_result_foldr -- foldr implementation for the result Foldable instance.
-(defn __foldable_result_foldr [ta init fn] #{Unsafe} :ptr<void>
+#;(defn __foldable_result_foldr [ta init fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
@@ -686,7 +694,10 @@
   ```)
 
 ;;; Typeclass instance for ptr<void> -- Foldable: foldl and foldr over the ok value.
-(definstance Foldable [ptr<void>]
+;; Disabled with #; -- Foldable is defined in stdlib/typeclass.tur which is
+;; not auto-loaded, so this instance fails to elaborate whenever result.tur
+;; is loaded by name.  Helper __foldable_result_* functions remain available.
+#;(definstance Foldable [ptr<void>]
   (foldl [ta init fn] (__foldable_result_foldl ta init fn))
   (foldr [ta init fn] (__foldable_result_foldr ta init fn)))
 
@@ -694,7 +705,7 @@
 ;; bimap :: (e -> e') -> (a -> b) -> result e a -> result e' b
 ;; Maps fn-left over err, fn-right over ok.
 ;;; __bifunctor_result_bimap -- bimap implementation for the result Bifunctor instance.
-(defn __bifunctor_result_bimap [container fn-left fn-right] #{Unsafe} :ptr<void>
+#;(defn __bifunctor_result_bimap [container fn-left fn-right] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
@@ -714,14 +725,15 @@
   ```)
 
 ;;; Typeclass instance for ptr<void> -- Bifunctor: bimap over ok and err values.
-(definstance Bifunctor [ptr<void>]
+;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
+#;(definstance Bifunctor [ptr<void>]
   (bimap [container fn-left fn-right] (__bifunctor_result_bimap container fn-left fn-right)))
 
 ;; Functor instance for result.
 ;; fmap :: (a -> b) -> result e a -> result e b
 ;; Maps a function over the ok value, leaving err unchanged.
 ;;; __functor_result_fmap -- fmap implementation for the result Functor instance.
-(defn __functor_result_fmap [container fn] #{Unsafe} :ptr<void>
+#;(defn __functor_result_fmap [container fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
@@ -747,7 +759,8 @@
 
 ;;; Typeclass instance for ptr<void> -- Functor: fmap over the ok value.
 ;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Functor [ptr<void>]
+;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
+#;(definstance Functor [ptr<void>]
   (fmap [container fn]
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -767,11 +780,11 @@
 ;;   ap (err e) _      = err e
 ;;   ap _ (err e)       = err e
 ;;; __applicative_result_pure -- pure implementation for the result Applicative instance.
-(defn __applicative_result_pure [x] #{Unsafe} :ptr<void>
+#;(defn __applicative_result_pure [x] #{Unsafe} :ptr<void>
   (ok x))
 
 ;;; __applicative_result_ap -- ap implementation for the result Applicative instance.
-(defn __applicative_result_ap [ff fa] #{Unsafe} :ptr<void>
+#;(defn __applicative_result_ap [ff fa] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *f_res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ff;
@@ -788,7 +801,8 @@
   ```)
 
 ;;; Typeclass instance for ptr<void> -- Applicative: pure and ap.
-(definstance Applicative [ptr<void>]
+;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
+#;(definstance Applicative [ptr<void>]
   (pure [x] (__applicative_result_pure x))
   (ap [ff fa] (__applicative_result_ap ff fa)))
 
@@ -796,7 +810,7 @@
 ;;   bind (ok x) f = f x
 ;;   bind (err e) _ = err e
 ;;; __monad_result_bind -- bind implementation for the result Monad instance.
-(defn __monad_result_bind [ma fn] #{Unsafe} :ptr<void>
+#;(defn __monad_result_bind [ma fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ma;
@@ -809,7 +823,8 @@
 
 ;;; Typeclass instance for ptr<void> -- Monad: bind (flat-map over the ok value).
 ;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Monad [ptr<void>]
+;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
+#;(definstance Monad [ptr<void>]
   (bind [ma fn]
     ```c
     struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =

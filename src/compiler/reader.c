@@ -1655,6 +1655,11 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
         if (peek(&r) == -1) break;
         Form *f = read_form(&r);
         if (!f) {
+            /* A NULL return with no error flag set means the reader hit EOF
+             * after consuming whitespace, comments, or a datum-comment
+             * `#;<form>` whose trailing form was the last meaningful token
+             * in the file.  Treat as end-of-input rather than parse error. */
+            if (!r.error) break;
             free(forms);
             return NULL;
         }
