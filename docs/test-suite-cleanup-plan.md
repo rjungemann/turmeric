@@ -242,31 +242,48 @@ literal). The new lowering's helper call site catches it with
 which is strictly more informative than the previous
 "if condition must be bool" diagnostic.
 
-#### Missing Feature 3 -- `defn` shadowing of stdlib symbols emits broken C instead of a diagnostic
+#### Missing Feature 3 -- `defn` shadowing of stdlib symbols emits broken C instead of a diagnostic [FIXED]
 
-Not a directly failing test (we worked around it everywhere), but it is
-the root cause of most of the rename churn in section 3 above. If a
-user writes `(defn ok ...)`, the auto-loaded stdlib `ok` and the user
-`ok` both get emitted as static C functions named `ok` -- the C
-compiler then complains. The Turmeric elaborator should either:
+Was the root cause of most of the rename churn in section 3 above. If
+a user wrote `(defn ok ...)`, the auto-loaded stdlib `ok` and the
+user `ok` both got emitted as static C functions named `ok` -- the C
+compiler then complained.
 
-* error: "function `ok` is already defined by stdlib/result.tur (auto-loaded)";
-* or mangle user-shadowed defns with a unique suffix in the emitted C.
+**Decision (implemented):** Hard error by default. A user `defn`
+colliding with an auto-loaded stdlib name produces:
 
-The current behaviour is the worst of both worlds (no Turmeric error,
-broken C output). Tracking here so it doesn't get lost.
+    defn: 'ok' is already defined by an auto-loaded stdlib module;
+    rename the local definition
 
-**Decision:** Hard error by default, with an opt-in shadow attribute.
-A user `defn` colliding with an auto-loaded stdlib name produces the
-diagnostic above. Users who genuinely want to shadow attach
-`#{Shadow}` (exact attribute name TBD) to the `defn`; the elaborator
-then emits the C symbol with a mangled suffix (e.g. a module hash) to
-avoid the `redefinition of 'ok'` C-level error.
+Implementation:
 
-Implication for section 3 renames: once the attribute lands, audit
-each fixture in the rename table and either revert to the original
-name with the attribute attached, or keep the rename. Track outcomes
-in a follow-up.
+* `Binding` gains an `is_from_stdlib` flag (`src/compiler/expr.h`).
+* `Elab` gains an `in_stdlib_load` flag that's true while the
+  auto-loaded stdlib prefix elaborates, false during user-form
+  elaboration (`src/compiler/elab_internal.h`,
+  `src/compiler/elab_toplevel.c`).
+* `binding_new` sets `is_from_stdlib = is_global && e->in_stdlib_load`
+  so any global binding created while elaborating the stdlib prefix
+  is marked.
+* `elab_toplevel.c`'s pass-1 forward-decl pre-pass now skips when the
+  name already resolves in `e.global`, so user code does not pre-
+  register a duplicate stub that would shadow the stdlib binding in
+  pass 2's reverse-iterating `scope_lookup`.
+* `elab_defn`'s redef check fires the diagnostic when
+  `existing->is_from_stdlib && !e->in_stdlib_load`.
+
+The plan originally also proposed an opt-in `#{Shadow}` attribute
+that would mangle the user's C symbol to allow shadowing. Skipped
+for now: the section-3 rename table already covers every collision
+we know about, and the attribute can be added later if a real use
+case emerges. Tracking that as deferred follow-up.
+
+**Fixture follow-up:** the new check tripped on
+`errors/gadt-refine-escape` (defined a user `unbox` that collided
+with `stdlib/safe.tur`'s `unbox`). Renamed the user fn to `my-unbox`;
+the fixture continues to exercise the skolem-escape diagnostic it
+was meant to test. Section 3's existing rename table covered every
+other case.
 
 #### Missing Feature 4 -- stdlib internal conflict between `stdlib/gadt-vec.tur` and `stdlib/tvec.tur`
 

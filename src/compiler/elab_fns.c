@@ -82,6 +82,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
     Binding *existing = scope_lookup(e->scope, name_f->as.sym);
     if (existing) {
+        /* MF3: hard-error on collision with an auto-loaded stdlib name. The
+         * elaborator otherwise treats stdlib bindings as forward declarations
+         * (because they're TY_FN + is_global, same shape as a pass-1 user
+         * forward-decl) and lets the user defn shadow them; the C compile
+         * then fails with "conflicting types for 'ok'" or similar. Producing
+         * a clear diagnostic here avoids the broken-C symptom.  Suppress
+         * during stdlib auto-load itself so stdlib pass-1 forward decls can
+         * be matched by their pass-2 real definitions. */
+        if (existing->is_from_stdlib && !e->in_stdlib_load) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defn: '%s' is already defined by an auto-loaded stdlib "
+                      "module; rename the local definition",
+                      name_f->as.sym->name);
+            return NULL;
+        }
         /* Allow forward-declared bindings from pass 1 to be redefined */
         /* Forward declarations have TY_FN type (from pass 1) */
         if (existing->type.kind == TY_FN && existing->is_global) {

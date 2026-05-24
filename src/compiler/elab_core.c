@@ -1345,6 +1345,9 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->is_exported = false;
     b->defining_module_name = e->current_module_name;
     b->c_export_name = NULL;  /* Phase M6: ^:export-as C name */
+    /* MF3: mark global bindings created during stdlib auto-load so user
+     * code that later shadows them gets a hard diagnostic. */
+    b->is_from_stdlib = is_global && e->in_stdlib_load;
     return b;
 }
 

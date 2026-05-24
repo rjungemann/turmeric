@@ -583,7 +583,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     /* Phase 2: Two-pass elaboration for mutual recursion support.
      * Pass 1: Collect all top-level defn declarations and add them to scope.
      * This allows mutually recursive functions to see each other. */
+    e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
+        if (i == stdlib_prefix) e.in_stdlib_load = false;
         Form *f = forms[i];
         if (f->tag == F_LIST && f->as.list.len > 0) {
             Form *head = f->as.list.items[0];
@@ -673,8 +675,16 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             TypeKind arg_kinds[MAX_FN_ARITY];
                             for (uint32_t ai = 0; ai < param_arity; ai++) arg_kinds[ai] = TY_INT;
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
-                            Binding *b = binding_new(&e, name_f->as.sym, fn_type, false, true, f->span);
-                            scope_add(&e.global, b);
+                            /* MF3: if the name is already in global scope (e.g. an
+                             * auto-loaded stdlib defn), do NOT pre-register a
+                             * duplicate forward decl. Pass 2's elab_defn will then
+                             * see the original binding (with is_from_stdlib set
+                             * correctly) and either reuse it as a forward decl or
+                             * emit the shadow diagnostic. */
+                            if (!scope_lookup(&e.global, name_f->as.sym)) {
+                                Binding *b = binding_new(&e, name_f->as.sym, fn_type, false, true, f->span);
+                                scope_add(&e.global, b);
+                            }
                         }
                     }
                     next_form:;
@@ -711,7 +721,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
 
     /* Pass 2: Elaborate all forms */
+    e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
+        if (i == stdlib_prefix) e.in_stdlib_load = false;
         items[i] = elab_form(&e, forms[i]);
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
 
@@ -734,6 +746,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                     gb->defining_module_name->len >= 4 &&
                     memcmp(gb->defining_module_name->name, "tur/", 4) == 0) {
                     gb->defining_module_name = NULL;
+                    gb->is_from_stdlib = true;
                 }
             }
             for (uint32_t k = 0; k < e.n_macros; k++) {
