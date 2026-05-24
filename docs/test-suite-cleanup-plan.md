@@ -335,12 +335,75 @@ sibling `../turmeric-spices/` directory and skips. Also add a short
 "Optional dependencies" note in `CLAUDE.md` / `README.md` so
 developers who want the test to run know how to enable it.
 
+### Compiler memory leaks (uncovered while executing this plan)
+
+Running `bash tests/run.sh` directly (rather than via `ctest`) surfaces
+~148 additional "build failed" failures that `ctest` hides by setting
+`ASAN_OPTIONS=detect_leaks=0`. Each is a LeakSanitizer report against
+the `tur` binary itself -- a pre-existing leak in the compiler, not a
+runtime program leak. Plug them so the two invocation paths agree and
+so future leaks aren't masked.
+
+Distinct leak sites observed across the ~148 fixtures:
+
+| Site | File:line | Count | Status |
+| --- | --- | --- | --- |
+| `collect_free_vars` (closure captures) | `src/compiler/elab_core.c:446` | 114 | Fixed (arena-copy in `elab_fns.c:1568`) |
+| `fresh_tmp` (codegen temp names) | `src/compiler/emit_core.c:194` | 131 | Open |
+| `elab_defdynamic` | `src/compiler/elab_*.c` | 10 | Open |
+| `dynvar_push_active` | `src/compiler/elab_*.c` | 9 | Open |
+| `scope_add` | `src/compiler/elab_*.c` | 5 | Open |
+| `read_curly_infix` | `src/reader/*.c` | 1 | Open |
+
+#### Compiler-leak task 1 -- `fresh_tmp` family (largest)
+
+`fresh_tmp`, `fresh_frame`, `fresh_defer_thunk`, `fresh_defer_env` each
+malloc a 24-byte string and return it to the caller. No caller frees
+the result -- the strings live for the rest of compilation. There are
+~83 `fresh_tmp` call sites; chasing each is impractical.
+
+**Decision:** add a string pool to `EmitCtx` (`char **fresh_strs` +
+count/cap) that owns every allocation from the four `fresh_*` helpers,
+and free the pool when `emit_program` / `emit_implementation` tear
+down `EmitCtx`. Existing call sites are unchanged.
+
+#### Compiler-leak task 2 -- `dynvar_push_active`
+
+Inspect the malloc site, identify the matching destructor (or its
+absence), and either free in the existing teardown path or arena-allocate.
+
+#### Compiler-leak task 3 -- `elab_defdynamic`
+
+As above.
+
+#### Compiler-leak task 4 -- `scope_add`
+
+`scope_free` exists (called in `elab_fns.c` after `collect_free_vars`).
+Find the path where a scope is created without a matching `scope_free`.
+
+#### Compiler-leak task 5 -- `read_curly_infix`
+
+Single leak in the reader; likely a transient buffer not freed on the
+success path. Small.
+
+#### Compiler-leak task 6 -- alignment commit
+
+Once all of the above are resolved and `bash tests/run.sh` matches
+`ctest`'s pass/fail counts, no further change is needed. If any leak
+proves intractable, leave a `# TODO(compiler-leak)` marker and add
+`ASAN_OPTIONS=detect_leaks=0` to `tests/run.sh` so the two paths
+agree.
+
 ## Files of note touched on this branch
 
 * `stdlib/result.tur` -- pointer-cast warning fix in `result-eq?`,
   `result-collect`, `result-partition`.
 * `stdlib/tmutmap.tur` -- pointer-cast warning fix in `tmutmap-new`.
-* `tests/fixtures/**/expected.c` -- mass regeneration (~300 files).
+* `tests/fixtures/**/expected.c` -- mass regeneration (~300 files);
+  later dropped entirely for behavior fixtures (see section 1 of the
+  Decisions block).
 * Renamed fixtures in section 3.
 * `tests/fixtures/tzipper-basic/input.tur`,
   `tests/fixtures/typed/tzipper-basic/input.tur` -- removed double-free.
+* `src/compiler/elab_fns.c` -- closure captures now arena-copied so
+  they share the closure's lifetime (plugs the `collect_free_vars` leak).

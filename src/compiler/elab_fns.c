@@ -1567,7 +1567,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
         /* Create Closure struct */
         struct Closure *closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
         closure->fn = fd;
-        closure->captures = captures;
+        /* Copy captures into arena memory so it shares the closure's lifetime. */
+        Binding **arena_captures = (Binding **)arena_alloc(e->arena, n_captures * sizeof(Binding *));
+        memcpy(arena_captures, captures, n_captures * sizeof(Binding *));
+        closure->captures = arena_captures;
         closure->n_captures = n_captures;
         closure->env_name = env_name_sym;
         
@@ -1578,8 +1581,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
         /* The closure's type is void* (pointer to closure struct) */
         Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, TYPE_PTR_VOID, call->span);
         closure_expr->as.closure_.closure = closure;
-        
-        /* Don't free captures - it's now owned by the closure */
+
+        free(captures);
         return closure_expr;
     }
 }
