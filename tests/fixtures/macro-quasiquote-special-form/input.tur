@@ -1,0 +1,17 @@
+;; Bug 6 / Option A regression: quasiquoted special-form symbols (`do`, `let`,
+;; `if`) must be dispatched as special forms after macro expansion, not looked
+;; up as bindings.
+
+(defmacro my-when [test & body]
+  `(if ~test (do ~@body) nil))
+
+(defmacro my-let1 [var val body]
+  `(let [~var ~val] ~body))
+
+(defn main [] :int
+  (my-when (> 5 3)
+    (println "first")
+    (println "second"))
+  (my-let1 x 42
+    (println x))
+  0)
