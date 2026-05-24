@@ -1377,7 +1377,9 @@ static Form *read_curly_infix(Reader *r) {
         return form_list(r->arena, span, NULL, 0);
     } else if (n == 1) {
         /* {e} -> e */
-        return items[0];
+        Form *only = items[0];
+        free(items);
+        return only;
     } else if (n == 2) {
         /* {e1 e2} -> (e1 e2) - function call */
         Span span = span_from_to(r, start_line, start_col, start_off, r->pos);

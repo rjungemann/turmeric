@@ -349,11 +349,13 @@ Distinct leak sites observed across the ~148 fixtures:
 | Site | File:line | Count | Status |
 | --- | --- | --- | --- |
 | `collect_free_vars` (closure captures) | `src/compiler/elab_core.c:446` | 114 | Fixed (arena-copy in `elab_fns.c:1568`) |
-| `fresh_tmp` (codegen temp names) | `src/compiler/emit_core.c:194` | 131 | Open |
-| `elab_defdynamic` | `src/compiler/elab_*.c` | 10 | Open |
-| `dynvar_push_active` | `src/compiler/elab_*.c` | 9 | Open |
-| `scope_add` | `src/compiler/elab_*.c` | 5 | Open |
-| `read_curly_infix` | `src/reader/*.c` | 1 | Open |
+| `fresh_tmp` (codegen temp names) | various | 131 | Fixed (free at each leaking site) |
+| `elab_defdynamic` | `src/compiler/elab_dynvars.c:141` | 10 | Fixed (`free(e.dynvar_entries)` in elab teardown) |
+| `dynvar_push_active` | `src/compiler/elab_dynvars.c:168` | 9 | Fixed (`free(e.active_dynvar_bindings)` in elab teardown) |
+| `scope_add` (try-catch / select / match) | `src/compiler/elab_concurrent.c` / `elab_structs.c` | 5 | Fixed (added `scope_free` at each site) |
+| `read_curly_infix` | `src/compiler/reader.c:1367` | 1 | Fixed (free items[] on n==1 path) |
+
+After all fixes, `bash tests/run.sh` reports **956 passed, 5 failed** -- the same as `just test` (ctest). The five remaining failures are the plan-known intentional failures (Missing Features 1, 2, 4 and `scscm-compile`).
 
 #### Compiler-leak task 1 -- `fresh_tmp` family (largest)
 

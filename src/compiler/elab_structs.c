@@ -1571,6 +1571,7 @@ Expr *elab_match(Elab *e, const Form *call) {
 
                 Expr *body = elab_form(e, body_form);
                 e->scope = saved_scope;
+                scope_free(&arm_scope);
                 if (!body) { free(member_covered); return NULL; }
 
                 /* Record the binding in the pattern */

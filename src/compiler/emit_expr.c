@@ -1494,7 +1494,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *ptr_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);
-            
+            free(fat_tmp);
+
             return ptr_tmp;
         }
         /* Phase 9: rc<T> + weak<T> operations */
@@ -1638,6 +1639,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "if (%s) { %s = malloc(sizeof(*%s)); %s->is_some = true; "
                              "%s->value = (int64_t)(intptr_t)%s; }\n",
                        cb_tmp, opt_tmp, opt_tmp, opt_tmp, opt_tmp, cb_tmp);
+            free(cb_tmp);
             return opt_tmp;
         }
         case EX_WEAK_PRED: {

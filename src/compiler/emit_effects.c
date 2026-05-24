@@ -854,6 +854,7 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "%s %s = %s((int64_t)(intptr_t)%s);\n",
                        type_c_name(e->type), result, k_fn_val, cont_var);
         }
+        free(cont_var);
         free(k_fn_val);
         if (env_var)      free(env_var);
         if (clone_fn_str) free(clone_fn_str);
@@ -1128,6 +1129,7 @@ char *emit_effects_cloneable_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     /* The shift never "returns" normally (longjmp jumps past it).
      * Return k_result as the nominal value for type-checking purposes. */
+    free(cont_var);
     free(k_fn_val);
     if (env_var)      free(env_var);
     if (clone_fn_str) free(clone_fn_str);

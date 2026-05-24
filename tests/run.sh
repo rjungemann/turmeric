@@ -241,6 +241,13 @@ run_happy() {
         return
     fi
 
+    # Skip fixtures owned by a dedicated ctest target (e.g. eval-import
+    # has its own tur_eval_import test with custom -I/-L flags).
+    if [ -f "$dir/requires.dedicated-runner" ]; then
+        write_result "PASS" "$name" "(dedicated-runner-skipped)" ""
+        return
+    fi
+
     # T19: Read per-fixture timeout (default: 10 seconds; 0 = unlimited).
     local fixture_timeout=10
     if [ -f "$dir/expected.timeout" ]; then
