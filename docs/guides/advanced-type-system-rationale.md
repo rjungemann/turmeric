@@ -94,7 +94,7 @@ Once channels are linear (used exactly once before being passed on or closed),
 the type system can track protocol state through the channel's type. The
 elaborator adds duality checking -- client and server must be type duals --
 which catches protocol mismatches at compile time rather than at runtime in a
-hung goroutine.
+hung coroutine.
 
 The C99 story is straightforward: channels are bounded queues (or pipes) paired
 with protocol tags. The runtime is a routed-queue implementation that does not
@@ -380,7 +380,7 @@ The v4 infrastructure substantially reduced the remaining work:
 
 | Phase | Status after v4 |
 |---|---|
-| Syntax (`{ x : T | p }`) | Done -- Contract Types use the same syntax |
+| Syntax (<code>{ x : T &vert; p }</code>) | Done -- Contract Types use the same syntax |
 | Subtyping (`T { p }` is a subtype of `T`) | Structural part done via union/intersection; entailment layer still needed |
 | Runtime check insertion | Done -- Contract Types already do this |
 | FFI boundary annotation | Done -- Contract Types CT4 covers this |
