@@ -1119,6 +1119,118 @@ Expr *elab_thread_last(Elab *e, const Form *call) {
     return elab_form(e, current);
 }
 
+/* Phase DS3: (set! (.field s) v) - struct field write.
+ *
+ * Accepts two receiver shapes:
+ *   - TY_STRUCT (direct struct value): the receiver binding must be `^mut`.
+ *   - TY_RC where struct_def is set (rc<Struct>): no `^mut` required
+ *     (interior mutability through the rc wrapper).
+ *
+ * For rc-typed fields, the prior value's strong count is decremented before
+ * the new pointer is stored (the new value already carries its own +1).
+ * For move-only non-rc values the source binding is marked moved. */
+static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
+    /* target shape: (.field receiver-form) */
+    Form *head_form = target->as.list.items[0];
+    const char *fname = head_form->as.sym->name + 1; /* skip leading '.' */
+
+    Expr *receiver = elab_form(e, target->as.list.items[1]);
+    if (!receiver) return NULL;
+
+    /* Resolve the struct def -- either directly or through the rc wrapper. */
+    StructDef *def = NULL;
+    bool receiver_is_rc = false;
+    Type rt = receiver->type;
+    if (rt.kind == TY_STRUCT) {
+        def = rt.as.struct_.def;
+    } else if (rt.kind == TY_RC && rt.as.rc.struct_def) {
+        def = rt.as.rc.struct_def;
+        receiver_is_rc = true;
+    } else if (rt.kind == TY_REF_MUT) {
+        /* &mut Struct -- field write through a mutable borrow.  The
+         * borrow already permits interior mutation; no ^mut on the
+         * source binding required. */
+        Type pointee = type_from_kind(rt.as.ref_borrow.target);
+        if (pointee.kind == TY_STRUCT && receiver->type.as.ref_borrow.target == TY_STRUCT) {
+            /* type_from_kind loses the struct def; in practice &mut Struct
+             * is rare for field writes today.  Fall through to error. */
+        }
+        diag_emit(DIAG_ERROR, target->span,
+                  "set! through &mut Struct is not yet supported -- "
+                  "use a ^mut struct binding or rc<Struct> instead");
+        return NULL;
+    } else {
+        diag_emit(DIAG_ERROR, target->span,
+                  "set! (.field s): receiver must be a struct or rc<Struct>, got %s",
+                  type_name(rt));
+        return NULL;
+    }
+
+    /* Find the field by name. */
+    uint32_t fi = 0;
+    for (; fi < def->n_fields; fi++) {
+        if (strcmp(def->fields[fi].name, fname) == 0) break;
+    }
+    if (fi >= def->n_fields) {
+        diag_emit(DIAG_ERROR, head_form->span,
+                  "set! (.%s s): struct '%s' has no field '%s'",
+                  fname, def->name, fname);
+        return NULL;
+    }
+
+    /* Direct-struct receivers require ^mut on the binding.  Through-rc
+     * is interior-mutable so any rc<Struct> binding is fine. */
+    if (!receiver_is_rc && receiver->kind == EX_VAR) {
+        Binding *rb = receiver->as.var.binding;
+        if (rb->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0005_USE_AFTER_MOVE,
+                                "use-after-move: cannot set! field of '%s' because it was moved",
+                                rb->name->name);
+            return NULL;
+        }
+        if (!rb->is_mut) {
+            diag_emit(DIAG_ERROR, target->span,
+                      "set! (.%s ...): '%s' is immutable; use ^mut at the binding site",
+                      fname, rb->name->name);
+            return NULL;
+        }
+    }
+
+    /* Elaborate the value and type-check against the field. */
+    Expr *value = elab_form(e, call->as.list.items[2]);
+    if (!value) return NULL;
+
+    Type expected_field;
+    if (def->fields[fi].full_type) {
+        expected_field = *def->fields[fi].full_type;
+    } else {
+        expected_field = type_from_kind(def->fields[fi].kind);
+    }
+    if (value->type.kind != TY_PTR_VOID && !type_eq(value->type, expected_field)) {
+        diag_emit(DIAG_ERROR, value->span,
+                  "set! (.%s ...): value type %s does not match field type %s",
+                  fname, type_name(value->type), type_name(expected_field));
+        return NULL;
+    }
+
+    /* Move-at-set for rc-managed payloads, mirroring the DS2 scan
+     * in elab_make_struct. */
+    if (value->kind == EX_VAR && value->as.var.binding) {
+        TypeKind vk = value->type.kind;
+        if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
+            (void)binding_mark_moved(value->as.var.binding, value->span);
+        }
+    }
+
+    Expr *out = expr_new(e->arena, EX_SET_FIELD, TYPE_NIL, call->span);
+    out->as.set_field_.receiver = receiver;
+    out->as.set_field_.value = value;
+    out->as.set_field_.field_idx = fi;
+    out->as.set_field_.def = def;
+    out->as.set_field_.receiver_is_rc = receiver_is_rc;
+    return out;
+}
+
 Expr *elab_set(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span, "set! takes (set! name value)");
@@ -1133,8 +1245,17 @@ Expr *elab_set(Elab *e, const Form *call) {
         return elab_set_deref(e, call, target);
     }
 
+    /* Phase DS3: (set! (.field s) v) -- struct field write. */
+    if (target->tag == F_LIST && target->as.list.len == 2
+        && target->as.list.items[0]->tag == F_SYM
+        && target->as.list.items[0]->as.sym->len > 1
+        && target->as.list.items[0]->as.sym->name[0] == '.') {
+        return elab_set_field(e, call, target);
+    }
+
     if (target->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, target->span, "set! target must be a symbol or (@ borrow)");
+        diag_emit(DIAG_ERROR, target->span,
+                  "set! target must be a symbol, (@ borrow), or (.field struct)");
         return NULL;
     }
     Binding *b = scope_lookup(e->scope, target->as.sym);

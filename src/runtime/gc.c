@@ -228,6 +228,16 @@ void gc_unregister_block(RcControlBlock *cb) {
 
 /* ========== The Bacon-Rajan Algorithm ========== */
 
+/* DS3: callback passed to RCK_STRUCT walk_fns during gc_mark_phase.
+ * Colors and enqueues each enumerated rc child. */
+static void gc_mark_struct_child(RcControlBlock *child, void *ctx) {
+    (void)ctx;
+    if (child && gc_get_color(child) != GC_BLACK) {
+        gc_set_color(child, GC_BLACK);
+        gc_enqueue_grey(child);
+    }
+}
+
 /* Mark phase: traverse from strong roots and mark reachable objects */
 static void gc_mark_phase(void) {
     /* Reset all colors to WHITE first */
@@ -270,6 +280,11 @@ static void gc_mark_phase(void) {
                 gc_set_color(inner, GC_BLACK);
                 gc_enqueue_grey(inner);
             }
+        } else if (cb->value && cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {
+            /* DS3: walk_fn enumerates each rc-typed child of the struct
+             * payload via gc_mark_struct_child below, which colors and
+             * enqueues children just like the existential path. */
+            cb->walk_fn(cb->value, gc_mark_struct_child, NULL);
         }
     }
 

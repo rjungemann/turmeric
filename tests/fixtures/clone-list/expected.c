@@ -1658,11 +1658,15 @@ typedef void (*RcDropFn)(void *value);
 
 typedef struct RcControlBlock RcControlBlock;
 
+typedef void (*RcWalkChildFn)(RcControlBlock *child, void *ctx);
+typedef void (*RcWalkFn)(void *value, RcWalkChildFn cb, void *ctx);
+
 struct RcControlBlock {
     uint64_t strong_count;
     uint64_t weak_count;
     void *value;
     RcDropFn drop_fn;
+    RcWalkFn walk_fn;
     uint8_t value_type_kind;
     uint8_t color;           /* GC color */
     bool may_contain_cycles;  /* Hint for GC */
@@ -1822,6 +1826,7 @@ static RcDropFn default_drop_fn_for_type(int value_type_kind) {
 
 #define RCK_OPAQUE       0
 #define RCK_EXISTENTIAL  1
+#define RCK_STRUCT       2
 #define RCEXP_OPAQUE     0
 #define RCEXP_RC         1
 RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {
@@ -1832,6 +1837,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDro
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);
+    cb->walk_fn = NULL;
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
@@ -1844,6 +1850,12 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDro
 
 RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {
     return rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_OPAQUE, RCEXP_OPAQUE);
+}
+
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {
+    RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_STRUCT, 0);
+    cb->walk_fn = walk_fn;
+    return cb;
 }
 
 uint64_t rc_strong_increment(RcControlBlock *cb) {
@@ -1951,6 +1963,16 @@ void *tur_ref_from_rc(RcControlBlock *cb) {
 }
 
 /* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */
+static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {
+    (void)ctx;
+    if (child && child->color != GC_BLACK) {
+        child->color = GC_BLACK;
+        if (gc_grey_count < GC_MAX_SUSPECTS) {
+            gc_grey_queue[gc_grey_count++] = child;
+        }
+    }
+}
+
 static void gc_mark_phase(void) {
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         gc_all_blocks[i]->color = GC_WHITE;
@@ -1976,6 +1998,8 @@ static void gc_mark_phase(void) {
                     gc_grey_queue[gc_grey_count++] = inner;
                 }
             }
+        } else if (cb && cb->value && cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {
+            cb->walk_fn(cb->value, __gc_mark_struct_child, NULL);
         }
     }
 }

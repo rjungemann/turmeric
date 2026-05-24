@@ -110,6 +110,25 @@ static Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     return NULL;
 }
 
+/* Phase DS3: when a defstruct field is annotated `rc<Name>`, look up `Name`
+ * as a struct so the resulting Type can carry the StructDef alongside the
+ * inner TypeKind.  Returns NULL when Name isn't an in-scope struct (the
+ * field still works as an opaque RcControlBlock *, just without field-
+ * resolution support through the rc wrapper). */
+static StructDef *lookup_rc_inner_struct_def(Elab *e, const char *tname, uint32_t tlen) {
+    if (tlen <= 4 || memcmp(tname, "rc<", 3) != 0 || tname[tlen - 1] != '>') {
+        return NULL;
+    }
+    const char *inner_name = tname + 3;
+    uint32_t inner_len = tlen - 4;  /* strip "rc<" and ">" */
+    const Symbol *sym = symtab_intern(e->st, strslice(inner_name, inner_len));
+    Binding *tb = scope_lookup_type_def(e->scope, sym);
+    if (tb && tb->type.kind == TY_STRUCT) {
+        return tb->type.as.struct_.def;
+    }
+    return NULL;
+}
+
 /* Phase RF0: Check if a symbol was registered as a forward-declared type stub */
 static bool elab_is_forward_type(Elab *e, const Symbol *sym) {
     for (uint32_t i = 0; i < e->n_forward_type_syms; i++) {
@@ -391,6 +410,17 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                                   field_name_form->as.sym->name, tname);
                         return NULL;
                     }
+                } else if (fkind == TY_RC && finner == TY_UNKNOWN) {
+                    /* DS3: rc<Name> over a user-defined struct -- carry the
+                     * StructDef so receivers of rc<Name>-typed values can do
+                     * field access / set! through the rc wrapper. */
+                    StructDef *inner_def = lookup_rc_inner_struct_def(e, tname, tlen);
+                    if (inner_def) {
+                        finner = TY_STRUCT;
+                        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *t = type_rc_struct(inner_def);
+                        full_type = t;
+                    }
                 }
             }
             if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
@@ -472,6 +502,14 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                                   "defstruct field '%s' has unrecognized type :%s",
                                   field_name_form->as.sym->name, tname);
                         return NULL;
+                    }
+                } else if (fkind == TY_RC && finner == TY_UNKNOWN) {
+                    StructDef *inner_def = lookup_rc_inner_struct_def(e, tname, tlen);
+                    if (inner_def) {
+                        finner = TY_STRUCT;
+                        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *t = type_rc_struct(inner_def);
+                        full_type = t;
                     }
                 }
             }

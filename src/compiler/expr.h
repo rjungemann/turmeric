@@ -210,6 +210,8 @@ typedef enum ExprKind {
     /* Phase 11: Struct operations */
     EX_MAKE_STRUCT,    /* (make-struct Name v1 v2 ...) - struct literal */
     EX_GET_FIELD,      /* (.field s) - struct field access */
+    /* Phase DS3: struct field assignment */
+    EX_SET_FIELD,      /* (set! (.field s) v) - struct field write */
     EX_PROGRAM,
     /* Phase M0: Module system */
     EX_DEFMODULE,      /* (defmodule name [docstring] (export ...) (import ...) body...) */
@@ -601,6 +603,10 @@ struct Expr {
         /* Phase 11: Struct operations */
         struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */
         struct { Expr *struct_expr; uint32_t field_idx; StructDef *def; } get_field_; /* (.field s) - field read */
+        /* Phase DS3: (set! (.field s) v) - struct field write.  receiver_is_rc
+         * is true when the receiver expression is rc<Struct> (auto-deref); in
+         * that case codegen casts through the rc-block's value pointer. */
+        struct { Expr *receiver; Expr *value; uint32_t field_idx; StructDef *def; bool receiver_is_rc; } set_field_;
 
         struct { Expr **items; uint32_t n; }                               program;
 

@@ -159,6 +159,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
+void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
 
 /* ------------ emit_fns.c: function-definition emission ------------ */
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
