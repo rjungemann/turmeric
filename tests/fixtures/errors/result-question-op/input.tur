@@ -1,6 +1,7 @@
-;; Phase R1: `?` lowers to a use of the result helpers `err?`, `err`, `err-val`,
-;; `ok-val`.  When those helpers aren't in scope the lowering must fail with a
-;; name-resolution diagnostic rather than silently miscompiling.
+;; MF2: the `?` operator lowers via the __tur-q-* helpers in
+;; stdlib/result.tur, which take a result-shaped :ptr<void>. Applying ? to
+;; a non-result expression (here, a plain int) must produce a type-mismatch
+;; diagnostic at the helper call site rather than silently miscompiling.
 (defn main [] :int
   (do
     (? 42)

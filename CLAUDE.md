@@ -94,6 +94,28 @@ Test fixture files (`tests/fixtures/**/*.tur`) must be ASCII-only. The Turmeric
 parser hangs on non-ASCII bytes (e.g. UTF-8 em dashes). Always use `--` instead
 of `--`.
 
+### `requires.*` skip markers
+
+A fixture directory can carry a marker file that causes `tests/run.sh` to
+PASS-skip it under certain conditions:
+
+| Marker | Skips when ... |
+| --- | --- |
+| `requires.tsan` | `TUR_TSAN` is not `1` |
+| `requires.interp` | (override) forces the interpreter path even under non-TSan |
+| `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
+| `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
+
+## Optional dependencies
+
+Some fixtures depend on the sibling repo `../turmeric-spices/`. When present,
+fixtures tagged `requires.spices` run as normal; when absent they auto-skip.
+To enable them, clone the repo next to this one:
+
+```sh
+git clone <turmeric-spices-url> ../turmeric-spices
+```
+
 ## Sweet-Expression Style
 
 Turmeric files can opt into sweet-expression syntax with a `#lang` directive or

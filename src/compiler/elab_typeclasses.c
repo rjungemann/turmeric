@@ -527,6 +527,37 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     return method;
 }
 
+/* Compare a freshly-parsed typeclass against an existing entry of the same
+ * name. Returns true iff all observable signature surface matches: same
+ * type-parameter count and kinds, same method count, and per-method the same
+ * name, parameter count, parameter type-kinds, and return type-kind. Used to
+ * accept idempotent stdlib pre-declarations while rejecting genuine
+ * redefinitions. */
+static bool typeclass_signatures_match(const TypeClass *existing,
+                                       uint8_t n_type_params,
+                                       const Kind *type_param_kinds,
+                                       uint8_t n_methods,
+                                       const TypeClassMethod *methods) {
+    if (existing->n_type_params != n_type_params) return false;
+    if (existing->n_methods     != n_methods)     return false;
+    for (uint8_t i = 0; i < n_type_params; i++) {
+        Kind a = existing->type_param_kinds ? existing->type_param_kinds[i] : KIND_STAR;
+        Kind b = type_param_kinds          ? type_param_kinds[i]          : KIND_STAR;
+        if (a != b) return false;
+    }
+    for (uint8_t i = 0; i < n_methods; i++) {
+        const TypeClassMethod *em = &existing->methods[i];
+        const TypeClassMethod *nm = &methods[i];
+        if (em->name != nm->name) return false; /* symbols interned -- ptr eq */
+        if (em->n_params != nm->n_params) return false;
+        if (em->return_type.kind != nm->return_type.kind) return false;
+        for (uint8_t j = 0; j < em->n_params; j++) {
+            if (em->param_types[j].kind != nm->param_types[j].kind) return false;
+        }
+    }
+    return true;
+}
+
 /* Elaborate (defclass Name [type-params...] (method1 ...) (method2 ...) ...)
  *
  * Defines a new typeclass with type parameters and methods.
@@ -554,13 +585,13 @@ Expr *elab_defclass(Elab *e, const Form *call) {
      * defined (in stdlib/typeclass.tur), not reserved.  The only guard remaining
      * is the standard "already defined" check below. */
 
-    /* Check if already defined — idempotent: skip silently if already in scope.
-     * This allows stdlib/typeclass-eq.tur to pre-declare Eq without conflicting
-     * with user programs or test fixtures that also define it. */
+    /* Check if already defined. The decision (skip silently vs hard-error) is
+     * deferred until after the new defclass is parsed so we can compare
+     * signatures: identical signature = idempotent silent skip (preserves the
+     * stdlib pre-declaration of Eq, Functor, etc.); different signature =
+     * "typeclass 'Foo' is already defined" diagnostic. See
+     * typeclass_signatures_match above. */
     TypeClass *existing = typeclass_env_lookup_typeclass(&e->typeclass_env, name);
-    if (existing) {
-        return e_nil(e, call->span);
-    }
     
     /* Parse type parameters (optional) */
     const Symbol **type_params = NULL;
@@ -686,14 +717,43 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     
     /* Allocate methods array */
     methods = (TypeClassMethod *)arena_alloc(e->arena, n_methods * sizeof(TypeClassMethod));
-    
-    /* Second pass: parse each method and elaborate any default bodies */
+    /* Per-method body_start so the default-body elaboration can run as a
+     * second pass after the redefinition check. */
+    uint32_t *method_body_starts = (uint32_t *)arena_alloc(e->arena,
+        n_methods * sizeof(uint32_t));
+
+    /* Second pass (signatures only): parse each method's signature.  Default
+     * bodies are elaborated in a third pass below so that an idempotent
+     * stdlib re-declare can short-circuit without registering orphan
+     * __default_* file-level FnDefs. */
     for (uint32_t i = 0; i < n_methods; i++) {
         Form *method_form = call->as.list.items[methods_start + i];
         uint32_t body_start = 0;
         TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start);
         if (!method) return NULL;
         methods[i] = *method;
+        method_body_starts[i] = body_start;
+    }
+
+    /* Redefinition check: same name already registered -> compare signatures.
+     * Identical = idempotent silent skip (stdlib pre-declaration case);
+     * different = hard error. */
+    if (existing) {
+        if (typeclass_signatures_match(existing, n_type_params,
+                                       type_param_kinds, n_methods, methods)) {
+            return e_nil(e, call->span);
+        }
+        diag_emit(DIAG_ERROR, call->span,
+                  "typeclass '%s' is already defined", name->name);
+        return NULL;
+    }
+
+    /* Third pass: elaborate default method bodies (if any) now that the
+     * defclass is committed. */
+    for (uint32_t i = 0; i < n_methods; i++) {
+        Form *method_form = call->as.list.items[methods_start + i];
+        uint32_t body_start = method_body_starts[i];
+        TypeClassMethod *method = &methods[i];
 
         /* ER3: If the method form has forms after the return type, elaborate
          * them as a default body.  This mirrors elab_definstance's method

@@ -1584,41 +1584,37 @@ Expr *elab_question(Elab *e, const Form *call) {
         strslice(q_name, (uint32_t)strlen(q_name)));
     Form *q_sym_f = form_sym(e->arena, span, q_sym);
 
-    /* User-defined result helpers — looked up by name in scope. */
-    const Symbol *sym_err_q   = symtab_intern(e->st, strslice("err?",    4));
-    const Symbol *sym_err     = symtab_intern(e->st, strslice("err",     3));
-    const Symbol *sym_err_val = symtab_intern(e->st, strslice("err-val", 7));
-    const Symbol *sym_ok_val  = symtab_intern(e->st, strslice("ok-val",  6));
+    /* The ? lowering routes through two stdlib helpers --
+     * __tur-q-is-err? and __tur-q-ok-val (defined in stdlib/result.tur) --
+     * that wrap the unsafe err? / ok-val calls inside (unsafe ...). This
+     * keeps the unsafe audit surface for ? to a single pair of named
+     * functions and means user call sites of ? do not need their own
+     * (unsafe ...) wrapper. Update both lowering and the stdlib helpers
+     * together if the internal result representation changes. */
+    const Symbol *sym_is_err = symtab_intern(e->st,
+        strslice("__tur-q-is-err?", 15));
+    const Symbol *sym_ok_val = symtab_intern(e->st,
+        strslice("__tur-q-ok-val", 14));
 
-    Form *err_q_f   = form_sym(e->arena, span, sym_err_q);
-    Form *err_f     = form_sym(e->arena, span, sym_err);
-    Form *err_val_f = form_sym(e->arena, span, sym_err_val);
+    Form *is_err_f  = form_sym(e->arena, span, sym_is_err);
     Form *ok_val_f  = form_sym(e->arena, span, sym_ok_val);
     Form *if_f      = form_sym(e->arena, span, e->sym_if);
     Form *let_f     = form_sym(e->arena, span, e->sym_let);
     Form *return_f  = form_sym(e->arena, span, e->sym_return);
 
-    /* (err? __q) */
-    Form *test_items[2] = { err_q_f, q_sym_f };
+    /* (__tur-q-is-err? __q) */
+    Form *test_items[2] = { is_err_f, q_sym_f };
     Form *test_form = form_list(e->arena, span, test_items, 2);
 
-    /* (err-val __q) */
-    Form *err_val_items[2] = { err_val_f, q_sym_f };
-    Form *err_val_form = form_list(e->arena, span, err_val_items, 2);
-
-    /* (err (err-val __q)) */
-    Form *err_call_items[2] = { err_f, err_val_form };
-    Form *err_call_form = form_list(e->arena, span, err_call_items, 2);
-
-    /* (return (err (err-val __q))) */
-    Form *return_items[2] = { return_f, err_call_form };
+    /* (return __q) -- __q is already the err Result; propagate it as-is. */
+    Form *return_items[2] = { return_f, q_sym_f };
     Form *return_form = form_list(e->arena, span, return_items, 2);
 
-    /* (ok-val __q) */
+    /* (__tur-q-ok-val __q) */
     Form *ok_val_items[2] = { ok_val_f, q_sym_f };
     Form *ok_val_form = form_list(e->arena, span, ok_val_items, 2);
 
-    /* (if (err? __q) (return (err (err-val __q))) (ok-val __q)) */
+    /* (if (__tur-q-is-err? __q) (return __q) (__tur-q-ok-val __q)) */
     Form *if_items[4] = { if_f, test_form, return_form, ok_val_form };
     Form *if_form = form_list(e->arena, span, if_items, 4);
 

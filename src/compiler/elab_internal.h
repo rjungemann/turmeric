@@ -474,6 +474,11 @@ typedef struct Elab {
     bool             separate_compilation;
     /* SB2: When true, (import ...) is forbidden (sandboxed environment). */
     bool             sandboxed;
+    /* MF3: true while elaborating the auto-loaded stdlib prefix; new global
+     * bindings created during this window are marked is_from_stdlib so
+     * user code that later shadows them gets a hard diagnostic instead
+     * of broken C output. */
+    bool             in_stdlib_load;
     /* Phase M4: During macro expansion, the defining module of the currently
      * expanding macro (so private helper macros from that module are visible). */
     const Symbol    *macro_expansion_module;

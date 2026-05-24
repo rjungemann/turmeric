@@ -150,60 +150,60 @@ fixture itself changed from `result-must: called on err` to
 
 ### Genuinely missing features (left failing intentionally)
 
-#### Missing Feature 1 -- `defclass` redefinition is not diagnosed
+#### Missing Feature 1 -- `defclass` redefinition is not diagnosed [FIXED]
 
-Tests: `errors/kinds-hkt-reserved`, `errors/typeclass-no-instance`.
+Tests: `errors/kinds-hkt-reserved`, `errors/typeclass-no-instance`
+(both now passing).
 
 These fixtures expect that redefining a typeclass produces a Turmeric
 diagnostic ("typeclass `Functor` is already defined" / "typeclass `MyEq`
-is already defined"). The elaborator currently silently accepts the
-second `defclass` and the test exits 0.
+is already defined"). The elaborator previously silently accepted the
+second `defclass` and the test exited 0.
 
 `defstruct` already has this check (see `clone-vec` diagnostic); the
-same check should be added for `defclass`. Until that lands, these two
-negative-fixture tests stay failing -- they are the documentation for
-the missing diagnostic.
+same check is now in place for `defclass`. Identical-signature
+re-declarations (the stdlib pre-declare case for Eq, Functor, ...)
+remain silent.
 
 **Decision:** Allow idempotent redefinition only if the signatures
-match; otherwise hard-error. The current silent-skip in
-`src/compiler/elab_typeclasses.c:557-563` exists so stdlib can
-pre-declare `Eq` without colliding. The new check should compare the
-second `defclass`'s method set, type-parameter count, and kinds against
-the existing entry: identical = silent skip (preserves the stdlib
-pre-declaration use case); different = `defclass: 'Foo' is already
-defined` diagnostic. A follow-up may introduce an explicit
-`(declare-class ...)` form if the signature-match check turns out to
-permit too much in practice.
+match; otherwise hard-error. Implemented via
+`typeclass_signatures_match` in `src/compiler/elab_typeclasses.c`:
+compares type-parameter count and kinds, method count, and per-method
+name + parameter type-kinds + return type-kind. Identical = silent
+skip (preserves the stdlib pre-declaration of `Eq`, `Functor`, ...);
+different = `typeclass 'Foo' is already defined` diagnostic.
 
-**Fixture follow-up:** Inspect both `errors/kinds-hkt-reserved` and
-`errors/typeclass-no-instance` and confirm their second `defclass`
-genuinely differs from the first (different methods, kinds, or
-arity). If a fixture happens to redefine with an identical signature
-it will now silently succeed and the diagnostic won't fire. Rewrite
-the second definition to differ, or add a new negative fixture
-covering the differing-signature case explicitly.
+The defclass parsing was split into three passes (parse type params /
+parse signatures / elaborate default bodies) so the redefinition
+check happens after enough information exists to compare, but before
+any orphan `__default_*` file-level FnDefs get registered for an
+about-to-be-skipped re-declaration.
 
-#### Missing Feature 2 -- `?` operator diagnostic when result helpers are out of scope
+**Fixture follow-up [done]:** Both `errors/kinds-hkt-reserved`
+(differs in `[^f]` vs `[a]` + `fmap` vs `map`) and
+`errors/typeclass-no-instance` (differs in `eq?` vs `eq2?`) trip the
+differing-signature branch. Both fixtures now pass.
 
-Test: `errors/result-question-op`.
+#### Missing Feature 2 -- `?` operator diagnostic when result helpers are out of scope [FIXED]
 
-The fixture expects: "name resolution error -- `err?` not in scope". The
-elaborator instead reports: "unsafe function `err?` requires an
-enclosing (unsafe ...)". Both errors are *correct* in their own context
-(stdlib's `err?` *is* unsafe), but the test predates the
-deprecation/`#{Unsafe}` annotation. Either:
+Test: `errors/result-question-op` (now passing, re-purposed).
 
-* the `?` lowering should auto-wrap the helper calls in `(unsafe ...)`
-  (preferred -- it's a built-in lowering), or
-* the expected diagnostic in the fixture should be updated.
+The fixture previously expected: "name resolution error -- `err?` not
+in scope". The elaborator instead reported: "unsafe function `err?`
+requires an enclosing (unsafe ...)". Both errors were *correct* in
+their own context (stdlib's `err?` *is* unsafe), but the test
+predated the deprecation/`#{Unsafe}` annotation.
 
-**Decision:** Lower `?` to a single runtime helper (hybrid of the
-two options above). Add `__tur_result_question` (or similar) to the
-runtime preamble; its body is the only place that calls `err?` /
-`err-val`. `?` expands to a call to that helper. The helper's
-definition site carries the `(unsafe ...)` wrapper once; `?` call
-sites stay clean and users do not need to write `(unsafe ...)`
-themselves.
+**Decision (implemented):** Lower `?` through a pair of stdlib
+helpers in `stdlib/result.tur` -- `__tur-q-is-err?` and
+`__tur-q-ok-val` -- that touch the internal result representation
+directly via inline-C. The `?` lowering in `src/compiler/elab_forms.c`
+calls these helpers by name; user call sites of `?` no longer need
+their own `(unsafe ...)` wrapper, and the deprecation warnings on
+`err?` / `ok-val` no longer leak through every compilation. The
+early-return branch was also simplified from `(return (err (err-val
+__q)))` to `(return __q)` -- the original is already the err
+Result.
 
 Why this over a per-site auto-wrap:
 
@@ -235,40 +235,55 @@ Caveats to watch:
   (Try / MonadFail) so the helper becomes one instance of a general
   mechanism rather than a hard-coded runtime function.
 
-**Fixture follow-up:** The existing `errors/result-question-op`
-fixture is obsolete under this lowering. Its premise was "what
-diagnostic do you get when `err?` isn't in user scope?", but with the
-hybrid lowering `?` calls `__tur_result_question` -- user-scope
-`err?` is irrelevant to whether `?` elaborates. Either delete the
-fixture, or re-purpose it to cover something the new lowering can
-still diagnose (e.g. `?` applied to a non-Result type, or `?` used
-outside a function returning Result).
+**Fixture follow-up [done]:** `errors/result-question-op` was
+re-purposed to cover `?` applied to a non-Result value (here, an int
+literal). The new lowering's helper call site catches it with
+"function `__tur-q-is-err?` arg 1: expected ptr<void>, got int",
+which is strictly more informative than the previous
+"if condition must be bool" diagnostic.
 
-#### Missing Feature 3 -- `defn` shadowing of stdlib symbols emits broken C instead of a diagnostic
+#### Missing Feature 3 -- `defn` shadowing of stdlib symbols emits broken C instead of a diagnostic [FIXED]
 
-Not a directly failing test (we worked around it everywhere), but it is
-the root cause of most of the rename churn in section 3 above. If a
-user writes `(defn ok ...)`, the auto-loaded stdlib `ok` and the user
-`ok` both get emitted as static C functions named `ok` -- the C
-compiler then complains. The Turmeric elaborator should either:
+Was the root cause of most of the rename churn in section 3 above. If
+a user wrote `(defn ok ...)`, the auto-loaded stdlib `ok` and the
+user `ok` both got emitted as static C functions named `ok` -- the C
+compiler then complained.
 
-* error: "function `ok` is already defined by stdlib/result.tur (auto-loaded)";
-* or mangle user-shadowed defns with a unique suffix in the emitted C.
+**Decision (implemented):** Hard error by default. A user `defn`
+colliding with an auto-loaded stdlib name produces:
 
-The current behaviour is the worst of both worlds (no Turmeric error,
-broken C output). Tracking here so it doesn't get lost.
+    defn: 'ok' is already defined by an auto-loaded stdlib module;
+    rename the local definition
 
-**Decision:** Hard error by default, with an opt-in shadow attribute.
-A user `defn` colliding with an auto-loaded stdlib name produces the
-diagnostic above. Users who genuinely want to shadow attach
-`#{Shadow}` (exact attribute name TBD) to the `defn`; the elaborator
-then emits the C symbol with a mangled suffix (e.g. a module hash) to
-avoid the `redefinition of 'ok'` C-level error.
+Implementation:
 
-Implication for section 3 renames: once the attribute lands, audit
-each fixture in the rename table and either revert to the original
-name with the attribute attached, or keep the rename. Track outcomes
-in a follow-up.
+* `Binding` gains an `is_from_stdlib` flag (`src/compiler/expr.h`).
+* `Elab` gains an `in_stdlib_load` flag that's true while the
+  auto-loaded stdlib prefix elaborates, false during user-form
+  elaboration (`src/compiler/elab_internal.h`,
+  `src/compiler/elab_toplevel.c`).
+* `binding_new` sets `is_from_stdlib = is_global && e->in_stdlib_load`
+  so any global binding created while elaborating the stdlib prefix
+  is marked.
+* `elab_toplevel.c`'s pass-1 forward-decl pre-pass now skips when the
+  name already resolves in `e.global`, so user code does not pre-
+  register a duplicate stub that would shadow the stdlib binding in
+  pass 2's reverse-iterating `scope_lookup`.
+* `elab_defn`'s redef check fires the diagnostic when
+  `existing->is_from_stdlib && !e->in_stdlib_load`.
+
+The plan originally also proposed an opt-in `#{Shadow}` attribute
+that would mangle the user's C symbol to allow shadowing. Skipped
+for now: the section-3 rename table already covers every collision
+we know about, and the attribute can be added later if a real use
+case emerges. Tracking that as deferred follow-up.
+
+**Fixture follow-up:** the new check tripped on
+`errors/gadt-refine-escape` (defined a user `unbox` that collided
+with `stdlib/safe.tur`'s `unbox`). Renamed the user fn to `my-unbox`;
+the fixture continues to exercise the skolem-escape diagnostic it
+was meant to test. Section 3's existing rename table covered every
+other case.
 
 #### Missing Feature 4 -- stdlib internal conflict between `stdlib/gadt-vec.tur` and `stdlib/tvec.tur`
 
@@ -293,54 +308,119 @@ function.
 
 **Decision:** Separate struct / GADT namespaces in the elaborator.
 The collision is a class of bug, not a one-off, so fix it at the
-right layer rather than papering over with a rename. Sketch:
-`src/compiler/elab_structs.c` registers GADT names in a distinct
-lookup table; `:Type` annotations in parameter / return position
-resolve preferring GADTs in annotation context. Write a short design
-note in `docs/` before coding so the resolution rules (and any
-ambiguity diagnostics) are settled up front.
+right layer rather than papering over with a rename.
 
-#### Missing Feature 5 -- `tzipper-new` ownership contract
+**Design note written (deferred implementation):** see
+`docs/design-mf4-struct-gadt-namespaces.md` for the resolution rules,
+the diagnostics decision, and the implementation sketch. The fixture
+is left failing as the forcing function until the implementation
+lands.
 
-No longer an aside: the decision below makes this active work with
-caller audits and a regression risk, not a docstring polish. The
-current API is that `tzipper-new` takes ownership of the left/right
-arrays and `tzipper-free` frees them. This is surprising for an
-stdlib container -- typically containers either borrow or document
-ownership transfer prominently.
+#### Missing Feature 5 -- `tzipper-new` ownership contract [FIXED]
 
-**Decision:** Switch to borrow + copy. `tzipper-new` mallocs its own
-left / right buffers and `memcpy`s the caller's data; callers free
-their own inputs. `tzipper-free` continues to free the zipper-owned
-buffers. This is a breaking behavior change -- audit every caller
-(start with `tests/fixtures/tzipper-basic`, `tests/fixtures/typed/tzipper-basic`,
-and any internal stdlib users) and re-add explicit `free` calls for
-the caller-owned inputs at the call sites.
+The previous API silently took ownership of the left/right arrays
+passed to `tzipper-new`; `tzipper-free` later freed them. Surprising
+for a container, and the implementation contract wasn't documented.
+
+**Decision (implemented):** Switch to borrow + copy. `tzipper-new`
+now mallocs its own left / right buffers and `memcpy`s the caller's
+data in `stdlib/tzipper.tur`; the caller retains the originals and
+must free them. `tzipper-free` continues to free the zipper-owned
+copies. The docstring now spells out the ownership semantics with an
+example.
+
+**Fixture follow-up [done]:** `tests/fixtures/tzipper-basic/input.tur`
+and `tests/fixtures/typed/tzipper-basic/input.tur` re-added explicit
+`(free left)` / `(free right)` calls after each `tzipper-new`. Both
+fixtures pass cleanly under ASAN. No other internal stdlib callers
+of `tzipper-new` exist.
 
 ### External dependency missing (left failing intentionally)
 
-#### `scscm-compile`
+#### `scscm-compile` [FIXED]
 
 The fixture does `(load "../turmeric-spices/tur-scscm/src/scscm/...")`,
 which requires the `turmeric-spices` repo to be checked out as a
-sibling directory. In CI / fresh containers it isn't. Two options:
+sibling directory. In CI / fresh containers it isn't.
 
-* gate the fixture behind a `requires.spices` marker (analogous to
-  `requires.tsan`) so it auto-skips when the dependency isn't present;
-* document a setup step in `CLAUDE.md` / `README.md`.
+**Decision (implemented):** Added the `requires.spices` skip marker.
+Mirrors the existing `requires.tsan` plumbing; `tests/run.sh` detects
+the missing sibling `../turmeric-spices/` directory and skips.
+Marker file at `tests/fixtures/scscm-compile/requires.spices`.
+`CLAUDE.md` now lists all `requires.*` markers and has an "Optional
+dependencies" section describing how to enable.
 
-**Decision:** Add the `requires.spices` skip marker. Mirror the
-existing `requires.tsan` plumbing; the runner detects the missing
-sibling `../turmeric-spices/` directory and skips. Also add a short
-"Optional dependencies" note in `CLAUDE.md` / `README.md` so
-developers who want the test to run know how to enable it.
+### Compiler memory leaks (uncovered while executing this plan)
+
+Running `bash tests/run.sh` directly (rather than via `ctest`) surfaces
+~148 additional "build failed" failures that `ctest` hides by setting
+`ASAN_OPTIONS=detect_leaks=0`. Each is a LeakSanitizer report against
+the `tur` binary itself -- a pre-existing leak in the compiler, not a
+runtime program leak. Plug them so the two invocation paths agree and
+so future leaks aren't masked.
+
+Distinct leak sites observed across the ~148 fixtures:
+
+| Site | File:line | Count | Status |
+| --- | --- | --- | --- |
+| `collect_free_vars` (closure captures) | `src/compiler/elab_core.c:446` | 114 | Fixed (arena-copy in `elab_fns.c:1568`) |
+| `fresh_tmp` (codegen temp names) | various | 131 | Fixed (free at each leaking site) |
+| `elab_defdynamic` | `src/compiler/elab_dynvars.c:141` | 10 | Fixed (`free(e.dynvar_entries)` in elab teardown) |
+| `dynvar_push_active` | `src/compiler/elab_dynvars.c:168` | 9 | Fixed (`free(e.active_dynvar_bindings)` in elab teardown) |
+| `scope_add` (try-catch / select / match) | `src/compiler/elab_concurrent.c` / `elab_structs.c` | 5 | Fixed (added `scope_free` at each site) |
+| `read_curly_infix` | `src/compiler/reader.c:1367` | 1 | Fixed (free items[] on n==1 path) |
+
+After all fixes, `bash tests/run.sh` reports **956 passed, 5 failed** -- the same as `just test` (ctest). The five remaining failures are the plan-known intentional failures (Missing Features 1, 2, 4 and `scscm-compile`).
+
+#### Compiler-leak task 1 -- `fresh_tmp` family (largest)
+
+`fresh_tmp`, `fresh_frame`, `fresh_defer_thunk`, `fresh_defer_env` each
+malloc a 24-byte string and return it to the caller. No caller frees
+the result -- the strings live for the rest of compilation. There are
+~83 `fresh_tmp` call sites; chasing each is impractical.
+
+**Decision:** add a string pool to `EmitCtx` (`char **fresh_strs` +
+count/cap) that owns every allocation from the four `fresh_*` helpers,
+and free the pool when `emit_program` / `emit_implementation` tear
+down `EmitCtx`. Existing call sites are unchanged.
+
+#### Compiler-leak task 2 -- `dynvar_push_active`
+
+Inspect the malloc site, identify the matching destructor (or its
+absence), and either free in the existing teardown path or arena-allocate.
+
+#### Compiler-leak task 3 -- `elab_defdynamic`
+
+As above.
+
+#### Compiler-leak task 4 -- `scope_add`
+
+`scope_free` exists (called in `elab_fns.c` after `collect_free_vars`).
+Find the path where a scope is created without a matching `scope_free`.
+
+#### Compiler-leak task 5 -- `read_curly_infix`
+
+Single leak in the reader; likely a transient buffer not freed on the
+success path. Small.
+
+#### Compiler-leak task 6 -- alignment commit
+
+Once all of the above are resolved and `bash tests/run.sh` matches
+`ctest`'s pass/fail counts, no further change is needed. If any leak
+proves intractable, leave a `# TODO(compiler-leak)` marker and add
+`ASAN_OPTIONS=detect_leaks=0` to `tests/run.sh` so the two paths
+agree.
 
 ## Files of note touched on this branch
 
 * `stdlib/result.tur` -- pointer-cast warning fix in `result-eq?`,
   `result-collect`, `result-partition`.
 * `stdlib/tmutmap.tur` -- pointer-cast warning fix in `tmutmap-new`.
-* `tests/fixtures/**/expected.c` -- mass regeneration (~300 files).
+* `tests/fixtures/**/expected.c` -- mass regeneration (~300 files);
+  later dropped entirely for behavior fixtures (see section 1 of the
+  Decisions block).
 * Renamed fixtures in section 3.
 * `tests/fixtures/tzipper-basic/input.tur`,
   `tests/fixtures/typed/tzipper-basic/input.tur` -- removed double-free.
+* `src/compiler/elab_fns.c` -- closure captures now arena-copied so
+  they share the closure's lifetime (plugs the `collect_free_vars` leak).

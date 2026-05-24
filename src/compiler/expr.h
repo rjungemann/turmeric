@@ -101,6 +101,12 @@ struct Binding {
      * for self-recursive references via e->current_fn_name. */
     bool          is_deprecated;
     const char   *deprecation_message;   /* NUL-terminated, arena-owned, or NULL */
+    /* MF3 (test-suite-cleanup-plan): true if this binding came from an
+     * auto-loaded stdlib module. Set during the M7 promotion in
+     * elab_toplevel.c. Used by elab_defn to hard-error on user code that
+     * shadows a stdlib name (which would otherwise produce conflicting
+     * static functions of the same C name and break the C compile). */
+    bool          is_from_stdlib;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */

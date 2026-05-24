@@ -2158,22 +2158,22 @@ static bool __inst_Eq_eq__uint16(uint16_t, uint16_t);
 static bool __inst_Eq_eq__uint32(uint32_t, uint32_t);
 static bool __inst_Eq_eq__uint64(uint64_t, uint64_t);
 static bool __inst_Eq_eq__float32(float, float);
-static bool __fn_463(int64_t, int64_t);
+static bool __fn_467(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_483(int64_t, int64_t);
+static bool __fn_487(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_510(int64_t, int64_t);
+static bool __fn_514(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_530(int64_t, int64_t);
 static bool __fn_534(int64_t, int64_t);
+static bool __fn_538(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_550(int64_t, int64_t);
 static bool __fn_554(int64_t, int64_t);
+static bool __fn_558(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_570(int64_t, int64_t);
+static bool __fn_574(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_641(int64_t, int64_t);
+static bool __fn_645(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
@@ -2226,6 +2226,8 @@ static bool ok_(void *);
 static bool err_(void *);
 static int64_t ok_val(void *);
 static int64_t err_val(void *);
+static bool __tur_q_is_err_(void *);
+static int64_t __tur_q_ok_val(void *);
 static int64_t result_unwrap(void *);
 static int64_t result_unwrap_or(void *, int64_t);
 static int64_t result_expect(void *, const char *);
@@ -2504,12 +2506,12 @@ static dict_Eq_float32 dict_Eq_float32_singleton = {
     .eq_ = __inst_Eq_eq__float32,
 };
 
-static bool __fn_463(int64_t a, int64_t b) {
+static bool __fn_467(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return tmap_eq_(x, y, (int64_t)(intptr_t)(__fn_463));
+        return tmap_eq_(x, y, (int64_t)(intptr_t)(__fn_467));
 }
 
 typedef struct dict_Eq_Map {
@@ -2520,12 +2522,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_483(int64_t a, int64_t b) {
+static bool __fn_487(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return tvec_eq_(x, y, (int64_t)(intptr_t)(__fn_483));
+        return tvec_eq_(x, y, (int64_t)(intptr_t)(__fn_487));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2536,12 +2538,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_510(int64_t a, int64_t b) {
+static bool __fn_514(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return toption_eq_(x, y, (int64_t)(intptr_t)(__fn_510));
+        return toption_eq_(x, y, (int64_t)(intptr_t)(__fn_514));
 }
 
 typedef struct dict_Eq_Option {
@@ -2552,16 +2554,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_530(int64_t a, int64_t b) {
-        return ((a) == (b));
-}
-
 static bool __fn_534(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
+static bool __fn_538(int64_t a, int64_t b) {
+        return ((a) == (b));
+}
+
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return tresult_eq_(x, y, (int64_t)(intptr_t)(__fn_530), (int64_t)(intptr_t)(__fn_534));
+        return tresult_eq_(x, y, (int64_t)(intptr_t)(__fn_534), (int64_t)(intptr_t)(__fn_538));
 }
 
 typedef struct dict_Eq_Result {
@@ -2572,16 +2574,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_550(int64_t a, int64_t b) {
-        return ((a) == (b));
-}
-
 static bool __fn_554(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
+static bool __fn_558(int64_t a, int64_t b) {
+        return ((a) == (b));
+}
+
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return tpair_eq_(x, y, (int64_t)(intptr_t)(__fn_550), (int64_t)(intptr_t)(__fn_554));
+        return tpair_eq_(x, y, (int64_t)(intptr_t)(__fn_554), (int64_t)(intptr_t)(__fn_558));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2592,12 +2594,12 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_570(int64_t a, int64_t b) {
+static bool __fn_574(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return tlist_eq_(x, y, (int64_t)(intptr_t)(__fn_570));
+        return tlist_eq_(x, y, (int64_t)(intptr_t)(__fn_574));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2620,12 +2622,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_641(int64_t a, int64_t b) {
+static bool __fn_645(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return tmutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_641));
+        return tmutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_645));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -2918,6 +2920,18 @@ static int64_t ok_val(void * r) {
 static int64_t err_val(void * r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->err_val;
+  
+}
+
+static bool __tur_q_is_err_(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  
+}
+
+static int64_t __tur_q_ok_val(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
   
 }
 
@@ -3638,11 +3652,13 @@ static void tgrid_free(int64_t g) {
 
 static int64_t tzipper_new(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
-  z->left      = (int64_t*)(intptr_t)left;
   z->left_len  = (size_t)left_len;
-  z->focus     = focus;
-  z->right     = (int64_t*)(intptr_t)right;
   z->right_len = (size_t)right_len;
+  z->focus     = focus;
+  z->left  = z->left_len  > 0 ? malloc(sizeof(int64_t) * z->left_len)  : NULL;
+  z->right = z->right_len > 0 ? malloc(sizeof(int64_t) * z->right_len) : NULL;
+  if (z->left  && left)  memcpy(z->left,  (int64_t*)(intptr_t)left,  sizeof(int64_t) * z->left_len);
+  if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;
   
 }
@@ -4210,20 +4226,20 @@ static void fiber_b() {
 int main() {
         int64_t __t0;
         {
-            void * sched_669 = scheduler_mt_new(INT64_C(2));
-            (void)sched_669;
+            void * sched_673 = scheduler_mt_new(INT64_C(2));
+            (void)sched_673;
             {
-                void * fa_670 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
-                (void)fa_670;
+                void * fa_674 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
+                (void)fa_674;
                 {
-                    void * fb_671 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
-                    (void)fb_671;
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_669), (void *)(intptr_t)(fa_670));
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_669), (void *)(intptr_t)(fb_671));
+                    void * fb_675 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
+                    (void)fb_675;
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_673), (void *)(intptr_t)(fa_674));
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_673), (void *)(intptr_t)(fb_675));
                     thread_sleep(INT64_C(100));
-                    scheduler_mt_free((void *)(intptr_t)(sched_669));
-                    fiber_free((void *)(intptr_t)(fa_670));
-                    fiber_free((void *)(intptr_t)(fb_671));
+                    scheduler_mt_free((void *)(intptr_t)(sched_673));
+                    fiber_free((void *)(intptr_t)(fa_674));
+                    fiber_free((void *)(intptr_t)(fb_675));
                 }
             }
             int64_t __t1;

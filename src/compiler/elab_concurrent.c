@@ -234,6 +234,7 @@ Expr *elab_select(Elab *e, const Form *call) {
             scope_add(&recv_scope, recv_bind);
             body_expr = elab_form(e, body_form);
             e->scope = recv_scope.parent;
+            scope_free(&recv_scope);
         } else {
             body_expr = elab_form(e, body_form);
         }
@@ -424,6 +425,7 @@ Expr *elab_try_catch(Elab *e, const Form *call) {
         if (catch_bind) scope_add(&catch_scope, catch_bind);
         Expr *handler = elab_form(e, clause->as.list.items[2]);
         e->scope = saved_scope;
+        scope_free(&catch_scope);
         if (!handler) return NULL;
         handlers[i] = handler;
     }
