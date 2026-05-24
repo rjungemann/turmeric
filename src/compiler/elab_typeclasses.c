@@ -1,10 +1,172 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "forms.h"
 
 /* ---- file-local helper forward declarations ---- */
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
+
+/* F3-5 (cross-plan-followups): convert a runtime Type back to its
+ * source-form representation so the dispatcher can synthesise inline
+ * ascription forms.  Supports only the kinds the dispatch synthesis
+ * actually needs: primitives + TY_STRUCT (named) + TY_APP.  Returns
+ * NULL for unsupported kinds. */
+static Form *type_to_form(Elab *e, const Type *t, Span span) {
+    if (!t) return NULL;
+    const char *kw = NULL;
+    switch (t->kind) {
+        case TY_INT:      kw = "int";      break;
+        case TY_BOOL:     kw = "bool";     break;
+        case TY_CSTR:     kw = "cstr";     break;
+        case TY_FLOAT:    kw = "float";    break;
+        case TY_INT8:     kw = "int8";     break;
+        case TY_INT16:    kw = "int16";    break;
+        case TY_INT32:    kw = "int32";    break;
+        case TY_UINT8:    kw = "uint8";    break;
+        case TY_UINT16:   kw = "uint16";   break;
+        case TY_UINT32:   kw = "uint32";   break;
+        case TY_UINT64:   kw = "uint64";   break;
+        case TY_FLOAT32:  kw = "float32";  break;
+        case TY_PTR_VOID: kw = "ptr<void>"; break;
+        default: break;
+    }
+    if (kw) {
+        return form_keyword(e->arena, span,
+            intern_cstr(e->st, kw));
+    }
+    if (t->kind == TY_STRUCT && t->as.struct_.def && t->as.struct_.def->name) {
+        /* Bare struct name: just an F_SYM. */
+        return form_sym(e->arena, span,
+            intern_cstr(e->st, t->as.struct_.def->name));
+    }
+    if (t->kind == TY_APP) {
+        /* Walk the TY_APP chain to collect [head, arg1, arg2, ...]
+         * (left-associative -- arg1 is the innermost). */
+        const Type *args[8];
+        uint8_t n_args = 0;
+        const Type *head = t;
+        while (head && head->kind == TY_APP && n_args < 8) {
+            if (head->as.app.arg) args[n_args++] = head->as.app.arg;
+            head = head->as.app.fn;
+        }
+        if (!head || head->kind != TY_STRUCT ||
+            !head->as.struct_.def || !head->as.struct_.def->name) {
+            return NULL;
+        }
+        /* Build (StructName arg1-form arg2-form ...) in original order. */
+        uint32_t n_items = 1 + n_args;
+        Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
+        items[0] = form_sym(e->arena, span,
+            intern_cstr(e->st, head->as.struct_.def->name));
+        /* args were collected innermost-first; reverse to original order. */
+        for (uint8_t i = 0; i < n_args; i++) {
+            Form *af = type_to_form(e, args[n_args - 1 - i], span);
+            if (!af) return NULL;
+            items[1 + i] = af;
+        }
+        return form_list(e->arena, span, items, n_items);
+    }
+    return NULL;
+}
+
+/* F3-5: map a typed-collection struct identity to its eq-helper symbol.
+ * Returns NULL if the struct is not a recognised typed collection. */
+static const Symbol *helper_eq_symbol_for_struct(Elab *e, const StructDef *sd) {
+    if (!sd || !sd->name) return NULL;
+    if (strcmp(sd->name, "Vec") == 0) return intern_cstr(e->st, "tvec-eq?");
+    /* Future: Map, Set, Cons, Option, Result, Pair.  Each has a
+     * different helper signature -- Map's tmap-eq? takes a value
+     * comparator (one constraint resolved to V) but the dispatcher
+     * also needs to thread an Eq[K] dictionary for the hash table's
+     * key comparison.  Vec is the easy case with a single (Eq A). */
+    return NULL;
+}
+
+/* F3-5: synthesise the dispatcher rewrite for `(.eq? obj other)` when
+ * `obj` has TY_APP receiver type whose element type is itself a TY_APP
+ * (recursive structural equality).  Returns NULL if conditions aren't
+ * met or synthesis isn't applicable.
+ *
+ * Synthesised form:
+ *   (<helper> obj other (fn [a b] (.eq? (:: a <elem>) (:: b <elem>))))
+ *
+ * The synthesised closure re-enters elab_method_call with `(:: a <elem>)`
+ * as the receiver, which (thanks to F3-7's sticky ascription) dispatches
+ * to the right inner instance.  Recursion terminates at primitive
+ * element types where F3-7's single-level path takes over. */
+static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
+                                     Expr *obj, Expr *other_arg, Span span) {
+    if (!outer_inst || outer_inst->n_type_args == 0) return NULL;
+    if (obj->type.kind != TY_APP || !obj->type.as.app.arg) return NULL;
+    /* Only fire for the recursive case -- primitive elements are handled
+     * by the existing dispatch (F3-7). */
+    const Type *elem = obj->type.as.app.arg;
+    if (elem->kind != TY_APP) return NULL;
+    /* Look up the helper for this typed-collection. */
+    const StructDef *sd = outer_inst->type_args[0].as.struct_.def;
+    const Symbol *helper_sym = helper_eq_symbol_for_struct(e, sd);
+    if (!helper_sym) return NULL;
+    Binding *helper_b = scope_lookup(&e->global, helper_sym);
+    if (!helper_b) return NULL;
+    /* Build the ascription form for the element type. */
+    Form *elem_form = type_to_form(e, elem, span);
+    if (!elem_form) return NULL;
+    /* Build (:: a <elem>) and (:: b <elem>). */
+    const Symbol *sym_a = intern_cstr(e->st, "__cmp_a");
+    const Symbol *sym_b = intern_cstr(e->st, "__cmp_b");
+    /* Use a fresh method-call sym so the reader's dot-prefix is honoured. */
+    const Symbol *sym_dot_eq = intern_cstr(e->st, ".eq?");
+
+    Form **asc_a_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    asc_a_items[0] = form_sym(e->arena, span, e->sym_ascribe);
+    asc_a_items[1] = form_sym(e->arena, span, sym_a);
+    asc_a_items[2] = elem_form;
+    Form *asc_a = form_list(e->arena, span, asc_a_items, 3);
+
+    Form **asc_b_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    asc_b_items[0] = form_sym(e->arena, span, e->sym_ascribe);
+    asc_b_items[1] = form_sym(e->arena, span, sym_b);
+    asc_b_items[2] = elem_form;
+    Form *asc_b = form_list(e->arena, span, asc_b_items, 3);
+
+    /* (.eq? <asc_a> <asc_b>) */
+    Form **dot_eq_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    dot_eq_items[0] = form_sym(e->arena, span, sym_dot_eq);
+    dot_eq_items[1] = asc_a;
+    dot_eq_items[2] = asc_b;
+    Form *dot_eq_call = form_list(e->arena, span, dot_eq_items, 3);
+
+    /* [a b] params vector */
+    Form **params_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    params_items[0] = form_sym(e->arena, span, sym_a);
+    params_items[1] = form_sym(e->arena, span, sym_b);
+    Form *params_vec = form_vec(e->arena, span, params_items, 2);
+
+    /* (fn [a b] <dot_eq_call>) */
+    Form **lambda_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    lambda_items[0] = form_sym(e->arena, span, e->sym_fn);
+    lambda_items[1] = params_vec;
+    lambda_items[2] = dot_eq_call;
+    Form *lambda_form = form_list(e->arena, span, lambda_items, 3);
+
+    Expr *lambda_expr = elab_form(e, lambda_form);
+    if (!lambda_expr) return NULL;
+
+    /* Build EX_CALL to helper with [obj, other, lambda]. */
+    Expr **call_args = (Expr **)arena_alloc(e->arena, 3 * sizeof(Expr *));
+    call_args[0] = obj;
+    call_args[1] = other_arg;
+    call_args[2] = lambda_expr;
+
+    Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
+    out->as.call_.fn_binding = helper_b;
+    out->as.call_.fn_expr    = NULL;
+    out->as.call_.args       = call_args;
+    out->as.call_.n_args     = 3;
+    out->as.call_.dict_arg   = NULL;
+    return out;
+}
 
 /* Phase 15: Typeclasses */
 
@@ -2064,6 +2226,25 @@ found_method:;
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[2 + i]);
         if (!args[i]) return NULL;
+    }
+
+    /* F3-5 (cross-plan-followups): per-call-site synthesis for the
+     * recursive case of typed-collection `.eq?` dispatch.  When the
+     * outer instance is a constrained typed-collection (e.g. Eq[Vec])
+     * and the receiver's element type is itself a TY_APP (e.g.
+     * Vec[Vec[int]]), bypass the constrained instance's hardcoded
+     * `(fn [a b] (= a b))` body and synthesise a direct call to the
+     * helper (tvec-eq?) with an inline comparator lambda whose
+     * params are ascribed to the element type.  The inner `.eq?`
+     * re-enters this dispatcher at the next level, terminating at
+     * primitives where F3-7 takes over. */
+    if (best_inst &&
+        best_inst->n_type_param_constraints > 0 &&
+        method_name_len == 3 &&
+        memcmp(method_name, "eq?", 3) == 0 &&
+        n_args == 1) {
+        Expr *synth = try_synth_recursive_eq(e, best_inst, obj, args[0], call->span);
+        if (synth) return synth;
     }
 
     /* Phase HRT3/HRT4: For methods with rank-N (poly fn) parameters, wrap matching args

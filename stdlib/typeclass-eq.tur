@@ -41,3 +41,17 @@
 ;;; Eq [float] -- equality on double.
 (definstance Eq [float]
   (eq? [x y] (= x y)))
+
+;;; Eq instances for the remaining numeric primitives so typed-collection
+;;; dispatch through `(.eq? v v)` on `Vec[int8]`, `Vec[uint32]`, etc.
+;;; satisfies the (Eq A) constraint without requiring users to import
+;;; stdlib/typeclass.tur.
+
+(definstance Eq [int8]    (eq? [x y] (= x y)))
+(definstance Eq [int16]   (eq? [x y] (= x y)))
+(definstance Eq [int32]   (eq? [x y] (= x y)))
+(definstance Eq [uint8]   (eq? [x y] (= x y)))
+(definstance Eq [uint16]  (eq? [x y] (= x y)))
+(definstance Eq [uint32]  (eq? [x y] (= x y)))
+(definstance Eq [uint64]  (eq? [x y] (= x y)))
+(definstance Eq [float32] (eq? [x y] (= x y)))
