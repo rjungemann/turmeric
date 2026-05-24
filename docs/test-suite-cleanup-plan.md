@@ -184,27 +184,26 @@ about-to-be-skipped re-declaration.
 `errors/typeclass-no-instance` (differs in `eq?` vs `eq2?`) trip the
 differing-signature branch. Both fixtures now pass.
 
-#### Missing Feature 2 -- `?` operator diagnostic when result helpers are out of scope
+#### Missing Feature 2 -- `?` operator diagnostic when result helpers are out of scope [FIXED]
 
-Test: `errors/result-question-op`.
+Test: `errors/result-question-op` (now passing, re-purposed).
 
-The fixture expects: "name resolution error -- `err?` not in scope". The
-elaborator instead reports: "unsafe function `err?` requires an
-enclosing (unsafe ...)". Both errors are *correct* in their own context
-(stdlib's `err?` *is* unsafe), but the test predates the
-deprecation/`#{Unsafe}` annotation. Either:
+The fixture previously expected: "name resolution error -- `err?` not
+in scope". The elaborator instead reported: "unsafe function `err?`
+requires an enclosing (unsafe ...)". Both errors were *correct* in
+their own context (stdlib's `err?` *is* unsafe), but the test
+predated the deprecation/`#{Unsafe}` annotation.
 
-* the `?` lowering should auto-wrap the helper calls in `(unsafe ...)`
-  (preferred -- it's a built-in lowering), or
-* the expected diagnostic in the fixture should be updated.
-
-**Decision:** Lower `?` to a single runtime helper (hybrid of the
-two options above). Add `__tur_result_question` (or similar) to the
-runtime preamble; its body is the only place that calls `err?` /
-`err-val`. `?` expands to a call to that helper. The helper's
-definition site carries the `(unsafe ...)` wrapper once; `?` call
-sites stay clean and users do not need to write `(unsafe ...)`
-themselves.
+**Decision (implemented):** Lower `?` through a pair of stdlib
+helpers in `stdlib/result.tur` -- `__tur-q-is-err?` and
+`__tur-q-ok-val` -- that touch the internal result representation
+directly via inline-C. The `?` lowering in `src/compiler/elab_forms.c`
+calls these helpers by name; user call sites of `?` no longer need
+their own `(unsafe ...)` wrapper, and the deprecation warnings on
+`err?` / `ok-val` no longer leak through every compilation. The
+early-return branch was also simplified from `(return (err (err-val
+__q)))` to `(return __q)` -- the original is already the err
+Result.
 
 Why this over a per-site auto-wrap:
 
@@ -236,14 +235,12 @@ Caveats to watch:
   (Try / MonadFail) so the helper becomes one instance of a general
   mechanism rather than a hard-coded runtime function.
 
-**Fixture follow-up:** The existing `errors/result-question-op`
-fixture is obsolete under this lowering. Its premise was "what
-diagnostic do you get when `err?` isn't in user scope?", but with the
-hybrid lowering `?` calls `__tur_result_question` -- user-scope
-`err?` is irrelevant to whether `?` elaborates. Either delete the
-fixture, or re-purpose it to cover something the new lowering can
-still diagnose (e.g. `?` applied to a non-Result type, or `?` used
-outside a function returning Result).
+**Fixture follow-up [done]:** `errors/result-question-op` was
+re-purposed to cover `?` applied to a non-Result value (here, an int
+literal). The new lowering's helper call site catches it with
+"function `__tur-q-is-err?` arg 1: expected ptr<void>, got int",
+which is strictly more informative than the previous
+"if condition must be bool" diagnostic.
 
 #### Missing Feature 3 -- `defn` shadowing of stdlib symbols emits broken C instead of a diagnostic
 

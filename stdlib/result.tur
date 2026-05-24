@@ -141,6 +141,41 @@
   return result->err_val;
   ```)
 
+;; -- ? operator support helpers ------------------------------------------------
+;;
+;; The ? operator (see elab_question in src/compiler/elab_forms.c) lowers to a
+;; predicate + an ok-unwrap; both touch the internal result representation and
+;; would otherwise require users to write `(unsafe (? expr))` at every call
+;; site. These two helpers absorb the unsafe surface so the ? lowering -- and
+;; therefore user code -- stays clean. Update them together with err? / ok-val
+;; if the internal representation ever changes.
+
+;;; __tur-q-is-err? -- predicate used by the ? operator lowering.
+;;;
+;;; Parameters:
+;;;   r -- a result value (:ptr<void>)
+;;;
+;;; Returns:
+;;;   true if r is an err result, false if ok.
+(defn __tur-q-is-err? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  ```)
+
+;;; __tur-q-ok-val -- ok-value extractor used by the ? operator lowering.
+;;;
+;;; Parameters:
+;;;   r -- an ok result (:ptr<void>); behaviour is undefined if r is err
+;;;
+;;; Returns:
+;;;   The contained ok value as :int.
+(defn __tur-q-ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+  ```)
+
 ;; -- Unwrapping ----------------------------------------------------------------
 
 ;; Unwrap - returns ok value, aborts if err
