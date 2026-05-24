@@ -64,6 +64,11 @@ fixture whose `expected.stdout` matched `actual.stdout` and whose
 generated C compiled cleanly. This is a quick fix; the snapshots are
 again capturing the current runtime preamble.
 
+Per the snapshot decision below, this was the last time the regeneration
+sweep should be needed at scale -- once `expected.c` is dropped for
+behavior fixtures, future preamble changes will only touch the small
+remaining codegen suite.
+
 **Note:** Snapshot regeneration is mechanical and will need to be redone
 whenever the runtime preamble changes. Worth a thought to either:
 
@@ -72,6 +77,14 @@ whenever the runtime preamble changes. Worth a thought to either:
   runtime behavior and not the literal C output. The runtime preamble
   is shared across all fixtures, so 290 copies of the same bytes do not
   buy us much.
+
+**Decision:** Drop `expected.c` for behavior fixtures. Audit which
+fixtures actually validate codegen (likely a small set under explicit
+codegen directories) and keep `expected.c` only for those; the rest
+verify `expected.stdout` only. This eliminates the recurring 290-file
+churn outright. No `tools/update-snapshots.py` helper needed if the
+remaining codegen surface is small enough to regenerate by hand;
+revisit if it isn't.
 
 ### 3. Renamed user-defined symbols that now collide with auto-loaded stdlib
 
@@ -151,6 +164,25 @@ same check should be added for `defclass`. Until that lands, these two
 negative-fixture tests stay failing -- they are the documentation for
 the missing diagnostic.
 
+**Decision:** Allow idempotent redefinition only if the signatures
+match; otherwise hard-error. The current silent-skip in
+`src/compiler/elab_typeclasses.c:557-563` exists so stdlib can
+pre-declare `Eq` without colliding. The new check should compare the
+second `defclass`'s method set, type-parameter count, and kinds against
+the existing entry: identical = silent skip (preserves the stdlib
+pre-declaration use case); different = `defclass: 'Foo' is already
+defined` diagnostic. A follow-up may introduce an explicit
+`(declare-class ...)` form if the signature-match check turns out to
+permit too much in practice.
+
+**Fixture follow-up:** Inspect both `errors/kinds-hkt-reserved` and
+`errors/typeclass-no-instance` and confirm their second `defclass`
+genuinely differs from the first (different methods, kinds, or
+arity). If a fixture happens to redefine with an identical signature
+it will now silently succeed and the diagnostic won't fire. Rewrite
+the second definition to differ, or add a new negative fixture
+covering the differing-signature case explicitly.
+
 #### Missing Feature 2 -- `?` operator diagnostic when result helpers are out of scope
 
 Test: `errors/result-question-op`.
@@ -165,8 +197,52 @@ deprecation/`#{Unsafe}` annotation. Either:
   (preferred -- it's a built-in lowering), or
 * the expected diagnostic in the fixture should be updated.
 
-Leaving the fixture failing as a forcing function for someone to make a
-deliberate choice on which direction to go.
+**Decision:** Lower `?` to a single runtime helper (hybrid of the
+two options above). Add `__tur_result_question` (or similar) to the
+runtime preamble; its body is the only place that calls `err?` /
+`err-val`. `?` expands to a call to that helper. The helper's
+definition site carries the `(unsafe ...)` wrapper once; `?` call
+sites stay clean and users do not need to write `(unsafe ...)`
+themselves.
+
+Why this over a per-site auto-wrap:
+
+* Audit surface collapses to one named function. A reviewer can
+  inspect `__tur_result_question` and know the full unsafe story for
+  `?` across the language.
+* Deprecation of `err?` / `err-val` becomes "update one function"
+  instead of "chase the lowering pass" -- the dependency is visible
+  in the runtime preamble rather than scattered through
+  compiler-synthesized code at every call site.
+* The `(unsafe ...)` annotation stays meaningful in user code --
+  it only appears when the user took responsibility, not as
+  ceremony around every `?`.
+* MF3 interaction is simpler: the helper resolves `err?` / `err-val`
+  exactly once at its own definition site, against whatever scope
+  applies there. No per-call-site shadow-aware resolution in the
+  lowering.
+
+Caveats to watch:
+
+* The helper is a runtime ABI surface -- once published, changing
+  its signature is a breaking change. Pin the signature early and
+  document it.
+* If user code shadows `err?` and expects `?` in their module to use
+  the shadow, that no longer works (the helper is resolved against
+  the stdlib scope). Document this as the intentional tradeoff; if
+  per-module shadowing of `?` is needed later, revisit.
+* Long-term, consider re-lowering `?` to a typeclass dispatch
+  (Try / MonadFail) so the helper becomes one instance of a general
+  mechanism rather than a hard-coded runtime function.
+
+**Fixture follow-up:** The existing `errors/result-question-op`
+fixture is obsolete under this lowering. Its premise was "what
+diagnostic do you get when `err?` isn't in user scope?", but with the
+hybrid lowering `?` calls `__tur_result_question` -- user-scope
+`err?` is irrelevant to whether `?` elaborates. Either delete the
+fixture, or re-purpose it to cover something the new lowering can
+still diagnose (e.g. `?` applied to a non-Result type, or `?` used
+outside a function returning Result).
 
 #### Missing Feature 3 -- `defn` shadowing of stdlib symbols emits broken C instead of a diagnostic
 
@@ -181,6 +257,18 @@ compiler then complains. The Turmeric elaborator should either:
 
 The current behaviour is the worst of both worlds (no Turmeric error,
 broken C output). Tracking here so it doesn't get lost.
+
+**Decision:** Hard error by default, with an opt-in shadow attribute.
+A user `defn` colliding with an auto-loaded stdlib name produces the
+diagnostic above. Users who genuinely want to shadow attach
+`#{Shadow}` (exact attribute name TBD) to the `defn`; the elaborator
+then emits the C symbol with a mangled suffix (e.g. a module hash) to
+avoid the `redefinition of 'ok'` C-level error.
+
+Implication for section 3 renames: once the attribute lands, audit
+each fixture in the rename table and either revert to the original
+name with the attribute attached, or keep the rename. Track outcomes
+in a follow-up.
 
 #### Missing Feature 4 -- stdlib internal conflict between `stdlib/gadt-vec.tur` and `stdlib/tvec.tur`
 
@@ -203,15 +291,31 @@ Either:
 This is squarely a stdlib bug. Test left failing as the forcing
 function.
 
+**Decision:** Separate struct / GADT namespaces in the elaborator.
+The collision is a class of bug, not a one-off, so fix it at the
+right layer rather than papering over with a rename. Sketch:
+`src/compiler/elab_structs.c` registers GADT names in a distinct
+lookup table; `:Type` annotations in parameter / return position
+resolve preferring GADTs in annotation context. Write a short design
+note in `docs/` before coding so the resolution rules (and any
+ambiguity diagnostics) are settled up front.
+
 #### Missing Feature 5 -- `tzipper-new` ownership contract
 
-(Aside, not a failing test now -- folded into the docstring of
-`stdlib/tzipper.tur`.) The current API is that `tzipper-new` takes
-ownership of the left/right arrays and `tzipper-free` frees them. This
-is surprising for an stdlib container -- typically containers either
-borrow or document ownership transfer prominently. Worth a follow-up to
-either document better or change the contract to "borrow, caller
-frees."
+No longer an aside: the decision below makes this active work with
+caller audits and a regression risk, not a docstring polish. The
+current API is that `tzipper-new` takes ownership of the left/right
+arrays and `tzipper-free` frees them. This is surprising for an
+stdlib container -- typically containers either borrow or document
+ownership transfer prominently.
+
+**Decision:** Switch to borrow + copy. `tzipper-new` mallocs its own
+left / right buffers and `memcpy`s the caller's data; callers free
+their own inputs. `tzipper-free` continues to free the zipper-owned
+buffers. This is a breaking behavior change -- audit every caller
+(start with `tests/fixtures/tzipper-basic`, `tests/fixtures/typed/tzipper-basic`,
+and any internal stdlib users) and re-add explicit `free` calls for
+the caller-owned inputs at the call sites.
 
 ### External dependency missing (left failing intentionally)
 
@@ -225,7 +329,11 @@ sibling directory. In CI / fresh containers it isn't. Two options:
   `requires.tsan`) so it auto-skips when the dependency isn't present;
 * document a setup step in `CLAUDE.md` / `README.md`.
 
-Test left failing pending a decision.
+**Decision:** Add the `requires.spices` skip marker. Mirror the
+existing `requires.tsan` plumbing; the runner detects the missing
+sibling `../turmeric-spices/` directory and skips. Also add a short
+"Optional dependencies" note in `CLAUDE.md` / `README.md` so
+developers who want the test to run know how to enable it.
 
 ## Files of note touched on this branch
 
