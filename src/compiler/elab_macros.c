@@ -668,8 +668,14 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
         case F_STR:
         case F_KEYWORD:
         case F_SYM:
-            /* Literals and symbols: (quasiquote x) -> (quote x) */
-            return form_quote(e->arena, f->span, f);
+            /* Bug 6 / Option A: literals and symbols inside quasiquote are
+             * already literal data in the resulting form; returning them as-is
+             * lets the elaborator dispatch special-form symbols like `do`,
+             * `let`, `if`, etc.  Wrapping them in (quote x) defeated that
+             * dispatch because the call head became an F_QUOTE node, not an
+             * F_SYM, and the elaborator would re-elaborate the inner symbol
+             * via the unbound-binding lookup path. */
+            return f;
         case F_QUOTE:
             /* (quasiquote (quote x)) -> (quote (quasiquote x)) */
             {
@@ -711,10 +717,15 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
                 Form **new_items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
                 for (uint32_t i = 0; i < f->as.list.len; i++) {
                     Form *item = f->as.list.items[i];
-                    if (item->tag == F_UNQUOTE || item->tag == F_UNQUOTE_SPLICING) {
-                        /* Unwrap unquote/unquote-splicing - just return the inner form */
-                        /* Parameter substitution will happen in substitute_params */
+                    if (item->tag == F_UNQUOTE) {
+                        /* Unwrap unquote -- substitute_params will handle the inner. */
                         new_items[i] = item->as.list.items[0];
+                    } else if (item->tag == F_UNQUOTE_SPLICING) {
+                        /* Bug 6 / Option A: preserve the unquote-splicing wrapper
+                         * so substitute_params's splice path can detect it and
+                         * splice a substituted list-valued rest parameter into
+                         * the parent list. */
+                        new_items[i] = item;
                     } else {
                         /* Recursively expand other items */
                         new_items[i] = quasiquote_expand_form(e, item);
@@ -732,6 +743,10 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
                 for (uint32_t i = 0; i < f->as.list.len; i++) {
                     Form *item = f->as.list.items[i];
                     if (item->tag == F_UNQUOTE || item->tag == F_UNQUOTE_SPLICING) {
+                        /* Vectors/maps/sets don't go through substitute_params's
+                         * splice path, so unwrap here.  (Splicing into a vec/map
+                         * literal isn't well-defined; the existing behavior of
+                         * embedding the spliced form is preserved.) */
                         new_items[i] = item->as.list.items[0];
                     } else {
                         new_items[i] = quasiquote_expand_form(e, item);

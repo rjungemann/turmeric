@@ -412,8 +412,39 @@ test framework to an actually-runnable state.  Options A and B are the
 durable fix for "third-party spices can rely on stdlib macros from
 within their own macro expansions."
 
-**Status:** out of scope for the current PR.  Tracked as Bug 6 /
-follow-up.
+**Resolution (Option A, landed):**
+
+The root cause was narrower than the original diagnosis suggested: the
+issue isn't really about "macro expansion runs against the defining
+module's scope", it's about how the quasiquote expander produced its
+template.  `quasiquote_expand_form` in `src/compiler/elab_macros.c`
+was wrapping every literal atom (`F_SYM`, `F_INT`, ...) inside a
+quasiquote in `(quote X)`.  That meant a body like ``\`(do ~@body)``
+expanded to ``((quote do) body...)`` rather than ``(do body...)``.
+
+When the result was elaborated, the call head was an `F_QUOTE` node,
+not an `F_SYM`, so `elab_call`'s special-form dispatch (which keys on
+`sym == e->sym_do`) was bypassed.  The elaborator instead fell into
+the "dynamic call head" path, recursed into the quote, and tried to
+resolve `do` as a binding -- producing the `unbound symbol 'do'` we
+saw from `test/suite.tur`.
+
+Two changes in `quasiquote_expand_form` fix it:
+
+1. Atoms inside a quasiquote are returned as-is rather than being
+   wrapped in `(quote ...)`.  They're already literal data in the
+   resulting form, so the wrap was redundant and actively wrong for
+   special-form symbols.
+2. `F_UNQUOTE_SPLICING` items inside a list are kept wrapped (not
+   pre-unwrapped) so the splice path in `substitute_params` can detect
+   them and splice a list-valued rest parameter into the parent list.
+
+A regression fixture lives at
+`tests/fixtures/macro-quasiquote-special-form/`; it exercises
+``\`(if ~test (do ~@body) nil)`` and ``\`(let [~var ~val] ~body)``
+patterns end-to-end.
+
+**Status:** landed.
 
 ---
 
@@ -429,7 +460,7 @@ follow-up.
 | 6 | Wire `tur test` to read `build.tur` and pass `-I` + cmake-deps flags (Bug 3) | turmeric | medium | **landed** |
 | 7 | Resolve `import result` orphan-instance and unsafe issues (Bug 5) | turmeric stdlib | medium | **landed** |
 | 8 | Add CI: run `tur fetch` + `tur test` for every spice in `turmeric-spices` | turmeric-spices | medium | **landed (`.github/workflows/ci.yml`)** |
-| 9 | Fix auto-loaded macros being invisible inside imported-module macro expansions (Bug 6) | turmeric or spices/test | medium | follow-up |
+| 9 | Fix auto-loaded macros being invisible inside imported-module macro expansions (Bug 6) | turmeric | medium | **landed** |
 
 After items 1-8 land, every spice's `build.tur` parses, every test file
 parses + elaborates, `tur fetch` succeeds, and `tur test` resolves the
