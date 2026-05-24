@@ -308,12 +308,13 @@ function.
 
 **Decision:** Separate struct / GADT namespaces in the elaborator.
 The collision is a class of bug, not a one-off, so fix it at the
-right layer rather than papering over with a rename. Sketch:
-`src/compiler/elab_structs.c` registers GADT names in a distinct
-lookup table; `:Type` annotations in parameter / return position
-resolve preferring GADTs in annotation context. Write a short design
-note in `docs/` before coding so the resolution rules (and any
-ambiguity diagnostics) are settled up front.
+right layer rather than papering over with a rename.
+
+**Design note written (deferred implementation):** see
+`docs/design-mf4-struct-gadt-namespaces.md` for the resolution rules,
+the diagnostics decision, and the implementation sketch. The fixture
+is left failing as the forcing function until the implementation
+lands.
 
 #### Missing Feature 5 -- `tzipper-new` ownership contract [FIXED]
 
