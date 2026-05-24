@@ -1,0 +1,39 @@
+;; Phase F3-6 (cross-plan-followups): recursive structural equality
+;; on Vec[Vec[int]] via tvec-eq? with a nested comparator lambda.
+;;
+;; This fixture documents the *working today* path: call tvec-eq?
+;; directly with a comparator that itself calls tvec-eq? on the
+;; inner Vecs.  It does NOT use the typeclass dispatch path
+;; (.eq? outer-vec), which still returns the wrong answer because
+;; the Eq[Vec[A]] instance hardcodes integer equality for elements
+;; (see F3 status in cross-plan-followups-plan.md).
+;;
+;; Once F3 ships, the .eq? path should give the same answers and
+;; an accompanying tvec-of-tvec-eq fixture (F3-6) should replace
+;; this one (or sit alongside it as the typeclass-dispatch version).
+
+(defn main [] :int
+  (let [inner-a (tvec-new)
+        inner-b (tvec-new)
+        inner-c (tvec-new)]
+    (tvec-push! inner-a 1)
+    (tvec-push! inner-b 1)
+    (tvec-push! inner-c 2)
+    (let [outer-1 (tvec-new)
+          outer-2 (tvec-new)
+          outer-3 (tvec-new)]
+      (tvec-push! outer-1 inner-a)
+      (tvec-push! outer-2 inner-b)
+      (tvec-push! outer-3 inner-c)
+      ;; Manual recursion: outer comparator opens up the inner Vec
+      ;; and compares elements with the leaf comparator (int =).
+      (println (tvec-eq? outer-1 outer-2
+                 (fn [x y] (tvec-eq? x y (fn [a b] (= a b))))))  ; true
+      (println (tvec-eq? outer-1 outer-3
+                 (fn [x y] (tvec-eq? x y (fn [a b] (= a b))))))  ; false
+      ;; And the leaf case (Vec[int]) does work via .eq? @Vec
+      ;; because the element comparator hardcodes int = which is
+      ;; correct here.
+      (println (.eq? @Vec inner-a inner-b))                      ; true
+      (println (.eq? @Vec inner-a inner-c))))                    ; false
+  0)

@@ -2,9 +2,12 @@
 
 > **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F4 (infra +
 > --Werror=deprecated; full stdlib sweep deferred), F7 (doc
-> hygiene) all shipped.  F3-1 (design) shipped; the F3
-> implementation tasks expanded scope (2-3 sessions) once we
-> discovered the receiver-type-erasure dependency -- deferred.
+> hygiene) all shipped.  F3-1 (design) shipped, plus a tracking
+> fixture (`tvec-of-tvec-eq-manual`) that documents both the bug
+> and the working manual-recursion workaround; F3-2..F3-7
+> implementation deferred (session-2 confirmed the receiver-type
+> recovery wall and narrowed F3-7 to "sticky ascription" as the
+> smallest viable approach).
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -273,6 +276,41 @@ original plan -- the dictionary-passing change alone is
 mechanically the largest piece, but it is not deliverable in
 isolation.
 
+### F3 implementation attempt -- session 2 findings (2026-05-23)
+
+While trying to bring up F3-2..F3-6 we hit the receiver-type-erasure
+wall described above and confirmed it is the gating issue, not the
+dict-passing infrastructure.  Specifically:
+
+- `(:: (tvec-new) (Vec int))` ascription parses and overrides the
+  binding's static type, but the existing `EX_ASCRIBE` lowering
+  drops the TY_APP at the next operation that takes the value as
+  `:int` (every typed-collection helper has `:int` parameters).
+  So even with an ascription, the next `(tvec-push! v ...)` reads
+  `v` as `:int` and the recovered TY_APP is lost.
+- `@TypeName` witness syntax pins the *outer* dispatch to a
+  specific instance but provides no recursive type info, so
+  `(.eq? @Vec outer-of-outer-of-int)` resolves to Eq[Vec]'s
+  instance method whose body hardcodes integer = on elements.
+- `@(Vec int)` (parenthesised type application as a witness) is
+  not supported: the reader lowers it to `(deref (Vec int))` and
+  treats `Vec` as a function name.
+- The interpreter (`tur --interpret`) has no `@TypeName` support
+  at all, so any F3 fixture that uses `.eq? @...` would be
+  compiler-only.
+
+These findings reinforce the F3-7 framing: receiver-type recovery
+must land first, and the implementation choice is non-trivial.
+Option (a) -- threading TY_APP through every typed-collection
+helper's `result_full_type` -- requires touching every
+`tvec-`/`tmap-`/`tlist-`/`tset-`/`toption-`/`tresult-`/`tpair-`
+signature.  Option (b) -- a typed ascription form that re-attaches
+TY_APP and persists across subsequent helper calls -- requires
+extending `EX_ASCRIBE` to be sticky (the static type follows the
+binding through subsequent operations instead of being dropped at
+the first `:int` parameter contact).  Sticky ascription is the
+smaller change.
+
 ### Design sketch (F3-1)
 
 **Call convention.**  For a constrained-instance method
@@ -325,12 +363,13 @@ backwards-compatibility issue.
 | ID | Task | File(s) |
 |----|------|---------|
 | F3-1 | Design dictionary-passing call convention -- **shipped** (this section).  The implementation work (F3-2..F3-7) is deferred to a follow-up session given the scope expansion described above. | -- |
+| F3-bug | Tracking fixture `tests/fixtures/tvec-of-tvec-eq-manual` -- **shipped**.  Documents that `(.eq? @Vec outer outer)` on a `Vec[Vec[int]]` returns the wrong answer today (the Eq[Vec[A]] instance hardcodes integer = for elements), but the underlying `tvec-eq?` primitive with a nested comparator lambda gives the correct answer.  When F3-2..F3-7 ship, a companion `tvec-of-tvec-eq` fixture should appear that asserts the same answers via the `.eq?` dispatch path. | `tests/fixtures/` |
 | F3-2 | Extend `elab_typeclasses.c` to elaborate constrained-instance methods with hidden dictionary parameters in scope, accessible by the constrained typeclass name. | `src/compiler/elab_typeclasses.c` |
 | F3-3 | Extend the method-dispatch loop to recursively resolve inner constraints and thread dictionaries from the call site into the hidden parameters. | `src/compiler/elab_typeclasses.c` |
 | F3-4 | Update `emit_fns.c` to emit the extra parameters and `emit_expr.c` to pass the dictionaries at the call.  Also extend the EX_METHOD_CALL emit to choose between the static-singleton path (unconstrained) and the dict-pointer-arg path (constrained). | `src/compiler/emit_fns.c`, `emit_expr.c` |
 | F3-5 | Replace the integer-`=` element comparison in each `t*.tur` constrained `Eq` instance with a dispatch through the element's `.eq?`. | `stdlib/t*.tur` |
 | F3-6 | Add fixture `tests/fixtures/typed/tvec-of-tvec-eq` and `tests/fixtures/typed/tmap-of-tvec-eq` covering recursive structural equality. | `tests/fixtures/typed/` |
-| F3-7 | **New.**  Pick option (a) or (b) for receiver-type recovery on typed-collection helpers (see "Additional blocker" above) and implement it.  Without F3-7, F3-5/F3-6 cannot exercise the dict-passing path through `.eq?`. | `src/compiler/elab_call.c`, `stdlib/t*.tur` |
+| F3-7 | **New.**  Pick option (a) or (b) for receiver-type recovery on typed-collection helpers (see "Additional blocker" above) and implement it.  Without F3-7, F3-5/F3-6 cannot exercise the dict-passing path through `.eq?`.  Session-2 finding (see below) narrows the recommended path to (b) "sticky ascription" -- smaller change than rewriting every typed helper's signature. | `src/compiler/elab_call.c`, `src/compiler/elab_types.c` (`EX_ASCRIBE` lowering), `stdlib/t*.tur` (only signature audit, not rewrite, under option b) |
 
 ---
 
