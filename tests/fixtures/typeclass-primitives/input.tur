@@ -1,36 +1,38 @@
 ;; Phase 15: Built-in typeclasses for primitive types
+;; NOTE: renamed Eq/Ord/Show -> MyEqPrim/MyOrdPrim/MyShowPrim to avoid
+;; orphan-instance errors against the auto-loaded stdlib typeclasses.
 
-(defclass Eq [a]
+(defclass MyEqPrim [a]
   (eq? [x y] :bool))
 
-(definstance Eq [int]
+(definstance MyEqPrim [int]
   (eq? [x y] (= x y)))
 
-(definstance Eq [bool]
+(definstance MyEqPrim [bool]
   (eq? [x y] (= x y)))
 
-(defclass Ord [a]
+(defclass MyOrdPrim [a]
   (lt? [x y] :bool)
   (lte? [x y] :bool)
   (gt? [x y] :bool)
   (gte? [x y] :bool))
 
-(definstance Ord [int]
+(definstance MyOrdPrim [int]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
-(defclass Show [a]
+(defclass MyShowPrim [a]
   (show [x] :cstr))
 
-(definstance Show [int]
+(definstance MyShowPrim [int]
   (show [x] :cstr "<int>"))
 
-(definstance Show [bool]
+(definstance MyShowPrim [bool]
   (show [x] :cstr "<bool>"))
 
-(definstance Show [cstr]
+(definstance MyShowPrim [cstr]
   (show [x] x))
 
 (defn main [] :int

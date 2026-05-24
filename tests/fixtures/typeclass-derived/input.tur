@@ -1,12 +1,14 @@
 ;; Phase 15: Derived typeclass instances
+;; NOTE: renamed Eq -> MyEqDerived to avoid orphan-instance error against the
+;; auto-loaded stdlib Eq typeclass.
 
-(defclass Eq [a]
+(defclass MyEqDerived [a]
   (eq? [x y] :bool))
 
-(definstance Eq [int]
+(definstance MyEqDerived [int]
   (eq? [x y] (= x y)))
 
-(definstance Eq [bool]
+(definstance MyEqDerived [bool]
   (eq? [x y] (= x y)))
 
 ;; Derived instance for option<T> if Eq T

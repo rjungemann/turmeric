@@ -26,8 +26,7 @@
 ;;; Since: RR4
 (defn float-range-bound-new [inclusive :int value :float] :int
   ```c
-  struct { bool is_inclusive; double value; } *b =
-    (struct { bool is_inclusive; double value; } *)malloc(sizeof(*b));
+  struct { bool is_inclusive; double value; } *b = malloc(sizeof(*b));
   b->is_inclusive = (bool)inclusive;
   b->value = value;
   return (int64_t)(intptr_t)b;
@@ -71,8 +70,7 @@
 ;;; Since: RR4
 (defn float-range-new [lower :int upper :int] :int
   ```c
-  struct { int64_t lower; int64_t upper; } *r =
-    (struct { int64_t lower; int64_t upper; } *)malloc(sizeof(*r));
+  struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
   r->lower = lower;
   r->upper = upper;
   return (int64_t)(intptr_t)r;

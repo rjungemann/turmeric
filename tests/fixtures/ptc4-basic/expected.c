@@ -119,12 +119,14 @@ static const char *__tur_any_type_name(int64_t tag) {
 }
 /* Phase HRT2: existential type (opaque void* box) */
 typedef void * tur_exists_t;
-/* Phase EX1e: constrained-existential heap record */
+/* Phase EX1e/EXG1: constrained-existential heap record */
 typedef struct tur_existential {
     int64_t  value;
     int32_t  n_witnesses;
-    void   **witnesses;
+    void    *witnesses[];   /* flexible array; length = n_witnesses */
 } tur_existential_t;
+/* EXG1-2: drop hook for constrained-existential rc records */
+static void tur_existential_drop(void *value) { (void)value; }
 /* STM types (Phase 21) */
 typedef void *(*stm_fn_t)(void *env);
 typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;
@@ -1656,11 +1658,15 @@ typedef void (*RcDropFn)(void *value);
 
 typedef struct RcControlBlock RcControlBlock;
 
+typedef void (*RcWalkChildFn)(RcControlBlock *child, void *ctx);
+typedef void (*RcWalkFn)(void *value, RcWalkChildFn cb, void *ctx);
+
 struct RcControlBlock {
     uint64_t strong_count;
     uint64_t weak_count;
     void *value;
     RcDropFn drop_fn;
+    RcWalkFn walk_fn;
     uint8_t value_type_kind;
     uint8_t color;           /* GC color */
     bool may_contain_cycles;  /* Hint for GC */
@@ -1772,6 +1778,11 @@ static uint32_t rc_free_queue_drain(void) {
                 (rc_free_queue_count - 1) * sizeof(RcControlBlock *));
         rc_free_queue_count--;
         gc_unregister_block(cb);
+        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
+            int64_t __raw = *(const int64_t *)cb->value;
+            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
+            if (__inner) rc_strong_decrement(__inner);
+        }
         if (cb->value) cb->drop_fn(cb->value);
         free(cb);
         freed++;
@@ -1813,7 +1824,12 @@ static RcDropFn default_drop_fn_for_type(int value_type_kind) {
     }
 }
 
-RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {
+#define RCK_OPAQUE       0
+#define RCK_EXISTENTIAL  1
+#define RCK_STRUCT       2
+#define RCEXP_OPAQUE     0
+#define RCEXP_RC         1
+RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {
     size_t total_size = sizeof(RcControlBlock) + value_size;
     RcControlBlock *cb = (RcControlBlock *)malloc(total_size);
     if (!cb) { fprintf(stderr, "rc: out of memory\n"); abort(); }
@@ -1821,11 +1837,24 @@ RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn dro
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);
+    cb->walk_fn = NULL;
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
+    cb->reserved[0] = kind;
+    cb->reserved[1] = payload_kind;
     /* Register with GC; primitives (type_kind<=7) cannot form cycles */
     gc_register_block(cb);
     if (value_type_kind <= 7) cb->may_contain_cycles = false;
+    return cb;
+}
+
+RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {
+    return rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_OPAQUE, RCEXP_OPAQUE);
+}
+
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {
+    RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_STRUCT, 0);
+    cb->walk_fn = walk_fn;
     return cb;
 }
 
@@ -1859,6 +1888,11 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
         gc_unregister_block(cb);
+        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
+            int64_t __raw = *(const int64_t *)cb->value;
+            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
+            if (__inner) rc_strong_decrement(__inner);
+        }
         /* Free zombie value if GC did not already collect it */
         if (cb->value && cb->drop_fn) {
             cb->drop_fn(cb->value);
@@ -1929,14 +1963,43 @@ void *tur_ref_from_rc(RcControlBlock *cb) {
 }
 
 /* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */
+static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {
+    (void)ctx;
+    if (child && child->color != GC_BLACK) {
+        child->color = GC_BLACK;
+        if (gc_grey_count < GC_MAX_SUSPECTS) {
+            gc_grey_queue[gc_grey_count++] = child;
+        }
+    }
+}
+
 static void gc_mark_phase(void) {
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         gc_all_blocks[i]->color = GC_WHITE;
     }
+    gc_grey_count = 0;
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         RcControlBlock *cb = gc_all_blocks[i];
         if (cb->strong_count > 0) {
             cb->color = GC_BLACK;
+            if (gc_grey_count < GC_MAX_SUSPECTS) {
+                gc_grey_queue[gc_grey_count++] = cb;
+            }
+        }
+    }
+    while (gc_grey_count > 0) {
+        RcControlBlock *cb = gc_grey_queue[--gc_grey_count];
+        if (cb && cb->value && cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {
+            int64_t raw = *(const int64_t *)cb->value;
+            RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
+            if (inner && inner->color != GC_BLACK) {
+                inner->color = GC_BLACK;
+                if (gc_grey_count < GC_MAX_SUSPECTS) {
+                    gc_grey_queue[gc_grey_count++] = inner;
+                }
+            }
+        } else if (cb && cb->value && cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {
+            cb->walk_fn(cb->value, __gc_mark_struct_child, NULL);
         }
     }
 }
@@ -2052,6 +2115,10 @@ typedef struct Set {
     void * hamt;
 } Set;
 
+typedef struct MutableMap {
+    void * storage;
+} MutableMap;
+
 typedef struct Box {
     int64_t v;
 } Box;
@@ -2083,21 +2150,35 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static bool __fn_329(int64_t, int64_t);
-static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_349(int64_t, int64_t);
-static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_376(int64_t, int64_t);
-static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_396(int64_t, int64_t);
-static bool __fn_400(int64_t, int64_t);
-static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_416(int64_t, int64_t);
-static bool __fn_420(int64_t, int64_t);
-static bool __inst_Eq_eq__Pair(int64_t, int64_t);
+static bool __inst_Eq_eq__int(int64_t, int64_t);
+static bool __inst_Eq_eq__bool(bool, bool);
+static bool __inst_Eq_eq__cstr(const char *, const char *);
+static bool __inst_Eq_eq__T(double, double);
+static bool __inst_Eq_eq__int8(int8_t, int8_t);
+static bool __inst_Eq_eq__int16(int16_t, int16_t);
+static bool __inst_Eq_eq__int32(int32_t, int32_t);
+static bool __inst_Eq_eq__uint8(uint8_t, uint8_t);
+static bool __inst_Eq_eq__uint16(uint16_t, uint16_t);
+static bool __inst_Eq_eq__uint32(uint32_t, uint32_t);
+static bool __inst_Eq_eq__uint64(uint64_t, uint64_t);
+static bool __inst_Eq_eq__float32(float, float);
 static bool __fn_436(int64_t, int64_t);
+static bool __inst_Eq_eq__Map(int64_t, int64_t);
+static bool __fn_456(int64_t, int64_t);
+static bool __inst_Eq_eq__Vec(int64_t, int64_t);
+static bool __fn_483(int64_t, int64_t);
+static bool __inst_Eq_eq__Option(int64_t, int64_t);
+static bool __fn_503(int64_t, int64_t);
+static bool __fn_507(int64_t, int64_t);
+static bool __inst_Eq_eq__Result(int64_t, int64_t);
+static bool __fn_523(int64_t, int64_t);
+static bool __fn_527(int64_t, int64_t);
+static bool __inst_Eq_eq__Pair(int64_t, int64_t);
+static bool __fn_543(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
+static bool __fn_614(int64_t, int64_t);
+static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
 static int64_t __inst_Measurable_measure_int(int64_t);
 static int64_t __inst_Measurable_measure_Box(int64_t);
 static void * array_get(void *, int64_t);
@@ -2145,6 +2226,30 @@ static bool has_(void *, void *);
 static int64_t count(void *);
 static void * merge(void *, void *);
 static bool map_eq_(int64_t, int64_t, int64_t);
+static void * ok(int64_t);
+static void * err(int64_t);
+static bool ok_(void *);
+static bool err_(void *);
+static int64_t ok_val(void *);
+static int64_t err_val(void *);
+static int64_t result_unwrap(void *);
+static int64_t result_unwrap_or(void *, int64_t);
+static int64_t result_expect(void *, const char *);
+static void * result_map(void *, void *);
+static void * result_map_err(void *, void *);
+static void * result_flat_map(void *, void *);
+static void * result_or(void *, void *);
+static void * result_or_else(void *, void *);
+static void * ok_or(void *, int64_t);
+static void * err_context(void *, const char *);
+static bool result_eq_(int64_t, int64_t, int64_t, int64_t);
+static void result_free(void *);
+static void * result_collect(void *);
+static void * result_partition(void *);
+static void * result_partition_ok(void *);
+static void * result_partition_err(void *);
+static int64_t result_must(void *);
+static int64_t result_must_msg(void *, const char *);
 static int64_t tmap_new();
 static void * tmap_hamt(int64_t);
 static int64_t tmap_wrap(void *);
@@ -2219,15 +2324,171 @@ static int64_t tset_union(int64_t, int64_t);
 static int64_t tset_intersect(int64_t, int64_t);
 static int64_t tset_diff(int64_t, int64_t);
 static bool tset_eq_(int64_t, int64_t);
+static bool tset_eq_cmp_(int64_t, int64_t, int64_t);
 static void tset_free(int64_t);
+static int64_t tmutmap_new();
+static int64_t tmutmap_len(int64_t);
+static void tmutmap_set_(int64_t, int64_t, int64_t, int64_t);
+static int64_t tmutmap_get(int64_t, int64_t, int64_t);
+static bool tmutmap_has_(int64_t, int64_t, int64_t);
+static bool tmutmap_delete_(int64_t, int64_t, int64_t);
+static bool tmutmap_eq_(int64_t, int64_t, int64_t);
+static void tmutmap_free(int64_t);
 static int64_t box_new(int64_t);
 
-static bool __fn_329(int64_t a, int64_t b) {
+static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_int {
+    bool (*eq_)(int64_t, int64_t);
+} dict_Eq_int;
+
+static dict_Eq_int dict_Eq_int_singleton = {
+    .eq_ = __inst_Eq_eq__int,
+};
+
+static bool __inst_Eq_eq__bool(bool x, bool y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_bool {
+    bool (*eq_)(bool, bool);
+} dict_Eq_bool;
+
+static dict_Eq_bool dict_Eq_bool_singleton = {
+    .eq_ = __inst_Eq_eq__bool,
+};
+
+static bool __inst_Eq_eq__cstr(const char * x, const char * y) {
+        if (x == NULL && y == NULL) return true;
+    if (x == NULL || y == NULL) return false;
+    return strcmp((const char *)x, (const char *)y) == 0;
+    
+}
+
+typedef struct dict_Eq_cstr {
+    bool (*eq_)(const char *, const char *);
+} dict_Eq_cstr;
+
+static dict_Eq_cstr dict_Eq_cstr_singleton = {
+    .eq_ = __inst_Eq_eq__cstr,
+};
+
+static bool __inst_Eq_eq__T(double x, double y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_T {
+    bool (*eq_)(double, double);
+} dict_Eq_T;
+
+static dict_Eq_T dict_Eq_T_singleton = {
+    .eq_ = __inst_Eq_eq__T,
+};
+
+static bool __inst_Eq_eq__int8(int8_t x, int8_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_int8 {
+    bool (*eq_)(int8_t, int8_t);
+} dict_Eq_int8;
+
+static dict_Eq_int8 dict_Eq_int8_singleton = {
+    .eq_ = __inst_Eq_eq__int8,
+};
+
+static bool __inst_Eq_eq__int16(int16_t x, int16_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_int16 {
+    bool (*eq_)(int16_t, int16_t);
+} dict_Eq_int16;
+
+static dict_Eq_int16 dict_Eq_int16_singleton = {
+    .eq_ = __inst_Eq_eq__int16,
+};
+
+static bool __inst_Eq_eq__int32(int32_t x, int32_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_int32 {
+    bool (*eq_)(int32_t, int32_t);
+} dict_Eq_int32;
+
+static dict_Eq_int32 dict_Eq_int32_singleton = {
+    .eq_ = __inst_Eq_eq__int32,
+};
+
+static bool __inst_Eq_eq__uint8(uint8_t x, uint8_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_uint8 {
+    bool (*eq_)(uint8_t, uint8_t);
+} dict_Eq_uint8;
+
+static dict_Eq_uint8 dict_Eq_uint8_singleton = {
+    .eq_ = __inst_Eq_eq__uint8,
+};
+
+static bool __inst_Eq_eq__uint16(uint16_t x, uint16_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_uint16 {
+    bool (*eq_)(uint16_t, uint16_t);
+} dict_Eq_uint16;
+
+static dict_Eq_uint16 dict_Eq_uint16_singleton = {
+    .eq_ = __inst_Eq_eq__uint16,
+};
+
+static bool __inst_Eq_eq__uint32(uint32_t x, uint32_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_uint32 {
+    bool (*eq_)(uint32_t, uint32_t);
+} dict_Eq_uint32;
+
+static dict_Eq_uint32 dict_Eq_uint32_singleton = {
+    .eq_ = __inst_Eq_eq__uint32,
+};
+
+static bool __inst_Eq_eq__uint64(uint64_t x, uint64_t y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_uint64 {
+    bool (*eq_)(uint64_t, uint64_t);
+} dict_Eq_uint64;
+
+static dict_Eq_uint64 dict_Eq_uint64_singleton = {
+    .eq_ = __inst_Eq_eq__uint64,
+};
+
+static bool __inst_Eq_eq__float32(float x, float y) {
+        return ((x) == (y));
+}
+
+typedef struct dict_Eq_float32 {
+    bool (*eq_)(float, float);
+} dict_Eq_float32;
+
+static dict_Eq_float32 dict_Eq_float32_singleton = {
+    .eq_ = __inst_Eq_eq__float32,
+};
+
+static bool __fn_436(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return tmap_eq_(x, y, (int64_t)(intptr_t)(__fn_329));
+        return tmap_eq_(x, y, (int64_t)(intptr_t)(__fn_436));
 }
 
 typedef struct dict_Eq_Map {
@@ -2238,12 +2499,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_349(int64_t a, int64_t b) {
+static bool __fn_456(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return tvec_eq_(x, y, (int64_t)(intptr_t)(__fn_349));
+        return tvec_eq_(x, y, (int64_t)(intptr_t)(__fn_456));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2254,12 +2515,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_376(int64_t a, int64_t b) {
+static bool __fn_483(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return toption_eq_(x, y, (int64_t)(intptr_t)(__fn_376));
+        return toption_eq_(x, y, (int64_t)(intptr_t)(__fn_483));
 }
 
 typedef struct dict_Eq_Option {
@@ -2270,16 +2531,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_396(int64_t a, int64_t b) {
+static bool __fn_503(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
-static bool __fn_400(int64_t a, int64_t b) {
+static bool __fn_507(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return tresult_eq_(x, y, (int64_t)(intptr_t)(__fn_396), (int64_t)(intptr_t)(__fn_400));
+        return tresult_eq_(x, y, (int64_t)(intptr_t)(__fn_503), (int64_t)(intptr_t)(__fn_507));
 }
 
 typedef struct dict_Eq_Result {
@@ -2290,16 +2551,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_416(int64_t a, int64_t b) {
+static bool __fn_523(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
-static bool __fn_420(int64_t a, int64_t b) {
+static bool __fn_527(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return tpair_eq_(x, y, (int64_t)(intptr_t)(__fn_416), (int64_t)(intptr_t)(__fn_420));
+        return tpair_eq_(x, y, (int64_t)(intptr_t)(__fn_523), (int64_t)(intptr_t)(__fn_527));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2310,12 +2571,12 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_436(int64_t a, int64_t b) {
+static bool __fn_543(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return tlist_eq_(x, y, (int64_t)(intptr_t)(__fn_436));
+        return tlist_eq_(x, y, (int64_t)(intptr_t)(__fn_543));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2336,6 +2597,22 @@ typedef struct dict_Eq_Set {
 
 static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
+};
+
+static bool __fn_614(int64_t a, int64_t b) {
+        return ((a) == (b));
+}
+
+static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
+        return tmutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_614));
+}
+
+typedef struct dict_Eq_MutableMap {
+    bool (*eq_)(int64_t, int64_t);
+} dict_Eq_MutableMap;
+
+static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
+    .eq_ = __inst_Eq_eq__MutableMap,
 };
 
 static int64_t __inst_Measurable_measure_int(int64_t x) {
@@ -2603,6 +2880,280 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
   }
   tur_hamt_iter_free(iter_buf);
   return true;
+  
+}
+
+static void * ok(int64_t x) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = true;
+  result->ok_val = x;
+  result->err_val = 0;
+  return result;
+  
+}
+
+static void * err(int64_t e) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = false;
+  result->ok_val = 0;
+  result->err_val = e;
+  return result;
+  
+}
+
+static bool ok_(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result != NULL && result->is_ok;
+  
+}
+
+static bool err_(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  
+}
+
+static int64_t ok_val(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+  
+}
+
+static int64_t err_val(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->err_val;
+  
+}
+
+static int64_t result_unwrap(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) {
+    fprintf(stderr, "result-unwrap: called on err\n");
+    abort();
+  }
+  return (int)result->ok_val;
+  
+}
+
+static int64_t result_unwrap_or(void * r, int64_t default_val) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result != NULL && result->is_ok) return (int)result->ok_val;
+  return default_val;
+  
+}
+
+static int64_t result_expect(void * r, const char * msg) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) {
+    fprintf(stderr, "result-expect: %s\n", (const char*)msg);
+    abort();
+  }
+  return (int)result->ok_val;
+  
+}
+
+static void * result_map(void * r, void * f) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  int64_t new_val = ((int64_t (*)(int64_t))f)(res->ok_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = true;
+  out->ok_val  = new_val;
+  out->err_val = 0;
+  return out;
+  
+}
+
+static void * result_map_err(void * r, void * f) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  int64_t new_err = ((int64_t (*)(int64_t))f)(res->err_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = false;
+  out->ok_val  = 0;
+  out->err_val = new_err;
+  return out;
+  
+}
+
+static void * result_flat_map(void * r, void * f) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
+  
+}
+
+static void * result_or(void * r, void * alt) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r;
+  return alt;
+  
+}
+
+static void * result_or_else(void * r, void * f) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r;
+  int64_t ev = res ? res->err_val : 0;
+  return (void *)((int64_t (*)(int64_t))f)(ev);
+  
+}
+
+static void * ok_or(void * opt, int64_t e) {
+        struct { bool is_some; int64_t value; } *o = (void*)opt;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  if (o != NULL && o->is_some) {
+    result->is_ok   = true;
+    result->ok_val  = o->value;
+    result->err_val = 0;
+  } else {
+    result->is_ok   = false;
+    result->ok_val  = 0;
+    result->err_val = e;
+  }
+  return result;
+  
+}
+
+static void * err_context(void * r, const char * ctx) {
+        extern size_t strlen(const char*);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  const char *orig = (const char *)(intptr_t)res->err_val;
+  size_t ctx_len  = strlen((const char*)ctx);
+  size_t orig_len = orig ? strlen(orig) : 0;
+  char *msg = malloc(ctx_len + 2 + orig_len + 1);
+  memmove(msg, ctx, ctx_len);
+  msg[ctx_len]     = ':';
+  msg[ctx_len + 1] = ' ';
+  if (orig) memmove(msg + ctx_len + 2, orig, orig_len);
+  msg[ctx_len + 2 + orig_len] = '\0';
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = false;
+  out->ok_val  = 0;
+  out->err_val = (int64_t)(intptr_t)msg;
+  return out;
+  
+}
+
+static bool result_eq_(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void *)(intptr_t)r1;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void *)(intptr_t)r2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a->is_ok != b->is_ok) return false;
+  if (a->is_ok) {
+      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+  } else {
+      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
+  }
+  
+}
+
+static void result_free(void * r) {
+        free(r);
+  
+}
+
+static void * result_collect(void * v) {
+        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
+  /* Check for first error */
+  for (size_t i = 0; i < vec->len; i++) {
+    res_ptr = (void *)(intptr_t)vec->data[i];
+    if (res_ptr == NULL || !res_ptr->is_ok) {
+      int64_t ev = res_ptr ? res_ptr->err_val : 0;
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+          malloc(sizeof(*out));
+      out->is_ok   = false;
+      out->ok_val  = 0;
+      out->err_val = ev;
+      return out;
+    }
+  }
+  /* All ok -- build a new vec of ok values */
+  struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
+      malloc(sizeof(*ok_vec));
+  ok_vec->len  = vec->len;
+  ok_vec->cap  = vec->len;
+  ok_vec->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
+  for (size_t i = 0; i < vec->len; i++) {
+    res_ptr = (void *)(intptr_t)vec->data[i];
+    ok_vec->data[i] = res_ptr->ok_val;
+  }
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+      malloc(sizeof(*out));
+  out->is_ok   = true;
+  out->ok_val  = (int64_t)(intptr_t)ok_vec;
+  out->err_val = 0;
+  return out;
+  
+}
+
+static void * result_partition(void * v) {
+        typedef struct __tur_res_vec { int64_t *data; size_t len; size_t cap; } __tur_res_vec_t;
+  __tur_res_vec_t *vec = (void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
+  /* Build ok and err vecs */
+  __tur_res_vec_t *ok_vec = malloc(sizeof(*ok_vec));
+  ok_vec->data = NULL; ok_vec->len = 0; ok_vec->cap = 0;
+  __tur_res_vec_t *err_vec = malloc(sizeof(*err_vec));
+  err_vec->data = NULL; err_vec->len = 0; err_vec->cap = 0;
+  for (size_t i = 0; i < vec->len; i++) {
+    res_ptr = (void *)(intptr_t)vec->data[i];
+    int64_t val;
+    __tur_res_vec_t *dst;
+    if (res_ptr != NULL && res_ptr->is_ok) {
+      val = res_ptr->ok_val;
+      dst = ok_vec;
+    } else {
+      val = res_ptr ? res_ptr->err_val : 0;
+      dst = err_vec;
+    }
+    if (dst->len >= dst->cap) {
+      size_t new_cap = dst->cap > 0 ? dst->cap * 2 : 4;
+      int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+      for (size_t j = 0; j < dst->len; j++) new_data[j] = dst->data[j];
+      free(dst->data);
+      dst->data = new_data;
+      dst->cap  = new_cap;
+    }
+    dst->data[dst->len++] = val;
+  }
+  /* Return pair */
+  struct { void *ok_vec; void *err_vec; } *pair = malloc(sizeof(*pair));
+  pair->ok_vec  = ok_vec;
+  pair->err_vec = err_vec;
+  return pair;
+  
+}
+
+static void * result_partition_ok(void * pair) {
+        struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->ok_vec;
+  
+}
+
+static void * result_partition_err(void * pair) {
+        struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->err_vec;
+  
+}
+
+static int64_t result_must(void * r) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) {
+    tur_panic("result-must: called on err");
+  }
+  return (int)res->ok_val;
+  
+}
+
+static int64_t result_must_msg(void * r, const char * msg) {
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) {
+    tur_panic(msg);
+  }
+  return (int)res->ok_val;
   
 }
 
@@ -3261,8 +3812,249 @@ static bool tset_eq_(int64_t a, int64_t b) {
   
 }
 
+static bool tset_eq_cmp_(int64_t a, int64_t b, int64_t cmp_fn) {
+        /* O(n*m) comparison: iterate a's elements, scan b for a structural
+   * match per element.  Bigger constant than tset-eq?'s hash lookup
+   * but correct for arbitrarily-structured element types.  Used by
+   * the F3-5 dispatcher synthesis for Set[T] where T is a TY_APP. */
+  struct { void *hamt; } *sa = (void*)(intptr_t)a;
+  struct { void *hamt; } *sb = (void*)(intptr_t)b;
+  if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
+  uint64_t iter_a[32];
+  for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
+  tur_hamt_iter_init(iter_a, sa->hamt);
+  uint64_t hash_a;
+  void *key_a = NULL, *val_a = NULL;
+  while (tur_hamt_iter_next(iter_a, &hash_a, &key_a, &val_a)) {
+      bool found = false;
+      uint64_t iter_b[32];
+      for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
+      tur_hamt_iter_init(iter_b, sb->hamt);
+      uint64_t hash_b;
+      void *key_b = NULL, *val_b = NULL;
+      while (tur_hamt_iter_next(iter_b, &hash_b, &key_b, &val_b)) {
+          if (((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(
+                (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
+              found = true;
+              break;
+          }
+      }
+      tur_hamt_iter_free(iter_b);
+      if (!found) {
+          tur_hamt_iter_free(iter_a);
+          return false;
+      }
+  }
+  tur_hamt_iter_free(iter_a);
+  return true;
+  
+}
+
 static void tset_free(int64_t s) {
         free((void*)(intptr_t)s);
+  
+}
+
+static int64_t tmutmap_new() {
+        /* Backing storage layout:
+   *   uint64_t cap;        capacity (power of two)
+   *   uint64_t len;        live entry count (OCCUPIED slots only)
+   *   uint64_t tomb;       tombstone count (DELETED slots)
+   *   Slot     slots[cap];
+   *
+   * Slot layout:
+   *   uint8_t  tag;        0=EMPTY, 1=OCCUPIED, 2=DELETED
+   *   int64_t  hash;
+   *   int64_t  key;
+   *   int64_t  value;
+   */
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  size_t init_cap = 16;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)
+      malloc(sizeof(*s) + init_cap * sizeof(struct __tur_mm_slot));
+  s->cap = init_cap; s->len = 0; s->tomb = 0;
+  for (size_t i = 0; i < init_cap; i++) {
+      s->slots[i].tag = TUR_MM_EMPTY;
+      s->slots[i].hash = 0; s->slots[i].key = 0; s->slots[i].value = 0;
+  }
+  struct { void *storage; } *m = malloc(sizeof(*m));
+  m->storage = s;
+  return (int64_t)(intptr_t)m;
+  
+}
+
+static int64_t tmutmap_len(int64_t m) {
+        struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
+  return (int64_t)s->len;
+  
+}
+
+static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  /* Resize when load factor (len + tomb) / cap >= 0.75. */
+  if ((s->len + s->tomb) * 4 >= s->cap * 3) {
+      uint64_t new_cap = s->cap * 2;
+      struct __tur_mm_storage *ns = (struct __tur_mm_storage *)
+          malloc(sizeof(*ns) + new_cap * sizeof(struct __tur_mm_slot));
+      ns->cap = new_cap; ns->len = 0; ns->tomb = 0;
+      for (uint64_t i = 0; i < new_cap; i++) {
+          ns->slots[i].tag = TUR_MM_EMPTY;
+          ns->slots[i].hash = 0; ns->slots[i].key = 0; ns->slots[i].value = 0;
+      }
+      uint64_t mask = new_cap - 1;
+      for (uint64_t i = 0; i < s->cap; i++) {
+          if (s->slots[i].tag != TUR_MM_OCCUPIED) continue;
+          uint64_t idx = ((uint64_t)s->slots[i].hash) & mask;
+          while (ns->slots[idx].tag == TUR_MM_OCCUPIED) idx = (idx + 1) & mask;
+          ns->slots[idx] = s->slots[i];
+          ns->len++;
+      }
+      free(s);
+      mm->storage = ns;
+      s = ns;
+  }
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  int64_t first_tomb = -1;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) {
+          /* Not present: insert at first tombstone if any, else here. */
+          if (first_tomb >= 0) {
+              struct __tur_mm_slot *ts = &s->slots[first_tomb];
+              ts->tag = TUR_MM_OCCUPIED;
+              ts->hash = h; ts->key = key; ts->value = val;
+              s->tomb--;
+              s->len++;
+          } else {
+              slot->tag = TUR_MM_OCCUPIED;
+              slot->hash = h; slot->key = key; slot->value = val;
+              s->len++;
+          }
+          return;
+      }
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          /* Update existing. */
+          slot->value = val;
+          return;
+      }
+      if (slot->tag == TUR_MM_DELETED && first_tomb < 0) {
+          first_tomb = (int64_t)idx;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static int64_t tmutmap_get(int64_t m, int64_t h, int64_t key) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return 0;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          return slot->value;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static bool tmutmap_has_(int64_t m, int64_t h, int64_t key) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return false;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          return true;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static bool tmutmap_delete_(int64_t m, int64_t h, int64_t key) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return false;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          slot->tag = TUR_MM_DELETED;
+          slot->hash = 0; slot->key = 0; slot->value = 0;
+          s->len--;
+          s->tomb++;
+          return true;
+      }
+      idx = (idx + 1) & mask;
+  }
+  
+}
+
+static bool tmutmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
+        enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *a = (void*)(intptr_t)m1;
+  struct { void *storage; } *b = (void*)(intptr_t)m2;
+  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)a->storage;
+  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)b->storage;
+  if (sa->len != sb->len) return false;
+  for (uint64_t i = 0; i < sa->cap; i++) {
+      if (sa->slots[i].tag != TUR_MM_OCCUPIED) continue;
+      int64_t h = sa->slots[i].hash;
+      int64_t k = sa->slots[i].key;
+      int64_t v_a = sa->slots[i].value;
+      /* Find the same key in b (via probe). */
+      uint64_t mask = sb->cap - 1;
+      uint64_t idx = ((uint64_t)h) & mask;
+      bool found = false;
+      int64_t v_b = 0;
+      for (;;) {
+          struct __tur_mm_slot *slot = &sb->slots[idx];
+          if (slot->tag == TUR_MM_EMPTY) break;
+          if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == k) {
+              v_b = slot->value;
+              found = true;
+              break;
+          }
+          idx = (idx + 1) & mask;
+      }
+      if (!found) return false;
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(v_a, v_b)) return false;
+  }
+  return true;
+  
+}
+
+static void tmutmap_free(int64_t m) {
+        struct { void *storage; } *mm = (void*)(intptr_t)m;
+  if (mm->storage) free(mm->storage);
+  free(mm);
   
 }
 

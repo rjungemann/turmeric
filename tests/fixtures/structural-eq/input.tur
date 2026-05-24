@@ -74,7 +74,7 @@
 ;; option helpers
 ;; ---------------------------------------------------------------------------
 
-(defn some [x] :int
+(defn u-some [x] :int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
@@ -104,7 +104,7 @@
 ;; result helpers
 ;; ---------------------------------------------------------------------------
 
-(defn ok [x :int] :int
+(defn u-ok [x :int] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true;
@@ -113,7 +113,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn err [e :int] :int
+(defn u-err [e :int] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false;
@@ -122,7 +122,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(defn result-eq? [r1 r2 ok-cmp err-cmp] :bool
+(defn u-result-eq? [r1 r2 ok-cmp err-cmp] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
@@ -247,7 +247,7 @@
 (defn test-vec-diff-len [] :int
   (if (vec-eq? (make-vec2 10 20) (make-vec1 10) (fn [a b] (= a b))) 0 1))
 
-;; vec of options: [some(1), some(2), none] vs [some(1), some(2), none]
+;; vec of options: [u-some(1), u-some(2), none] vs [u-some(1), u-some(2), none]
 (defn test-vec-nested-options [] :int
   ```c
   typedef struct { bool is_some; int64_t value; } SEqOpt;
@@ -355,38 +355,38 @@
       (if (pair-eq? (pair-new 1 2) (pair-new 1 3) (fn [a b] (= a b))) 0 1)))
 
   ;; --- option-eq? ---
-  (register-test "option-eq? some equal"
+  (register-test "option-eq? u-some equal"
     (fn []
-      (if (option-eq? (some 42) (some 42) (fn [a b] (= a b))) 1 0)))
+      (if (option-eq? (u-some 42) (u-some 42) (fn [a b] (= a b))) 1 0)))
 
   (register-test "option-eq? none equal"
     (fn []
       (if (option-eq? (none) (none) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "option-eq? some vs none"
+  (register-test "option-eq? u-some vs none"
     (fn []
-      (if (option-eq? (some 1) (none) (fn [a b] (= a b))) 0 1)))
+      (if (option-eq? (u-some 1) (none) (fn [a b] (= a b))) 0 1)))
 
-  (register-test "option-eq? some different values"
+  (register-test "option-eq? u-some different values"
     (fn []
-      (if (option-eq? (some 1) (some 2) (fn [a b] (= a b))) 0 1)))
+      (if (option-eq? (u-some 1) (u-some 2) (fn [a b] (= a b))) 0 1)))
 
-  ;; --- result-eq? ---
-  (register-test "result-eq? ok equal"
+  ;; --- u-result-eq? ---
+  (register-test "u-result-eq? u-ok equal"
     (fn []
-      (if (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
+      (if (u-result-eq? (u-ok 1) (u-ok 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "result-eq? err equal"
+  (register-test "u-result-eq? u-err equal"
     (fn []
-      (if (result-eq? (err 2) (err 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
+      (if (u-result-eq? (u-err 2) (u-err 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "result-eq? ok vs err"
+  (register-test "u-result-eq? u-ok vs u-err"
     (fn []
-      (if (result-eq? (ok 1) (err 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
+      (if (u-result-eq? (u-ok 1) (u-err 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
 
-  (register-test "result-eq? ok different values"
+  (register-test "u-result-eq? u-ok different values"
     (fn []
-      (if (result-eq? (ok 1) (ok 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
+      (if (u-result-eq? (u-ok 1) (u-ok 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
 
   ;; --- vec-eq? ---
   (register-test "vec-eq? empty vecs equal"

@@ -1,19 +1,19 @@
-;; Phase R4: must-result-ok — result-must on ok succeeds
+;; Phase R4: must-result-ok — u-result-must on u-ok succeeds
 
-(defn ok [x :int] :ptr<void>
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; return (void*)r;
   ```)
 
-(defn result-must [r :ptr<void>] :int
+(defn u-result-must [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) { tur_panic("result-must: called on err"); }
+  if (res == NULL || !res->is_ok) { tur_panic("u-result-must: called on u-err"); }
   return (int)res->ok_val;
   ```)
 
-(defn result-must-msg [r :ptr<void> msg :cstr] :int
+(defn u-result-must-msg [r :ptr<void> msg :cstr] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) { tur_panic(msg); }
@@ -22,6 +22,6 @@
 
 (defn main [] :int
   (do
-    (println (result-must (ok 7)))
-    (println (result-must-msg (ok 13) "custom msg"))
+    (println (u-result-must (u-ok 7)))
+    (println (u-result-must-msg (u-ok 13) "custom msg"))
     0))

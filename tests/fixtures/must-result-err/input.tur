@@ -1,19 +1,19 @@
-;; Phase R4: must-result-err — result-must on err panics
+;; Phase R4: must-result-err — u-result-must on u-err panics
 
-(defn err [e :int] :ptr<void>
+(defn u-err [e :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->err_val = e; return (void*)r;
   ```)
 
-(defn result-must [r :ptr<void>] :int
+(defn u-result-must [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) { tur_panic("result-must: called on err"); }
+  if (res == NULL || !res->is_ok) { tur_panic("u-result-must: called on u-err"); }
   return (int)res->ok_val;
   ```)
 
 (defn main [] :int
   (do
-    (result-must (err 99))
+    (u-result-must (u-err 99))
     0))

@@ -1,13 +1,15 @@
 ;; Phase R3: error-context — err-context wrapping and show functions
 
 ;; ─── inline result helpers ──────────────────────────────────────────────────
-(defn ok [x :int] :ptr<void>
+;; NOTE: renamed user `ok`/`err`/`err-context`/`err-val-cstr`/`ok?` -> u-*
+;; to avoid collisions with the auto-loaded stdlib result helpers.
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return (void*)r;
   ```)
 
-(defn err [x :cstr] :ptr<void>
+(defn u-err-cstr [x :cstr] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0;
@@ -15,20 +17,20 @@
   return (void*)r;
   ```)
 
-(defn ok? [r :ptr<void>] :bool
+(defn u-ok? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return res->is_ok;
   ```)
 
-(defn err-val-cstr [r :ptr<void>] :cstr
+(defn u-err-val-cstr [r :ptr<void>] :cstr
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   return (const char*)(intptr_t)res->err_val;
   ```)
 
-;; err-context — wrap an err value's message in additional context
-(defn err-context [r :ptr<void> ctx :cstr] :ptr<void>
+;; u-err-context — wrap an err value's message in additional context
+(defn u-err-context [r :ptr<void> ctx :cstr] :ptr<void>
   ```c
   extern size_t strlen(const char*);
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -101,17 +103,17 @@
 
 (defn main [] :int
   (do
-    ;; err-context adds context to an err result
-    (let [r1 (err "file not found")]
-      (let [r2 (err-context r1 "reading config")]
-        (if (ok? r2)
+    ;; u-err-context adds context to an err result
+    (let [r1 (u-err-cstr "file not found")]
+      (let [r2 (u-err-context r1 "reading config")]
+        (if (u-ok? r2)
           (println "unexpected ok")
-          (println (err-val-cstr r2)))))
+          (println (u-err-val-cstr r2)))))
 
-    ;; err-context passes ok results through unchanged
-    (let [r3 (ok 42)]
-      (let [r4 (err-context r3 "some context")]
-        (if (ok? r4)
+    ;; u-err-context passes ok results through unchanged
+    (let [r3 (u-ok 42)]
+      (let [r4 (u-err-context r3 "some context")]
+        (if (u-ok? r4)
           (println "ok passed through")
           (println "unexpected err"))))
 

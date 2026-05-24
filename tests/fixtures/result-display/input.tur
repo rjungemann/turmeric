@@ -3,13 +3,13 @@
 ;; Simplified to use direct functions instead of typeclass methods due to
 ;; typeclass instance elaboration issues with inline-c return types.
 
-(defn ok [x :int] :ptr<void>
+(defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
   ```)
 
-(defn err [e :int] :ptr<void>
+(defn u-err [e :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
@@ -34,8 +34,8 @@
   ```)
 
 (defn main [] :int
-  (let [r-ok (ok 7)]
-    (let [r-err (err 9)]
+  (let [r-ok (u-ok 7)]
+    (let [r-err (u-err 9)]
       (do
         (println (result-display r-ok))
         (println (result-display r-err))
