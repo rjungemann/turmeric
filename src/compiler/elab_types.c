@@ -1,6 +1,41 @@
 /* elab_types.c -- type-expression forms: defkind/defrec/deftype/type-app, ascribe/pack/open. */
 #include "elab_internal.h"
 
+/* MF4: separate struct / GADT namespaces. Resolve a type name by walking
+ * the ADT registry first, then the struct registry. When the same name is
+ * registered as both a defgadt and a defstruct, the GADT wins -- a name
+ * appearing in a type annotation almost always means the GADT (the
+ * struct's phantom-type projection is rare; a qualified `Struct/Vec` form
+ * can be added later if needed). Returns an arena-allocated Type* (TY_ADT
+ * or TY_STRUCT), or NULL when neither registry has the name. */
+Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
+    if (!name) return NULL;
+    for (uint32_t i = 0; i < e->n_adt_defs; i++) {
+        AdtDef *d = e->adt_defs[i];
+        if (d && d->name && strcmp(d->name, name->name) == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_adt(d);
+            /* Phase G1/HKT: parameterized GADTs need a non-* kind so kind
+             * checks against type-constructor arg slots stay consistent
+             * with how defgadt itself stamps the binding. */
+            if (d->n_type_params >= 2)      t->hkt_kind = KIND_ARROW2;
+            else if (d->n_type_params == 1) t->hkt_kind = KIND_ARROW;
+            return t;
+        }
+    }
+    for (uint32_t i = 0; i < e->n_struct_defs; i++) {
+        StructDef *d = e->struct_defs[i];
+        if (d && d->name && strcmp(d->name, name->name) == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_struct(d);
+            if (d->n_type_params >= 2)      t->hkt_kind = KIND_ARROW2;
+            else if (d->n_type_params == 1) t->hkt_kind = KIND_ARROW;
+            return t;
+        }
+    }
+    return NULL;
+}
+
 /* Phase HKT H5: (defkind Name kind-expr)
  *
  * Registers a kind alias.  The kind-expr is currently stored as a string
@@ -194,7 +229,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             }
         }
         
-        /* Look up as a type binding (primitive or user-defined type) */
+        /* MF4: prefer the typed-registry lookup so struct / GADT namespaces
+         * stay separate. When both a defstruct and a defgadt share a name,
+         * the GADT wins in type-annotation context. Falls back to
+         * scope_lookup so user-defined type aliases and forward
+         * declarations continue to resolve as today. */
+        {
+            Type *resolved = elab_lookup_type_by_name(e, sym);
+            if (resolved) return resolved;
+        }
         Binding *b = scope_lookup(e->scope, sym);
         if (!b) {
             b = scope_lookup(&e->global, sym);

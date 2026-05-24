@@ -1,0 +1,19 @@
+; MF4: defstruct Stack and defgadt Stack share a name; the GADT wins in
+; type annotations (`:Stack`).  Exercises the explicit prefer-GADT path
+; from docs/design-mf4-struct-gadt-namespaces.md.
+
+(defstruct Stack [A] (data :ptr<void>) (size :int))
+
+(defgadt Stack [a]
+  (SEmpty : (Stack int))
+  (SPush  int (Stack int) : (Stack int)))
+
+(defn stack-depth [s :Stack] :int
+  (match s
+    (SEmpty)    0
+    (SPush _ t) (+ 1 (stack-depth t))))
+
+(defn main [] :int
+  (println (stack-depth (SEmpty)))
+  (println (stack-depth (SPush 1 (SPush 2 (SPush 3 (SEmpty))))))
+  0)

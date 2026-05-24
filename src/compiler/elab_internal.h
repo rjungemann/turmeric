@@ -806,6 +806,11 @@ Expr *elab_defrec(Elab *e, const Form *call);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);
+/* MF4: separate struct / GADT namespaces. Resolves a type name by walking
+ * the ADT registry first, then the struct registry. Returns an
+ * arena-allocated Type* (TY_ADT or TY_STRUCT) when found, else NULL.
+ * Prefers GADTs over structs when both share a name, per the MF4 design. */
+Type *elab_lookup_type_by_name(Elab *e, const Symbol *name);
 Expr *elab_deftype(Elab *e, const Form *call);
 Expr *elab_type_app(Elab *e, const Form *call);
 Expr *elab_ascribe(Elab *e, const Form *call);

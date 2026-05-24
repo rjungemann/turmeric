@@ -240,11 +240,18 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
     
-    /* Phase RF0: allow re-elaboration of forward-declared stub types */
+    /* Phase RF0: allow re-elaboration of forward-declared stub types.
+     * MF4: only reuse the existing binding as a stub when its kind matches
+     * the kind we're elaborating (TY_STRUCT here).  A same-name GADT
+     * binding (TY_ADT) is a separate registration and coexists -- the new
+     * struct gets a fresh binding, and type-annotation lookups resolve
+     * via the GADT-prefers-struct rule in elab_lookup_type_by_name. */
     bool is_forward_stub = false;
     Binding *existing_b = scope_lookup(e->scope, name);
     if (existing_b) {
-        if (elab_is_forward_type(e, name)) {
+        bool same_kind_forward =
+            (existing_b->type.kind == TY_STRUCT) && elab_is_forward_type(e, name);
+        if (same_kind_forward) {
             /* DS4-2: a forward-registered stub is only re-elaborable while
              * it is still an empty placeholder (n_fields == 0).  Once
              * another defstruct has filled it in -- whether earlier in
@@ -253,8 +260,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
              * emit a duplicate `typedef struct <Name>` at codegen.  Reject
              * here so the user gets an elaborator diagnostic instead of a
              * cc error. */
-            StructDef *existing_def = (existing_b->type.kind == TY_STRUCT)
-                ? existing_b->type.as.struct_.def : NULL;
+            StructDef *existing_def = existing_b->type.as.struct_.def;
             if (existing_def && existing_def->n_fields > 0) {
                 diag_emit(DIAG_ERROR, name_form->span,
                           "defstruct: '%s' is already defined "
@@ -265,6 +271,11 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 return NULL;
             }
             is_forward_stub = true;
+        } else if (existing_b->type.kind == TY_ADT) {
+            /* MF4: an existing same-name GADT does not block a new struct.
+             * Fall through to register a fresh struct binding alongside the
+             * GADT entry in adt_defs[].  Type annotations resolve to the
+             * GADT under elab_lookup_type_by_name's prefer-GADT rule. */
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
                       "defstruct: '%s' is already defined", name->name);
@@ -1104,12 +1115,29 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Phase RF0: allow re-elaboration of forward-declared stub types */
+    /* Phase RF0: allow re-elaboration of forward-declared stub types.
+     * MF4: only reuse the existing binding as a stub when its kind matches
+     * the kind we're elaborating (TY_ADT here).  A same-name struct
+     * binding (TY_STRUCT) does not block the GADT -- per the MF4 design,
+     * GADTs and structs occupy separate namespaces and type-annotation
+     * lookups prefer the GADT.  Emit a one-shot warning at the defgadt
+     * span so the shadowing is visible. */
     bool is_forward_stub_gadt = false;
     Binding *existing_gadt_b = scope_lookup(e->scope, name);
     if (existing_gadt_b) {
-        if (elab_is_forward_type(e, name)) {
+        bool same_kind_forward =
+            (existing_gadt_b->type.kind == TY_ADT) && elab_is_forward_type(e, name);
+        if (same_kind_forward) {
             is_forward_stub_gadt = true;
+        } else if (existing_gadt_b->type.kind == TY_STRUCT) {
+            /* MF4: GADT shadows an existing struct of the same name.
+             * Allow coexistence; warn so the shadowing is visible. */
+            diag_emit(DIAG_WARNING, name_form->span,
+                      "GADT '%s' shadows existing struct '%s'; uses of "
+                      "':%s' in type annotations resolve to the GADT",
+                      name->name, name->name, name->name);
+            /* fall through: is_forward_stub_gadt stays false, the else
+             * branch below registers a fresh GADT binding and AdtDef. */
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
                       "defgadt: '%s' is already defined", name->name);
