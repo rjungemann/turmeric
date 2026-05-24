@@ -361,13 +361,13 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero is_opaque and any future bool fields */
         def->name = name->name;
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
         memset(def->fields, 0, actual_n_fields * sizeof(StructField));  /* F8: zero full_type and other fields */
         def->is_copy = is_copy;
         def->is_linear = is_linear; /* LT4 */
-        def->needs_drop_glue = false;
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
         /* Phase TM0 */
@@ -622,17 +622,11 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
         return NULL;
     }
     StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+    memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
     def->name = name->name;
-    def->n_fields = 0;
-    def->fields = NULL;
     def->is_copy = true;
-    def->is_linear = false;
-    def->needs_drop_glue = false;
     def->is_opaque = true;
     def->origin_file_id = call->span.file_id;
-    /* Phase TM0: opaque types have no type params */
-    def->type_params = NULL;
-    def->n_type_params = 0;
     Type struct_type = type_struct(def);
     Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
     scope_add(&e->global, b);
@@ -765,13 +759,12 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero is_gadt and any future bool fields */
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
         def->is_copy = is_copy;
-        def->needs_drop_glue = false;
         /* Phase RF1: store type parameters */
-        def->is_gadt = false;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
 
@@ -1152,11 +1145,10 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        memset(def, 0, sizeof(*def));  /* DS5: zero all bool / scalar fields by default */
         def->name = name->name;
         def->n_ctors = n_ctors;
         def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-        def->is_copy = false;
-        def->needs_drop_glue = false;
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;

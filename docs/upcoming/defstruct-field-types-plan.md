@@ -318,8 +318,8 @@ is real undefined behaviour.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| DS5-1 | Audit Binding allocation sites for direct `arena_alloc(... sizeof(Binding))` that skip the `binding_new` helper.  Either route them through `binding_new` or add an explicit `memset`. | `src/compiler/` (grep `arena_alloc.*Binding`) |
-| DS5-2 | Run the F8 smoke tests under UBSan after DS5-1 lands to confirm the trip is gone. | -- |
+| DS5-1 | ✓ The actual UBSan trip was on `MacroDef::is_referred`, not a Binding field -- `elab_macros.c:1047` allocated MacroDef via `arena_alloc` without zeroing, so the `is_referred` bool was indeterminate until the `:refer` alias path later wrote it.  Added `memset(macro, 0, sizeof(MacroDef))` at that site.  Audit of `StructDef` / `AdtDef` arena_alloc sites (`elab_toplevel.c:539,556,572,586`, `elab_structs.c:363,624,761,1147`) surfaced a second matching trip on `StructDef::is_opaque` -- the prepass stubs and the non-forward `defstruct` / `defdata` / `defgadt` paths set named fields one by one but never initialised `is_opaque`, so emit_module.c's `if (def->is_opaque) continue` (pass 0) tripped UBSan.  Added `memset(..., 0, sizeof(*...))` at all eight sites so future field additions don't reintroduce the same bug. | `src/compiler/elab_macros.c`, `src/compiler/elab_structs.c`, `src/compiler/elab_toplevel.c` |
+| DS5-2 | ✓ Re-ran `tests/run.sh` (which builds Debug -- ASan+UBSan).  Pre-DS5 the suite emitted two distinct trips (`elab_core.c:1322` macro lookup, `emit_module.c:91` opaque check); post-DS5 the suite emits zero UBSan trips.  Same PASS/FAIL counts as DS4 (no regressions). | -- |
 
 ### Phase DS6 -- struct drop glue for free-floating bindings & compound rc fields
 
