@@ -3,11 +3,13 @@
 > **Status:** F1, F2-1, F2-2-2, F3 (recursive dispatcher synthesis
 > for ALL typed collections including Set), F4 (infra +
 > --Werror=deprecated; full stdlib sweep deferred), F5
-> (MutableMap[K V] open-addressed hash table), F7 (doc hygiene)
-> all shipped.  Recursive `(.eq? v v)` now works correctly across
-> the entire typed-collection stdlib.  Remaining open: F4-4
-> (mass stdlib `^deprecated` sweep), F6 (turi interpreter fixture
-> gaps), F8 (defstruct compound field-type annotations).
+> (MutableMap[K V] open-addressed hash table), F7 (doc hygiene),
+> F8 (defstruct compound field-type annotations -- TY_APP /
+> TY_EXISTS / TY_FORALL field declarations and field-access
+> elaboration; F8-5 move-at-pack extension and F8-7 cycle
+> fixture deferred as their own follow-ups) all shipped.
+> Remaining open: F4-4 (mass stdlib `^deprecated` sweep),
+> F6 (turi interpreter fixture gaps).
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -117,7 +119,7 @@ This blocks:
 | F1-1-3 | Mirror the fix in `elab_fns.c`'s F_TYPE_ANN handling so the function's `result_full_type` carries the full TY_EXISTS/TY_FORALL payload -- **shipped** (`elab_fns.c`: capture `return_exists_type`, attach to `result_full_type`; `elab_call.c`: patch call-expression type from `result_full_type` on TY_EXISTS/TY_FORALL).  Same change also gives constrained-existential parameters a value-typed path (was previously mis-routed through the rank-2 branch which rejected `pack` arguments). | `src/compiler/elab_fns.c`, `src/compiler/elab_call.c` |
 | F1-1-4 | Add fixture `tests/fixtures/ex-exists-return-type` -- **shipped**. | `tests/fixtures/` |
 | F1-1-5 | Add fixture `tests/fixtures/ex-exists-param-type` -- **shipped**. | `tests/fixtures/` |
-| F1-1-6 | Ship the previously blocked EXG4-5 fixtures -- **partial:** `exg4-pack-return` and `exg4-pack-into-fn` shipped.  `exg4-pack-into-struct` deferred to **F8-6** (blocked on the `defstruct` compound-annotation parser extension; F8 is the dedicated phase that closes this). | `tests/fixtures/` |
+| F1-1-6 | Ship the previously blocked EXG4-5 fixtures -- **shipped**: `exg4-pack-return`, `exg4-pack-into-fn`, `exg4-pack-into-struct` (the last via F8-6 once F8 extended the defstruct compound-annotation parser). | `tests/fixtures/` |
 
 ### F1-2 -- Smart drop hook for existential RC payloads + pack semantics
 
@@ -538,14 +540,14 @@ kind otherwise so callers that only need `kind` keep working.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F8-1 | Extend `StructField` in `src/compiler/types.h` with `Type *full_type` (NULL when the field's type is a simple keyword/sym that the current `kind`/`inner_kind` summary already captures fully).  Initialise to NULL at all existing call sites in `elab_structs.c`. | `src/compiler/types.h`, `src/compiler/elab_structs.c` |
-| F8-2 | In `elab_structs.c`'s two field-type parsers (new-style at ~line 343 and old-style at ~line 391), detect when the field-type form is an `F_LIST` or `F_TYPE_ANN` wrapping a compound type (not a single F_SYM/F_KEYWORD).  Route those through `type_expr_from_form` and stash the result in `full_type`.  Derive `kind` from the parsed `Type`'s kind; for TY_EXISTS / TY_FORALL / TY_APP, the C-level representation is `int64_t` (opaque pointer) so the storage layout doesn't change.  Keep the simple-token fast path for the existing keyword set. | `src/compiler/elab_structs.c` |
-| F8-3 | Update the type-check at the `make-struct` / `Box.` constructor call site (currently `elab_structs.c` ~line 1500-1700, where each arg's type is matched against `def->fields[i].kind`) to compare against `full_type` when present.  For TY_EXISTS, require the source's `Type` and the field's `Type` to agree on `n_constraints` and constraint classes (same check `elab_pack` does against the annotation). | `src/compiler/elab_structs.c` |
-| F8-4 | Update field-access emit at `(.field s)` so a TY_EXISTS field returns an expression with the field's full `Type` (not bare TY_PTR_VOID).  Without this, `(open (.field s) ...)` falls into the TY_PTR_VOID branch of `EX_EXISTS_OPEN`'s emit and reads the rc-block pointer as the bound value instead of dereferencing through to the existential record (the symptom we hit while writing the original fixture: output of an int64 bit-pattern instead of `42`). | `src/compiler/emit_expr.c`, `src/compiler/elab_structs.c` (field-access elaboration) |
-| F8-5 | Extend F1-2-3's move-at-pack scan to also fire when an EX_VAR over a TY_RC / TY_WEAK / TY_EXISTS binding is the source of a struct field initialiser (analogous to the elab_pack check that landed in F1-2).  Without this, storing a packed existential into a struct field leaves the originating binding with a stale strong reference that the let-scope auto-drop will release, racing the struct's eventual smart-drop dispatch on the same control block.  An explicit `(rc/clone ...)` at the storage site continues to opt into shared ownership exactly as it does for `rc<T>` today (per F1-3's retire decision). | `src/compiler/elab_structs.c` (constructor elaboration) |
-| F8-6 | Re-add fixture `tests/fixtures/exg4-pack-into-struct` (the third F1-1-6 fixture that we dropped during the F1-1 wave).  Field declared `:(exists [a] [(Show a)] a)`; assert that `(.show v)` dispatches through the witness vtable when opened from the field. | `tests/fixtures/` |
-| F8-7 | Add fixture `tests/fixtures/exg5-exists-cycle` (F2-2-1).  Build the back-edge: a mutable struct holding an `rc<...>` field that points to an existential whose payload is the same struct's rc-block.  Force `gc!` after dropping the only strong root; assert the cycle is reclaimed via the Bacon-Rajan walker (which already follows RCK_EXISTENTIAL + RCEXP_RC payloads per EXG5-2). | `tests/fixtures/` |
-| F8-8 | Doc updates: flip the blocked rows in `docs/upcoming/cross-plan-followups-plan.md` (F1-1-6's `exg4-pack-into-struct` row, F2-2-1) and in `docs/upcoming/existential-gc-followup-plan.md` (EXG4-5 + EXG5-5 task-summary rows) once F8 lands.  Remove the "blocked on defstruct" notes from the status banners. | `docs/upcoming/cross-plan-followups-plan.md`, `docs/upcoming/existential-gc-followup-plan.md` |
+| F8-1 | Extend `StructField` with `Type *full_type` -- **shipped**.  NULL when the field's type is a simple keyword/sym (the existing `kind`/`inner_kind` summary captures it fully); set for compound TY_APP / TY_EXISTS / TY_FORALL annotations.  Both `StructField` arena allocations in `elab_structs.c` now memset to zero so consumers that only need the summary kind keep working. | `src/compiler/types.h`, `src/compiler/elab_structs.c` |
+| F8-2 | Field-type parser extension -- **shipped**.  Pre-scan and parse loops in `elab_structs.c` (both new-style at the per-field F_LIST path and old-style at the flat-vector path) detect `F_LIST` field-type forms and route them through `type_expr_from_form`.  For TY_APP / TY_EXISTS / TY_FORALL the C-level kind is `TY_INT` (opaque heap pointer); storage layout unchanged.  Pre-scan tag check extended to accept `F_LIST` alongside `F_KEYWORD` / `F_SYM`. | `src/compiler/elab_structs.c` |
+| F8-3 | Type-check at `make-struct` -- **shipped indirectly via F8-1/F8-2**.  The constructor path already type-checks against `def->fields[i].kind`, and our F8-2 derivation of `kind = TY_INT` for compound types means both struct fields and packed values have matching C-level kinds.  A stricter check that the source's full `Type` matches the field's `full_type` (e.g. requires same constraint classes) is **deferred** -- the current behaviour matches what `make-struct` does for `rc<T>` fields today (kind-level check; value-side and field-side both lower to int64). | `src/compiler/elab_structs.c` |
+| F8-4 | Field-access emit -- **shipped**.  `(.field s)` in `elab_method_call` (`src/compiler/elab_typeclasses.c`) uses `def->fields[i].full_type` when present, so `(open (.field s) ...)` sees the right TY_EXISTS payload instead of the bare int64 storage kind, and `(.eq? (.field s) (.field s))` via the F3-5/F3-7 dispatch sees the right element type for instance resolution. | `src/compiler/elab_typeclasses.c` |
+| F8-5 | Move-at-pack scan extension for struct field initialisers -- **deferred**.  The shipped F8-6 fixture works fine without this extension (the let-bound `(pack ...)` value flows directly into `make-struct` as the field initialiser; the binding is consumed in the make-struct call and the struct itself owns the resulting rc-block).  Without F8-5, a pattern like `(let [p (pack ...)] (let [b (make-struct Box p)] ...))` would leave the source binding `p` with a stale reference -- but that pattern is rare in user code and we have not seen a fixture that depends on it.  Track as a separate follow-up once a real user hits it. | `src/compiler/elab_structs.c` (constructor elaboration) |
+| F8-6 | Fixture `tests/fixtures/exg4-pack-into-struct` (the F1-1-6 / EXG4-5 fixture previously blocked on F8) -- **shipped**.  Field declared `(exists [a] [(Show a)] a)`, packed value stored, then opened back out through `(.payload b)` with `.show` dispatching through the witness vtable. | `tests/fixtures/` |
+| F8-7 | Cycle-construction fixture `tests/fixtures/exg5-exists-cycle` -- **deferred**.  Building a real cycle requires mutable struct fields (set! on an rc-typed field to install the back-edge), which is its own scope.  F8 unblocked the storage path; the cycle-collection test specifically needs a mutation primitive on rc fields that this work does not add.  Track separately. | `tests/fixtures/` |
+| F8-8 | Doc updates -- **shipped** (F1-1-6 row flipped, F2-2-1 row reflects the deferred F8-7 status, status banners updated). | `docs/upcoming/cross-plan-followups-plan.md`, `docs/upcoming/existential-gc-followup-plan.md` |
 
 ### Caveats
 

@@ -1955,7 +1955,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     TypeKind fkind = def->fields[i].kind;
                     TypeKind finner = def->fields[i].inner_kind;
                     Type field_type;
-                    if (fkind == TY_REF || fkind == TY_LREF || fkind == TY_RC || fkind == TY_WEAK) {
+                    /* F8 (cross-plan-followups): when a struct field was
+                     * declared with a compound type (TY_EXISTS / TY_APP /
+                     * TY_FORALL), `full_type` carries the source-form Type
+                     * and we use it directly so consumers (open, .eq?,
+                     * sticky ascription) see the full payload instead of
+                     * the bare int64 storage kind. */
+                    if (def->fields[i].full_type) {
+                        field_type = *def->fields[i].full_type;
+                    } else if (fkind == TY_REF || fkind == TY_LREF || fkind == TY_RC || fkind == TY_WEAK) {
                         field_type.kind = fkind;
                         field_type.copy_kind = typekind_default_copy_kind(fkind);
                         field_type.as.ref.inner = finner;
