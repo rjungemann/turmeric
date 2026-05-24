@@ -61,7 +61,7 @@
       s->slots[i].tag = TUR_MM_EMPTY;
       s->slots[i].hash = 0; s->slots[i].key = 0; s->slots[i].value = 0;
   }
-  struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+  struct { void *storage; } *m = malloc(sizeof(*m));
   m->storage = s;
   return (int64_t)(intptr_t)m;
   ```)

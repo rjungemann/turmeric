@@ -428,10 +428,8 @@
 ;;; Since: Phase E1
 (defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-eq? [r1 r2 ok-cmp err-cmp] #{Unsafe} :bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void *)(intptr_t)r1;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void *)(intptr_t)r2;
   if (!a && !b) return true;
   if (!a || !b) return false;
   if (a->is_ok != b->is_ok) return false;
@@ -490,8 +488,7 @@
 ;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-collect [v :ptr<void>] #{Unsafe} :ptr<void>
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
   /* Check for first error */
   for (size_t i = 0; i < vec->len; i++) {
@@ -543,20 +540,18 @@
 ;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
 (defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-partition [v :ptr<void>] #{Unsafe} :ptr<void>
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  typedef struct __tur_res_vec { int64_t *data; size_t len; size_t cap; } __tur_res_vec_t;
+  __tur_res_vec_t *vec = (void*)v;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
   /* Build ok and err vecs */
-  struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
-      malloc(sizeof(*ok_vec));
+  __tur_res_vec_t *ok_vec = malloc(sizeof(*ok_vec));
   ok_vec->data = NULL; ok_vec->len = 0; ok_vec->cap = 0;
-  struct { int64_t *data; size_t len; size_t cap; } *err_vec =
-      malloc(sizeof(*err_vec));
+  __tur_res_vec_t *err_vec = malloc(sizeof(*err_vec));
   err_vec->data = NULL; err_vec->len = 0; err_vec->cap = 0;
   for (size_t i = 0; i < vec->len; i++) {
     res_ptr = (void *)(intptr_t)vec->data[i];
     int64_t val;
-    struct { int64_t *data; size_t len; size_t cap; } *dst;
+    __tur_res_vec_t *dst;
     if (res_ptr != NULL && res_ptr->is_ok) {
       val = res_ptr->ok_val;
       dst = ok_vec;
