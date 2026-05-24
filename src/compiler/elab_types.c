@@ -1166,6 +1166,36 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             *t = type_from_kind(k);
             return t;
         }
+        /* F6-1 (cross-plan-followups): look up unknown keyword as a
+         * user-defined ADT or struct name so callers that round-trip a
+         * declared `:MyADT` field type get a real TY_ADT (with def) /
+         * TY_STRUCT (with def) back, not a NULL-def placeholder.  This
+         * fixes the `match inner ...` nested-ADT path: previously the
+         * extracted binding had TY_STRUCT/def=NULL ("got struct").
+         *
+         * Walk the scope manually (we don't have access to the
+         * scope_lookup_type_def helper that's static in elab_structs.c). */
+        const Symbol *type_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
+        for (Scope *cur = e->scope; cur; cur = cur->parent) {
+            for (uint32_t i = 0; i < cur->n; i++) {
+                Binding *cand = cur->bindings[i];
+                if (cand->name != type_sym) continue;
+                if (cand->type.kind == TY_ADT && cand->type.as.adt_.def) {
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *t = type_adt(cand->type.as.adt_.def);
+                    return t;
+                }
+                if (cand->type.kind == TY_STRUCT && cand->type.as.struct_.def) {
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    memset(t, 0, sizeof(Type));
+                    t->kind = TY_STRUCT;
+                    t->copy_kind = CK_MOVE;
+                    t->hkt_kind = KIND_STAR;
+                    t->as.struct_.def = cand->type.as.struct_.def;
+                    return t;
+                }
+            }
+        }
         /* Unknown keyword type — return opaque struct placeholder */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));

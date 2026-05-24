@@ -1,10 +1,12 @@
-(defdata Option
-  (None)
-  (Some :int))
+;; Renamed Option -> Opt to avoid colliding with the auto-loaded
+;; stdlib `Option` struct from stdlib/toption.tur.
+(defdata Opt
+  (Nada)
+  (Just :int))
 
 (defn main [] :int
-  (let [v (Some 7)]
+  (let [v (Just 7)]
     (match v
-      (None)   (println "none")
-      (Some n) (println n))
+      (Nada)   (println "none")
+      (Just n) (println n))
     0))

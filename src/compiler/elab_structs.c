@@ -761,7 +761,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         ctor->adt = def;
         ctor->tag = ci;
         ctor->result_type_form = NULL; /* Phase G1: NULL for defdata */
-        ctor->field_forms = NULL;      /* Phase G2: NULL for defdata */
+        /* F6-1 (cross-plan-followups): stash the raw field-type forms for
+         * defdata ctors too (was previously NULL).  Without this, pattern
+         * extraction at match time can only recover the C-level TypeKind
+         * (TY_INT for ADT-typed fields), which makes a nested `match
+         * inner ...` fail with "scrutinee must be an ADT type, got int". */
+        ctor->field_forms = n_fields > 0
+            ? (const struct Form **)arena_alloc(e->arena, n_fields * sizeof(const Form *))
+            : NULL;
 
         /* Parse field types */
         for (uint32_t fi = 0; fi < n_fields; fi++) {
@@ -791,6 +798,9 @@ Expr *elab_defdata(Elab *e, const Form *call) {
             }
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = finner;
+            /* F6-1: also stash the raw form so match extraction can
+             * recover the declared ADT/struct type. */
+            if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
             if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
                 def->needs_drop_glue = true;
             }
@@ -1947,6 +1957,21 @@ Expr *elab_match(Elab *e, const Form *call) {
                     /* Phase G2: resolve field type using the skolem env */
                     ftype = gadt_resolve_type_from_form(e, adt,
                                                         ctor->field_forms[bi], &arm_senv);
+                } else if (ctor->field_forms && ctor->field_forms[bi]) {
+                    /* F6-1 (cross-plan-followups): defdata ctor field with
+                     * a stashed type form -- re-parse the type so the binding
+                     * carries the declared ADT/struct, not just the C-level
+                     * `int` collapsed by parse_struct_field_type for ADT-typed
+                     * fields.  Falls back to type_from_kind below if the
+                     * re-parse fails (e.g. unknown type). */
+                    Type *resolved = type_expr_from_form(e,
+                        (Form *)ctor->field_forms[bi],
+                        NULL, NULL, NULL, 0);
+                    if (resolved) {
+                        ftype = *resolved;
+                    } else {
+                        ftype = type_from_kind(ctor->fields[bi].kind);
+                    }
                 } else {
                     ftype = type_from_kind(ctor->fields[bi].kind);
                 }

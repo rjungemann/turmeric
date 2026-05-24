@@ -10,13 +10,12 @@
 > fixture deferred as their own follow-ups), F6 (partial: F6-2
 > via fixture rename + F6-4 for clone-list / clone-option /
 > clone-pair; F6-1 / F6-3 share a deeper compiled-mode
-> ADT-field-type carry-through bug that needs its own session),
-> F4-4 (mass stdlib `^deprecated` sweep across the 7 legacy
-> modules) all shipped.  Remaining open: F6-1 (ADT nested-field
-> type loss in compiled mode -- the original turi gap turned out
-> to be compiled-mode too).  Substantively, every original plan
-> task is now either shipped or has its remaining work scoped
-> as a separate follow-up.
+> ADT-field-type carry-through bug for nested matches and the
+> stdlib-name-collision fixture renames), F4-4 (mass stdlib
+> `^deprecated` sweep across the 7 legacy modules) all shipped.
+> Every original plan task is now shipped.  The plan can be
+> moved to `docs/archive/` once the maintainers have reviewed
+> the final state.
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -478,10 +477,10 @@ cause.
 
 | ID | Task | File(s) | Root cause |
 |----|------|---------|------------|
-| F6-1 | ADT-typed nested field extraction loses the field's ADT type in *compiled* mode (not turi-specific as the plan originally framed it).  `(Wrap inner)` where `inner` was declared `(Wrap :Option)` yields `inner : int` at the elaborator instead of `:Option`, so a nested `match inner ...` fires `match: scrutinee must be an ADT type, got int`.  `adt-param` and `adt-nested` work under `tur --interpret` (tree-walker preserves the tag) but the runner uses `tur run` (compile + execute) where the elab loses it.  **Deferred** -- the root cause is in `elab_call.c`'s ADT-constructor return-type patching which doesn't carry the declared field type through to the extracted binding.  Track separately. | `src/compiler/elab_call.c` (constructor result), `src/compiler/elab_structs.c` (match binding type) |
+| F6-1 | ADT-typed nested field extraction -- **shipped** via two compiler fixes plus fixture renames:  (1) `elab_structs.c` now stashes raw field-type forms on defdata ctors (was previously NULL for non-GADT) and the match-binding path re-parses them via `type_expr_from_form` so the binding carries the declared ADT/struct type instead of being collapsed to `int`.  (2) `elab_types.c`'s F_KEYWORD path looks up unknown keyword type names in the scope and returns a real TY_ADT / TY_STRUCT with the def pointer (was previously a NULL-def placeholder).  (3) The fixtures `adt-param`, `adt-nested`, and `gadt-syntax-multi` were renamed to avoid colliding with auto-loaded stdlib names: `Option -> Opt` (adt-param, adt-nested), `Pair -> P2` (gadt-syntax-multi).  Without the rename, the user's `(defdata Option ...)` collided with `toption.tur`'s `(defstruct Option [A])` and the defdata silently failed to register, leaving `(Some 7)` unable to resolve through `elab_lookup_ctor`. | `src/compiler/elab_structs.c`, `src/compiler/elab_types.c`, `tests/fixtures/adt-param/`, `tests/fixtures/adt-nested/`, `tests/fixtures/gadt-syntax-multi/` |
 | F6-2 | Disambiguate user-defined `defstruct Cons`/`Option`/`Pair` from auto-loaded stdlib structs of the same name -- **shipped** by renaming the user-side structs in the three fixtures (`Cons -> Cell`, `Option -> Opt`, `Pair -> Pr`).  The proper compiler-level fix (catch the redef at elaboration time -- the `(defstruct X ...)` check at `elab_structs.c:227` should fire when X is already in scope from the auto-loaded stdlib) is **deferred** as a separate cleanup, but the user-facing principle "do not shadow stdlib names" is correct.  Regenerated `expected.c` snapshots for the renamed fixtures. | `tests/fixtures/clone-list/`, `tests/fixtures/clone-option/`, `tests/fixtures/clone-pair/` |
-| F6-3 | Add the missing `flags` file to `tests/fixtures/gadt-syntax-multi` -- **n/a** (file already present on the branch; F6-3 was already shipped before this work).  The fixture still fails for a different reason (`match` on GADT-constructor result loses the ADT type tag, same root cause as F6-1).  Track with F6-1. | -- |
-| F6-4 | Re-add the now-working fixtures to `TURI_FIXTURES_DEFAULT` in `tests/run-turi.sh` -- **shipped** (added `clone-list`, `clone-option`, `clone-pair`).  `adt-param` / `adt-nested` / `gadt-syntax-multi` remain excluded pending F6-1. | `tests/run-turi.sh` |
+| F6-3 | Add the missing `flags` file to `tests/fixtures/gadt-syntax-multi` -- **n/a** (file already present on the branch).  Fixture now passes via the F6-1 fix + rename. | -- |
+| F6-4 | Re-add the now-working fixtures to `TURI_FIXTURES_DEFAULT` in `tests/run-turi.sh` -- **shipped** (added `clone-list`, `clone-option`, `clone-pair`, `adt-param`, `adt-nested`, `gadt-syntax-multi`).  All six previously-deferred F6 fixtures now pass. | `tests/run-turi.sh` |
 
 ---
 
