@@ -408,6 +408,8 @@ static int compile_to_c(const char *path, Buf *out_c,
         "stdlib/tgrid.tur",
         "stdlib/tzipper.tur",
         "stdlib/tset.tur",
+        /* Phase F5 (cross-plan-followups): mutable open-addressed hash table. */
+        "stdlib/tmutmap.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -3530,6 +3532,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
                 "stdlib/tgrid.tur",
                 "stdlib/tzipper.tur",
                 "stdlib/tset.tur",
+                "stdlib/tmutmap.tur",
                 NULL
             };
             for (int pi = 0; preload[pi]; pi++) {

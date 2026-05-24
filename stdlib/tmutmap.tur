@@ -1,0 +1,346 @@
+;; Phase F5 (cross-plan-followups): Mutable typed map MutableMap[K V].
+;;
+;; A mutable, open-addressed hash table with linear probing.  Unlike
+;; the persistent Map[K V] backed by HAMT, MutableMap mutates in
+;; place: tmutmap-set! / tmutmap-delete! modify the storage rather
+;; than returning a new map.
+;;
+;; Design notes (F5-1 decision):
+;;   - Backing structure: open-addressed hash table with linear probing.
+;;     Conventional choice; avoids the persistence overhead of a HAMT
+;;     when the persistence is not needed.  Sharing is not the goal --
+;;     the API is mutation-focused.
+;;   - Load factor: resize at 0.75.  Capacity doubles on resize.
+;;   - Tombstones: each slot has a tag (EMPTY / OCCUPIED / DELETED).
+;;     get / set! / delete! follow probe chains past DELETED slots.
+;;   - Keys and values are int64_t at the C level (matching the
+;;     Hash[K] / Eq[K] typeclass dispatch convention -- caller passes
+;;     a precomputed hash).
+;;
+;; K must satisfy Hash[K] and Eq[K] -- callers supply precomputed
+;; hashes to insert / lookup / delete, mirroring tmap.tur's API.
+
+;;; MutableMap -- parameterized in-place hash table with key K, value V.
+;;;
+;;; Since: Phase F5 (cross-plan-followups)
+(defstruct MutableMap [K V]
+  (storage :ptr<void>))
+
+;;; tmutmap-new -- create a new empty MutableMap[K V] with default
+;;; initial capacity (16 slots).
+;;;
+;;; Returns:
+;;;   An empty MutableMap[K V] pointer (int64 at the C level).
+;;;
+;;; Example:
+;;;   (tmutmap-new)  ; => empty MutableMap
+;;;
+;;; Since: Phase F5
+(defn tmutmap-new [] #{} :int
+  ```c
+  /* Backing storage layout:
+   *   uint64_t cap;        capacity (power of two)
+   *   uint64_t len;        live entry count (OCCUPIED slots only)
+   *   uint64_t tomb;       tombstone count (DELETED slots)
+   *   Slot     slots[cap];
+   *
+   * Slot layout:
+   *   uint8_t  tag;        0=EMPTY, 1=OCCUPIED, 2=DELETED
+   *   int64_t  hash;
+   *   int64_t  key;
+   *   int64_t  value;
+   */
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  size_t init_cap = 16;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)
+      malloc(sizeof(*s) + init_cap * sizeof(struct __tur_mm_slot));
+  s->cap = init_cap; s->len = 0; s->tomb = 0;
+  for (size_t i = 0; i < init_cap; i++) {
+      s->slots[i].tag = TUR_MM_EMPTY;
+      s->slots[i].hash = 0; s->slots[i].key = 0; s->slots[i].value = 0;
+  }
+  struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+  m->storage = s;
+  return (int64_t)(intptr_t)m;
+  ```)
+
+;;; tmutmap-len -- live entry count (excludes tombstones).
+;;;
+;;; Parameters:
+;;;   m -- MutableMap[K V]
+;;;
+;;; Returns:
+;;;   Number of live (key, value) entries.
+;;;
+;;; Example:
+;;;   (tmutmap-len mm)  ; => 0
+;;;
+;;; Since: Phase F5
+(defn tmutmap-len [m :int] #{} :int
+  ```c
+  struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
+  return (int64_t)s->len;
+  ```)
+
+;;; tmutmap-set! -- insert or update (key, value).  Mutates m in place.
+;;;
+;;; Parameters:
+;;;   m   -- MutableMap[K V]
+;;;   h   -- precomputed hash of key (Hash[K])
+;;;   key -- key
+;;;   val -- value
+;;;
+;;; Returns:
+;;;   nil.
+;;;
+;;; Example:
+;;;   (tmutmap-set! mm 1 1 100)
+;;;
+;;; Since: Phase F5
+(defn tmutmap-set! [m :int h :int key :int val :int] #{} :nil
+  ```c
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  /* Resize when load factor (len + tomb) / cap >= 0.75. */
+  if ((s->len + s->tomb) * 4 >= s->cap * 3) {
+      uint64_t new_cap = s->cap * 2;
+      struct __tur_mm_storage *ns = (struct __tur_mm_storage *)
+          malloc(sizeof(*ns) + new_cap * sizeof(struct __tur_mm_slot));
+      ns->cap = new_cap; ns->len = 0; ns->tomb = 0;
+      for (uint64_t i = 0; i < new_cap; i++) {
+          ns->slots[i].tag = TUR_MM_EMPTY;
+          ns->slots[i].hash = 0; ns->slots[i].key = 0; ns->slots[i].value = 0;
+      }
+      uint64_t mask = new_cap - 1;
+      for (uint64_t i = 0; i < s->cap; i++) {
+          if (s->slots[i].tag != TUR_MM_OCCUPIED) continue;
+          uint64_t idx = ((uint64_t)s->slots[i].hash) & mask;
+          while (ns->slots[idx].tag == TUR_MM_OCCUPIED) idx = (idx + 1) & mask;
+          ns->slots[idx] = s->slots[i];
+          ns->len++;
+      }
+      free(s);
+      mm->storage = ns;
+      s = ns;
+  }
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  int64_t first_tomb = -1;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) {
+          /* Not present: insert at first tombstone if any, else here. */
+          if (first_tomb >= 0) {
+              struct __tur_mm_slot *ts = &s->slots[first_tomb];
+              ts->tag = TUR_MM_OCCUPIED;
+              ts->hash = h; ts->key = key; ts->value = val;
+              s->tomb--;
+              s->len++;
+          } else {
+              slot->tag = TUR_MM_OCCUPIED;
+              slot->hash = h; slot->key = key; slot->value = val;
+              s->len++;
+          }
+          return;
+      }
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          /* Update existing. */
+          slot->value = val;
+          return;
+      }
+      if (slot->tag == TUR_MM_DELETED && first_tomb < 0) {
+          first_tomb = (int64_t)idx;
+      }
+      idx = (idx + 1) & mask;
+  }
+  ```)
+
+;;; tmutmap-get -- look up the value bound to key, or 0 if absent.
+;;;
+;;; Parameters:
+;;;   m   -- MutableMap[K V]
+;;;   h   -- precomputed hash of key (Hash[K])
+;;;   key -- key
+;;;
+;;; Returns:
+;;;   The bound value, or 0 if key is not present.  Callers needing
+;;;   to distinguish "absent" from "value = 0" should use
+;;;   tmutmap-has? first.
+;;;
+;;; Example:
+;;;   (tmutmap-get mm 1 1)  ; => 100
+;;;
+;;; Since: Phase F5
+(defn tmutmap-get [m :int h :int key :int] #{} :int
+  ```c
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return 0;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          return slot->value;
+      }
+      idx = (idx + 1) & mask;
+  }
+  ```)
+
+;;; tmutmap-has? -- check whether key is present.
+;;;
+;;; Parameters:
+;;;   m   -- MutableMap[K V]
+;;;   h   -- precomputed hash of key
+;;;   key -- key
+;;;
+;;; Returns:
+;;;   true if key is present (value of any kind), false otherwise.
+;;;
+;;; Example:
+;;;   (tmutmap-has? mm 1 1)  ; => true
+;;;
+;;; Since: Phase F5
+(defn tmutmap-has? [m :int h :int key :int] #{} :bool
+  ```c
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return false;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          return true;
+      }
+      idx = (idx + 1) & mask;
+  }
+  ```)
+
+;;; tmutmap-delete! -- remove (key, value) if present.  Mutates m
+;;; in place.  Leaves a tombstone so probe chains stay intact.
+;;;
+;;; Parameters:
+;;;   m   -- MutableMap[K V]
+;;;   h   -- precomputed hash of key
+;;;   key -- key
+;;;
+;;; Returns:
+;;;   true if key was present (and is now removed), false otherwise.
+;;;
+;;; Example:
+;;;   (tmutmap-delete! mm 1 1)  ; => true
+;;;
+;;; Since: Phase F5
+(defn tmutmap-delete! [m :int h :int key :int] #{} :bool
+  ```c
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  uint64_t mask = s->cap - 1;
+  uint64_t idx = ((uint64_t)h) & mask;
+  for (;;) {
+      struct __tur_mm_slot *slot = &s->slots[idx];
+      if (slot->tag == TUR_MM_EMPTY) return false;
+      if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == key) {
+          slot->tag = TUR_MM_DELETED;
+          slot->hash = 0; slot->key = 0; slot->value = 0;
+          s->len--;
+          s->tomb++;
+          return true;
+      }
+      idx = (idx + 1) & mask;
+  }
+  ```)
+
+;;; tmutmap-eq? -- structural equality.  Two MutableMap[K V]s are
+;;; equal iff they have the same live entries (any order) per a
+;;; user-supplied value comparator.  Keys compared by (== h h) +
+;;; (== k k) on the int64_t storage representation.
+;;;
+;;; Parameters:
+;;;   m1     -- MutableMap[K V]
+;;;   m2     -- MutableMap[K V]
+;;;   val-cmp -- comparator fn [a :int b :int] :bool for values
+;;;
+;;; Returns:
+;;;   true iff m1 and m2 have the same set of (key, value) pairs.
+;;;
+;;; Example:
+;;;   (tmutmap-eq? ma mb (fn [a b] (= a b)))
+;;;
+;;; Since: Phase F5
+(defn tmutmap-eq? [m1 :int m2 :int val-cmp] #{} :bool
+  ```c
+  enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
+  struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *a = (void*)(intptr_t)m1;
+  struct { void *storage; } *b = (void*)(intptr_t)m2;
+  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)a->storage;
+  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)b->storage;
+  if (sa->len != sb->len) return false;
+  for (uint64_t i = 0; i < sa->cap; i++) {
+      if (sa->slots[i].tag != TUR_MM_OCCUPIED) continue;
+      int64_t h = sa->slots[i].hash;
+      int64_t k = sa->slots[i].key;
+      int64_t v_a = sa->slots[i].value;
+      /* Find the same key in b (via probe). */
+      uint64_t mask = sb->cap - 1;
+      uint64_t idx = ((uint64_t)h) & mask;
+      bool found = false;
+      int64_t v_b = 0;
+      for (;;) {
+          struct __tur_mm_slot *slot = &sb->slots[idx];
+          if (slot->tag == TUR_MM_EMPTY) break;
+          if (slot->tag == TUR_MM_OCCUPIED && slot->hash == h && slot->key == k) {
+              v_b = slot->value;
+              found = true;
+              break;
+          }
+          idx = (idx + 1) & mask;
+      }
+      if (!found) return false;
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(v_a, v_b)) return false;
+  }
+  return true;
+  ```)
+
+;;; tmutmap-free -- free the storage and wrapper.
+;;;
+;;; Parameters:
+;;;   m -- MutableMap[K V] to free
+;;;
+;;; Example:
+;;;   (tmutmap-free mm)
+;;;
+;;; Since: Phase F5
+(defn tmutmap-free [m :int] #{} :void
+  ```c
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  if (mm->storage) free(mm->storage);
+  free(mm);
+  ```)
+
+;;; Eq [MutableMap] -- structural equality using the value type's Eq.
+;; Constrained instance: requires Eq[V] for value comparison.  Keys
+;; compared by raw int64 equality on the hash + key representation.
+;; The cross-plan-followups F3-5 dispatcher synthesises the value
+;; comparator at the call site when V is itself a TY_APP.
+(definstance Eq [MutableMap] [(Eq V)]
+  (eq? [x y] (tmutmap-eq? x y (fn [a b] (= a b)))))

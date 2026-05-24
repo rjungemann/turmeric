@@ -1,14 +1,13 @@
 # Cross-Plan Followups
 
-> **Status:** F1-1, F1-2, F1-3 (retire), F2-1, F2-2-2, F4 (infra +
-> --Werror=deprecated; full stdlib sweep deferred), F7 (doc
-> hygiene), F3 (design + recursive dispatcher synthesis for ALL
-> typed collections including Set, fixtures, sticky ascription)
+> **Status:** F1, F2-1, F2-2-2, F3 (recursive dispatcher synthesis
+> for ALL typed collections including Set), F4 (infra +
+> --Werror=deprecated; full stdlib sweep deferred), F5
+> (MutableMap[K V] open-addressed hash table), F7 (doc hygiene)
 > all shipped.  Recursive `(.eq? v v)` now works correctly across
-> the entire typed-collection stdlib -- arbitrarily deep
-> `Vec[Vec[...]]`, `Map[K (Vec V)]`, `Cons[Cons[...]]`,
-> `Option[Vec[T]]`, `Pair[A B]`, `Result[A B]`, and
-> `Set[Vec[T]]` (via the new `tset-eq-cmp?` stdlib helper).
+> the entire typed-collection stdlib.  Remaining open: F4-4
+> (mass stdlib `^deprecated` sweep), F6 (turi interpreter fixture
+> gaps), F8 (defstruct compound field-type annotations).
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -451,10 +450,10 @@ covers only the persistent variant.
 
 | ID | Task | File(s) |
 |----|------|---------|
-| F5-1 | Decide backing data structure: open-addressed hash table (no persistence overhead) vs. a mutated HAMT (uniform code path with `Map[K V]` but loses RC-friendly sharing).  Open-addressed is the conventional choice. | design decision |
-| F5-2 | Implement `stdlib/tmutmap.tur` with `(defstruct MutableMap [K V] ...)` and the standard operations (`tmutmap-new`, `tmutmap-set!`, `tmutmap-get`, `tmutmap-delete!`, `tmutmap-len`, `tmutmap-eq?`).  Mirror the `Hash[K]`/`Eq[K]` typeclass constraints from TM0. | `stdlib/tmutmap.tur` |
-| F5-3 | Add docstrings per the project doc-comment standard. | `stdlib/tmutmap.tur` |
-| F5-4 | Add fixtures: insert/lookup, deletion, collision, eq?, resize. | `tests/fixtures/typed/` |
+| F5-1 | Backing data structure: **open-addressed hash table with linear probing** -- **shipped** (conventional choice; avoids persistence overhead when mutation is the goal).  Resize at load factor 0.75 with capacity doubling; tombstones for deletion so probe chains stay intact. | design decision |
+| F5-2 | Implement `stdlib/tmutmap.tur` -- **shipped**.  `(defstruct MutableMap [K V] ...)` with `tmutmap-new`, `tmutmap-set!`, `tmutmap-get`, `tmutmap-has?`, `tmutmap-delete!`, `tmutmap-len`, `tmutmap-eq?`, `tmutmap-free`, plus the constrained `(definstance Eq [MutableMap] [(Eq V)] ...)`.  Caller supplies a precomputed hash for keys, matching the `Hash[K]`/`Eq[K]` convention from `tmap.tur`.  Auto-loaded in `src/main.c` alongside the other typed-collection stdlib files. | `stdlib/tmutmap.tur`, `src/main.c` |
+| F5-3 | Docstrings per the project doc-comment standard -- **shipped** (full `;;;` blocks with Parameters / Returns / Example / Since for every exported function; one-liner on the Eq instance). | `stdlib/tmutmap.tur` |
+| F5-4 | Fixtures -- **shipped**: `tmutmap-basic` (insert/lookup/update/has?), `tmutmap-delete` (deletion with tombstone reuse + absent-key noop), `tmutmap-resize` (100-entry insert forcing multiple resizes), `tmutmap-eq` (structural equality via the helper AND via the F3-7 `.eq?` typeclass dispatch on an ascribed `(MutableMap int int)`). | `tests/fixtures/` |
 
 ---
 
