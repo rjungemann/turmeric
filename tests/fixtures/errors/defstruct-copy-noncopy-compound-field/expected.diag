@@ -1,0 +1,1 @@
+defstruct: field 'r' has non-copy type lref<int>

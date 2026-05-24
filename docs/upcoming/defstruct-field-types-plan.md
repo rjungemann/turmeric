@@ -294,8 +294,8 @@ follow-up:
 
 | ID | Task | File(s) |
 |----|------|---------|
-| DS4-1 | Improve the `:copy non-copy compound type` diagnostic by formatting the parsed `Type` (via `type_name(*full_type)` or similar) so users see the actual type they wrote. | `src/compiler/elab_structs.c` |
-| DS4-2 | Reject `(defstruct X ...)` where X is already bound by an auto-loaded stdlib struct.  Today the elaborator accepts the redefinition silently and codegen produces a duplicate C-level typedef.  This unblocks removing the user-side fixture renames added in F6-2 (`Cell` / `Opt` / `Pr` -> back to original names).  Alternative: continue requiring users to pick distinct names (current state). | `src/compiler/elab_structs.c` |
+| DS4-1 | ✓ Both `:copy`/non-copy diagnostics (new-style ~line 434, old-style ~line 529 in `elab_structs.c`) now format the parsed `Type` via `type_name(*full_type)` when `full_type` is set -- so `(lref int)` reads as `lref<int>` in the message instead of the generic "non-copy compound type".  Fixture: `tests/fixtures/errors/defstruct-copy-noncopy-compound-field`. | `src/compiler/elab_structs.c` |
+| DS4-2 | ✓ `elab_defstruct`'s forward-stub re-elaboration path (`elab_structs.c:247`) now rejects when the stub has already been filled in (`n_fields > 0`).  This catches both intra-file double-defines and the stdlib name-collision case (e.g. user `(defstruct Cons ...)` shadowing `stdlib/list.tur`).  Users now get an elaborator diagnostic instead of a duplicate-typedef cc error.  Fixture: `tests/fixtures/errors/defstruct-redef-stdlib-name`. | `src/compiler/elab_structs.c` |
 
 ### Phase DS5 -- UBSan-flagged uninitialised binding field
 

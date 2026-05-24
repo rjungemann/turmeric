@@ -245,6 +245,25 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     Binding *existing_b = scope_lookup(e->scope, name);
     if (existing_b) {
         if (elab_is_forward_type(e, name)) {
+            /* DS4-2: a forward-registered stub is only re-elaborable while
+             * it is still an empty placeholder (n_fields == 0).  Once
+             * another defstruct has filled it in -- whether earlier in
+             * this file or, more commonly, in an auto-loaded stdlib
+             * module -- a second defstruct of the same name would also
+             * emit a duplicate `typedef struct <Name>` at codegen.  Reject
+             * here so the user gets an elaborator diagnostic instead of a
+             * cc error. */
+            StructDef *existing_def = (existing_b->type.kind == TY_STRUCT)
+                ? existing_b->type.as.struct_.def : NULL;
+            if (existing_def && existing_def->n_fields > 0) {
+                diag_emit(DIAG_ERROR, name_form->span,
+                          "defstruct: '%s' is already defined "
+                          "(an auto-loaded stdlib module or earlier "
+                          "form in this file defines a struct with "
+                          "this name; pick a distinct name)",
+                          name->name);
+                return NULL;
+            }
             is_forward_stub = true;
         } else {
             diag_emit(DIAG_ERROR, name_form->span,
@@ -434,8 +453,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
                 if (full_type) {
                     diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy compound type and cannot be used in :copy struct",
-                              field_name_form->as.sym->name);
+                              "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
+                              field_name_form->as.sym->name,
+                              type_name(*full_type));
                 } else {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
@@ -527,13 +547,11 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             }
             /* :copy struct validation: all fields must be copy */
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                /* F8: when the field was parsed via type_expr_from_form
-                 * the original simple type name isn't captured; fall back
-                 * to a generic message. */
-                if (type_name_form->tag == F_LIST) {
+                if (full_type) {
                     diag_emit(DIAG_ERROR, field_type_form->span,
-                              "defstruct: field '%s' has non-copy compound type and cannot be used in :copy struct",
-                              field_name_form->as.sym->name);
+                              "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
+                              field_name_form->as.sym->name,
+                              type_name(*full_type));
                 } else {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
