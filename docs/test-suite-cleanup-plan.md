@@ -315,22 +315,24 @@ resolve preferring GADTs in annotation context. Write a short design
 note in `docs/` before coding so the resolution rules (and any
 ambiguity diagnostics) are settled up front.
 
-#### Missing Feature 5 -- `tzipper-new` ownership contract
+#### Missing Feature 5 -- `tzipper-new` ownership contract [FIXED]
 
-No longer an aside: the decision below makes this active work with
-caller audits and a regression risk, not a docstring polish. The
-current API is that `tzipper-new` takes ownership of the left/right
-arrays and `tzipper-free` frees them. This is surprising for an
-stdlib container -- typically containers either borrow or document
-ownership transfer prominently.
+The previous API silently took ownership of the left/right arrays
+passed to `tzipper-new`; `tzipper-free` later freed them. Surprising
+for a container, and the implementation contract wasn't documented.
 
-**Decision:** Switch to borrow + copy. `tzipper-new` mallocs its own
-left / right buffers and `memcpy`s the caller's data; callers free
-their own inputs. `tzipper-free` continues to free the zipper-owned
-buffers. This is a breaking behavior change -- audit every caller
-(start with `tests/fixtures/tzipper-basic`, `tests/fixtures/typed/tzipper-basic`,
-and any internal stdlib users) and re-add explicit `free` calls for
-the caller-owned inputs at the call sites.
+**Decision (implemented):** Switch to borrow + copy. `tzipper-new`
+now mallocs its own left / right buffers and `memcpy`s the caller's
+data in `stdlib/tzipper.tur`; the caller retains the originals and
+must free them. `tzipper-free` continues to free the zipper-owned
+copies. The docstring now spells out the ownership semantics with an
+example.
+
+**Fixture follow-up [done]:** `tests/fixtures/tzipper-basic/input.tur`
+and `tests/fixtures/typed/tzipper-basic/input.tur` re-added explicit
+`(free left)` / `(free right)` calls after each `tzipper-new`. Both
+fixtures pass cleanly under ASAN. No other internal stdlib callers
+of `tzipper-new` exist.
 
 ### External dependency missing (left failing intentionally)
 

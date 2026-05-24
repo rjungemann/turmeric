@@ -3626,11 +3626,13 @@ static void tgrid_free(int64_t g) {
 
 static int64_t tzipper_new(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
-  z->left      = (int64_t*)(intptr_t)left;
   z->left_len  = (size_t)left_len;
-  z->focus     = focus;
-  z->right     = (int64_t*)(intptr_t)right;
   z->right_len = (size_t)right_len;
+  z->focus     = focus;
+  z->left  = z->left_len  > 0 ? malloc(sizeof(int64_t) * z->left_len)  : NULL;
+  z->right = z->right_len > 0 ? malloc(sizeof(int64_t) * z->right_len) : NULL;
+  if (z->left  && left)  memcpy(z->left,  (int64_t*)(intptr_t)left,  sizeof(int64_t) * z->left_len);
+  if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;
   
 }
