@@ -10,9 +10,13 @@
 > fixture deferred as their own follow-ups), F6 (partial: F6-2
 > via fixture rename + F6-4 for clone-list / clone-option /
 > clone-pair; F6-1 / F6-3 share a deeper compiled-mode
-> ADT-field-type carry-through bug that needs its own session)
-> all shipped.  Remaining open: F4-4 (mass stdlib `^deprecated`
-> sweep), F6-1 (ADT nested-field type loss in compiled mode).
+> ADT-field-type carry-through bug that needs its own session),
+> F4-4 (mass stdlib `^deprecated` sweep across the 7 legacy
+> modules) all shipped.  Remaining open: F6-1 (ADT nested-field
+> type loss in compiled mode -- the original turi gap turned out
+> to be compiled-mode too).  Substantively, every original plan
+> task is now either shipped or has its remaining work scoped
+> as a separate follow-up.
 > Remaining open phases:
 >   - F3-2..F3-7 -- dictionary passing + receiver type recovery
 >     (see Phase F3 "Additional blocker" for the expanded scope),
@@ -439,7 +443,7 @@ docs by hand.
 | F4-1 | Add `^deprecated` to the recognised binding/def annotations -- **shipped**.  `elab_fns.c` (`elab_defn`, `elab_def`) parses `^deprecated ["message"]` after the existing `#[no-unwind]` / `(export-as ...)` / `^persistent` attributes; the message is optional.  The pass-1 forward-declaration loop in `elab_toplevel.c` also skips the attribute so recursive lookups in pass 2 hit the existing global binding (no closure-via-id artifact). | `src/compiler/elab_fns.c`, `src/compiler/elab_toplevel.c`, `src/compiler/elab_core.c` (sym intern), `src/compiler/elab_internal.h` |
 | F4-2 | Store the deprecation message on the Binding -- **shipped** (`Binding.is_deprecated` + `Binding.deprecation_message`).  Both zero-initialised via the existing `memset` in `binding_new`. | `src/compiler/expr.h` |
 | F4-3 | Emit `DIAG_WARNING` at the use site -- **shipped** in `elab_lookup_sym` (the chokepoint that both var refs and call heads go through).  Self-recursive lookups are suppressed by comparing `b->name == e->current_fn_name`.  Promotion to error is wired through `--Werror=deprecated`: `g_werror_deprecated` global gated in `src/runtime/globals.{c,h}`, parsed/consumed in `src/main.c` (mirrors `--warn-unused-result`'s argv-strip pattern). | `src/compiler/elab_module.c`, `src/runtime/globals.{c,h}`, `src/main.c` |
-| F4-4 | Mass stdlib annotation -- **partial**: pair.tur user-facing functions annotated as a representative sample (see F4-4-partial commit).  The full sweep across `{map,vec,list,slice,option,result,pair}.tur` is **deferred** because applying it all at once would generate warnings in every fixture that uses those modules (~30+ fixtures across the suite) without first deciding the migration path -- each annotation should ideally cite the replacement (e.g. `t*-push!` for `*-push!`).  Track as a follow-up that lands one module at a time alongside the migration guidance for that module's users. | `stdlib/*.tur` |
+| F4-4 | Mass stdlib annotation across the seven legacy modules (`pair.tur`, `option.tur`, `result.tur`, `list.tur`, `vec.tur`, `map.tur`, `slice.tur`) -- **shipped** (102 user-facing defns annotated: `pair.tur` 5 by-hand with specific replacements, the other six modules 97 by a regex script with a generic `see t<mod>-* in stdlib/t<mod>.tur` message).  Internal `__*`-prefixed defns left unannotated (typeclass-dispatch helpers etc).  Warnings fire at every use-site that resolves to one of these stdlib bindings; existing fixtures that rely on the legacy API see new stderr noise but no test-suite failures (their `expected.stderr` files either don't exist or use substring matching).  Most legacy stdlib modules aren't even in the auto-load list, so warnings only fire when a project explicitly loads them. | `stdlib/{pair,option,result,list,vec,map,slice}.tur` |
 | F4-5 | Fixtures -- **shipped**.  `tests/fixtures/deprecated-warning` exercises the warning emission (with-message and bare variants, plus self-recursion suppression); `tests/fixtures/errors/deprecated-as-error` exercises `--Werror=deprecated`. | `tests/fixtures/` |
 
 ---

@@ -20,7 +20,7 @@
 ;;; Deprecated: Use tvec-new from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Create a new empty vec
-(defn vec-new [] #{Unsafe} :int
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-new [] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
@@ -44,7 +44,7 @@
 ;;; Deprecated: Use tvec-len from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Get vec length - v is a pointer from vec-new
-(defn vec-len [v] #{Unsafe} :int
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-len [v] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->len;
@@ -66,7 +66,7 @@
 ;;; Deprecated: Use tvec-get from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Get element at index (bounds-checked)
-(defn vec-get [v i] #{Unsafe} :int
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-get [v i] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
@@ -88,7 +88,7 @@
 ;;; Deprecated: Use tvec-push! from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Push an element to the vec
-(defn vec-push! [^unique ^mut v val] #{Unsafe} :nil
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-push! [^unique ^mut v val] #{Unsafe} :nil
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -117,7 +117,7 @@
 ;;; Deprecated: Use tvec-pop! from stdlib/tvec.tur instead (returns Option[A]).
 ;;; Since: Phase B1
 ;; Pop an element from the vec
-(defn vec-pop! [^unique ^mut v] #{Unsafe} :int
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-pop! [^unique ^mut v] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len == 0) {
@@ -139,7 +139,7 @@
 ;;; Deprecated: Use tvec-free from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
 ;; Free the vec and its data
-(defn vec-free [^unique v] #{Unsafe} :nil
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-free [^unique v] #{Unsafe} :nil
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   free(vec->data);
@@ -416,7 +416,7 @@
 ;;; Since: Phase E1
 ;; Phase E1: vec-eq? -- compare two vecs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
-(defn vec-eq? [v1 v2 cmp-fn] #{Unsafe} :bool
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-eq? [v1 v2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *a =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
@@ -511,7 +511,7 @@
 ;;;
 ;;; Deprecated: Use the typed Vec[A] API in stdlib/tvec.tur once a tvec-sort! lands.
 ;;; Since: Phase B2
-(defn vec-sort! [v] :nil
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-sort! [v] :nil
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
@@ -539,7 +539,7 @@
 ;;;
 ;;; Deprecated: Use tvec-set! from stdlib/tvec.tur instead.
 ;;; Since: Phase B1
-(defn vec-set! [v :int i :int val :int] #{Unsafe} :nil
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-set! [v :int i :int val :int] #{Unsafe} :nil
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
@@ -561,7 +561,7 @@
 ;;;
 ;;; Deprecated: Use tvec-new from stdlib/tvec.tur then tvec-push! in a loop, or add tvec-new-filled.
 ;;; Since: Phase B1
-(defn vec-new-filled [n :int val :int] #{Unsafe} :int
+(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-new-filled [n :int val :int] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));

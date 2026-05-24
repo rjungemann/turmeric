@@ -27,7 +27,7 @@
 ;;;
 ;;; Deprecated: Use tsome from stdlib/toption.tur instead.
 ;;; Since: Phase B1
-(defn some [x] #{Unsafe}
+(defn ^deprecated "see toption-* in stdlib/toption.tur" some [x] #{Unsafe}
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
@@ -47,7 +47,7 @@
 ;;;
 ;;; Deprecated: Use tnone from stdlib/toption.tur instead.
 ;;; Since: Phase B1
-(defn none [] #{Unsafe}
+(defn ^deprecated "see toption-* in stdlib/toption.tur" none [] #{Unsafe}
   ```c
   return NULL;
   ```)
@@ -68,7 +68,7 @@
 ;;;
 ;;; Deprecated: Use tsome? from stdlib/toption.tur instead.
 ;;; Since: Phase B1
-(defn some? [o] #{Unsafe} :bool
+(defn ^deprecated "see toption-* in stdlib/toption.tur" some? [o] #{Unsafe} :bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
@@ -89,7 +89,7 @@
 ;;;
 ;;; Deprecated: Use tunwrap from stdlib/toption.tur instead.
 ;;; Since: Phase B1
-(defn option-unwrap [o] #{Unsafe} :int
+(defn ^deprecated "see toption-* in stdlib/toption.tur" option-unwrap [o] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -111,7 +111,7 @@
 ;;;
 ;;; Deprecated: Use toption-free from stdlib/toption.tur instead.
 ;;; Since: Phase B1
-(defn option-free [o] #{Unsafe}
+(defn ^deprecated "see toption-* in stdlib/toption.tur" option-free [o] #{Unsafe}
   ```c
   free(o);
   return 0;
@@ -132,7 +132,7 @@
 ;;;
 ;;; Deprecated: Use tunwrap from stdlib/toption.tur instead.
 ;;; Since: Phase R4
-(defn option-must [o :ptr<void>] #{Unsafe} :int
+(defn ^deprecated "see toption-* in stdlib/toption.tur" option-must [o :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -157,7 +157,7 @@
 ;;;
 ;;; Deprecated: Use tunwrap (or a future toption-expect) from stdlib/toption.tur.
 ;;; Since: Phase R4
-(defn option-expect [o :ptr<void> msg :cstr] #{Unsafe} :int
+(defn ^deprecated "see toption-* in stdlib/toption.tur" option-expect [o :ptr<void> msg :cstr] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -377,7 +377,7 @@
 ;;;
 ;;; Deprecated: Use toption-eq? from stdlib/toption.tur instead (or the Eq[Option] instance).
 ;;; Since: Phase E1
-(defn option-eq? [o1 o2 cmp-fn] #{Unsafe} :bool
+(defn ^deprecated "see toption-* in stdlib/toption.tur" option-eq? [o1 o2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { bool is_some; int64_t value; } *a =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
