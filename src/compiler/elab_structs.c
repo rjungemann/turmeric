@@ -2295,6 +2295,24 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
         Expr *fv = elab_form(e, call->as.list.items[2 + i]);
         if (!fv) return NULL;
         field_values[i] = fv;
+
+        /* Compound field annotations (TY_APP / TY_EXISTS / TY_FORALL) all
+         * lower to TY_INT at the C level, so without this check a raw `42`
+         * passed where `(exists [a] [(Show a)] a)` is expected slips through
+         * and codegen reads the int as a `tur_existential_t *`.  TY_PTR_VOID
+         * values are treated as a wildcard so inline-C escape hatches that
+         * return an opaque pointer keep working. */
+        if (def->fields[i].full_type) {
+            Type expected = *def->fields[i].full_type;
+            Type actual   = fv->type;
+            if (actual.kind != TY_PTR_VOID && !type_eq(actual, expected)) {
+                diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
+                          "make-struct '%s': field '%s' expects %s, got %s",
+                          def->name, def->fields[i].name,
+                          type_name(expected), type_name(actual));
+                return NULL;
+            }
+        }
     }
 
     /* Build the result type */

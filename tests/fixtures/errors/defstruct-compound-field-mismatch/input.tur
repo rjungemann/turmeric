@@ -1,0 +1,30 @@
+;; DS1-3 (defstruct-field-types-plan): make-struct must reject a value
+;; whose type does not match a compound field annotation.
+;;
+;; Before DS1 the call-site type-check was kind-level only.  TY_EXISTS
+;; lowers to TY_INT at the C level, so passing a raw `42` (TY_INT) where
+;; `(exists [a] [(Show a)] a)` was expected silently slipped through --
+;; and the generated C then read the int as a `tur_existential_t *` and
+;; SEGV'd on the next `open` / `.field` dispatch.
+;;
+;; DS1-1 added a per-field type check that prefers the parsed `full_type`
+;; over the kind summary; DS1-2 leans on `type_eq`'s structural TY_EXISTS
+;; comparison (n_constraints / constraint_classes / constraint_var_idx)
+;; to enforce the constraint check.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defstruct B :move
+  [p (exists [a] [(Show a)] a)])
+
+(defn main [] :int
+  (let [b (make-struct B 42)]
+    0))

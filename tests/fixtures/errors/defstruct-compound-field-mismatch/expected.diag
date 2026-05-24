@@ -1,0 +1,2 @@
+make-struct 'B': field 'p' expects
+got int
