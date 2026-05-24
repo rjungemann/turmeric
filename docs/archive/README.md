@@ -32,8 +32,6 @@ active development or consideration. For user-facing guides and tutorials, see
 
 ### CLI and Developer Experience
 
-- **[cli-arguments-plan.md](cli-arguments-plan.md)** -- `*args*` passthrough and `--` separator (shipped); see [../guides/cli-args-guide.md](../guides/cli-args-guide.md)
-- **[arg-parser-plan.md](arg-parser-plan.md)** -- `stdlib/args.tur` builder API (shipped); see [../guides/cli-args-guide.md](../guides/cli-args-guide.md)
 - **[developer-ergonomics-plan.md](developer-ergonomics-plan.md)** -- Day-one UX baseline checklist (help flags, eval command, etc.); several items outstanding
 - **[autodoc-plan.md](autodoc-plan.md)** -- Docstring standard and doc generator (see also CLAUDE.md); doctest integration pending
 - **[doctest-plan.md](doctest-plan.md)** -- Executable doctests from `;;;` Example blocks; not yet started
@@ -58,7 +56,7 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[signal-processing-arrows-plan.md](signal-processing-arrows-plan.md)** -- Signal processing with arrows and HKTs (tutorial plan; depends on Phase 19 + HKT)
 - **[remove-exceptions-plan.md](remove-exceptions-plan.md)** -- Plan to remove remaining exception machinery
 - **[set-literal-plan.md](set-literal-plan.md)** -- `#s(...)` set literal syntax
-- **[scscm-hcsynth-livecoding-plan.md](scscm-hcsynth-livecoding-plan.md)** -- SuperCollider/Haskell live coding integration (Phase 20+ target)
+- **[scscm-tidal-spices-plan.md](scscm-tidal-spices-plan.md)** -- SuperCollider/Tidal live coding spice pair (Phase 20+ target)
 - **[effect-types-row-polymorphism-plan.md](effect-types-row-polymorphism-plan.md)** -- Full first-class effect polymorphism (ET0-ET4); not started; v3 target
 - **[multishot-continuations-plan.md](multishot-continuations-plan.md)** -- Multi-shot continuations (MS0-MS4); deferred until linear-continuations stable
 - **[linear-continuations-plan.md](linear-continuations-plan.md)** -- Linear continuations; deferred to v5+
@@ -78,7 +76,7 @@ The following planning documents have guide counterparts in [../guides/](../guid
 |---|---|
 | [async-await-guide.md](../guides/async-await-guide.md) | `async-await-plan.md` (history) |
 | [backtracking-guide.md](../guides/backtracking-guide.md) | `backtracking-cloneable-continuations-plan.md` (history) |
-| [cli-args-guide.md](../guides/cli-args-guide.md) | `cli-arguments-plan.md`, `arg-parser-plan.md` |
+| [cli-args-guide.md](../guides/cli-args-guide.md) | `cli-arguments-plan.md` (history), `arg-parser-plan.md` (history) |
 | [effects-system-guide.md](../guides/effects-system-guide.md) | `effects-plan.md` (history); `effect-rows-plan.md` (ER0-ER6 core) |
 | [effects-vs-monads.md](../guides/effects-vs-monads.md) | `effects-vs-monads.md` (archive copy deleted; guides version is canonical) |
 | [error-handling-guide.md](../guides/error-handling-guide.md) | `contracts-plan.md` (C0-C1 section) |
@@ -97,7 +95,6 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [sized-types-guide.md](../guides/sized-types-guide.md) | `sized-types-plan.md` (history; SZ3 complete) |
 | [stm-guide.md](../guides/stm-guide.md) | `stm-plan-2.md` (history) |
 | [substructural-types-guide.md](../guides/substructural-types-guide.md) | `substructural-types-plan.md` (complete); `linear-types-plan.md` (history) |
-| [tidal-guide.md](../guides/tidal-guide.md) | `tidalcycles-dsl-plan.md` (history) |
 | [threading-guide.md](../guides/threading-guide.md) | `threading-tasks.md` (complete); `select-fair-blocking-plan.md` (history) |
 | [type-annotations-guide.md](../guides/type-annotations-guide.md) | `compound-type-annotations-plan.md` (complete) |
 | [union-intersection-types-guide.md](../guides/union-intersection-types-guide.md) | `intersection-union-types-plan.md` (history; IT0--IT4 complete) |

@@ -422,12 +422,12 @@ nodes have `strong_count == 1` and are kept alive by each other.
 
 ## Relation to other plans
 
-- `docs/upcoming/cross-plan-followups-plan.md` -- F8 shipped the
+- `docs/cross-plan-followups-plan.md` -- F8 shipped the
   core extension.  This plan is the natural follow-up tracking
   what F8 deliberately deferred (F8-3 strict type-check,
   F8-5 move-at-pack for struct fields, F8-7 cycle fixture)
   plus the DS4 / DS5 items that surfaced post-F8.
-- `docs/upcoming/existential-gc-followup-plan.md` -- DS3 (cycle
+- `docs/existential-gc-followup-plan.md` -- DS3 (cycle
   fixture) closes the last open EXG5-5 item.
 - `docs/existential-gc-plan.md` -- DS3 also closes the
   superseded EXG2-4 task (already marked done via EXG5 walker;

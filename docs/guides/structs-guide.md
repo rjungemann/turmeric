@@ -367,6 +367,76 @@ let [p make-struct(Point 3 4)]
   println $ .show(p)   ; Point { x = 3, y = 4 }
 ```
 
+### Deriving `Show`, `Debug`, `Display`
+
+Writing the inline C above for every struct is tedious. The `derive-show`,
+`derive-debug`, and `derive-display` macros in `stdlib/macros.tur` generate
+the instance from a struct name and a list of field descriptors.
+
+Each field descriptor is either a bare symbol -- `x` becomes label `"x"` with
+accessor `(.x s)` -- or a `[label .accessor]` pair to use a different label
+or non-default accessor.
+
+```turmeric
+(defstruct Point :copy [x :int y :int])
+(derive-show    Point x y)
+(derive-debug   Point x y)
+(derive-display Point x y)
+
+(let [p (make-struct Point 3 4)]
+  (println (.show    p))    ; Point { x = 3, y = 4 }
+  (println (.debug   p))    ; (Point (x 3) (y 4))
+  (println (.display p)))   ; Point { x = 3, y = 4 }
+```
+
+```sweet-exp
+defstruct Point :copy [x :int y :int]
+derive-show    Point x y
+derive-debug   Point x y
+derive-display Point x y
+
+let [p make-struct(Point 3 4)]
+  println $ .show(p)     ; Point { x = 3, y = 4 }
+  println $ .debug(p)    ; (Point (x 3) (y 4))
+  println $ .display(p)  ; Point { x = 3, y = 4 }
+```
+
+`derive-show` produces `"TypeName { k = v, ... }"`. `derive-debug` produces
+the s-expression-flavoured `"(TypeName (k v) ...)"`. `derive-display` matches
+`derive-show` but dispatches through the `Display` typeclass.
+
+Each field must itself have an instance of the relevant typeclass -- the macro
+expansion calls `.show` (or `.debug`/`.display`) on each field value and joins
+the results with `str-concat`. `Show`, `Debug`, and `Display` instances exist
+in stdlib for primitives, `Pair`, `Option`, `Result`, `List`, and `Vec`, so
+nested structs and collections print recursively out of the box.
+
+To alias a field name or access through a non-standard reader, use the
+`[label .accessor]` pair form:
+
+```turmeric
+(defstruct MyStruct [name :cstr internal-label :cstr count :int])
+(derive-show MyStruct name [display-name .internal-label] count)
+;; => "MyStruct { name = ..., display-name = ..., count = ... }"
+```
+
+### REPL auto-show
+
+The native REPL and web REPL automatically call `show` on the result of each
+top-level expression when an applicable `Show` instance exists, so:
+
+```
+> (make-struct Point 3 4)
+Point { x = 3, y = 4 }
+```
+
+If no `Show` instance is registered for the result type, the REPL falls back
+to printing the raw value. Note: heap-allocated stdlib types returned through
+constructors that elaborate to `:int` (for example `pair-new`) are seen by
+typeclass dispatch as `int` and will print as a raw pointer; use
+`(make-struct Pair 1 2)` (or a typed alias) when you want `Show`-dispatch to
+fire on the constructed value.
+
 ### `Bifunctor`
 
 ```turmeric

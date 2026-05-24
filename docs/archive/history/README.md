@@ -19,7 +19,9 @@ Plans whose features have shipped and are documented in [../../guides/](../../gu
 
 | Plan | Guide |
 |---|---|
+| [arg-parser-plan.md](arg-parser-plan.md) | [cli-args-guide.md](../../guides/cli-args-guide.md) |
 | [auto-formatter-plan.md](auto-formatter-plan.md) | [formatter-guide.md](../../guides/formatter-guide.md) |
+| [cli-arguments-plan.md](cli-arguments-plan.md) | [cli-args-guide.md](../../guides/cli-args-guide.md) |
 | [closure-typeclass-dispatch-plan.md](closure-typeclass-dispatch-plan.md) | [hkt-guide.md](../../guides/hkt-guide.md) (CCL section) |
 | [contract-types-plan.md](contract-types-plan.md) | [contract-types-guide.md](../../guides/contract-types-guide.md) |
 | [dynamic-vars-plan.md](dynamic-vars-plan.md) | [dynamic-vars-guide.md](../../guides/dynamic-vars-guide.md) |
@@ -31,6 +33,9 @@ Plans whose features have shipped and are documented in [../../guides/](../../gu
 | [session-types-plan.md](session-types-plan.md) | [session-types-guide.md](../../guides/session-types-guide.md) |
 | [sized-types-plan.md](sized-types-plan.md) | [sized-types-guide.md](../../guides/sized-types-guide.md) |
 | [stdlib-plan.md](stdlib-plan.md) | stdlib shipped in full; see API docs |
+| [struct-inspection-plan.md](struct-inspection-plan.md) | [structs-guide.md](../../guides/structs-guide.md) ("Deriving `Show`, `Debug`, `Display`" section) |
+| [si4-repl-auto-show-plan.md](si4-repl-auto-show-plan.md) | [structs-guide.md](../../guides/structs-guide.md) ("REPL auto-show" section) |
+| [typed-collections-plan.md](typed-collections-plan.md) | TM0/TC1/TC2 shipped; see stdlib `Map`/`Vec`/`List`/`Set` API docs |
 | [vscode-syntax-highlighting-plan.md](vscode-syntax-highlighting-plan.md) | [vscode-guide.md](../../guides/vscode-guide.md) |
 
 ## Completed Tutorials (plans superseded by written guides)
@@ -54,6 +59,15 @@ Plans whose features have shipped and are documented in [../../guides/](../../gu
 ## Resolved Design Decisions
 
 - **panic-system-vs-exception-system-plan.md** -- Pre-implementation comparison of panic vs. exception error handling (2024); decision made and implemented: hybrid Result + limited panic (see [../../guides/error-handling-guide.md](../../guides/error-handling-guide.md))
+- **ptc-plan.md** -- Parametric type constraints (PTC1--PTC4); complete; enables typeclass instances like `Eq [Vec]` with `(Eq A)` constraints on element types
+
+## Superseded Plans
+
+- **existential-gc-plan.md** -- Original GC integration plan for `tur_existential_t`; superseded by `existential-gc-followup-plan.md` (EXG4/EXG5/EXG6) and `cross-plan-followups-plan.md` (F1-1..F1-3, F2-1)
+
+## Completed Spices
+
+- **plutovg-spice-plan.md** -- `tur-plutovg` spice (2D vector graphics via plutovg 1.3); shipped as `plutovg-v0.1.0` in [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
 
 ## Design References (Kept for Architecture Context)
 

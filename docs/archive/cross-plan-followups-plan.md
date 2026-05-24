@@ -42,7 +42,7 @@ together.
 
 Source plans the work threads back to:
 
-- `docs/upcoming/existential-gc-followup-plan.md` (EXG4/EXG5/EXG6)
+- `docs/existential-gc-followup-plan.md` (EXG4/EXG5/EXG6)
 - `docs/existential-types-plan.md` (EX1/EX2)
 - `docs/existential-gc-plan.md` (EXG1/EXG2/EXG3 -- now superseded by
   the followup plan, but the doc itself still needs a status update)
@@ -493,7 +493,7 @@ nobody re-investigates already-shipped work.
 |----|------|---------|
 | F7-1 | Backfill `[x]` on EX1a-1..EX1f-5 in `existential-types-plan.md`; mark EX0 superseded -- **shipped** (27 EX1 entries flipped, EX0 banner added). | `docs/existential-types-plan.md` |
 | F7-2 | Flip EXG2-2..EXG3-4 from `defer` to `done` with cross-refs; add superseded banner -- **shipped** (banner added, 6 entries flipped, task-summary cross-refs added). | `docs/existential-gc-plan.md` |
-| F7-3 | Update `existential-gc-followup-plan.md` status to reflect cross-plan-followups closures -- **shipped** (status banner rewritten; EXG4-5, EXG5-5, EXG6-5 task-summary rows flipped from `partial` to `shipped (mostly)` / `shipped` with cross-refs to F1-1, F1-2, F2-1; EXG4-3 already marked retired via F1-3). | `docs/upcoming/existential-gc-followup-plan.md` |
+| F7-3 | Update `existential-gc-followup-plan.md` status to reflect cross-plan-followups closures -- **shipped** (status banner rewritten; EXG4-5, EXG5-5, EXG6-5 task-summary rows flipped from `partial` to `shipped (mostly)` / `shipped` with cross-refs to F1-1, F1-2, F2-1; EXG4-3 already marked retired via F1-3). | `docs/existential-gc-followup-plan.md` |
 
 ---
 
@@ -553,7 +553,7 @@ kind otherwise so callers that only need `kind` keep working.
 | F8-5 | Move-at-pack scan extension for struct field initialisers -- **deferred**.  The shipped F8-6 fixture works fine without this extension (the let-bound `(pack ...)` value flows directly into `make-struct` as the field initialiser; the binding is consumed in the make-struct call and the struct itself owns the resulting rc-block).  Without F8-5, a pattern like `(let [p (pack ...)] (let [b (make-struct Box p)] ...))` would leave the source binding `p` with a stale reference -- but that pattern is rare in user code and we have not seen a fixture that depends on it.  Track as a separate follow-up once a real user hits it. | `src/compiler/elab_structs.c` (constructor elaboration) |
 | F8-6 | Fixture `tests/fixtures/exg4-pack-into-struct` (the F1-1-6 / EXG4-5 fixture previously blocked on F8) -- **shipped**.  Field declared `(exists [a] [(Show a)] a)`, packed value stored, then opened back out through `(.payload b)` with `.show` dispatching through the witness vtable. | `tests/fixtures/` |
 | F8-7 | Cycle-construction fixture `tests/fixtures/exg5-exists-cycle` -- **deferred**.  Building a real cycle requires mutable struct fields (set! on an rc-typed field to install the back-edge), which is its own scope.  F8 unblocked the storage path; the cycle-collection test specifically needs a mutation primitive on rc fields that this work does not add.  Track separately. | `tests/fixtures/` |
-| F8-8 | Doc updates -- **shipped** (F1-1-6 row flipped, F2-2-1 row reflects the deferred F8-7 status, status banners updated). | `docs/upcoming/cross-plan-followups-plan.md`, `docs/upcoming/existential-gc-followup-plan.md` |
+| F8-8 | Doc updates -- **shipped** (F1-1-6 row flipped, F2-2-1 row reflects the deferred F8-7 status, status banners updated). | `docs/cross-plan-followups-plan.md`, `docs/existential-gc-followup-plan.md` |
 
 ### Caveats
 
@@ -621,7 +621,7 @@ for that one.
 
 ## Relation to Other Plans
 
-- `docs/upcoming/existential-gc-followup-plan.md` -- F1/F2 close the
+- `docs/existential-gc-followup-plan.md` -- F1/F2 close the
   items that plan explicitly deferred ("blocked on a separate parser
   limitation", "blocked on a smart drop hook").  F7-3 retires the
   deferred entries once they ship.

@@ -1,7 +1,7 @@
 # Spice Plan: tur-plutovg
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-22
+> **Status:** Complete -- shipped as `plutovg-v0.1.0` in `turmeric-spices`
+> **Last Updated:** 2026-05-24
 > **Type:** Spice Design
 
 ---
@@ -260,39 +260,39 @@ plutovg/font      -- font loading, cache, metrics, text extent queries
 
 ## Implementation phases
 
-- [ ] **PV0** -- `build.tur`; CPM plutovg at `v1.3.3`; `surface-create`, `surface-destroy`,
+- [x] **PV0** -- `build.tur`; CPM plutovg at `v1.3.3`; `surface-create`, `surface-destroy`,
   `surface-width`, `surface-height`, `surface-stride`, `surface-data`;
   `canvas-create`, `canvas-destroy`; solid-color fill of a rect (smoke test).
 
-- [ ] **PV1** -- Canvas path recording: `canvas-move-to`, `canvas-line-to`, `canvas-quad-to`,
+- [x] **PV1** -- Canvas path recording: `canvas-move-to`, `canvas-line-to`, `canvas-quad-to`,
   `canvas-cubic-to`, `canvas-close-path`; shape helpers (`canvas-rect`,
   `canvas-ellipse`, `canvas-circle`); `canvas-fill`, `canvas-stroke`, `canvas-clip`.
 
-- [ ] **PV2** -- Standalone path object (`plutovg/path`): full construction API,
+- [x] **PV2** -- Standalone path object (`plutovg/path`): full construction API,
   `path-clone`, `path-extents`, `path-length`, `path-clone-flatten`, `path-parse`;
   `canvas-add-path`, `canvas-fill-path`, `canvas-stroke-path`.
 
-- [ ] **PV3** -- Paint module (`plutovg/paint`): `paint-create-color`, `paint-create-color-hex`,
+- [x] **PV3** -- Paint module (`plutovg/paint`): `paint-create-color`, `paint-create-color-hex`,
   linear/radial gradients, `paint-add-color-stop`, `paint-set-spread-method`,
   texture paints; `canvas-set-source`, `canvas-set-source-color`.
 
-- [ ] **PV4** -- Canvas state and transforms: `canvas-save`, `canvas-restore`,
+- [x] **PV4** -- Canvas state and transforms: `canvas-save`, `canvas-restore`,
   `canvas-translate`, `canvas-scale`, `canvas-rotate`, `canvas-transform`,
   `canvas-reset-transform`; stroke properties (`canvas-set-line-width/cap/join/miter-limit`);
   dash (`canvas-set-dash-offset`, `canvas-set-dash-array`); `canvas-set-fill-rule`;
   `canvas-set-operator`; `canvas-set-opacity`.
 
-- [ ] **PV5** -- Font module (`plutovg/font`): `font-face-load-from-file`,
+- [x] **PV5** -- Font module (`plutovg/font`): `font-face-load-from-file`,
   `font-face-load-from-data`, metrics, `font-face-text-extents`;
   `canvas-set-font-face`, `canvas-set-font-size`, `canvas-show-text`;
   font cache (`font-cache-create`, `font-cache-add-file`, `font-cache-load-system`,
   `font-cache-get`).
 
-- [ ] **PV6** -- Surface export: `surface-write-png`, `surface-write-jpeg`;
+- [x] **PV6** -- Surface export: `surface-write-png`, `surface-write-jpeg`;
   `canvas-draw-image`; arc helpers (`canvas-arc`, `canvas-round-rect`,
   `canvas-arc-to`, `path-clone-dashed`).
 
-- [ ] **PV7** -- Tests (off-screen render, compare pixel output);
+- [x] **PV7** -- Tests (off-screen render, compare pixel output);
   README section in `turmeric-spices`; `plutovg-v0.1.0` tag.
 
 ---

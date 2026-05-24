@@ -342,6 +342,7 @@ The following were originally open questions; resolved 2026-05-23.
 - `src/compiler/pkg.c:1375` already branches on `target == "wasm"` for
   `emcmake`. v0 reuses that branch and adds the `:web` manifest parsing
   alongside.
-- `docs/plutovg-spice-plan.md` and `docs/scscm-tidal-spices-plan.md` are
-  consistent with this -- both spices fall on the ✅ side of the matrix and
-  would be the first non-trivial demos of `tur build --target web`.
+- `docs/archive/history/plutovg-spice-plan.md` and
+  `docs/archive/scscm-tidal-spices-plan.md` are consistent with this -- both
+  spices fall on the ✅ side of the matrix and would be the first non-trivial
+  demos of `tur build --target web`.

@@ -3,9 +3,9 @@
 > **Status: superseded.**  The cross-scope ownership,
 > cycle-walker, and `:linear` work that originally lived in this
 > plan's EXG2 and EXG3 phases now lives in
-> [`docs/upcoming/existential-gc-followup-plan.md`](upcoming/existential-gc-followup-plan.md)
+> [`docs/existential-gc-followup-plan.md`](../existential-gc-followup-plan.md)
 > (EXG4 / EXG5 / EXG6) and the cross-plan followups
-> [`docs/upcoming/cross-plan-followups-plan.md`](upcoming/cross-plan-followups-plan.md)
+> [`docs/cross-plan-followups-plan.md`](../cross-plan-followups-plan.md)
 > (F1-1 / F1-2 / F1-3 / F2-1).  EXG1 shipped per this plan; EXG2-2,
 > EXG2-4, EXG3-1..4 flipped to **done** below with cross-references
 > to the followup commits.

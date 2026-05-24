@@ -362,6 +362,92 @@ pointer-cast usage and should not be removed without a real rework.
 
 ---
 
+### Bug 6 -- Auto-loaded macros are invisible inside imported-module macro expansions
+
+**Where it lives**
+
+- `src/compiler/elab_macros.c` -- macro expansion runs against the
+  *defining* module's scope, not the calling site.  Bindings promoted to
+  "stdlib pre-module" status by `elab_toplevel.c:735-756` are visible to
+  user code that imports nothing special, but not from inside macros
+  loaded via `(import some-spice)`.
+
+**Symptom**
+
+`tur-test`'s `describe` macro (in `spices/test/src/test/suite.tur:66`)
+expands to ``(`do (__desc-print ~name) ~@body)``.  `do` is provided by
+the auto-loaded `stdlib/macros.tur`, but when `describe` expands inside
+a test file's module body the expansion is elaborated against the
+`test/suite` module's scope -- where `do` is not visible.  Every spice
+test file therefore fails to compile with:
+
+```
+spices/test/src/test/suite.tur:67:5: error: unbound symbol 'do'
+```
+
+This blocks all end-to-end test execution even though every PV0-PV7
+plutovg test file (and every other spice's test files) parses,
+elaborates its own body, and reaches the macro-expansion step cleanly.
+Bug 3's wiring (`tur test` reading the manifest) is the reason we even
+get this far; this is the next gate.
+
+**Fix options**
+
+- *Option A (elaborator):* during macro expansion, walk up to the
+  importing module's scope (and ultimately the pre-module global scope)
+  when a symbol cannot be resolved in the defining module's scope.  This
+  matches Clojure/Lisp's typical "macro sees its expansion site" model
+  but conflicts with strict module hygiene.
+- *Option B (stdlib):* make `do` (and other core macros that get
+  splice-quoted by spice macros -- `cond`, `when`, etc.) addressable by
+  fully-qualified name from inside any module, e.g. by reserving a
+  built-in `tur/do` form that the macro expander always recognises.
+- *Option C (spice):* rewrite the `describe` / `it` macros in
+  `spices/test/src/test/suite.tur` to avoid stdlib-only macros in their
+  expansions -- expand to a `(let)` / explicit sequence form instead of
+  `(do ...)`.
+
+Option C is the cheapest unblock (one spice, one file) and gets the
+test framework to an actually-runnable state.  Options A and B are the
+durable fix for "third-party spices can rely on stdlib macros from
+within their own macro expansions."
+
+**Resolution (Option A, landed):**
+
+The root cause was narrower than the original diagnosis suggested: the
+issue isn't really about "macro expansion runs against the defining
+module's scope", it's about how the quasiquote expander produced its
+template.  `quasiquote_expand_form` in `src/compiler/elab_macros.c`
+was wrapping every literal atom (`F_SYM`, `F_INT`, ...) inside a
+quasiquote in `(quote X)`.  That meant a body like ``\`(do ~@body)``
+expanded to ``((quote do) body...)`` rather than ``(do body...)``.
+
+When the result was elaborated, the call head was an `F_QUOTE` node,
+not an `F_SYM`, so `elab_call`'s special-form dispatch (which keys on
+`sym == e->sym_do`) was bypassed.  The elaborator instead fell into
+the "dynamic call head" path, recursed into the quote, and tried to
+resolve `do` as a binding -- producing the `unbound symbol 'do'` we
+saw from `test/suite.tur`.
+
+Two changes in `quasiquote_expand_form` fix it:
+
+1. Atoms inside a quasiquote are returned as-is rather than being
+   wrapped in `(quote ...)`.  They're already literal data in the
+   resulting form, so the wrap was redundant and actively wrong for
+   special-form symbols.
+2. `F_UNQUOTE_SPLICING` items inside a list are kept wrapped (not
+   pre-unwrapped) so the splice path in `substitute_params` can detect
+   them and splice a list-valued rest parameter into the parent list.
+
+A regression fixture lives at
+`tests/fixtures/macro-quasiquote-special-form/`; it exercises
+``\`(if ~test (do ~@body) nil)`` and ``\`(let [~var ~val] ~body)``
+patterns end-to-end.
+
+**Status:** landed.
+
+---
+
 ## Execution order
 
 | # | Task | Repo | Cost | Phase |
@@ -371,13 +457,16 @@ pointer-cast usage and should not be removed without a real rework.
 | 3 | Wrap all 26 test files in `(defmodule ...)` | turmeric-spices | low | **this PR** |
 | 4 | Make stdlib auto-load honor `TUR_STDLIB_DIR` | turmeric | low | **this PR** |
 | 5 | Verify `tur fetch --update` succeeds for every spice | turmeric-spices | n/a | **this PR** |
-| 6 | Wire `tur test` to read `build.tur` and pass `-I` + cmake-deps flags | turmeric | medium | follow-up |
-| 7 | Resolve `import result` orphan-instance and unsafe issues (Bug 5) | turmeric stdlib | medium | follow-up |
+| 6 | Wire `tur test` to read `build.tur` and pass `-I` + cmake-deps flags (Bug 3) | turmeric | medium | **landed** |
+| 7 | Resolve `import result` orphan-instance and unsafe issues (Bug 5) | turmeric stdlib | medium | **landed** |
 | 8 | Add CI: run `tur fetch` + `tur test` for every spice in `turmeric-spices` | turmeric-spices | medium | **landed (`.github/workflows/ci.yml`)** |
+| 9 | Fix auto-loaded macros being invisible inside imported-module macro expansions (Bug 6) | turmeric | medium | **landed** |
 
-After items 1-5 land, every spice can be `tur fetch`'d cleanly and the test
-files compile. Running them via `tur test` still requires items 6 and 7 --
-those become the next plan.
+After items 1-8 land, every spice's `build.tur` parses, every test file
+parses + elaborates, `tur fetch` succeeds, and `tur test` resolves the
+right `-I` paths.  The last gate to actually running the tests
+end-to-end is item 9 (Bug 6) -- the macro-hygiene issue that today
+shows up as `error: unbound symbol 'do'` inside `test/suite.tur`.
 
 ---
 

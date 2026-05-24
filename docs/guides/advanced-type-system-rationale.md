@@ -269,6 +269,59 @@ at API boundaries.
 
 ---
 
+## Existential types
+
+Existential types (`-Xexistentials`) hide a concrete type behind an opaque
+boundary while still allowing operations on it through typeclass constraints.
+They are the dual of higher-ranked `forall`: where `forall` lets the caller
+pick the type, `exists` lets the callee pick the type and expose only what the
+caller is allowed to do with it.
+
+```turmeric
+;; A boxed value paired with evidence that its type implements Show.
+(defn box-it [x :a] :(exists [a] [(Show a)] a)
+  (pack x (exists [a] [(Show a)] a)))
+
+(defn print-it [e :(exists [a] [(Show a)] a)] :unit
+  (open e [x] (println (show x))))
+```
+
+### Why these features fit
+
+Existentials are the missing half of Turmeric's quantifier story. HKT (Phase
+S1--S8) gave the language `forall` and Rank-2 polymorphism; existentials
+complete the pair by giving callees a way to return values whose concrete type
+is private. Heterogeneous collections (`(vec (exists [a] [(Show a)] a))`),
+plugin APIs that hand back opaque handles, and abstract data types whose
+representation is sealed at the module boundary all fall out of the same
+construct.
+
+The codegen story reuses infrastructure that already exists. A packed
+existential is a `struct` holding the inner value (or a pointer to it) and one
+vtable pointer per constraint -- the same dictionary-passing representation
+that typeclasses already emit. `pack` is a record construction; `open` is a
+scoped binding that brings the witness type and methods into scope. No new
+runtime machinery, no boxing beyond what typeclass dispatch already requires.
+
+Existentials compose cleanly with the rest of the system:
+
+- **Typeclasses**: constraints on the existential are checked at the `pack`
+  site against existing instance declarations. No new resolution rules.
+- **RC and substructural types**: `(exists [a] [(Show a)] (rc a))` and
+  `(exists [a] [(Show a)] (lref a))` are both well-formed. The discipline of
+  the inner type is preserved through the existential boundary.
+- **GADTs**: existential index variables in GADT constructors were the
+  precursor; full first-class existentials generalise the same mechanism to
+  arbitrary positions in a type.
+
+The "existential GC" work (see `docs/archive/history/existential-gc-plan.md`)
+addressed the one non-trivial interaction: ensuring that boxed values inside
+existentials are visible to the runtime's tracing so that RC and arena
+ownership rules continue to hold across the opaque boundary. With that piece
+in place, existentials cost nothing beyond what users explicitly pack.
+
+---
+
 ## Why dependent types were correctly deferred
 
 Dependent types allow a type to be indexed by a runtime value:
@@ -368,6 +421,9 @@ GADTs (-Xgadt)
 Union/Intersection Types (-Xunion-types, -Xintersection-types)
 
 Contract Types (-Xcontracts)
+
+HKT (-Xhkt) -- forall, Rank-2
+  └── Existential Types (-Xexistentials) -- exists, pack/open
 ```
 
 Each feature in the graph uses the one above it without requiring anything from
@@ -391,6 +447,7 @@ risk of dependent unification or SMT integration.
 - [session-types-guide.md](session-types-guide.md) -- Session types and protocol types
 - [effects-system-guide.md](effects-system-guide.md) -- Algebraic effects
 - [hkt-guide.md](hkt-guide.md) -- Higher-kinded types
+- [existential-types-guide.md](existential-types-guide.md) -- Existential types and `pack`/`open`
 - [gadts-guide.md](gadts-guide.md) -- GADTs
 - [sized-types-guide.md](sized-types-guide.md) -- Sized types
 - [contract-types-guide.md](contract-types-guide.md) -- Contract types
