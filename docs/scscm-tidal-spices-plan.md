@@ -35,7 +35,7 @@ character-level string scanning in the lexer stages; all higher-level logic is
 pure Turmeric. Each spice follows the standard layout:
 
 ```
-../turmeric-spices/<name>/
+../turmeric-spices/spices/<name>/
   build.tur
   src/<name>/*.tur
   tests/<name>/*_test.tur
@@ -381,22 +381,22 @@ Pbind output).
 
 ### Implementation phases
 
-- [ ] **TD0** -- `build.tur`; `tidal/event`: `event-new`, `event-onset`, `event-dur`,
+- [x] **TD0** -- `build.tur`; `tidal/event`: `event-new`, `event-onset`, `event-dur`,
   `event-value`, `event-free`; note-name -> MIDI integer parser (handles `c4`, `d#3`,
   `bb5`, raw integers, `~`); event-list helpers using stdlib cons
-- [ ] **TD1** -- `tidal/notation` (Phase 1): parse flat space-separated sequences;
+- [x] **TD1** -- `tidal/notation` (Phase 1): parse flat space-separated sequences;
   handle `~` rests; return a pattern that produces N equal-duration events per
   cycle; `parse-notation`, `notation-free`; `pattern-events` for a flat sequence
-- [ ] **TD2** -- `tidal/notation` (Phase 2): parse `[a b c]` subsequences
+- [x] **TD2** -- `tidal/notation` (Phase 2): parse `[a b c]` subsequences
   (subdivide the slot); parse `<a b c>` alternating groups (one element per cycle,
   advancing each cycle); nested `[...]` groupings
-- [ ] **TD3** -- `tidal/notation` (Phase 3): modifiers -- `a*n` (repeat), `a/n`
+- [x] **TD3** -- `tidal/notation` (Phase 3): modifiers -- `a*n` (repeat), `a/n`
   (slow/span), `a(n,k)` (Euclidean rhythm via Bjorklund algorithm), `a@w`
   (relative weight)
-- [ ] **TD4** -- `tidal/pattern` combinators: `pattern-fast`, `pattern-slow`,
+- [x] **TD4** -- `tidal/pattern` combinators: `pattern-fast`, `pattern-slow`,
   `pattern-stack`, `pattern-cat`, `pattern-rev`, `pattern-every`, `pattern-degrade`;
   multi-cycle `pattern-events` evaluation
-- [ ] **TD5** -- `tidal/render`: `render-pbind` (produces scscm text using
+- [x] **TD5** -- `tidal/render`: `render-pbind` (produces scscm text using
   `tur-scscm`'s `compile-text` on the generated scscm string), `render-sclang`
   (produces raw sclang directly), `render-events` (plain-text inspection table);
   tests; README section; `tidal-v0.1.0` tag
