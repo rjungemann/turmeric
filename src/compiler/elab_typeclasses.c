@@ -71,15 +71,25 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
 }
 
 /* F3-5: map a typed-collection struct identity to its eq-helper symbol.
- * Returns NULL if the struct is not a recognised typed collection. */
+ * Returns NULL if the struct is not a recognised typed collection.
+ *
+ * Each helper has the signature `(helper m1 m2 elem-cmp) -> bool`
+ * where elem-cmp is a function pointer comparing the OUTERMOST element
+ * type (Vec's element, Map's value, Set's member, etc.).  For Map's
+ * keys the helper relies on the HAMT's hash lookup -- key equality is
+ * via the hash + pointer/memcmp, which is correct for primitive keys.
+ * Recursive Map[K (Vec V)] etc. only need the V-comparator threaded
+ * recursively. */
 static const Symbol *helper_eq_symbol_for_struct(Elab *e, const StructDef *sd) {
     if (!sd || !sd->name) return NULL;
     if (strcmp(sd->name, "Vec") == 0) return intern_cstr(e->st, "tvec-eq?");
-    /* Future: Map, Set, Cons, Option, Result, Pair.  Each has a
-     * different helper signature -- Map's tmap-eq? takes a value
-     * comparator (one constraint resolved to V) but the dispatcher
-     * also needs to thread an Eq[K] dictionary for the hash table's
-     * key comparison.  Vec is the easy case with a single (Eq A). */
+    if (strcmp(sd->name, "Map") == 0) return intern_cstr(e->st, "tmap-eq?");
+    /* Set, Cons, Option, Result, Pair: helpers exist but each has a
+     * different signature.  `tset-eq?` takes no comparator (uses
+     * hash equality), `tpair-eq?` and `tresult-eq?` take two
+     * comparators (for the two type params).  Deferred until the
+     * synth path generalises to multi-constraint dispatch and to
+     * fixed-arity helpers without an element comparator. */
     return NULL;
 }
 
