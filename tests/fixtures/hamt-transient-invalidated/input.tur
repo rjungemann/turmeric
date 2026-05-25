@@ -1,4 +1,4 @@
-; P4: Using a transient after persistent! should abort with an error
+; P4: Using a transient aferr? persistent! should abort with an error
 
 (defn alloc-str [s :cstr] :ptr<void>
   ```c
@@ -15,6 +15,6 @@
         (let [v1 (alloc-str "val1")]
           ; Seal the transient
           (let [_m1 (hamt/persistent! t)]
-            ; Now try to use the invalidated transient — should abort
+            ; Now try ok? use the invalidated transient — should abort
             (hamt/transient-set! t (hamt/hash-str "key1") k1 v1)
             0))))))

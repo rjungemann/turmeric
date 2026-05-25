@@ -1,6 +1,6 @@
 (defn main [] :int
   (unsafe
-    ;; Allocate memory, write a value, then dereference to read it back
+    ;; Allocate memory, write a value, then dereference ok? read it back
     (let [p (raw-malloc 16)]
       (ptr-write p 99)
       (let [v (ptr-deref p)]

@@ -1,191 +1,243 @@
-;;; tur/map -- untyped map operations backed by a persistent HAMT.
+;;; tur/map -- typed Map[K V]: persistent hash map requiring Hash[K] and Eq[K].
 ;;;
-;;; Provides basic map operations for both mutable and persistent maps.
-;;; Prefer tur/tmap for typed Map[K V] operations in new code.
+;;; Backed by the persistent HAMT from tur/hamt.
 ;;;
-;;; Since: Phase P3
-;;; Deprecated: superseded by tur/tmap (Phase TM0)
-;; stdlib/map.tur -- Map operations (mutable and persistent)
-;;
-;; This module provides the basic map operations that can be used with both
-;; mutable and persistent maps. When a map is annotated with ^persistent,
-;; the compiler will lower these operations to HAMT calls automatically.
-;;
-;; For now, we delegate to hamt.tur functions (which is auto-loaded).
-;; See docs/hamt-plan.md Phase P3 for the lowering pass design.
-;;
-;; DEPRECATED: Phase TM0
-;; The untyped functions in this module (assoc, dissoc, get, has?, count, merge)
-;; are deprecated in favor of the typed Map[K V] API in stdlib/tmap.tur.
-;; These functions will be removed in the release cycle following TM0.
-;; Migration: replace (assoc m k v) with (tmap-assoc-h m (hash k) k v), etc.
+;;; Since: Phase TM0
+;; Phase TM0: Typed Map[K V]
+;; K must satisfy Hash[K] and Eq[K].
+;; Backed by the persistent HAMT (stdlib/hamt.tur).
+;; At runtime, a Map[K V] is a heap-allocated wrapper around a HAMT ptr<void>.
 
-;;; map-new -- create a new empty map.
+;; Internal C layout: struct { void *hamt; }
+
+;;; Map -- parameterized persistent map with key type K and value type V.
+;;;
+;;; Since: Phase TM0
+(defstruct Map [K V]
+  (hamt :ptr<void>))
+
+;;; map-new -- create a new empty typed map.
 ;;;
 ;;; Returns:
-;;;   Pointer to a freshly allocated, empty map backed by a persistent HAMT.
+;;;   An empty Map[K V].
 ;;;
 ;;; Example:
-;;;   (map-new)  ; => <map ptr>
+;;;   (map-new)  ; => empty Map
 ;;;
-;;;
-;;; Deprecated: Use tmap-new from stdlib/tmap.tur instead.
-;;; Since: Phase P3
-;; Create an empty map
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" map-new [] #{} :ptr<void>
-  (hamt/new))
+;;; Since: Phase TM0
+(defn map-new [] #{} :int
+  ```c
+  struct { void *hamt; } *m = malloc(sizeof(*m));
+  m->hamt = tur_hamt_new();
+  return (int64_t)(intptr_t)m;
+  ```)
 
-;;; assoc -- insert or update a key/value pair; returns a new map.
+;;; map-hamt -- internal accessor for the HAMT backing store.
+(defn map-hamt [m :int] #{} :ptr<void>
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return map->hamt;
+  ```)
+
+;;; map-wrap -- internal constructor from a HAMT pointer.
+(defn map-wrap [h :ptr<void>] #{} :int
+  ```c
+  struct { void *hamt; } *m = malloc(sizeof(*m));
+  m->hamt = (void*)(intptr_t)h;
+  return (int64_t)(intptr_t)m;
+  ```)
+
+;;; map-assoc -- insert or update a key/value pair; returns a new map.
 ;;;
 ;;; Parameters:
-;;;   m   -- source map pointer
-;;;   key -- key pointer (hashed by pointer identity)
-;;;   val -- value pointer
+;;;   m   -- source Map[K V]
+;;;   key -- key of type K (used as hash for scalar keys)
+;;;   val -- value of type V
 ;;;
 ;;; Returns:
-;;;   A new map with the entry inserted or updated. The original is unchanged.
+;;;   A new Map[K V] with the entry inserted or updated.
 ;;;
 ;;; Example:
-;;;   (assoc my-map k v)  ; => <new map ptr>
+;;;   (map-assoc my-map 1 100)  ; => updated map
 ;;;
-;;;
-;;; Deprecated: Use tmap-assoc from stdlib/tmap.tur instead.
-;;; Since: Phase P3
-;; Insert or update a key/value pair. Returns a new map.
-;; For persistent maps, this creates a new version with structural sharing.
-;; For mutable maps, this modifies the map in place (future phase).
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" assoc [m :ptr<void> key :ptr<void> val :ptr<void>] #{} :ptr<void>
-  (hamt/set m (hamt/hash-ptr key) key val))
+;;; Since: Phase TM0
+(defn map-assoc [m :int key :int val :int] #{} :int
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  void *new_hamt = tur_hamt_set(map->hamt, (int64_t)key, (void*)(intptr_t)key, (void*)(intptr_t)val);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
 
-;;; dissoc -- remove a key from the map; returns a new map.
+;;; map-assoc-h -- insert or update with an explicit hash; returns a new map.
 ;;;
 ;;; Parameters:
-;;;   m   -- source map pointer
-;;;   key -- key pointer to remove
+;;;   m   -- source Map[K V]
+;;;   h   -- precomputed hash of key (from Hash[K] typeclass)
+;;;   key -- key of type K
+;;;   val -- value of type V
 ;;;
 ;;; Returns:
-;;;   A new map with the key removed. The original is unchanged.
+;;;   A new Map[K V] with the entry inserted or updated.
 ;;;
 ;;; Example:
-;;;   (dissoc my-map k)  ; => <new map ptr>
+;;;   (map-assoc-h my-map (hash k) k v)  ; => updated map
 ;;;
-;;;
-;;; Deprecated: Use tmap-dissoc from stdlib/tmap.tur instead.
-;;; Since: Phase P3
-;; Delete a key. Returns a new map.
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" dissoc [m :ptr<void> key :ptr<void>] #{} :ptr<void>
-  (hamt/del m (hamt/hash-ptr key) key))
+;;; Since: Phase TM0
+(defn map-assoc-h [m :int h :int key :int val :int] #{} :int
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  void *new_hamt = tur_hamt_set(map->hamt, h, (void*)(intptr_t)key, (void*)(intptr_t)val);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
 
-;;; get -- look up a key and return its value, or NULL if absent.
+;;; map-dissoc -- remove a key from the map; returns a new map.
 ;;;
 ;;; Parameters:
-;;;   m   -- map pointer
-;;;   key -- key pointer to look up
+;;;   m   -- source Map[K V]
+;;;   h   -- precomputed hash of key
+;;;   key -- key of type K
 ;;;
 ;;; Returns:
-;;;   The value pointer for key, or NULL if the key is not in the map.
+;;;   A new Map[K V] with the key removed.
 ;;;
 ;;; Example:
-;;;   (get my-map k)  ; => <value ptr or NULL>
+;;;   (map-dissoc my-map (hash k) k)  ; => map without k
 ;;;
-;;;
-;;; Deprecated: Use tmap-get from stdlib/tmap.tur instead (returns Option[V]).
-;;; Since: Phase P3
-;; Get the value for a key. Returns NULL if not found.
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" get [m :ptr<void> key :ptr<void>] #{} :ptr<void>
-  (hamt/get m (hamt/hash-ptr key) key))
+;;; Since: Phase TM0
+(defn map-dissoc [m :int h :int key :int] #{} :int
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  void *new_hamt = tur_hamt_del(map->hamt, h, (void*)(intptr_t)key);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
 
-;;; has? -- check whether a key exists in the map.
+;;; map-get -- look up a key; returns the value or 0 if absent.
 ;;;
 ;;; Parameters:
-;;;   m   -- map pointer
-;;;   key -- key pointer to test
+;;;   m   -- Map[K V]
+;;;   h   -- precomputed hash of key
+;;;   key -- key of type K
+;;;
+;;; Returns:
+;;;   The value for the key, or 0 (none) if absent.
+;;;
+;;; Example:
+;;;   (map-get my-map (hash k) k)  ; => value or 0
+;;;
+;;; Since: Phase TM0
+(defn map-get [m :int h :int key :int] #{} :int
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return (int64_t)(intptr_t)tur_hamt_get(map->hamt, h, (void*)(intptr_t)key);
+  ```)
+
+;;; map-has? -- check whether a key exists in the map.
+;;;
+;;; Parameters:
+;;;   m   -- Map[K V]
+;;;   h   -- precomputed hash of key
+;;;   key -- key of type K
 ;;;
 ;;; Returns:
 ;;;   true if the key is present, false otherwise.
 ;;;
 ;;; Example:
-;;;   (has? my-map k)  ; => true
+;;;   (map-has? my-map (hash k) k)  ; => true or false
 ;;;
-;;;
-;;; Deprecated: Use tmap-has? from stdlib/tmap.tur instead.
-;;; Since: Phase P3
-;; Check if a key exists in the map.
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" has? [m :ptr<void> key :ptr<void>] #{} :bool
-  (hamt/has? m (hamt/hash-ptr key) key))
+;;; Since: Phase TM0
+(defn map-has? [m :int h :int key :int] #{} :bool
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return tur_hamt_has(map->hamt, h, (void*)(intptr_t)key);
+  ```)
 
-;;; count -- return the number of key/value pairs in the map.
+;;; map-count -- return the number of entries in the map.
 ;;;
 ;;; Parameters:
-;;;   m -- map pointer
+;;;   m -- Map[K V]
 ;;;
 ;;; Returns:
-;;;   Integer count of entries in the map.
+;;;   Integer count of key/value pairs.
 ;;;
 ;;; Example:
-;;;   (count my-map)  ; => 3
+;;;   (map-count my-map)  ; => 3
 ;;;
-;;;
-;;; Deprecated: Use tmap-count from stdlib/tmap.tur instead.
-;;; Since: Phase P3
-;; Get the number of key/value pairs in the map.
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" count [m :ptr<void>] #{} :int
-  (hamt/count m))
+;;; Since: Phase TM0
+(defn map-count [m :int] #{} :int
+  ```c
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return tur_hamt_count(map->hamt);
+  ```)
 
-;;; merge -- merge two maps; values from b win on key collision.
+;;; map-merge -- merge two maps; values from b win on key collision.
 ;;;
 ;;; Parameters:
-;;;   a -- first map pointer
-;;;   b -- second map pointer (wins on collision)
+;;;   a -- first Map[K V]
+;;;   b -- second Map[K V] (wins on collision)
 ;;;
 ;;; Returns:
-;;;   A new map containing all entries from a and b.
+;;;   A new Map[K V] containing all entries from both maps.
 ;;;
 ;;; Example:
-;;;   (merge map-a map-b)  ; => <merged map ptr>
+;;;   (map-merge map-a map-b)  ; => merged map
 ;;;
+;;; Since: Phase TM0
+(defn map-merge [a :int b :int] #{} :int
+  ```c
+  struct { void *hamt; } *ma = (void*)(intptr_t)a;
+  struct { void *hamt; } *mb = (void*)(intptr_t)b;
+  void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).
 ;;;
-;;; Deprecated: Use tmap-merge from stdlib/tmap.tur instead.
-;;; Since: Phase P3
-;; Merge two maps. b wins on collision.
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" merge [a :ptr<void> b :ptr<void>] #{} :ptr<void>
-  (hamt/merge a b))
+;;; Parameters:
+;;;   m -- Map[K V] to free
+;;;
+;;; Example:
+;;;   (map-free my-map)
+;;;
+;;; Since: Phase TM0
+(defn map-free [m :int] #{} :void
+  ```c
+  free((void*)(intptr_t)m);
+  ```)
 
 ;;; map-eq? -- compare two maps for structural equality using a value comparator.
 ;;;
 ;;; Parameters:
-;;;   m1      -- first map pointer
-;;;   m2      -- second map pointer
+;;;   m1      -- first Map[K V]
+;;;   m2      -- second Map[K V]
 ;;;   val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair
 ;;;
 ;;; Returns:
-;;;   true if both maps contain identical keys (by pointer identity) and
-;;;   all corresponding values satisfy val-cmp.
+;;;   true if both maps have identical keys and all corresponding values satisfy val-cmp.
 ;;;
 ;;; Example:
 ;;;   (map-eq? ma mb (fn [a b] (= a b)))  ; => true
 ;;;
-;;;
-;;; Deprecated: Use tmap-eq? from stdlib/tmap.tur instead (or the Eq[Map] instance).
-;;; Since: Phase P3
-;; Phase E1: map-eq? -- compare two maps for structural equality.
-;; Keys are compared by pointer identity (same limitation as hamt/get).
-;; val-cmp must be a fn [a :int b :int] :bool
-;; Known limitation: key equality uses pointer identity. Maps keyed by
-;; value-equal but distinct-address values will not compare correctly.
-;; A Phase E2 follow-on will accept a key-hash and key-cmp argument.
-(defn ^deprecated "see tmap-* in stdlib/tmap.tur" map-eq? [m1 m2 val-cmp] #{Unsafe} :bool
+;;; Since: Phase TM0
+(defn map-eq? [m1 :int m2 :int val-cmp] #{} :bool
   ```c
-  if (tur_hamt_count((void*)(intptr_t)m1) !=
-      tur_hamt_count((void*)(intptr_t)m2)) return false;
+  struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
+  struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
+  if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, (void*)(intptr_t)m1);
+  tur_hamt_iter_init(iter_buf, map1->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
   while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
-      void *val_in_b = tur_hamt_get(
-          (void*)(intptr_t)m2, (int64_t)hash_out, key_out);
+      void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
       if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
       bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
           (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
@@ -194,6 +246,10 @@
   tur_hamt_iter_free(iter_buf);
   return true;
   ```)
-;; Note: No (definstance Eq [map] ...) is provided in Phase E1.
-;; The Eq typeclass dispatch uses eq? with two arguments and cannot pass val-cmp.
-;; See Phase E2 task E2-6 for the constrained Eq[map] instance.
+
+;;; Eq [Map] -- structural equality using the value type's Eq instance.
+;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
+;; Constraints: (Eq K) ensures keys are comparable; (Eq V) uses integer equality.
+;; Note: element comparison uses integer equality; correct for all primitive K/V.
+(definstance Eq [Map] [(Eq K) (Eq V)]
+  (eq? [x y] (map-eq? x y (fn [a b] (= a b)))))

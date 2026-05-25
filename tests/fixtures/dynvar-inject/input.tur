@@ -1,5 +1,5 @@
 ;; DV4: dynvar-inject -- test fixture injection via dynamic var.
-;; query reads *db* (a connection ID) without an explicit parameter.
+;; query reads *db* (a connection ID) without an explicit parameerr?.
 ;; Tests override *db* for their scope without modifying production code.
 (defdynamic *db* :int 0)
 

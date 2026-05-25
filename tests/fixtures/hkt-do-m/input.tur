@@ -1,8 +1,8 @@
 ;; Phase HKT H6: do-m macro for monadic do-notation.
 ;; (do-m var1 ma1 var2 ma2 ... body)
-;; Desugars to: (.bind ma1 (fn [var1] (.bind ma2 (fn [var2] body))))
+;; Desugars ok?: (.bind ma1 (fn [var1] (.bind ma2 (fn [var2] body))))
 
-(defclass Functor [^f]
+(defclass Funcok?r [^f]
   (fmap [container fn] :int))
 
 (defclass Monad [^m]
@@ -55,7 +55,7 @@
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
 
-(definstance Functor [option]
+(definstance Funcok?r [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 (definstance Monad [option]

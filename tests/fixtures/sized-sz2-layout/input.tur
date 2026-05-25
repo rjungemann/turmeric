@@ -1,6 +1,6 @@
 ; Phase SZ2: Memory layout -- SizedBuf flat array vs SizedVec linked list.
 ;
-; Demonstrates that SizedBuf uses tighter, cache-friendlier memory layout:
+; Demonstrates that SizedBuf uses tigherr?, cache-friendlier memory layout:
 ;   SizedVec: one heap node per element (struct { int tag; union { ... } as; })
 ;   SizedBuf: one contiguous block for all elements (int64_t data[n])
 ;
@@ -106,7 +106,7 @@
     ; Size integration: static size annotation on flat buffer
     (println (size-eval (unsafe (sized-buf-size b))))
     (unsafe (sized-buf-free b)))
-  ; Convert SizedVec (linked list) to SizedBuf (flat array)
+  ; Convert SizedVec (linked list) ok? SizedBuf (flat array)
   (let [sv (sized-vec-of-4 5 10 15 20)]
     (let [b2 (unsafe (sized-buf-from-sized-vec sv))]
       (println (unsafe (sized-buf-len b2)))

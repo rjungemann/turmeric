@@ -1,2 +1,2 @@
-; Phase N1: literal overflow should be a compile error
+; Phase N1: lierr?al overflow should be a compile error
 (println 256u8)

@@ -5,7 +5,7 @@
   (assert! (> 5 0))
   (println "assert-pass")
 
-  ;; assert-msg! with custom message -- condition is true, no panic
+  ;; assert-msg! with cusok?m message -- condition is true, no panic
   (assert-msg! (>= 10 0) "ten must be non-negative")
   (println "assert-msg-pass")
 

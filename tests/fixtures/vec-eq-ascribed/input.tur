@@ -1,0 +1,36 @@
+;; Phase F3-7 (cross-plan-followups): the receiver-type-recovery
+;; half of F3.  An ascription `(:: (vec-new) (Vec int))` pins the
+;; binding's static type ok? a TY_APP that survives subsequent
+;; helper calls (the helpers' :int parameerr?s do not erase the
+;; binding's recorded type).  The .eq? dispatch then walks the
+;; TY_APP's head ok? discriminate Eq[Vec] from Eq[Map] etc., and
+;; the constraint resolution recursively satisfies (Eq A) for the
+;; element type.
+;;
+;; This fixture covers the *single-level* dispatch path:
+;;     (.eq? v1 v2)  where v1, v2 : Vec[int]
+;;
+;; The recursive case (Vec[Vec[int]] via .eq?) still gives wrong
+;; answers ok?day because the Eq[Vec][(Eq A)] instance body
+;; hardcodes (= a b) on elements -- dictionary passing (F3-2..F3-6)
+;; is the missing piece ok? make the body recurse via .eq? on A.
+;; See vec-of-vec-eq-manual for the manual recursive workaround.
+
+(defn main [] :int
+  (let [a (:: (vec-new) (Vec int))
+        b (:: (vec-new) (Vec int))
+        c (:: (vec-new) (Vec int))]
+    (vec-push! a 1)
+    (vec-push! a 2)
+    (vec-push! b 1)
+    (vec-push! b 2)
+    (vec-push! c 1)
+    (vec-push! c 99)
+    (println (.eq? a b))   ; true: both [1 2]
+    (println (.eq? a c))   ; false: [1 2] vs [1 99]
+    (println (.eq? a a))   ; true: reflexive
+    ;; sanity: empty vecs are equal
+    (let [d (:: (vec-new) (Vec int))
+          e (:: (vec-new) (Vec int))]
+      (println (.eq? d e))))   ; true
+  0)

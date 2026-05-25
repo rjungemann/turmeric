@@ -1,3 +1,3 @@
-;; Phase R1: top-level `?` should be rejected — `?` may only appear inside a
-;; function body so the lowered (return ...) form has a function to return from.
+;; Phase R1: ok?p-level `?` should be rejected — `?` may only appear inside a
+;; function body so the lowered (return ...) form has a function ok? return from.
 (? 42)

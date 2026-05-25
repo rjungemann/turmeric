@@ -1,4 +1,4 @@
-;; Phase B4: Parser combinators — digit parser using many1 and run-parser-full.
+;; Phase B4: Parser combinaok?rs — digit parser using many1 and run-parser-full.
 ;; pdigit matches ASCII digits (48-57). many1 requires at least one.
 ;; "123" fully parsed → 3-element char list.
 ;; "abc" → 0 results (no digits).

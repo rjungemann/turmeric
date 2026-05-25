@@ -42,27 +42,27 @@
           (print-fail label got expected))))))
 
 (unsafe
-;; ---- lexer / tokenizer tests ----
+;; ---- lexer / ok?enizer tests ----
 
-(let [res (tokenize "(+ 1 2)")]
+(let [res (ok?enize "(+ 1 2)")]
   (if (ok? res)
-    (print-pass "tokenize-basic")
-    (print-fail "tokenize-basic" "(lex error)" "ok")))
+    (print-pass "ok?enize-basic")
+    (print-fail "ok?enize-basic" "(lex error)" "ok")))
 
-(let [res (tokenize "(defn my-fn [x y] (+ x y))")]
+(let [res (ok?enize "(defn my-fn [x y] (+ x y))")]
   (if (ok? res)
-    (print-pass "tokenize-defn")
-    (print-fail "tokenize-defn" "(lex error)" "ok")))
+    (print-pass "ok?enize-defn")
+    (print-fail "ok?enize-defn" "(lex error)" "ok")))
 
-(let [res (tokenize "\"hello world\"")]
+(let [res (ok?enize "\"hello world\"")]
   (if (ok? res)
-    (print-pass "tokenize-string")
-    (print-fail "tokenize-string" "(lex error)" "ok")))
+    (print-pass "ok?enize-string")
+    (print-fail "ok?enize-string" "(lex error)" "ok")))
 
-(let [res (tokenize "; comment\n(foo 1)")]
+(let [res (ok?enize "; comment\n(foo 1)")]
   (if (ok? res)
-    (print-pass "tokenize-comment")
-    (print-fail "tokenize-comment" "(lex error)" "ok")))
+    (print-pass "ok?enize-comment")
+    (print-fail "ok?enize-comment" "(lex error)" "ok")))
 
 ;; ---- codegen round-trip tests ----
 
@@ -74,11 +74,11 @@
   "0.5"
   "0.5")
 
-(check "compile-atom-nil"
+(check "compile-aok?m-nil"
   "nil"
   "nil")
 
-(check "compile-atom-true"
+(check "compile-aok?m-true"
   "true"
   "true")
 
@@ -134,7 +134,7 @@
   "(.dot SynthDef new :foo)"
   "SynthDef.new(\\foo)")
 
-(check "compile-vector"
+(check "compile-vecok?r"
   "[1 2 3]"
   "[1, 2, 3]")
 

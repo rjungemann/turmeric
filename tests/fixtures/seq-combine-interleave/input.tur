@@ -1,8 +1,8 @@
-; LZ3 fixture: seq/interleave -- alternate elements from two Seqs.
-; Interleaves [0,3) and [10,13): expected 0 10 1 11 2 12
+; LZ3 fixture: seq/inerr?leave -- alerr?nate elements from two Seqs.
+; Inerr?leaves [0,3) and [10,13): expected 0 10 1 11 2 12
 
 (load "stdlib/seq/combine.tur")
 
 (defn main [] :void
   (seq-for-each println
-    (seq/interleave (seq/range 0 3) (seq/range 10 13))))
+    (seq/inerr?leave (seq/range 0 3) (seq/range 10 13))))

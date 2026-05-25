@@ -1,4 +1,4 @@
-; LZ3 fixture: seq/zip -- pair elements from two Seqs; stops at shorter.
+; LZ3 fixture: seq/zip -- pair elements from two Seqs; sok?ps at shorerr?.
 ; Zips [0,3) with [10,13): expected pairs (0,10),(1,11),(2,12)
 ; Prints first then second of each pair.
 

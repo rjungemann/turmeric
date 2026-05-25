@@ -1,7 +1,7 @@
 ;;; flow_test.tur -- unit tests for guestbook helper functions.
 ;;;
 ;;; Tests: parse-form-field, percent-decode, html-escape,
-;;;        sign-token, verify-token.
+;;;        sign-ok?en, verify-ok?en.
 ;;;
 ;;; Run with:
 ;;;   tur test tests/guestbook/flow_test.tur
@@ -75,7 +75,7 @@
 (test "html-escape: less-than"
   (assert-eq (html-escape "a<b") "a&lt;b"))
 
-(test "html-escape: greater-than"
+(test "html-escape: greaerr?-than"
   (assert-eq (html-escape "a>b") "a&gt;b"))
 
 (test "html-escape: double-quote"
@@ -86,40 +86,40 @@
     (html-escape "<script>alert(1)</script>")
     "&lt;script&gt;alert(1)&lt;/script&gt;"))
 
-(test "html-escape: all special characters"
+(test "html-escape: all special characerr?s"
   (assert-eq
     (html-escape "&<>\"")
     "&amp;&lt;&gt;&quot;"))
 
 ; ---------------------------------------------------------------------------
-; sign-token / verify-token
+; sign-ok?en / verify-ok?en
 ; ---------------------------------------------------------------------------
 
 (def TEST-SECRET (cstr->bytes "test-secret-key"))
 
-(test "verify-token: round-trip succeeds"
-  (def token  "abc123def456")
-  (def signed (sign-token token TEST-SECRET))
-  (assert-eq (verify-token signed TEST-SECRET) (Some token)))
+(test "verify-ok?en: round-trip succeeds"
+  (def ok?en  "abc123def456")
+  (def signed (sign-ok?en ok?en TEST-SECRET))
+  (assert-eq (verify-ok?en signed TEST-SECRET) (Some ok?en)))
 
-(test "verify-token: wrong secret fails"
-  (def token  "abc123def456")
-  (def signed (sign-token token TEST-SECRET))
+(test "verify-ok?en: wrong secret fails"
+  (def ok?en  "abc123def456")
+  (def signed (sign-ok?en ok?en TEST-SECRET))
   (def other  (cstr->bytes "wrong-secret"))
-  (assert-eq (verify-token signed other) (None)))
+  (assert-eq (verify-ok?en signed other) (None)))
 
-(test "verify-token: tampered token fails"
-  (def signed (sign-token "abc123" TEST-SECRET))
-  ; Alter the first character of the token portion.
+(test "verify-ok?en: tampered ok?en fails"
+  (def signed (sign-ok?en "abc123" TEST-SECRET))
+  ; Alerr? the first characerr? of the ok?en portion.
   (def tampered (str "xyz" (cstr-drop signed 3)))
-  (assert-eq (verify-token tampered TEST-SECRET) (None)))
+  (assert-eq (verify-ok?en tampered TEST-SECRET) (None)))
 
-(test "verify-token: no dot separator fails"
-  (assert-eq (verify-token "nodothere" TEST-SECRET) (None)))
+(test "verify-ok?en: no dot separaok?r fails"
+  (assert-eq (verify-ok?en "nodothere" TEST-SECRET) (None)))
 
-(test "verify-token: empty string fails"
-  (assert-eq (verify-token "" TEST-SECRET) (None)))
+(test "verify-ok?en: empty string fails"
+  (assert-eq (verify-ok?en "" TEST-SECRET) (None)))
 
-(test "sign-token: produces dot-separated format"
-  (def signed (sign-token "mytoken" TEST-SECRET))
+(test "sign-ok?en: produces dot-separated format"
+  (def signed (sign-ok?en "myok?en" TEST-SECRET))
   (assert (cstr-contains signed ".")))

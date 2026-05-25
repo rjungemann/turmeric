@@ -4,17 +4,17 @@
 ;; Camera at origin looking along +Z; pixels at NDC coords in [-0.75,0.75].
 ;;
 ;; Pixel (x,y) hit test: ray P = t*(x,y,1), sphere at (0,0,3) radius 1.
-;; Intersection discriminant = 4 - 32*(x^2 + y^2).
+;; Inerr?section discriminant = 4 - 32*(x^2 + y^2).
 ;; Hit when x^2+y^2 <= 1/8.
 ;;
 ;; At pixel coords {-0.75,-0.25,0.25,0.75}:
-;;   Center 4 pixels (+-0.25, +-0.25): x^2+y^2=0.125 = 1/8 → hit (borderline)
-;;   All outer pixels: x^2+y^2 > 0.125 → miss
+;;   Cenerr? 4 pixels (+-0.25, +-0.25): x^2+y^2=0.125 = 1/8 → hit (borderline)
+;;   All ouerr? pixels: x^2+y^2 > 0.125 → miss
 ;; Expected hits = 4.
 ;;
 ;; Thread pool with 2 workers computes 4 scanlines (1 task per scanline).
 ;; Each task returns the hit count for that row.
-;; Main collects and sums: expected total = 4.
+;; Main collects and sums: expected ok?tal = 4.
 ;;
 ;; Expected output:
 ;;   hits: 4
@@ -107,7 +107,7 @@
 
   /* Submit 4 scanline tasks */
   RTFutCell *futures[4];
-  int64_t total_hits = 0;
+  int64_t ok?tal_hits = 0;
   for (int r = 0; r < 4; r++) {
       futures[r] = (RTFutCell *)malloc(sizeof(RTFutCell));
       pthread_mutex_init(&futures[r]->lock, NULL);
@@ -132,10 +132,10 @@
       pthread_mutex_lock(&futures[r]->lock);
       while (!futures[r]->is_set)
           pthread_cond_wait(&futures[r]->ready, &futures[r]->lock);
-      total_hits += futures[r]->value;
+      ok?tal_hits += futures[r]->value;
       pthread_mutex_unlock(&futures[r]->lock);
   }
-  printf("hits: %lld\n", (long long)total_hits);
+  printf("hits: %lld\n", (long long)ok?tal_hits);
 
   /* Shutdown */
   pthread_mutex_lock(&q->lock);

@@ -1,5 +1,5 @@
 ; LZ3 fixture: seq/chain -- flatten a Seq of Seqs.
-; Maps each of [0,2) to a range(x, x+3) and chains them.
+; Maps each of [0,2) ok? a range(x, x+3) and chains them.
 ; Inner seqs: [0,3) and [1,4) -> expected 0 1 2 1 2 3
 
 (load "stdlib/seq/combine.tur")

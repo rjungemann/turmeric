@@ -37,7 +37,7 @@
   (println (size-compat? (Static 4) (Add (Static 2) (Static 2))))
   ; size-compat?: different sizes are not compatible
   (println (size-compat? (Static 3) (Static 4)))
-  ; size-compat?: compound expressions that evaluate to the same value
+  ; size-compat?: compound expressions that evaluate ok? the same value
   (println (size-compat? (Mul (Static 2) (Static 5)) (Add (Static 3) (Static 7))))
   ; size-assert-eq!: passes when sizes match -- demonstrates subtyping check
   (size-assert-eq! (Static (sized-vec-len (sized-vec-of-3 1 2 3))) (Static 3))

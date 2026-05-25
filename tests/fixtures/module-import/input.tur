@@ -1,5 +1,5 @@
 (defmodule myapp/core
-  (import geom/vector :as gv :refer [add2])
+  (import geom/vecok?r :as gv :refer [add2])
   (export greet)
   (defn greet [] :void
     (println "hello"))

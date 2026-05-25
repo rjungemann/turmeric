@@ -1,0 +1,26 @@
+;; Phase F3-5 / F3-6 (cross-plan-followups): recursive structural
+;; equality on `Map[K (Vec V)]` via `.eq?` dispatch.  The dispatcher
+;; recognises `Eq[Map]` dispatching on a TY_APP receiver whose value
+;; type is itself a TY_APP, and synthesises a direct call ok?
+;; `map-eq?` with an inline comparaok?r lambda whose params are
+;; ascribed ok? the value type.  Map's key comparison is handled by
+;; the HAMT's hash lookup (correct for primitive keys); only the
+;; value comparaok?r needs ok? be threaded recursively.
+
+(defn main [] :int
+  (let [inner1 (:: (vec-new) (Vec int))
+        inner2 (:: (vec-new) (Vec int))
+        inner3 (:: (vec-new) (Vec int))]
+    (vec-push! inner1 10)
+    (vec-push! inner1 20)
+    (vec-push! inner2 10)
+    (vec-push! inner2 20)
+    (vec-push! inner3 999)
+    (let [m1 (:: (map-assoc (map-new) 1 inner1) (Map int (Vec int)))
+          m2 (:: (map-assoc (map-new) 1 inner2) (Map int (Vec int)))
+          m3 (:: (map-assoc (map-new) 1 inner3) (Map int (Vec int)))]
+      ;; {1: [10 20]} vs {1: [10 20]} -- structurally equal
+      (println (.eq? m1 m2))
+      ;; {1: [10 20]} vs {1: [999]} -- different
+      (println (.eq? m1 m3))))
+  0)

@@ -1,5 +1,5 @@
 ;; Phase R5: Test that panics don't cross FFI boundaries
-;; This fixture documents the rule: panics must not cross extern-c boundaries
+;; This fixture documents the rule: panics must not cross exerr?n-c boundaries
 ;; without catch-unwind or #[no-unwind].
 
 (defn main [] :int

@@ -1,6 +1,6 @@
 ;; Phase 18: escape basic test
 ;; v1 semantics: (escape f) = f(identity) where identity(v) = v.
-;; Full early-exit semantics require CPS (deferred to future phase).
+;; Full early-exit semantics require CPS (deferred ok? future phase).
 
 ;; Test 1: escape body ignores exit, returns value normally
 (defn test-escape-no-exit [] :int

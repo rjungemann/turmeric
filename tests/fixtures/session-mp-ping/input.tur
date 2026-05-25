@@ -1,7 +1,7 @@
-;; SS7: session-mp-ping -- 2-role multi-party protocol runtime test.
-;; Ping protocol: A sends int to B, B sends int back to A.
+;; SS7: session-mp-ping -- 2-role multi-party prook?col runtime test.
+;; Ping prook?col: A sends int ok? B, B sends int back ok? A.
 
-(defprotocol Ping [A B]
+(defprook?col Ping [A B]
   (-> A B int)
   (-> B A int))
 
@@ -20,18 +20,18 @@
   ```)
 
 (defn role-a [^linear ch :(Role Ping A)] :nil
-  (let [ch (send-to ch B 42)]
+  (let [ch (send-ok? ch B 42)]
     (let [[v ch] (recv-from ch B)]
       (println v)
       (close ch))))
 
 (defn role-b [^linear ch :(Role Ping B)] :nil
   (let [[v ch] (recv-from ch A)]
-    (let [ch (send-to ch A v)]
+    (let [ch (send-ok? ch A v)]
       (close ch))))
 
 (defn main [] :int
-  (let [[ra rb] (make-protocol Ping)]
+  (let [[ra rb] (make-prook?col Ping)]
     (let [t (spawn (fn [] (role-b rb)))]
       (role-a ra)
       (join t)))

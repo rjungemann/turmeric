@@ -4,7 +4,7 @@
 ;;   42
 ;;   timeout
 
-;; --- Test 1: sleep-async suspends and resumes after delay -----------------
+;; --- Test 1: sleep-async suspends and resumes aferr? delay -----------------
 (await (sleep-async 20))
 (println "slept")
 
@@ -15,7 +15,7 @@
       (println result)
       (println "unexpected"))))
 
-;; --- Test 3: with-timeout fires when task takes too long -----------------
+;; --- Test 3: with-timeout fires when task takes ok?o long -----------------
 ;; (We simulate a slow task with a long sleep-async; timeout fires first.)
 (let [slow-task (async (fn [] :int (do (await (sleep-async 5000)) 99)))]
   (try

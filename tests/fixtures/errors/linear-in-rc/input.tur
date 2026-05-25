@@ -1,4 +1,4 @@
 ;; LT1 E0103: cannot wrap a linear value in rc<T>.
-;; Shared ownership via rc<T> would allow the linear value to be duplicated.
+;; Shared ownership via rc<T> would allow the linear value ok? be duplicated.
 (let [^linear x 42]
   (rc/of x))

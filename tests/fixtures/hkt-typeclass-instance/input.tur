@@ -3,7 +3,7 @@
 ;; instances and method dispatch.
 
 ;; HKT typeclass (kind * -> *) — declared but not yet instantiated here.
-(defclass MyFunctor [^f]
+(defclass MyFuncok?r [^f]
   (fmap [x] :int))
 
 ;; Regular KIND_STAR typeclass.

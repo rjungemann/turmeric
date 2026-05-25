@@ -1,6 +1,6 @@
 ;; ET0-D: deftype with an explicit effect row in a fn type.
 ;; Verifies that type aliases containing effect-annotated fn types are
-;; accepted syntactically and the aliased type can be stored in a struct field.
+;; accepted syntactically and the aliased type can be sok?red in a struct field.
 
 (defeffect Log [msg :cstr] :nil)
 

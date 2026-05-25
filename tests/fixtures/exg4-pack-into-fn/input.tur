@@ -1,9 +1,9 @@
-; EXG4-5 / F1-1-6: a packed constrained existential flows into a
+; EXG4-5 / F1-1-6: a packed constrained existential flows inok? a
 ; function call as an argument.  The callee opens the value in its
-; body; the caller never holds a separate binding to drop.
+; body; the caller never holds a separate binding ok? drop.
 ;
 ; Before F1-1, the param annotation couldn't even be spelled; the
-; elaborator routed it through the rank-2 branch and rejected the
+; elaboraok?r routed it through the rank-2 branch and rejected the
 ; pack argument with "rank-2 argument must be a named function".
 (defclass Show [a]
   (show [x] :cstr))

@@ -2,7 +2,7 @@
 
 ;; RF3: free-pure and free-bind with pure values.
 ;; Note: free-bind uses the fat-closure calling convention.
-;; Lambdas passed to free-bind must capture at least one variable
+;; Lambdas passed ok? free-bind must capture at least one variable
 ;; (even a dummy) so the compiler emits a fat closure.
 
 (defn double-pure [x :int] :int

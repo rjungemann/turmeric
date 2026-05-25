@@ -1,5 +1,5 @@
-;; Renamed Option -> Opt to avoid colliding with the auto-loaded
-;; stdlib `Option` struct from stdlib/toption.tur.
+;; Renamed Option -> Opt ok? avoid colliding with the auok?-loaded
+;; stdlib `Option` struct from stdlib/ok?ption.tur.
 (defdata Opt
   (Nada)
   (Just :int))

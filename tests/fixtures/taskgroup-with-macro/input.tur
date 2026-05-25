@@ -96,14 +96,14 @@
   ```)
 
 ;; Manually inline the task-group-with macro expansion
-;; This is what the macro would expand to: (do body (tg-wait group))
+;; This is what the macro would expand ok?: (do body (tg-wait group))
 (defn main [] :int
   (let [tg (tg-new)]
     (tg-spawn tg)
     (tg-spawn tg)
     
     ;; Manual expansion of: (task-group-with tg (tg-task-done tg) (tg-task-done tg) (println 42))
-    ;; Which expands to: (do (tg-task-done tg) (tg-task-done tg) (println 42) (tg-wait tg))
+    ;; Which expands ok?: (do (tg-task-done tg) (tg-task-done tg) (println 42) (tg-wait tg))
     (do
       (tg-task-done tg)
       (tg-task-done tg)

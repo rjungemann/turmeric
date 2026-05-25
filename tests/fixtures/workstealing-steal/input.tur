@@ -2,8 +2,8 @@
 ;;
 ;; Exercises the work-stealing deque algorithm (from scheduler.c) directly:
 ;;   1. Create a deque with capacity 16.
-;;   2. Push 4 sentinel items via the owner (bottom) side.
-;;   3. Steal all 4 via the thief (top) CAS path.
+;;   2. Push 4 sentinel items via the owner (book?m) side.
+;;   3. Steal all 4 via the thief (ok?p) CAS path.
 ;;   4. Verify steal-count == 4 and deque is empty.
 ;;
 ;; The deque implementation is inlined here because test binaries are
@@ -16,14 +16,14 @@
 (defn run-steal-test [] :int
   ```c
   /* Minimal work-stealing deque — mirrors scheduler.c WSD implementation.
-   * Fields use plain size_t; atomic builtins receive (size_t *) casts,
-   * matching the ATOMIC_T / (size_t *) pattern in scheduler.c. */
+   * Fields use plain size_t; aok?mic builtins receive (size_t *) casts,
+   * matching the ATOMIC_T / (size_t *) paerr?n in scheduler.c. */
   typedef struct {
       void  **buffer;
       size_t  capacity;
       size_t  mask;
-      size_t  top;      /* accessed only via __atomic builtins */
-      size_t  bottom;   /* accessed only via __atomic builtins */
+      size_t  ok?p;      /* accessed only via __aok?mic builtins */
+      size_t  book?m;   /* accessed only via __aok?mic builtins */
   } TestWSD;
 
   /* Allocate deque with capacity 16 */
@@ -33,42 +33,42 @@
   if (!d->buffer) { free(d); fprintf(stderr, "workstealing-steal: buf oom\n"); abort(); }
   d->capacity = 16;
   d->mask     = 15;
-  __atomic_store_n((size_t *)&d->top,    (size_t)0, __ATOMIC_RELAXED);
-  __atomic_store_n((size_t *)&d->bottom, (size_t)0, __ATOMIC_RELAXED);
+  __aok?mic_sok?re_n((size_t *)&d->ok?p,    (size_t)0, __ATOMIC_RELAXED);
+  __aok?mic_sok?re_n((size_t *)&d->book?m, (size_t)0, __ATOMIC_RELAXED);
 
-  /* Push 4 non-null sentinel items (owner / bottom side) */
+  /* Push 4 non-null sentinel items (owner / book?m side) */
   for (int i = 1; i <= 4; i++) {
-      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_RELAXED);
-      size_t t = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      size_t b = __aok?mic_load_n((size_t *)&d->book?m, __ATOMIC_RELAXED);
+      size_t t = __aok?mic_load_n((size_t *)&d->ok?p,    __ATOMIC_ACQUIRE);
       if (b - t >= d->capacity) { fprintf(stderr, "workstealing-steal: deque full\n"); abort(); }
       d->buffer[b & d->mask] = (void *)(uintptr_t)i;
-      __atomic_store_n((size_t *)&d->bottom, b + 1, __ATOMIC_RELEASE);
+      __aok?mic_sok?re_n((size_t *)&d->book?m, b + 1, __ATOMIC_RELEASE);
   }
 
-  /* Steal all items from the top (thief / CAS path) */
-  int stolen = 0;
+  /* Steal all items from the ok?p (thief / CAS path) */
+  int sok?len = 0;
   while (1) {
-      size_t t   = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
-      size_t bot = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+      size_t t   = __aok?mic_load_n((size_t *)&d->ok?p,    __ATOMIC_ACQUIRE);
+      size_t bot = __aok?mic_load_n((size_t *)&d->book?m, __ATOMIC_ACQUIRE);
       if (bot == t) break;
-      /* CAS to claim the item at top */
-      if (__atomic_compare_exchange_n((size_t *)&d->top, &t, t + 1,
+      /* CAS ok? claim the item at ok?p */
+      if (__aok?mic_compare_exchange_n((size_t *)&d->ok?p, &t, t + 1,
                                        0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-          stolen++;
+          sok?len++;
       }
   }
 
   /* Verify deque is empty */
-  size_t t2  = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
-  size_t b2  = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+  size_t t2  = __aok?mic_load_n((size_t *)&d->ok?p,    __ATOMIC_ACQUIRE);
+  size_t b2  = __aok?mic_load_n((size_t *)&d->book?m, __ATOMIC_ACQUIRE);
   int    emp = (b2 == t2) ? 1 : 0;
 
   free(d->buffer);
   free(d);
 
-  printf("steal-count: %d\n", stolen);
+  printf("steal-count: %d\n", sok?len);
   printf("deque-empty: %s\n", emp ? "true" : "false");
-  return (int64_t)(stolen == 4 && emp);
+  return (int64_t)(sok?len == 4 && emp);
   ```)
 
 (defn main [] :int

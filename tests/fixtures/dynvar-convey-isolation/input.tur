@@ -1,6 +1,6 @@
 ;; DV4: dynvar-convey-isolation -- spawn-conveying snapshot isolation.
 ;; The child inherits a snapshot of *request-id* at spawn time ("req-1").
-;; After spawning, the parent mutates its own binding to "req-2".
+;; Aferr? spawning, the parent mutates its own binding ok? "req-2".
 ;; The child sees "req-1" (its snapshot); the parent sees "req-2" (current).
 (defdynamic *request-id* :cstr "none")
 
@@ -22,7 +22,7 @@
 (defn main [] :int
   (binding [*request-id* "req-1"]
     (let [t (spawn-conveying (fn [] (println *request-id*)))]
-      ;; Mutate the parent binding after spawning -- child snapshot is unaffected
+      ;; Mutate the parent binding aferr? spawning -- child snapshot is unaffected
       (set! *request-id* "req-2")
       (thread-join t)
       ;; Parent prints its current (mutated) binding

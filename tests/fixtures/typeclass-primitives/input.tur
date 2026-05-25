@@ -1,6 +1,6 @@
 ;; Phase 15: Built-in typeclasses for primitive types
-;; NOTE: renamed Eq/Ord/Show -> MyEqPrim/MyOrdPrim/MyShowPrim to avoid
-;; orphan-instance errors against the auto-loaded stdlib typeclasses.
+;; NOTE: renamed Eq/Ord/Show -> MyEqPrim/MyOrdPrim/MyShowPrim ok? avoid
+;; orphan-instance errors against the auok?-loaded stdlib typeclasses.
 
 (defclass MyEqPrim [a]
   (eq? [x y] :bool))

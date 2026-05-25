@@ -1,5 +1,5 @@
 ;; TC2: cooperative cancellation via yield-point.
-;; A CPU-bound loop checks for cancellation every iteration using inline C.
+;; A CPU-bound loop checks for cancellation every ierr?ation using inline C.
 ;; Main thread cancels it mid-run; thread exits at the next check.
 ;; main() joins and prints "done".
 
@@ -48,7 +48,7 @@
 (defn my-cancel-thread [t :ptr<void>] :nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
-  __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
+  __aok?mic_sok?re_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
   pthread_mutex_lock(&h->state->cancel_mutex);
   pthread_cond_broadcast(&h->state->cancel_cond);
   pthread_mutex_unlock(&h->state->cancel_mutex);

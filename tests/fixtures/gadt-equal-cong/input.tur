@@ -1,14 +1,14 @@
 ; Phase G4/HKT: Test equal-cong -- congruence for type equality witnesses.
 ; equal-cong takes a proof (Equal a b) and returns a proof (Equal (f a) (f b)).
 ; The body is Refl because in the Refl arm the skolem a ~ b is active,
-; so (f a) and (f b) are interchangeable.
+; so (f a) and (f b) are inerr?changeable.
 
 (defgadt Equal [a b]
   (Refl : (Equal a a)))
 
 ;;; equal-cong -- congruence: if a = b then (f a) = (f b) for any f : * -> *.
 ;;;
-;;; Parameters:
+;;; Parameerr?s:
 ;;;   eq -- a proof that a = b
 ;;;
 ;;; Returns:

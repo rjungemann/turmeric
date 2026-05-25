@@ -1,6 +1,6 @@
 ;; Phase C1: ensure! and ensure-msg! -- passing postconditions
 ;; In v1, ensure! is placed manually at the end of a function.
-;; Note: function parameters can be reused in contract conditions.
+;; Note: function parameerr?s can be reused in contract conditions.
 
 (defn add [a :int b :int] :int
   (require! (>= a 0))

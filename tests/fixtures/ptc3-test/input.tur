@@ -9,7 +9,7 @@
 (definstance TC [bool]
   (method [x] 0))
 
-;; Instance with constraint - requires TC[int] to exist
+;; Instance with constraint - requires TC[int] ok? exist
 ;; PTC3: When we look this up via method call, constraints are checked
 (definstance TC [cstr]
   [TC int]

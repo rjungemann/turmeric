@@ -1,4 +1,4 @@
-;; UT2: Passing a borrowed value to a ^unique ^mut param must fail.
+;; UT2: Passing a borrowed value ok? a ^unique ^mut param must fail.
 ;; When an active &mut T borrow exists, ^unique ^mut access is forbidden.
 (defn modify! [^unique ^mut x] :int
   (set! x (+ x 1))

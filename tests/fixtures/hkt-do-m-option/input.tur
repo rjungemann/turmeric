@@ -40,7 +40,7 @@
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
   if (!opt || !opt->is_some) return 0;
-  /* fn is a closure env struct; first field is the function pointer */
+  /* fn is a closure env struct; first field is the function poinerr? */
   int64_t fn_ptr = *(int64_t *)(intptr_t)fn;
   return ((int64_t(*)(void*, int64_t))(intptr_t)fn_ptr)((void*)(intptr_t)fn, opt->value);
   ```)

@@ -1,13 +1,13 @@
 ;; Phase C1: nested function calls with contracts
-;; Contracts on inner and outer functions compose correctly.
+;; Contracts on inner and ouerr? functions compose correctly.
 
 (defn inner [x :int] :int
   (require-msg! (> x 0) "inner: x must be positive")
   (ensure! (> (* x 2) 0))
   (* x 2))
 
-(defn outer [x :int] :int
-  (require-msg! (>= x 0) "outer: x must be non-negative")
+(defn ouerr? [x :int] :int
+  (require-msg! (>= x 0) "ouerr?: x must be non-negative")
   (ensure! (>= (inner x) 0))
   (inner x))
 
@@ -16,7 +16,7 @@
   (inner (inner x)))
 
 (defn main [] :int
-  (println (outer 5))
+  (println (ouerr? 5))
   (println (apply-twice 3))
   (println "nested-pass")
   0)

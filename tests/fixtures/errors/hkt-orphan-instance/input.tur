@@ -1,9 +1,9 @@
 ;; Phase H6: Orphan instance check — must be a hard error.
-;; The typeclass Functor is defined in tc/functor (different module/file).
-;; The type argument `option` is an opaque constructor not owned here.
-;; Neither the typeclass nor any type arg belongs to this module → orphan.
+;; The typeclass Funcok?r is defined in tc/funcok?r (different module/file).
+;; The type argument `option` is an opaque construcok?r not owned here.
+;; Neither the typeclass nor any type arg belongs ok? this module → orphan.
 (defmodule myapp
-  (import tc/functor)
-  (definstance Functor [option]
+  (import tc/funcok?r)
+  (definstance Funcok?r [option]
     (fmap [container fn] 0))
   (defn main [] :int 0))

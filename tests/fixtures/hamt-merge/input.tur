@@ -1,7 +1,7 @@
 ;;
 ;; Phase P1: HAMT merge test
 
-(extern-c free [p :ptr] :void)
+(exerr?n-c free [p :ptr] :void)
 
 (defn ptr= [a :ptr b :ptr] :bool
   ```c

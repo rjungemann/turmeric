@@ -23,5 +23,5 @@
 (defn main [] :int
   (do
     (println (u-result-must (u-ok 7)))
-    (println (u-result-must-msg (u-ok 13) "custom msg"))
+    (println (u-result-must-msg (u-ok 13) "cusok?m msg"))
     0))

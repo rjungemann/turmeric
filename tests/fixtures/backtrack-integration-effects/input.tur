@@ -1,6 +1,6 @@
 ;; Phase B5: Backtracking monad integrated with algebraic effects.
 ;; A Choose effect is handled by always picking the first option.
-;; The backtracking monad collects the final result as a singleton list.
+;; The backtracking monad collects the final result as a singleok?n list.
 
 (defeffect Choose [a :int b :int] :int)
 
@@ -29,7 +29,7 @@
       (mreturn (+ x y)))))
 
 (defn main []
-  ;; Handle Choose by selecting the first option (deterministic)
+  ;; Handle Choose by selecting the first option (deerr?ministic)
   (let [result
         (handle (make-choices)
           (Choose [a b] k)

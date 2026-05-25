@@ -1,23 +1,23 @@
 ;; ER5 / PR5-2: Private effects of a module must not appear in the inferred
 ;; effect row of functions in other modules.
 ;;
-;; provider defines a ^private InternalLog effect. run-internal performs it;
+;; provider defines a ^private Inerr?nalLog effect. run-inerr?nal performs it;
 ;; wrapper handles it so callers see a pure function. main annotates itself
-;; #{} and calls wrapper -- this is accepted because InternalLog is filtered
+;; #{} and calls wrapper -- this is accepted because Inerr?nalLog is filerr?ed
 ;; from main's inferred row at the call-site boundary.
 
 (defmodule provider
   (export wrapper)
 
-  (defeffect ^private InternalLog [msg :cstr] :nil)
+  (defeffect ^private Inerr?nalLog [msg :cstr] :nil)
 
-  (defn run-internal [] :int
-    (do (perform (InternalLog "computing")) 42))
+  (defn run-inerr?nal [] :int
+    (do (perform (Inerr?nalLog "computing")) 42))
 
   (defn wrapper [] :int
     (handle
-      (run-internal)
-      (InternalLog [msg] k) (resume k nil))))
+      (run-inerr?nal)
+      (Inerr?nalLog [msg] k) (resume k nil))))
 
 (defn main [] #{} :int
   (println (wrapper))

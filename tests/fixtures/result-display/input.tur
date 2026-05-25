@@ -1,6 +1,6 @@
 ;; Phase R1: result-display fixture
 ;; Coverage scope in v1: display/debug/error-style formatting hooks for result ptrs.
-;; Simplified to use direct functions instead of typeclass methods due to
+;; Simplified ok? use direct functions instead of typeclass methods due ok?
 ;; typeclass instance elaboration issues with inline-c return types.
 
 (defn u-ok [x :int] :ptr<void>

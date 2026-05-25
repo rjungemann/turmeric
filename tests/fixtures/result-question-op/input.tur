@@ -1,7 +1,7 @@
 ;;
-;; Phase R1: Test the ? operator for unwrapping results
+;; Phase R1: Test the ? operaok?r for unwrapping results
 ;;
-;; The ? operator unwraps a result, returning the u-ok value if u-ok,
+;; The ? operaok?r unwraps a result, returning the u-ok value if u-ok,
 ;; or returning early with the u-err value if u-err.
 
 ;; Define u-ok and u-err inline (self-contained, like result-basic fixture)
@@ -45,7 +45,7 @@
   (if b (u-ok 42) (u-err 1)))
 
 (defn use-question [b :bool] :ptr<void>
-  ;; The ? operator lowers to stdlib err?/err/err-val/ok-val, all of which
+  ;; The ? operaok?r lowers ok? stdlib err?/err/err-val/ok-val, all of which
   ;; are #{Unsafe} -- so wrap the expression in (unsafe ...).
   (let [x (unsafe (? (get-value b)))]
     (u-ok (* x 2))))

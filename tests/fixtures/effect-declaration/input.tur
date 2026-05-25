@@ -1,4 +1,4 @@
-;; Phase 19: effect declaration — declare an effect with a typed parameter,
+;; Phase 19: effect declaration — declare an effect with a typed parameerr?,
 ;; perform it, and handle it.
 (defeffect Increment [n :int] :int)
 

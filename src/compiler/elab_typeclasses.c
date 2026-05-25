@@ -83,7 +83,7 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
  * primitive keys.  Recursive Map[K (Vec V)] etc. only need the
  * V-comparator threaded recursively.
  *
- * Set is intentionally not listed: `tset-eq?` takes no comparator
+ * Set is intentionally not listed: `set-eq?` takes no comparator
  * (relies on hash equality entirely), so even single-level dispatch
  * is wrong for non-primitive elements; fixing it requires changes to
  * the helper itself, not just the dispatcher.
@@ -94,36 +94,36 @@ static const Symbol *helper_eq_symbol_for_struct(Elab *e, const StructDef *sd,
     if (!sd || !sd->name) return NULL;
     if (strcmp(sd->name, "Vec") == 0) {
         if (out_n_comparators) *out_n_comparators = 1;
-        return intern_cstr(e->st, "tvec-eq?");
+        return intern_cstr(e->st, "vec-eq?");
     }
     if (strcmp(sd->name, "Map") == 0) {
         if (out_n_comparators) *out_n_comparators = 1;
-        return intern_cstr(e->st, "tmap-eq?");
+        return intern_cstr(e->st, "map-eq?");
     }
     if (strcmp(sd->name, "Option") == 0) {
         if (out_n_comparators) *out_n_comparators = 1;
-        return intern_cstr(e->st, "toption-eq?");
+        return intern_cstr(e->st, "option-eq?");
     }
     if (strcmp(sd->name, "Cons") == 0) {
         if (out_n_comparators) *out_n_comparators = 1;
-        return intern_cstr(e->st, "tlist-eq?");
+        return intern_cstr(e->st, "list-eq?");
     }
     if (strcmp(sd->name, "Pair") == 0) {
         if (out_n_comparators) *out_n_comparators = 2;
-        return intern_cstr(e->st, "tpair-eq?");
+        return intern_cstr(e->st, "pair-eq?");
     }
     if (strcmp(sd->name, "Result") == 0) {
         if (out_n_comparators) *out_n_comparators = 2;
-        return intern_cstr(e->st, "tresult-eq?");
+        return intern_cstr(e->st, "result-eq?");
     }
     if (strcmp(sd->name, "Set") == 0) {
-        /* `tset-eq?` itself takes no comparator (relies on HAMT hash
+        /* `set-eq?` itself takes no comparator (relies on HAMT hash
          * equality, wrong for non-primitive elements).  The synth path
-         * routes to a comparator-taking variant `tset-eq-cmp?` instead
+         * routes to a comparator-taking variant `set-eq-cmp?` instead
          * so structural equality of Set[Vec[int]] etc. works
          * correctly. */
         if (out_n_comparators) *out_n_comparators = 1;
-        return intern_cstr(e->st, "tset-eq-cmp?");
+        return intern_cstr(e->st, "set-eq-cmp?");
     }
     return NULL;
 }
@@ -208,10 +208,10 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
      * For 1-comparator helpers the comparator targets the OUTERMOST
      * arg of the TY_APP chain.  This matches every typed-collection
      * helper signature we currently support:
-     *   Vec[A]     -> tvec-eq?  with cmp for A     (only arg)
-     *   Cons[A]    -> tlist-eq? with cmp for A     (only arg)
-     *   Option[A]  -> toption-eq? with cmp for A   (only arg)
-     *   Map[K V]   -> tmap-eq?  with cmp for V     (outermost = V;
+     *   Vec[A]     -> vec-eq?  with cmp for A     (only arg)
+     *   Cons[A]    -> list-eq? with cmp for A     (only arg)
+     *   Option[A]  -> option-eq? with cmp for A   (only arg)
+     *   Map[K V]   -> map-eq?  with cmp for V     (outermost = V;
      *                                                K rides on HAMT hash)
      *
      * For 2-comparator helpers (Pair[A B], Result[A B]) the helpers
@@ -2422,7 +2422,7 @@ found_method:;
      * and the receiver's element type is itself a TY_APP (e.g.
      * Vec[Vec[int]]), bypass the constrained instance's hardcoded
      * `(fn [a b] (= a b))` body and synthesise a direct call to the
-     * helper (tvec-eq?) with an inline comparator lambda whose
+     * helper (vec-eq?) with an inline comparator lambda whose
      * params are ascribed to the element type.  The inner `.eq?`
      * re-enters this dispatcher at the next level, terminating at
      * primitives where F3-7 takes over. */

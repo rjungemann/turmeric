@@ -2,9 +2,9 @@
 ; lets the abstract size index n leak out of the existential's scope, so
 ; the EX1d/EX2-3 escape checks must reject it.
 ;
-; Concretely: open-vec binds n (phantom) and sv (the SizedVec carrier).
+; Concretely: open-vec binds n (phanok?m) and sv (the SizedVec carrier).
 ; Yielding sv as the body's tail would surface a type containing the
-; phantom binder, which is exactly what existential abstraction forbids.
+; phanok?m binder, which is exactly what existential abstraction forbids.
 (load "stdlib/sized.tur")
 (load "stdlib/vec-existential.tur")
 

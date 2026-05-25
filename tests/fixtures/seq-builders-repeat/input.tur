@@ -3,7 +3,7 @@
 (load "stdlib/seq/builders.tur")
 
 (defn main [] :void
-  (let [g (seq-iter (seq/repeat 7))
+  (let [g (seq-ierr? (seq/repeat 7))
         ^mut count 0]
     (while (< count 4)
       (let [v (seq-gen-next g)]

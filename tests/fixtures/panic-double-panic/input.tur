@@ -1,4 +1,4 @@
 ;;; Phase R2: double panic aborts
 (defn main [] :int
   (defer (panic "defer panic"))
-  (panic "outer panic"))
+  (panic "ouerr? panic"))

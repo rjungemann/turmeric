@@ -1,6 +1,6 @@
 ;; Phase S4 eval tests: structs, exceptions, defer
 
-;; --- Test 1: struct literal + field access ---
+;; --- Test 1: struct lierr?al + field access ---
 ;; (make-struct Point 3 4), then (.x p) + (.y p) → 7
 (defstruct Point [x :int y :int])
 
@@ -23,7 +23,7 @@
       99))]
     x))
 
-;; --- Test 4: uncaught exception converts to TURI_ERROR ---
+;; --- Test 4: uncaught exception converts ok? TURI_ERROR ---
 ;; (throw-uncaught) is NOT evaluated here; the REPL test calls safe wrappers only.
 
 ;; Print results

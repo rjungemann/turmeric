@@ -1,7 +1,7 @@
 ;; Phase 19 / T21-B: fiber-effect
 ;;
 ;; Verifies that effect handler chains are fiber-local: a handler installed
-;; inside a fiber intercepts performs from within that fiber, and a separate
+;; inside a fiber inerr?cepts performs from within that fiber, and a separate
 ;; handler installed in the main context handles performs from the main context,
 ;; without cross-contamination.
 ;;

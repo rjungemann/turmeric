@@ -1,68 +1,58 @@
-;;; tur/option -- untyped optional values: some(value) or none.
+;;; tur/option -- typed Option[A]: parameterized optional value.
 ;;;
-;;; Legacy untyped option implementation. Prefer tur/toption for new code.
+;;; First-class parameterized optional value type.
+;;; Runtime layout: { bool is_some; int64_t value; }.
 ;;;
-;;; Since: Phase B1
-;;; Deprecated: superseded by tur/toption (Phase TC1-D)
-;; Option type for Turmeric
-;; Represents optional values: some(value) or none
+;;; Since: Phase TC1-D
+;; Phase TC1-D: Typed Option[A]
+;; First-class parameterized optional value type.
+;; Runtime layout identical to option.tur: { bool is_some; int64_t value; }
 
-;;
-;; DEPRECATED: Phase TC1-D
-;; The functions in this module are deprecated in favor of the typed
-;; API in stdlib/toption.tur.  They will be removed in the
-;; release cycle following Phase TC1-D.
-;;
+;;; Option -- parameterized optional value containing either some A or none.
+;;;
+;;; Since: Phase TC1
+(defstruct Option [A]
+  (is-some :bool)
+  (value   :int))
 
-(extern-c malloc [^int size] :ptr<void>)
-(extern-c free [^ptr<void> p] :void)
-(extern-c exit [^int code] :void)
-
-;; Create a some value
-;;; some -- wrap a value in a some option.
+;;; some -- wrap a value of type A in a some Option[A].
 ;;;
 ;;; Parameters:
-;;;   x -- the value to wrap
+;;;   x -- the value to wrap (type A, stored as int64_t)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated some option containing x (as :ptr<void>).
+;;;   A heap-allocated Option[A] with is-some=true.
 ;;;
 ;;; Example:
 ;;;   (some 42)  ; => some(42)
 ;;;
-;;;
-;;; Deprecated: Use tsome from stdlib/toption.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see toption-* in stdlib/toption.tur" some [x] #{Unsafe}
+;;; Since: Phase TC1
+(defn some [x :int] #{} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
   opt->value = x;
-  return opt;
+  return (int64_t)(intptr_t)opt;
   ```)
 
-;; none value (NULL)
-;;; none -- return the none option (NULL).
+;;; none -- return the none Option[A] (NULL).
 ;;;
 ;;; Returns:
-;;;   NULL as :ptr<void>, representing the absent value.
+;;;   0 (NULL) representing the absent option.
 ;;;
 ;;; Example:
-;;;   (none)  ; => none (NULL)
+;;;   (none)  ; => none
 ;;;
-;;;
-;;; Deprecated: Use tnone from stdlib/toption.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see toption-* in stdlib/toption.tur" none [] #{Unsafe}
+;;; Since: Phase TC1
+(defn none [] #{} :int
   ```c
-  return NULL;
+  return 0;
   ```)
 
-;; Check if option is some
-;;; some? -- check whether an option contains a value.
+;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:
-;;;   o -- the option to test
+;;;   o -- Option[A]
 ;;;
 ;;; Returns:
 ;;;   true if o is some, false if o is none.
@@ -71,324 +61,108 @@
 ;;;   (some? (some 1))  ; => true
 ;;;   (some? (none))    ; => false
 ;;;
-;;;
-;;; Deprecated: Use tsome? from stdlib/toption.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see toption-* in stdlib/toption.tur" some? [o] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn some? [o :int] #{} :bool
   ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   return opt != NULL && opt->is_some;
   ```)
 
-;; Unwrap - returns value, panics if none
-;;; option-unwrap -- extract the value from a some option, panicking if none.
+;;; unwrap -- extract the value from a some Option[A], panicking if none.
 ;;;
 ;;; Parameters:
-;;;   o -- the option to unwrap
+;;;   o -- Option[A]
 ;;;
 ;;; Returns:
-;;;   The contained :int value.
+;;;   The contained value of type A.
 ;;;
 ;;; Example:
-;;;   (option-unwrap (some 7))  ; => 7
+;;;   (unwrap (some 7))  ; => 7
 ;;;
-;;;
-;;; Deprecated: Use tunwrap from stdlib/toption.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see toption-* in stdlib/toption.tur" option-unwrap [o] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn unwrap [o :int] #{} :int
   ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)o;
-  if (opt == NULL || !opt->is_some) {
-    fprintf(stderr, "unwrap called on none\n");
-    exit(1);
-  }
-  return (int)opt->value;
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  if (!opt || !opt->is_some) tur_panic("unwrap called on none");
+  return (int64_t)opt->value;
   ```)
 
-;; Free an option
-;;; option-free -- free the heap memory for an option value.
+;;; unwrap-or -- extract the value or return a default.
 ;;;
 ;;; Parameters:
-;;;   o -- the option to free (may be none / NULL)
+;;;   o    -- Option[A]
+;;;   dflt -- value to return if o is none (type A)
+;;;
+;;; Returns:
+;;;   The contained value, or default if none.
+;;;
+;;; Example:
+;;;   (unwrap-or (none) 99)   ; => 99
+;;;   (unwrap-or (some 7) 99) ; => 7
+;;;
+;;; Since: Phase TC1
+(defn unwrap-or [o :int dflt :int] #{} :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  if (!opt || !opt->is_some) return dflt;
+  return (int64_t)opt->value;
+  ```)
+
+;;; option-free -- free a heap-allocated Option[A].
+;;;
+;;; Parameters:
+;;;   o -- Option[A] to free (may be none / 0)
 ;;;
 ;;; Example:
 ;;;   (option-free my-opt)
 ;;;
-;;;
-;;; Deprecated: Use toption-free from stdlib/toption.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see toption-* in stdlib/toption.tur" option-free [o] #{Unsafe}
+;;; Since: Phase TC1
+(defn option-free [o :int] #{} :void
   ```c
-  free(o);
-  return 0;
+  if (o) free((void*)(intptr_t)o);
   ```)
 
-;; Phase R4: option-must -- unwrap or panic with a default message
-;;; option-must -- unwrap a some option or panic with a default message.
+;;; option-map -- apply a function to the contained value if some.
 ;;;
 ;;; Parameters:
-;;;   o -- the option to unwrap (:ptr<void>)
+;;;   o -- Option[A]
+;;;   f -- function A -> B
 ;;;
 ;;; Returns:
-;;;   The contained :int value.
+;;;   Option[B] with f applied if some, or none.
 ;;;
 ;;; Example:
-;;;   (option-must (some 3))  ; => 3
+;;;   (option-map (some 3) (fn [x] (* x 2)))  ; => some(6)
 ;;;
-;;;
-;;; Deprecated: Use tunwrap from stdlib/toption.tur instead.
-;;; Since: Phase R4
-(defn ^deprecated "see toption-* in stdlib/toption.tur" option-must [o :ptr<void>] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn option-map [o :int f] #{} :int
   ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)o;
-  if (opt == NULL || !opt->is_some) {
-    tur_panic("option-must: called on none");
-  }
-  return (int)opt->value;
-  ```)
-
-;; Phase R4: option-expect -- unwrap or panic with a custom message
-;;; option-expect -- unwrap a some option or panic with a caller-supplied message.
-;;;
-;;; Parameters:
-;;;   o   -- the option to unwrap (:ptr<void>)
-;;;   msg -- the panic message (:cstr)
-;;;
-;;; Returns:
-;;;   The contained :int value.
-;;;
-;;; Example:
-;;;   (option-expect my-opt "expected a value")  ; => value or panic
-;;;
-;;;
-;;; Deprecated: Use tunwrap (or a future toption-expect) from stdlib/toption.tur.
-;;; Since: Phase R4
-(defn ^deprecated "see toption-* in stdlib/toption.tur" option-expect [o :ptr<void> msg :cstr] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)o;
-  if (opt == NULL || !opt->is_some) {
-    tur_panic(msg);
-  }
-  return (int)opt->value;
-  ```)
-
-;;; SINCE: Phase HKT §6
-;; Foldable instance for option.
-;;   foldl :: b -> (b -> a -> b) -> option a -> b
-;;     none    -> init
-;;     some(x) -> fn(init, x)
-;;   foldr :: (a -> b -> b) -> b -> option a -> b
-;;     none    -> init
-;;     some(x) -> fn(x, init)
-;;; __foldable_option_foldl -- foldl implementation for the option Foldable instance.
-(defn __foldable_option_foldl [ta init fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
-  if (!opt || !opt->is_some) return init;
-  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
-  ```)
-
-;;; __foldable_option_foldr -- foldr implementation for the option Foldable instance.
-(defn __foldable_option_foldr [ta init fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
-  if (!opt || !opt->is_some) return init;
-  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(opt->value, init);
-  ```)
-
-;;; Typeclass instance for option -- Foldable: foldl and foldr over the contained value.
-(definstance Foldable [option]
-  (foldl [ta init fn] (__foldable_option_foldl ta init fn))
-  (foldr [ta init fn] (__foldable_option_foldr ta init fn)))
-
-;;; SINCE: Phase HKT H3
-;; Functor instance for option -- apply fn to the contained value if some,
-;; return a none (NULL) option if the input is none.
-;; The fn argument is expected to be a function pointer cast to int64_t.
-;;; __functor_option_fmap -- fmap implementation for the option Functor instance.
-(defn __functor_option_fmap [container fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
-  if (!c || !c->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r =
-      malloc(sizeof(struct { bool is_some; int64_t value; }));
-  r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; Typeclass instance for option -- Functor: fmap over the contained value.
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg) so capturing
-;;; closures work transparently.
-(definstance Functor [option]
-  (fmap [container fn]
-    ```c
-    struct { bool is_some; int64_t value; } *c =
-        (struct { bool is_some; int64_t value; } *)(intptr_t)container;
-    if (!c || !c->is_some) return 0;
-    struct { bool is_some; int64_t value; } *r =
-        malloc(sizeof(struct { bool is_some; int64_t value; }));
-    r->is_some = true;
-    r->value = fn.fn(fn.env, c->value);
-    return (int64_t)(intptr_t)r;
-    ```))
-
-;; Applicative instance for option.
-;;   pure x = some(x)
-;;   ap (some f) (some x) = some (f x)
-;;   ap none _            = none
-;;; __applicative_option_pure -- pure implementation for the option Applicative instance.
-(defn __applicative_option_pure [x] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *r =
-      malloc(sizeof(struct { bool is_some; int64_t value; }));
-  r->is_some = true;
-  r->value = x;
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; __applicative_option_ap -- ap implementation for the option Applicative instance.
-(defn __applicative_option_ap [ff fa] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *f_opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ff;
-  struct { bool is_some; int64_t value; } *a_opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)fa;
-  if (!f_opt || !f_opt->is_some || !a_opt || !a_opt->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r =
-      malloc(sizeof(struct { bool is_some; int64_t value; }));
-  r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)f_opt->value)(a_opt->value);
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; Typeclass instance for option -- Applicative: pure and ap.
-(definstance Applicative [option]
-  (pure [x] (__applicative_option_pure x))
-  (ap [ff fa] (__applicative_option_ap ff fa)))
-
-;; Monad instance for option.
-;;   bind (some x) f = f x
-;;   bind none     _ = none
-;;; __monad_option_bind -- bind implementation for the option Monad instance.
-(defn __monad_option_bind [ma fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
-  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)f)(opt->value);
+  return (int64_t)(intptr_t)r;
   ```)
 
-;;; Typeclass instance for option -- Monad: bind (flat-map over the contained value).
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Monad [option]
-  (bind [ma fn]
-    ```c
-    struct { bool is_some; int64_t value; } *opt =
-        (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
-    if (!opt || !opt->is_some) return 0;
-    return fn.fn(fn.env, opt->value);
-    ```))
-
-;; Foldable instance for option.
-;; foldl :: (b -> a -> b) -> b -> option a -> b
-;; foldr :: (a -> b -> b) -> b -> option a -> b
-(defn __foldable_option_foldl [ta init fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
-  if (!opt || !opt->is_some) return init;
-  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
-  ```)
-
-(defn __foldable_option_foldr [ta init fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
-  if (!opt || !opt->is_some) return init;
-  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(opt->value, init);
-  ```)
-
-(definstance Foldable [option]
-  (foldl [ta init fn] (__foldable_option_foldl ta init fn))
-  (foldr [ta init fn] (__foldable_option_foldr ta init fn)))
-
-;; Traversable instance for option.
-;; traverse :: Applicative f => (a -> f b) -> option a -> f (option b)
-;; For option as traversable:
-;;   traverse f (some a) = some <$> f a
-;;   traverse f none     = pure none
-;;; __traversable_option_traverse -- traverse implementation for the option Traversable instance.
-(defn __traversable_option_traverse [ta fn] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
-  if (!opt || !opt->is_some) {
-      /* none case: return pure none = some(none) but cast as int64_t */
-      /* In v1, pure for option is some(NULL) but we use 0 for none */
-      return 0; /* none */
-  }
-  /* some case: apply fn to value, then wrap in some */
-  int64_t fb = ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
-  /* fb is f b where f is the applicative functor */
-  /* We need to map some over fb: some(fb) */
-  /* But we don't know if fb is already a pointer or needs wrapping */
-  /* In v1, the applicative instance handles the wrapping */
-  /* For now, we just return fb assuming it's already wrapped */
-  return fb;
-  ```)
-
-;;; Typeclass instance for option -- Traversable: traverse with an Applicative.
-(definstance Traversable [option]
-  (traverse [ta fn] (__traversable_option_traverse ta fn)))
-
-;; Alternative instance for option.
-;;   empty = none
-;;   alt-or a b = a if a is some, otherwise b
-;;; __alternative_option_empty -- empty implementation for the option Alternative instance.
-(defn __alternative_option_empty [] #{Unsafe} :int
-  (none))
-
-;;; __alternative_option_alt_or -- alt-or implementation for the option Alternative instance.
-(defn __alternative_option_alt_or [a b] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt_a = (void*)a;
-  if (opt_a && opt_a->is_some) return a;
-  return b;
-  ```)
-
-;;; Typeclass instance for option -- Alternative: empty and alt-or.
-(definstance Alternative [option]
-  (empty [_] (__alternative_option_empty))
-  (alt-or [a b] (__alternative_option_alt_or a b)))
-
-;; Phase E1: option-eq? -- compare two options using a comparator fn for the contained value.
-;; cmp-fn must be a fn [a :int b :int] :bool
-;;; option-eq? -- compare two options using a caller-supplied comparator.
+;;; option-eq? -- compare two Option[A] values using a comparator.
 ;;;
 ;;; Parameters:
-;;;   o1     -- first option
-;;;   o2     -- second option
-;;;   cmp-fn -- comparator of type fn [a :int b :int] :bool
+;;;   o1     -- first Option[A]
+;;;   o2     -- second Option[A]
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool
 ;;;
 ;;; Returns:
-;;;   true if both are none, or both are some with cmp-fn returning true for their values.
+;;;   true if both none, or both some with equal values.
 ;;;
 ;;; Example:
 ;;;   (option-eq? (some 1) (some 1) (fn [a b] (= a b)))  ; => true
 ;;;
-;;;
-;;; Deprecated: Use toption-eq? from stdlib/toption.tur instead (or the Eq[Option] instance).
-;;; Since: Phase E1
-(defn ^deprecated "see toption-* in stdlib/toption.tur" option-eq? [o1 o2 cmp-fn] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn option-eq? [o1 :int o2 :int cmp-fn] #{} :bool
   ```c
-  struct { bool is_some; int64_t value; } *a =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
-  struct { bool is_some; int64_t value; } *b =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o2;
+  struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
+  struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;
   bool b_some = b && b->is_some;
   if (!a_some && !b_some) return true;
@@ -396,50 +170,8 @@
   return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
   ```)
 
-;;; Typeclass instance for option -- Eq: structural equality via option-eq?.
-(definstance Eq [option]
+;;; Eq [Option] -- equality using the inner type's Eq instance.
+;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
+;; Note: element comparison uses integer equality; correct for all primitive A.
+(definstance Eq [Option] [(Eq A)]
   (eq? [x y] (option-eq? x y (fn [a b] (= a b)))))
-
-;; Phase B1: Clone instance for option
-;; Deep copies the option struct and its contained value (v1: int64_t only)
-;;; __clone_option_clone -- clone implementation for the option Clone instance.
-(defn __clone_option_clone [x] #{Unsafe} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)x;
-  if (!opt) return 0;
-  struct { bool is_some; int64_t value; } *r =
-      malloc(sizeof(struct { bool is_some; int64_t value; }));
-  r->is_some = opt->is_some;
-  r->value = opt->value;  /* v1: int64_t copy (deep clone for primitives) */
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; Typeclass instance for option -- Clone: deep copy of the option struct.
-(definstance Clone [option]
-  (clone [x] (__clone_option_clone x)))
-
-;;; Show [option] -- show an option value as "some(v)" or "none".
-;;;
-;;; Parameters:
-;;;   x -- option pointer (as :int / int64_t)
-;;;
-;;; Returns:
-;;;   "none" for a none option; "some(v)" where v is the integer value for some.
-;;;
-;;; Example:
-;;;   (show (some 99))  ; => "some(99)"
-;;;   (show (none))     ; => "none"
-;;;
-;;; Since: SI3
-(definstance Show [option]
-  (show [x] :cstr
-    ```c
-    // TODO: use scratch arena once arena infrastructure lands.
-    struct { bool is_some; int64_t value; } *opt =
-        (struct { bool is_some; int64_t value; } *)(intptr_t)x;
-    if (!opt || !opt->is_some) return "none";
-    char *buf = (char *)malloc(48);
-    snprintf(buf, 48, "some(%lld)", (long long)opt->value);
-    return (const char *)(intptr_t)buf;
-    ```))

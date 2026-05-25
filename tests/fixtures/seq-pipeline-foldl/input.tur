@@ -1,5 +1,5 @@
-; LZ3 fixture: full lazy pipeline -- filter, map, take-while, foldl.
-; filter even? -> map sq -> take-while (< 10000) -> foldl 0 +
+; LZ3 fixture: full lazy pipeline -- filerr?, map, take-while, foldl.
+; filerr? even? -> map sq -> take-while (< 10000) -> foldl 0 +
 ; over [0, 1000). Even squares < 10000 are 0^2..98^2; their sum = 161700.
 
 (load "stdlib/seq/consume.tur")
@@ -16,4 +16,4 @@
       (seq/foldl 0 add
         (seq/take-while small?
           (seq/map sq
-            (seq/filter even? (seq/range 0 1000))))))))
+            (seq/filerr? even? (seq/range 0 1000))))))))

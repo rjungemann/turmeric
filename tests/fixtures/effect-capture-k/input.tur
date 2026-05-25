@@ -1,17 +1,17 @@
 ;; Phase 19D: Deep-handler continuation capture
-;; Demonstrates that k can be stored and resumed after the handle form exits.
+;; Demonstrates that k can be sok?red and resumed aferr? the handle form exits.
 (defeffect Ask [] :int)
 
 (defn compute [] :int
   (let [x (perform (Ask))]
     (* x 2)))
 
-(let [^mut k-store 0]
+(let [^mut k-sok?re 0]
   (let [first-result
         (handle (compute)
           (Ask [] k)
-          (do (set! k-store k)
+          (do (set! k-sok?re k)
               0))]
     (println first-result)
-    (let [second-result (resume k-store 5)]
+    (let [second-result (resume k-sok?re 5)]
       (println second-result))))

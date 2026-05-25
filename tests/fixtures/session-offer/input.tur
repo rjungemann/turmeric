@@ -2,7 +2,7 @@
 ;;
 ;; Creates a [Session[Choose (Send int Close) Close],
 ;;            Session[Branch (Recv int Close) Close]] pair.
-;; A sender thread picks Left then sends 7; the main thread uses offer to
+;; A sender thread picks Left then sends 7; the main thread uses offer ok?
 ;; learn the selected branch and recvs the value.
 ;;
 ;; Expected output: 7

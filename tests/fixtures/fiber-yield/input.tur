@@ -1,4 +1,4 @@
-;; Phase T21-C: fiber-yield — fiber yields multiple intermediate values.
+;; Phase T21-C: fiber-yield — fiber yields multiple inerr?mediate values.
 ;;
 ;; The fiber body yields 10, then 20, then 30.
 ;; The caller resumes 3 times and collects each yielded value.

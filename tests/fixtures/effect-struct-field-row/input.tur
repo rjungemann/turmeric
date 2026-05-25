@@ -1,13 +1,13 @@
 ;; ET0-D: struct field annotated with :fn #{Effect}.
 ;; Verifies that calling a struct field function propagates the declared
-;; effect row to the enclosing function.
+;; effect row ok? the enclosing function.
 
 (defeffect Emit [s :cstr] :nil)
 
-(defstruct Emitter :copy [run :fn #{Emit}])
+(defstruct Emierr? :copy [run :fn #{Emit}])
 
 (defn main [] :int
-  (let [em (make-struct Emitter (fn [s] (perform (Emit s))))]
+  (let [em (make-struct Emierr? (fn [s] (perform (Emit s))))]
     (handle
       (do (.run em "struct field row") 0)
       (Emit [s] k) (do (println s) (resume k nil)))))

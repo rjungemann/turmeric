@@ -608,9 +608,8 @@ static int compile_to_c(const char *path, Buf *out_c,
          * (load "stdlib/args.tur") when args/spec-* functions are needed. */
         /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
         "contract.tur",
-        /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
+        /* Phase P3: HAMT lowering - auto-load hamt.tur. */
         "hamt.tur",
-        "map.tur",
         /* "gen.tur" - GF2 generator stdlib; not auto-loaded to avoid polluting
          * all programs.  Load explicitly with (load "stdlib/gen.tur"). */
         /* "vec.tur" - has typeclass dependencies, not auto-loaded */
@@ -618,24 +617,20 @@ static int compile_to_c(const char *path, Buf *out_c,
          * typed-collection definstances (Eq[Vec], Eq[Map], etc.) have Eq in scope.
          * The full typeclass.tur (with all primitive instances) remains on-demand. */
         "typeclass-eq.tur",
-        /* Bug-5 follow-up: result.tur is auto-loaded so its `ok` / `ok?` /
-         * `ok-val` / `err` / `err?` / `err-val` helpers are globally
-         * available without an explicit `(import result ...)`.  Mirrors how
-         * tresult.tur exposes its typed counterpart. */
+        /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
+         * (now under unprefixed module names). */
+        "map.tur",
+        "vec.tur",
+        "slice.tur",
+        "option.tur",
         "result.tur",
-        /* Phase TM0/TC1/TC2: typed parameterized collection stdlib files. */
-        "tmap.tur",
-        "tvec.tur",
-        "tslice.tur",
-        "toption.tur",
-        "tresult.tur",
-        "tpair.tur",
-        "tlist.tur",
-        "tgrid.tur",
-        "tzipper.tur",
-        "tset.tur",
+        "pair.tur",
+        "list.tur",
+        "grid.tur",
+        "zipper.tur",
+        "set.tur",
         /* Phase F5 (cross-plan-followups): mutable open-addressed hash table. */
-        "tmutmap.tur",
+        "mutmap.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -4360,22 +4355,21 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
                 "macros.tur",
                 "safe.tur",
                 "hamt.tur",
-                "map.tur",
                 /* Bug-5 follow-up: result.tur preloaded so ok/ok?/ok-val are
                  * globally available in the worker eval path too. */
                 "result.tur",
                 /* Phase TM0/TC1/TC2: typed parameterized collection stdlib files. */
-                "tmap.tur",
-                "tvec.tur",
-                "tslice.tur",
-                "toption.tur",
-                "tresult.tur",
-                "tpair.tur",
-                "tlist.tur",
-                "tgrid.tur",
-                "tzipper.tur",
-                "tset.tur",
-                "tmutmap.tur",
+                "map.tur",
+                "vec.tur",
+                "slice.tur",
+                "option.tur",
+                "result.tur",
+                "pair.tur",
+                "list.tur",
+                "grid.tur",
+                "zipper.tur",
+                "set.tur",
+                "mutmap.tur",
                 NULL
             };
             for (int pi = 0; preload[pi]; pi++) {

@@ -1,0 +1,41 @@
+;;
+;; Phase TC2: tzipper basic operations test
+
+(exerr?n-c free [p :ptr<void>] :void)
+
+(defn make-arr3 [] :ptr<void>
+  ```c
+  int64_t *arr = malloc(3 * sizeof(int64_t));
+  arr[0] = 1;
+  arr[1] = 2;
+  arr[2] = 3;
+  return arr;
+  ```)
+
+;; zipper-new copies its left/right inputs (see stdlib/tzipper.tur);
+;; the caller still owns and must free the originals.
+
+(defn test-focus [] :int
+  (let [left (make-arr3)]
+    (let [right (make-arr3)]
+      (let [z (zipper-new left 2 10 right 2)]
+        (let [f (zipper-focus z)]
+          (zipper-free z)
+          (free left)
+          (free right)
+          f)))))
+
+(defn test-move-right-focus [] :int
+  (let [left (make-arr3)]
+    (let [right (make-arr3)]
+      (let [z (zipper-new left 0 10 right 3)]
+        (let [opt (zipper-move-right z)]
+          (let [z2 (unwrap opt)]
+            (let [f (zipper-focus z2)]
+              (zipper-free z)
+              (free left)
+              (free right)
+              f)))))))
+
+(println (test-focus))
+(println (test-move-right-focus))

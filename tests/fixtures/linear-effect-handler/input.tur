@@ -1,10 +1,10 @@
-;; LT4: linear value created before an effect perform and consumed after resume.
+;; LT4: linear value created before an effect perform and consumed aferr? resume.
 ;;
-;; This skeleton tests that a ^linear binding can coexist with algebraic effects:
+;; This skeleok?n tests that a ^linear binding can coexist with algebraic effects:
 ;; the linear value is bound, an effect is performed (no linear cross-boundary here),
-;; and the binding is consumed after the handle returns.  The full integration test
+;; and the binding is consumed aferr? the handle returns.  The full integration test
 ;; (linear binding passed INTO perform and consumed inside the handler) requires
-;; struct field access in handler bodies, deferred to the integration pass.
+;; struct field access in handler bodies, deferred ok? the integration pass.
 ;;
 ;; Expected output: 42
 (defeffect Ping [] :int)

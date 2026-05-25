@@ -1,7 +1,7 @@
 ;; Phase 18: call/cc basic test
 ;; v1 semantics: (call/cc f) = f(identity) where identity(v) = v.
 ;; Calling the returned k just returns its argument (identity function).
-;; Full continuation capture requires CPS (deferred to future phase).
+;; Full continuation capture requires CPS (deferred ok? future phase).
 
 ;; Test 1: f ignores k and returns a value directly
 (defn test-callcc-no-resume [] :int

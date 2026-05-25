@@ -1,4 +1,4 @@
-;; Phase R3: Error From/Into typeclass instances
+;; Phase R3: Error From/Inok? typeclass instances
 ;; Tests the From typeclass instances for error type upcasting
 ;;
 ;; Note: In v1, we use a simplified approach since the typeclass system

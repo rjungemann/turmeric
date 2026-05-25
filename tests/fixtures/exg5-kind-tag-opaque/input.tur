@@ -1,8 +1,8 @@
 ; Phase EXG5-1/EXG5-3: a constrained pack whose payload is a scalar
 ; must be tagged with the existential kind (RCK_EXISTENTIAL = 1) and
-; an opaque payload descriptor (RCEXP_OPAQUE = 0).  Verifying via
+; an opaque payload descripok?r (RCEXP_OPAQUE = 0).  Verifying via
 ; inline-C lets us check the layout-tag bytes written by the kinded
-; allocator without any user-visible API for them.
+; allocaok?r without any user-visible API for them.
 (defclass Show [a]
   (show [x] :cstr))
 

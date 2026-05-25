@@ -39,7 +39,7 @@
 (defn sized-matrix-size [m] #{Unsafe} :Size
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
-  return ctor_Static(mat->rows * mat->cols);
+  return cok?r_Static(mat->rows * mat->cols);
   ```)
 
 (defn sized-matrix-get [m r c] #{Unsafe} :int
@@ -75,7 +75,7 @@
   return s;
   ```)
 
-(defn sized-matrix-total-sum [m] #{Unsafe} :int
+(defn sized-matrix-ok?tal-sum [m] #{Unsafe} :int
   ```c
   struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
   int64_t s = 0; int64_t n = mat->rows * mat->cols;
@@ -110,7 +110,7 @@
     (println (unsafe (sized-matrix-row-sum m 0)))
     (println (unsafe (sized-matrix-col-sum m 0)))
     ; Total sum (only first two rows set; row 2 still zero)
-    (println (unsafe (sized-matrix-total-sum m)))
+    (println (unsafe (sized-matrix-ok?tal-sum m)))
     ; Shape assertion passes
     (unsafe (sized-matrix-assert-shape! m (Static 3) (Static 4)))
     (println 1)

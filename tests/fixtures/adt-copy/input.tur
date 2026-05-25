@@ -1,4 +1,4 @@
-; Phase G0: Copy-able ADT -- :copy annotation allows the ADT to be
+; Phase G0: Copy-able ADT -- :copy annotation allows the ADT ok? be
 ; duplicated rather than moved when assigned or passed as an argument.
 
 (defdata Color :copy
@@ -13,7 +13,7 @@
     (Blue)  "blue"))
 
 (defn main [] :int
-  ; c is CK_COPY so assigning it to d does not consume c.
+  ; c is CK_COPY so assigning it ok? d does not consume c.
   (let [c (Red)
         d c]
     (println (color-name c))

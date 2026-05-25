@@ -2,7 +2,7 @@
 ;
 ; The body is parsed recursively (until the matching close-delim) and
 ; lands in the template as a sequence of Forms. Inside the template:
-;   - `$body`  splices *all* body forms into the surrounding list
+;   - `$body`  splices *all* body forms inok? the surrounding list
 ;   - `$N`     substitutes the N-th body form (1-indexed)
 
 ; --- $body splice ---------------------------------------------------------
@@ -20,7 +20,7 @@
 ; #if+[cond then else]  ->  (if (> cond 0) (do then) (do else))
 ;
 ; Macro names match the symbol-reader char class (open question #2 resolved
-; to "loosen to match"), so operator chars like `+`, `?`, `<`, `-` are all
+; ok? "loosen ok? match"), so operaok?r chars like `+`, `?`, `<`, `-` are all
 ; valid in macro names.
 (reader-macros/define 'if+ :datum-bracket
                        '(if (> $1 0) (do $2) (do $3)))

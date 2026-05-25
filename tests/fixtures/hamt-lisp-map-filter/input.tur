@@ -1,8 +1,8 @@
 ;;
-;; Phase P2: Lisp bindings map/filter test
-;; Tests hamt/map and hamt/filter higher-order operations
+;; Phase P2: Lisp bindings map/filerr? test
+;; Tests hamt/map and hamt/filerr? higher-order operations
 
-(extern-c free [p :ptr] :void)
+(exerr?n-c free [p :ptr] :void)
 
 (defn alloc-int [x :int] :ptr
   ```c
@@ -58,8 +58,8 @@
                         (free v2)
                         (if ok 1 0)))))))))))))
 
-;; Test: hamt/filter keeps only big values
-(defn test-filter [] :int
+;; Test: hamt/filerr? keeps only big values
+(defn test-filerr? [] :int
   (let [k1 (alloc-int 1)]
     (let [k2 (alloc-int 2)]
       (let [v1 (alloc-int 10)]
@@ -67,7 +67,7 @@
           (let [m1 (hamt/new)]
             (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
               (let [m3 (hamt/set m2 (hamt/hash-ptr k2) k2 v2)]
-                (let [m4 (hamt/filter m3 keep-big m3)]
+                (let [m4 (hamt/filerr? m3 keep-big m3)]
                   (let [cnt (hamt/count m4)]
                     (let [has-k1 (hamt/has? m4 (hamt/hash-ptr k1) k1)]
                       (let [has-k2 (hamt/has? m4 (hamt/hash-ptr k2) k2)]
@@ -82,4 +82,4 @@
                         (if (and (= cnt 1) (not has-k1) has-k2) 1 0)))))))))))))
 
 (println (test-map))
-(println (test-filter))
+(println (test-filerr?))

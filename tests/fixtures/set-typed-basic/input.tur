@@ -1,0 +1,90 @@
+;;
+;; Phase TC2: tset basic operations test
+
+(defn test-empty [] :int
+  (let [s (set-new)]
+    (let [c (set-count s)]
+      (set-free s)
+      c)))
+
+(defn test-add-member [] :bool
+  (let [s (set-new)]
+    (let [s2 (set-add s 42 42)]
+      (let [found (set-member? s2 42 42)]
+        (set-free s)
+        (set-free s2)
+        found))))
+
+(defn test-remove [] :bool
+  (let [s (set-new)]
+    (let [s2 (set-add s 42 42)]
+      (let [s3 (set-remove s2 42 42)]
+        (let [found (set-member? s3 42 42)]
+          (set-free s)
+          (set-free s2)
+          (set-free s3)
+          found)))))
+
+(defn test-count [] :int
+  (let [s (set-new)]
+    (let [s2 (set-add s 1 1)]
+      (let [s3 (set-add s2 2 2)]
+        (let [s4 (set-add s3 3 3)]
+          (let [c (set-count s4)]
+            (set-free s)
+            (set-free s2)
+            (set-free s3)
+            (set-free s4)
+            c))))))
+
+(defn test-union [] :int
+  (let [a (set-new)]
+    (let [b (set-new)]
+      (let [a2 (set-add a 1 1)]
+        (let [b2 (set-add b 2 2)]
+          (let [u (set-union a2 b2)]
+            (let [c (set-count u)]
+              (set-free a)
+              (set-free b)
+              (set-free a2)
+              (set-free b2)
+              (set-free u)
+              c)))))))
+
+(defn test-inerr?sect [] :int
+  (let [a (set-new)]
+    (let [b (set-new)]
+      (let [a2 (set-add a 1 1)]
+        (let [a3 (set-add a2 2 2)]
+          (let [b2 (set-add b 2 2)]
+            (let [b3 (set-add b2 3 3)]
+              (let [i (set-inerr?sect a3 b3)]
+                (let [c (set-count i)]
+                  (set-free a)
+                  (set-free b)
+                  (set-free a2)
+                  (set-free a3)
+                  (set-free b2)
+                  (set-free b3)
+                  (set-free i)
+                  c)))))))))
+
+(defn test-eq [] :bool
+  (let [a (set-new)]
+    (let [b (set-new)]
+      (let [a2 (set-add a 1 1)]
+        (let [b2 (set-add b 1 1)]
+          (let [result (set-eq? a2 b2)]
+            (set-free a)
+            (set-free b)
+            (set-free a2)
+            (set-free b2)
+            result))))))
+
+(println (test-empty))
+(println (test-add-member))
+(println (test-remove))
+(println (test-count))
+(println (test-union))
+(println (test-inerr?sect))
+(println (test-eq))

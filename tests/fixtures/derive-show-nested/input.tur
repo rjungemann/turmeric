@@ -1,4 +1,4 @@
-;; SI2: derive-show recurses into Show-able fields.
+;; SI2: derive-show recurses inok? Show-able fields.
 ;; Tests that derive-show with three int fields calls Show [int] on each.
 (defclass Show [a]
   (show [x] :cstr))

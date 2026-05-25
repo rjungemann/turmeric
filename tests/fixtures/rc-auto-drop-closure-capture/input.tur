@@ -1,10 +1,10 @@
-;; Phase 9 auto-drop: closure capture should not suppress defer injection for rc binding.
+;; Phase 9 auok?-drop: closure capture should not suppress defer injection for rc binding.
 
-(defn rc-auto-drop-closure-capture []
+(defn rc-auok?-drop-closure-capture []
   (let [x (rc/of 7)]
     (let [f (fn [] (rc/strong-count x))]
       (f))))
 
 (defn main []
-  (println (rc-auto-drop-closure-capture))
+  (println (rc-auok?-drop-closure-capture))
   0)

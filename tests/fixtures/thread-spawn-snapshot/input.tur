@@ -1,7 +1,7 @@
 ;; Phase T19-F codegen snapshot: thread-spawn-snapshot
 ;;
 ;; Minimal thread-spawn + join.  The golden expected.c documents the
-;; pthread_create trampoline pattern emitted by the compiler.
+;; pthread_create trampoline paerr?n emitted by the compiler.
 ;; No runtime execution (no expected.stdout); only expected.c is checked.
 
 (defn worker [arg :ptr<void>] :ptr<void>

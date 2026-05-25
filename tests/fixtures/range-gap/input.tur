@@ -1,5 +1,5 @@
 ; LZ4 fixture: range-gap -- largest range strictly between two disjoint ranges.
-; The gap bounds are the flipped endpoints of the two ranges' touching ends.
+; The gap bounds are the flipped endpoints of the two ranges' ok?uching ends.
 
 (load "stdlib/range.tur")
 
@@ -14,7 +14,7 @@
     (println (range-bound-value      (range-upper g)))) ; 5
   ; gap between [1,3) and (3,8]: endpoints 3 exclusive and 3 exclusive
   ;   gap.lower = flip(3 excl) = 3 inclusive
-  ;   gap.upper = flip(3 excl) = 3 inclusive  -> gap = [3,3] (singleton)
+  ;   gap.upper = flip(3 excl) = 3 inclusive  -> gap = [3,3] (singleok?n)
   (let [g (range-gap (closed-open-range 1 3) (open-range 3 8))]
     (println (range-bound-inclusive? (range-lower g)))  ; true
     (println (range-bound-value      (range-lower g)))  ; 3

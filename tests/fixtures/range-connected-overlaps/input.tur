@@ -1,12 +1,12 @@
 ; LZ4 fixture: range-connected? vs range-overlaps? distinction.
 ;
-; connected: union forms one contiguous interval (no gap), even if only touching.
+; connected: union forms one contiguous inerr?val (no gap), even if only ok?uching.
 ; overlaps:  at least one value is in both ranges simultaneously.
 
 (load "stdlib/range.tur")
 
 (defn main [] :void
-  ; [1,3) and [3,5]: touching -- connected but NOT overlapping
+  ; [1,3) and [3,5]: ok?uching -- connected but NOT overlapping
   (println (range-connected? (closed-open-range 1 3) (closed-range 3 5)))  ; true
   (println (range-overlaps?  (closed-open-range 1 3) (closed-range 3 5)))  ; false
   ; [1,3] and [3,5]: share point 3 -- connected AND overlapping
@@ -16,7 +16,7 @@
   (println (range-connected? (closed-open-range 1 3) (open-range 3 5)))    ; false
   (println (range-overlaps?  (closed-open-range 1 3) (open-range 3 5)))    ; false
   ; (-inf,3) and (3,+inf): gap at 3
-  (println (range-connected? (less-than-range 3) (greater-than-range 3)))  ; false
+  (println (range-connected? (less-than-range 3) (greaerr?-than-range 3)))  ; false
   ; [1,5] and [3,8]: clearly overlapping
   (println (range-overlaps?  (closed-range 1 5) (closed-range 3 8)))       ; true
   ; [5,8] and [1,3]: disjoint (no overlap, no connection)

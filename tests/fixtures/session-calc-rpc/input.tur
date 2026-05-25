@@ -1,10 +1,10 @@
-;; SS4: session-calc-rpc -- calculator RPC integration test.
+;; SS4: session-calc-rpc -- calculaok?r RPC integration test.
 ;;
 ;; A server receives an integer and sends back double the value.
-;; The client sends 21 and expects to receive 42.
+;; The client sends 21 and expects ok? receive 42.
 ;;
-;; Protocol (server view): Recv int (Send int Close)
-;; Protocol (client view): Send int (Recv int Close)
+;; Prook?col (server view): Recv int (Send int Close)
+;; Prook?col (client view): Send int (Recv int Close)
 ;;
 ;; Expected output: 42
 

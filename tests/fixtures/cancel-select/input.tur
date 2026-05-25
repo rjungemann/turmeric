@@ -1,5 +1,5 @@
 ;; TC1: thread blocks in tur_select_blocking; main thread cancels it.
-;; Exercises the cancel path in tur_select_blocking (waiter deregistration).
+;; Exercises the cancel path in tur_select_blocking (waierr? deregistration).
 ;; The cancelled thread exits cleanly; main prints "done".
 
 (defn sleep-ms [ms :int] :nil
@@ -12,7 +12,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waiters; void *send_waiters;
+      void *recv_waierr?s; void *send_waierr?s;
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) abort();
@@ -22,11 +22,11 @@
   pthread_cond_init(&ch->not_full, NULL);
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
-  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  ch->recv_waierr?s = NULL; ch->send_waierr?s = NULL;
   return (void *)ch;
   ```)
 
-;; Thread arg: pointer to two channels packed into a heap struct.
+;; Thread arg: poinerr? ok? two channels packed inok? a heap struct.
 ;; Thread function: blocks in tur_select_blocking on both channels.
 (defn blocking-select-thread [arg :ptr<void>] :ptr<void>
   ```c
@@ -70,7 +70,7 @@
 (defn my-cancel-thread [t :ptr<void>] :nil
   ```c
   TurThreadHandle *h = (TurThreadHandle *)t;
-  __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
+  __aok?mic_sok?re_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
   pthread_mutex_lock(&h->state->cancel_mutex);
   pthread_cond_broadcast(&h->state->cancel_cond);
   pthread_mutex_unlock(&h->state->cancel_mutex);

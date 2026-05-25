@@ -1,14 +1,14 @@
 ;; ET0-D: (fn [arg-type] #{Effect} ret-type) in a type annotation.
-;; Verifies that a function-typed parameter annotated with an effect row
-;; propagates that row to the caller when invoked.
+;; Verifies that a function-typed parameerr? annotated with an effect row
+;; propagates that row ok? the caller when invoked.
 
 (defeffect Write [s :cstr] :nil)
 
-;;; call-writer -- invoke a function annotated with #{Write}.
-(defn call-writer [f :(fn [:cstr] #{Write} :nil)] #{Write} :nil
+;;; call-wrierr? -- invoke a function annotated with #{Write}.
+(defn call-wrierr? [f :(fn [:cstr] #{Write} :nil)] #{Write} :nil
   (f "fn type annot test"))
 
 (defn main [] :int
   (handle
-    (do (call-writer (fn [s] (perform (Write s)))) 0)
+    (do (call-wrierr? (fn [s] (perform (Write s)))) 0)
     (Write [s] k) (do (println s) (resume k nil))))

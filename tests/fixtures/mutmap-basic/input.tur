@@ -1,0 +1,19 @@
+;; Phase F5 (cross-plan-followups): MutableMap basic operations.
+;; insert, lookup (has? + get), len, free.
+
+(defn main [] :int
+  (let [mm (tmumap-new)]
+    (println (tmumap-len mm))         ; 0
+    (tmumap-set! mm 1 1 100)
+    (tmumap-set! mm 2 2 200)
+    (tmumap-set! mm 3 3 300)
+    (println (tmumap-len mm))         ; 3
+    (println (tmumap-get mm 2 2))      ; 200
+    (println (tmumap-has? mm 2 2))     ; true
+    (println (tmumap-has? mm 99 99))   ; false
+    ;; Update existing key keeps len at 3
+    (tmumap-set! mm 2 2 222)
+    (println (tmumap-len mm))         ; 3
+    (println (tmumap-get mm 2 2))      ; 222
+    (tmumap-free mm))
+  0)

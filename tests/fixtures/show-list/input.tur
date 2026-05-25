@@ -10,21 +10,21 @@
     typedef struct { int64_t value; int64_t next; } Cons_t;
     char tmp[32];
     int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)x.value);
-    size_t total = 1 + (n > 0 ? (size_t)n : 0) + 1;
+    size_t ok?tal = 1 + (n > 0 ? (size_t)n : 0) + 1;
     Cons_t *cur = (Cons_t *)(intptr_t)x.next;
     while (cur) {
         n = snprintf(tmp, sizeof(tmp), "%lld", (long long)cur->value);
-        total += 2 + (n > 0 ? (size_t)n : 0);
+        ok?tal += 2 + (n > 0 ? (size_t)n : 0);
         cur = (Cons_t *)(intptr_t)cur->next;
     }
-    char *buf = (char *)malloc(total + 1);
-    int off = snprintf(buf, total + 1, "[%lld", (long long)x.value);
+    char *buf = (char *)malloc(ok?tal + 1);
+    int off = snprintf(buf, ok?tal + 1, "[%lld", (long long)x.value);
     cur = (Cons_t *)(intptr_t)x.next;
     while (cur) {
-        off += snprintf(buf + off, (int)(total + 1) - off, ", %lld", (long long)cur->value);
+        off += snprintf(buf + off, (int)(ok?tal + 1) - off, ", %lld", (long long)cur->value);
         cur = (Cons_t *)(intptr_t)cur->next;
     }
-    snprintf(buf + off, (int)(total + 1) - off, "]");
+    snprintf(buf + off, (int)(ok?tal + 1) - off, "]");
     return (const char *)(intptr_t)buf;
     ```))
 

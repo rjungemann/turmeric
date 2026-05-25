@@ -1,5 +1,5 @@
 ;; SI3: MyShow [MyOption] formats as "some(v)" or "none".
-;; Uses a user-defined MyOption struct to avoid conflicts with the built-in option type.
+;; Uses a user-defined MyOption struct ok? avoid conflicts with the built-in option type.
 (defclass MyShow [a]
   (show [x] :cstr))
 

@@ -3,7 +3,7 @@
 ; from the record and dispatches each method via the concrete type's
 ; instance (the EX1e-3 vtable indirection is deferred, so the witness
 ; array is populated but not yet consulted; the test verifies the record
-; allocation path compiles and runs end-to-end).
+; allocation path compiles and runs end-ok?-end).
 (defclass Show [a]
   (show [x] :cstr))
 

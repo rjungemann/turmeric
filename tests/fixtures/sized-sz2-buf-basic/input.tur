@@ -112,7 +112,7 @@
     (println (unsafe (sized-buf-sum b)))
     (println (unsafe (sized-buf-min b)))
     (println (unsafe (sized-buf-max b)))
-    ; copy into a second buffer, verify
+    ; copy inok? a second buffer, verify
     (let [c (unsafe (sized-buf-new 4))]
       (unsafe (sized-buf-copy! c b))
       (println (unsafe (sized-buf-sum c)))

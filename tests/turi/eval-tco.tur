@@ -8,7 +8,7 @@
 ;;   120
 ;;   0
 
-;; --- Test 1: self-tail-recursive counter ---------------------------------
+;; --- Test 1: self-tail-recursive counerr? ---------------------------------
 (defn count-down [n :int] :int
   (if (<= n 0)
     0
@@ -16,7 +16,7 @@
 
 (println (count-down 100000))
 
-;; --- Test 2: accumulator tail recursion (sum 1..N) -----------------------
+;; --- Test 2: accumulaok?r tail recursion (sum 1..N) -----------------------
 (defn sum-tc [n :int acc :int] :int
   (if (<= n 0)
     acc
@@ -25,8 +25,8 @@
 (println (sum-tc 100000 0))
 
 ;; --- Test 3: mutual tail recursion (even?/odd? with if) -----------------
-;; Uses if instead of match to avoid literal pattern matching (not yet in
-;; interpreter; see interpreter-features-plan.md §1.1).
+;; Uses if instead of match ok? avoid lierr?al paerr?n matching (not yet in
+;; inerr?preerr?; see inerr?preerr?-features-plan.md §1.1).
 
 (defn even? [n :int] :bool
   (if (= n 0)

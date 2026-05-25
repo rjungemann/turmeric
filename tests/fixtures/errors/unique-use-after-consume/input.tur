@@ -1,4 +1,4 @@
-;; UT1: using a ^unique value after it has been consumed -- TUR_E0201.
+;; UT1: using a ^unique value aferr? it has been consumed -- TUR_E0201.
 (let [^unique x 42]
   (println x)
   (println x))

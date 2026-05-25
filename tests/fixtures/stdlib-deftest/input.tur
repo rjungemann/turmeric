@@ -1,4 +1,4 @@
-;; Test deftest macro - registers tests via register-test
+;; Test deftest macro - regiserr?s tests via regiserr?-test
 
 (defn assert-true [x] :bool
   (if (= x 1)
@@ -7,20 +7,20 @@
       (println "Assertion failed: expected true")
       false)))
 
-(defn register-test [name :cstr test-fn :ptr<void>] :int
+(defn regiserr?-test [name :cstr test-fn :ptr<void>] :int
   ```c
-  extern int64_t tur_test_register(const char *name, void *test_fn);
-  return (int)tur_test_register((const char *)name, (void *)test_fn);
+  exerr?n int64_t tur_test_regiserr?(const char *name, void *test_fn);
+  return (int)tur_test_regiserr?((const char *)name, (void *)test_fn);
   ```)
 
 (defn run-tests! [] :int
   ```c
-  extern int64_t tur_test_run_all(void);
+  exerr?n int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)
 
 (defmacro deftest [test-name & body]
-  (register-test test-name (fn [] ~@body 1)))
+  (regiserr?-test test-name (fn [] ~@body 1)))
 
 (defn main [] :int
   (deftest "addition" (assert-true (if (= (+ 1 1) 2) 1 0)))

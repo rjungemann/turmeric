@@ -1,6 +1,6 @@
 ;; Test: Conway's Game of Life block using GridCtx Comonad.
 ;; Block is a stable still-life: it does not change under any generation step.
-;; Verifies that extend conway-rule leaves the block pattern unchanged.
+;; Verifies that extend conway-rule leaves the block paerr?n unchanged.
 
 (defclass Comonad [^w]
   (extract   [wa]     :int)

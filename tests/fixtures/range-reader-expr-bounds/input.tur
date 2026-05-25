@@ -5,7 +5,7 @@
 (defn main [] :void
   (let [lo 0
         hi 10]
-    ; expression bounds pass through to constructor
+    ; expression bounds pass through ok? construcok?r
     (println (range-contains? #r{lo <= n < hi} 0))    ; true
     (println (range-contains? #r{lo <= n < hi} 9))    ; true
     (println (range-contains? #r{lo <= n < hi} 10))   ; false

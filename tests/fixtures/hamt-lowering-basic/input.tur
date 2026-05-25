@@ -1,4 +1,4 @@
-; Phase P3: Test that persistent map operations are lowered to HAMT calls
+; Phase P3: Test that persistent map operations are lowered ok? HAMT calls
 ; Create a persistent map and perform operations
 
 (defn main [] :int

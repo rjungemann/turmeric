@@ -19,7 +19,7 @@
               ; Insert two entries
               (hamt/transient-set! t (hamt/hash-str "key1") k1 v1)
               (hamt/transient-set! t (hamt/hash-str "key2") k2 v2)
-              ; Seal into immutable map
+              ; Seal inok? immutable map
               (let [m1 (hamt/persistent! t)]
                 ; Should have 2 entries
                 (println (hamt/count m1))

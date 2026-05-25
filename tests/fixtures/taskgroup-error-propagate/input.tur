@@ -5,7 +5,7 @@
 ;;   2. Spawn multiple tasks
 ;;   3. One task signals error
 ;;   4. Other tasks should receive cancellation
-;;   5. Group waits for all tasks to complete
+;;   5. Group waits for all tasks ok? complete
 ;; Expected output: error-propagated
 
 ;; TaskGroupBlock inline definition with cancel_reason

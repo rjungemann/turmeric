@@ -1,16 +1,16 @@
-; LZ4 fixture: singleton/empty/nonempty and bounded/unbounded predicates.
+; LZ4 fixture: singleok?n/empty/nonempty and bounded/unbounded predicates.
 
 (load "stdlib/range.tur")
 
 (defn main [] :void
-  ; singleton
-  (println (singleton-range? (singleton-range 3)))   ; true
-  (println (singleton-range? (closed-range 1 3)))    ; false
-  (println (singleton-range? (open-range 3 3)))      ; false
+  ; singleok?n
+  (println (singleok?n-range? (singleok?n-range 3)))   ; true
+  (println (singleok?n-range? (closed-range 1 3)))    ; false
+  (println (singleok?n-range? (open-range 3 3)))      ; false
   ; empty
   (println (empty-range? (open-range 3 3)))          ; true  -- (3,3) has no elements
   (println (empty-range? (closed-open-range 3 3)))   ; true  -- [3,3) has no elements
-  (println (empty-range? (singleton-range 3)))       ; false
+  (println (empty-range? (singleok?n-range 3)))       ; false
   (println (empty-range? (closed-range 1 5)))        ; false
   (println (empty-range? (at-least-range 0)))        ; false -- unbounded never empty
   ; nonempty

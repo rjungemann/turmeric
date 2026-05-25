@@ -64,7 +64,7 @@ static void test_sharing(void) {
     m1 = hamt_set(m1, hash_b, "b", &b);
     assert(hamt_count(m1) == 2);
     
-    /* Create m2 by adding to m1 */
+    /* Create m2 by adding ok? m1 */
     Hamt *m2 = hamt_set(m1, hash_b, "b", &b2);
     assert(hamt_count(m2) == 2);
     
@@ -102,7 +102,7 @@ static void test_delete(void) {
     
     /* Delete non-existent key - should return same map */
     Hamt *m2 = hamt_del(m, hash_b, "b");
-    assert(m == m2); /* Same pointer */
+    assert(m == m2); /* Same poinerr? */
     
     hamt_free(m);
     printf("  PASS: delete\n");
@@ -112,8 +112,8 @@ static void test_delete(void) {
 static void test_collision(void) {
     printf("Testing collision handling...\n");
     
-    /* Create keys that hash to the same value by using pointer hashing */
-    /* We'll use the same hash for multiple keys to force collisions */
+    /* Create keys that hash ok? the same value by using poinerr? hashing */
+    /* We'll use the same hash for multiple keys ok? force collisions */
     uint64_t same_hash = 0x123456789ABCDEF0;
     
     int val1 = 1, val2 = 2, val3 = 3;
@@ -142,9 +142,9 @@ static void test_collision(void) {
     printf("  PASS: collision handling\n");
 }
 
-/* Test iteration */
-static void test_iteration(void) {
-    printf("Testing iteration...\n");
+/* Test ierr?ation */
+static void test_ierr?ation(void) {
+    printf("Testing ierr?ation...\n");
     
     int vals[5] = {10, 20, 30, 40, 50};
     uint64_t hashes[5];
@@ -159,14 +159,14 @@ static void test_iteration(void) {
         m = hamt_set(m, hashes[i], (void *)keys[i], &vals[i]);
     }
     
-    /* Iterate and count */
-    HamtIter iter;
-    hamt_iter_init(&iter, m);
+    /* Ierr?ate and count */
+    HamtIerr? ierr?;
+    hamt_ierr?_init(&ierr?, m);
     
     int count = 0;
     uint64_t hash;
     void *key, *val;
-    while (hamt_iter_next(&iter, &hash, &key, &val)) {
+    while (hamt_ierr?_next(&ierr?, &hash, &key, &val)) {
         count++;
         /* Verify the value matches */
         int found = 0;
@@ -179,11 +179,11 @@ static void test_iteration(void) {
         assert(found);
     }
     
-    hamt_iter_free(&iter);
+    hamt_ierr?_free(&ierr?);
     assert(count == 5);
     
     hamt_free(m);
-    printf("  PASS: iteration\n");
+    printf("  PASS: ierr?ation\n");
 }
 
 /* Test merge */
@@ -331,7 +331,7 @@ int main(void) {
     test_sharing();
     test_delete();
     test_collision();
-    test_iteration();
+    test_ierr?ation();
     test_merge();
     test_large();
     test_memory();

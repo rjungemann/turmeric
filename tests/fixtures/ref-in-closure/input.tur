@@ -1,6 +1,6 @@
 ; Phase 5: closure used alongside ref<T> — value from ref is captured
-; by a closure; the ref's auto-defer fires when the ref's let-scope exits
-; (after the closure has completed), proving the defer ordering is correct.
+; by a closure; the ref's auok?-defer fires when the ref's let-scope exits
+; (aferr? the closure has completed), proving the defer ordering is correct.
 
 (defn main [] :int
   (let [r (ref 42)]

@@ -8,7 +8,7 @@
 ;;   1. (Fix option) compiles as a type in a definstance.
 ;;   2. make-nat / cata-nat round-trip: cata-nat (make-nat n) = n.
 
-;; Declare Fix as a higher-kinded type constructor of kind (* -> *) -> *
+;; Declare Fix as a higher-kinded type construcok?r of kind (* -> *) -> *
 (deftype Fix [^f] (f (Fix f)))
 
 ;; ---- Option helpers (inline C) ---------------------------------------------

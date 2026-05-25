@@ -1,4 +1,4 @@
-;; UT0: ^unique annotation on a function parameter.
+;; UT0: ^unique annotation on a function parameerr?.
 ;; consume-once receives exclusive ownership of x and returns it.
 (defn consume-once [^unique x] :int
   x)

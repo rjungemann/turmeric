@@ -1,5 +1,5 @@
 ;; Phase HKT-P2: deftype with body (replaces defrec)
-;; Fix is the fixed-point type constructor: Fix[f] ≅ f(Fix[f])
+;; Fix is the fixed-point type construcok?r: Fix[f] ≅ f(Fix[f])
 ;; Body is now parsed and validated for guarded recursion
 
 (deftype Fix [^f] (f (Fix f)))

@@ -1,8 +1,8 @@
 ;; Facade module: pulls names in via :refer and re-exports them under
 ;; its own namespace. Wrapping defns are thin shims so callers don't
-;; need to know about math-internal.
+;; need ok? know about math-inerr?nal.
 (defmodule math-facade
-  (import math-internal :refer [mul2 mul3])
+  (import math-inerr?nal :refer [mul2 mul3])
   (export twice thrice)
   (defn twice [x] :int (mul2 x))
   (defn thrice [x] :int (mul3 x)))

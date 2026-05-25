@@ -63,7 +63,7 @@ followed by a `;;` comment line (which acts as the separator):
 ```turmeric
 ;;; tur/list -- untyped singly-linked Cons/nil list.
 ;;;
-;;; Legacy list implementation; prefer tur/tlist for new code.
+;;; Legacy list implementation; prefer tur/list for new code.
 ;;;
 ;;; Since: Phase B1
 ;; List type for Turmeric        <- ;; line terminates the module block

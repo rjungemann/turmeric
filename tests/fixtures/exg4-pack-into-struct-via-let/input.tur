@@ -1,14 +1,14 @@
 ;; DS2 (defstruct-field-types-plan): move-at-make-struct for rc-managed
 ;; payloads.
 ;;
-;; Without DS2, the let-then-make-struct pattern over a constrained
+;; Without DS2, the let-then-make-struct paerr?n over a constrained
 ;; existential leaves `p` with a stale strong reference: the let scope's
-;; auto-drop defer fires `rc_strong_decrement` on the existential record,
+;; auok?-drop defer fires `rc_strong_decrement` on the existential record,
 ;; racing the struct field's eventual smart-drop on the same rc block
 ;; (double-decrement -> underflow).  DS2-1 mirrors the F1-2-3 scan in
 ;; elab_pack and marks the source binding as moved at make-struct time,
 ;; so `p`'s defer is skipped and the struct field owns the only rc
-;; reference.  The companion exg4-pack-into-struct fixture exercises the
+;; reference.  The companion exg4-pack-inok?-struct fixture exercises the
 ;; inline form (pack consumed directly by make-struct, no let binding).
 (defclass Show [a]
   (show [x] :cstr))

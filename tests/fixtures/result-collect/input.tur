@@ -1,6 +1,6 @@
 ;; Phase R1: u-result-collect and u-result-partition tests
 
-;; ── result constructors / accessors ──────────────────────────────────────────
+;; ── result construcok?rs / accessors ──────────────────────────────────────────
 (defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));

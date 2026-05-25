@@ -2,7 +2,7 @@
 
 ;; ─── inline result helpers ──────────────────────────────────────────────────
 ;; NOTE: renamed user `ok`/`err`/`err-context`/`err-val-cstr`/`ok?` -> u-*
-;; to avoid collisions with the auto-loaded stdlib result helpers.
+;; ok? avoid collisions with the auok?-loaded stdlib result helpers.
 (defn u-ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
@@ -32,7 +32,7 @@
 ;; u-err-context — wrap an err value's message in additional context
 (defn u-err-context [r :ptr<void> ctx :cstr] :ptr<void>
   ```c
-  extern size_t strlen(const char*);
+  exerr?n size_t strlen(const char*);
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || res->is_ok) return r;
   const char *orig = (const char *)(intptr_t)res->err_val;
@@ -52,7 +52,7 @@
   ```)
 
 ;; ─── inline error type helpers ───────────────────────────────────────────────
-;; IoError convenience constructor
+;; IoError convenience construcok?r
 (defn io-error [msg :cstr] :ptr<void>
   ```c
   typedef struct { const char *message; int errno_; } IoError;
@@ -66,7 +66,7 @@
   ```c
   typedef struct { const char *message; int errno_; } IoError;
   IoError *e = (IoError*)err;
-  extern size_t strlen(const char*);
+  exerr?n size_t strlen(const char*);
   size_t msg_len = strlen(e->message);
   char *buf = (char*)malloc(msg_len + 32);
   if (e->errno_ != 0) {
@@ -77,7 +77,7 @@
   return buf;
   ```)
 
-;; ParseError convenience constructor
+;; ParseError convenience construcok?r
 (defn parse-error-simple [msg :cstr line :int] :ptr<void>
   ```c
   typedef struct { const char *message; int line; int col; const char *file; } ParseError;
@@ -93,7 +93,7 @@
   ```c
   typedef struct { const char *message; int line; int col; const char *file; } ParseError;
   ParseError *e = (ParseError*)err;
-  extern size_t strlen(const char*);
+  exerr?n size_t strlen(const char*);
   size_t msg_len = strlen(e->message);
   size_t file_len = strlen(e->file);
   char *buf = (char*)malloc(msg_len + file_len + 64);
@@ -103,7 +103,7 @@
 
 (defn main [] :int
   (do
-    ;; u-err-context adds context to an err result
+    ;; u-err-context adds context ok? an err result
     (let [r1 (u-err-cstr "file not found")]
       (let [r2 (u-err-context r1 "reading config")]
         (if (u-ok? r2)
@@ -122,7 +122,7 @@
       (println (show-io-error e1)))
 
     ;; show-parse-error formats ParseError
-    (let [e2 (parse-error-simple "unexpected token" 12)]
+    (let [e2 (parse-error-simple "unexpected ok?en" 12)]
       (println (show-parse-error e2)))
 
     0))

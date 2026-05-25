@@ -1,4 +1,4 @@
-;; Phase T21: fiber-local storage test
+;; Phase T21: fiber-local sok?rage test
 ;; Test that fiber-local values are isolated between fibers
 
 (defn fiber-a [] :nil

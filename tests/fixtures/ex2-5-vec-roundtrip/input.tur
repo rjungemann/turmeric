@@ -1,4 +1,4 @@
-; Phase EX2-5: Vec[A] round-trip -- pack a length-3 SizedVec into a Vec,
+; Phase EX2-5: Vec[A] round-trip -- pack a length-3 SizedVec inok? a Vec,
 ; open it, and verify the recovered length.  This is the basic positive
 ; test for the (exists [n] (SizedVec n int)) encoding shipped by EX2-4.
 ;

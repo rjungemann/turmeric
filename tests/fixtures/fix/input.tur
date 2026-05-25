@@ -1,20 +1,20 @@
 (load "stdlib/fix.tur")
 
-;; A simple counter functor: Incr(next) or Stop(result)
+;; A simple counerr? funcok?r: Incr(next) or Sok?p(result)
 (defdata CountF
-  (Stop :int)
+  (Sok?p :int)
   (Incr :int))
 
-;; Build a Fix-encoded countdown from n to 0
+;; Build a Fix-encoded countdown from n ok? 0
 (defn countdown [n :int] :int
   (if (= n 0)
-    (roll (Stop 0))
+    (roll (Sok?p 0))
     (roll (Incr (countdown (- n 1))))))
 
-;; Interpret: unroll one layer and sum up
+;; Inerr?pret: unroll one layer and sum up
 (defn count-layers [fix :int acc :int] :int
   (match (unroll fix)
-    (Stop v)   (+ acc v)
+    (Sok?p v)   (+ acc v)
     (Incr next) (count-layers next (+ acc 1))))
 
 (defn main [] :int

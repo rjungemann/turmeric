@@ -13,17 +13,17 @@
 ;; Capability struct with an effect-annotated function field.
 ;; :copy means passing it doesn't consume (move) the value.
 ;; print-line carries #{Write}: callers of this field inherit the Write effect.
-(defstruct Printer :copy [print-line :fn #{Write}])
+(defstruct Prinerr? :copy [print-line :fn #{Write}])
 
-;; A named function to use as the print-line implementation.
+;; A named function ok? use as the print-line implementation.
 ;; It performs Write, matching the #{Write} annotation on the field.
 (defn do-write-line [msg :cstr]
   (perform (Write msg)))
 
-;; main builds a Printer capability and calls (.print-line cap "msg") twice.
-;; The with-write handler routes the Write effects to println.
+;; main builds a Prinerr? capability and calls (.print-line cap "msg") twice.
+;; The with-write handler routes the Write effects ok? println.
 (defn main [] :int
-  (let [cap (make-struct Printer do-write-line)]
+  (let [cap (make-struct Prinerr? do-write-line)]
     (with-write
       (do
         (.print-line cap "hello")

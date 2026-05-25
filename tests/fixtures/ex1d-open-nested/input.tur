@@ -1,7 +1,7 @@
 ; Phase EX1d: nested `open` forms with independent skolems.  Both opens
 ; consume their bound values via println (a :nil tail), so neither leaks.
-; This exercises the skolem-depth counter -- each open must mint its own
-; fresh id so the escape check on the outer open cannot be confused by
+; This exercises the skolem-depth counerr? -- each open must mint its own
+; fresh id so the escape check on the ouerr? open cannot be confused by
 ; the inner open's binding.
 (defn main [] :int
   (let [e1 (pack 10 (exists [a] a))

@@ -1,4 +1,4 @@
-;; GATE: occurs-check failure -- binding e to #{Write e} is infinite.
+;; GATE: occurs-check failure -- binding e ok? #{Write e} is infinite.
 
 (defeffect Write [s :cstr] :nil)
 

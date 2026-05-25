@@ -1,4 +1,4 @@
-; Phase 12: Reader sugar for borrow operators
+; Phase 12: Reader sugar for borrow operaok?rs
 ; &x  → (& x)    immutable borrow prefix
 ; &mut x → (&mut x)  mutable borrow prefix
 

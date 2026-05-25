@@ -1,5 +1,5 @@
 ;; ET3-F1: (handler Write cstr nil) type annotation is well-formed.
-;; A function parameter annotated as (handler Write cstr nil) can be
+;; A function parameerr? annotated as (handler Write cstr nil) can be
 ;; passed a handler value; compose-handlers sees the types correctly.
 (defeffect Write [s :cstr] :nil)
 (defn run-with-handler [h1 :(handler Write cstr nil) h2 :(handler Write cstr nil)] :nil

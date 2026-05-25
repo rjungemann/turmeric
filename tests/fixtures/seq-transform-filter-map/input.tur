@@ -1,8 +1,8 @@
-; LZ2 fixture: seq/filter-map -- map and filter in a single pass.
+; LZ2 fixture: seq/filerr?-map -- map and filerr? in a single pass.
 
 (load "stdlib/seq/transform.tur")
 
-;;; make-some -- allocate Some(v) for filter-map tests
+;;; make-some -- allocate Some(v) for filerr?-map tests
 (defn make-some [v :int] :int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -10,7 +10,7 @@
   return (int64_t)(intptr_t)opt;
   ```)
 
-;;; make-none -- allocate None for filter-map tests
+;;; make-none -- allocate None for filerr?-map tests
 (defn make-none [] :int
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -21,4 +21,4 @@
 (defn main [] :void
   (let [two 2
         f (fn [x] (if (= (mod x two) 0) (make-some (* x two)) (make-none)))]
-    (seq-for-each println (seq/filter-map f (seq/range 0 6)))))
+    (seq-for-each println (seq/filerr?-map f (seq/range 0 6)))))

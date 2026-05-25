@@ -1,9 +1,9 @@
-;; SS8 negative: send-to with wrong role name.
-(defprotocol Ping [A B]
+;; SS8 negative: send-ok? with wrong role name.
+(defprook?col Ping [A B]
   (-> A B int))
 
 (defn role-a [^linear ch :(Role Ping A)] :nil
-  (let [ch (send-to ch C 42)]
+  (let [ch (send-ok? ch C 42)]
     (close ch)))
 
 (defn main [] :int 0)

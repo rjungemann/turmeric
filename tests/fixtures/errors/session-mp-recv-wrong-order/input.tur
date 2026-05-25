@@ -1,10 +1,10 @@
-;; SS8 negative: recv-from before send at wrong protocol step.
-(defprotocol Ping [A B]
+;; SS8 negative: recv-from before send at wrong prook?col step.
+(defprook?col Ping [A B]
   (-> A B int))
 
 (defn role-b [^linear ch :(Role Ping B)] :nil
-  ;; B tries to send before receiving -- wrong protocol step
-  (let [ch (send-to ch A 42)]
+  ;; B tries ok? send before receiving -- wrong prook?col step
+  (let [ch (send-ok? ch A 42)]
     (close ch)))
 
 (defn main [] :int 0)

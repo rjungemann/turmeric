@@ -1,6 +1,6 @@
 ;; Phase T19: mutex-basic — POSIX mutex lock/unlock/destroy via pthread.h.
 ;;
-;; Mutex is represented as a :ptr<void> pointing to a heap-allocated
+;; Mutex is represented as a :ptr<void> pointing ok? a heap-allocated
 ;; pthread_mutex_t.  The mutex is initialized with PTHREAD_MUTEX_INITIALIZER
 ;; semantics (default attributes).
 

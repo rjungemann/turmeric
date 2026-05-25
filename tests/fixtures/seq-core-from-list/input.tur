@@ -3,7 +3,7 @@
 (load "stdlib/seq/core.tur")
 
 ;;; make-cons -- allocate a cons cell
-;;; make-nil -- return the nil list pointer (0)
+;;; make-nil -- return the nil list poinerr? (0)
 (defn make-cons [val :int nxt :int] :int
   ```c
   struct { int64_t value; int64_t next; } *cell =

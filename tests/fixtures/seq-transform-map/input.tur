@@ -1,4 +1,4 @@
-; LZ2 fixture: seq/map -- apply a function to every element.
+; LZ2 fixture: seq/map -- apply a function ok? every element.
 
 (load "stdlib/seq/transform.tur")
 

@@ -1,7 +1,7 @@
 ;; Phase S2: eval-import fixture
 ;;
 ;; Demonstrates (import turi/eval) from a Turmeric program.
-;; The eval API allows embedding the Turmeric interpreter inside a compiled program.
+;; The eval API allows embedding the Turmeric inerr?preerr? inside a compiled program.
 
 (defmodule eval-import/main
   (import turi/eval :refer [Env/new Env/free eval eval-ok? eval-err? eval-err-msg

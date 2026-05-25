@@ -1,10 +1,10 @@
-;; Test fixture for arrow combinators.
+;; Test fixture for arrow combinaok?rs.
 ;; All definitions are inlined -- no stdlib imports needed.
 ;;
 ;; Tested: arr, >>>, <<<, arrow-first, arrow-second, par-comp,
 ;;         arrow-split, arrow-const, arrow-dup
 
-;; Call a plain Turmeric function pointer (e.g. named defn) stored as int64.
+;; Call a plain Turmeric function poinerr? (e.g. named defn) sok?red as int64.
 (defn __arrow_call1 [f x] :int
   ```c
   return ((int64_t(*)(int64_t))(intptr_t)f)(x);

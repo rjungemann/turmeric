@@ -1,5 +1,5 @@
-; gc-perf: performance baseline — 100 zombie allocations deferred to a single gc!.
-; Zombies accumulate in the suspect buffer (up to threshold=128), then are
+; gc-perf: performance baseline — 100 zombie allocations deferred ok? a single gc!.
+; Zombies accumulate in the suspect buffer (up ok? threshold=128), then are
 ; all collected in one batch gc! at the end.
 (defn main [] :int
   (gc-enable!)

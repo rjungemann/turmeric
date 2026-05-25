@@ -1,871 +1,214 @@
-;;; tur/result -- untyped Result: ok(value) or err(value).
+;;; tur/result -- typed Result[A B]: ok value A or err value B.
 ;;;
-;;; Legacy untyped result implementation. Prefer tur/tresult for new code.
+;;; Parameterized result type. Runtime layout:
+;;; { bool is_ok; int64_t ok_val; int64_t err_val; }.
 ;;;
-;;; Since: Phase B1
-;;; Deprecated: superseded by tur/tresult (Phase TC1-E)
-;; Result type for Turmeric
-;; Represents either a success (ok) or an error (err)
-;;
-;; v1 representation: heap-allocated struct { bool is_ok; int64_t ok_val; int64_t err_val; }
-;; returned as ptr<void>. Both ok_val and err_val are int64_t in v1; typed generics
-;; are a Phase R1 follow-on once generic structs land.
+;;; Since: Phase TC1-E
+;; Phase TC1-E: Typed Result[A B]
+;; ok value of type A, err value of type B.
+;; Runtime layout: { bool is_ok; int64_t ok_val; int64_t err_val; }
 
+;;; Result -- parameterized result type with ok type A and err type B.
+;;;
+;;; Since: Phase TC1
+(defstruct Result [A B]
+  (is-ok   :bool)
+  (ok-val  :int)
+  (err-val :int))
 
-;; -- Constructors -------------------------------------------------------------
-
-;; Create an ok value
-;;
-;; DEPRECATED: Phase TC1-E
-;; The functions in this module are deprecated in favor of the typed
-;; API in stdlib/tresult.tur.  They will be removed in the
-;; release cycle following Phase TC1-E.
-;;
-
-;;; ok -- wrap a value in an ok result.
+;;; ok -- wrap a success value of type A in a Result[A B].
 ;;;
 ;;; Parameters:
-;;;   x -- the success value (:int)
+;;;   x -- the ok value (type A)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated ok result as :ptr<void>.
+;;;   A heap-allocated Result[A B] with is-ok=true.
 ;;;
 ;;; Example:
 ;;;   (ok 42)  ; => ok(42)
 ;;;
-;;; Deprecated: Use tok from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" ok [x :int] #{Unsafe} :ptr<void>
+;;; Since: Phase TC1
+(defn ok [x :int] #{} :int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  result->is_ok = true;
-  result->ok_val = x;
-  result->err_val = 0;
-  return result;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true;
+  r->ok_val = x;
+  r->err_val = 0;
+  return (int64_t)(intptr_t)r;
   ```)
 
-;; Create an err value
-;;; err -- wrap a value in an err result.
+;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
-;;;   e -- the error value (:int)
+;;;   e -- the error value (type B)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated err result as :ptr<void>.
+;;;   A heap-allocated Result[A B] with is-ok=false.
 ;;;
 ;;; Example:
-;;;   (err 1)  ; => err(1)
+;;;   (err 404)  ; => err(404)
 ;;;
-;;; Deprecated: Use terr from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" err [e :int] #{Unsafe} :ptr<void>
+;;; Since: Phase TC1
+(defn err [e :int] #{} :int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  result->is_ok = false;
-  result->ok_val = 0;
-  result->err_val = e;
-  return result;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false;
+  r->ok_val = 0;
+  r->err_val = e;
+  return (int64_t)(intptr_t)r;
   ```)
 
-;; -- Predicates ---------------------------------------------------------------
-
-;; Check if result is ok
-;;; ok? -- check whether a result is ok.
+;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
-;;;   r -- the result to test (:ptr<void>)
+;;;   r -- Result[A B]
 ;;;
 ;;; Returns:
-;;;   true if r is an ok result, false otherwise.
+;;;   true if r is ok, false if r is err.
 ;;;
 ;;; Example:
 ;;;   (ok? (ok 1))   ; => true
 ;;;   (ok? (err 0))  ; => false
 ;;;
-;;; Deprecated: Use tok? from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" ok? [r :ptr<void>] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn ok? [r :int] #{} :bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result != NULL && result->is_ok;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return res && res->is_ok;
   ```)
 
-;; Check if result is err
-;;; err? -- check whether a result is err.
+;;; err? -- check whether a Result[A B] is err.
 ;;;
 ;;; Parameters:
-;;;   r -- the result to test (:ptr<void>)
+;;;   r -- Result[A B]
 ;;;
 ;;; Returns:
-;;;   true if r is an err result (or NULL), false otherwise.
+;;;   true if r is err, false if r is ok.
 ;;;
 ;;; Example:
-;;;   (err? (err 0))  ; => true
-;;;   (err? (ok 1))   ; => false
+;;;   (err? (err 1))  ; => true
 ;;;
-;;; Deprecated: Use terr? from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" err? [r :ptr<void>] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn err? [r :int] #{} :bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result == NULL || !result->is_ok;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return !res || !res->is_ok;
   ```)
 
-;; -- Value accessors -----------------------------------------------------------
-
-;; Extract the ok value (undefined behaviour if r is err)
-;;; ok-val -- extract the ok value from a result.
+;;; ok-val -- extract the ok value; panics if err.
 ;;;
 ;;; Parameters:
-;;;   r -- an ok result (:ptr<void>); behaviour is undefined if r is err
+;;;   r -- Result[A B]
 ;;;
 ;;; Returns:
-;;;   The contained ok value as :int.
+;;;   The ok value of type A.
 ;;;
 ;;; Example:
-;;;   (ok-val (ok 5))  ; => 5
+;;;   (ok-val (ok 7))  ; => 7
 ;;;
-;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" ok-val [r :ptr<void>] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn ok-val [r :int] #{} :int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->ok_val;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res || !res->is_ok) tur_panic("ok-val called on err");
+  return (int64_t)res->ok_val;
   ```)
 
-;; Extract the err value (undefined behaviour if r is ok)
-;;; err-val -- extract the err value from a result.
+;;; err-val -- extract the error value; panics if ok.
 ;;;
 ;;; Parameters:
-;;;   r -- an err result (:ptr<void>); behaviour is undefined if r is ok
+;;;   r -- Result[A B]
 ;;;
 ;;; Returns:
-;;;   The contained err value as :int.
+;;;   The error value of type B.
 ;;;
 ;;; Example:
-;;;   (err-val (err 99))  ; => 99
+;;;   (err-val (err 404))  ; => 404
 ;;;
-;;; Deprecated: Use terr-val from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" err-val [r :ptr<void>] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn err-val [r :int] #{} :int
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->err_val;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res || res->is_ok) tur_panic("err-val called on ok");
+  return (int64_t)res->err_val;
   ```)
 
-;; -- ? operator support helpers ------------------------------------------------
-;;
-;; The ? operator (see elab_question in src/compiler/elab_forms.c) lowers to a
-;; predicate + an ok-unwrap; both touch the internal result representation and
-;; would otherwise require users to write `(unsafe (? expr))` at every call
-;; site. These two helpers absorb the unsafe surface so the ? lowering -- and
-;; therefore user code -- stays clean. Update them together with err? / ok-val
-;; if the internal representation ever changes.
-
-;;; __tur-q-is-err? -- predicate used by the ? operator lowering.
+;;; result-free -- free a heap-allocated Result[A B].
 ;;;
 ;;; Parameters:
-;;;   r -- a result value (:ptr<void>)
-;;;
-;;; Returns:
-;;;   true if r is an err result, false if ok.
-(defn __tur-q-is-err? [r :ptr<void>] :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result == NULL || !result->is_ok;
-  ```)
-
-;;; __tur-q-ok-val -- ok-value extractor used by the ? operator lowering.
-;;;
-;;; Parameters:
-;;;   r -- an ok result (:ptr<void>); behaviour is undefined if r is err
-;;;
-;;; Returns:
-;;;   The contained ok value as :int.
-(defn __tur-q-ok-val [r :ptr<void>] :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->ok_val;
-  ```)
-
-;; -- Unwrapping ----------------------------------------------------------------
-
-;; Unwrap - returns ok value, aborts if err
-;;; result-unwrap -- extract the ok value, aborting the process if r is err.
-;;;
-;;; Parameters:
-;;;   r -- the result to unwrap (:ptr<void>)
-;;;
-;;; Returns:
-;;;   The contained ok value as :int.
-;;;
-;;; Example:
-;;;   (result-unwrap (ok 7))  ; => 7
-;;;
-;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-unwrap [r :ptr<void>] #{Unsafe} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  if (result == NULL || !result->is_ok) {
-    fprintf(stderr, "result-unwrap: called on err\n");
-    abort();
-  }
-  return (int)result->ok_val;
-  ```)
-
-;; Unwrap with default - returns ok value or default_val if err
-;;; result-unwrap-or -- extract the ok value, or return a default if r is err.
-;;;
-;;; Parameters:
-;;;   r           -- the result (:ptr<void>)
-;;;   default_val -- the fallback value (:int)
-;;;
-;;; Returns:
-;;;   The ok value if r is ok, otherwise default_val.
-;;;
-;;; Example:
-;;;   (result-unwrap-or (err 0) 99)  ; => 99
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-unwrap-or [r :ptr<void> default_val :int] #{Unsafe} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  if (result != NULL && result->is_ok) return (int)result->ok_val;
-  return default_val;
-  ```)
-
-;; Expect - returns ok value, aborts with custom message if err
-;;; result-expect -- extract the ok value, aborting with a custom message if r is err.
-;;;
-;;; Parameters:
-;;;   r   -- the result to unwrap (:ptr<void>)
-;;;   msg -- message printed to stderr before aborting (:cstr)
-;;;
-;;; Returns:
-;;;   The contained ok value as :int.
-;;;
-;;; Example:
-;;;   (result-expect r "parse failed")  ; => ok value or abort
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-expect [r :ptr<void> msg :cstr] #{Unsafe} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  if (result == NULL || !result->is_ok) {
-    fprintf(stderr, "result-expect: %s\n", (const char*)msg);
-    abort();
-  }
-  return (int)result->ok_val;
-  ```)
-
-;; -- Combinators --------------------------------------------------------------
-
-;; result-map -- apply f to the ok value; propagate err unchanged
-;; f must be a fn [x :int] :int
-;;; result-map -- apply a function to the ok value, propagating err unchanged.
-;;;
-;;; Parameters:
-;;;   r -- the result (:ptr<void>)
-;;;   f -- function to apply to the ok value (:ptr<void>); signature fn [x :int] :int
-;;;
-;;; Returns:
-;;;   A new ok result with the mapped value, or r unchanged if r is err.
-;;;
-;;; Example:
-;;;   (result-map (ok 3) (fn [x] (* x 2)))  ; => ok(6)
-;;;
-;;; Deprecated: Use tresult-map from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-map [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) return r;
-  int64_t new_val = ((int64_t (*)(int64_t))f)(res->ok_val);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok   = true;
-  out->ok_val  = new_val;
-  out->err_val = 0;
-  return out;
-  ```)
-
-;; result-map-err -- apply f to the err value; propagate ok unchanged
-;; f must be a fn [e :int] :int
-;;; result-map-err -- apply a function to the err value, propagating ok unchanged.
-;;;
-;;; Parameters:
-;;;   r -- the result (:ptr<void>)
-;;;   f -- function to apply to the err value (:ptr<void>); signature fn [e :int] :int
-;;;
-;;; Returns:
-;;;   A new err result with the mapped error, or r unchanged if r is ok.
-;;;
-;;; Example:
-;;;   (result-map-err (err 1) (fn [e] (+ e 100)))  ; => err(101)
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-map-err [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || res->is_ok) return r;
-  int64_t new_err = ((int64_t (*)(int64_t))f)(res->err_val);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok   = false;
-  out->ok_val  = 0;
-  out->err_val = new_err;
-  return out;
-  ```)
-
-;; result-flat-map (result-and-then) -- chain computations that may fail
-;; f receives the ok value and must return a ptr<void> result
-;;; result-flat-map -- chain a fallible computation over an ok result.
-;;;
-;;; Parameters:
-;;;   r -- the result (:ptr<void>)
-;;;   f -- function receiving the ok value and returning a new result (:ptr<void>)
-;;;
-;;; Returns:
-;;;   The result of applying f to the ok value, or r unchanged if r is err.
-;;;
-;;; Example:
-;;;   (result-flat-map (ok 5) (fn [x] (if (> x 0) (ok x) (err -1))))  ; => ok(5)
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-flat-map [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) return r;
-  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
-  ```)
-
-;; result-or -- return r if ok, otherwise return alt
-;;; result-or -- return r if ok, otherwise return the fallback result.
-;;;
-;;; Parameters:
-;;;   r   -- the primary result (:ptr<void>)
-;;;   alt -- the fallback result (:ptr<void>)
-;;;
-;;; Returns:
-;;;   r if r is ok, otherwise alt.
-;;;
-;;; Example:
-;;;   (result-or (err 0) (ok 99))  ; => ok(99)
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-or [r :ptr<void> alt :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res != NULL && res->is_ok) return r;
-  return alt;
-  ```)
-
-;; result-or-else -- return r if ok, otherwise compute alt via thunk
-;; f must be a fn [e :int] :ptr<void>
-;;; result-or-else -- return r if ok, otherwise compute a fallback by calling f with the err value.
-;;;
-;;; Parameters:
-;;;   r -- the primary result (:ptr<void>)
-;;;   f -- recovery function of type fn [e :int] :ptr<void>
-;;;
-;;; Returns:
-;;;   r if r is ok, otherwise the result of f(err-value).
-;;;
-;;; Example:
-;;;   (result-or-else (err 1) (fn [e] (ok 0)))  ; => ok(0)
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-or-else [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res != NULL && res->is_ok) return r;
-  int64_t ev = res ? res->err_val : 0;
-  return (void *)((int64_t (*)(int64_t))f)(ev);
-  ```)
-
-;; -- Option interop -----------------------------------------------------------
-
-;; ok-or -- convert option to result: some(v) -> ok(v), none -> err(e)
-;;; ok-or -- convert an option to a result, using e as the error value if the option is none.
-;;;
-;;; Parameters:
-;;;   opt -- the option to convert (:ptr<void>)
-;;;   e   -- the error value to use if opt is none (:int)
-;;;
-;;; Returns:
-;;;   ok(value) if opt is some(value), err(e) if opt is none.
-;;;
-;;; Example:
-;;;   (ok-or (some 7) -1)  ; => ok(7)
-;;;   (ok-or (none) -1)    ; => err(-1)
-;;;
-;;; Deprecated: Use the typed Result[A B] / Option[A] API in stdlib/tresult.tur and stdlib/toption.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" ok-or [opt :ptr<void> e :int] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_some; int64_t value; } *o = (void*)opt;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  if (o != NULL && o->is_some) {
-    result->is_ok   = true;
-    result->ok_val  = o->value;
-    result->err_val = 0;
-  } else {
-    result->is_ok   = false;
-    result->ok_val  = 0;
-    result->err_val = e;
-  }
-  return result;
-  ```)
-
-;; -- Error context -------------------------------------------------------------
-
-;; err-context -- wrap an err value's message in additional context
-;; Returns a new err whose err_val is a freshly allocated cstr "context: original"
-;; If r is ok, returns r unchanged.
-;;; err-context -- prepend context text to an err value's message string.
-;;;
-;;; Parameters:
-;;;   r   -- the result (:ptr<void>)
-;;;   ctx -- context prefix string (:cstr)
-;;;
-;;; Returns:
-;;;   A new err result whose message is "ctx: original", or r unchanged if r is ok.
-;;;
-;;; Example:
-;;;   (err-context (err my-msg) "loading config")
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" err-context [r :ptr<void> ctx :cstr] #{Unsafe} :ptr<void>
-  ```c
-  extern size_t strlen(const char*);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || res->is_ok) return r;
-  const char *orig = (const char *)(intptr_t)res->err_val;
-  size_t ctx_len  = strlen((const char*)ctx);
-  size_t orig_len = orig ? strlen(orig) : 0;
-  char *msg = malloc(ctx_len + 2 + orig_len + 1);
-  memmove(msg, ctx, ctx_len);
-  msg[ctx_len]     = ':';
-  msg[ctx_len + 1] = ' ';
-  if (orig) memmove(msg + ctx_len + 2, orig, orig_len);
-  msg[ctx_len + 2 + orig_len] = '\0';
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok   = false;
-  out->ok_val  = 0;
-  out->err_val = (int64_t)(intptr_t)msg;
-  return out;
-  ```)
-
-;; -- Memory management --------------------------------------------------------
-
-;; Phase E1: result-eq? -- compare two results using separate comparators for ok and err values.
-;; ok-cmp and err-cmp must each be fn [a :int b :int] :bool
-;;; result-eq? -- compare two results using separate comparators for ok and err values.
-;;;
-;;; Parameters:
-;;;   r1      -- first result
-;;;   r2      -- second result
-;;;   ok-cmp  -- comparator for ok values; fn [a :int b :int] :bool
-;;;   err-cmp -- comparator for err values; fn [a :int b :int] :bool
-;;;
-;;; Returns:
-;;;   true if both results have the same variant and the relevant comparator returns true.
-;;;
-;;; Example:
-;;;   (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
-;;;
-;;;
-;;; Deprecated: Use tresult-eq? from stdlib/tresult.tur instead (or the Eq[Result] instance).
-;;; Since: Phase E1
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-eq? [r1 r2 ok-cmp err-cmp] #{Unsafe} :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void *)(intptr_t)r1;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void *)(intptr_t)r2;
-  if (!a && !b) return true;
-  if (!a || !b) return false;
-  if (a->is_ok != b->is_ok) return false;
-  if (a->is_ok) {
-      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
-  } else {
-      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
-  }
-  ```)
-
-;;; Typeclass instance for result -- Eq: structural equality via result-eq?.
-;;
-;; Disabled with #; -- this instance never elaborated cleanly when result.tur
-;; was loaded explicitly via (import result ...) because:
-;;   (1) the orphan-instance check fires (Eq is owned by typeclass-eq.tur);
-;;   (2) result-eq? is #{Unsafe} and would need an (unsafe ...) wrapper here.
-;; The instance only "worked" historically because result.tur was never
-;; actually imported by name.  Restoring it requires either an exemption in
-;; the elaborator or relocating the instance into typeclass-eq.tur.
-#;(definstance Eq [result]
-  (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
-
-;; Free a result (does not free the contained value)
-;;; result-free -- free the heap memory for a result value.
-;;;
-;;; Parameters:
-;;;   r -- the result to free (:ptr<void>)
+;;;   r -- Result[A B] to free
 ;;;
 ;;; Example:
 ;;;   (result-free my-result)
 ;;;
-;;; Deprecated: Use tresult-free from stdlib/tresult.tur instead.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-free [r :ptr<void>] #{Unsafe}
+;;; Since: Phase TC1
+(defn result-free [r :int] #{} :void
   ```c
-  free(r);
+  if (r) free((void*)(intptr_t)r);
   ```)
 
-;; -- Collection helpers -------------------------------------------------------
-
-;; result-collect -- collect a vec of results into a single result
-;; v must be a vec (ptr<void> from vec-new) containing result ptr<void> values.
-;; Returns ok(vec-of-ok-values) if all items are ok,
-;; or err(first-err-value) on the first err encountered.
-;;; result-collect -- collect a vec of results into a single result.
+;;; result-map -- apply a function to the ok value if ok.
 ;;;
 ;;; Parameters:
-;;;   v -- a vec (:ptr<void>) whose elements are result ptr<void> values
+;;;   r -- Result[A B]
+;;;   f -- function A -> C
 ;;;
 ;;; Returns:
-;;;   ok(vec-of-ok-values) if every element is ok,
-;;;   or err(first-err-value) on the first err encountered.
+;;;   Result[C B] with f applied to the ok value if ok, or the
+;;;   unchanged err otherwise. The returned value is a freshly
+;;;   allocated Result; the input r is not modified.
 ;;;
 ;;; Example:
-;;;   (result-collect my-results-vec)  ; => ok(vec) or err(e)
+;;;   (result-map (ok 3) (fn [x] (* x 2)))  ; => ok(6)
+;;;   (result-map (err 5) (fn [x] (* x 2))) ; => err(5)
 ;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-collect [v :ptr<void>] #{Unsafe} :ptr<void>
+;;; Since: Phase TC1
+(defn result-map [r :int f] #{} :int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
-  /* Check for first error */
-  for (size_t i = 0; i < vec->len; i++) {
-    res_ptr = (void *)(intptr_t)vec->data[i];
-    if (res_ptr == NULL || !res_ptr->is_ok) {
-      int64_t ev = res_ptr ? res_ptr->err_val : 0;
-      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-          malloc(sizeof(*out));
-      out->is_ok   = false;
-      out->ok_val  = 0;
-      out->err_val = ev;
-      return out;
-    }
-  }
-  /* All ok -- build a new vec of ok values */
-  struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
-      malloc(sizeof(*ok_vec));
-  ok_vec->len  = vec->len;
-  ok_vec->cap  = vec->len;
-  ok_vec->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
-  for (size_t i = 0; i < vec->len; i++) {
-    res_ptr = (void *)(intptr_t)vec->data[i];
-    ok_vec->data[i] = res_ptr->ok_val;
-  }
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-      malloc(sizeof(*out));
-  out->is_ok   = true;
-  out->ok_val  = (int64_t)(intptr_t)ok_vec;
-  out->err_val = 0;
-  return out;
-  ```)
-
-;; result-partition -- split a vec of results into (ok-vec, err-vec)
-;; Returns a ptr<void> to a pair struct { void *ok_vec; void *err_vec; }.
-;; Use result-partition-ok and result-partition-err to extract each vec.
-;;; result-partition -- split a vec of results into separate ok and err vecs.
-;;;
-;;; Parameters:
-;;;   v -- a vec (:ptr<void>) whose elements are result ptr<void> values
-;;;
-;;; Returns:
-;;;   A pair (:ptr<void>) with fields ok_vec and err_vec.
-;;;   Use result-partition-ok and result-partition-err to access each vec.
-;;;
-;;; Example:
-;;;   (let [pair (result-partition my-vec)]
-;;;     (result-partition-ok pair))
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-partition [v :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  typedef struct __tur_res_vec { int64_t *data; size_t len; size_t cap; } __tur_res_vec_t;
-  __tur_res_vec_t *vec = (void*)v;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
-  /* Build ok and err vecs */
-  __tur_res_vec_t *ok_vec = malloc(sizeof(*ok_vec));
-  ok_vec->data = NULL; ok_vec->len = 0; ok_vec->cap = 0;
-  __tur_res_vec_t *err_vec = malloc(sizeof(*err_vec));
-  err_vec->data = NULL; err_vec->len = 0; err_vec->cap = 0;
-  for (size_t i = 0; i < vec->len; i++) {
-    res_ptr = (void *)(intptr_t)vec->data[i];
-    int64_t val;
-    __tur_res_vec_t *dst;
-    if (res_ptr != NULL && res_ptr->is_ok) {
-      val = res_ptr->ok_val;
-      dst = ok_vec;
-    } else {
-      val = res_ptr ? res_ptr->err_val : 0;
-      dst = err_vec;
-    }
-    if (dst->len >= dst->cap) {
-      size_t new_cap = dst->cap > 0 ? dst->cap * 2 : 4;
-      int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
-      for (size_t j = 0; j < dst->len; j++) new_data[j] = dst->data[j];
-      free(dst->data);
-      dst->data = new_data;
-      dst->cap  = new_cap;
-    }
-    dst->data[dst->len++] = val;
-  }
-  /* Return pair */
-  struct { void *ok_vec; void *err_vec; } *pair = malloc(sizeof(*pair));
-  pair->ok_vec  = ok_vec;
-  pair->err_vec = err_vec;
-  return pair;
-  ```)
-
-;; result-partition-ok -- extract the ok-vec from a result-partition pair
-;;; result-partition-ok -- extract the ok-vec from a result-partition pair.
-;;;
-;;; Parameters:
-;;;   pair -- the pair returned by result-partition (:ptr<void>)
-;;;
-;;; Returns:
-;;;   The vec (:ptr<void>) of ok values.
-;;;
-;;; Example:
-;;;   (result-partition-ok (result-partition my-vec))
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-partition-ok [pair :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
-  return p->ok_vec;
-  ```)
-
-;; result-partition-err -- extract the err-vec from a result-partition pair
-;;; result-partition-err -- extract the err-vec from a result-partition pair.
-;;;
-;;; Parameters:
-;;;   pair -- the pair returned by result-partition (:ptr<void>)
-;;;
-;;; Returns:
-;;;   The vec (:ptr<void>) of err values.
-;;;
-;;; Example:
-;;;   (result-partition-err (result-partition my-vec))
-;;;
-;;; Deprecated: Use the typed Result[A B] API in stdlib/tresult.tur.
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-partition-err [pair :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
-  return p->err_vec;
-  ```)
-
-;; Phase R4: result-must -- unwrap ok or panic with default message
-;;; result-must -- unwrap the ok value or panic with a default message.
-;;;
-;;; Parameters:
-;;;   r -- the result to unwrap (:ptr<void>)
-;;;
-;;; Returns:
-;;;   The contained ok value as :int.
-;;;
-;;; Example:
-;;;   (result-must (ok 5))  ; => 5
-;;;
-;;;
-;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
-;;; Since: Phase R4
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-must [r :ptr<void>] #{Unsafe} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) {
-    tur_panic("result-must: called on err");
-  }
-  return (int)res->ok_val;
-  ```)
-
-;; Phase R4: result-must-msg -- unwrap ok or panic with custom message
-;;; result-must-msg -- unwrap the ok value or panic with a caller-supplied message.
-;;;
-;;; Parameters:
-;;;   r   -- the result to unwrap (:ptr<void>)
-;;;   msg -- the panic message (:cstr)
-;;;
-;;; Returns:
-;;;   The contained ok value as :int.
-;;;
-;;; Example:
-;;;   (result-must-msg r "expected ok result")  ; => value or panic
-;;;
-;;;
-;;; Deprecated: Use tok-val from stdlib/tresult.tur instead.
-;;; Since: Phase R4
-(defn ^deprecated "see tresult-* in stdlib/tresult.tur" result-must-msg [r :ptr<void> msg :cstr] #{Unsafe} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) {
-    tur_panic(msg);
-  }
-  return (int)res->ok_val;
-  ```)
-
-;;; SINCE: Phase HKT H3
-;; Typeclass instances for result.
-;; Note: result is a binary type constructor (kind * -> * -> *).
-;; These instances are for result<error, T> which has kind * -> *.
-
-;; Foldable instance for result.
-;; foldl/foldr operate on the ok value only; err is skipped.
-;;; __foldable_result_foldl -- foldl implementation for the result Foldable instance.
-#;(defn __foldable_result_foldl [ta init fn] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
-  if (!res || !res->is_ok) return (void*)(intptr_t)init;
-  return (void*)(intptr_t)((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, res->ok_val);
-  ```)
-
-;;; __foldable_result_foldr -- foldr implementation for the result Foldable instance.
-#;(defn __foldable_result_foldr [ta init fn] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
-  if (!res || !res->is_ok) return (void*)(intptr_t)init;
-  return (void*)(intptr_t)((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(res->ok_val, init);
-  ```)
-
-;;; Typeclass instance for ptr<void> -- Foldable: foldl and foldr over the ok value.
-;; Disabled with #; -- Foldable is defined in stdlib/typeclass.tur which is
-;; not auto-loaded, so this instance fails to elaborate whenever result.tur
-;; is loaded by name.  Helper __foldable_result_* functions remain available.
-#;(definstance Foldable [ptr<void>]
-  (foldl [ta init fn] (__foldable_result_foldl ta init fn))
-  (foldr [ta init fn] (__foldable_result_foldr ta init fn)))
-
-;; Bifunctor instance for result.
-;; bimap :: (e -> e') -> (a -> b) -> result e a -> result e' b
-;; Maps fn-left over err, fn-right over ok.
-;;; __bifunctor_result_bimap -- bimap implementation for the result Bifunctor instance.
-#;(defn __bifunctor_result_bimap [container fn-left fn-right] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
-  if (!res) return NULL;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-      malloc(sizeof(*out));
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  if (!res) return 0;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = res->is_ok;
   if (res->is_ok) {
-      out->is_ok   = true;
-      out->ok_val  = ((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val);
+      out->ok_val = ((int64_t(*)(int64_t))(intptr_t)f)(res->ok_val);
       out->err_val = 0;
   } else {
-      out->is_ok   = false;
-      out->ok_val  = 0;
-      out->err_val = ((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val);
-  }
-  return out;
-  ```)
-
-;;; Typeclass instance for ptr<void> -- Bifunctor: bimap over ok and err values.
-;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
-#;(definstance Bifunctor [ptr<void>]
-  (bimap [container fn-left fn-right] (__bifunctor_result_bimap container fn-left fn-right)))
-
-;; Functor instance for result.
-;; fmap :: (a -> b) -> result e a -> result e b
-;; Maps a function over the ok value, leaving err unchanged.
-;;; __functor_result_fmap -- fmap implementation for the result Functor instance.
-#;(defn __functor_result_fmap [container fn] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
-  if (!res) return NULL;
-  if (!res->is_ok) {
-      /* Propagate err */
-      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-          malloc(sizeof(*out));
-      out->is_ok   = false;
-      out->ok_val  = 0;
+      out->ok_val = 0;
       out->err_val = res->err_val;
-      return out;
   }
-  /* Apply fn to ok value */
-  int64_t new_val = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-      malloc(sizeof(*out));
-  out->is_ok   = true;
-  out->ok_val  = new_val;
-  out->err_val = 0;
-  return out;
+  return (int64_t)(intptr_t)out;
   ```)
 
-;;; Typeclass instance for ptr<void> -- Functor: fmap over the ok value.
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
-#;(definstance Functor [ptr<void>]
-  (fmap [container fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-        (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
-    if (!res || !res->is_ok) return container;
-    int64_t new_val = fn.fn(fn.env, res->ok_val);
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-    out->is_ok   = true;
-    out->ok_val  = new_val;
-    out->err_val = 0;
-    return (int64_t)(intptr_t)out;
-    ```))
-
-;; Applicative instance for result.
-;;   pure x = ok(x)
-;;   ap (ok f) (ok x) = ok (f x)
-;;   ap (err e) _      = err e
-;;   ap _ (err e)       = err e
-;;; __applicative_result_pure -- pure implementation for the result Applicative instance.
-#;(defn __applicative_result_pure [x] #{Unsafe} :ptr<void>
-  (ok x))
-
-;;; __applicative_result_ap -- ap implementation for the result Applicative instance.
-#;(defn __applicative_result_ap [ff fa] #{Unsafe} :ptr<void>
+;;; result-eq? -- compare two Result[A B] values.
+;;;
+;;; Parameters:
+;;;   r1      -- first Result[A B]
+;;;   r2      -- second Result[A B]
+;;;   ok-cmp  -- comparator for ok values fn [a :int b :int] :bool
+;;;   err-cmp -- comparator for err values fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both ok with equal ok values, or both err with equal err values.
+;;;
+;;; Example:
+;;;   (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn result-eq? [r1 :int r2 :int ok-cmp err-cmp] #{} :bool
   ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *f_res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ff;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a_res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)fa;
-
-  /* If either is err, return err */
-  if (!f_res || !f_res->is_ok) return ff;
-  if (!a_res || !a_res->is_ok) return fa;
-
-  /* Both are ok: apply function to value */
-  int64_t result = ((int64_t(*)(int64_t))(intptr_t)(int64_t)f_res->ok_val)(a_res->ok_val);
-  return ok(result);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a->is_ok != b->is_ok) return false;
+  if (a->is_ok)
+      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+  else
+      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
   ```)
 
-;;; Typeclass instance for ptr<void> -- Applicative: pure and ap.
-;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
-#;(definstance Applicative [ptr<void>]
-  (pure [x] (__applicative_result_pure x))
-  (ap [ff fa] (__applicative_result_ap ff fa)))
-
-;; Monad instance for result.
-;;   bind (ok x) f = f x
-;;   bind (err e) _ = err e
-;;; __monad_result_bind -- bind implementation for the result Monad instance.
-#;(defn __monad_result_bind [ma fn] #{Unsafe} :ptr<void>
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ma;
-  if (!res || !res->is_ok) return ma; /* Propagate err */
-
-  /* Apply fn to ok value */
-  int64_t mb = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
-  return (void *)mb;
-  ```)
-
-;;; Typeclass instance for ptr<void> -- Monad: bind (flat-map over the ok value).
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-;; Disabled with #; -- see Eq/Foldable notes above (typeclass not auto-loaded).
-#;(definstance Monad [ptr<void>]
-  (bind [ma fn]
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-        (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
-    if (!res || !res->is_ok) return ma;
-    int64_t mb = fn.fn(fn.env, res->ok_val);
-    return mb;
-    ```))
+;;; Eq [Result] -- equality using the ok and err types' Eq instances.
+;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
+;; Note: element comparison uses integer equality; correct for all primitive A/B.
+(definstance Eq [Result] [(Eq A) (Eq B)]
+  (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

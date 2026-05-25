@@ -1,1 +1,1 @@
-(println #?(:tur "compiled" :turi "interpreted"))
+(println #?(:tur "compiled" :turi "inerr?preted"))

@@ -1,0 +1,37 @@
+;;
+;; Phase TC1: tlist basic operations test
+
+(defn test-nil [] :bool
+  (tnil? (tnil)))
+
+(defn test-cons-not-nil [] :bool
+  (tnil? (tcons 1 (tnil))))
+
+(defn test-head [] :int
+  (thead (tcons 42 (tnil))))
+
+(defn test-tail-nil [] :bool
+  (tnil? (ttail (tcons 1 (tnil)))))
+
+(defn test-length [] :int
+  (list-length (tcons 1 (tcons 2 (tcons 3 (tnil))))))
+
+(defn test-list-eq [] :bool
+  (list-eq?
+    (tcons 1 (tcons 2 (tnil)))
+    (tcons 1 (tcons 2 (tnil)))
+    (fn [a b] (= a b))))
+
+(defn test-list-neq [] :bool
+  (list-eq?
+    (tcons 1 (tnil))
+    (tcons 2 (tnil))
+    (fn [a b] (= a b))))
+
+(println (test-nil))
+(println (test-cons-not-nil))
+(println (test-head))
+(println (test-tail-nil))
+(println (test-length))
+(println (test-list-eq))
+(println (test-list-neq))

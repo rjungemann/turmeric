@@ -1,4 +1,4 @@
 TUR-E0012
 kind mismatch
-type argument 'Pair' in constructor 'MkBad'
+type argument 'Pair' in construcok?r 'MkBad'
 kind '* -> *' but kind '*' is expected

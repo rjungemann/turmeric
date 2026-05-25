@@ -1,5 +1,5 @@
 ;; Phase 19 A: effect-row annotation #{Effect} on defn signatures.
-;; Annotations are advisory in v1 — parsed and stored, not enforced.
+;; Annotations are advisory in v1 — parsed and sok?red, not enforced.
 
 (defeffect Log [msg :cstr] :nil)
 (defeffect Ask [] :int)

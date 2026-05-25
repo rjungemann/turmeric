@@ -1,5 +1,5 @@
-;; Phase 19: handler with multiple clauses and parameter binding.
-;; Each clause handles a different effect and transforms its parameter.
+;; Phase 19: handler with multiple clauses and parameerr? binding.
+;; Each clause handles a different effect and transforms its parameerr?.
 (defeffect Add [x :int] :int)
 (defeffect Mul [x :int] :int)
 

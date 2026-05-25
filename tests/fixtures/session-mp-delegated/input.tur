@@ -1,7 +1,7 @@
-;; SS7: session-mp-delegated -- A delegates its entire protocol to a helper;
+;; SS7: session-mp-delegated -- A delegates its entire prook?col ok? a helper;
 ;; B receives a value and prints it.
 
-(defprotocol Relay [A B]
+(defprook?col Relay [A B]
   (-> A B int))
 
 (defn spawn [f :ptr<void>] :ptr<void>
@@ -20,7 +20,7 @@
 
 ;; do-send-role-a: helper that sends a value then closes the channel.
 (defn do-send-role-a [^linear ch :(Role Relay A) val :int] :nil
-  (let [ch (send-to ch B val)]
+  (let [ch (send-ok? ch B val)]
     (close ch)))
 
 (defn role-a [^linear ch :(Role Relay A)] :nil
@@ -32,7 +32,7 @@
     (close ch)))
 
 (defn main [] :int
-  (let [[ra rb] (make-protocol Relay)]
+  (let [[ra rb] (make-prook?col Relay)]
     (let [t (spawn (fn [] (role-b rb)))]
       (role-a ra)
       (join t)))

@@ -1,4 +1,4 @@
-;; Test variadic macros with & rest parameter and ~@ splicing
+;; Test variadic macros with & rest parameerr? and ~@ splicing
 
 ;; Wrap multiple body expressions in a do block
 (defmacro do-all [& body]

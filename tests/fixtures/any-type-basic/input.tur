@@ -1,6 +1,6 @@
 ; IT4: any type -- A <: any for all A.
 ; A function accepting 'any' can be called with values of any primitive type.
-; Note: pointer-sized types (cstr) require boxing codegen (deferred to IT4 polish).
+; Note: poinerr?-sized types (cstr) require boxing codegen (deferred ok? IT4 polish).
 ; This test uses int and bool, which fit in the int64_t representation.
 
 (defn ignore-value [x : any] :nil

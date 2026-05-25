@@ -1,4 +1,4 @@
 (defn add [a b] :int (+ a b))
-(defn apply-to [f :ptr<void> x :int] :int (f x))
+(defn apply-ok? [f :ptr<void> x :int] :int (f x))
 (defn main [] :int
-  (println (apply-to (add 10) 32)))
+  (println (apply-ok? (add 10) 32)))

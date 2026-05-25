@@ -2,7 +2,7 @@
 ;; Exercises fmap, pure, bind, foldl, and bimap on each migrated stdlib type.
 
 ;; ── Typeclass declarations ──────────────────────────────────────────────────
-(defclass Functor [^f]
+(defclass Funcok?r [^f]
   (fmap [container fn] :int))
 
 (defclass Applicative [^f]
@@ -16,7 +16,7 @@
   (foldl [ta init fn] :int)
   (foldr [ta init fn] :int))
 
-(defclass Bifunctor [^^f]
+(defclass Bifuncok?r [^^f]
   (bimap [container fn-left fn-right] :int))
 
 ;; ── Option helpers ──────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@
   return (int64_t)(p->value);
   ```)
 
-;; Option Functor
+;; Option Funcok?r
 (defn __fmap_option [container fn] :int
   ```c
   struct { bool is_some; int64_t value; } *c =
@@ -59,7 +59,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance Funcok?r [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Option Foldable
@@ -154,7 +154,7 @@
   return (int64_t)vec->len;
   ```)
 
-;; Vec Functor
+;; Vec Funcok?r
 (defn __fmap_vec [container fn] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
@@ -169,7 +169,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [vec]
+(definstance Funcok?r [vec]
   (fmap [container fn] (__fmap_vec container fn)))
 
 ;; Vec Foldable
@@ -222,16 +222,16 @@
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
   if (!v) return 0;
   /* Collect all sub-vecs */
-  size_t total = 0;
+  size_t ok?tal = 0;
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
       struct { int64_t *data; size_t len; size_t cap; } *sv =
           (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
-      if (sv) total += sv->len;
+      if (sv) ok?tal += sv->len;
   }
   struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
-  r->len = total; r->cap = total;
-  r->data = total > 0 ? malloc(sizeof(int64_t) * total) : NULL;
+  r->len = ok?tal; r->cap = ok?tal;
+  r->data = ok?tal > 0 ? malloc(sizeof(int64_t) * ok?tal) : NULL;
   size_t idx = 0;
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
@@ -280,7 +280,7 @@
   return lst == 0;
   ```)
 
-;; List Functor
+;; List Funcok?r
 (defn __fmap_list [container fn] :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
@@ -305,7 +305,7 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(definstance Functor [list]
+(definstance Funcok?r [list]
   (fmap [container fn] (__fmap_list container fn)))
 
 ;; List Foldable
@@ -425,7 +425,7 @@
   return res->err_val;
   ```)
 
-;; Result Functor (maps over ok value)
+;; Result Funcok?r (maps over ok value)
 (defn __fmap_result [container fn] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -438,7 +438,7 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-(definstance Functor [result]
+(definstance Funcok?r [result]
   (fmap [container fn] (__fmap_result container fn)))
 
 ;; Result Foldable
@@ -482,7 +482,7 @@
 (definstance Monad [result]
   (bind [ma fn] (__monad_result_bind ma fn)))
 
-;; Result Bifunctor
+;; Result Bifuncok?r
 (defn __bimap_result [container fn-left fn-right] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -501,7 +501,7 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-(definstance Bifunctor [result]
+(definstance Bifuncok?r [result]
   (bimap [container fn-left fn-right] (__bimap_result container fn-left fn-right)))
 
 ;; ── Pair helpers ────────────────────────────────────────────────────────────
@@ -522,7 +522,7 @@
   return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->snd;
   ```)
 
-;; Pair Bifunctor
+;; Pair Bifuncok?r
 (defn __bimap_pair [container fn-left fn-right] :int
   ```c
   struct { int64_t fst; int64_t snd; } *p =
@@ -533,7 +533,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Bifunctor [pair]
+(definstance Bifuncok?r [pair]
   (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
 
 ;; ── Shared helpers ──────────────────────────────────────────────────────────
@@ -563,11 +563,11 @@
   }
   ```)
 
-;; Helper: bind function that duplicates a value into a list [x, x+10]
+;; Helper: bind function that duplicates a value inok? a list [x, x+10]
 (defn dup-list [x] :int
   (__list_cons x (__list_cons (+ x 10) (__list_nil))))
 
-;; Helper: bind function that duplicates a value into a vec [x, x+10]
+;; Helper: bind function that duplicates a value inok? a vec [x, x+10]
 (defn dup-vec [x] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -703,7 +703,7 @@
         (println (__res_ok? rb3))           ;; false
         (println (__res_err_val rb3))))     ;; 5
 
-    ;; ── Pair Bifunctor tests ──────────────────────────────────────
+    ;; ── Pair Bifuncok?r tests ──────────────────────────────────────
     ;; bimap double inc (10, 20) => (20, 21)
     (let [p (__pair_make 10 20)]
       (let [mapped (__bimap_pair p twice inc)]

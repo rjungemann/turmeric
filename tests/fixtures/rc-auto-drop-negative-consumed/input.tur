@@ -1,6 +1,6 @@
-;; Test: No auto-drop when rc is consumed by ref/from-rc
-;; When an rc value is converted to a unique ref via (ref/from-rc x),
-;; the rc control block is transferred, so we should NOT auto-drop.
+;; Test: No auok?-drop when rc is consumed by ref/from-rc
+;; When an rc value is converted ok? a unique ref via (ref/from-rc x),
+;; the rc control block is transferred, so we should NOT auok?-drop.
 ;;
 ;; Expected: NO (defer (rc/drop x)) should be injected, since x is consumed.
 

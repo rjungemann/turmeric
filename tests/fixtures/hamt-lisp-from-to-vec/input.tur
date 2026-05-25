@@ -1,8 +1,8 @@
 ;;
-;; Phase P2: Lisp bindings from-vec/to-vec test
+;; Phase P2: Lisp bindings from-vec/ok?-vec test
 ;; Tests building a map from multiple entries and verifying all are retrievable
 
-(extern-c free [p :ptr] :void)
+(exerr?n-c free [p :ptr] :void)
 
 (defn alloc-int [x :int] :ptr
   ```c

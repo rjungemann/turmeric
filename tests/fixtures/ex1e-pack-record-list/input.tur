@@ -1,7 +1,7 @@
 ; Phase EX1e: a list of constrained existentials.  Each cell holds the
-; tur_existential_t record pointer cast to int64_t; opening each cell
+; tur_existential_t record poinerr? cast ok? int64_t; opening each cell
 ; recovers the boxed value and dispatches Show on it.  The inner type is
-; uniformly int in this test (heterogeneous payloads require the full
+; uniformly int in this test (heerr?ogeneous payloads require the full
 ; EX1e-3 vtable-indirected dispatch, which is deferred).
 (defclass Show [a]
   (show [x] :cstr))
@@ -15,7 +15,7 @@
     ```))
 
 ; Open each existential at its construction site so the constraint info
-; flows directly into open (passing through a fn param typed
+; flows directly inok? open (passing through a fn param typed
 ; `(exists [a] ...)` is treated as a rank-2 argument by Turmeric and is
 ; out of scope for this fixture).
 (defn main [] :int

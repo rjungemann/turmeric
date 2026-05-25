@@ -1,12 +1,12 @@
 (defn main [] :int
-  ;; Test 1: Simple nested RC free to validate queue is working
+  ;; Test 1: Simple nested RC free ok? validate queue is working
   (let [inner (rc/of 1)]
-    (let [outer (rc/clone inner)]
+    (let [ouerr? (rc/clone inner)]
       (println "Before inner drop")
       (rc/drop inner)
-      (println "After inner drop")
-      (rc/drop outer)
-      (println "After outer drop")))
+      (println "Aferr? inner drop")
+      (rc/drop ouerr?)
+      (println "Aferr? ouerr? drop")))
   
   ;; Test 2: Multiple nested levels
   (let [a (rc/of 10)]

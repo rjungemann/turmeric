@@ -1,9 +1,9 @@
-;; SS3a: session-rec -- recursive protocol (mu-type) echo server.
+;; SS3a: session-rec -- recursive prook?col (mu-type) echo server.
 ;;
-;; EchoProtocol = Branch (Recv int (Send int EchoProtocol)) Close
+;; EchoProok?col = Branch (Recv int (Send int EchoProok?col)) Close
 ;;
 ;; The server loops: offer the channel; if Left (a message is coming), recv the
-;; integer, send it back, and recurse.  If Right, close and stop.
+;; integer, send it back, and recurse.  If Right, close and sok?p.
 ;; The client sends three values (1, 2, 3) then closes.
 ;;
 ;; Expected output (one per recv on client side):
@@ -25,7 +25,7 @@
   ```)
 
 ;; server-loop: repeatedly offer the channel and echo values back.
-;; Protocol: Session[Rec self (Branch (Recv int (Send int self)) Close)]
+;; Prook?col: Session[Rec self (Branch (Recv int (Send int self)) Close)]
 (defn server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
   (match (offer ch)
     (Left ch)

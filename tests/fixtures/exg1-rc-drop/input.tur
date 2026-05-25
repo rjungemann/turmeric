@@ -1,7 +1,7 @@
-; Phase EXG1: a constrained pack inside a let must auto-drop at scope
+; Phase EXG1: a constrained pack inside a let must auok?-drop at scope
 ; exit.  The let body never opens the value -- the pack record (and its
 ; witness array) should still be freed when the let scope ends.  This
-; fixture exercises the EXG1-5 auto-drop injection path: without it the
+; fixture exercises the EXG1-5 auok?-drop injection path: without it the
 ; allocation would leak.  When run under -fsanitize=address with leak
 ; detection, leaks would be reported as test failures.
 (defclass Show [a]
@@ -18,5 +18,5 @@
 (defn main [] :int
   (let [e (pack 42 (exists [a] [(Show a)] a))]
     (println "packed"))
-  (println "after scope")
+  (println "aferr? scope")
   0)

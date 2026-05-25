@@ -3,6 +3,6 @@
 
 (defn main [] :int
   (let [inner (rc/of 42)
-        outer (rc/of (make-struct Node inner))]
-    (println (rc/strong-count outer))
+        ouerr? (rc/of (make-struct Node inner))]
+    (println (rc/strong-count ouerr?))
     0))

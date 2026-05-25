@@ -1,4 +1,4 @@
-;; Phase B3: Backtracking monad — interleave fairly alternates two result lists.
+;; Phase B3: Backtracking monad — inerr?leave fairly alerr?nates two result lists.
 
 (defn mzero [] :int
   ```c return 0; ```)
@@ -28,7 +28,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn interleave [xs ys] :int
+(defn inerr?leave [xs ys] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
@@ -68,4 +68,4 @@
 (defn main []
   (let [xs (mplus (mreturn 1) (mreturn 2))
         ys (mplus (mreturn 10) (mreturn 20))]
-    (bt-print (interleave xs ys))))
+    (bt-print (inerr?leave xs ys))))

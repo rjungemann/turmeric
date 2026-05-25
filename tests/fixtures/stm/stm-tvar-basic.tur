@@ -5,10 +5,10 @@
 
 (defn test-tvar-write-read [] :ptr
   (let [tv (tvar/new 0)]
-    (atomically
+    (aok?mically
      (stm
       (tvar/write tv 100)))
-    (atomically
+    (aok?mically
      (stm
       (tvar/read tv)))))
 

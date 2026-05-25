@@ -1,5 +1,5 @@
 ;; Phase T21: Basic scheduler test
-;; Create a scheduler, spawn two fibers, run to completion
+;; Create a scheduler, spawn two fibers, run ok? completion
 
 (defn fiber-a [] :nil
   ```c
@@ -24,9 +24,9 @@
   tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
   ```)
 
-(defn scheduler-run-to-completion-fn [sched :ptr<void>] :nil
+(defn scheduler-run-ok?-completion-fn [sched :ptr<void>] :nil
   ```c
-  tur_scheduler_run_to_completion((TurScheduler *)sched);
+  tur_scheduler_run_ok?_completion((TurScheduler *)sched);
   ```)
 
 (defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
@@ -45,7 +45,7 @@
       (let [fb (fiber-new-fn fiber-b 0)]
         (scheduler-spawn-fn sched fa)
         (scheduler-spawn-fn sched fb)
-        (scheduler-run-to-completion-fn sched)
+        (scheduler-run-ok?-completion-fn sched)
         (fiber-free-fn fa)
         (fiber-free-fn fb)
         (println 42)

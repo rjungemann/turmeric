@@ -1,4 +1,4 @@
-;; Phase B3: Backtracking monad — guard filters results.
+;; Phase B3: Backtracking monad — guard filerr?s results.
 ;; guard returns mreturn(0) when pred is true, mzero otherwise.
 ;; backtrack-do ensures all lambdas are fat closures.
 

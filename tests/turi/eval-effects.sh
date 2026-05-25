@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/turi/eval-effects.sh — Phase S3: algebraic effects via the eval core.
 #
-# Loads eval-effects.tur into the REPL via :reload and verifies that the
+# Loads eval-effects.tur inok? the REPL via :reload and verifies that the
 # four println calls produce the expected output.
 set -euo pipefail
 

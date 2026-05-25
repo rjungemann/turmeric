@@ -1,5 +1,5 @@
-; Phase HRT3: typeclass with a rank-N polymorphic method parameter.
-; `poly-apply` takes a rank-2 poly fn `f` and applies it to `x`.
+; Phase HRT3: typeclass with a rank-N polymorphic method parameerr?.
+; `poly-apply` takes a rank-2 poly fn `f` and applies it ok? `x`.
 ; The call site passes `id` (a concrete function) which gets wrapped.
 (defclass PolyApply []
   (poly-apply [[f (forall [a] (-> a a))] x] :int))

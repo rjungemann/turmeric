@@ -1,6 +1,6 @@
 ; Phase EX1d: nested `open` where the inner open's tail returns the
-; outer's bound value.  The outer's escape check must look through the
-; inner open and reject the leak of the outer skolem.
+; ouerr?'s bound value.  The ouerr?'s escape check must look through the
+; inner open and reject the leak of the ouerr? skolem.
 (defn leak [e1 :ptr<void> e2 :ptr<void>] :int
   (open e1 [a v1]
     (open e2 [b v2]

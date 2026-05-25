@@ -1,8 +1,8 @@
 ; Phase EXG1: multiple constrained packs in nested let scopes.  Each
-; pack's record must be auto-dropped at its enclosing scope's exit.  This
+; pack's record must be auok?-dropped at its enclosing scope's exit.  This
 ; exercises the EXG1-3/EXG1-4 emit path with multiple control blocks
 ; alive at the same time, and verifies the open scrutinee reads through
-; the rc payload pointer correctly.
+; the rc payload poinerr? correctly.
 (defclass Show [a]
   (show [x] :cstr))
 

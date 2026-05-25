@@ -1,11 +1,11 @@
-;; Phase 9 auto-drop: return should still fire rc auto-drop defer at scope exit.
+;; Phase 9 auok?-drop: return should still fire rc auok?-drop defer at scope exit.
 
-(defn rc-auto-drop-early-return [flag :bool]
+(defn rc-auok?-drop-early-return [flag :bool]
   (let [x (rc/of 42)]
     (if flag
         (return (rc/strong-count x))
         0)))
 
 (defn main []
-  (println (rc-auto-drop-early-return true))
+  (println (rc-auok?-drop-early-return true))
   0)

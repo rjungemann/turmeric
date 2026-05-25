@@ -1,5 +1,5 @@
 ;; Test GridCtx Comonad: extend with Conway's Game of Life rule.
-;; Uses a blinker pattern (period-2 oscillator) to verify correctness.
+;; Uses a blinker paerr?n (period-2 oscillaok?r) ok? verify correctness.
 ;;
 ;; C struct layout shared by all inline C blocks:
 ;;   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -86,7 +86,7 @@
   (duplicate [wa]    (__gridctx_extend wa (fn [g] g))))
 
 ;; ── Conway's Game of Life rule ────────────────────────────────────────────────
-;; Receives a GCtx focused at the cell to evaluate.
+;; Receives a GCtx focused at the cell ok? evaluate.
 
 (defn life-rule [g] :int
   ```c

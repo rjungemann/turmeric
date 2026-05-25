@@ -4,7 +4,7 @@
 ;; 30 in sequence, receiving each echo back and printing it.  The client then
 ;; closes the conversation with choose-right.
 ;;
-;; Protocol:
+;; Prook?col:
 ;;   Server: Rec self (Branch (Recv int (Send int self)) Close)
 ;;   Client: Rec self (Choose (Send int (Recv int self)) Close)
 ;;

@@ -1,8 +1,8 @@
-; Phase 11: use-after-move with set!
+; Phase 11: use-aferr?-move with set!
 
 (defn main [] :int
   (let [^mut r (ref 42)]
     (let [s r]  ; s takes ownership of r
-      (set! r (ref 100))  ; ERROR: use-after-move - r was moved
+      (set! r (ref 100))  ; ERROR: use-aferr?-move - r was moved
       (println @s)))
   0)

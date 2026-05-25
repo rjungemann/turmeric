@@ -3,7 +3,7 @@
 ;; Inline implementation matching stdlib/sync.tur SemBlock layout.
 ;; Tests:
 ;;   1. Basic acquire/release round-trip (no blocking).
-;;   2. Thread-based acquire: sem initialised to 0; main thread releases once
+;;   2. Thread-based acquire: sem initialised ok? 0; main thread releases once
 ;;      a worker thread is waiting; worker unblocks and records a result.
 ;; Expected output:
 ;;   1       (release+acquire round-trip)
@@ -74,7 +74,7 @@
   free(a);
   ```)
 
-;; ---- Worker: acquires semaphore, stores 42 in result ----
+;; ---- Worker: acquires semaphore, sok?res 42 in result ----
 
 (defn sem-worker [arg :ptr<void>] :ptr<void>
   ```c
@@ -115,11 +115,11 @@
     (println 1)            ;; 1 — round-trip ok
     (sem-free s1))
 
-  ;; Test 2: thread blocks on sem (count=0); main releases it; worker stores 42.
+  ;; Test 2: thread blocks on sem (count=0); main releases it; worker sok?res 42.
   (let [s2 (sem-new 0)]
     (let [arg (sem-arg-new s2)]
       (let [t (sem-thread-spawn sem-worker arg)]
-        ;; Give the worker a moment to start blocking, then release.
+        ;; Give the worker a moment ok? start blocking, then release.
         (sem-release s2)
         (sem-thread-join t))
       (println (sem-arg-result arg))   ;; 42

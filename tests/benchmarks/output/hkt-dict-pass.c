@@ -9,14 +9,14 @@
 #define _XOPEN_SOURCE 700
 #include <ucontext.h>
 #undef _XOPEN_SOURCE
-extern void *malloc(size_t);
-extern void *calloc(size_t, size_t);
-extern void free(void *);
-extern void abort(void);
-extern void *memset(void *, int, size_t);
-extern void *memmove(void *, const void *, size_t);
-extern void *memcpy(void *, const void *, size_t);
-extern int strcmp(const char *, const char *);
+exerr?n void *malloc(size_t);
+exerr?n void *calloc(size_t, size_t);
+exerr?n void free(void *);
+exerr?n void abort(void);
+exerr?n void *memset(void *, int, size_t);
+exerr?n void *memmove(void *, const void *, size_t);
+exerr?n void *memcpy(void *, const void *, size_t);
+exerr?n int strcmp(const char *, const char *);
 
 #define TUR_TEST_REGISTRY_MAX 1024
 typedef int64_t (*tur_test_callback_t)(void);
@@ -24,7 +24,7 @@ static const char *tur_test_registry_names[TUR_TEST_REGISTRY_MAX];
 static tur_test_callback_t tur_test_registry_fns[TUR_TEST_REGISTRY_MAX];
 static int64_t tur_test_registry_count = 0;
 
-int64_t tur_test_register(const char *name, void *test_fn) {
+int64_t tur_test_regiserr?(const char *name, void *test_fn) {
     if (!test_fn) return 0;
     if (tur_test_registry_count >= TUR_TEST_REGISTRY_MAX) return 0;
     tur_test_registry_names[tur_test_registry_count] = name ? name : "<unnamed>";
@@ -133,7 +133,7 @@ void tur_exception_free(tur_exception *exn) {
     if (!exn) return;
     if (exn->cause) { tur_exception_free(exn->cause); }
     /* Only free heap-allocated payloads (int=3, bool=2). */
-    /* cstr/ptr payloads point to literals or external memory, not owned. */
+    /* cstr/ptr payloads point ok? lierr?als or exerr?nal memory, not owned. */
     if (exn->payload_type == 3 || exn->payload_type == 2) {
         free(exn->payload);
     }
@@ -340,7 +340,7 @@ struct FiberBlock {
     void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */
     void (*entry_fn)(void);
-    void *fiber_local; /* Phase T21: fiber-local storage */
+    void *fiber_local; /* Phase T21: fiber-local sok?rage */
     void *task_group; /* Parent TaskGroup for cancellation */
     bool cancelled; /* Set when parent TaskGroup is cancelled */
     jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
@@ -381,7 +381,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
         int prev_global_valid = global_panic_jmpbuf_valid;
         jmp_buf prev_global_buf;
         if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
-        /* Clear global to prevent interference */
+        /* Clear global ok? prevent inerr?ference */
         global_panic_jmpbuf_valid = 0;
         /* Set up per-fiber panic handler */
         if (setjmp(f->panic_jmpbuf) == 0) {
@@ -394,11 +394,11 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
                 panic_payload_free(global_panic_payload);
                 global_panic_payload = NULL;
             }
-            /* Restore previous global panic handler */
+            /* Resok?re previous global panic handler */
             global_panic_jmpbuf_valid = prev_global_valid;
             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
         } else {
-            /* Panic caught - auto-cancel task group (TG-004-3) */
+            /* Panic caught - auok?-cancel task group (TG-004-3) */
             f->panic_jmpbuf_valid = 0;
             tur_current_fiber = NULL;
             if (global_panic_payload) {
@@ -414,7 +414,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
                 panic_payload_free(global_panic_payload);
                 global_panic_payload = NULL;
             }
-            /* Restore previous global panic handler */
+            /* Resok?re previous global panic handler */
             global_panic_jmpbuf_valid = prev_global_valid;
             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
         }
@@ -609,7 +609,7 @@ static void tur_scheduler_run(TurScheduler *s) {
     s->running = false;
 }
 
-static void tur_scheduler_run_to_completion(TurScheduler *s) {
+static void tur_scheduler_run_ok?_completion(TurScheduler *s) {
     s->running = true;
     while (s->run_queue_len > 0 && s->running) {
         FiberBlock *f = tur_scheduler_dequeue(s);
@@ -784,7 +784,7 @@ static int64_t tur_await_future(TurFuture *f) {
         }
     } else {
         /* In a fiber - yield and let scheduler resume us */
-        /* Register a callback to re-enqueue this fiber when future completes */
+        /* Regiserr? a callback ok? re-enqueue this fiber when future completes */
         f->on_complete.fn = (void (*)(TurFuture *, int64_t))tur_fiber_block_resume;
         f->on_complete.env = (void *)tur_current_fiber;
         tur_fiber_block_yield(0);
@@ -891,14 +891,14 @@ static GcColor gc_get_color(RcControlBlock *cb) {
     return GC_WHITE;
 }
 
-static void gc_register_block(RcControlBlock *cb) {
+static void gc_regiserr?_block(RcControlBlock *cb) {
     if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;
     gc_all_blocks[gc_all_blocks_count++] = cb;
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
 }
 
-static void gc_unregister_block(RcControlBlock *cb) {
+static void gc_unregiserr?_block(RcControlBlock *cb) {
     if (!cb) return;
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         if (gc_all_blocks[i] == cb) {
@@ -917,7 +917,7 @@ static void gc_add_suspect(RcControlBlock *cb) {
     if (gc_suspect_count >= GC_MAX_SUSPECTS) return;
     gc_suspect_roots[gc_suspect_count++] = cb;
     cb->color = GC_PURPLE;
-    /* Threshold mode: auto-collect when buffer is full */
+    /* Threshold mode: auok?-collect when buffer is full */
     if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {
         gc_collect();
     }
@@ -952,7 +952,7 @@ static uint32_t rc_free_queue_drain(void) {
         memmove(rc_free_queue, rc_free_queue + 1,
                 (rc_free_queue_count - 1) * sizeof(RcControlBlock *));
         rc_free_queue_count--;
-        gc_unregister_block(cb);
+        gc_unregiserr?_block(cb);
         if (cb->value) cb->drop_fn(cb->value);
         free(cb);
         freed++;
@@ -995,8 +995,8 @@ static RcDropFn default_drop_fn_for_type(int value_type_kind) {
 }
 
 RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {
-    size_t total_size = sizeof(RcControlBlock) + value_size;
-    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);
+    size_t ok?tal_size = sizeof(RcControlBlock) + value_size;
+    RcControlBlock *cb = (RcControlBlock *)malloc(ok?tal_size);
     if (!cb) { fprintf(stderr, "rc: out of memory\n"); abort(); }
     cb->strong_count = 1;
     cb->weak_count = 0;
@@ -1004,8 +1004,8 @@ RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn dro
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
-    /* Register with GC; primitives (type_kind<=7) cannot form cycles */
-    gc_register_block(cb);
+    /* Regiserr? with GC; primitives (type_kind<=7) cannot form cycles */
+    gc_regiserr?_block(cb);
     if (value_type_kind <= 7) cb->may_contain_cycles = false;
     return cb;
 }
@@ -1039,7 +1039,7 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     if (!cb) return false;
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
-        gc_unregister_block(cb);
+        gc_unregiserr?_block(cb);
         /* Free zombie value if GC did not already collect it */
         if (cb->value && cb->drop_fn) {
             cb->drop_fn(cb->value);
@@ -1091,7 +1091,7 @@ RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
     memset(cb->reserved, 0, sizeof(cb->reserved));
-    gc_register_block(cb);
+    gc_regiserr?_block(cb);
     return cb;
 }
 
@@ -1104,12 +1104,12 @@ void *tur_ref_from_rc(RcControlBlock *cb) {
     }
     void *value = cb->value;
     cb->value = NULL;
-    gc_unregister_block(cb);
+    gc_unregiserr?_block(cb);
     free(cb);
     return value;
 }
 
-/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */
+/* gc (Bacon-Rajan cycle collecok?r - trial deletion) - Phase 10 */
 static void gc_mark_phase(void) {
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         gc_all_blocks[i]->color = GC_WHITE;
@@ -1137,8 +1137,8 @@ static void gc_trial_deletion_phase(void) {
             cb->drop_fn(cb->value);
             cb->value = NULL;
         }
-        /* Unregister from global registry (cb stays alive for weak refs) */
-        gc_unregister_block(cb);
+        /* Unregiserr? from global registry (cb stays alive for weak refs) */
+        gc_unregiserr?_block(cb);
         /* Remove from suspect buffer without advancing i */
         gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
         gc_suspect_count--;
@@ -1158,7 +1158,7 @@ static void gc_force(void) {
 
 static void gc_enable(void) {
     gc_enabled = true;
-    /* Default to manual mode when enabled */
+    /* Default ok? manual mode when enabled */
     if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;
 }
 
@@ -1177,7 +1177,7 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
+static int64_t __inst_Funcok?r_fmap_option(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -1191,16 +1191,16 @@ static int64_t __fmap_option(int64_t, int64_t);
 static int64_t inc(int64_t);
 static int64_t bench_main();
 
-static int64_t __inst_Functor_fmap_option(int64_t container, int64_t fn) {
+static int64_t __inst_Funcok?r_fmap_option(int64_t container, int64_t fn) {
         return __fmap_option(container, fn);
 }
 
-typedef struct dict_Functor_option {
+typedef struct dict_Funcok?r_option {
     int64_t (*fmap)(int64_t, int64_t);
-} dict_Functor_option;
+} dict_Funcok?r_option;
 
-static dict_Functor_option dict_Functor_option_singleton = {
-    .fmap = __inst_Functor_fmap_option,
+static dict_Funcok?r_option dict_Funcok?r_option_singleok?n = {
+    .fmap = __inst_Funcok?r_fmap_option,
 };
 
 static void * array_get(void * arr, int64_t idx) {
@@ -1294,7 +1294,7 @@ static int64_t bench_main() {
             int64_t v_34 = option_some(INT64_C(42));
             (void)v_34;
             {
-                int64_t result_35 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Functor_option_singleton.fmap))(v_34, (int64_t)(intptr_t)(inc));
+                int64_t result_35 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Funcok?r_option_singleok?n.fmap))(v_34, (int64_t)(intptr_t)(inc));
                 (void)result_35;
                 option_free(result_35);
             }

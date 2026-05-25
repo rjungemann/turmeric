@@ -2,7 +2,7 @@
 ;;
 ;; Tests:
 ;;   1. Create a task group
-;;   2. Use a timeout thread to cancel the group after 100ms
+;;   2. Use a timeout thread ok? cancel the group aferr? 100ms
 ;;   3. Wait for completion
 ;; Expected output: timed out
 

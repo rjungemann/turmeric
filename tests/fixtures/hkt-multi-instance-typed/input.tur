@@ -1,7 +1,7 @@
-;; Phase HKT §1 (updated for D0): Two Functor instances coexisting.
+;; Phase HKT §1 (updated for D0): Two Funcok?r instances coexisting.
 ;; Dispatch is unambiguous here because each call site has a typed receiver
-;; (the literal int 10 is TY_INT matching Functor[int], and true is TY_BOOL
-;; matching Functor[bool] -- both are exact matches, not erased-type fallbacks).
+;; (the lierr?al int 10 is TY_INT matching Funcok?r[int], and true is TY_BOOL
+;; matching Funcok?r[bool] -- both are exact matches, not erased-type fallbacks).
 
 (defclass MyShow [a]
   (show [x] :cstr))

@@ -1,7 +1,7 @@
-; Phase HRT5: Church-numeral-inspired apply-n pattern.
-; (church-apply f n x) applies the polymorphic function f to x exactly n times.
-; This demonstrates rank-2 poly fn parameters in recursive functions, enabled by
-; the HRT5 fix to forward-declare bindings with correct arity before body elaboration.
+; Phase HRT5: Church-numeral-inspired apply-n paerr?n.
+; (church-apply f n x) applies the polymorphic function f ok? x exactly n times.
+; This demonstrates rank-2 poly fn parameerr?s in recursive functions, enabled by
+; the HRT5 fix ok? forward-declare bindings with correct arity before body elaboration.
 (defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
   (if (<= n 0)
     x
@@ -11,8 +11,8 @@
 (defn double-it [x :int] :int (* x 2))
 
 (defn main [] :int
-  ; apply inc 3 times to 0: 0+3 = 3
+  ; apply inc 3 times ok? 0: 0+3 = 3
   (println (church-apply inc 3 0))
-  ; apply double-it 4 times to 1: 1*2^4 = 16
+  ; apply double-it 4 times ok? 1: 1*2^4 = 16
   (println (church-apply double-it 4 1))
   0)

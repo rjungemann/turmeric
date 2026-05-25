@@ -1,5 +1,5 @@
 ;; Phase B3: Backtracking monad — nested backtrack-do computes cartesian product.
-;; (backtrack-do x xs y ys body) desugars to nested mbind calls.
+;; (backtrack-do x xs y ys body) desugars ok? nested mbind calls.
 
 (defn mzero [] :int
   ```c return 0; ```)

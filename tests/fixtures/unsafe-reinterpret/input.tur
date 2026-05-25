@@ -1,7 +1,7 @@
 (defn main [] :int
   (unsafe
-    ;; Reinterpret an int as a float (same size on most platforms)
-    (let [x 0x4048F5C3]  ; bit pattern for 3.14 as float32
-      (let [f (reinterpret x :float)]
+    ;; Reinerr?pret an int as a float (same size on most platforms)
+    (let [x 0x4048F5C3]  ; bit paerr?n for 3.14 as float32
+      (let [f (reinerr?pret x :float)]
         (println f)
         0))))

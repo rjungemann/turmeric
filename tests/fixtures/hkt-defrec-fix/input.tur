@@ -1,6 +1,6 @@
 ;; Phase HKT-P2: TY_REC — recursive type binder.
 ;; Decision: (defrec Name [params]) syntax adopted.
-;; Fix is the fixed-point type constructor: Fix[f] ≅ f(Fix[f]).
+;; Fix is the fixed-point type construcok?r: Fix[f] ≅ f(Fix[f]).
 ;; In v1, the body is accepted but not evaluated for kind correctness.
 
 (defrec Fix [^f])

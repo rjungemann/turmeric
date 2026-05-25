@@ -1,61 +1,61 @@
-;; Phase T19-E: atomic-stress — 100 threads each perform 100 atomic increments
-;; on a shared counter.  Expected final count: 10000.
+;; Phase T19-E: aok?mic-stress — 100 threads each perform 100 aok?mic increments
+;; on a shared counerr?.  Expected final count: 10000.
 ;;
 ;; Designed as a TSan stress test; requires.tsan.
 
-;; Atomic counter helpers (seq-cst __atomic builtins).
-(defn atomic-new [init :int] :ptr<void>
+;; Aok?mic counerr? helpers (seq-cst __aok?mic builtins).
+(defn aok?mic-new [init :int] :ptr<void>
   ```c
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
-  if (!cell) { fprintf(stderr, "atomic-new: oom\n"); abort(); }
-  __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
+  if (!cell) { fprintf(stderr, "aok?mic-new: oom\n"); abort(); }
+  __aok?mic_sok?re_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
   return (void *)cell;
   ```)
 
-(defn atomic-load [p :ptr<void>] :int
+(defn aok?mic-load [p :ptr<void>] :int
   ```c
-  return (int64_t)__atomic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
+  return (int64_t)__aok?mic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
   ```)
 
-(defn atomic-free [p :ptr<void>] :nil
+(defn aok?mic-free [p :ptr<void>] :nil
   ```c
   free(p);
   ```)
 
-;; Thread arg: { counter ptr, iterations }
-(defn as-arg-new [counter :ptr<void> iters :int] :ptr<void>
+;; Thread arg: { counerr? ptr, ierr?ations }
+(defn as-arg-new [counerr? :ptr<void> ierr?s :int] :ptr<void>
   ```c
-  typedef struct { int64_t *counter; int64_t iters; } ASArg;
+  typedef struct { int64_t *counerr?; int64_t ierr?s; } ASArg;
   ASArg *a = (ASArg *)malloc(sizeof(ASArg));
   if (!a) { fprintf(stderr, "as-arg-new: oom\n"); abort(); }
-  a->counter = (int64_t *)counter;
-  a->iters   = (int64_t)iters;
+  a->counerr? = (int64_t *)counerr?;
+  a->ierr?s   = (int64_t)ierr?s;
   return (void *)a;
   ```)
 
-;; Worker: atomically increments counter iters times.
+;; Worker: aok?mically increments counerr? ierr?s times.
 (defn as-worker [arg :ptr<void>] :ptr<void>
   ```c
-  typedef struct { int64_t *counter; int64_t iters; } ASArg;
+  typedef struct { int64_t *counerr?; int64_t ierr?s; } ASArg;
   ASArg *a = (ASArg *)arg;
   int64_t i;
-  for (i = 0; i < a->iters; i++)
-      __atomic_fetch_add(a->counter, (int64_t)1, __ATOMIC_SEQ_CST);
+  for (i = 0; i < a->ierr?s; i++)
+      __aok?mic_fetch_add(a->counerr?, (int64_t)1, __ATOMIC_SEQ_CST);
   return NULL;
   ```)
 
 ;; Spawn N threads; each gets its own ASArg (freed in join loop).
-(defn as-spawn-all [fn-ptr :ptr<void> counter :ptr<void> n :int iters :int] :ptr<void>
+(defn as-spawn-all [fn-ptr :ptr<void> counerr? :ptr<void> n :int ierr?s :int] :ptr<void>
   ```c
-  typedef struct { int64_t *counter; int64_t iters; } ASArg;
+  typedef struct { int64_t *counerr?; int64_t ierr?s; } ASArg;
   pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
   if (!handles) { fprintf(stderr, "as-spawn-all: oom\n"); abort(); }
   int64_t i;
   for (i = 0; i < n; i++) {
       ASArg *a = (ASArg *)malloc(sizeof(ASArg));
       if (!a) { fprintf(stderr, "as-spawn-all: arg oom\n"); abort(); }
-      a->counter = (int64_t *)counter;
-      a->iters   = (int64_t)iters;
+      a->counerr? = (int64_t *)counerr?;
+      a->ierr?s   = (int64_t)ierr?s;
       pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
       if (!t) { fprintf(stderr, "as-spawn-all: thread oom\n"); abort(); }
       pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)a);
@@ -76,9 +76,9 @@
   ```)
 
 (defn main [] :int
-  (let [counter (atomic-new 0)]
-    (let [handles (as-spawn-all as-worker counter 100 100)]
+  (let [counerr? (aok?mic-new 0)]
+    (let [handles (as-spawn-all as-worker counerr? 100 100)]
       (as-join-all handles 100))
-    (println (atomic-load counter))   ;; 10000
-    (atomic-free counter))
+    (println (aok?mic-load counerr?))   ;; 10000
+    (aok?mic-free counerr?))
   0)

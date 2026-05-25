@@ -1,7 +1,7 @@
 ;; Phase P19-7: A borrow-typed variable from the enclosing scope must not
 ;; be referenced inside an effect handler case body.  Handler case bodies
-;; are emitted as top-level C static functions and have no access to the
-;; enclosing stack frame, so any reference to an outer borrow is invalid.
+;; are emitted as ok?p-level C static functions and have no access ok? the
+;; enclosing stack frame, so any reference ok? an ouerr? borrow is invalid.
 (defeffect Ask [] :int)
 
 (defn test [] :int
@@ -9,6 +9,6 @@
     (let [r (& x)]
       (handle (perform (Ask))
         (Ask [] k)
-        (resume k @r)))))  ;; ERROR: borrow 'r' captured from outer scope
+        (resume k @r)))))  ;; ERROR: borrow 'r' captured from ouerr? scope
 
 (println (test))

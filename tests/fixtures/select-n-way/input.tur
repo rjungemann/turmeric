@@ -1,11 +1,11 @@
 ;; Phase SEL2: select-n-way -- 4-channel select coverage check.
 ;;
 ;; Four channels are each pre-filled with 1000 items.
-;; A select loop runs 1000 iterations selecting across all 4 channels and
+;; A select loop runs 1000 ierr?ations selecting across all 4 channels and
 ;; accumulates a bitmask: bit 0 = ch-a fired, bit 1 = ch-b, bit 2 = ch-c,
 ;; bit 3 = ch-d.
 ;;
-;; After 1000 iterations over 4 always-ready channels, all 4 must have
+;; Aferr? 1000 ierr?ations over 4 always-ready channels, all 4 must have
 ;; been selected at least once, so the bitmask must equal 15 (0b1111).
 ;;
 ;; Output: "all-selected" if bitmask==15, "missed" otherwise.
@@ -18,7 +18,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waiters; void *send_waiters;
+      void *recv_waierr?s; void *send_waierr?s;
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
@@ -28,7 +28,7 @@
   pthread_cond_init(&ch->not_full, NULL);
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
-  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  ch->recv_waierr?s = NULL; ch->send_waierr?s = NULL;
   return (void *)ch;
   ```)
 
@@ -37,7 +37,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waiters; void *send_waiters;
+      void *recv_waierr?s; void *send_waierr?s;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   int64_t i;
@@ -53,7 +53,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waiters; void *send_waiters;
+      void *recv_waierr?s; void *send_waierr?s;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_destroy(&c->lock);
@@ -73,14 +73,14 @@
 ;; Returns bitmask of which channels fired at least once.
 ;; The (+ vN N) form ensures each recv binding is referenced in its body.
 (defn mark-loop [ch-a :ptr<void> ch-b :ptr<void> ch-c :ptr<void> ch-d :ptr<void>
-                 iter :int seen :int] :int
-  (if (= iter 0)
+                 ierr? :int seen :int] :int
+  (if (= ierr? 0)
     seen
     (let [bit (select ((ch-a :recv va) (+ va 1))
                       ((ch-b :recv vb) (+ vb 2))
                       ((ch-c :recv vc) (+ vc 4))
                       ((ch-d :recv vd) (+ vd 8)))]
-      (mark-loop ch-a ch-b ch-c ch-d (- iter 1) (bit-or seen bit)))))
+      (mark-loop ch-a ch-b ch-c ch-d (- ierr? 1) (bit-or seen bit)))))
 
 (defn main [] :int
   (let [ch-a (chan-new 1000)

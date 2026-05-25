@@ -1,16 +1,16 @@
 ;; Phase F3-5/F3-6: recursive `.eq?` on
-;; `Pair[Vec[int] Option[int]]` -- the 2-comparator helper
-;; (`tpair-eq?` takes fst-cmp and snd-cmp) case.  Both type-args
-;; need their own synthesised comparator lambda.
+;; `Pair[Vec[int] Option[int]]` -- the 2-comparaok?r helper
+;; (`pair-eq?` takes fst-cmp and snd-cmp) case.  Both type-args
+;; need their own synthesised comparaok?r lambda.
 
 (defn main [] :int
-  (let [v1 (:: (tvec-new) (Vec int))
-        v2 (:: (tvec-new) (Vec int))]
-    (tvec-push! v1 7)
-    (tvec-push! v2 7)
-    (let [p1 (:: (tpair v1 (tsome 100)) (Pair (Vec int) (Option int)))
-          p2 (:: (tpair v2 (tsome 100)) (Pair (Vec int) (Option int)))
-          p3 (:: (tpair v2 (tsome 999)) (Pair (Vec int) (Option int)))]
+  (let [v1 (:: (vec-new) (Vec int))
+        v2 (:: (vec-new) (Vec int))]
+    (vec-push! v1 7)
+    (vec-push! v2 7)
+    (let [p1 (:: (tpair v1 (some? 100)) (Pair (Vec int) (Option int)))
+          p2 (:: (tpair v2 (some? 100)) (Pair (Vec int) (Option int)))
+          p3 (:: (tpair v2 (some? 999)) (Pair (Vec int) (Option int)))]
       (println (.eq? p1 p2))   ; true:  ([7], Some 100) == ([7], Some 100)
       (println (.eq? p1 p3)))) ; false: differs in snd (Some 100 vs Some 999)
   0)

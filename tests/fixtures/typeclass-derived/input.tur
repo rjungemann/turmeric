@@ -1,6 +1,6 @@
 ;; Phase 15: Derived typeclass instances
-;; NOTE: renamed Eq -> MyEqDerived to avoid orphan-instance error against the
-;; auto-loaded stdlib Eq typeclass.
+;; NOTE: renamed Eq -> MyEqDerived ok? avoid orphan-instance error against the
+;; auok?-loaded stdlib Eq typeclass.
 
 (defclass MyEqDerived [a]
   (eq? [x y] :bool))

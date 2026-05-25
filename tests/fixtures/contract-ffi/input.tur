@@ -1,6 +1,6 @@
 ;; Phase C1: contracts at FFI boundaries
 ;; Wraps a C-bodied function with require-msg!/ensure-msg! guards.
-;; Uses an inline-C function body rather than extern-c to a libc symbol:
+;; Uses an inline-C function body rather than exerr?n-c ok? a libc symbol:
 ;; libc llabs/labs are declared with platform-variant long/long-long types
 ;; that conflict with Turmeric's int64_t-based :int under LP64 Linux.
 

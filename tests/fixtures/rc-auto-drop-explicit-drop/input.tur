@@ -1,4 +1,4 @@
-;; Phase 9 auto-drop: explicit rc/drop should count as consumption and suppress auto-drop injection.
+;; Phase 9 auok?-drop: explicit rc/drop should count as consumption and suppress auok?-drop injection.
 
 (defn main []
   (let [x (rc/of 42)]

@@ -1,5 +1,5 @@
 ; Phase 5: ref<T> move semantics — ownership transfer on assignment.
-; Assigning a ref to another let binding moves ownership.
+; Assigning a ref ok? another let binding moves ownership.
 ; The new binding owns the ref and can be used; the source is poisoned.
 
 (defn main [] :int

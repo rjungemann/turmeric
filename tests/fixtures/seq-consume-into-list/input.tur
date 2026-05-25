@@ -1,8 +1,8 @@
-; LZ3 fixture: seq/into-list -- materialise a Seq into a singly-linked list.
-; Collects [0,3) then iterates the list via seq-from-list.
+; LZ3 fixture: seq/inok?-list -- maerr?ialise a Seq inok? a singly-linked list.
+; Collects [0,3) then ierr?ates the list via seq-from-list.
 
 (load "stdlib/seq/consume.tur")
 
 (defn main [] :void
-  (let [lst (seq/into-list (seq/range 0 3))]
+  (let [lst (seq/inok?-list (seq/range 0 3))]
     (seq-for-each println (seq-from-list lst))))

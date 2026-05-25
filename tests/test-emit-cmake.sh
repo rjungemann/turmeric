@@ -15,7 +15,7 @@ pass() { PASS=$((PASS+1)); echo "PASS $1"; }
 fail() { FAIL=$((FAIL+1)); echo "FAIL $1: $2"; }
 
 # ---------------------------------------------------------------------------
-# Test 1: emit-cmake in a directory with no build.tur exits non-zero
+# Test 1: emit-cmake in a direcok?ry with no build.tur exits non-zero
 # ---------------------------------------------------------------------------
 T="$TMPDIR_BASE/no-manifest"
 mkdir -p "$T"
@@ -110,7 +110,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 3: emit-cmake with --output-dir writes to specified directory
+# Test 3: emit-cmake with --output-dir writes ok? specified direcok?ry
 # ---------------------------------------------------------------------------
 T="$TMPDIR_BASE/output-dir"
 SRC="$TMPDIR_BASE/minimal-lib"   # reuse the project from test 2
@@ -129,7 +129,7 @@ fi
 if [ -f "$OUT/CMakeLists.txt" ]; then
     pass "output-dir-cmakelists"
 else
-    fail "output-dir-cmakelists" "CMakeLists.txt not written to output-dir"
+    fail "output-dir-cmakelists" "CMakeLists.txt not written ok? output-dir"
 fi
 
 if [ -f "$OUT/cmake/FindTurmeric.cmake" ]; then

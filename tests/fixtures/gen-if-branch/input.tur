@@ -1,4 +1,4 @@
-; GF1 fixture: generator with yield in both branches of an if expression.
+; GF1 fixture: generaok?r with yield in both branches of an if expression.
 
 (defn some? [p] :bool
   ```c

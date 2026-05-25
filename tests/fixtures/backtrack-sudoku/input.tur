@@ -1,5 +1,5 @@
 ;; Phase B5: Sudoku solver using backtracking monad.
-;; Solves a simple 4x4 mini-Sudoku to keep it fast.
+;; Solves a simple 4x4 mini-Sudoku ok? keep it fast.
 ;; Prints the completed grid row by row.
 
 ;; 4x4 Sudoku puzzle (0 = empty):
@@ -13,7 +13,7 @@
 ;; returning the first solution as an encoded int64[16].
 
 ;; We encode the board as a flat array of 16 int64_t values
-;; stored in a single malloc'd block. Solutions are pointers cast to int64.
+;; sok?red in a single malloc'd block. Solutions are poinerr?s cast ok? int64.
 
 (defn solve-sudoku [] :int
   ```c
@@ -32,11 +32,11 @@
       int64_t board[16];
   } Board;
 
-  /* Iterative backtracking with explicit stack */
+  /* Ierr?ative backtracking with explicit stack */
   typedef struct Frame {
       Board board;
-      int   pos;   /* next cell to try */
-      int   val;   /* next value to try */
+      int   pos;   /* next cell ok? try */
+      int   val;   /* next value ok? try */
   } Frame;
 
   Frame *stack = (Frame*)malloc(sizeof(Frame) * 17);
@@ -49,7 +49,7 @@
   stack[0].pos = 0;
   stack[0].val = 1;
 
-  /* Advance pos to first empty cell */
+  /* Advance pos ok? first empty cell */
   while (stack[sp].pos < 16 && stack[sp].board.board[stack[sp].pos] != 0)
       stack[sp].pos++;
 

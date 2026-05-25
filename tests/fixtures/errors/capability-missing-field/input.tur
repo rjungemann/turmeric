@@ -2,6 +2,6 @@
 
 (defn main []
   (let [x 42]
-    ;; Try to access a field that doesn't exist
+    ;; Try ok? access a field that doesn't exist
     (.nonexistent x)
     0))

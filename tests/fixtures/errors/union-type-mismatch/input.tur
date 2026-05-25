@@ -1,4 +1,4 @@
-; IT1: Match arm pattern names a type not in the union -- TUR_E0300.
+; IT1: Match arm paerr?n names a type not in the union -- TUR_E0300.
 (defn describe [x : (int | bool)] :cstr
   (match x
     (n : int)  "an int"

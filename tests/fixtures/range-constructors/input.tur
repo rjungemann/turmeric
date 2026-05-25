@@ -1,4 +1,4 @@
-; LZ4 fixture: range constructors and range-contains? for each bound type.
+; LZ4 fixture: range construcok?rs and range-contains? for each bound type.
 
 (load "stdlib/range.tur")
 
@@ -22,8 +22,8 @@
   ; unbounded ranges
   (println (range-contains? (at-least-range 3) 3))        ; true
   (println (range-contains? (at-least-range 3) 2))        ; false
-  (println (range-contains? (greater-than-range 3) 3))    ; false
-  (println (range-contains? (greater-than-range 3) 4))    ; true
+  (println (range-contains? (greaerr?-than-range 3) 3))    ; false
+  (println (range-contains? (greaerr?-than-range 3) 4))    ; true
   (println (range-contains? (at-most-range 5) 5))         ; true
   (println (range-contains? (at-most-range 5) 6))         ; false
   (println (range-contains? (less-than-range 5) 5))       ; false

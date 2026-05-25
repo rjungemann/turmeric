@@ -1,5 +1,5 @@
 ;; Test fixture for stdlib vec type
-;; Note: vec functions use inline C and return pointers which the type system
+;; Note: vec functions use inline C and return poinerr?s which the type system
 ;; doesn't fully support yet. This test just verifies the module compiles.
 
 (defn main [] :int

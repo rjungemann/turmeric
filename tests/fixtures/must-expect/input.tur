@@ -37,7 +37,7 @@
     (let [b (u-result-expect (u-ok 13) "expected u-ok(13)")]
       (println b))
 
-    ;; chaining: u-option-expect result fed into u-result-expect context
+    ;; chaining: u-option-expect result fed inok? u-result-expect context
     (let [x (u-option-expect (u-some 100) "expected u-some")]
       (let [y (u-result-expect (u-ok x) "expected u-ok")]
         (println y)))

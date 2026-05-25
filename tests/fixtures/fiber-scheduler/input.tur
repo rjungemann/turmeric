@@ -1,6 +1,6 @@
 ;; Phase T21-D: fiber-scheduler — three fibers cooperatively print values.
 ;;
-;; Scheduler: a simple ring-buffer queue of FiberBlock pointers.
+;; Scheduler: a simple ring-buffer queue of FiberBlock poinerr?s.
 ;; Three fibers A, B, C each yield two values then finish.
 ;; The scheduler runs them in round-robin (FIFO) order.
 ;;
@@ -35,7 +35,7 @@
   tur_fiber_block_free((FiberBlock *)f);
   ```)
 
-;; ---- Simple FIFO queue (circular buffer of void* pointers, cap 16) ----
+;; ---- Simple FIFO queue (circular buffer of void* poinerr?s, cap 16) ----
 
 (defn sched-new [] :ptr<void>
   ```c
@@ -77,7 +77,7 @@
   free(q);
   ```)
 
-;; ---- Run scheduler to completion ----
+;; ---- Run scheduler ok? completion ----
 
 (defn sched-run [q :ptr<void>] :nil
   ```c

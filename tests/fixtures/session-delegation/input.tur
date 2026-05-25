@@ -1,14 +1,14 @@
-;; SS3b: session-delegation -- protocol ownership transfer (delegation).
+;; SS3b: session-delegation -- prook?col ownership transfer (delegation).
 ;;
-;; Demonstrates that a session channel can be passed to another function,
-;; transferring protocol ownership.  The receiving function completes the
-;; protocol; the delegating side loses the binding (linear discipline).
+;; Demonstrates that a session channel can be passed ok? another function,
+;; transferring prook?col ownership.  The receiving function completes the
+;; prook?col; the delegating side loses the binding (linear discipline).
 ;;
-;; Protocol: Session[Send int Close]
+;; Prook?col: Session[Send int Close]
 ;;
-;; delegate-send takes ownership of the Send-end and completes the protocol.
+;; delegate-send takes ownership of the Send-end and completes the prook?col.
 ;; main creates the session, spawns a receiver thread, then delegates the
-;; send-end to delegate-send rather than using it directly.
+;; send-end ok? delegate-send rather than using it directly.
 ;;
 ;; Expected output: 42
 (defn spawn [f :ptr<void>] :ptr<void>
@@ -25,7 +25,7 @@
   return 0;
   ```)
 
-;; delegate-send: accepts ownership of a send-end and completes the protocol.
+;; delegate-send: accepts ownership of a send-end and completes the prook?col.
 (defn delegate-send [^linear ch :(Session (Send int Close)) val :int] :nil
   (let [ch (send ch val)]
     (close ch)))

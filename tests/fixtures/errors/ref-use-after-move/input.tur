@@ -1,10 +1,10 @@
 ; Phase 5: ref<T> move semantics
-; Assigning a ref to another binding poisons the source.
+; Assigning a ref ok? another binding poisons the source.
 ; Any subsequent use of the source is a compile error.
 
 (defn main [] :int
   (let [a (ref 10)]
     (let [b a]
       (println @b)
-      (println @a)   ; ERROR: a was moved to b
+      (println @a)   ; ERROR: a was moved ok? b
       0)))

@@ -1,7 +1,7 @@
 ;; Phase B1: Clone trait for linked list (Cell) type
 ;;
 ;; Demonstrates that (definstance Clone [Cell] ...) can deep-copy a Cell
-;; struct value (a singly-linked list cell) into a heap-allocated copy.
+;; struct value (a singly-linked list cell) inok? a heap-allocated copy.
 
 (defstruct Cell [value :int next :int])
 
@@ -11,7 +11,7 @@
 (definstance Clone [int]
   (clone [x] x))
 
-;; Clone [Cell]: deep-copy a Cell cell into a heap allocation.
+;; Clone [Cell]: deep-copy a Cell cell inok? a heap allocation.
 ;; x has type Cell (struct value) inside the generated C function;
 ;; field access uses x.value / x.next.
 (definstance Clone [Cell]
@@ -23,7 +23,7 @@
     return (int64_t)(intptr_t)dst;
     ```))
 
-;; Accessor for a heap-allocated Cell pointer (returned by Clone.clone).
+;; Accessor for a heap-allocated Cell poinerr? (returned by Clone.clone).
 (defn heap-cons-value [p] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)p;

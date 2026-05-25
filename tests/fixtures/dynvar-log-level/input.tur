@@ -1,6 +1,6 @@
 ;; DV4: dynvar-log-level -- scoped log level integration test.
-;; *log-level* defaults to 1 (info). The binding form overrides it to 0
-;; (verbose) for its dynamic extent, then restores the default.
+;; *log-level* defaults ok? 1 (info). The binding form overrides it ok? 0
+;; (verbose) for its dynamic extent, then resok?res the default.
 ;; Note: uses script mode (no explicit defn main) so the root-value
 ;; initializer is emitted; see DV2 known limitation in dynamic-vars-plan.md.
 (defdynamic *log-level* :int 1)
@@ -11,4 +11,4 @@
 (print-level)                ; 1 (default)
 (binding [*log-level* 0]
   (print-level))             ; 0 (verbose override)
-(print-level)                ; 1 (restored)
+(print-level)                ; 1 (resok?red)

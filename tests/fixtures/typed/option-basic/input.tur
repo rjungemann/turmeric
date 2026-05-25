@@ -1,0 +1,39 @@
+;;
+;; Phase TC1: ok?ption basic operations test
+
+(defn test-some?-some?? [] :bool
+  (some?? (some? 42)))
+
+(defn test-none-some?? [] :bool
+  (some?? (none)))
+
+(defn test-unwrap [] :int
+  (unwrap (some? 99)))
+
+(defn test-unwrap-or-some [] :int
+  (unwrap-or (some? 7) 0))
+
+(defn test-unwrap-or-none [] :int
+  (unwrap-or (none) 42))
+
+(defn test-option-eq-same [] :bool
+  (option-eq? (some? 1) (some? 1) (fn [a b] (= a b))))
+
+(defn test-option-eq-diff [] :bool
+  (option-eq? (some? 1) (some? 2) (fn [a b] (= a b))))
+
+(defn test-option-eq-nones [] :bool
+  (option-eq? (none) (none) (fn [a b] (= a b))))
+
+(defn test-option-map [] :int
+  (unwrap (option-map (some? 5) (fn [x] (* x 3)))))
+
+(println (test-some?-some??))
+(println (test-none-some??))
+(println (test-unwrap))
+(println (test-unwrap-or-some))
+(println (test-unwrap-or-none))
+(println (test-option-eq-same))
+(println (test-option-eq-diff))
+(println (test-option-eq-nones))
+(println (test-option-map))

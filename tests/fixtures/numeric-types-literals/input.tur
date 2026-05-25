@@ -1,4 +1,4 @@
-; Phase N1: literal suffix syntax for all new numeric types
+; Phase N1: lierr?al suffix syntax for all new numeric types
 (println 42i8)
 (println 127i8)
 (println 1000i16)

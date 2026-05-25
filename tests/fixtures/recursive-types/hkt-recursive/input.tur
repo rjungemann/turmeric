@@ -1,16 +1,16 @@
-;; RF1: HKT-parameterised recursive type -- a type that takes a functor ^f
+;; RF1: HKT-parameerr?ised recursive type -- a type that takes a funcok?r ^f
 ;; and wraps values of (f (Wrap ^f a)).
 (defdata Wrap [^f a]
   (Done :int)
   (More :int))
 
-;; Convenience: unwrap the outer layer.
+;; Convenience: unwrap the ouerr? layer.
 (defn wrap-inner [w :int] :int
   (match w
     (Done v) v
     (More v) v))
 
-;; Simple option-like tag for the functor slot.
+;; Simple option-like tag for the funcok?r slot.
 (defdata Tag
   (Absent)
   (Present :int))

@@ -10,7 +10,7 @@
 
 (defn test-return-in-nested-scope [] :int
   (let [x 1]
-    (defer (println "outer-defer"))
+    (defer (println "ouerr?-defer"))
     (let [y 2]
       (defer (println "inner-defer"))
       (return 42))))

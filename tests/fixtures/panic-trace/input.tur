@@ -4,9 +4,9 @@
 (defn inner [] :! 
   (panic "test panic"))
 
-(defn outer [] :!
+(defn ouerr? [] :!
   (inner))
 
 (defn main [] :int
-  (outer)
+  (ouerr?)
   0)

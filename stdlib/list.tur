@@ -1,494 +1,161 @@
-;;; tur/list -- untyped singly-linked Cons/nil list.
+;;; tur/list -- typed singly-linked List[A] with Cons cells.
 ;;;
-;;; Legacy untyped list implementation. Prefer tur/tlist for new code;
-;;; this exists for bootstrap and backwards-compatibility with pre-TC1-B spices.
+;;; Typed singly-linked list. List[A] = Option[Cons[A]].
+;;; At runtime, nil is 0 and a cons cell is a heap-allocated
+;;; { int64_t head; int64_t tail; }.
 ;;;
-;;; Since: Phase B1
-;;; Deprecated: superseded by tur/tlist (Phase TC1-B)
-;; List type for Turmeric
-;; Singly-linked list: Cons(value, next) or nil
-;; Phase B1: Clone trait infrastructure
-;; SI4-C: ConsPtr is an opaque int64_t newtype for heap-allocated Cons pointers.
+;;; Since: Phase TC1-B
+;; Phase TC1-B: Typed List[A]
+;; Typed singly-linked list. List[A] = Option[Cons[A]].
+;; At runtime, nil is 0 and a cons cell is a heap-allocated { int64_t head; int64_t tail; }.
 
-;;
-;; DEPRECATED: Phase TC1-B
-;; The functions in this module are deprecated in favor of the typed
-;; API in stdlib/tlist.tur.  They will be removed in the
-;; release cycle following Phase TC1-B.
-;;
+;;; Cons -- parameterized cons cell with typed head and tail.
+;;;
+;;; Since: Phase TC1
+(defstruct Cons [A]
+  (head :int)
+  (tail :int))
 
-(defstruct Cons [value :int next :int])
-(defopaque ConsPtr :int)
-
-;; nil-value - empty list (NULL pointer)
-;;; nil-value -- return the empty list sentinel (NULL / 0).
-;;;
-;;; Returns:
-;;;   ConsPtr (opaque int64_t) representing an empty list (0 / NULL).
-;;;
-;;; Example:
-;;;   (nil-value)  ; => []
-;;;
-;;;
-;;; Deprecated: Use tnil from stdlib/tlist.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" nil-value [] #{Unsafe} :ConsPtr
-  ```c
-  return 0;
-  ```)
-
-;; Check if list is nil
-;;; list-nil? -- check whether a list is empty.
+;;; tcons -- prepend a value to a typed list.
 ;;;
 ;;; Parameters:
-;;;   lst -- the list to test
+;;;   h -- head element of type A
+;;;   t -- tail list (another typed list or tnil)
 ;;;
 ;;; Returns:
-;;;   true if lst is nil (0 / NULL), false otherwise.
+;;;   A new List[A] (cons cell) with h at the front.
 ;;;
 ;;; Example:
-;;;   (list-nil? (nil-value))  ; => true
+;;;   (tcons 1 (tcons 2 (tnil)))  ; => [1, 2]
 ;;;
-;;;
-;;; Deprecated: Use tnil? from stdlib/tlist.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-nil? [lst] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn tcons [h :int t :int] #{} :int
   ```c
-  return lst == 0;
-  ```)
-
-;; Create a new Cons cell (prepend to list)
-;;; cons -- prepend a value to a list, returning a new Cons cell.
-;;;
-;;; Parameters:
-;;;   value -- the element to prepend
-;;;   next  -- the existing list (or nil-value for a one-element list)
-;;;
-;;; Returns:
-;;;   ConsPtr (opaque int64_t heap pointer) to a newly allocated Cons cell.
-;;;
-;;; Example:
-;;;   (cons 1 (cons 2 (nil-value)))  ; => [1, 2]
-;;;
-;;;
-;;; Deprecated: Use tcons from stdlib/tlist.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" cons [value next] #{Unsafe} :ConsPtr
-  ```c
-  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
-  cell->value = value;
-  cell->next = next;
+  struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
+  cell->head = h;
+  cell->tail = t;
   return (int64_t)(intptr_t)cell;
   ```)
 
-;; Get the value of the first Cons cell
-;;; head -- return the value of the first element of a list.
-;;;
-;;; Parameters:
-;;;   lst -- a non-nil list
+;;; tnil -- return an empty typed list.
 ;;;
 ;;; Returns:
-;;;   The :int value stored in the first Cons cell.
+;;;   0, representing the empty List[A].
 ;;;
 ;;; Example:
-;;;   (head (cons 42 (nil-value)))  ; => 42
+;;;   (tnil)  ; => empty list
 ;;;
-;;;
-;;; Deprecated: Use thead from stdlib/tlist.tur instead (returns Option[A]).
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" head [lst] #{Unsafe} :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
-  if (!cell) {
-    fprintf(stderr, "head: empty list\n");
-    exit(1);
-  }
-  return cell->value;
-  ```)
+;;; Since: Phase TC1
+(defn tnil [] :int
+  0)
 
-;; Get the tail of the list (next pointer)
-;;; tail -- return the rest of the list after the first element.
+;;; tnil? -- check whether a typed list is empty.
 ;;;
 ;;; Parameters:
-;;;   lst -- a non-nil list
+;;;   l -- List[A]
 ;;;
 ;;; Returns:
-;;;   Pointer (as :int) to the next Cons cell, or nil-value if lst has one element.
+;;;   true if l is the empty list, false otherwise.
 ;;;
 ;;; Example:
-;;;   (tail (cons 1 (cons 2 (nil-value))))  ; => list [2]
+;;;   (tnil? (tnil))         ; => true
+;;;   (tnil? (tcons 1 (tnil)))  ; => false
 ;;;
-;;;
-;;; Deprecated: Use ttail from stdlib/tlist.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" tail [lst] #{Unsafe} :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
-  if (!cell) {
-    fprintf(stderr, "tail: empty list\n");
-    exit(1);
-  }
-  return cell->next;
-  ```)
+;;; Since: Phase TC1
+(defn tnil? [l :int] :bool
+  (= l 0))
 
-;; Free the entire list (does NOT free contained values - shallow free)
-;;; list-free -- free all Cons cells in a list (shallow -- does not free contained values).
+;;; thead -- return the head element of a typed list; panics if empty.
 ;;;
 ;;; Parameters:
-;;;   lst -- the list to free (may be nil-value)
-;;;
-;;; Example:
-;;;   (list-free my-list)
-;;;
-;;;
-;;; Deprecated: Use the typed List[A] API in stdlib/tlist.tur.
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-free [lst] #{Unsafe}
-  ```c
-  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
-  while (cell) {
-    struct { int64_t value; int64_t next; } *next = (void*)(intptr_t)cell->next;
-    free(cell);
-    cell = next;
-  }
-  ```)
-
-;; Get the length of the list
-;;; list-length -- return the number of elements in a list.
-;;;
-;;; Parameters:
-;;;   lst -- the list to measure
+;;;   l -- List[A] (must be non-empty)
 ;;;
 ;;; Returns:
-;;;   The number of Cons cells in lst (0 for nil).
+;;;   The head element of type A.
 ;;;
 ;;; Example:
-;;;   (list-length (cons 1 (cons 2 (nil-value))))  ; => 2
+;;;   (thead (tcons 42 (tnil)))  ; => 42
 ;;;
-;;;
-;;; Deprecated: Use tlist-length from stdlib/tlist.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-length [lst] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn thead [l :int] #{} :int
   ```c
-  int len = 0;
-  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
-  while (cell) {
-    len++;
-    cell = (void*)(intptr_t)cell->next;
-  }
-  return len;
+  struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
+  if (!cell) tur_panic("thead called on empty list");
+  return (int64_t)cell->head;
   ```)
 
-;; Phase B1: Clone instance for Cons
-;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
-;; Shallow-copies a single Cons cell into a new heap allocation (does NOT recursively
-;; clone the tail -- use clone-list for a deep list clone).
-;; x has type Cons (struct value) inside the generated C method.
-;;; Typeclass instance for Cons -- shallow Clone for a single Cons cell.
-(definstance Clone [Cons]
-  (clone [x] :int
-    ```c
-    struct { int64_t value; int64_t next; } *dst = malloc(sizeof(Cons));
-    dst->value = x.value;
-    dst->next  = x.next;
-    return (int64_t)(intptr_t)dst;
-    ```))
-
-;;; SINCE: Phase HKT §6 — Stdlib HKT migration
-;; HKT typeclass instances for singly-linked list (Cons/nil).
-
-;; Functor instance for list.
-;; fmap :: (a -> b) -> list a -> list b
-;; Maps fn over every element, building a new list.
-;;; __functor_list_fmap -- fmap implementation for the list Functor instance.
-(defn __functor_list_fmap [container fn] #{Unsafe} :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)container;
-  if (!cell) return 0; /* nil -> nil */
-  /* Build result list in reverse, then reverse it */
-  struct { int64_t value; int64_t next; } *rev = NULL;
-  while (cell) {
-      struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
-      n->value = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
-      n->next = (int64_t)(intptr_t)rev;
-      rev = n;
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
-  }
-  /* Reverse */
-  struct { int64_t value; int64_t next; } *result = NULL;
-  while (rev) {
-      struct { int64_t value; int64_t next; } *tmp =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
-      rev->next = (int64_t)(intptr_t)result;
-      result = rev;
-      rev = tmp;
-  }
-  return (int64_t)(intptr_t)result;
-  ```)
-
-;;; Typeclass instance for list -- Functor: fmap over every element.
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Functor [list]
-  (fmap [container fn]
-    ```c
-    struct { int64_t value; int64_t next; } *cell =
-        (struct { int64_t value; int64_t next; } *)(intptr_t)container;
-    if (!cell) return 0;
-    struct { int64_t value; int64_t next; } *rev = NULL;
-    while (cell) {
-        struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
-        n->value = fn.fn(fn.env, cell->value);
-        n->next = (int64_t)(intptr_t)rev;
-        rev = n;
-        cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
-    }
-    struct { int64_t value; int64_t next; } *result = NULL;
-    while (rev) {
-        struct { int64_t value; int64_t next; } *tmp =
-            (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
-        rev->next = (int64_t)(intptr_t)result;
-        result = rev;
-        rev = tmp;
-    }
-    return (int64_t)(intptr_t)result;
-    ```))
-
-;; Foldable instance for list.
-;; foldl :: (b -> a -> b) -> b -> list a -> b
-;; foldr :: (a -> b -> b) -> b -> list a -> b
-;;; __foldable_list_foldl -- foldl implementation for the list Foldable instance.
-(defn __foldable_list_foldl [ta init fn] #{Unsafe} :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
-  int64_t acc = init;
-  while (cell) {
-      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, cell->value);
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
-  }
-  return acc;
-  ```)
-
-;;; __foldable_list_foldr -- foldr implementation for the list Foldable instance.
-(defn __foldable_list_foldr [ta init fn] #{Unsafe} :int
-  ```c
-  /* Count elements first, then process in reverse order via stack */
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
-  /* Count */
-  size_t count = 0;
-  struct { int64_t value; int64_t next; } *tmp = cell;
-  while (tmp) { count++; tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next; }
-  if (count == 0) return init;
-  /* Collect values into stack array */
-  int64_t *vals = malloc(sizeof(int64_t) * count);
-  tmp = cell;
-  for (size_t i = 0; i < count; i++) {
-      vals[i] = tmp->value;
-      tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next;
-  }
-  /* Fold from right */
-  int64_t acc = init;
-  for (size_t i = count; i-- > 0; ) {
-      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(vals[i], acc);
-  }
-  free(vals);
-  return acc;
-  ```)
-
-;;; Typeclass instance for list -- Foldable: foldl and foldr over all elements.
-(definstance Foldable [list]
-  (foldl [ta init fn] (__foldable_list_foldl ta init fn))
-  (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
-
-;; Applicative instance for list.
-;;   pure x = cons(x, nil)
-;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, ...]
-;;; __applicative_list_pure -- pure implementation for the list Applicative instance.
-(defn __applicative_list_pure [x] #{Unsafe} :int
-  (cons x (nil-value)))
-
-;;; __applicative_list_ap -- ap implementation for the list Applicative instance.
-(defn __applicative_list_ap [ff fa] #{Unsafe} :int
-  ```c
-  struct { int64_t value; int64_t next; } *fs =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ff;
-  struct { int64_t value; int64_t next; } *as =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)fa;
-  if (!fs || !as) return 0;
-  /* Build result in reverse, then reverse */
-  struct { int64_t value; int64_t next; } *rev = NULL;
-  struct { int64_t value; int64_t next; } *fc = fs;
-  while (fc) {
-      struct { int64_t value; int64_t next; } *ac = as;
-      while (ac) {
-          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
-          n->value = ((int64_t(*)(int64_t))(intptr_t)fc->value)(ac->value);
-          n->next = (int64_t)(intptr_t)rev;
-          rev = n;
-          ac = (struct { int64_t value; int64_t next; } *)(intptr_t)ac->next;
-      }
-      fc = (struct { int64_t value; int64_t next; } *)(intptr_t)fc->next;
-  }
-  /* Reverse */
-  struct { int64_t value; int64_t next; } *result = NULL;
-  while (rev) {
-      struct { int64_t value; int64_t next; } *tmp =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
-      rev->next = (int64_t)(intptr_t)result;
-      result = rev;
-      rev = tmp;
-  }
-  return (int64_t)(intptr_t)result;
-  ```)
-
-;;; Typeclass instance for list -- Applicative: pure and ap.
-(definstance Applicative [list]
-  (pure [x] (__applicative_list_pure x))
-  (ap [ff fa] (__applicative_list_ap ff fa)))
-
-;; Monad instance for list.
-;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
-;;; __monad_list_bind -- bind implementation for the list Monad instance.
-(defn __monad_list_bind [ma fn] #{Unsafe} :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
-  if (!cell) return 0;
-  /* For each element, apply fn (returns a list), then concat all results */
-  struct { int64_t value; int64_t next; } *rev = NULL;
-  while (cell) {
-      int64_t sub_list = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
-      struct { int64_t value; int64_t next; } *sub =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
-      while (sub) {
-          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
-          n->value = sub->value;
-          n->next = (int64_t)(intptr_t)rev;
-          rev = n;
-          sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
-      }
-      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
-  }
-  /* Reverse */
-  struct { int64_t value; int64_t next; } *result = NULL;
-  while (rev) {
-      struct { int64_t value; int64_t next; } *tmp =
-          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
-      rev->next = (int64_t)(intptr_t)result;
-      result = rev;
-      rev = tmp;
-  }
-  return (int64_t)(intptr_t)result;
-  ```)
-
-;;; Typeclass instance for list -- Monad: bind (concat-map).
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Monad [list]
-  (bind [ma fn]
-    ```c
-    struct { int64_t value; int64_t next; } *cell =
-        (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
-    if (!cell) return 0;
-    struct { int64_t value; int64_t next; } *rev = NULL;
-    while (cell) {
-        int64_t sub_list = fn.fn(fn.env, cell->value);
-        struct { int64_t value; int64_t next; } *sub =
-            (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
-        while (sub) {
-            struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
-            n->value = sub->value;
-            n->next = (int64_t)(intptr_t)rev;
-            rev = n;
-            sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
-        }
-        cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
-    }
-    struct { int64_t value; int64_t next; } *result = NULL;
-    while (rev) {
-        struct { int64_t value; int64_t next; } *tmp =
-            (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
-        rev->next = (int64_t)(intptr_t)result;
-        result = rev;
-        rev = tmp;
-    }
-    return (int64_t)(intptr_t)result;
-    ```))
-
-;; Phase E1: list-eq? -- compare two singly-linked lists element-wise using a comparator fn.
-;; cmp-fn must be a fn [a :int b :int] :bool
-;;; list-eq? -- compare two lists element-wise using a caller-supplied comparator.
+;;; ttail -- return the tail of a typed list; panics if empty.
 ;;;
 ;;; Parameters:
-;;;   l1     -- first list
-;;;   l2     -- second list
-;;;   cmp-fn -- comparator of type fn [a :int b :int] :bool
+;;;   l -- List[A] (must be non-empty)
 ;;;
 ;;; Returns:
-;;;   true if both lists have the same length and cmp-fn returns true for every pair of elements.
+;;;   The tail List[A].
 ;;;
 ;;; Example:
-;;;   (list-eq? xs ys (fn [a b] (= a b)))  ; => true/false
+;;;   (ttail (tcons 1 (tcons 2 (tnil))))  ; => [2]
 ;;;
-;;;
-;;; Deprecated: Use tlist-eq? from stdlib/tlist.tur instead (or the Eq[Cons] instance).
-;;; Since: Phase E1
-(defn ^deprecated "see tlist-* in stdlib/tlist.tur" list-eq? [l1 l2 cmp-fn] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn ttail [l :int] #{} :int
   ```c
-  struct { int64_t value; int64_t next; } *a =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)l1;
-  struct { int64_t value; int64_t next; } *b =
-      (struct { int64_t value; int64_t next; } *)(intptr_t)l2;
+  struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
+  if (!cell) tur_panic("ttail called on empty list");
+  return (int64_t)cell->tail;
+  ```)
+
+;;; list-length -- count the number of elements in a typed list.
+;;;
+;;; Parameters:
+;;;   l -- List[A]
+;;;
+;;; Returns:
+;;;   Integer length.
+;;;
+;;; Example:
+;;;   (list-length (tcons 1 (tcons 2 (tnil))))  ; => 2
+;;;
+;;; Since: Phase TC1
+(defn list-length [l :int] #{} :int
+  ```c
+  struct __tur_cell_t { int64_t head; int64_t tail; };
+  struct __tur_cell_t *cell = (void*)(intptr_t)l;
+  int64_t count = 0;
+  while (cell) {
+      count++;
+      cell = (void*)(intptr_t)cell->tail;
+  }
+  return count;
+  ```)
+
+;;; list-eq? -- compare two typed lists element-wise.
+;;;
+;;; Parameters:
+;;;   l1     -- first List[A]
+;;;   l2     -- second List[A]
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both lists have the same elements in the same order.
+;;;
+;;; Example:
+;;;   (list-eq? (tcons 1 (tnil)) (tcons 1 (tnil)) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TC1
+(defn list-eq? [l1 :int l2 :int cmp-fn] #{} :bool
+  ```c
+  struct __tur_cons_t { int64_t head; int64_t tail; };
+  struct __tur_cons_t *a = (void*)(intptr_t)l1;
+  struct __tur_cons_t *b = (void*)(intptr_t)l2;
   while (a && b) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value)) {
-          return false;
-      }
-      a = (struct { int64_t value; int64_t next; } *)(intptr_t)a->next;
-      b = (struct { int64_t value; int64_t next; } *)(intptr_t)b->next;
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->head, b->head)) return false;
+      a = (void*)(intptr_t)a->tail;
+      b = (void*)(intptr_t)b->tail;
   }
-  return a == b;
+  return (void*)a == (void*)b;
   ```)
 
-;;; Typeclass instance for list -- Eq: structural equality via list-eq?.
-(definstance Eq [list]
+;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
+;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
+;; Note: element comparison uses integer equality; correct for all primitive A.
+(definstance Eq [Cons] [(Eq A)]
   (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
-
-;;; Show [Cons] -- show a non-empty list as "[v1, v2, ...]".
-;;;
-;;; Parameters:
-;;;   x -- a Cons struct value (first cell of the list)
-;;;
-;;; Returns:
-;;;   A heap-allocated :cstr formatted as "[v1, v2, ...]".
-;;;
-;;; Example:
-;;;   (show (make-struct Cons 1 0))  ; => "[1]"
-;;;
-;;; Since: SI3
-(definstance Show [Cons]
-  (show [x] :cstr
-    ```c
-    // TODO: use scratch arena once arena infrastructure lands.
-    typedef struct { int64_t value; int64_t next; } Cons_t;
-    // First pass: compute total buffer size needed.
-    char tmp[32];
-    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)x.value);
-    size_t total = 1 + (n > 0 ? (size_t)n : 0) + 1; // "[" + v1 + "]"
-    Cons_t *cur = (Cons_t *)(intptr_t)x.next;
-    while (cur) {
-        n = snprintf(tmp, sizeof(tmp), "%lld", (long long)cur->value);
-        total += 2 + (n > 0 ? (size_t)n : 0); // ", " + v
-        cur = (Cons_t *)(intptr_t)cur->next;
-    }
-    // Second pass: write the string.
-    char *buf = (char *)malloc(total + 1);
-    int off = snprintf(buf, total + 1, "[%lld", (long long)x.value);
-    cur = (Cons_t *)(intptr_t)x.next;
-    while (cur) {
-        off += snprintf(buf + off, (int)(total + 1) - off, ", %lld", (long long)cur->value);
-        cur = (Cons_t *)(intptr_t)cur->next;
-    }
-    snprintf(buf + off, (int)(total + 1) - off, "]");
-    return (const char *)(intptr_t)buf;
-    ```))

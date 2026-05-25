@@ -1,5 +1,5 @@
 ; IT4: any type boxing -- values of any type are tagged with their TypeKind
-; when passed to functions accepting the 'any' top type.
+; when passed ok? functions accepting the 'any' ok?p type.
 
 (defn consume [x : any] :int
   0)

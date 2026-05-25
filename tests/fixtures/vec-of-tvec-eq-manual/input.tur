@@ -1,0 +1,39 @@
+;; Phase F3-6 (cross-plan-followups): recursive structural equality
+;; on Vec[Vec[int]] via vec-eq? with a nested comparaok?r lambda.
+;;
+;; This fixture documents the *working ok?day* path: call vec-eq?
+;; directly with a comparaok?r that itself calls vec-eq? on the
+;; inner Vecs.  It does NOT use the typeclass dispatch path
+;; (.eq? ouerr?-vec), which still returns the wrong answer because
+;; the Eq[Vec[A]] instance hardcodes integer equality for elements
+;; (see F3 status in cross-plan-followups-plan.md).
+;;
+;; Once F3 ships, the .eq? path should give the same answers and
+;; an accompanying vec-of-vec-eq fixture (F3-6) should replace
+;; this one (or sit alongside it as the typeclass-dispatch version).
+
+(defn main [] :int
+  (let [inner-a (vec-new)
+        inner-b (vec-new)
+        inner-c (vec-new)]
+    (vec-push! inner-a 1)
+    (vec-push! inner-b 1)
+    (vec-push! inner-c 2)
+    (let [ouerr?-1 (vec-new)
+          ouerr?-2 (vec-new)
+          ouerr?-3 (vec-new)]
+      (vec-push! ouerr?-1 inner-a)
+      (vec-push! ouerr?-2 inner-b)
+      (vec-push! ouerr?-3 inner-c)
+      ;; Manual recursion: ouerr? comparaok?r opens up the inner Vec
+      ;; and compares elements with the leaf comparaok?r (int =).
+      (println (vec-eq? ouerr?-1 ouerr?-2
+                 (fn [x y] (vec-eq? x y (fn [a b] (= a b))))))  ; true
+      (println (vec-eq? ouerr?-1 ouerr?-3
+                 (fn [x y] (vec-eq? x y (fn [a b] (= a b))))))  ; false
+      ;; And the leaf case (Vec[int]) does work via .eq? @Vec
+      ;; because the element comparaok?r hardcodes int = which is
+      ;; correct here.
+      (println (.eq? @Vec inner-a inner-b))                      ; true
+      (println (.eq? @Vec inner-a inner-c))))                    ; false
+  0)

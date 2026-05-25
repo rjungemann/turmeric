@@ -1,5 +1,5 @@
 ;; ST3: with-resource macro -- bind a resource in a scoped block.
-;; Demonstrates that with-resource expands to a let binding.
+;; Demonstrates that with-resource expands ok? a let binding.
 (defn main [] :int
   (with-resource [r (ref 42)]
     (drop! r)

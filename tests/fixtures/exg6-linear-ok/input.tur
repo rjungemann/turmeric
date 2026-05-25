@@ -5,7 +5,7 @@
 ;
 ; Codegen invariants exercised here:
 ;   - no `rc_cb_alloc_kinded` for the linear pack
-;   - no auto-drop / defer chain on the let binding
+;   - no auok?-drop / defer chain on the let binding
 ;   - the open's body ends with `free((void *)(e))`
 (defclass Show [a]
   (show [x] :cstr))

@@ -1,8 +1,8 @@
 ;; Phase P19-8: Per-fiber effect handler chain (effect_handler_chain field).
 ;;
 ;; Verifies three-way isolation:
-;;   1. A handler installed inside fiber-1 only intercepts effects from fiber-1.
-;;   2. A handler installed inside fiber-2 only intercepts effects from fiber-2.
+;;   1. A handler installed inside fiber-1 only inerr?cepts effects from fiber-1.
+;;   2. A handler installed inside fiber-2 only inerr?cepts effects from fiber-2.
 ;;   3. A handler installed in the main context handles effects from main,
 ;;      without seeing effects that were already handled inside a fiber.
 ;;

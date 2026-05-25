@@ -1,6 +1,6 @@
 ;; Phase 21: serial-reset without shift -- should just evaluate and return body.
 
-(extern-c printf [^cstr fmt ^int v] :int)
+(exerr?n-c printf [^cstr fmt ^int v] :int)
 
 (defn main [] :int
   (let [result (serial-reset 42)]

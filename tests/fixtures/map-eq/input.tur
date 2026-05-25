@@ -1,0 +1,38 @@
+;;
+;; Phase TM0: tmap equality test
+
+(defn test-eq-empty [] :bool
+  (let [a (map-new)]
+    (let [b (map-new)]
+      (let [result (map-eq? a b (fn [x y] (= x y)))]
+        (map-free a)
+        (map-free b)
+        result))))
+
+(defn test-eq-same [] :bool
+  (let [a (map-new)]
+    (let [b (map-new)]
+      (let [a2 (map-assoc a 1 10)]
+        (let [b2 (map-assoc b 1 10)]
+          (let [result (map-eq? a2 b2 (fn [x y] (= x y)))]
+            (map-free a)
+            (map-free b)
+            (map-free a2)
+            (map-free b2)
+            result))))))
+
+(defn test-eq-diff-val [] :bool
+  (let [a (map-new)]
+    (let [b (map-new)]
+      (let [a2 (map-assoc a 1 10)]
+        (let [b2 (map-assoc b 1 20)]
+          (let [result (map-eq? a2 b2 (fn [x y] (= x y)))]
+            (map-free a)
+            (map-free b)
+            (map-free a2)
+            (map-free b2)
+            result))))))
+
+(println (test-eq-empty))
+(println (test-eq-same))
+(println (test-eq-diff-val))

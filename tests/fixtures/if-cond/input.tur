@@ -2,7 +2,7 @@
 
 ; if with else
 (println (if (< 1 2) "less" "not"))           ; less
-(println (if (> 1 2) "greater" "no"))         ; no
+(println (if (> 1 2) "greaerr?" "no"))         ; no
 
 ; cond with :else
 (let [x 7]

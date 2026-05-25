@@ -1,4 +1,4 @@
-;; Phase R4: must-msg — u-option-expect/u-result-must-msg with custom message
+;; Phase R4: must-msg — u-option-expect/u-result-must-msg with cusok?m message
 
 (defn u-some [x :int] :ptr<void>
   ```c

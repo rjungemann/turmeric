@@ -1,102 +1,91 @@
-;;; tur/vec -- untyped growable owning array.
+;;; tur/vec -- typed Vec[A]: parameterized growable array.
 ;;;
-;;; Legacy untyped growable array. Prefer tur/tvec for new code.
+;;; Parameterized growable array. Runtime layout identical to tur/vec.
 ;;;
-;;; Since: Phase B1
-;;; Deprecated: superseded by tur/tvec (Phase TC1-A)
-;; Vec type for Turmeric
-;; Growable owning array
+;;; Since: Phase TC1-A
+;; Phase TC1-A: Typed Vec[A]
+;; Parameterized growable array. Runtime layout identical to vec.tur.
+;; Type parameter A is tracked by the type-checker at call sites only.
 
-;;
-;; DEPRECATED: Phase TC1-A
-;; The functions in this module are deprecated in favor of the typed
-;; API in stdlib/tvec.tur.  They will be removed in the
-;; release cycle following Phase TC1-A.
-;;
+;;; Vec -- parameterized growable array with element type A.
+;;;
+;;; Since: Phase TC1
+(defstruct Vec [A]
+  (data :ptr<void>)
+  (len  :int)
+  (cap  :int))
 
-;;; vec-new -- allocate a new empty vec.
+;;; vec-new -- allocate a new empty Vec[A].
 ;;;
 ;;; Returns:
-;;;   Pointer to an empty vec with len=0 and cap=0.
+;;;   A new empty Vec[A] with len=0 and cap=0.
 ;;;
 ;;; Example:
-;;;   (vec-new)  ; => <vec ptr>
+;;;   (vec-new)  ; => empty Vec
 ;;;
-;;;
-;;; Deprecated: Use tvec-new from stdlib/tvec.tur instead.
-;;; Since: Phase B1
-;; Create a new empty vec
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-new [] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn vec-new [] #{} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
   v->cap = 0;
-  return v;
+  return (int64_t)(intptr_t)v;
   ```)
 
-;;; vec-len -- return the number of elements in a vec.
+;;; vec-len -- return the number of elements in a Vec[A].
 ;;;
 ;;; Parameters:
-;;;   v -- vec pointer returned by vec-new
+;;;   v -- Vec[A] pointer
 ;;;
 ;;; Returns:
-;;;   Number of elements currently in the vec.
+;;;   Element count.
 ;;;
 ;;; Example:
 ;;;   (vec-len my-vec)  ; => 3
 ;;;
-;;;
-;;; Deprecated: Use tvec-len from stdlib/tvec.tur instead.
-;;; Since: Phase B1
-;; Get vec length - v is a pointer from vec-new
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-len [v] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn vec-len [v :int] #{} :int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
 
 ;;; vec-get -- return the element at index i (bounds-checked).
 ;;;
 ;;; Parameters:
-;;;   v -- vec pointer
+;;;   v -- Vec[A] pointer
 ;;;   i -- zero-based index
 ;;;
 ;;; Returns:
-;;;   The int64_t element stored at index i.
+;;;   The element at index i (typed A, stored as int64_t).
 ;;;
 ;;; Example:
-;;;   (vec-get my-vec 0)  ; => <element>
+;;;   (vec-get my-vec 0)  ; => first element
 ;;;
-;;;
-;;; Deprecated: Use tvec-get from stdlib/tvec.tur instead.
-;;; Since: Phase B1
-;; Get element at index (bounds-checked)
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-get [v i] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn vec-get [v :int i :int] #{} :int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
-  fprintf(stderr, "vec index out of bounds\n");
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
+  fprintf(stderr, "tvec index out of bounds\n");
   exit(1);
   return 0;
   ```)
 
-;;; vec-push! -- append a value to the end of a vec, growing storage as needed.
+;;; vec-push! -- append an element to the Vec[A].
 ;;;
 ;;; Parameters:
-;;;   v   -- ^unique ^mut vec pointer (exclusive mutable access required)
-;;;   val -- value to append
+;;;   v   -- Vec[A] pointer
+;;;   val -- element of type A to append
 ;;;
 ;;; Example:
 ;;;   (vec-push! my-vec 42)
 ;;;
-;;;
-;;; Deprecated: Use tvec-push! from stdlib/tvec.tur instead.
-;;; Since: Phase B1
-;; Push an element to the vec
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-push! [^unique ^mut v val] #{Unsafe} :nil
+;;; Since: Phase TC1
+(defn vec-push! [v :int val :int] #{} :nil
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
     size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
     int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
@@ -108,308 +97,66 @@
   vec->data[vec->len++] = val;
   ```)
 
-;;; vec-pop! -- remove and return the last element of a vec.
+;;; vec-pop! -- remove and return the last element of a Vec[A].
 ;;;
 ;;; Parameters:
-;;;   v -- ^unique ^mut vec pointer (exclusive mutable access required)
+;;;   v -- Vec[A] pointer
 ;;;
 ;;; Returns:
-;;;   The int64_t element that was at the last position.
+;;;   The last element of type A (as int64_t), or 0 if empty.
 ;;;
 ;;; Example:
-;;;   (vec-pop! my-vec)  ; => <last element>
+;;;   (vec-pop! my-vec)  ; => last element
 ;;;
-;;;
-;;; Deprecated: Use tvec-pop! from stdlib/tvec.tur instead (returns Option[A]).
-;;; Since: Phase B1
-;; Pop an element from the vec
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-pop! [^unique ^mut v] #{Unsafe} :int
+;;; Since: Phase TC1
+(defn vec-pop! [v :int] #{} :int
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  if (vec->len == 0) {
-    fprintf(stderr, "vec pop from empty vec\n");
-    exit(1);
-  }
-  return (int)vec->data[--vec->len];
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->len == 0) return 0;
+  return (int64_t)vec->data[--vec->len];
   ```)
 
-;;; vec-free -- free a vec and its backing data buffer.
+;;; vec-set! -- overwrite the element at index i.
 ;;;
 ;;; Parameters:
-;;;   v -- ^unique vec pointer (exclusive ownership required; vec is destroyed)
+;;;   v   -- Vec[A] pointer
+;;;   i   -- zero-based index
+;;;   val -- new element value of type A
+;;;
+;;; Example:
+;;;   (vec-set! my-vec 0 99)
+;;;
+;;; Since: Phase TC1
+(defn vec-set! [v :int i :int val :int] #{} :void
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
+  fprintf(stderr, "vec-set! index out of bounds\n");
+  exit(1);
+  ```)
+
+;;; vec-free -- free a Vec[A] and its data buffer.
+;;;
+;;; Parameters:
+;;;   v -- Vec[A] pointer to free
 ;;;
 ;;; Example:
 ;;;   (vec-free my-vec)
 ;;;
-;;;
-;;; Deprecated: Use tvec-free from stdlib/tvec.tur instead.
-;;; Since: Phase B1
-;; Free the vec and its data
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-free [^unique v] #{Unsafe} :nil
+;;; Since: Phase TC1
+(defn vec-free [v :int] #{} :void
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  free(vec->data);
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->data) free(vec->data);
   free(vec);
   ```)
 
-;;; __functor_vec_fmap -- apply fn to every element and return a new vec.
-;;; SINCE: Phase HKT H3
-;; Functor instance for vec -- apply fn to every element, return a new vec.
-(defn __functor_vec_fmap [container fn] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
-  if (!v) return 0;
-  struct { int64_t *data; size_t len; size_t cap; } *r =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  r->len  = v->len;
-  r->cap  = v->len;
-  r->data = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
-  for (size_t i = 0; i < v->len; i++) {
-      r->data[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
-  }
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; Functor [vec] -- fmap applies a function to every element, returning a new vec.
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Functor [vec]
-  (fmap [container fn]
-    ```c
-    struct { int64_t *data; size_t len; size_t cap; } *v =
-        (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
-    if (!v) return 0;
-    struct { int64_t *data; size_t len; size_t cap; } *r =
-        malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-    r->len  = v->len;
-    r->cap  = v->len;
-    r->data = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
-    for (size_t i = 0; i < v->len; i++) {
-        r->data[i] = fn.fn(fn.env, v->data[i]);
-    }
-    return (int64_t)(intptr_t)r;
-    ```))
-
-;;; __foldable_vec_foldl -- strict left fold over a vec.
-;; Foldable instance for vec.
-;;   foldl :: (b -> a -> b) -> b -> t a -> b   (left fold, strict)
-;;   foldr :: (a -> b -> b) -> b -> t a -> b   (right fold)
-(defn __foldable_vec_foldl [ta init fn] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
-  int64_t acc = init;
-  if (!v) return acc;
-  for (size_t i = 0; i < v->len; i++) {
-      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, v->data[i]);
-  }
-  return acc;
-  ```)
-
-;;; __foldable_vec_foldr -- right fold over a vec.
-(defn __foldable_vec_foldr [ta init fn] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
-  int64_t acc = init;
-  if (!v) return acc;
-  for (size_t i = v->len; i-- > 0; ) {
-      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(v->data[i], acc);
-  }
-  return acc;
-  ```)
-
-;;; Foldable [vec] -- foldl and foldr fold a vec with an accumulator function.
-(definstance Foldable [vec]
-  (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
-  (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))
-
-;;; __applicative_vec_pure -- wrap a single value in a one-element vec.
-;; Applicative instance for vec.
-;;   pure x = [x]
-;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, f2 x2, ...]
-(defn __applicative_vec_pure [x] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  v->len = 1;
-  v->cap = 1;
-  v->data = malloc(sizeof(int64_t));
-  v->data[0] = x;
-  return (int64_t)(intptr_t)v;
-  ```)
-
-;;; __applicative_vec_ap -- apply a vec of functions to a vec of values (cartesian product).
-(defn __applicative_vec_ap [ff fa] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *fv =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ff;
-  struct { int64_t *data; size_t len; size_t cap; } *av =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)fa;
-  if (!fv || !av) return 0;
-  /* Result vec */
-  struct { int64_t *data; size_t len; size_t cap; } *r =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  r->len = fv->len * av->len;
-  r->cap = r->len;
-  r->data = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
-  /* Apply each function to each value */
-  size_t idx = 0;
-  for (size_t i = 0; i < fv->len; i++) {
-      for (size_t j = 0; j < av->len; j++) {
-          int64_t fn_ptr = fv->data[i];
-          int64_t val = av->data[j];
-          r->data[idx++] = ((int64_t(*)(int64_t))(intptr_t)fn_ptr)(val);
-      }
-  }
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; Applicative [vec] -- pure wraps a value; ap applies each function to each value.
-(definstance Applicative [vec]
-  (pure [x] (__applicative_vec_pure x))
-  (ap [ff fa] (__applicative_vec_ap ff fa)))
-
-;;; __monad_vec_concat -- flatten a vec of vecs into a single vec.
-;; Monad instance for vec.
-;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
-;;   where concat flattens a vec of vecs
-(defn __monad_vec_concat [outer] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *ov =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)outer;
-  if (!ov) return 0;
-  /* Calculate total length */
-  size_t total_len = 0;
-  for (size_t i = 0; i < ov->len; i++) {
-      struct { int64_t *data; size_t len; size_t cap; } *iv =
-          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ov->data[i];
-      if (iv) total_len += iv->len;
-  }
-  /* Build result */
-  struct { int64_t *data; size_t len; size_t cap; } *r =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  r->len = total_len;
-  r->cap = total_len;
-  r->data = total_len > 0 ? malloc(sizeof(int64_t) * total_len) : NULL;
-  size_t idx = 0;
-  for (size_t i = 0; i < ov->len; i++) {
-      struct { int64_t *data; size_t len; size_t cap; } *iv =
-          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ov->data[i];
-      if (iv) {
-          for (size_t j = 0; j < iv->len; j++) {
-              r->data[idx++] = iv->data[j];
-          }
-      }
-  }
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; __monad_vec_bind -- map fn over each element and flatten the resulting vec of vecs.
-(defn __monad_vec_bind [ma fn] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
-  if (!v) return 0;
-  /* Map fn over each element */
-  struct { int64_t *data; size_t len; size_t cap; } *mapped =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  mapped->len = v->len;
-  mapped->cap = v->len;
-  mapped->data = v->len > 0 ? malloc(sizeof(int64_t) * v->len) : NULL;
-  for (size_t i = 0; i < v->len; i++) {
-      mapped->data[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
-  }
-  /* Now concat the results */
-  return __monad_vec_concat((int64_t)(intptr_t)mapped);
-  ```)
-
-;;; Monad [vec] -- bind maps fn over each element and flattens the results.
-;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Monad [vec]
-  (bind [ma fn]
-    ```c
-    struct { int64_t *data; size_t len; size_t cap; } *v =
-        (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
-    if (!v) return 0;
-    struct { int64_t *data; size_t len; size_t cap; } *mapped =
-        malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-    mapped->len = v->len;
-    mapped->cap = v->len;
-    mapped->data = v->len > 0 ? malloc(sizeof(int64_t) * v->len) : NULL;
-    for (size_t i = 0; i < v->len; i++) {
-        mapped->data[i] = fn.fn(fn.env, v->data[i]);
-    }
-    return __monad_vec_concat((int64_t)(intptr_t)mapped);
-    ```))
-
-;;; __traversable_vec_traverse -- map fn over each element, collecting results into a new vec.
-;; Traversable instance for vec.
-;; traverse :: Applicative f => (a -> f b) -> vec a -> f (vec b)
-;; For vec as traversable:
-;;   traverse f [] = pure []
-;;   traverse f [x1, x2, ...] = (<*> ...) ... (pure (:)) (f x1) (f x2) ...
-;; In v1, we use the Applicative instance's pure and ap
-(defn __traversable_vec_traverse [ta fn] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
-  if (!v || v->len == 0) {
-      /* Empty vec: return pure [] = [] wrapped by applicative */
-      /* In v1, we return an empty vec */
-      struct { int64_t *data; size_t len; size_t cap; } *r =
-          malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-      r->len = 0; r->cap = 0; r->data = NULL;
-      return (int64_t)(intptr_t)r;
-  }
-  /* Non-empty vec: map fn over each element and collect results */
-  struct { int64_t *data; size_t len; size_t cap; } *mapped =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  mapped->len = v->len;
-  mapped->cap = v->len;
-  mapped->data = v->len > 0 ? malloc(sizeof(int64_t) * v->len) : NULL;
-  for (size_t i = 0; i < v->len; i++) {
-      mapped->data[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
-  }
-  /* The result is f (vec b) where f is the applicative functor */
-  /* In v1, we just return the mapped vec, assuming the applicative
-   * will handle the wrapping */
-  return (int64_t)(intptr_t)mapped;
-  ```)
-
-;;; Traversable [vec] -- traverse maps an effectful function over a vec, collecting results.
-(definstance Traversable [vec]
-  (traverse [ta fn] (__traversable_vec_traverse ta fn)))
-
-;;; __alternative_vec_empty -- return a new empty vec (the zero element for alt-or).
-;; Alternative instance for vec.
-;;   empty = []
-;;   alt-or a b = concat [a b] (concatenate the two vecs)
-(defn __alternative_vec_empty [] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  v->len = 0;
-  v->cap = 0;
-  v->data = NULL;
-  return (int64_t)(intptr_t)v;
-  ```)
-
-;;; __alternative_vec_alt_or -- return the concat function for two vecs.
-(defn __alternative_vec_alt_or [a b] #{} :int
-  __monad_vec_concat)
-
-;;; Alternative [vec] -- empty returns []; alt-or concatenates two vecs.
-(definstance Alternative [vec]
-  (empty [_] (__alternative_vec_empty))
-  (alt-or [a b] (__alternative_vec_alt_or a b)))
-
-;;; vec-eq? -- compare two vecs element-wise using a comparator function.
+;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
-;;;   v1     -- first vec pointer
-;;;   v2     -- second vec pointer
-;;;   cmp-fn -- comparator fn [a :int b :int] :bool applied to each element pair
+;;;   v1     -- first Vec[A]
+;;;   v2     -- second Vec[A]
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool
 ;;;
 ;;; Returns:
 ;;;   true if both vecs have the same length and all element pairs satisfy cmp-fn.
@@ -417,163 +164,21 @@
 ;;; Example:
 ;;;   (vec-eq? va vb (fn [a b] (= a b)))  ; => true
 ;;;
-;;;
-;;; Deprecated: Use tvec-eq? from stdlib/tvec.tur instead (or the Eq[Vec] instance).
-;;; Since: Phase E1
-;; Phase E1: vec-eq? -- compare two vecs element-wise using a comparator fn.
-;; cmp-fn must be a fn [a :int b :int] :bool
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-eq? [v1 v2 cmp-fn] #{Unsafe} :bool
+;;; Since: Phase TC1
+(defn vec-eq? [v1 :int v2 :int cmp-fn] #{} :bool
   ```c
-  struct { int64_t *data; size_t len; size_t cap; } *a =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
-  struct { int64_t *data; size_t len; size_t cap; } *b =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v2;
-  if (a == b) return true;
-  if (!a || !b) return false;
+  struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
+  struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
   for (size_t i = 0; i < a->len; i++) {
-      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i])) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i]))
           return false;
-      }
   }
   return true;
   ```)
 
-;;; Eq [vec] -- eq? compares two vecs using integer equality on each element.
-(definstance Eq [vec]
+;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
+;; TC1-5: Phase PTC4 -- constrained Eq instance for Vec[A].
+;; Note: element comparison uses integer equality; correct for all primitive A.
+(definstance Eq [Vec] [(Eq A)]
   (eq? [x y] (vec-eq? x y (fn [a b] (= a b)))))
-
-;;; __clone_vec_clone -- deep-copy a vec and all its int64_t elements.
-;; Phase B1: Clone instance for vec
-;; Deep copies the vec struct and all its elements (v1: int64_t only)
-(defn __clone_vec_clone [x] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)x;
-  if (!v) return 0;
-  struct { int64_t *data; size_t len; size_t cap; } *r =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  r->len = v->len;
-  r->cap = v->cap;
-  r->data = malloc(sizeof(int64_t) * v->cap);
-  for (size_t i = 0; i < v->len; i++) {
-      r->data[i] = v->data[i];  /* v1: int64_t copy (deep clone for primitives) */
-  }
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;;; Clone [vec] -- clone deep-copies the vec struct and all its elements.
-(definstance Clone [vec]
-  (clone [x] (__clone_vec_clone x)))
-
-;;; Show [vec] -- show a vec as "[v1, v2, ...]" (or "[]" for empty).
-;;;
-;;; Parameters:
-;;;   x -- vec pointer (as :int / int64_t)
-;;;
-;;; Returns:
-;;;   A heap-allocated :cstr formatted as "[v1, v2, ...]" or "[]".
-;;;
-;;; Example:
-;;;   (show (vec-new))  ; => "[]"
-;;;
-;;; Since: SI3
-(definstance Show [vec]
-  (show [x] :cstr
-    ```c
-    // TODO: use scratch arena once arena infrastructure lands.
-    struct { int64_t *data; size_t len; size_t cap; } *v =
-        (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)x;
-    if (!v || v->len == 0) return "[]";
-    // First pass: compute total buffer size needed.
-    char tmp[32];
-    size_t total = 1 + 1; // "[" + "]"
-    for (size_t i = 0; i < v->len; i++) {
-        int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v->data[i]);
-        total += (n > 0 ? (size_t)n : 0);
-        if (i > 0) total += 2; // ", "
-    }
-    // Second pass: write the string.
-    char *buf = (char *)malloc(total + 1);
-    int off = snprintf(buf, total + 1, "[");
-    for (size_t i = 0; i < v->len; i++) {
-        if (i > 0) off += snprintf(buf + off, (int)(total + 1) - off, ", ");
-        off += snprintf(buf + off, (int)(total + 1) - off, "%lld", (long long)v->data[i]);
-    }
-    snprintf(buf + off, (int)(total + 1) - off, "]");
-    return (const char *)(intptr_t)buf;
-    ```))
-;;; vec-sort! -- sort the elements of a vec in ascending order (in-place).
-;;;
-;;; Parameters:
-;;;   v -- vec pointer (as :int / int64_t)
-;;;
-;;; Returns:
-;;;   :nil
-;;;
-;;; Example:
-;;;   (vec-sort! my-vec)
-;;;
-;;;
-;;; Deprecated: Use the typed Vec[A] API in stdlib/tvec.tur once a tvec-sort! lands.
-;;; Since: Phase B2
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-sort! [v] :nil
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
-  if (!vec || vec->len < 2) return;
-  static int cmp_i64(const void *a, const void *b) {
-      int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
-      return (x > y) - (x < y);
-  }
-  qsort(vec->data, vec->len, sizeof(int64_t), cmp_i64);
-  ```)
-
-;;; vec-set! -- write val to the element at index i (bounds-checked).
-;;;
-;;; Parameters:
-;;;   v   -- vec pointer (as :int / int64_t)
-;;;   i   -- zero-based index
-;;;   val -- value to write
-;;;
-;;; Returns:
-;;;   :nil
-;;;
-;;; Example:
-;;;   (vec-set! my-vec 0 42)
-;;;
-;;;
-;;; Deprecated: Use tvec-set! from stdlib/tvec.tur instead.
-;;; Since: Phase B1
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-set! [v :int i :int val :int] #{Unsafe} :nil
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
-  if (vec && i >= 0 && (size_t)i < vec->len) vec->data[i] = val;
-  ```)
-
-;;; vec-new-filled -- create a vec of size n with all elements initialised to val.
-;;;
-;;; Parameters:
-;;;   n   -- number of elements
-;;;   val -- initial value for every element
-;;;
-;;; Returns:
-;;;   Pointer to the new vec.
-;;;
-;;; Example:
-;;;   (vec-new-filled 10 0)  ; => vec of ten zeros
-;;;
-;;;
-;;; Deprecated: Use tvec-new from stdlib/tvec.tur then tvec-push! in a loop, or add tvec-new-filled.
-;;; Since: Phase B1
-(defn ^deprecated "see tvec-* in stdlib/tvec.tur" vec-new-filled [n :int val :int] #{Unsafe} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v =
-      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
-  v->len = (size_t)n;
-  v->cap = (size_t)n;
-  v->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
-  for (size_t i = 0; i < (size_t)n; i++) v->data[i] = val;
-  return (int64_t)(intptr_t)v;
-  ```)

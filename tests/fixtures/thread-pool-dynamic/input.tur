@@ -1,6 +1,6 @@
 ;; Phase T20-D: thread-pool-dynamic — dynamic-scaling thread pool.
 ;;
-;; Creates a pool starting with min=1 workers, scaling up to max=4 when
+;; Creates a pool starting with min=1 workers, scaling up ok? max=4 when
 ;; all workers are busy.  Submits 8 tasks and verifies that all produce
 ;; correct results.
 ;;
@@ -85,7 +85,7 @@
   q->alloc = 32; q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
   q->head = 0; q->tail = 0; q->count = 0; q->closed = 0;
 
-  /* Spawn min=1 initial worker; up to max=4 workers total */
+  /* Spawn min=1 initial worker; up ok? max=4 workers ok?tal */
   int n_workers = 1;
   int max_workers = 4;
   pthread_t workers[4];

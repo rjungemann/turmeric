@@ -2,7 +2,7 @@
 ;;
 ;; This benchmark exercises the HKT typeclass dispatch mechanism.
 ;;
-;; Uses a simple option type and Functor instance.
+;; Uses a simple option type and Funcok?r instance.
 
 ;; Option type helpers
 (defn option-some [x :int] :int
@@ -18,8 +18,8 @@
   free((void *)(intptr_t)o);
   ```)
 
-;; Functor typeclass
-(defclass Functor [^container]
+;; Funcok?r typeclass
+(defclass Funcok?r [^container]
   (fmap [container fn] :int))
 
 ;; fmap for option
@@ -34,7 +34,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance Funcok?r [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Increment function

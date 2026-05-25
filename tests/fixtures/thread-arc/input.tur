@@ -1,7 +1,7 @@
-;; Phase T19: thread-arc — threads share an Arc<T> atomic refcount cell.
+;; Phase T19: thread-arc — threads share an Arc<T> aok?mic refcount cell.
 ;;
-;; Two threads each receive a clone of an Arc (atomic int64_t cell).
-;; Each thread reads the value and stores a result in its own output cell.
+;; Two threads each receive a clone of an Arc (aok?mic int64_t cell).
+;; Each thread reads the value and sok?res a result in its own output cell.
 ;; Main joins both threads then reads the results.
 ;;
 ;; Arc layout: struct { uint64_t strong; uint64_t weak; int64_t value; }
@@ -11,8 +11,8 @@
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)malloc(sizeof(ArcCell));
   if (!b) { fprintf(stderr, "arc-new: oom\n"); abort(); }
-  __atomic_store_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
-  __atomic_store_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
+  __aok?mic_sok?re_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __aok?mic_sok?re_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
   b->value = (int64_t)val;
   return (void *)b;
   ```)
@@ -21,7 +21,7 @@
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
-  __atomic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __aok?mic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
   return (void *)b;
   ```)
 
@@ -35,9 +35,9 @@
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
-  uint64_t prev = __atomic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
+  uint64_t prev = __aok?mic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
   if (prev == 1) {
-      if (__atomic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL) == 1)
+      if (__aok?mic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL) == 1)
           free(b);
   }
   ```)
@@ -45,7 +45,7 @@
 (defn arc-strong-count [p :ptr<void>] :int
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
-  return (int64_t)__atomic_load_n(&((ArcCell *)p)->strong, __ATOMIC_SEQ_CST);
+  return (int64_t)__aok?mic_load_n(&((ArcCell *)p)->strong, __ATOMIC_SEQ_CST);
   ```)
 
 ;; Thread argument: contains the Arc clone and a result slot.
@@ -71,7 +71,7 @@
   free(a);
   ```)
 
-;; Worker: reads value from Arc, multiplies by 2, stores in result slot.
+;; Worker: reads value from Arc, multiplies by 2, sok?res in result slot.
 (defn thread-worker [arg :ptr<void>] :ptr<void>
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;

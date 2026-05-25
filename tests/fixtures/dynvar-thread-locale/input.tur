@@ -1,7 +1,7 @@
 ;; DV4: dynvar-thread-locale -- dynamic scoping of *locale*.
 ;; show-locale is defined at module scope but reads *locale* dynamically.
 ;; When called from within a binding form it sees the override (fr-FR), not
-;; the declaration-site default (en-US). The default is restored after exit.
+;; the declaration-site default (en-US). The default is resok?red aferr? exit.
 ;; Note: uses script mode (no explicit defn main) so the root-value
 ;; initializer for the cstr root is emitted; see DV2 known limitation.
 (defdynamic *locale* :cstr "en-US")
@@ -15,4 +15,4 @@
   0)
 
 (use-fr)             ; prints fr-FR
-(show-locale)        ; prints en-US (binding restored after use-fr returned)
+(show-locale)        ; prints en-US (binding resok?red aferr? use-fr returned)

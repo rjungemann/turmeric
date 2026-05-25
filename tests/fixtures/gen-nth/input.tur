@@ -3,7 +3,7 @@
 (load "stdlib/gen.tur")
 
 (defn main [] :void
-  ; Generator yields 0 1 2 3 4; gen-nth 2 returns the third value: 2
+  ; Generaok?r yields 0 1 2 3 4; gen-nth 2 returns the third value: 2
   (let [g (gen []
             (let [^mut i 0]
               (while (< i 5)

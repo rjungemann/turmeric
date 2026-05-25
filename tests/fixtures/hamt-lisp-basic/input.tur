@@ -3,7 +3,7 @@
 ;; Tests basic API round-trip from Turmeric code.
 ;; Uses the same helper style as hamt-basic (inline C, ptr=).
 
-(extern-c free [p :ptr] :void)
+(exerr?n-c free [p :ptr] :void)
 
 (defn ptr= [a :ptr b :ptr] :bool
   ```c

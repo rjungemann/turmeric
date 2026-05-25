@@ -1,4 +1,4 @@
-;; Phase 19: with-write stdlib handler — routes Write effects to println.
+;; Phase 19: with-write stdlib handler — routes Write effects ok? println.
 (defeffect Write [s :cstr] :nil)
 
 (defmacro with-write [body]

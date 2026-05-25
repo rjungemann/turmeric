@@ -1,0 +1,65 @@
+;;
+;; Phase TM0: tmap basic operations test
+
+(defn test-empty [] :int
+  (let [m (map-new)]
+    (let [c (map-count m)]
+      (map-free m)
+      c)))
+
+(defn test-assoc-get [] :int
+  (let [m (map-new)]
+    (let [m2 (map-assoc m 42 100)]
+      (let [v (map-get m2 42 42)]
+        (map-free m)
+        (map-free m2)
+        v))))
+
+(defn test-has [] :int
+  (let [m (map-new)]
+    (let [m2 (map-assoc m 7 999)]
+      (let [found (map-has? m2 7 7)]
+        (map-free m)
+        (map-free m2)
+        (if found 1 0)))))
+
+(defn test-count [] :int
+  (let [m (map-new)]
+    (let [m2 (map-assoc m 1 10)]
+      (let [m3 (map-assoc m2 2 20)]
+        (let [c (map-count m3)]
+          (map-free m)
+          (map-free m2)
+          (map-free m3)
+          c)))))
+
+(defn test-dissoc [] :int
+  (let [m (map-new)]
+    (let [m2 (map-assoc m 5 50)]
+      (let [m3 (map-dissoc m2 5 5)]
+        (let [c (map-count m3)]
+          (map-free m)
+          (map-free m2)
+          (map-free m3)
+          c)))))
+
+(defn test-merge [] :int
+  (let [a (map-new)]
+    (let [b (map-new)]
+      (let [a2 (map-assoc a 1 10)]
+        (let [b2 (map-assoc b 2 20)]
+          (let [m (map-merge a2 b2)]
+            (let [c (map-count m)]
+              (map-free a)
+              (map-free b)
+              (map-free a2)
+              (map-free b2)
+              (map-free m)
+              c)))))))
+
+(println (test-empty))
+(println (test-assoc-get))
+(println (test-has))
+(println (test-count))
+(println (test-dissoc))
+(println (test-merge))

@@ -1,10 +1,10 @@
-; LZ3 fixture: seq/into-vec -- materialise a Seq into a growable vec.
+; LZ3 fixture: seq/inok?-vec -- maerr?ialise a Seq inok? a growable vec.
 ; Collects [0,5) then prints length and each element.
 
 (load "stdlib/seq/consume.tur")
 
 (defn main [] :void
-  (let [v (seq/into-vec (seq/range 0 5))]
+  (let [v (seq/inok?-vec (seq/range 0 5))]
     (println (seq-vec-len v))
     (let [^mut i 0]
       (while (< i (seq-vec-len v))

@@ -1,0 +1,61 @@
+;;
+;; Phase TC1: tvec basic operations test
+
+(defn test-empty [] :int
+  (let [v (vec-new)]
+    (let [len (vec-len v)]
+      (vec-free v)
+      len)))
+
+(defn test-push-get [] :int
+  (let [v (vec-new)]
+    (vec-push! v 42)
+    (let [x (vec-get v 0)]
+      (vec-free v)
+      x)))
+
+(defn test-push-multi [] :int
+  (let [v (vec-new)]
+    (vec-push! v 10)
+    (vec-push! v 20)
+    (vec-push! v 30)
+    (let [len (vec-len v)]
+      (vec-free v)
+      len)))
+
+(defn test-pop [] :int
+  (let [v (vec-new)]
+    (vec-push! v 100)
+    (vec-push! v 200)
+    (let [x (vec-pop! v)]
+      (vec-free v)
+      x)))
+
+(defn test-set [] :int
+  (let [v (vec-new)]
+    (vec-push! v 1)
+    (vec-push! v 2)
+    (vec-push! v 3)
+    (vec-set! v 1 99)
+    (let [x (vec-get v 1)]
+      (vec-free v)
+      x)))
+
+(defn test-eq [] :bool
+  (let [a (vec-new)]
+    (let [b (vec-new)]
+      (vec-push! a 1)
+      (vec-push! a 2)
+      (vec-push! b 1)
+      (vec-push! b 2)
+      (let [result (vec-eq? a b (fn [x y] (= x y)))]
+        (vec-free a)
+        (vec-free b)
+        result))))
+
+(println (test-empty))
+(println (test-push-get))
+(println (test-push-multi))
+(println (test-pop))
+(println (test-set))
+(println (test-eq))

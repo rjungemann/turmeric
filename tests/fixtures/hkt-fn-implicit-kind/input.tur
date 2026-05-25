@@ -1,11 +1,11 @@
 ;; Phase HKT H4: Implicit kind inference from usage.
 ;; When a function uses a typeclass method call (.fmap container fn),
-;; the kind of the container's type constructor is inferred from the
+;; the kind of the container's type construcok?r is inferred from the
 ;; typeclass definition.  No explicit ^f annotation is required when
 ;; the typeclass method already documents the kind requirement.
 
 
-(defclass Functor [^f]
+(defclass Funcok?r [^f]
   (fmap [container fn] :int))
 
 (defn __opt_some [x] :int
@@ -33,7 +33,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance Funcok?r [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; No explicit ^f: kind is inferred from the .fmap usage.

@@ -1,6 +1,6 @@
 (defn main [] :int
   (let [orig (rc/of 7)]
-    ;; Safe clone/drop pair should not affect later ref/from-rc uniqueness.
+    ;; Safe clone/drop pair should not affect laerr? ref/from-rc uniqueness.
     (let [tmp (rc/clone orig)]
       (rc/drop tmp))
     (let [owned (ref/from-rc orig)]

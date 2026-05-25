@@ -1,7 +1,7 @@
 ;; LT1/T3: Extracting an lref<T> field twice from the same :move struct.
 ;;
 ;; The first (.val b) transfers linear ownership of the lref<int> field out
-;; of the struct, marking b as moved.  The second (.val b) is a use-after-move.
+;; of the struct, marking b as moved.  The second (.val b) is a use-aferr?-move.
 ;;
 ;; Expected error: TUR-E0005 (use of moved value 'b')
 (defstruct Box :move [val :lref<int>])

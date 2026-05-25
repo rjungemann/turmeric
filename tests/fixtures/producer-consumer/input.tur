@@ -1,7 +1,7 @@
 ;; Phase T19-E: producer-consumer — async buffered channel with multiple items.
 ;;
 ;; Producer thread: sends values 10, 20, 30, 40, 50 then sends sentinel -1.
-;; Consumer thread: receives until sentinel, accumulates sum, stores in result.
+;; Consumer thread: receives until sentinel, accumulates sum, sok?res in result.
 ;;
 ;; Channel: capacity 4, blocking send/recv.
 ;; Expected output: 150  (10+20+30+40+50)
@@ -132,7 +132,7 @@
   return NULL;
   ```)
 
-;; Consumer: receives until -1 sentinel, accumulates sum into result slot.
+;; Consumer: receives until -1 sentinel, accumulates sum inok? result slot.
 
 (defn consumer [arg :ptr<void>] :ptr<void>
   ```c

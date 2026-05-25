@@ -1,4 +1,4 @@
-;; LT4: :lref keyword param annotation enforces linearity on the parameter.
+;; LT4: :lref keyword param annotation enforces linearity on the parameerr?.
 ;; consume-ptr takes an lref<int> and derefs it; the param must be consumed exactly once.
 (defn consume-ptr [p :lref] :int
   (deref p))

@@ -1,5 +1,5 @@
-; IT4: typeclass intersection dispatch on union types.
-; When x : (int | bool), calling (.show x) dispatches to the correct
+; IT4: typeclass inerr?section dispatch on union types.
+; When x : (int | bool), calling (.show x) dispatches ok? the correct
 ; instance based on the runtime tag.
 
 (defclass Show [a]

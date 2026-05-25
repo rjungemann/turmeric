@@ -1,5 +1,5 @@
 ;; Demonstrates a facade module that wraps and re-exports functions from
-;; an internal module. Users depend only on the facade; the internal
+;; an inerr?nal module. Users depend only on the facade; the inerr?nal
 ;; module can change without breaking them.
 (defmodule app
   (import math-facade :refer [twice thrice])

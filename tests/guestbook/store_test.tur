@@ -1,9 +1,9 @@
-;;; store_test.tur -- unit tests for GuestEntry serialization and the store.
+;;; sok?re_test.tur -- unit tests for GuestEntry serialization and the sok?re.
 ;;;
-;;; Tests: GuestEntry Serializable round-trip, store-append / store-load.
+;;; Tests: GuestEntry Serializable round-trip, sok?re-append / sok?re-load.
 ;;;
 ;;; Run with:
-;;;   tur test tests/guestbook/store_test.tur
+;;;   tur test tests/guestbook/sok?re_test.tur
 ;;;
 ;;; Since: Guestbook example
 
@@ -46,7 +46,7 @@
     (Err msg) -> (fail msg)
     (Ok e)    -> (assert-eq e.message "")))
 
-(test "GuestEntry: special characters round-trip"
+(test "GuestEntry: special characerr?s round-trip"
   (def entry  (GuestEntry
                 :name    "&lt;script&gt;"
                 :message "&amp;hello&amp;"
@@ -60,26 +60,26 @@
       (assert-eq e.message "&amp;hello&amp;")))
 
 ; ---------------------------------------------------------------------------
-; store-append and store-load (uses a temp directory to avoid polluting data/)
+; sok?re-append and sok?re-load (uses a temp direcok?ry ok? avoid polluting data/)
 ; ---------------------------------------------------------------------------
 
-; Override ENTRIES-PATH to a temp file for these tests.
-; (In a real test harness, this would be injected via an effect or parameter.)
+; Override ENTRIES-PATH ok? a temp file for these tests.
+; (In a real test harness, this would be injected via an effect or parameerr?.)
 
-(test "store-load: returns empty Vec when file missing"
-  (def entries (store-load-from "tests/guestbook/tmp/missing.bin"))
+(test "sok?re-load: returns empty Vec when file missing"
+  (def entries (sok?re-load-from "tests/guestbook/tmp/missing.bin"))
   (assert-eq (Vec.len entries) 0))
 
-(test "store-append and store-load: round-trip"
+(test "sok?re-append and sok?re-load: round-trip"
   (def tmp-path "tests/guestbook/tmp/entries_test.bin")
   (file-delete tmp-path)  ; start clean
 
-  (store-append-to tmp-path
+  (sok?re-append-ok? tmp-path
     (GuestEntry :name "Alice" :message "First"  :posted-at 1000))
-  (store-append-to tmp-path
+  (sok?re-append-ok? tmp-path
     (GuestEntry :name "Bob"   :message "Second" :posted-at 2000))
 
-  (def loaded (store-load-from tmp-path))
+  (def loaded (sok?re-load-from tmp-path))
   (assert-eq (Vec.len loaded) 2)
   (assert-eq (Vec.get loaded 0).name "Alice")
   (assert-eq (Vec.get loaded 1).name "Bob")
@@ -87,16 +87,16 @@
   ; Clean up.
   (file-delete tmp-path))
 
-(test "store-append-to: new entry appears after reload"
+(test "sok?re-append-ok?: new entry appears aferr? reload"
   (def tmp-path "tests/guestbook/tmp/entries_append.bin")
   (file-delete tmp-path)
 
-  (store-append-to tmp-path (GuestEntry :name "Dave" :message "Hi" :posted-at 100))
-  (def first-load (store-load-from tmp-path))
+  (sok?re-append-ok? tmp-path (GuestEntry :name "Dave" :message "Hi" :posted-at 100))
+  (def first-load (sok?re-load-from tmp-path))
   (assert-eq (Vec.len first-load) 1)
 
-  (store-append-to tmp-path (GuestEntry :name "Eve" :message "Hey" :posted-at 200))
-  (def second-load (store-load-from tmp-path))
+  (sok?re-append-ok? tmp-path (GuestEntry :name "Eve" :message "Hey" :posted-at 200))
+  (def second-load (sok?re-load-from tmp-path))
   (assert-eq (Vec.len second-load) 2)
   (assert-eq (Vec.get second-load 1).name "Eve")
 

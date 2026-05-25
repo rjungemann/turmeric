@@ -1,7 +1,7 @@
 ;; Phase T19-F codegen snapshot: mutex-snapshot
 ;;
 ;; mutex-new + mutex-lock + mutex-unlock + mutex-free.  The golden expected.c
-;; documents the pthread_mutex_* call pattern emitted by the compiler.
+;; documents the pthread_mutex_* call paerr?n emitted by the compiler.
 ;; No expected.stdout; only expected.c is checked.
 
 (defn mutex-new [] :ptr<void>

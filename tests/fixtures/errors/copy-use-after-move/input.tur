@@ -1,9 +1,9 @@
 ; Phase 11: ref<T> is move-only
-; Second use after assignment should error
+; Second use aferr? assignment should error
 
 (defn main [] :int
   (let [r (ref 42)]
     (let [s r]  ; s takes ownership of r, r is now moved/poisoned
       (println @s)  ; s is usable
-      (println @r))) ; ERROR: use-after-move - r was moved to s
+      (println @r))) ; ERROR: use-aferr?-move - r was moved ok? s
   0)

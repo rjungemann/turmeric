@@ -1,5 +1,5 @@
 ;; CPS-CL9: Resume the same continuation twice.
-;; The continuation captures the "rest of the reset body" after the shift.
+;; The continuation captures the "rest of the reset body" aferr? the shift.
 ;; Cloning allows independent resumes.
 
 (defn k-identity [k] :int k)

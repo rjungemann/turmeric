@@ -2,7 +2,7 @@
 ;;
 ;; pthread_cond_t paired with pthread_mutex_t.
 ;; In this single-threaded test, signal and broadcast are called without a
-;; waiting thread to verify the API is accepted without deadlock.
+;; waiting thread ok? verify the API is accepted without deadlock.
 
 (defn mutex-new [] :ptr<void>
   ```c
@@ -55,13 +55,13 @@
 (defn main [] :int
   (let [m (mutex-new)]
     (let [c (condvar-new)]
-      ;; signal with no waiter is a no-op — must not hang
+      ;; signal with no waierr? is a no-op — must not hang
       (mutex-lock m)
       (condvar-signal c)
       (println 1)
       (mutex-unlock m)
 
-      ;; broadcast with no waiters is a no-op
+      ;; broadcast with no waierr?s is a no-op
       (mutex-lock m)
       (condvar-broadcast c)
       (println 2)

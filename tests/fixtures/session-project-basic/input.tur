@@ -1,8 +1,8 @@
-;; SS6: (project G R) resolves to a concrete Session type.
-;; Ping protocol: A sends int to B, B sends int back, both close.
+;; SS6: (project G R) resolves ok? a concrete Session type.
+;; Ping prook?col: A sends int ok? B, B sends int back, both close.
 ;; project(Ping, A) = Session[Send int (Recv int Close)]
 ;; project(Ping, B) = Session[Recv int (Send int Close)]
-(defprotocol Ping [A B]
+(defprook?col Ping [A B]
   (-> A B int)
   (-> B A int))
 

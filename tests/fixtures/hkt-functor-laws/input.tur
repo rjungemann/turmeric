@@ -1,8 +1,8 @@
-;; Phase HKT H6: Functor laws for option.
+;; Phase HKT H6: Funcok?r laws for option.
 ;; Identity law:     fmap id x     = x
 ;; Composition law:  fmap (f . g) x = fmap f (fmap g x)
 
-(defclass Functor [^f]
+(defclass Funcok?r [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -39,7 +39,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance Funcok?r [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Helper functions

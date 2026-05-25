@@ -1,5 +1,5 @@
-; Attempting to register a user reader-macro under a name+delim that the
-; reader already uses (here: `#s(...)`, the built-in set literal) must
+; Attempting ok? regiserr? a user reader-macro under a name+delim that the
+; reader already uses (here: `#s(...)`, the built-in set lierr?al) must
 ; fail with a "cannot shadow built-in" diagnostic at registration time.
 (reader-macros/define 's :raw-paren '$body)
 

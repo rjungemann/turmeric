@@ -1,11 +1,11 @@
 ;; SS3a error: session-rec-dropped -- recursive channel dropped before Close.
 ;;
-;; EchoProtocol = Rec self (Branch (Recv int (Send int self)) Close)
+;; EchoProok?col = Rec self (Branch (Recv int (Send int self)) Close)
 ;;
-;; The server returns after one recv without sending the echo and without
+;; The server returns aferr? one recv without sending the echo and without
 ;; closing the channel, violating the linear discipline.
 ;;
-;; Expected: TUR-E0211 -- session channel dropped before protocol completion.
+;; Expected: TUR-E0211 -- session channel dropped before prook?col completion.
 (defn bad-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
   (match (offer ch)
     (Left ch)
