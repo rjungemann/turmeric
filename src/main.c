@@ -4316,10 +4316,70 @@ static int usage_run(void) {
 static int usage_check(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur check <file.tur>   type-check only, no codegen\n"
+        "  tur check [-I <dir>...] <file.tur>   type-check only, no codegen\n"
+        "\n"
+        "flags:\n"
+        "  -I <dir>   add an include directory for module resolution\n"
+        "             (repeat to add multiple; intra-spice imports usually\n"
+        "             want `-I src` from the spice root)\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
+}
+
+/* SC1: is argv[i] the start of a `-I <path>` or `-I<path>` flag?
+ * On true, writes the number of argv positions it consumes into *consumed
+ * (1 for "-Ifoo", 2 for "-I foo").  Callers loop over argv looking for
+ * non-include flags and skip these positions. */
+static bool is_include_flag(int argc, char **argv, int i, int *consumed) {
+    const char *a = argv[i];
+    if (strcmp(a, "-I") == 0 && i + 1 < argc) {
+        *consumed = 2;
+        return true;
+    }
+    if (strncmp(a, "-I", 2) == 0 && a[2] != '\0') {
+        *consumed = 1;
+        return true;
+    }
+    return false;
+}
+
+/* SC1: collect every -I flag from argv[start..argc-1] into a heap-allocated
+ * array.  The array of pointers is malloc'd (caller frees); the strings it
+ * points to are borrowed from argv and live as long as argv does.
+ *
+ * Returns the number of include dirs collected, or -1 if a bare `-I` was
+ * encountered without a following path argument.  Non-`-I` arguments are
+ * ignored -- callers handle them in their own pass (using is_include_flag
+ * to skip the positions consumed here). */
+static int parse_include_flags(int argc, char **argv, int start, char ***out_dirs) {
+    int  cap = 4;
+    int  n   = 0;
+    char **dirs = (char **)malloc((size_t)cap * sizeof(char *));
+    if (!dirs) { *out_dirs = NULL; return 0; }
+    for (int i = start; i < argc; i++) {
+        const char *a = argv[i];
+        if (strcmp(a, "-I") == 0) {
+            if (i + 1 >= argc) { free(dirs); *out_dirs = NULL; return -1; }
+            if (n >= cap) {
+                cap *= 2;
+                char **bigger = (char **)realloc(dirs, (size_t)cap * sizeof(char *));
+                if (!bigger) { free(dirs); *out_dirs = NULL; return n; }
+                dirs = bigger;
+            }
+            dirs[n++] = argv[++i];
+        } else if (strncmp(a, "-I", 2) == 0 && a[2] != '\0') {
+            if (n >= cap) {
+                cap *= 2;
+                char **bigger = (char **)realloc(dirs, (size_t)cap * sizeof(char *));
+                if (!bigger) { free(dirs); *out_dirs = NULL; return n; }
+                dirs = bigger;
+            }
+            dirs[n++] = argv[i] + 2;
+        }
+    }
+    *out_dirs = dirs;
+    return n;
 }
 
 static int usage_eval(void) {
@@ -4877,24 +4937,44 @@ int main(int argc, char **argv) {
         return cmd_emit_h(argv[2]);
     }
     if (strcmp(cmd, "check") == 0) {
-        /* Phase 8: tur check subcommand - type-check only, no codegen */
-        if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
-            return usage_check();
-        if (argc != 3) return usage_check();
+        /* Phase 8: tur check subcommand - type-check only, no codegen
+         * SC1: now accepts -I <dir> flags so per-file checks inside a spice
+         * resolve their intra-spice imports the same way `tur build` does. */
+        char       **check_inc = NULL;
+        int          n_check_inc = parse_include_flags(argc, argv, 2, &check_inc);
+        if (n_check_inc < 0) { free(check_inc); return usage_check(); }
+        const char *input = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(check_inc); return usage_check();
+            }
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (argv[i][0] != '-') {
+                if (input) { free(check_inc); return usage_check(); }
+                input = argv[i];
+                continue;
+            }
+            free(check_inc); return usage_check();
+        }
+        if (!input) { free(check_inc); return usage_check(); }
+        int rc;
         if (use_json_output) {
             diag_lsp_begin();
             Buf out;
             buf_init(&out);
-            compile_to_c(argv[2], &out, NULL, 0);
+            compile_to_c(input, &out, (const char **)check_inc, n_check_inc);
             buf_free(&out);
             diag_lsp_flush(stdout);
             diag_lsp_end();
-            return diag_had_error() ? 1 : 0;
+            rc = diag_had_error() ? 1 : 0;
+        } else {
+            Buf out;
+            buf_init(&out);
+            rc = compile_to_c(input, &out, (const char **)check_inc, n_check_inc);
+            buf_free(&out);
         }
-        Buf out;
-        buf_init(&out);
-        int rc = compile_to_c(argv[2], &out, NULL, 0);
-        buf_free(&out);
+        free(check_inc);
         return rc;
     }
     if (strcmp(cmd, "lsp") == 0) {
@@ -4906,11 +4986,15 @@ int main(int argc, char **argv) {
         const char *input = NULL;
         const char *out = NULL;
         const char *build_target = NULL;
-        /* Collect -I flags from the command line */
-        int     n_build_inc = 0;
-        int     build_inc_cap = 4;
-        char  **build_inc = (char **)malloc((size_t)build_inc_cap * sizeof(char *));
+        /* SC1: collect -I flags once via the shared helper, then walk argv
+         * a second time for the build-specific flags (`-o`, `--target`)
+         * and the positional input. */
+        char  **build_inc = NULL;
+        int     n_build_inc = parse_include_flags(argc, argv, 2, &build_inc);
+        if (n_build_inc < 0) { free(build_inc); return usage_build(); }
         for (int i = 2; i < argc; i++) {
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
                 free(build_inc); return usage_build();
             } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
@@ -4921,20 +5005,6 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "tur build: unknown target '%s' (supported: wasm)\n", build_target);
                     free(build_inc); return 1;
                 }
-            } else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc) {
-                if (n_build_inc >= build_inc_cap) {
-                    build_inc_cap *= 2;
-                    build_inc = (char **)realloc(build_inc,
-                        (size_t)build_inc_cap * sizeof(char *));
-                }
-                build_inc[n_build_inc++] = argv[++i];
-            } else if (strncmp(argv[i], "-I", 2) == 0 && argv[i][2] != '\0') {
-                if (n_build_inc >= build_inc_cap) {
-                    build_inc_cap *= 2;
-                    build_inc = (char **)realloc(build_inc,
-                        (size_t)build_inc_cap * sizeof(char *));
-                }
-                build_inc[n_build_inc++] = argv[i] + 2;
             } else if (argv[i][0] != '-') {
                 if (input) { free(build_inc); return usage_build(); }
                 input = argv[i];

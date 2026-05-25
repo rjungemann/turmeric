@@ -34,6 +34,12 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
+add_test(
+  NAME tur_spice_resolver_tests
+  COMMAND bash tests/spice-resolver-tests.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_flags_tests
   COMMAND bash tests/run-flags.sh

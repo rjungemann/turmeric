@@ -1,0 +1,3 @@
+(defmodule foo/b
+  (import foo/a :refer [answer])
+  (defn main [] :int (answer)))

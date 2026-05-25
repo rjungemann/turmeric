@@ -1,0 +1,3 @@
+;; SC1 fixture: minimal two-module spice used by spice-aware-check tests.
+(defspice spice-resolver-ok
+  :modules [foo/a foo/b])

@@ -1,0 +1,3 @@
+(defmodule foo/a
+  (export answer)
+  (defn answer [] :int 42))
