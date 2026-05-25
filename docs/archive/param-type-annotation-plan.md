@@ -97,7 +97,9 @@ Gap **5-7** is a separate, pre-existing gap: `fn` (anonymous lambda)
 never had parameter type annotations at all -- only return-type
 annotations work (`elab_fns.c:1397`). The fused form `[x :int]` is
 rejected outright by the `if (p->tag != F_SYM)` check at
-`elab_fns.c:1316`.
+`elab_fns.c:1316`. Direct anonymous-lambda application is also a
+separate existing limitation; see
+[`docs/direct-anonymous-lambda-application-plan.md`](direct-anonymous-lambda-application-plan.md).
 
 For comparison, the spaced **return** type works in `defn`:
 

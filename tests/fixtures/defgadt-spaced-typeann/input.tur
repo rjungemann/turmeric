@@ -1,0 +1,8 @@
+;; TA4: keep bare-colon defgadt constructor syntax working.
+
+(defgadt Expr [a]
+  (Wrap : (Expr int)))
+
+(defn main [] :int
+  (println "ok")
+  0)

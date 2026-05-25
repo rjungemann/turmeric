@@ -1,0 +1,12 @@
+;; TA4: defclass and definstance method params accept spaced annotations.
+
+(defclass MyEq [a]
+  (same? [x : int y : int] :bool))
+
+(definstance MyEq [int]
+  (same? [x : int y : int] :bool
+    (= x y)))
+
+(defn main [] :int
+  (println (.same? 4 4))
+  0)

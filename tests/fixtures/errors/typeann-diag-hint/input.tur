@@ -1,0 +1,2 @@
+(defn square [n : nope] :int
+  (* n n))

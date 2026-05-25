@@ -191,7 +191,7 @@ as an indented block.
 defn square [x :float] :float
   *(x x)
 
-defn classify [x :float] :cstr
+defn classify [x : float] :cstr
   if >(x 0.0)
     "positive"
     if <(x 0.0)

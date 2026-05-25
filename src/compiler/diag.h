@@ -198,6 +198,7 @@ void diag_register_file(const SourceFile *file);
 
 /* Return the filesystem path registered for file_id, or NULL. */
 const char *diag_file_path(uint16_t file_id);
+const SourceFile *diag_source_file(uint16_t file_id);
 
 /* Core diagnostic emission */
 void diag_emit(DiagLevel level, Span span, const char *fmt, ...);

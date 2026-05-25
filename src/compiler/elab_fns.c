@@ -116,7 +116,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Parse params - Phase 15 supports typeclass constraints
+    /* Parse params - Phase 15 supports typeclass constraints.
+     * Parameter type annotations accept both fused `[x :T]` and spaced
+     * `[x : T]` forms.
+     *
      * Syntax: [^Eq a x : a, y : a] means:
      *   - ^Eq is a constraint annotation (symbol starting with ^)
      *   - a is a type variable
@@ -570,6 +573,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* For phase 2, default to int */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        b->is_param = true;
         /* LT0: If the previous ^linear annotation applied to this parameter, mark it linear */
         if (next_param_linear) {
             b->is_linear = true;
@@ -1359,9 +1363,22 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN || p->tag == F_LIST || p->tag == F_VEC) {
+            if (n_params == 0) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "fn: type annotation without preceding parameter");
+                return NULL;
+            }
+            const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
+            Type *ann = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+            if (!ann) return NULL;
+            param_kinds[n_params - 1] = ann->kind;
+            params[n_params - 1]->type = *ann;
+            continue;
+        }
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
-                      "fn: parameter name must be a symbol");
+                      "fn: parameter name must be a symbol or type annotation");
             /* params is arena-allocated, no need to free */
             return NULL;
         }
@@ -1371,9 +1388,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
             /* params is arena-allocated, no need to free */
             return NULL;
         }
-        /* For phase 2, all params are int by default */
+        /* Untyped fn params preserve the existing int default. */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        b->is_param = true;
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
         }
@@ -1526,7 +1544,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
-        arg_kinds[i] = TY_INT;  /* All int for phase 2 */
+        arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
     if (return_fn_type) {
@@ -1562,7 +1580,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
-        fd->param_types[i] = type_from_kind(param_kinds[i]);
+        fd->param_types[i] = params[i]->type;
     }
     /* Phase 15: Initialize constraints */
     constraint_set_init(&fd->constraints);
@@ -1615,7 +1633,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         /* Copy existing params */
         for (uint8_t i = 0; i < n_params; i++) {
             new_params[i + 1] = params[i];
-            new_param_types[i + 1] = TYPE_INT;
+            new_param_types[i + 1] = params[i]->type;
         }
         
         /* Update FnDef with new params */
@@ -1627,7 +1645,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         TypeKind new_arg_kinds[MAX_FN_ARITY];
         new_arg_kinds[0] = TY_PTR_VOID;  /* env parameter */
         for (uint8_t i = 0; i < n_params; i++) {
-            new_arg_kinds[i + 1] = TY_INT;
+            new_arg_kinds[i + 1] = param_kinds[i];
         }
         Type new_fn_type = type_fn(new_arg_kinds, new_n_params, return_kind);
         if (return_fn_type) {
@@ -1779,6 +1797,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                 param_kinds[n_params] = ck;
                 /* Use the ^type symbol itself as a placeholder name */
                 Binding *b = binding_new(e, p->as.sym, type_from_kind(ck), false, false, p->span);
+                b->is_param = true;
                 params[n_params++] = b;
                 break;
             }
@@ -1793,12 +1812,14 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
             }
             param_kinds[n_params] = ck;
             Binding *b = binding_new(e, name_f->as.sym, type_from_kind(ck), false, false, name_f->span);
+            b->is_param = true;
             params[n_params++] = b;
             continue;
         }
 
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        b->is_param = true;
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
         }

@@ -667,6 +667,18 @@ bool binding_mark_moved(Binding *b, Span use_span) {
     return true;
 }
 
+static bool binding_has_suspicious_param_annotation(const Binding *b) {
+    if (!b || !b->is_param) return false;
+    if (span_is_unknown(b->span)) return false;
+    if (b->type.kind != TY_STRUCT || b->type.as.struct_.def != NULL) return false;
+    const SourceFile *file = diag_source_file(b->span.file_id);
+    if (!file || !file->src || b->span.off_end > file->len) return false;
+    const char *p = file->src + b->span.off_end;
+    const char *end = file->src + file->len;
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    return p < end && *p == ':';
+}
+
 /* Check if a binding has been moved. Emits use-after-move diagnostic if so. */
 bool binding_check_not_moved(Binding *b, Span use_span, const char *use_desc) {
     if (b->is_moved) {
@@ -676,6 +688,12 @@ bool binding_check_not_moved(Binding *b, Span use_span, const char *use_desc) {
                             use_desc, b->name->name);
         if (!span_is_unknown(b->moved_at)) {
             diag_emit(DIAG_NOTE, b->moved_at, "moved here");
+        }
+        if (binding_has_suspicious_param_annotation(b)) {
+            diag_emit(DIAG_NOTE, b->span,
+                      "parameter '%s' looks like it was followed by a type annotation; "
+                      "use `[%s :Type]` or `[%s : Type]`",
+                      b->name->name, b->name->name, b->name->name);
         }
         return false;
     }

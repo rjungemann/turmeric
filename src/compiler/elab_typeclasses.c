@@ -363,6 +363,21 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                               "unsupported type in typeclass method parameter");
                     return NULL;
                 }
+            } else if (p->tag == F_TYPE_ANN) {
+                if (actual_p == 0) {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "type annotation without preceding parameter");
+                    return NULL;
+                }
+                Type *ft = (p->as.list.len > 0)
+                    ? type_expr_from_form(e, p->as.list.items[0], NULL, NULL, NULL, 0)
+                    : NULL;
+                if (!ft) {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "unsupported type in typeclass method parameter");
+                    return NULL;
+                }
+                param_types[actual_p - 1] = *ft;
             } else if (p->tag == F_VEC && p->as.list.len >= 2) {
                 /* [name : type] or [name :fn] nested vector syntax */
                 Form *name_f = p->as.list.items[0];
@@ -1566,20 +1581,79 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Type *method_param_types = NULL;
         
         if (impl_params_form->tag == F_VEC) {
-            n_method_params = impl_params_form->as.list.len;
-            if (n_method_params > 0) {
+            uint8_t max_method_params = (uint8_t)impl_params_form->as.list.len;
+            if (max_method_params > 0) {
                 method_params = (Binding **)arena_alloc(e->arena, 
-                    n_method_params * sizeof(Binding *));
+                    max_method_params * sizeof(Binding *));
                 method_param_types = (Type *)arena_alloc(e->arena, 
-                    n_method_params * sizeof(Type));
+                    max_method_params * sizeof(Type));
                 
-                for (uint8_t j = 0; j < n_method_params; j++) {
+                for (uint8_t j = 0; j < max_method_params; j++) {
                     Form *p = impl_params_form->as.list.items[j];
+                    if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
+                        if (n_method_params == 0) {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "method parameter type annotation without a preceding parameter");
+                            return NULL;
+                        }
+                        uint8_t prev = n_method_params - 1;
+                        Type param_type = method_param_types[prev];
+                        if (p->tag == F_TYPE_ANN) {
+                            Type *ann = (p->as.list.len > 0)
+                                ? type_expr_from_form(e, p->as.list.items[0], NULL, NULL, NULL, 0)
+                                : NULL;
+                            if (!ann) {
+                                diag_emit(DIAG_ERROR, p->span,
+                                          "unsupported type form in method parameter");
+                                return NULL;
+                            }
+                            param_type = *ann;
+                        } else {
+                            const Symbol *kw = p->as.sym;
+                            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                                param_type = TYPE_INT;
+                            } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                                param_type = TYPE_BOOL;
+                            } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                                param_type = TYPE_CSTR;
+                            } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
+                                       (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
+                                param_type = TYPE_NIL;
+                            } else if ((kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) ||
+                                       (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
+                                param_type = TYPE_PTR_VOID;
+                            } else {
+                                diag_emit(DIAG_ERROR, p->span,
+                                          "unsupported type in method parameter");
+                                return NULL;
+                            }
+                        }
+                        bool param_is_poly = (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
+                        if (!param_is_poly
+                            && tc->methods[i].param_is_fn
+                            && prev < tc->methods[i].n_params
+                            && tc->methods[i].param_is_fn[prev]) {
+                            param_is_poly = true;
+                            param_type = TYPE_PTR_VOID;
+                        }
+                        Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
+                        method_params[prev]->type = c_param_type;
+                        method_params[prev]->is_poly_fn = param_is_poly;
+                        method_params[prev]->poly_type = NULL;
+                        if (param_is_poly) {
+                            Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *pt = param_type;
+                            method_params[prev]->poly_type = pt;
+                        }
+                        method_param_types[prev] = c_param_type;
+                        continue;
+                    }
+
                     Type param_type = TYPE_INT;
                     
                     /* Phase 15: Try to use type from typeclass method definition */
-                    if (tc->methods[i].param_types && j < tc->methods[i].n_params) {
-                        param_type = tc->methods[i].param_types[j];
+                    if (tc->methods[i].param_types && n_method_params < tc->methods[i].n_params) {
+                        param_type = tc->methods[i].param_types[n_method_params];
                     }
                     
                     /* Phase 15: Substitute type variables with type args */
@@ -1601,22 +1675,22 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     bool param_is_poly = (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
                     if (!param_is_poly
                         && tc->methods[i].param_is_fn
-                        && j < tc->methods[i].n_params
-                        && tc->methods[i].param_is_fn[j]) {
+                        && n_method_params < tc->methods[i].n_params
+                        && tc->methods[i].param_is_fn[n_method_params]) {
                         param_is_poly = true;
                         param_type = TYPE_PTR_VOID;
                     }
                     Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                     if (p->tag == F_SYM) {
                         /* Simple parameter name */
-                        method_params[j] = binding_new(e, p->as.sym, c_param_type, false, false, p->span);
+                        method_params[n_method_params] = binding_new(e, p->as.sym, c_param_type, false, false, p->span);
                         if (param_is_poly) {
-                            method_params[j]->is_poly_fn = true;
+                            method_params[n_method_params]->is_poly_fn = true;
                             Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
                             *pt = param_type;
-                            method_params[j]->poly_type = pt;
+                            method_params[n_method_params]->poly_type = pt;
                         }
-                        method_param_types[j] = c_param_type;
+                        method_param_types[n_method_params++] = c_param_type;
                     } else if (p->tag == F_VEC && p->as.list.len >= 1) {
                         /* Parameter with type annotation: [name : type] */
                         Form *name_f = p->as.list.items[0];
@@ -1634,26 +1708,45 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                            (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                                     param_type = TYPE_NIL;
                                 }
+                            } else if (p->as.list.len >= 2 && p->as.list.items[1]->tag == F_TYPE_ANN) {
+                                Type *ann = (p->as.list.items[1]->as.list.len > 0)
+                                    ? type_expr_from_form(e, p->as.list.items[1]->as.list.items[0], NULL, NULL, NULL, 0)
+                                    : NULL;
+                                if (!ann) {
+                                    diag_emit(DIAG_ERROR, p->span,
+                                              "unsupported type form in method parameter");
+                                    return NULL;
+                                }
+                                param_type = *ann;
+                            } else if (p->as.list.len >= 2
+                                       && (p->as.list.items[1]->tag == F_LIST || p->as.list.items[1]->tag == F_VEC)) {
+                                Type *ann = type_expr_from_form(e, p->as.list.items[1], NULL, NULL, NULL, 0);
+                                if (!ann) {
+                                    diag_emit(DIAG_ERROR, p->span,
+                                              "unsupported type form in method parameter");
+                                    return NULL;
+                                }
+                                param_type = *ann;
                             }
                             /* Phase CCL: :fn-annotated params also become poly fn */
                             if (!param_is_poly
                                 && tc->methods[i].param_is_fn
-                                && j < tc->methods[i].n_params
-                                && tc->methods[i].param_is_fn[j]) {
+                                && n_method_params < tc->methods[i].n_params
+                                && tc->methods[i].param_is_fn[n_method_params]) {
                                 param_is_poly = true;
                                 param_type = TYPE_PTR_VOID;
                             }
                             param_is_poly = param_is_poly
                                 || (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
                             c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
-                            method_params[j] = binding_new(e, name_f->as.sym, c_param_type, false, false, p->span);
+                            method_params[n_method_params] = binding_new(e, name_f->as.sym, c_param_type, false, false, p->span);
                             if (param_is_poly) {
-                                method_params[j]->is_poly_fn = true;
+                                method_params[n_method_params]->is_poly_fn = true;
                                 Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));
                                 *pt = param_type;
-                                method_params[j]->poly_type = pt;
+                                method_params[n_method_params]->poly_type = pt;
                             }
-                            method_param_types[j] = c_param_type;
+                            method_param_types[n_method_params++] = c_param_type;
                         } else {
                             diag_emit(DIAG_ERROR, p->span,
                                       "method parameter name must be a symbol");

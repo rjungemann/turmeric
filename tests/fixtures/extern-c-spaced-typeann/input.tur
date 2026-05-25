@@ -1,0 +1,7 @@
+;; TA4: extern-c already supports spaced parameter annotations.
+
+(extern-c puts [s : cstr] :int)
+
+(defn main [] :int
+  (puts "hi")
+  0)

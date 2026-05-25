@@ -45,6 +45,7 @@ struct Binding {
     Type          type;
     bool          is_mut;
     bool          is_global;     /* top-level def vs. local let */
+    bool          is_param;      /* function/extern parameter binding */
     uint32_t      id;            /* unique within the program */
     Span          span;
     /* Phase 3: For closure bindings, this points to the thunk function binding */

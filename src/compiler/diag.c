@@ -52,6 +52,11 @@ const char *diag_file_path(uint16_t file_id) {
     return NULL;
 }
 
+const SourceFile *diag_source_file(uint16_t file_id) {
+    if (file_id < MAX_FILES) return files_[file_id];
+    return NULL;
+}
+
 void diag_reset(void) {
     had_error_ = false;
     file_count_ = 0;
@@ -1994,5 +1999,4 @@ void diag_emit_json(DiagLevel level, Span span, DiagCode code, const char *messa
     fwrite(b.data, 1, b.len, stderr);
     buf_free(&b);
 }
-
 

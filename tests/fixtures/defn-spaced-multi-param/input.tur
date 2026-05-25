@@ -1,0 +1,8 @@
+;; TA0: spaced annotations should work for multiple parameters in defn.
+
+(defn add [a : float b : float] :float
+  (+ a b))
+
+(defn main [] :int
+  (println (add 1.5 2.5))
+  0)

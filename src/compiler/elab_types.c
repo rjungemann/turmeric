@@ -315,28 +315,31 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return t;
         }
         
-        /* Primitive type keywords */
-        if (sym->len == 3 && memcmp(sym->name, "int", 3) == 0) {
-            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *t = TYPE_INT;
-            return t;
-        } else if (sym->len == 4 && memcmp(sym->name, "bool", 4) == 0) {
-            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *t = TYPE_BOOL;
-            return t;
-        } else if (sym->len == 4 && memcmp(sym->name, "cstr", 4) == 0) {
-            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *t = TYPE_CSTR;
-            return t;
-        } else if ((sym->len == 4 && memcmp(sym->name, "void", 4) == 0) ||
-                   (sym->len == 3 && memcmp(sym->name, "nil", 3) == 0)) {
-            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *t = TYPE_NIL;
-            return t;
-        } else if (sym->len == 9 && memcmp(sym->name, "ptr<void>", 9) == 0) {
-            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-            *t = TYPE_PTR_VOID;
-            return t;
+        /* Primitive type names and defalias names.
+         * Spaced annotations like [x : float] arrive here as bare symbols,
+         * so keep this path in sync with the keyword-based resolver below. */
+        {
+            TypeKind k = typekind_from_symbol(sym->name);
+            if (k == TY_UNKNOWN && sym->len == 4 && memcmp(sym->name, "void", 4) == 0) {
+                k = TY_NIL;
+            } else if (k == TY_UNKNOWN && sym->len == 9 && memcmp(sym->name, "ptr<void>", 9) == 0) {
+                k = TY_PTR_VOID;
+            }
+            if (k != TY_UNKNOWN) {
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_from_kind(k);
+                return t;
+            }
+        }
+        {
+            const Symbol *alias_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
+            for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
+                if (e->type_alias_names[ai] == alias_sym) {
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *t = type_from_kind(e->type_alias_kinds[ai]);
+                    return t;
+                }
+            }
         }
         
         /* IT4: any — top type.  Available when -Xunion-types or -Xintersection-types is on. */

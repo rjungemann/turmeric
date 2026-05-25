@@ -1,0 +1,20 @@
+;; TA0: spaced parameter and return annotations in defn should elaborate.
+
+(defn square [n : float] :float
+  (* n n))
+
+(defn square-extra-ws [n  :  float] : float
+  (* n n))
+
+(defn square-spaced-ret-fused-param [n :float] : float
+  (* n n))
+
+(defn square-spaced-ret-spaced-param [n : float] : float
+  (* n n))
+
+(defn main [] :int
+  (println (square 3.0))
+  (println (square-extra-ws 4.0))
+  (println (square-spaced-ret-fused-param 5.0))
+  (println (square-spaced-ret-spaced-param 6.0))
+  0)

@@ -1,0 +1,11 @@
+;; TA0: spaced annotations should also work for compound type expressions.
+
+(defn apply1 [f : (-> int int)] :int
+  (f 41))
+
+(defn inc [x] :int
+  (+ x 1))
+
+(defn main [] :int
+  (println (apply1 inc))
+  0)
