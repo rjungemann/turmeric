@@ -1,0 +1,3 @@
+(defmodule main
+  (import lib/syntax :refer [thing])
+  (defn main [] :int (thing)))

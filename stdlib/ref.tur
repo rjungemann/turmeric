@@ -1,3 +1,8 @@
+;;; tur/ref -- heap-allocated mutable reference cell with independent ownership.
+;;;
+;;; ref-new allocates; ref-get reads; ref-set writes; ref-free releases.
+;;;
+;;; Since: Phase B1
 ;; Ref (Reference) type for Turmeric
 ;; Heap-allocated container with independent ownership
 ;; Phase B1: Clone trait infrastructure

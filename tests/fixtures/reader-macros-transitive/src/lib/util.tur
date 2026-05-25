@@ -1,0 +1,10 @@
+;; Imported by src/main.tur. The transitive-RM wiring (T1 in
+;; reader-macros-transitive-plan.md) is what makes `#sum[...]` and
+;; `#pi` resolve here -- without it, the entry file's manifest
+;; registry would be invisible at the module boundary.
+(defmodule lib/util
+  (export doubled-pi sum-of-first-five)
+  (defn doubled-pi [] :float
+    (+ #pi #pi))
+  (defn sum-of-first-five [] :int
+    #sum[1 2 3 4 5]))

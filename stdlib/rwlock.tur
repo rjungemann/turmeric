@@ -1,4 +1,9 @@
-;; stdlib/rwlock.tur — POSIX read-write lock (Phase T19-C)
+;;; tur/rwlock -- POSIX read-write lock (pthread_rwlock_t) wrapped as ptr<void>.
+;;;
+;;; Multiple readers may hold the lock simultaneously; writers are exclusive.
+;;;
+;;; Since: Phase T19-C
+;; stdlib/rwlock.tur -- POSIX read-write lock (Phase T19-C)
 ;;
 ;; Wraps pthread_rwlock_t as a :ptr<void>.  Multiple readers can hold the lock
 ;; concurrently; writers get exclusive access.

@@ -182,11 +182,33 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     sfile->reader_type = READER_TURMERIC;
     diag_register_file(sfile);
 
-    /* Parse the source into forms. */
+    /* Parse the source into forms.
+     *
+     * Transitive-RM (T1): pass the shared `user_macros` registry so the
+     * imported file sees the same user macros the entry file did. The
+     * registry can be NULL (legacy callers / no manifest) -- in that
+     * case read_all_with_registry behaves identically to read_all.
+     *
+     * Loading semantics: see docs/reader-macros-plan.md ("Loading
+     * semantics"). `(import ...)` and `(load ...)` (elab_toplevel.c)
+     * both populate this same registry; macros declared in an imported
+     * module become visible to anything loaded *after* it in the
+     * compile's read order. */
     uint32_t nforms = 0;
-    Form **forms = read_all(e->arena, e->st, sfile, &nforms);
+    bool had_error_before = diag_had_error();
+    Form **forms = read_all_with_registry(e->arena, e->st, sfile,
+                                          e->user_macros, &nforms);
     if (!forms) {
         slot->is_loading = false;
+        /* Transitive-RM (T1) decision #4: if the sub-read introduced a
+         * new error, attach a `while loading module X` note at the
+         * import site so the user can trace the breadcrumb back from
+         * (say) an "unexpected character '#'" inside `lib/syntax.tur`
+         * to the `(import lib/syntax)` that triggered the load. */
+        if (!had_error_before && diag_had_error()) {
+            diag_emit(DIAG_NOTE, import_span,
+                      "while loading module '%s'", name->name);
+        }
         return NULL;
     }
 

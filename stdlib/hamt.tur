@@ -1,3 +1,9 @@
+;;; tur/hamt -- persistent hash-array-mapped trie (HAMT) map.
+;;;
+;;; Immutable, structurally-sharing key-value map. All update operations
+;;; return a new root; the old root remains valid (snapshot semantics).
+;;;
+;;; Since: Phase P1
 ; Phase P1: Persistent HAMT - External C declarations
 ; NOTE: C functions are prefixed tur_hamt_* to avoid name collision with
 ; Turmeric wrapper functions (hamt/new mangles to hamt_new in C).

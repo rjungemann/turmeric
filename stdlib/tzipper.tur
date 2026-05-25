@@ -1,3 +1,8 @@
+;;; tur/tzipper -- typed Zipper[A]: 1D list zipper with typed focus and neighbors.
+;;;
+;;; Runtime layout: left array, left_len, focus, right array, right_len.
+;;;
+;;; Since: Phase TC2-B
 ;; Phase TC2-B: Typed Zipper[A]
 ;; 1D list zipper with typed focus and neighbor arrays.
 ;; Runtime layout: { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }

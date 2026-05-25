@@ -1,4 +1,10 @@
-; Phase T21-C: Fiber API — lightweight cooperative fibers via FiberBlock.
+;;; tur/fiber -- lightweight cooperative fibers backed by the FiberBlock runtime.
+;;;
+;;; All functions delegate to the FiberBlock C runtime emitted by emit.c.
+;;;
+;;; Since: Phase T21-C
+;; Phase T21-C: Fiber API -- lightweight cooperative fibers via FiberBlock.
+; Phase T21-C: Fiber API -- lightweight cooperative fibers via FiberBlock.
 ;
 ; All functions delegate directly to the FiberBlock C runtime emitted into
 ; every compiled Turmeric program by emit.c (FiberBlock + tur_fiber_block_*).

@@ -1,3 +1,8 @@
+;;; tur/atomic -- atomic load/store/add/sub/swap/CAS on 64-bit integers.
+;;;
+;;; Thread-safe integer operations using C11 _Atomic semantics.
+;;;
+;;; Since: Phase T19
 ;; stdlib/atomic.tur -- Atomic integer operations (Phase T19)
 ;;
 ;; Provides atomic load/store/add/sub/swap/cas on 64-bit integers,

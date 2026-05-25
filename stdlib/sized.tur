@@ -1,3 +1,8 @@
+;;; tur/sized -- static sizes and size arithmetic for memory layout verification.
+;;;
+;;; Foundational support for SZ0/SZ1 phases. Enables type-safe array shape annotations.
+;;;
+;;; Since: Phase SZ0
 ;; Sized types for Turmeric -- Phases SZ0 and SZ1
 ;; Foundational support for static sizes and size arithmetic.
 ;; Enables memory layout verification and type-safe array shape annotations.

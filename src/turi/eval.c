@@ -3778,9 +3778,11 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
     sfile->reader_type = env->reader_type;
     diag_register_file(sfile);
 
-    /* 5. Parse. */
+    /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined
+     * in earlier eval calls remain visible. */
     uint32_t  nforms = 0;
-    Form    **forms  = read_all(eval_arena, &env->st, sfile, &nforms);
+    Form    **forms  = read_all_with_registry(eval_arena, &env->st, sfile,
+                                              env->reader_macros, &nforms);
     if (!forms || diag_had_error()) {
         return turi_error("parse error");
     }
@@ -3810,7 +3812,11 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
                                    /*out_tc_env=*/tc_env_slot,
                                    /*include_dirs=*/NULL,
                                    /*n_include_dirs=*/0,
-                                   /*out_n_file_scope_defs=*/&actual_n_fsd);
+                                   /*out_n_file_scope_defs=*/&actual_n_fsd,
+                                   /* RM transitive: REPL/eval reuses the
+                                    * env-owned registry so module loads
+                                    * see the same macros the entry did. */
+                                   env->reader_macros);
     if (!prog || diag_had_error()) {
         return turi_error("elaboration error");
     }

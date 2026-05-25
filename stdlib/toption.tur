@@ -1,3 +1,9 @@
+;;; tur/toption -- typed Option[A]: parameterized optional value.
+;;;
+;;; First-class parameterized optional value type.
+;;; Runtime layout: { bool is_some; int64_t value; }.
+;;;
+;;; Since: Phase TC1-D
 ;; Phase TC1-D: Typed Option[A]
 ;; First-class parameterized optional value type.
 ;; Runtime layout identical to option.tur: { bool is_some; int64_t value; }

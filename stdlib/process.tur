@@ -1,3 +1,8 @@
+;;; tur/process -- process management: pid, spawn, wait, exec, cwd, chdir.
+;;;
+;;; Wrappers around unistd.h and sys/wait.h primitives.
+;;;
+;;; Since: Phase B1
 ;; stdlib/process.tur -- process management: pid, spawn, wait, exec, cwd, chdir.
 ;;
 ;; Wrappers around unistd.h / sys/wait.h primitives.

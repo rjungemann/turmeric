@@ -1,3 +1,8 @@
+;;; tur/range -- Range: continuous interval with inclusive, exclusive, or unbounded ends.
+;;;
+;;; Supports integer iteration and containment tests.
+;;;
+;;; Since: Phase LZ4
 ;; stdlib/range.tur -- Range type (LZ4)
 ;;
 ;; A Range represents a continuous interval with inclusive, exclusive, or

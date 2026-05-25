@@ -1,4 +1,10 @@
-;; Phase CA0: Zipper comonad — 1D list zipper with a cursor.
+;;; tur/zipper -- Zipper comonad: 1D list zipper with a focus cursor.
+;;;
+;;; A Zipper is (left_list, focus, right_list). Extend applies a function
+;;; at every position; extract returns the current focus.
+;;;
+;;; Since: Phase CA0
+;; Phase CA0: Zipper comonad -- 1D list zipper with a cursor.
 ;;
 ;; A Zipper is (left_list, focus, right_list) where focus is the current element.
 ;; The Comonad instance lets us apply a function to every position simultaneously,

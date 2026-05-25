@@ -1,3 +1,9 @@
+;;; tur/option -- untyped optional values: some(value) or none.
+;;;
+;;; Legacy untyped option implementation. Prefer tur/toption for new code.
+;;;
+;;; Since: Phase B1
+;;; Deprecated: superseded by tur/toption (Phase TC1-D)
 ;; Option type for Turmeric
 ;; Represents optional values: some(value) or none
 

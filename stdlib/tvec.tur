@@ -1,3 +1,8 @@
+;;; tur/tvec -- typed Vec[A]: parameterized growable array.
+;;;
+;;; Parameterized growable array. Runtime layout identical to tur/vec.
+;;;
+;;; Since: Phase TC1-A
 ;; Phase TC1-A: Typed Vec[A]
 ;; Parameterized growable array. Runtime layout identical to vec.tur.
 ;; Type parameter A is tracked by the type-checker at call sites only.

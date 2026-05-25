@@ -1,3 +1,8 @@
+;;; tur/digest -- SHA-256 and MD5 checksum implementations.
+;;;
+;;; Self-contained; no external crypto libraries are required.
+;;;
+;;; Since: Phase B1
 ;; stdlib/digest.tur -- SHA-256 and MD5 checksums.
 ;;
 ;; Self-contained implementations; no external crypto libraries required.

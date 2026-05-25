@@ -69,6 +69,12 @@ typedef struct PassContext {
     int          n_include_dirs;
     /* Phase P3: HAMT lowering - track if HAMT functions are used */
     bool         needs_hamt;
+    /* Transitive-RM: shared reader-macro registry. Set by the compile
+     * driver alongside `forms`/`nforms`; the elaborator copies the
+     * pointer into Elab so module loaders read with the same registry
+     * the entry file used. May be NULL (no user macros) -- in which
+     * case downstream loaders fall back to the no-registry read_all. */
+    struct ReaderMacroRegistry *reader_macros;
 } PassContext;
 
 #endif /* TUR_PASS_H */

@@ -1,3 +1,8 @@
+;;; tur/float-range -- FloatRange: continuous interval with inclusive or exclusive ends.
+;;;
+;;; Supports iteration over floating-point ranges with configurable step.
+;;;
+;;; Since: Phase RR4
 ;; stdlib/float-range.tur -- Float Range type (RR4)
 ;;
 ;; A FloatRange represents a continuous interval with inclusive, exclusive, or

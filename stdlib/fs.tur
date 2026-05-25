@@ -1,3 +1,8 @@
+;;; tur/fs -- extended file-system operations (stat, readdir, fnmatch, walk).
+;;;
+;;; Higher-level wrappers around sys/stat.h, dirent.h, and fnmatch.h.
+;;;
+;;; Since: Phase B1
 ;; stdlib/fs.tur -- extended file system operations.
 ;;
 ;; Higher-level wrappers around sys/stat.h, dirent.h, fnmatch.h, and

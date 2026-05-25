@@ -1,3 +1,8 @@
+;;; tur/async_socket -- non-blocking TCP socket I/O for the cooperative scheduler.
+;;;
+;;; Accept connections and send/recv data without blocking the current fiber.
+;;;
+;;; Since: Phase T24
 ;; stdlib/async_socket.tur -- Async TCP socket I/O for Turmeric (Phase T24)
 ;;
 ;; Non-blocking TCP socket operations that integrate with the cooperative

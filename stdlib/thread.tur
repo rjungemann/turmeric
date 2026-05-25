@@ -1,3 +1,8 @@
+;;; tur/thread -- POSIX thread spawn, join, and detach wrappers.
+;;;
+;;; Thin wrappers around pthread_create, pthread_join, and pthread_detach.
+;;;
+;;; Since: Phase T19-C
 ;; stdlib/thread.tur -- POSIX thread spawn/join/detach (Phase T19-C)
 ;;
 ;; Wraps pthread_create / pthread_join / pthread_detach.

@@ -1,3 +1,8 @@
+;;; tur/session -- standard session-type protocol patterns for typed channels.
+;;;
+;;; Reusable protocol templates built on the core session primitives.
+;;;
+;;; Since: Phase B1
 ;; stdlib/session.tur -- Standard session-type protocol patterns.
 ;;
 ;; Provides reusable protocol templates built on the core session primitives

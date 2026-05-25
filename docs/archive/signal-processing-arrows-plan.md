@@ -1,5 +1,9 @@
 # Signal Processing Example with Haskell-Style Arrows — Plan & Tutorial
 
+> **Status: extracted to `tur-signal` spice as of v0.1.0.** Source files now live in
+> `../turmeric-spices/spices/signal/src/signal/`. Import as `(import signal/core)` etc.
+> This document is archived; paths below refer to the pre-extraction layout.
+
 A **practical example** and **step-by-step tutorial** demonstrating Haskell-style arrows for signal processing in Turmeric. This showcases Turmeric's typeclass system, higher-kinded types (via the HKT implementation from `hkt-implementation-plan.md`), and arrow-based composition for building declarative signal processing pipelines.
 
 > **Prerequisites**: Phase 19 compiler (CPS + effect lowering), HKT infrastructure, typeclass dispatch

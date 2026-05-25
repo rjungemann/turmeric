@@ -79,7 +79,8 @@ Priority order:
 - `raylib.tur`, `test.tur`
 
 **Tier 5 — Subdirectory modules**
-- `scscm/`, `tidal/`, `signal/`, `turi/`, `test/`
+- `scscm/`, `tidal/`, `turi/`, `test/`
+  *(Note: `signal/` extracted to `tur-signal` spice)*
 
 ---
 

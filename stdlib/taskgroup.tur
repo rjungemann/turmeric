@@ -1,4 +1,9 @@
-;; stdlib/taskgroup.tur — Structured concurrency with TaskGroup (Phase T22)
+;;; tur/taskgroup -- structured concurrency with scoped TaskGroup.
+;;;
+;;; Spawns tasks and waits for all of them to complete before returning.
+;;;
+;;; Since: Phase T22
+;; stdlib/taskgroup.tur -- Structured concurrency with TaskGroup (Phase T22)
 ;;
 ;; TaskGroup provides structured concurrency: a group of tasks that are
 ;; spawned together and can be cancelled together. When a task fails or

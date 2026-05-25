@@ -1,3 +1,8 @@
+;;; tur/tmap -- typed Map[K V]: persistent hash map requiring Hash[K] and Eq[K].
+;;;
+;;; Backed by the persistent HAMT from tur/hamt.
+;;;
+;;; Since: Phase TM0
 ;; Phase TM0: Typed Map[K V]
 ;; K must satisfy Hash[K] and Eq[K].
 ;; Backed by the persistent HAMT (stdlib/hamt.tur).

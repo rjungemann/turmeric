@@ -1,3 +1,9 @@
+;;; tur/pair -- untyped generic two-element pair (a, b).
+;;;
+;;; Legacy untyped pair implementation. Prefer tur/tpair for new code.
+;;;
+;;; Since: Phase B1
+;;; Deprecated: superseded by tur/tpair (Phase TC1-F)
 ;; Pair type for Turmeric
 ;; A generic pair of values (a, b) - stored as int64_t
 ;; Phase B1: Clone trait infrastructure

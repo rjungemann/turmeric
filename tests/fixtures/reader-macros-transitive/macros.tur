@@ -1,0 +1,3 @@
+;; Reader-macro definitions shared by every file in this spice.
+(reader-macros/define 'sum :datum-bracket '(+ $body))
+(reader-macros/define 'pi  :none          '3.14159)

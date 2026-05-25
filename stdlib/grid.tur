@@ -1,3 +1,9 @@
+;;; tur/grid -- GridCtx comonad: 2D grid with a focused cell position.
+;;;
+;;; GridCtx is a flat row-major array with a current focus (cx, cy).
+;;; Extend/extract follow the comonad laws.
+;;;
+;;; Since: Phase CA2
 ;; Phase CA2: GridCtx comonad -- 2D grid with a focused position.
 ;;
 ;; GridCtx is a flat row-major array with a current focus (cx, cy).

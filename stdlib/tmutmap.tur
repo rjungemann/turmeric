@@ -1,3 +1,8 @@
+;;; tur/tmutmap -- MutableMap[K V]: mutable open-addressed hash table.
+;;;
+;;; Uses linear probing. Unlike tur/tmap, mutations happen in-place.
+;;;
+;;; Since: Phase F5
 ;; Phase F5 (cross-plan-followups): Mutable typed map MutableMap[K V].
 ;;
 ;; A mutable, open-addressed hash table with linear probing.  Unlike

@@ -1,3 +1,10 @@
+;;; tur/list -- untyped singly-linked Cons/nil list.
+;;;
+;;; Legacy untyped list implementation. Prefer tur/tlist for new code;
+;;; this exists for bootstrap and backwards-compatibility with pre-TC1-B spices.
+;;;
+;;; Since: Phase B1
+;;; Deprecated: superseded by tur/tlist (Phase TC1-B)
 ;; List type for Turmeric
 ;; Singly-linked list: Cons(value, next) or nil
 ;; Phase B1: Clone trait infrastructure

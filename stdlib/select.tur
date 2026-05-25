@@ -1,3 +1,8 @@
+;;; tur/select -- multi-channel select: wait on multiple channel operations at once.
+;;;
+;;; Executes the branch for the first channel that becomes ready.
+;;;
+;;; Since: Phase SEL1
 ;; stdlib/select.tur -- Multi-channel select (Phase SEL1)
 ;;
 ;; Select allows waiting on multiple channel operations simultaneously

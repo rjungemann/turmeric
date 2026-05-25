@@ -1,3 +1,8 @@
+;;; tur/tset -- typed Set[A]: persistent set backed by the HAMT.
+;;;
+;;; A must satisfy Hash[A] and Eq[A]. Elements are stored as HAMT keys.
+;;;
+;;; Since: Phase TC2-C
 ;; Phase TC2-C: Typed Set[A]
 ;; Persistent set backed by the HAMT. A must satisfy Hash[A] and Eq[A].
 ;; Elements are stored as HAMT keys; values are always 1 (sentinel).

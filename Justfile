@@ -130,15 +130,6 @@ run-guestbook: guestbook
 run-cellular-automata: build
     ./build/tur run examples/cellular-automata.tur
 
-run-signal-processing-basics: build
-    ./build/tur run examples/signal-processing/01_basics.tur
-
-run-signal-processing-signals: build
-    ./build/tur run examples/signal-processing/02_signals.tur
-
-run-signal-processing-dsp: build
-    ./build/tur run examples/signal-processing/03_dsp.tur
-
 # ---------------------------------------------------------------------------
 # Full rebuild
 # ---------------------------------------------------------------------------

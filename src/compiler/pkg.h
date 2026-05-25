@@ -104,6 +104,11 @@ typedef struct PkgManifest {
     char       **link_libs;
     int          n_link_libs;
     bool         no_stdlib;
+    /* RM4: reader-macro files loaded implicitly for every source file in
+     * this spice. Paths are stored as written in build.tur (relative to
+     * the manifest directory unless absolute). */
+    char       **reader_macros;
+    int          n_reader_macros;
 } PkgManifest;
 
 /* ------------------------------------------------------------------ */

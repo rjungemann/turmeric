@@ -1,3 +1,8 @@
+;;; tur/log -- Logger capability implementation using stderr/stdout.
+;;;
+;;; Implements the Logger capability typeclass for real logging output.
+;;;
+;;; Since: Phase 16
 ;; Phase 16: Real Logger implementation
 ;;
 ;; Implementation of Logger capability using stderr/stdout

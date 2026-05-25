@@ -1,4 +1,9 @@
-;; stdlib/chan.tur — Synchronous and async buffered channels (Phase T19-C/D)
+;;; tur/chan -- synchronous and async buffered channels for inter-fiber communication.
+;;;
+;;; Both channel types share the same underlying ring-buffer struct.
+;;;
+;;; Since: Phase T19-C
+;; stdlib/chan.tur -- Synchronous and async buffered channels (Phase T19-C/D)
 ;;
 ;; Both channel types share the same underlying ring-buffer struct.
 ;; Chan:      blocking send/recv only.

@@ -1,4 +1,9 @@
-;; stdlib/timer.tur — Timer API for Turmeric (Phase T24)
+;;; tur/timer -- Timer API backed by a min-heap timer wheel.
+;;;
+;;; Schedule callbacks at a future time; integrates with the cooperative scheduler.
+;;;
+;;; Since: Phase T24
+;; stdlib/timer.tur -- Timer API for Turmeric (Phase T24)
 ;;
 ;; Provides high-level timer operations backed by the min-heap timer wheel
 ;; emitted in the runtime preamble.

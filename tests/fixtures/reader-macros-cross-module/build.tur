@@ -1,0 +1,8 @@
+;; Transitive-RM T3: cross-module define visibility.
+;;
+;; No :reader-macros entry. Instead, lib/syntax.tur contains
+;; `(reader-macros/define ...)` directly. main.tur imports it and
+;; then uses the macros -- proving that defines from inside an
+;; imported module register into the shared registry and become
+;; visible to subsequent reads.
+(defpackage reader-macros-cross-module)

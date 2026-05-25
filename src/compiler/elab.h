@@ -22,6 +22,12 @@
  * definition items prepended to the program (from imported modules) is
  * written here on success; used by the interpreter to distinguish these
  * from (load ...) -expanded forms when computing evaluation ranges. */
+/* Transitive-RM: `user_macros` is the shared reader-macro registry used
+ * by module loaders (elab_module.c, elab_toplevel.c) so imported files
+ * see the entry file's user macros. Pass NULL when no registry is
+ * available (REPL, eval, legacy paths). Forward-declared to keep this
+ * header lean. */
+struct ReaderMacroRegistry;
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -31,6 +37,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         TypeClassEnv *out_tc_env,
                         const char **include_dirs,
                         int n_include_dirs,
-                        uint32_t *out_n_file_scope_defs);
+                        uint32_t *out_n_file_scope_defs,
+                        struct ReaderMacroRegistry *user_macros);
 
 #endif

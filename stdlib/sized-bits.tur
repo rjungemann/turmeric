@@ -1,3 +1,8 @@
+;;; tur/sized-bits -- SizedBitVec: packed bit vector with static size annotations.
+;;;
+;;; Stores n bits in ceil(n/8) bytes using a flat uint8_t array.
+;;;
+;;; Since: Phase SZ3
 ;; Phase SZ3: SizedBitVec -- packed bit vector with sized type annotations.
 ;;
 ;; SizedBitVec stores n bits in ceil(n/8) bytes using a flat uint8_t array.

@@ -40,6 +40,12 @@ check "multi-line let" "=> 7" "$(repl_out '(let [x 3' '      y 4] (+ x y))')"
 # --- Persistent state ---
 check "defn persists" "=> 25" "$(repl_out '(defn sq [x] (* x x))' '(sq 5)')"
 
+# --- Reader macros persist across REPL turns (RM Q#5) ---
+# A `(reader-macros/define ...)` on one line should affect subsequent reads;
+# the registry is owned by TuriEnv, not the per-turn reader.
+RM_OUT="$(repl_out "(reader-macros/define 'pi :none '3.14159)" '(println #pi)')"
+check "reader macro persists" "3.14159" "$RM_OUT"
+
 # --- :type meta-command ---
 TYPE_OUT="$(repl_out ':type (+ 1 2)')"
 check ":type int"     ": int"    "$TYPE_OUT"

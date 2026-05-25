@@ -1,3 +1,8 @@
+;;; tur/scheduler_mt -- multi-threaded work-stealing scheduler for parallel fibers.
+;;;
+;;; Distributes fibers across OS threads for true parallelism.
+;;;
+;;; Since: Phase T23
 ;; stdlib/scheduler_mt.tur -- Multi-threaded work-stealing scheduler (Phase T23)
 ;;
 ;; This provides a higher-level API for the multi-threaded scheduler.

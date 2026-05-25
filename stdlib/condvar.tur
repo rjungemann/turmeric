@@ -1,4 +1,9 @@
-;; stdlib/condvar.tur — POSIX condition variable (Phase T19-C)
+;;; tur/condvar -- POSIX condition variable (pthread_cond_t) wrapped as ptr<void>.
+;;;
+;;; Must be used together with a mutex from tur/mutex.
+;;;
+;;; Since: Phase T19-C
+;; stdlib/condvar.tur -- POSIX condition variable (Phase T19-C)
 ;;
 ;; Wraps pthread_cond_t as a :ptr<void>.  Must be used together with a mutex
 ;; from stdlib/mutex.tur.

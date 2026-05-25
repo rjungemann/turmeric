@@ -1,3 +1,9 @@
+;;; tur/tresult -- typed Result[A B]: ok value A or err value B.
+;;;
+;;; Parameterized result type. Runtime layout:
+;;; { bool is_ok; int64_t ok_val; int64_t err_val; }.
+;;;
+;;; Since: Phase TC1-E
 ;; Phase TC1-E: Typed Result[A B]
 ;; ok value of type A, err value of type B.
 ;; Runtime layout: { bool is_ok; int64_t ok_val; int64_t err_val; }

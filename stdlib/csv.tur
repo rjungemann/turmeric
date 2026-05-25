@@ -1,3 +1,8 @@
+;;; tur/csv -- CSV parser and emitter following RFC 4180.
+;;;
+;;; Handles quoted fields, embedded commas, embedded quotes, and CRLF line endings.
+;;;
+;;; Since: Phase B1
 ;; stdlib/csv.tur -- CSV parse and emit following RFC 4180.
 ;;
 ;; Handles quoted fields (double-quote), embedded commas, embedded quotes

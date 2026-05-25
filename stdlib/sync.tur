@@ -1,3 +1,9 @@
+;;; tur/sync -- Once and Semaphore synchronization primitives.
+;;;
+;;; Once: one-time initialization via pthread_once_t.
+;;; Semaphore: counting semaphore for resource access control.
+;;;
+;;; Since: Phase T19-C
 ;; stdlib/sync.tur -- Once and Semaphore primitives (Phase T19-C)
 ;;
 ;; Once: wraps pthread_once_t for one-time initialisation.

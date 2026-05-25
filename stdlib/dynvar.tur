@@ -1,3 +1,8 @@
+;;; tur/dynvar -- dynamic variables and binding conveyance for cooperative tasks.
+;;;
+;;; Declares the standard dynamic-var set and provides spawn-conveying helpers.
+;;;
+;;; Since: Phase DV3
 ;; stdlib/dynvar.tur -- common dynamic vars and binding conveyance (DV3-DV4)
 ;;
 ;; Declares the standard set of dynamic vars and provides spawn-conveying.

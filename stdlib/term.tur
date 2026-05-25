@@ -1,3 +1,8 @@
+;;; tur/term -- terminal utilities: size, tty detection, raw mode, ANSI colors.
+;;;
+;;; Uses sys/ioctl.h for window size and termios.h for raw/cooked mode switching.
+;;;
+;;; Since: Phase B1
 ;; stdlib/term.tur -- terminal utilities: size, tty detection, raw mode, ANSI colors.
 ;;
 ;; Uses sys/ioctl.h for window size, termios.h for raw/cooked mode switching,

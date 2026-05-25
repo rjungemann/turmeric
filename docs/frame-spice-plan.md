@@ -1,7 +1,7 @@
 # Spice Plan: tur-frame
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-24
+> **Status:** v0.1.0 ready for tag (pending CI verification + `git tag frame-v0.1.0`)
+> **Last Updated:** 2026-05-25
 > **Type:** Spice Design
 
 ---
@@ -95,7 +95,7 @@ spices/frame/
     sort.tur        -- "frame/sort"    arrange (multi-key, asc/desc)
     group.tur       -- "frame/group"   group-by, agg, summarize
     join.tur        -- "frame/join"    inner/left/right/full/semi/anti joins
-    reshape.tur     -- "frame/reshape" pivot, melt, transpose
+    reshape.tur     -- "frame/reshape" melt (pivot/transpose deferred -- see "Potential later enhancements")
     io_csv.tur      -- "frame/csv"     read-csv, write-csv (RFC 4180 subset)
     interop.tur     -- "frame/interop" Arrow C Data Interface import/export
     print.tur       -- "frame/print"   pretty-printing + summary
@@ -134,7 +134,7 @@ frame/frame     -- the data-frame struct: schema + parallel columns
   +-- frame/sort
   +-- frame/group    -- group-by => grouped-frame -> agg => frame
   +-- frame/join     -- hash join driver for inner/left/right/full/semi/anti
-  +-- frame/reshape  -- pivot / melt
+  +-- frame/reshape  -- melt
   +-- frame/csv      -- streaming CSV reader/writer
   +-- frame/interop  -- Arrow C Data Interface bridge (import & export)
   +-- frame/print    -- ascii table renderer, summary stats
@@ -476,16 +476,14 @@ input has fewer rows.
 
 ```turmeric
 ;; Wide -> long.  id-cols stay; the remaining columns become two output columns
-;; named by `var-name` and `value-name`.
-(melt f id-cols var-name value-name)       ;; => result<frame>
-
-;; Long -> wide.  Each unique key-col value becomes a new column whose values
-;; come from value-col.  index-cols stay as identifying columns.
-(pivot f index-cols key-col value-col)     ;; => result<frame>
-
-;; Transpose: rows become columns and vice versa.  All columns must share type.
-(transpose f new-key-col)                  ;; => result<frame>
+;; named by `var-name` and `value-name`.  All non-id columns must share a
+;; single type tag; melt returns 0 otherwise.
+(melt f id-cols var-name value-name)       ;; => :int frame (or 0)
 ```
+
+`pivot` (long -> wide) and `transpose` were built during FR7.5 and removed
+before tag.  See "Potential later enhancements" at the bottom for the
+rationale and recommended out-of-tree paths.
 
 ---
 
@@ -563,7 +561,7 @@ R `nanoarrow::as_nanoarrow_array(...)`, DuckDB `arrow_scan(...)`, Polars
 
 ## Implementation phases
 
-- [ ] **FR0** -- `build.tur`; vendor `arrow_c.h`; `frame/type` (tags, names,
+- [x] **FR0** -- `build.tur`; vendor `arrow_c.h`; `frame/type` (tags, names,
   formats, sizes); `frame/buffer` (aligned alloc, bitmap helpers); `frame/column`
   for the four numeric primitives (int32, int64, f32, f64) and bool, with
   `column-length`, `column-null-count`, typed `*-at` accessors, `column-slice`;
@@ -571,47 +569,144 @@ R `nanoarrow::as_nanoarrow_array(...)`, DuckDB `arrow_scan(...)`, Polars
   `frame-column`, `frame-head`, `frame-slice`); `frame/print` ascii table for
   numeric columns. Tag this as a checkpoint -- everything below assumes FR0.
 
-- [ ] **FR1** -- `frame/column` utf8 support (offsets + values buffers);
+- [x] **FR1** -- `frame/column` utf8 support (offsets + values buffers);
   `column-utf8-at`; pretty-printing strings (truncate + ellipsis); builder API
   for incremental column construction (used by CSV reader in FR3).
 
-- [ ] **FR2** -- `frame/select`: `select`, `drop-cols`, `rename`, `with-col`,
-  `map-col`, `mutate`; `frame/filter`: `filter-mask`, `filter`, `drop-nulls`;
-  `frame=?`; tests that compose select + filter.
+- [~] **FR2** -- `frame/select`: `select-cols` (renamed from `select` to avoid
+  shadowing Turmeric's channel `select` form), `drop-cols`, `rename`,
+  `with-col`; `frame/filter`: `filter-mask`; `frame=?`; tests that compose
+  select-cols + filter-mask. Refcount-shared columns via `column-retain`.
+  Deferred to FR2.5: `map-col`, `mutate`, predicate `filter`, `drop-nulls`
+  (each needs a higher-order function bridge from Turmeric to inline-C
+  kernels, which arrives with FR4 sort comparators).
 
-- [ ] **FR3** -- `frame/csv`: `read-csv` (with type inference over the first
+- [x] **FR3** -- `frame/csv`: `read-csv` (with type inference over the first
   `opts.infer-rows` lines), `read-csv-typed`, `read-csv-string`, `write-csv`,
   `write-csv-string`; round-trip test (read -> write -> read produces equal
-  frame).
+  frame). v0 inference covers int64 / float64 / bool / utf8; date32 /
+  timestamp inference lands with FR9.
 
-- [ ] **FR4** -- `frame/sort`: `arrange`, `arrange-indices`, `reorder`; stable
-  LSD radix sort for integer keys; stable introsort for floats and strings.
+- [x] **FR4** -- `frame/sort`: `arrange`, `arrange-indices`, `reorder`.
+  v0 ships a single stable bottom-up merge sort for all key types (int32/64,
+  float32/64, bool, utf8) with a row-index tiebreaker.  Nulls sort low under
+  asc / high under desc.  The plan's separate radix / introsort kernels move
+  to a future tuning pass once benchmarks justify the complexity.  API uses
+  two parallel `(names, dirs)` cons lists instead of a cons-of-pairs.
 
-- [ ] **FR5** -- `frame/group`: `group-by` (hash on key columns), `agg` with
-  count / sum / mean / min / max / first / last; `summarize`; tests that
-  reproduce a small "group by category, sum amount" workflow end-to-end.
+- [x] **FR5** -- `frame/group`: `group-by` (sort-based instead of hash --
+  reuses FR4's stable sort and skips a separate hash-table implementation),
+  `grouped-count`, `grouped-free`; `agg` with count / sum / mean / min / max
+  (first / last / median / std / var deferred to FR7); `summarize`.
+  API uses three parallel `(out-names, in-names, agg-tags)` cons lists
+  instead of cons-of-pairs.  Tests cover sum / count / mean / min / max
+  and the "group by category, sum value" workflow end-to-end.
 
-- [ ] **FR6** -- `frame/join`: hash-join driver shared by `inner-join`,
-  `left-join`, `right-join`, `full-join`, `semi-join`, `anti-join`; `cross-join`;
-  string-key tests.
+- [x] **FR6** -- `frame/join`: hash-join driver shared by `inner-join`,
+  `left-join`, `right-join`, `full-join`, `semi-join`, `anti-join`;
+  `cross-join`; convenience `(join l r how keys)`.  Hash side selected as
+  the build side per direction; FNV-1a 64-bit row hashes; chaining buckets
+  sized to next power-of-two above 2*n_build.  Output schema = all left
+  columns + right's NON-key columns (right collisions get a `_r` suffix).
+  API takes two parallel `left-keys` / `right-keys` cons lists instead of
+  the plan's join-opts struct.  Tests cover all six keyed variants + cross
+  + a string-key collision case.
 
-- [ ] **FR7** -- `frame/reshape`: `melt`, `pivot`, `transpose`; `describe`;
-  `agg-median`, `agg-std`, `agg-var` in `frame/group`; `sample` and `distinct`
-  in `frame/filter`.
+- [~] **FR7** -- Shipped: `melt` in new `frame/reshape`; `agg-median`,
+  `agg-std`, `agg-var` in `frame/group`; `sample` and `distinct` in
+  `frame/filter`; `frame-describe` in `frame/print` (renamed from
+  `describe` to avoid clashing with `test/suite`'s `describe` macro).
+  Sample is deterministic per seed (splitmix64 + Fisher-Yates partial
+  shuffle).  `pivot` and `transpose` (originally FR7.5a / FR7.5b) were
+  built and then **removed before v0.1.0 tag**; see "Potential later
+  enhancements" below for the rationale and rollback breadcrumbs.
 
-- [ ] **FR8** -- `frame/interop`: Arrow C Data Interface export and import for
-  primitive + utf8 columns; release-callback bookkeeping; an integration test
-  that exports a frame, re-imports the same pointers, and asserts round-trip
-  equality. Document the PyArrow / R / DuckDB / Polars call patterns in the
-  README.
+- [~] **FR8** -- `frame/interop`: Arrow C Data Interface export and import
+  for primitive (int32 / int64 / float32 / float64 / bool) and utf8 columns,
+  plus frame-level "+s" struct wrap.  v0 deep-copies on both sides --
+  export allocates fresh buffers and copies, import copies into our standard
+  aligned-buffer layout and immediately invokes the consumer's release
+  callbacks.  Release callbacks are implemented as their own Turmeric
+  defns whose mangled C names are cast to the Arrow `void (*)(ArrowSchema*)` /
+  `void (*)(ArrowArray*)` signatures (ABI-compatible on 64-bit).
 
-- [ ] **FR9** -- `date32` and `timestamp` types in `frame/type` and
-  `frame/column`; CSV inference for ISO-8601 dates and `YYYY-MM-DD HH:MM:SS`
-  timestamps; `column-cast` for numeric <-> numeric.
+  Round-trip test in `tests/frame/interop_test.tur` exports a frame, imports
+  the result back, and asserts `frame=?`.  6 tests covering int64 + utf8
+  column round-trips and full-frame round-trips including cell-value
+  preservation.
 
-- [ ] **FR10** -- Tests pass on all CI targets (Linux, macOS, WASM where
-  applicable); README in `turmeric-spices`; `docs/guides/frame-guide.md` (see
-  below); `frame-v0.1.0` tag.
+  Deferred to **FR8.1**: zero-copy export (share column buffers via refcount,
+  invoke `column-free` from the release callback); zero-copy import (store
+  the consumer's release callback on our column descriptor so it fires when
+  the column is freed).
+
+  Documentation of PyArrow / R / DuckDB / Polars consumer call patterns
+  moves to the README under FR10.
+
+- [~] **FR9** -- `date32` (tag 7) and `timestamp` (tag 8) types in
+  `frame/type`; `column-date32` / `column-timestamp` constructors and
+  `column-date32-at` / `column-timestamp-at` accessors in `frame/column`
+  (storage is identical to int32 / int64 respectively -- only the type
+  tag differs; a `__set-type-tag` helper retags after the underlying
+  constructor finishes).
+
+  CSV reader inference order is now int64 -> float64 -> date32 ->
+  timestamp -> bool -> utf8, with `__csv-try-date32` / `__csv-parse-date32`
+  (Howard Hinnant's `days_from_civil`) and matching timestamp helpers
+  (`YYYY-MM-DD HH:MM:SS` or `T` separator).  CSV writer renders date32
+  as `YYYY-MM-DD` and timestamp as `YYYY-MM-DD HH:MM:SS` via the inverse
+  algorithm.
+
+  `column-cast` does numeric <-> numeric conversions across int32 /
+  int64 / float32 / float64 (preserving date32/timestamp tags when
+  requested as the target; route through int32/int64 storage internally).
+  Returns 0 for unsupported casts (e.g. anything involving utf8).
+
+  Type-switching call sites in `frame=?`, `sort`, `filter`, `join`,
+  `print`, and `group`'s reductions all add case-fall-throughs so tag 7
+  reads identically to tag 1 and tag 8 identically to tag 2.
+
+  Tests cover type tags + names, constructor + accessor round-trip,
+  four `column-cast` cases, CSV inference for both ISO formats, CSV
+  writer formatting, and CSV round-trip via `frame=?`.
+
+  Deferred to **FR9.1**: pretty rendering of date32 / timestamp in
+  `print-frame` (currently shows the underlying int); `column-builder`
+  acceptance of tag 7 / 8 (currently date32/timestamp columns produced
+  by anything other than the CSV path fall through to default and emit
+  nulls -- `__csv-build-cols` works around this by storage-tag-mapping
+  to 1/2 explicitly and retagging the finished column).
+
+- [~] **FR10** -- README + guide landed; tag and CI verification still
+  pending.
+
+  **Done:**
+  - `tur-frame` row added to the `turmeric-spices` README spice table
+    (Tier 1 -- pure Turmeric).
+  - Full `### tur-frame` section in the README with quick-start snippet
+    and `tur add` install command.
+  - `docs/guides/frame-guide.md` with all seven sections from the plan
+    (build from CSV / columns / builder; select/drop/rename/with-col;
+    sort + distinct; group-by + agg; six joins + cross + convenience;
+    melt; Arrow C Data Interface with PyArrow / R / DuckDB / Polars
+    consumer snippets) plus a column-type reference table and v0.2
+    candidates list.
+  - Local-suite verification: 110 tests pass across 10 test files
+    (column / utf8 / select+filter / csv / sort / group / join /
+    reshape / interop / datetime).
+
+  **Pending (user-side actions):**
+  - **CI**: run the suite on Linux + macOS targets via the
+    `turmeric-spices` GitHub Actions workflow (WASM build is N/A for
+    `tur-frame` -- no JS interop, no DOM globals; it should compile
+    cleanly under Emscripten but isn't part of the v0.1.0 guarantee).
+    `cd ../turmeric-spices && ../turmeric/build/tur test spices/frame/tests/frame/`
+    is the local equivalent.
+  - **Tag**: `git tag frame-v0.1.0` in `turmeric-spices` and push.
+    Don't tag until CI is green.  The plan doc's API deviations
+    (`select-cols` instead of `select`; parallel-list APIs for `sort` /
+    `agg` / `join` instead of cons-of-pairs / opts-structs) are stable
+    for the v0.1.0 ABI -- changing them is a v0.2 task.
 
 ---
 
@@ -744,7 +839,7 @@ Deliver `docs/guides/frame-guide.md` alongside the `v0.1.0` tag. Sections:
 3. Sorting and de-duplicating
 4. Group-by and aggregation
 5. Joining two frames
-6. Reshaping with `melt` and `pivot`
+6. Reshaping with `melt` (pivot / transpose deferred -- see "Potential later enhancements")
 7. Handing a frame to Python / R / DuckDB via the Arrow C Data Interface
 
 ### Integration notes
@@ -759,6 +854,70 @@ Deliver `docs/guides/frame-guide.md` alongside the `v0.1.0` tag. Sections:
   user code; a future `tur-frame-json` sub-spice could absorb that.
 
 ---
+
+## Potential later enhancements
+
+Built end-to-end during the FR7.5 spike, then removed before v0.1.0
+tag because the API decisions weren't ready to lock in.  The
+working implementations are recoverable from git history.
+
+### `pivot` -- long -> wide reshape
+
+**Status:** removed; may return as a follow-on once the duplicate-key
+policy is settled.
+
+What was shipped: `(pivot f index-cols key-col value-col)` with
+output schema discovered by hashing `(index-tuple, key)` pairs.
+Output columns shared `value-col`'s type; missing combos became
+null; duplicate `(index, key)` tuples returned `0`.
+
+What blocked landing it:
+- **Duplicate-key reduction policy.**  pandas distinguishes `pivot`
+  (errors out) from `pivot_table` (aggregates).  v0 chose "error
+  out," but the right shape is probably `pivot-agg` with an explicit
+  reduction (sum / mean / first / etc.) -- and that wants the same
+  three-parallel-list calling convention `agg` uses, not the
+  single-`value-col` shape we built.
+- **Output row order.**  v0 chose first-occurrence-in-source.
+  pandas / dplyr both sort.  Picking one before users hit a
+  consistency surprise is cheap if we wait.
+- **Column-name stringification policy.**  We stringified the
+  representative key cell (int -> `"42"`, utf8 -> the string, etc.).
+  For float keys that ends up with `"%g"`-shaped names, which is a
+  footgun.
+
+When `pivot-agg` lands, the implementation pattern is documented in
+the now-removed pivot section of this plan (open-addressed hash on
+the `(index, key)` tuple; FNV-1a row hashes; one column-builder per
+unique key value).
+
+### `transpose` -- swap rows and columns
+
+**Status:** removed; expected to stay out-of-tree.
+
+What was shipped: a heterogeneous `any` column kind (Arrow `+ud`
+dense_union; per-cell type-tag buffer + 8-byte payload + side
+strings buffer) so a transposed row could carry cells from
+originally-different-typed columns.  `transpose f new-key-col-name`
+returned a frame with the original column names as the first new
+column and `row_0..row_{N-1}` as `any`-typed value columns.
+
+Why it's better external:
+- **Transpose is rare in dataframe workloads** (it usually signals a
+  modeling mistake -- the user wanted melt or pivot instead).
+- **The `any` column kind doubles the surface area** for every
+  type-switching call site (sort, group, filter, join, CSV writer,
+  Arrow interop) without serving any other operation in this
+  spice's scope.
+- **Arrow `+ud` export is non-trivial** (per-cell type IDs + offsets
+  + child arrays per variant), and the consumers we care about
+  (PyArrow, Polars, DuckDB) all have a native transpose that runs
+  *after* the Arrow hop with much better ergonomics.
+
+Recommendation: users who need transpose should `arrow-export` and
+let the receiving runtime do it.  If a strong in-tree case appears,
+revisit; the `any`-column design from this plan's earlier draft is
+still the right starting point.
 
 ## Future spices
 

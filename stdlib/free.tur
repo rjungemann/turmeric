@@ -1,3 +1,9 @@
+;;; tur/free -- Free monad over a functor f for building effect DSLs.
+;;;
+;;; Free f a = PureFree a | Suspend (f (Free f a)). Run a Free program
+;;; by providing an interpreter for the functor f.
+;;;
+;;; Since: Phase B1
 ;; Free -- the Free monad over a functor f.
 ;;
 ;; Free f a = PureFree a | Suspend (f (Free f a))

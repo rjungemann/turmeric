@@ -404,6 +404,9 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
             parse_cmake_deps(vf, out);
         } else if (strcmp(kw, "exports") == 0) {
             parse_str_vec(vf, &out->exports, &out->n_exports);
+        } else if (strcmp(kw, "reader-macros") == 0) {
+            /* RM4: vector of paths to reader-macro definition files. */
+            parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
         } else if (strcmp(kw, "build-opts") == 0) {
             if (vf && vf->tag == F_MAP) {
                 const Form *cf = map_get_kw(vf, "c-flags");
@@ -536,6 +539,15 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "]\n");
     }
 
+    if (m->n_reader_macros > 0) {
+        fprintf(f, "\n  :reader-macros [");
+        for (int i = 0; i < m->n_reader_macros; i++) {
+            if (i) fprintf(f, " ");
+            fprintf(f, "\"%s\"", m->reader_macros[i]);
+        }
+        fprintf(f, "]\n");
+    }
+
     fprintf(f, ")\n");
     fclose(f);
     return true;
@@ -584,6 +596,8 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->c_flags);
     for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
     free(m->link_libs);
+    for (int i = 0; i < m->n_reader_macros; i++) free(m->reader_macros[i]);
+    free(m->reader_macros);
     memset(m, 0, sizeof(*m));
 }
 

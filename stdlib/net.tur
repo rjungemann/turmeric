@@ -1,3 +1,8 @@
+;;; tur/net -- stub networking type (Socket) for linear resource tracking.
+;;;
+;;; Defines Socket as a move-only struct wrapping an integer file descriptor.
+;;;
+;;; Since: Phase LT4
 ;; LT4: net.tur -- stub networking types for linear resource tracking.
 ;;
 ;; Defines Socket as a move-only struct wrapping an integer file descriptor.

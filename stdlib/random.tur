@@ -1,3 +1,8 @@
+;;; tur/random -- Random capability implementation using the platform RNG.
+;;;
+;;; Implements the Random capability typeclass for real random values.
+;;;
+;;; Since: Phase 16
 ;; Phase 16: Real Random implementation
 ;;
 ;; Implementation of Random capability using platform RNG

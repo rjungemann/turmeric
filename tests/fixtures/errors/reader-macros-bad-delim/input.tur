@@ -1,0 +1,7 @@
+; A macro registered for `:raw-brace` should reject calls with the wrong
+; delimiter (here `(...)` instead of `{...}`).
+(reader-macros/define 'json :raw-brace '$body)
+
+(println #json(oops wrong delim))
+
+(defn main [] :int 0)

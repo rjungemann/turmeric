@@ -1,3 +1,9 @@
+;;; tur/effects -- standard algebraic effects for IO, logging, and randomness.
+;;;
+;;; Allows pure code to declare side-effect dependencies that are injected
+;;; by the caller via capability passing.
+;;;
+;;; Since: Phase 19
 ;; Phase 19: Standard algebraic effects for common side effects.
 ;;
 ;; These effects allow pure code to declare IO dependencies that are

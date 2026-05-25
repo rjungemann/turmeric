@@ -50,6 +50,7 @@
 #include "forms.h"
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
+#include "reader_macros.h"
 #include "symbols.h"
 /* Phase S0: eval API for tur repl */
 #include "turi/eval.h"
@@ -344,7 +345,8 @@ static int run_core_passes(PassContext *ctx) {
                                           &ctx->tc_env,
                                           ctx->include_dirs,
                                           ctx->n_include_dirs,
-                                          NULL);
+                                          NULL,
+                                          ctx->reader_macros);
             if (!ctx->prog || diag_had_error()) return 1;
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
@@ -422,7 +424,14 @@ static int run_core_passes(PassContext *ctx) {
 
 /* Forward declaration: compile_to_c is defined later in this file */
 static int compile_to_c(const char *path, Buf *out_c,
-                        const char **include_dirs, int n_include_dirs);
+                        const char **include_dirs, int n_include_dirs,
+                        const char **reader_macro_paths,
+                        int n_reader_macro_paths);
+
+/* RM4 follow-up forward decls. */
+static char **discover_manifest_reader_macros(const char *input_path,
+                                              int *n_out);
+static void free_reader_macro_paths(char **paths, int n);
 
 /* SC1/SC2 forward decls: include-flag helpers used from cmd_run before
  * their definitions later in this file. */
@@ -516,7 +525,11 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
     g_collect_syms_count = count_out;
     Buf discard;
     buf_init(&discard);
-    int rc = compile_to_c(path, &discard, NULL, 0);
+    int rm_n = 0;
+    char **rm_p = discover_manifest_reader_macros(path, &rm_n);
+    int rc = compile_to_c(path, &discard, NULL, 0,
+                          (const char **)rm_p, rm_n);
+    free_reader_macro_paths(rm_p, rm_n);
     buf_free(&discard);
     g_collect_syms_out   = NULL;
     g_collect_syms_cap   = 0;
@@ -526,9 +539,15 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
 
 /* Reads a .tur file and emits its C source into `out_c`. Returns 0 on success,
  * nonzero on error (diagnostics already emitted).
- * include_dirs/n_include_dirs: additional module search paths for (import ...). */
+ * include_dirs/n_include_dirs: additional module search paths for (import ...).
+ * reader_macro_paths/n_reader_macro_paths: RM4 — absolute paths to
+ * `(reader-macros/define ...)` definition files that are preloaded into
+ * the reader's macro registry before the entry file is parsed. Typically
+ * derived from the project's `build.tur :reader-macros [...]` entry. */
 static int compile_to_c(const char *path, Buf *out_c,
-                         const char **include_dirs, int n_include_dirs) {
+                         const char **include_dirs, int n_include_dirs,
+                         const char **reader_macro_paths,
+                         int n_reader_macro_paths) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -551,8 +570,28 @@ static int compile_to_c(const char *path, Buf *out_c,
     SymbolTable st;
     symtab_init(&st, &arena);
 
+    /* RM4: preload spice-manifest `:reader-macros [...]` into a registry
+     * the entry-file reader will see. */
+    ReaderMacroRegistry reader_macros_reg;
+    reader_macros_init(&reader_macros_reg, &arena);
+    /* Transitive-RM decision #2: batch compile is strict -- duplicate
+     * `(reader-macros/define ...)` is a hard error. REPL leaves this
+     * flag false on env->reader_macros for iterative-redefinition UX. */
+    reader_macros_reg.strict = true;
+    for (int i = 0; i < n_reader_macro_paths; ++i) {
+        if (reader_macros_load_file(&arena, &st,
+                                    reader_macro_paths[i],
+                                    &reader_macros_reg) != 0) {
+            arena_free(&arena);
+            symtab_free(&st);
+            free(src);
+            return 1;
+        }
+    }
+
     uint32_t nforms = 0;
-    Form **forms = read_all(&arena, &st, &file, &nforms);
+    Form **forms = read_all_with_registry(&arena, &st, &file,
+                                          &reader_macros_reg, &nforms);
 
     /* Phase 7: Load standard library files */
     /* For now, load them in a specific order to ensure dependencies are met */
@@ -688,6 +727,7 @@ static int compile_to_c(const char *path, Buf *out_c,
         ctx.module_base_dir = base_dir;
         ctx.include_dirs    = include_dirs;
         ctx.n_include_dirs  = n_include_dirs;
+        ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
         /* Collect symbols whether or not later passes failed -- elaboration
          * may have succeeded even when borrow-check reports errors. */
@@ -712,7 +752,9 @@ static int compile_to_c(const char *path, Buf *out_c,
 
 /* Compile a .tur file to a C header (.h). Returns 0 on success. */
 static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
-                        const char **include_dirs, int n_include_dirs) {
+                        const char **include_dirs, int n_include_dirs,
+                        const char **reader_macro_paths,
+                        int n_reader_macro_paths) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -735,8 +777,25 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     SymbolTable st;
     symtab_init(&st, &arena);
 
+    /* RM4: preload spice-manifest reader-macros into the reader registry. */
+    ReaderMacroRegistry reader_macros_reg;
+    reader_macros_init(&reader_macros_reg, &arena);
+    /* Transitive-RM decision #2: batch compile is strict -- duplicate
+     * `(reader-macros/define ...)` is a hard error. REPL leaves this
+     * flag false on env->reader_macros for iterative-redefinition UX. */
+    reader_macros_reg.strict = true;
+    for (int i = 0; i < n_reader_macro_paths; ++i) {
+        if (reader_macros_load_file(&arena, &st,
+                                    reader_macro_paths[i],
+                                    &reader_macros_reg) != 0) {
+            symtab_free(&st); arena_free(&arena); free(src);
+            return 1;
+        }
+    }
+
     uint32_t nforms = 0;
-    Form **forms = read_all(&arena, &st, &file, &nforms);
+    Form **forms = read_all_with_registry(&arena, &st, &file,
+                                          &reader_macros_reg, &nforms);
 
     int rc = 0;
     if (!forms || diag_had_error()) {
@@ -753,6 +812,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
         ctx.include_dirs    = include_dirs;
         ctx.n_include_dirs  = n_include_dirs;
         ctx.separate_compilation = true;
+        ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_header(out_h, module_name, ctx.prog, true) != 0) {
             rc = 1;
@@ -767,7 +827,9 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
 
 /* Compile a .tur file to a C implementation (.c). Returns 0 on success. */
 static int compile_to_implementation(const char *path, Buf *out_c, const char *module_name,
-                                     const char **include_dirs, int n_include_dirs) {
+                                     const char **include_dirs, int n_include_dirs,
+                                     const char **reader_macro_paths,
+                                     int n_reader_macro_paths) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -790,8 +852,25 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     SymbolTable st;
     symtab_init(&st, &arena);
 
+    /* RM4: preload spice-manifest reader-macros into the reader registry. */
+    ReaderMacroRegistry reader_macros_reg;
+    reader_macros_init(&reader_macros_reg, &arena);
+    /* Transitive-RM decision #2: batch compile is strict -- duplicate
+     * `(reader-macros/define ...)` is a hard error. REPL leaves this
+     * flag false on env->reader_macros for iterative-redefinition UX. */
+    reader_macros_reg.strict = true;
+    for (int i = 0; i < n_reader_macro_paths; ++i) {
+        if (reader_macros_load_file(&arena, &st,
+                                    reader_macro_paths[i],
+                                    &reader_macros_reg) != 0) {
+            symtab_free(&st); arena_free(&arena); free(src);
+            return 1;
+        }
+    }
+
     uint32_t nforms = 0;
-    Form **forms = read_all(&arena, &st, &file, &nforms);
+    Form **forms = read_all_with_registry(&arena, &st, &file,
+                                          &reader_macros_reg, &nforms);
 
     int rc = 0;
     if (!forms || diag_had_error()) {
@@ -808,6 +887,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         ctx.include_dirs    = include_dirs;
         ctx.n_include_dirs  = n_include_dirs;
         ctx.separate_compilation = true;
+        ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true) != 0) {
             rc = 1;
@@ -855,7 +935,11 @@ int tur_check_only(const char *path) {
 
     Buf discard;
     buf_init(&discard);
-    int rc = compile_to_c(path, &discard, (const char **)inc, n_inc);
+    int rm_n = 0;
+    char **rm_p = discover_manifest_reader_macros(path, &rm_n);
+    int rc = compile_to_c(path, &discard, (const char **)inc, n_inc,
+                          (const char **)rm_p, rm_n);
+    free_reader_macro_paths(rm_p, rm_n);
     buf_free(&discard);
 
     for (int i = 0; i < n_owned; i++) free(owned[i]);
@@ -868,7 +952,11 @@ static int cmd_emit_c(const char *path,
                       const char **include_dirs, int n_include_dirs) {
     Buf out;
     buf_init(&out);
-    int rc = compile_to_c(path, &out, include_dirs, n_include_dirs);
+    int n_rm = 0;
+    char **rm = discover_manifest_reader_macros(path, &n_rm);
+    int rc = compile_to_c(path, &out, include_dirs, n_include_dirs,
+                          (const char **)rm, n_rm);
+    free_reader_macro_paths(rm, n_rm);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
     return rc;
@@ -914,10 +1002,15 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
         buf_init(&h_buf);
         buf_init(&c_buf);
 
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
         int h_rc = compile_to_h(input, &h_buf, mod_name,
-                                include_dirs, n_include_dirs);
+                                include_dirs, n_include_dirs,
+                                (const char **)rm_p, rm_n);
         int c_rc = compile_to_implementation(input, &c_buf, mod_name,
-                                             include_dirs, n_include_dirs);
+                                             include_dirs, n_include_dirs,
+                                             (const char **)rm_p, rm_n);
+        free_reader_macro_paths(rm_p, rm_n);
 
         if (h_rc != 0 || c_rc != 0) {
             rc = (h_rc != 0) ? h_rc : c_rc;
@@ -947,7 +1040,11 @@ static int cmd_emit_h(const char *path,
 
     Buf out;
     buf_init(&out);
-    int rc = compile_to_h(path, &out, mod_name, include_dirs, n_include_dirs);
+    int n_rm = 0;
+    char **rm = discover_manifest_reader_macros(path, &n_rm);
+    int rc = compile_to_h(path, &out, mod_name, include_dirs, n_include_dirs,
+                          (const char **)rm, n_rm);
+    free_reader_macro_paths(rm, n_rm);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
     return rc;
@@ -970,7 +1067,9 @@ static void default_output_name(const char *input, char *out, size_t cap) {
 /* target: NULL for native build, "wasm" to compile with emcc. */
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
-                     const char *target);
+                     const char *target,
+                     const char **reader_macro_paths,
+                     int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 
 /* Build a deterministic path for the intermediate generated-C file so that
@@ -1002,10 +1101,13 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
 
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
-                     const char *target) {
+                     const char *target,
+                     const char **reader_macro_paths,
+                     int n_reader_macro_paths) {
     Buf csrc;
     buf_init(&csrc);
-    int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs);
+    int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
+                          reader_macro_paths, n_reader_macro_paths);
     if (rc != 0) { buf_free(&csrc); return rc; }
 
     /* Write generated C to a deterministic path so ccache can cache the result
@@ -1213,6 +1315,56 @@ static int cmd_build(const char *input, const char *out_path,
 
 /* Walk up from 'start' to find a directory containing build.tur.
  * Returns malloc'd path string or NULL if not found. Caller must free(). */
+/* RM4: collect the manifest's `:reader-macros [...]` entries as absolute
+ * paths suitable for compile_to_c. `root_dir` is the spice root (where
+ * build.tur lives); each manifest entry is joined onto it unless it is
+ * already absolute. Returns a heap-allocated `char **` (each element also
+ * heap-allocated) and writes the count to `*n_out`. Caller frees with
+ * `free_reader_macro_paths`. Returns NULL with `*n_out = 0` if the
+ * manifest has no entries. */
+static char **resolve_manifest_reader_macros(const char *root_dir,
+                                             const PkgManifest *m,
+                                             int *n_out) {
+    *n_out = 0;
+    if (!m || m->n_reader_macros == 0) return NULL;
+    char **out = (char **)malloc(sizeof(char *) * (size_t)m->n_reader_macros);
+    if (!out) return NULL;
+    for (int i = 0; i < m->n_reader_macros; ++i) {
+        const char *rel = m->reader_macros[i];
+        char buf[4096];
+        if (rel[0] == '/') {
+            snprintf(buf, sizeof(buf), "%s", rel);
+        } else {
+            snprintf(buf, sizeof(buf), "%s/%s", root_dir, rel);
+        }
+        out[i] = (char *)malloc(strlen(buf) + 1);
+        if (!out[i]) {
+            for (int j = 0; j < i; ++j) free(out[j]);
+            free(out);
+            return NULL;
+        }
+        strcpy(out[i], buf);
+    }
+    *n_out = m->n_reader_macros;
+    return out;
+}
+
+static void free_reader_macro_paths(char **paths, int n) {
+    if (!paths) return;
+    for (int i = 0; i < n; ++i) free(paths[i]);
+    free(paths);
+}
+
+/* RM4 follow-up: convenience wrapper around find_spice_root +
+ * pkg_manifest_read + resolve_manifest_reader_macros. Walks up from
+ * `input_path` to find an enclosing build.tur, then returns the resolved
+ * absolute reader-macro paths. Returns NULL/0 when there is no manifest
+ * or no entries. Caller frees with free_reader_macro_paths. Used by
+ * every compile entry point that takes a single input file path. */
+static char **discover_manifest_reader_macros(const char *input_path,
+                                              int *n_out);
+/* Defined below find_spice_root, which it depends on. */
+
 static char *find_project_root(const char *start) {
     char dir[4096];
     strncpy(dir, start, sizeof(dir) - 1);
@@ -1295,6 +1447,25 @@ static char *find_spice_root(const char *file_path) {
         *slash = '\0';
     }
     return NULL;
+}
+
+static char **discover_manifest_reader_macros(const char *input_path,
+                                              int *n_out) {
+    *n_out = 0;
+    if (!input_path) return NULL;
+    char *sroot = find_spice_root(input_path);
+    if (!sroot) return NULL;
+    char mp[4096];
+    snprintf(mp, sizeof(mp), "%s/build.tur", sroot);
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    char **out = NULL;
+    if (pkg_manifest_read(mp, &m)) {
+        out = resolve_manifest_reader_macros(sroot, &m, n_out);
+    }
+    pkg_manifest_free(&m);
+    free(sroot);
+    return out;
 }
 
 /* Append `path` (taken by ownership of a strdup'd copy of `s`) to both
@@ -1510,12 +1681,21 @@ static int cmd_run(int argc, char **argv) {
     const char **spice_inc_dirs = NULL;
     int          n_spice_inc_dirs = 0;
 
+    /* RM4: reader-macro definition files preloaded for the entry file.
+     * Populated below during project-mode setup from the manifest's
+     * `:reader-macros [...]` entry; stays NULL/0 in single-file mode.
+     * `rm_paths_owned` is the heap-allocated backing storage (freed at
+     * RUN_ENTRY's exit and at all early-return paths via the macro). */
+    char       **rm_paths_owned = NULL;
+    const char **rm_paths       = NULL;
+    int          n_rm_paths     = 0;
+
     /* Helper: build 'entry', exec with optional passthrough args.
      * Cleans up user_inc, spice_inc_dirs, and auto_src_run on every exit. */
 #define RUN_ENTRY(entry_path) do {                                       \
         char out_path[] = "/tmp/tur-run-XXXXXX";                         \
         int _fd = mkstemp(out_path);                                     \
-        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); return 2; } \
         close(_fd);                                                      \
         int _n_inc = n_user_inc + n_spice_inc_dirs;                      \
@@ -1525,9 +1705,9 @@ static int cmd_run(int argc, char **argv) {
             for (int _i = 0; _i < n_user_inc; _i++) _inc[_i] = user_inc[_i]; \
             for (int _i = 0; _i < n_spice_inc_dirs; _i++) _inc[n_user_inc + _i] = spice_inc_dirs[_i]; \
         }                                                                \
-        int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL); \
+        int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL, rm_paths, n_rm_paths); \
         free(_inc);                                                      \
-        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
@@ -1541,6 +1721,7 @@ static int cmd_run(int argc, char **argv) {
         unlink(out_path);                                                \
         free(spice_inc_dirs);                                            \
         free(user_inc);                                                  \
+        free_reader_macro_paths(rm_paths_owned, n_rm_paths);             \
         for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned);                                              \
         return decode_exit_status(_sys);                                 \
@@ -1584,7 +1765,8 @@ static int cmd_run(int argc, char **argv) {
             /* SC2: stdin mode never enters project setup, so spice_inc_dirs
              * is empty here; we can pass user_inc straight through. */
             int brc = cmd_build(src_tmp, out_path,
-                                (const char **)user_inc, n_user_inc, NULL);
+                                (const char **)user_inc, n_user_inc, NULL,
+                                NULL, 0);
             unlink(src_tmp);
             if (brc != 0) { unlink(out_path); free(user_inc); return brc; }
             Buf run_cmd; buf_init(&run_cmd);
@@ -1598,6 +1780,24 @@ static int cmd_run(int argc, char **argv) {
             unlink(out_path);
             free(user_inc);
             return decode_exit_status(sys);
+        }
+        /* RM4: in explicit-file mode, walk up from the file to discover an
+         * enclosing build.tur and apply its `:reader-macros [...]` if any.
+         * Mirrors the auto-include discovery a few lines above. */
+        {
+            char *sroot = find_spice_root(explicit_file);
+            if (sroot) {
+                char mp[4096];
+                snprintf(mp, sizeof(mp), "%s/build.tur", sroot);
+                PkgManifest sm; memset(&sm, 0, sizeof(sm));
+                if (pkg_manifest_read(mp, &sm)) {
+                    rm_paths_owned = resolve_manifest_reader_macros(
+                        sroot, &sm, &n_rm_paths);
+                    rm_paths = (const char **)rm_paths_owned;
+                }
+                pkg_manifest_free(&sm);
+                free(sroot);
+            }
         }
         RUN_ENTRY(explicit_file);
     }
@@ -1625,6 +1825,14 @@ static int cmd_run(int argc, char **argv) {
     PkgManifest m;
     memset(&m, 0, sizeof(m));
     if (!pkg_manifest_read(manifest_path, &m)) { free(root); return 1; }
+
+    /* RM4: resolve manifest reader-macros against the spice root and
+     * thread them through RUN_ENTRY/cmd_build below. The allocated
+     * string array is owned by cmd_run for the remainder of this call;
+     * release sites already free user_inc / spice_inc_dirs and now also
+     * free this. */
+    rm_paths_owned = resolve_manifest_reader_macros(root, &m, &n_rm_paths);
+    rm_paths       = (const char **)rm_paths_owned;
 
     /* Read lock file. */
     char lock_path[4096];
@@ -1971,8 +2179,12 @@ static int cmd_test(const char *dir) {
         }
         close(fd);
 
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
         int build_rc = cmd_build(tur_files[i], out_path,
-                                  spice_inc_dirs, n_spice_inc_dirs, NULL);
+                                  spice_inc_dirs, n_spice_inc_dirs, NULL,
+                                  (const char **)rm_p, rm_n);
+        free_reader_macro_paths(rm_p, rm_n);
         int run_rc = 1;
         if (build_rc == 0) {
             int status = system(out_path);
@@ -2059,11 +2271,16 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
         char mod_name_no_ext[256];
         snprintf(mod_name_no_ext, sizeof(mod_name_no_ext), "%.*s", (int)(len - 4), module_name);
 
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
+
         Buf h_out;
         buf_init(&h_out);
-        if (compile_to_h(tur_files[i], &h_out, mod_name_no_ext, NULL, 0) != 0) {
+        if (compile_to_h(tur_files[i], &h_out, mod_name_no_ext, NULL, 0,
+                         (const char **)rm_p, rm_n) != 0) {
             fprintf(stderr, "tur: failed to compile %s to header\n", tur_files[i]);
             buf_free(&h_out);
+            free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
@@ -2072,6 +2289,7 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
         if (buf_to_path(&h_out, h_files[i]) != 0) {
             fprintf(stderr, "tur: failed to write %s\n", h_files[i]);
             buf_free(&h_out);
+            free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
@@ -2081,9 +2299,12 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
 
         Buf c_out;
         buf_init(&c_out);
-        if (compile_to_implementation(tur_files[i], &c_out, mod_name_no_ext, NULL, 0) != 0) {
+        if (compile_to_implementation(tur_files[i], &c_out, mod_name_no_ext,
+                                      NULL, 0,
+                                      (const char **)rm_p, rm_n) != 0) {
             fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
             buf_free(&c_out);
+            free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
@@ -2092,12 +2313,14 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
         if (buf_to_path(&c_out, c_files[i]) != 0) {
             fprintf(stderr, "tur: failed to write %s\n", c_files[i]);
             buf_free(&c_out);
+            free_reader_macro_paths(rm_p, rm_n);
             for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
             return 1;
         }
         buf_free(&c_out);
+        free_reader_macro_paths(rm_p, rm_n);
     }
 
     /* Generate _main.c */
@@ -2225,8 +2448,33 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
     SymbolTable st;
     symtab_init(&st, &arena);
 
+    /* RM4 follow-up: preload manifest reader-macros so `tur format`
+     * doesn't fail to parse files that use `#foo{...}` invocations
+     * registered in the spice's build.tur. Stdin-mode (path == NULL)
+     * has no enclosing file to walk up from -- skip. */
+    ReaderMacroRegistry reader_macros_reg;
+    reader_macros_init(&reader_macros_reg, &arena);
+    /* Transitive-RM decision #2: batch compile is strict -- duplicate
+     * `(reader-macros/define ...)` is a hard error. REPL leaves this
+     * flag false on env->reader_macros for iterative-redefinition UX. */
+    reader_macros_reg.strict = true;
+    if (path) {
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(path, &rm_n);
+        for (int i = 0; i < rm_n; ++i) {
+            if (reader_macros_load_file(&arena, &st, rm_p[i],
+                                        &reader_macros_reg) != 0) {
+                free_reader_macro_paths(rm_p, rm_n);
+                symtab_free(&st); arena_free(&arena); free(src);
+                return 1;
+            }
+        }
+        free_reader_macro_paths(rm_p, rm_n);
+    }
+
     uint32_t nforms = 0;
-    Form **forms = read_all(&arena, &st, &file, &nforms);
+    Form **forms = read_all_with_registry(&arena, &st, &file,
+                                          &reader_macros_reg, &nforms);
 
     int rc = 0;
     if (!forms || diag_had_error()) {
@@ -4246,7 +4494,11 @@ static int wk_emit_c_fixture(const char *input, const char *flags_str, char **ge
         diag_init(false);
 
         Buf cbuf; buf_init(&cbuf);
-        int rc = compile_to_c(input, &cbuf, NULL, 0);
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
+        int rc = compile_to_c(input, &cbuf, NULL, 0,
+                              (const char **)rm_p, rm_n);
+        free_reader_macro_paths(rm_p, rm_n);
         if (rc == 0 && cbuf.data) {
             fwrite(cbuf.data, 1, cbuf.len, stdout);
         }
@@ -4895,7 +5147,7 @@ static int cmd_explain(const char *code) {
     }
 
     Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, false, NULL,
-                                    NULL, 0, NULL);
+                                    NULL, 0, NULL, NULL);
     if (!prog || diag_had_error()) {
         /* Error already emitted */
         symtab_free(&st);
@@ -5355,11 +5607,14 @@ int main(int argc, char **argv) {
         auto_append_spice_includes(input, &check_inc, &n_check_inc,
                                    &ck_owned, &n_ck_owned);
         int rc;
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
         if (use_json_output) {
             diag_lsp_begin();
             Buf out;
             buf_init(&out);
-            compile_to_c(input, &out, (const char **)check_inc, n_check_inc);
+            compile_to_c(input, &out, (const char **)check_inc, n_check_inc,
+                         (const char **)rm_p, rm_n);
             buf_free(&out);
             diag_lsp_flush(stdout);
             diag_lsp_end();
@@ -5367,9 +5622,11 @@ int main(int argc, char **argv) {
         } else {
             Buf out;
             buf_init(&out);
-            rc = compile_to_c(input, &out, (const char **)check_inc, n_check_inc);
+            rc = compile_to_c(input, &out, (const char **)check_inc, n_check_inc,
+                              (const char **)rm_p, rm_n);
             buf_free(&out);
         }
+        free_reader_macro_paths(rm_p, rm_n);
         for (int i = 0; i < n_ck_owned; i++) free(ck_owned[i]);
         free(ck_owned);
         free(check_inc);
@@ -5416,7 +5673,25 @@ int main(int argc, char **argv) {
         if (is_directory(input)) {
             rc = cmd_build_multi(input, out);
         } else {
-            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc, build_target);
+            /* RM4: auto-discover the spice manifest containing `input` so
+             * `:reader-macros [...]` entries apply when building a single
+             * file from inside a project. No-op when there is no manifest. */
+            char *b_root = find_spice_root(input);
+            char **b_rm  = NULL;
+            int    b_n   = 0;
+            if (b_root) {
+                char mp[4096];
+                snprintf(mp, sizeof(mp), "%s/build.tur", b_root);
+                PkgManifest bm; memset(&bm, 0, sizeof(bm));
+                if (pkg_manifest_read(mp, &bm)) {
+                    b_rm = resolve_manifest_reader_macros(b_root, &bm, &b_n);
+                }
+                pkg_manifest_free(&bm);
+            }
+            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
+                           build_target, (const char **)b_rm, b_n);
+            free_reader_macro_paths(b_rm, b_n);
+            free(b_root);
         }
         free(build_inc);
         return rc;

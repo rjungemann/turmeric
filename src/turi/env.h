@@ -146,6 +146,12 @@ typedef struct TuriEnv {
     /* SI4: TypeClassEnv* from latest turi_eval; used by turi_try_show for Show dispatch.
      * Points into an eval_arena (never freed). Cast to TypeClassEnv* in eval.c. */
     void        *last_tc_env;
+    /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
+     * turns so `(reader-macros/define ...)` on one line is visible to the
+     * reader on the next. Allocated from sym_arena; entries' templates
+     * point into eval_arenas (kept alive by TuriEnv until free). Opaque
+     * to callers that don't include reader_macros.h. */
+    struct ReaderMacroRegistry *reader_macros;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

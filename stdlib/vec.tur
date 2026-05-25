@@ -1,3 +1,9 @@
+;;; tur/vec -- untyped growable owning array.
+;;;
+;;; Legacy untyped growable array. Prefer tur/tvec for new code.
+;;;
+;;; Since: Phase B1
+;;; Deprecated: superseded by tur/tvec (Phase TC1-A)
 ;; Vec type for Turmeric
 ;; Growable owning array
 

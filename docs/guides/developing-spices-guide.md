@@ -343,6 +343,27 @@ definition. The standard format (from CLAUDE.md):
 
 Exported symbols without docstrings will be omitted from `just docs` output.
 
+### Module docstring (optional)
+
+A spice module can optionally include a module-level docstring at the very top
+of the file, before the first `defn`, `defmacro`, `defstruct`, `definstance`,
+or `defopaque`. Place a contiguous `;;;` block followed by a `;;` comment line
+(which acts as the separator):
+
+```turmeric
+;;; myspice/db -- SQLite database bindings.
+;;;
+;;; Thin wrapper around libsqlite3; provides open/close/query/exec with
+;;; result-typed error handling.
+;;;
+;;; Since: Phase P2
+;; ---- SQLite bindings ----
+(extern-c sqlite3_open ...)
+```
+
+Without a module docstring the page renders with no description block -- the
+per-symbol cards still appear normally.
+
 ---
 
 ## Testing Your Spice

@@ -1,0 +1,4 @@
+;; Loaded implicitly by the spice manifest. Defines a couple of macros
+;; that src/main.tur uses without `#use-reader-macros`.
+(reader-macros/define 'sum :datum-bracket '(+ $body))
+(reader-macros/define 'pi  :none          '3.14159)

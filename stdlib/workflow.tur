@@ -1,3 +1,8 @@
+;;; tur/workflow -- persistent workflow helpers built on tur/serial.
+;;;
+;;; Higher-level API for checkpointed, resumable long-running computations.
+;;;
+;;; Since: Phase 21
 ;; stdlib/workflow.tur -- Phase 21: Serializable continuations -- workflow helpers
 ;;
 ;; Higher-level API for persistent workflows built on top of serial-reset /

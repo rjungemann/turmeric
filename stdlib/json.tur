@@ -1,3 +1,8 @@
+;;; tur/json -- JSON encode and decode with no external dependencies.
+;;;
+;;; Pure C implementation. Supports null, boolean, number, string, array, object.
+;;;
+;;; Since: Phase B1
 ;; stdlib/json.tur -- JSON encode and decode.
 ;;
 ;; Pure C implementation with no external dependencies.

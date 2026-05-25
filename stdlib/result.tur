@@ -1,3 +1,9 @@
+;;; tur/result -- untyped Result: ok(value) or err(value).
+;;;
+;;; Legacy untyped result implementation. Prefer tur/tresult for new code.
+;;;
+;;; Since: Phase B1
+;;; Deprecated: superseded by tur/tresult (Phase TC1-E)
 ;; Result type for Turmeric
 ;; Represents either a success (ok) or an error (err)
 ;;

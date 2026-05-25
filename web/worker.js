@@ -4,7 +4,8 @@ set -e
 # Turmeric installer
 # https://turmeric-lang.com
 
-FORMULA_URL="https://raw.githubusercontent.com/rjungemann/turmeric/main/Formula/turmeric.rb"
+TAP="rjungemann/turmeric"
+TAP_URL="https://github.com/rjungemann/turmeric"
 
 if ! command -v brew >/dev/null 2>&1; then
   echo "Turmeric requires Homebrew. Install it first:"
@@ -12,8 +13,11 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Tapping $TAP..."
+brew tap "$TAP" "$TAP_URL"
+
 echo "Installing Turmeric..."
-brew install --HEAD "$FORMULA_URL"
+brew install --HEAD "$TAP/turmeric"
 echo ""
 echo "Done! Run 'tur --help' to get started."
 echo "Try the online playground at https://turmeric-lang.com/try"

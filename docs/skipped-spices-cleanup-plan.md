@@ -1,7 +1,7 @@
 # Plan: Unblock the 8 typecheck-skipped spices
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-24
+> **Status:** Phase 1 Complete (Category A fixed; tidal marker removed)
+> **Last Updated:** 2026-05-25
 > **Type:** Compiler / Spice maintenance
 > **Companion to:** [spice-aware-check-plan.md](spice-aware-check-plan.md)
 > **Tracked across repos:** `turmeric` (compiler fixes), `turmeric-spices` (spice source fixes)
@@ -49,13 +49,13 @@ to reproduce.
 | scscm    | `src/scscm/codegen.tur`             | `if condition must be bool, got int`                           | B        |
 | scscm    | `src/scscm/compile.tur`             | `err?` arg 1: expected `ptr<void>`, got int                    | B        |
 | scscm    | `src/scscm/expander.tur`            | `if condition must be bool, got int`                           | B        |
-| scscm    | `src/scscm/lexer.tur`               | `defn: 'ok' is already defined by an auto-loaded stdlib module`| A        |
+| scscm    | `src/scscm/lexer.tur`               | ~~`defn: 'ok' is already defined by an auto-loaded stdlib module`~~ **FIXED (Phase 1)** | A        |
 | scscm    | `src/scscm/parser.tur`              | `if condition must be bool, got int`                           | B        |
 | sqlite   | `src/sqlite/db.tur`                 | `if condition must be bool, got int`                           | B        |
-| tidal    | `src/tidal/event.tur`               | `defn: 'ok' is already defined ...`                            | A        |
-| tidal    | `src/tidal/notation.tur`            | `defn: 'ok' is already defined ...`                            | A        |
-| tidal    | `src/tidal/pattern.tur`             | `defn: 'ok' is already defined ...`                            | A        |
-| tidal    | `src/tidal/render.tur`              | `unterminated list (missing ')')`                              | E        |
+| tidal    | `src/tidal/event.tur`               | ~~`defn: 'ok' is already defined ...`~~ **FIXED (Phase 1)**    | A        |
+| tidal    | `src/tidal/notation.tur`            | ~~`defn: 'ok' is already defined ...`~~ **FIXED (Phase 1)**    | A        |
+| tidal    | `src/tidal/pattern.tur`             | ~~`defn: 'ok' is already defined ...`~~ **FIXED (Phase 1)**    | A        |
+| tidal    | `src/tidal/render.tur`              | ~~`unterminated list (missing ')')`~~ **FIXED (Phase 1)** -- missing `)` in `render-dur-sp` | E        |
 
 ---
 
@@ -292,6 +292,40 @@ Easiest first; each phase is independently mergeable.
 
 5. **Phase 5: Category D** (glsl investigation). Unknown effort.
    Independent of phases 1-4.
+
+6. **Phase 6: `tur-signal` spice -- run tests and resolve issues.**
+   The `signal` spice was just extracted from stdlib (see
+   `docs/signal-spice-plan.md`). It does not yet carry a
+   `requires.typecheck-skip` marker, so we need to verify it is
+   actually clean rather than silently skipped.
+
+   Steps:
+   a. Run `tur check` against all four source files:
+      ```sh
+      cd ../turmeric-spices/spices/signal
+      for f in src/signal/{core,dsp,envelope,synth}.tur; do
+          echo "=== $f ===" && tur check "$f"
+      done
+      ```
+   b. Run the test suite:
+      ```sh
+      tur run tests/signal/arrow_tests.tur
+      ```
+   c. If `synth.tur` triggers Category C (`too many parameters`),
+      decide between raising the compiler limit (Phase 3 spike result)
+      or introducing intermediate structs matching the existing type
+      annotations.
+   d. If `synth.tur` triggers unbound-symbol errors for `math/sin`,
+      `math/PI`, `vec-of`, etc. (it references math and vec stdlib
+      without explicit imports), add the missing `(import ...)` lines.
+   e. Fix any remaining `if int -> bool` hits in the four files
+      (Category B recipe applies).
+   f. If issues cannot be resolved before the other phases land, add a
+      `requires.typecheck-skip` marker with a comment so CI stays green
+      and remove it when the blocking fix arrives.
+
+   **Effort:** ~1-2 hours if only import/Category B fixes are needed;
+   more if synth.tur requires Category C struct refactoring.
 
 After every phase, delete the corresponding `requires.typecheck-skip`
 markers in `turmeric-spices/spices/*/` so CI starts asserting against

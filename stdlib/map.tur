@@ -1,3 +1,10 @@
+;;; tur/map -- untyped map operations backed by a persistent HAMT.
+;;;
+;;; Provides basic map operations for both mutable and persistent maps.
+;;; Prefer tur/tmap for typed Map[K V] operations in new code.
+;;;
+;;; Since: Phase P3
+;;; Deprecated: superseded by tur/tmap (Phase TM0)
 ;; stdlib/map.tur -- Map operations (mutable and persistent)
 ;;
 ;; This module provides the basic map operations that can be used with both

@@ -1,3 +1,8 @@
+;;; tur/tslice -- typed Slice[A]: bounds-checked borrowed view into A elements.
+;;;
+;;; Runtime layout identical to tur/slice (pointer + length).
+;;;
+;;; Since: Phase TC1-C
 ;; Phase TC1-C: Typed Slice[A]
 ;; Borrowed, bounds-checked view into a contiguous region of A elements.
 ;; Runtime layout identical to slice.tur (int64_t array pointer + length).

@@ -1,3 +1,8 @@
+;;; tur/stm -- Software Transactional Memory: transactional read/write on TVars.
+;;;
+;;; Transactions are retried automatically on conflict.
+;;;
+;;; Since: Phase 20
 ;; stdlib/stm.tur - Software Transactional Memory (Phase 20/21)
 ;;
 ;; Minimal version for STM primitives

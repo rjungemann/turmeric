@@ -1,3 +1,8 @@
+;;; tur/path -- pure path-string manipulation (join, dirname, basename, extension).
+;;;
+;;; No syscalls; all functions operate on NUL-terminated cstr values.
+;;;
+;;; Since: Phase B1
 ;; stdlib/path.tur -- pure path string manipulation.
 ;;
 ;; No syscalls; all functions operate on NUL-terminated cstr values and

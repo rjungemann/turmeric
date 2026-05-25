@@ -1,3 +1,8 @@
+;;; tur/typeclass -- built-in typeclasses: Eq, Ord, Show, Num.
+;;;
+;;; Core typeclass definitions used across the standard library.
+;;;
+;;; Since: Phase 15
 ;; Phase 15: Typeclasses
 ;; Built-in typeclasses: Eq, Ord, Show, Num
 

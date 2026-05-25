@@ -1,0 +1,7 @@
+; A template that references `$3` while the body supplies only two forms
+; should be a clean reader diagnostic, not a confusing later-stage error.
+(reader-macros/define 'pair :datum-bracket '(cons $1 (cons $2 (cons $3 0))))
+
+(println #pair[10 20])
+
+(defn main [] :int 0)

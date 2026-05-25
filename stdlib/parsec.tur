@@ -1,4 +1,9 @@
-;; stdlib/parsec.tur — Parser combinator library
+;;; tur/parsec -- parser combinator library built on the backtracking monad.
+;;;
+;;; Provides char, string, satisfy, many, sepBy, between, and friends.
+;;;
+;;; Since: Phase B1
+;; stdlib/parsec.tur -- Parser combinator library
 ;;
 ;; Built on the backtracking monad (list monad, inlined from backtrack.tur).
 ;;

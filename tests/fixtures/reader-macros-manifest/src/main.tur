@@ -1,0 +1,8 @@
+;; Note the absence of a `#use-reader-macros` directive: the macros
+;; `#sum` and `#pi` are made available by build.tur's
+;; `:reader-macros ["macros.tur"]` entry, which the `tur` driver
+;; preloads before parsing this file.
+
+(println #sum[1 2 3 4 5])     ; 15
+(println #pi)                 ; 3.14159
+(println (+ #pi #pi))         ; 6.28318

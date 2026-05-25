@@ -1,3 +1,8 @@
+;;; tur/io -- FileSystem capability implementation using libc functions.
+;;;
+;;; Implements the FileSystem capability typeclass for real I/O.
+;;;
+;;; Since: Phase 16
 ;; Phase 16: Real FileSystem implementation
 ;;
 ;; Implementation of FileSystem capability using libc functions

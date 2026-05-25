@@ -1,6 +1,7 @@
 #include "env.h"
 #include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL, TURI_DEFAULT_SANDBOX_DEPTH */
 #include "fiber.h"
+#include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +88,10 @@ TuriEnv *turi_env_new(void) {
     turi_async_register_builtins(env);
     /* Register eval-layer native builtins (panic?, etc.) */
     turi_eval_register_builtins(env);
+    /* RM Q#5: persistent reader-macro registry for session semantics. */
+    env->reader_macros = (ReaderMacroRegistry *)arena_alloc(
+        &env->sym_arena, sizeof(ReaderMacroRegistry));
+    reader_macros_init(env->reader_macros, &env->sym_arena);
     return env;
 }
 

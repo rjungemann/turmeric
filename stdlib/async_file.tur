@@ -1,3 +1,8 @@
+;;; tur/async_file -- non-blocking file I/O integrated with the cooperative scheduler.
+;;;
+;;; Read and write files without blocking the current fiber.
+;;;
+;;; Since: Phase T24
 ;; stdlib/async_file.tur -- Async file I/O for Turmeric (Phase T24)
 ;;
 ;; Non-blocking file operations that integrate with the cooperative scheduler.

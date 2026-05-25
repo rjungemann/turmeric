@@ -1,4 +1,9 @@
-;; Phase CA0: Comonad typeclass — dual of Monad.
+;;; tur/comonad -- Comonad typeclass -- the categorical dual of Monad.
+;;;
+;;; Provides extract, extend, and duplicate operations.
+;;;
+;;; Since: Phase CA0
+;; Phase CA0: Comonad typeclass -- dual of Monad.
 ;;
 ;; Laws:
 ;;   extract (extend f w) = f w           (left identity)

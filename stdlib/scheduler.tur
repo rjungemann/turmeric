@@ -1,3 +1,8 @@
+;;; tur/scheduler -- cooperative fiber scheduler managing a fiber run queue.
+;;;
+;;; Fibers are run round-robin until all terminate or block.
+;;;
+;;; Since: Phase T21
 ;; stdlib/scheduler.tur -- Cooperative scheduler for fibers (Phase T21)
 ;;
 ;; The scheduler manages a queue of fibers and runs them cooperatively.

@@ -1,3 +1,9 @@
+;;; tur/contract -- runtime contract macros (assert!, require!, ensure!, ...).
+;;;
+;;; Provides precondition, postcondition, and invariant checks that panic on
+;;; failure. Contracts can be stripped at compile time with --no-contracts.
+;;;
+;;; Since: Phase C1
 ;; Runtime contracts for Turmeric
 ;; Phase C1: Core contract macros (v1)
 ;; Phase M7: Wrapped in (defmodule tur/contract ...). Auto-loaded once

@@ -1,3 +1,9 @@
+;;; tur/capability -- capability-passing typeclasses for controlled side-effect injection.
+;;;
+;;; Capability types are ordinary structs with function-pointer fields,
+;;; passed explicitly to functions that need a side effect.
+;;;
+;;; Since: Phase 16
 ;; Phase 16: Capability passing (v1 effects)
 ;;
 ;; Capability types are ordinary structs with function pointer fields.

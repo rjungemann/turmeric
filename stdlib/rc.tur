@@ -1,3 +1,8 @@
+;;; tur/rc -- reference-counted pointer (rc<T>) for shared ownership.
+;;;
+;;; rc<T> is an owning handle; rc-clone increments the count, rc-drop decrements.
+;;;
+;;; Since: Phase 9
 ;; stdlib/rc.tur -- Reference-counted pointer (Phase 9)
 ;; rc<T> is a reference-counted owning pointer.
 ;;

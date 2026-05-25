@@ -1,3 +1,8 @@
+;;; tur/existential -- helpers for native pack/open existential types.
+;;;
+;;; Phase EX1f macros built on top of the EX1c constraint interface.
+;;;
+;;; Since: Phase EX1
 ;; stdlib/existential.tur -- helpers for native pack/open existentials.
 ;;
 ;; Phase EX1f wires the macros defined here on top of the EX1c constraint

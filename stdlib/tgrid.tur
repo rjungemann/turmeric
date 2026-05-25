@@ -1,3 +1,8 @@
+;;; tur/tgrid -- typed Grid[A]: 2D row-major grid parameterized over element type A.
+;;;
+;;; Runtime layout: { int64_t *data; int width; int height; int cx; int cy; }.
+;;;
+;;; Since: Phase TC2-A
 ;; Phase TC2-A: Typed Grid[A]
 ;; 2D row-major grid parameterized over element type A.
 ;; Runtime layout: { int64_t *data; int width; int height; int cx; int cy; }

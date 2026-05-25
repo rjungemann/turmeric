@@ -1,3 +1,8 @@
+;;; tur/vec-existential -- Vec[A] as a size-hiding existential for heterogeneous collections.
+;;;
+;;; Phase EX2-4: wraps Vec[A] in an existential to hide the element type.
+;;;
+;;; Since: Phase EX2
 ;; stdlib/vec-existential.tur -- Vec[A] as a size-hiding existential.
 ;;
 ;; Phase EX2-4 closes Option B from typed-collections-plan.md:

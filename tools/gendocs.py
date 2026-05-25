@@ -225,6 +225,7 @@ def parse_tur_file(path):
         'file_path': str(path),
         'exports': set(),
         'definitions': [],
+        'docstring': None,
     }
 
     # ------------------------------------------------------------------
@@ -273,8 +274,11 @@ def parse_tur_file(path):
     # ------------------------------------------------------------------
     doc_buf = []  # accumulated ';;;' lines
     def_re = re.compile(
-        r'^\s*\(\s*(defn|defmacro|defstruct|definstance)\s+'
+        r'^\s*\(\s*(defn|defmacro|defstruct|definstance|defopaque)\s+'
     )
+
+    pending_module_doc = None   # most recently flushed ;;; block before first def
+    first_def_seen = False
 
     i = 0
     while i < len(lines):
@@ -288,6 +292,13 @@ def parse_tur_file(path):
 
         m = def_re.match(line)
         if m:
+            # Promote the pending module docstring on the first real definition.
+            if not first_def_seen:
+                if module['docstring'] is None and pending_module_doc:
+                    module['docstring'] = _parse_docstring(pending_module_doc)
+                    pending_module_doc = None
+                first_def_seen = True
+
             kind = m.group(1)
             # Parse the name + rest from this line (may span lines)
             def_text = line
@@ -330,7 +341,17 @@ def parse_tur_file(path):
         # But: regular ;; comments between the ;;; block and the defn are
         # allowed (agents may place them there); do NOT reset on ;; lines.
         if stripped and not stripped.startswith(';'):
+            # Snapshot as pending module docstring if no real def seen yet
+            if not first_def_seen and module['docstring'] is None and pending_module_doc is None and doc_buf:
+                pending_module_doc = list(doc_buf)
             doc_buf = []
+        elif stripped.startswith(';;') and not stripped.startswith(';;;'):
+            # A ;; (non-doc) comment after a ;;; block terminates the block.
+            # Snapshot the accumulated block as the candidate module docstring
+            # (before the first real definition).
+            if not first_def_seen and module['docstring'] is None and pending_module_doc is None and doc_buf:
+                pending_module_doc = list(doc_buf)
+                doc_buf = []
 
         i += 1
 
@@ -744,6 +765,20 @@ a:hover { text-decoration: underline; }
 
 .def-since { font-size: 0.8rem; color: var(--text-sec); margin-top: 0.5rem; }
 
+.module-doc {
+  margin-bottom: 2rem;
+  padding: 1rem 1.25rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+}
+.module-doc-summary {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
 .def-deprecated {
   margin: 0.75rem 0;
   padding: 0.5rem 0.75rem;
@@ -1145,6 +1180,27 @@ def render_module_page(module, out_dir, brand='stdlib'):
     content += f'    <div class="module-path">{html_module.escape(rel_path)}</div>\n'
     content += '  </div>\n'
 
+    if module.get('docstring'):
+        md = module['docstring']
+        summary = md['summary']
+        dash_idx = summary.find(' -- ')
+        if dash_idx != -1:
+            summary = summary[dash_idx + 4:]
+        content += '  <div class="module-doc">\n'
+        if summary:
+            content += f'    <p class="module-doc-summary">{html_module.escape(summary)}</p>\n'
+        if md.get('example'):
+            content += '    <div class="def-section">\n'
+            content += '      <div class="def-section-label">Example</div>\n'
+            content += f'      <pre class="def-example">{html_module.escape(md["example"])}</pre>\n'
+            content += '    </div>\n'
+        if md.get('deprecated'):
+            content += '    <p class="def-deprecated"><span class="def-deprecated-label">Deprecated</span> '
+            content += f'{html_module.escape(md["deprecated"])}</p>\n'
+        if md.get('since'):
+            content += f'    <p class="def-since">Since: {html_module.escape(md["since"])}</p>\n'
+        content += '  </div>\n'
+
     for defn in exported:
         content += _render_def_card(defn)
 
@@ -1187,14 +1243,20 @@ def _index_card_html(module):
     page_name = mod_name.replace('/', '-') + '.html'
     exported = [d for d in module['definitions'] if d['exported']]
     mod_summary = ''
-    with open(module['file_path'], encoding='utf-8', errors='replace') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith(';; ') and not line.startswith(';;; '):
-                mod_summary = line[3:]
-                break
-            if line and not line.startswith(';'):
-                break
+    if module.get('docstring') and module['docstring']['summary']:
+        s = module['docstring']['summary']
+        dash_idx = s.find(' -- ')
+        mod_summary = s[dash_idx + 4:] if dash_idx != -1 else s
+    else:
+        # legacy fallback: first ';; ' line at top of file
+        with open(module['file_path'], encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(';; ') and not line.startswith(';;; '):
+                    mod_summary = line[3:]
+                    break
+                if line and not line.startswith(';'):
+                    break
 
     export_count = len(exported)
     h = f'  <a href="{html_module.escape(page_name)}" class="index-card" style="display:block">\n'
@@ -1333,6 +1395,24 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
             key = re.sub(r'\[.*\]$', '', name)
             text = _build_doc_entry(defn)
             entries.append((key, text))
+        # MD3: also register the module name itself as a doc-lookup key
+        if module.get('docstring') and module.get('name'):
+            mod_doc = module['docstring']
+            mod_summary = mod_doc['summary']
+            # Strip the "module-name -- " prefix for the stored text
+            dash_idx = mod_summary.find(' -- ')
+            if dash_idx != -1:
+                mod_summary = mod_summary[dash_idx + 4:]
+            parts = [mod_doc['summary']]
+            if mod_doc.get('deprecated'):
+                parts.append('')
+                parts.append('Deprecated:')
+                for line in mod_doc['deprecated'].splitlines():
+                    parts.append(f'  {line}')
+            if mod_doc.get('since'):
+                parts.append('')
+                parts.append(f'Since: {mod_doc["since"]}')
+            entries.append((module['name'], '\n'.join(parts)))
 
     # Deduplicate: keep the first entry for each key
     seen = {}
@@ -1427,6 +1507,20 @@ def collect_doc_entries(modules, *, spice=None):
             if spice:
                 entry['spice'] = spice
             entries.append(entry)
+
+        # MD3: also emit a module-level entry for the web search bar
+        if module.get('docstring') and module.get('name'):
+            mod_name = module['name']
+            if mod_name not in seen:
+                seen.add(mod_name)
+                s = module['docstring']['summary']
+                dash_idx = s.find(' -- ')
+                summary = s[dash_idx + 4:] if dash_idx != -1 else s
+                entry = {'name': mod_name, 'summary': summary, 'kind': 'module'}
+                if spice:
+                    entry['spice'] = spice
+                entries.append(entry)
+
     return entries
 
 

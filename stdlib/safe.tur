@@ -1,3 +1,8 @@
+;;; tur/safe -- bounds-checked operations returning Option or Result.
+;;;
+;;; Drop-in replacements for unsafe operations that panic on failure.
+;;;
+;;; Since: Phase U4
 ;; Phase U4: Safe standard library wrappers
 ;; Bounds-checked operations that return Option or Result
 ;; Phase M7: Wrapped in (defmodule tur/safe ...). Auto-loaded; exports below

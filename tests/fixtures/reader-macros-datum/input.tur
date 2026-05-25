@@ -1,0 +1,28 @@
+; RM2: `datum` body mode.
+;
+; The body is parsed recursively (until the matching close-delim) and
+; lands in the template as a sequence of Forms. Inside the template:
+;   - `$body`  splices *all* body forms into the surrounding list
+;   - `$N`     substitutes the N-th body form (1-indexed)
+
+; --- $body splice ---------------------------------------------------------
+; #sum[a b c d]  ->  (+ a b c d)
+(reader-macros/define 'sum :datum-bracket '(+ $body))
+(println #sum[1 2 3 4 5])      ; 15
+
+; --- $N substitution ------------------------------------------------------
+; #pick(x y z)  ->  (* $2 $2)
+; (echoes the middle element, doubled)
+(reader-macros/define 'pick :datum-paren '(* $2 $2))
+(println #pick(10 7 99))       ; 49
+
+; --- mixing $1 / $body inside a larger template ---------------------------
+; #if+[cond then else]  ->  (if (> cond 0) (do then) (do else))
+;
+; Macro names match the symbol-reader char class (open question #2 resolved
+; to "loosen to match"), so operator chars like `+`, `?`, `<`, `-` are all
+; valid in macro names.
+(reader-macros/define 'if+ :datum-bracket
+                       '(if (> $1 0) (do $2) (do $3)))
+(println #if+[ 5 "positive" "non-positive"])
+(println #if+[-3 "positive" "non-positive"])

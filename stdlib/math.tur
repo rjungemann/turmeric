@@ -1,3 +1,8 @@
+;;; tur/math -- thin wrappers around libm functions (sin, cos, sqrt, ...).
+;;;
+;;; All functions forward to libc/libm with no capability requirements.
+;;;
+;;; Since: Phase B1
 ;; stdlib/math.tur -- thin wrappers around libm functions.
 ;;
 ;; All functions forward to libc/libm and require no capabilities beyond

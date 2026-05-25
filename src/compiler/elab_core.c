@@ -1,5 +1,6 @@
 /* elab_core.c -- Elab state, scope, free-var analysis, binding/move/linear-state helpers. */
 #include "elab_internal.h"
+#include <string.h>  /* memset for elab_init_state */
 
 /* ---- shared file-scope state (declared in elab_internal.h) ---- */
 bool elab_in_atomically = false;
@@ -923,12 +924,24 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
 }
 
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
+    /* Zero everything first so any bool/pointer field not explicitly
+     * initialised below (e.g. `in_stdlib_load`, set later by
+     * elaborate_program once stdlib_prefix is known) doesn't read
+     * uninitialised stack memory. This used to "work" by luck because
+     * the struct layout left those bytes zero on common stacks; the
+     * Transitive-RM `user_macros` field shifted the layout and exposed
+     * the latent UB. */
+    memset(e, 0, sizeof(*e));
     e->arena = arena;
     e->st = st;
     scope_init(&e->global, NULL);
     e->scope = &e->global;
     e->next_id = 0;
     e->next_gensym_id = 0;  /* Phase 6 */
+    /* Transitive-RM: driver overrides this via elaborate_program's
+     * user_macros param when there's a shared registry to thread into
+     * module loaders. */
+    e->user_macros = NULL;
     /* Phase 3: file-scope defs collection */
     e->file_scope_defs = NULL;
     e->n_file_scope_defs = 0;

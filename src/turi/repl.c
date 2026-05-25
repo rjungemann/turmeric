@@ -239,7 +239,10 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     diag_register_file(&sfile);
 
     uint32_t nforms = 0;
-    Form **forms = read_all(&arena, &st, &sfile, &nforms);
+    /* RM Q#5: share the session registry with `:type` so it sees macros
+     * defined earlier in the REPL. */
+    Form **forms = read_all_with_registry(&arena, &st, &sfile,
+                                          env->reader_macros, &nforms);
     if (!forms || diag_had_error()) goto cleanup;
 
     {
@@ -250,7 +253,10 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
                                        /*tc_env=*/NULL,
                                        /*include_dirs=*/NULL,
                                        /*n_include_dirs=*/0,
-                                       /*out_n_fsd=*/NULL);
+                                       /*out_n_fsd=*/NULL,
+                                       /* RM transitive: `:type` shares
+                                        * the session registry. */
+                                       env->reader_macros);
         if (!prog || diag_had_error()) goto cleanup;
 
         /* The last top-level item is the expression we care about */
@@ -840,8 +846,8 @@ int turi_repl_run(void) {
                 free(line);
                 continue;
             }
-            if (strncmp(line, ":tutorial", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) {
-                const char *rest = (line[8] == ' ') ? line + 9 : "";
+            if (strncmp(line, ":tutorial", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) {
+                const char *rest = (line[9] == ' ') ? line + 10 : "";
                 if (*rest == '\0') {
                     cmd_tutorial_list();
                 } else {

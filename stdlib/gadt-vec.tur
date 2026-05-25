@@ -1,3 +1,9 @@
+;;; tur/gadt-vec -- length-indexed Vec GADT with phantom natural-number type parameter.
+;;;
+;;; Vec is a phantom-typed singly-linked list of ints.
+;;; True compile-time length safety is deferred to a future dependent-types phase.
+;;;
+;;; Since: Phase G4
 ;; Phase G4: length-indexed Vec GADT (simplified int elements)
 ;; Vec is a phantom-typed singly-linked list of ints.
 ;; The type parameter a is unused in constructor field types (phantom).

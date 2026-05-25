@@ -1,3 +1,8 @@
+;;; tur/slice -- borrowed view into a contiguous sequence (pointer + length).
+;;;
+;;; Provides bounds-checked element access without taking ownership.
+;;;
+;;; Since: Phase B1
 ;; Slice type for Turmeric
 ;; Borrowed view into a contiguous sequence
 

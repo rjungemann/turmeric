@@ -1,3 +1,10 @@
+;;; tur/tlist -- typed singly-linked List[A] with Cons cells.
+;;;
+;;; Typed singly-linked list. List[A] = Option[Cons[A]].
+;;; At runtime, nil is 0 and a cons cell is a heap-allocated
+;;; { int64_t head; int64_t tail; }.
+;;;
+;;; Since: Phase TC1-B
 ;; Phase TC1-B: Typed List[A]
 ;; Typed singly-linked list. List[A] = Option[Cons[A]].
 ;; At runtime, nil is 0 and a cons cell is a heap-allocated { int64_t head; int64_t tail; }.

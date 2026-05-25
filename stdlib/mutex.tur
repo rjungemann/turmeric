@@ -1,4 +1,9 @@
-;; stdlib/mutex.tur — POSIX mutex (Phase T19-C)
+;;; tur/mutex -- POSIX mutex (pthread_mutex_t) wrapped as ptr<void>.
+;;;
+;;; Suitable for single-threaded and multi-threaded programs.
+;;;
+;;; Since: Phase T19-C
+;; stdlib/mutex.tur -- POSIX mutex (Phase T19-C)
 ;;
 ;; Wraps pthread_mutex_t as a :ptr<void>.  Suitable for single-threaded and
 ;; multi-threaded use (default PTHREAD_MUTEX_DEFAULT attributes).

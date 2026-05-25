@@ -1,4 +1,9 @@
-;; stdlib/backtrack.tur — Backtracking monad (list monad)
+;;; tur/backtrack -- backtracking monad (list monad) for non-deterministic search.
+;;;
+;;; Backtrack T = list T. Each "result" is a list of all possible values.
+;;;
+;;; Since: Phase CA0
+;; stdlib/backtrack.tur -- Backtracking monad (list monad)
 ;;
 ;; Backtrack T  =  list T  (a singly-linked list of result values)
 ;;

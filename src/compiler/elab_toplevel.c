@@ -380,9 +380,11 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         TypeClassEnv *out_tc_env,
                         const char **include_dirs,
                         int n_include_dirs,
-                        uint32_t *out_n_file_scope_defs) {
+                        uint32_t *out_n_file_scope_defs,
+                        struct ReaderMacroRegistry *user_macros) {
     Elab e;
     elab_init_state(&e, arena, st);
+    e.user_macros = user_macros;
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
     /* stdlib fallback: TUR_STDLIB_DIR env var, else "stdlib" */
     {
@@ -485,9 +487,25 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 sfile->reader_type = reader_type_from_extension(path_buf);
                 if (sfile->reader_type == READER_UNKNOWN) sfile->reader_type = READER_TURMERIC;
                 diag_register_file(sfile);
+                /* Transitive-RM (T2): use the shared `user_macros`
+                 * registry so the loaded file sees the entry file's
+                 * macros. `(load ...)` and `(import ...)` populate the
+                 * same registry -- see docs/reader-macros-plan.md
+                 * ("Loading semantics") for the user-facing contract. */
                 uint32_t lf_n = 0;
-                Form **lf = read_all(arena, st, sfile, &lf_n);
-                if (!lf) { rc = -1; continue; }
+                bool had_error_before_load = diag_had_error();
+                Form **lf = read_all_with_registry(arena, st, sfile,
+                                                   e.user_macros, &lf_n);
+                if (!lf) {
+                    /* Same import-chain note as elab_module.c's T1
+                     * handling (decision #4). */
+                    if (!had_error_before_load && diag_had_error()) {
+                        diag_emit(DIAG_NOTE, path_f->span,
+                                  "while loading '%s'", path_buf);
+                    }
+                    rc = -1;
+                    continue;
+                }
                 /* Splice loaded forms into output list */
                 if (out_n + lf_n > out_cap) {
                     while (out_n + lf_n > out_cap) out_cap *= 2;

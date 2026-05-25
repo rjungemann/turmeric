@@ -1,3 +1,8 @@
+;;; tur/async_pipe -- non-blocking stdin/stdout pipe I/O for the cooperative scheduler.
+;;;
+;;; Read from stdin and write to stdout without blocking the current fiber.
+;;;
+;;; Since: Phase T24
 ;; stdlib/async_pipe.tur -- Async pipe/stdio I/O for Turmeric (Phase T24)
 ;;
 ;; Non-blocking stdin/stdout operations that integrate with the cooperative

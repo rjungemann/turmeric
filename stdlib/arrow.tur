@@ -1,3 +1,8 @@
+;;; tur/arrow -- Haskell-style Arrow typeclass hierarchy for signal processing.
+;;;
+;;; Provides Category, Arrow, ArrowChoice, and ArrowLoop typeclasses.
+;;;
+;;; Since: Phase CA0
 ;; Signal Processing Arrows Library
 ;; Haskell-style Arrow typeclass hierarchy for Turmeric
 ;;

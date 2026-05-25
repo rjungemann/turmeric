@@ -1,3 +1,8 @@
+;;; tur/sized-buf -- SizedBuf: flat contiguous memory layout for sized types.
+;;;
+;;; Wraps a single flat int64_t array with a runtime length.
+;;;
+;;; Since: Phase SZ2
 ;; Phase SZ2: SizedBuf -- flat contiguous memory layout for sized types.
 ;;
 ;; SizedBuf wraps a single flat int64_t array with a runtime length.

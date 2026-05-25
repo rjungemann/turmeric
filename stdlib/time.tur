@@ -1,3 +1,8 @@
+;;; tur/time -- Time capability implementation using platform time functions.
+;;;
+;;; Implements the Time capability typeclass for real clock access.
+;;;
+;;; Since: Phase 16
 ;; Phase 16: Real Time implementation
 ;;
 ;; Implementation of Time capability using platform time functions

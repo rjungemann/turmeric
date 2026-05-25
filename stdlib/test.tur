@@ -1,3 +1,8 @@
+;;; tur/test -- lightweight unit test runner for Turmeric.
+;;;
+;;; Provides assert-equal, assert-true, and test-run helpers.
+;;;
+;;; Since: Phase B1
 ;; Test runner for Turmeric
 
 ;; Assert equality (both args must be int for now)

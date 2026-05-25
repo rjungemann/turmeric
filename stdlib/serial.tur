@@ -1,3 +1,8 @@
+;;; tur/serial -- serializable continuations for persistent workflow state.
+;;;
+;;; Defines the Serializable typeclass with primitive and container instances.
+;;;
+;;; Since: Phase 21
 ;; stdlib/serial.tur -- Phase 21: Serializable continuations
 ;;
 ;; Defines the Serializable typeclass and primitive/container instances.

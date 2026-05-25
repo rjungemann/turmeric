@@ -443,7 +443,17 @@ static Tutorial *create_tutorial(
     tutorial->description = tutorial_strdup(description);
     tutorial->difficulty = difficulty;
     tutorial->category = tutorial_strdup(category);
-    tutorial->steps = steps;
+    /* Copy steps into arena-owned storage — callers typically pass a
+       stack-local array, which would otherwise dangle after they return. */
+    if (step_count > 0 && steps) {
+        TutorialStep *owned = (TutorialStep *)tutorial_malloc(
+            (size_t)step_count * sizeof(TutorialStep));
+        if (!owned) return NULL;
+        memcpy(owned, steps, (size_t)step_count * sizeof(TutorialStep));
+        tutorial->steps = owned;
+    } else {
+        tutorial->steps = NULL;
+    }
     tutorial->step_count = step_count;
     
     return tutorial;

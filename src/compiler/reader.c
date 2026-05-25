@@ -1,4 +1,5 @@
 #include "reader.h"
+#include "reader_macros.h"
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 
 #include <ctype.h>
@@ -20,7 +21,13 @@ typedef struct Reader {
     bool              curly_infix_enabled;
     /* Phase S2: Neoteric support */
     bool              neoteric_enabled;
+    /* RM0/RM1: User-defined #-dispatch macros. May be NULL (no user macros). */
+    const ReaderMacroRegistry *user_macros;
 } Reader;
+
+/* Forward declaration; the RM1 implementation lives further down, after the
+ * basic Reader helpers (peek, advance, span_from_to, ...) it depends on. */
+static Form *try_read_user_macro(Reader *r);
 
 /* Forward declarations for neoteric support */
 static int peek_neoteric_bracket(const Reader *r);
@@ -1501,11 +1508,408 @@ static Form *read_contract_type(Reader *r) {
     return f;
 }
 
+/* ------------------------------------------------------------------------
+ * RM1: user-defined #-dispatch reader macros (template-only, raw bodies).
+ * Placed here, below the basic Reader helpers (peek/advance/span_*), and
+ * above read_form, which calls try_read_user_macro on the '#' branch.
+ * ------------------------------------------------------------------------ */
+
+/* Identifier char class for macro names. Per the plan's open question #2,
+ * we delegate to the symbol reader so names like `#if+`, `#?some`,
+ * `#<-bind` work, with one carve-out: `#` is *not* a continuation byte for
+ * macro names — otherwise `#foo#bar` would parse as a single macro name
+ * `foo#bar` instead of two adjacent `#`-dispatches. */
+static bool is_macro_id_start(int c) {
+    return is_sym_start(c);
+}
+static bool is_macro_id_cont(int c) {
+    if (c == '#') return false;
+    return is_sym_cont(c);
+}
+
+static int matching_close_for(int open) {
+    switch (open) {
+        case '(': return ')';
+        case '[': return ']';
+        case '{': return '}';
+        default:  return 0;
+    }
+}
+
+/* Read a raw (verbatim) macro body. The reader is positioned at the
+ * open-delim; on success leaves it past the matched close-delim. Tracks
+ * nesting and recognises `\X` escapes (the backslash is dropped, the next
+ * byte is kept literally — including the close-delim, which does not
+ * affect depth). Returns the body bytes (arena-allocated, NUL-terminated)
+ * and sets *out_len. On unterminated input, emits a diagnostic and returns
+ * NULL. */
+static char *read_raw_body(Reader *r, int open, int close, uint32_t *out_len) {
+    uint32_t open_line = r->line;
+    uint32_t open_col  = r->col;
+    size_t   open_off  = r->pos;
+    advance(r); /* consume open delim */
+
+    /* Two-pass: find the matched close + the unescaped length, then copy. */
+    size_t scan      = r->pos;
+    size_t scan_end  = 0;
+    size_t out_n     = 0;
+    int    depth     = 1;
+    bool   ok        = false;
+    while (scan < r->len) {
+        char c = r->src[scan];
+        if (c == '\\' && scan + 1 < r->len) {
+            scan += 2;
+            out_n += 1;
+            continue;
+        }
+        if (c == open && open != close) {
+            depth++; scan++; out_n++; continue;
+        }
+        if (c == close) {
+            depth--;
+            if (depth == 0) { ok = true; scan_end = scan; break; }
+            scan++; out_n++; continue;
+        }
+        scan++; out_n++;
+    }
+    if (!ok) {
+        diag_emit(DIAG_ERROR,
+                  span_from_to(r, open_line, open_col, open_off, r->pos),
+                  "unterminated reader macro body (missing '%c')",
+                  (char)close);
+        r->error = true;
+        return NULL;
+    }
+
+    char *buf = (char *)arena_alloc_aligned(r->arena, out_n + 1, 1);
+    size_t bi = 0;
+    while (r->pos < scan_end) {
+        int c = peek(r);
+        if (c == '\\' && r->pos + 1 < r->len) {
+            advance(r); /* drop the backslash */
+            buf[bi++] = (char)advance(r);
+            continue;
+        }
+        buf[bi++] = (char)advance(r);
+    }
+    buf[bi] = '\0';
+    advance(r); /* consume close delim */
+    *out_len = (uint32_t)bi;
+    return buf;
+}
+
+/* Deep-clone a form tree, overriding every node's span with `span`. Used
+ * by the macro expanders so that the expanded tree carries the call-site
+ * span (e.g. the `#foo{...}` location), not the registration-site span
+ * the template was originally parsed with. The payload (literal value,
+ * symbol pointer, raw bytes, ...) is shared with the source form — only
+ * the `Form` envelope and any child `Form *` slots are freshly allocated.
+ */
+static Form *form_clone_with_span(Arena *a, const Form *f, Span span) {
+    if (!f) return NULL;
+    Form *out = form_new(a, f->tag, span);
+    out->lit_suffix = f->lit_suffix;
+    memcpy(&out->as, &f->as, sizeof(f->as));
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET:
+        case F_QUOTE: case F_QUASIQUOTE:
+        case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN: case F_CONTRACT_TYPE:
+        case F_READER_COND: case F_RANGE_VAR: {
+            uint32_t n = f->as.list.len;
+            Form **items = (Form **)arena_alloc(
+                a, sizeof(Form *) * (n ? n : 1));
+            for (uint32_t i = 0; i < n; ++i) {
+                items[i] = form_clone_with_span(a, f->as.list.items[i], span);
+            }
+            out->as.list.items = items;
+            out->as.list.len = n;
+            break;
+        }
+        default:
+            /* Scalar payload was copied by the memcpy above. */
+            break;
+    }
+    return out;
+}
+
+/* RM2: parse a template splice marker `$N` (N >= 1). Returns N, or 0 if
+ * `f` is not such a marker. Leading zeros are rejected so the syntax
+ * stays unambiguous. */
+static int try_dollar_index(const Form *f) {
+    if (!f || f->tag != F_SYM || !f->as.sym) return 0;
+    const Symbol *s = f->as.sym;
+    if (s->len < 2 || s->name[0] != '$') return 0;
+    if (s->name[1] < '1' || s->name[1] > '9') return 0;
+    int n = 0;
+    for (uint32_t i = 1; i < s->len; ++i) {
+        char c = s->name[i];
+        if (c < '0' || c > '9') return 0;
+        n = n * 10 + (c - '0');
+        if (n > 9999) return 0;
+    }
+    return n;
+}
+
+static bool is_dollar_body_form(const Form *f) {
+    return f && f->tag == F_SYM && f->as.sym
+        && f->as.sym->len == 5
+        && memcmp(f->as.sym->name, "$body", 5) == 0;
+}
+
+/* Walk a template form tree, replacing the symbol `$body` with a string
+ * literal of the body. Sub-trees are always rebuilt so that every node in
+ * the result carries the call-site span (so diagnostics on the expansion
+ * point at the `#foo{...}` use site, not the `(reader-macros/define ...)`
+ * registration site). Only F_LIST and F_VEC are recursed into for
+ * substitution — quoted / quasiquoted sub-trees are span-rewritten but
+ * their symbols are left intact, matching the "templates are dumb"
+ * stance in the plan. */
+static Form *expand_raw_template(Reader *r, const Form *t,
+                                 const char *body, uint32_t body_len,
+                                 Span call_site) {
+    if (!t) return NULL;
+    if (t->tag == F_SYM && t->as.sym
+        && t->as.sym->len == 5
+        && memcmp(t->as.sym->name, "$body", 5) == 0) {
+        return form_str(r->arena, call_site, body, body_len);
+    }
+    if (t->tag == F_LIST || t->tag == F_VEC) {
+        uint32_t n = t->as.list.len;
+        Form **items = (Form **)arena_alloc(
+            r->arena, sizeof(Form *) * (n ? n : 1));
+        for (uint32_t i = 0; i < n; ++i) {
+            items[i] = expand_raw_template(r, t->as.list.items[i],
+                                           body, body_len, call_site);
+        }
+        return (t->tag == F_LIST)
+            ? form_list(r->arena, call_site, items, n)
+            : form_vec(r->arena, call_site, items, n);
+    }
+    /* Anything else — including quoted sub-trees, keywords, literals —
+     * gets a structural clone with the call-site span everywhere. */
+    return form_clone_with_span(r->arena, t, call_site);
+}
+
+/* RM2: walk a template tree replacing splice markers with parsed body
+ * forms. Two replacement rules apply inside any F_LIST/F_VEC child slot:
+ *
+ *   - the symbol `$body` is replaced by *all* body forms, spliced into
+ *     the surrounding sequence (so `(foo $body)` with body `[a b c]`
+ *     becomes `(foo a b c)`);
+ *   - the symbol `$N` (N >= 1) is replaced in-place by the N-th body
+ *     form (1-indexed). Referring past the body is a diagnostic.
+ *
+ * At the top level (template position itself), `$body` produces a
+ * synthesized F_LIST of the items and `$N` produces a single item.
+ *
+ * Template-derived nodes are rebuilt with the call-site span; body forms
+ * retain their original spans (they came from user code at the call site
+ * so their existing parse-time spans already point at the right place). */
+static Form *expand_datum_template(Reader *r, const Form *t,
+                                   Form **items, uint32_t body_n,
+                                   Span call_site) {
+    if (!t) return NULL;
+    if (is_dollar_body_form(t)) {
+        return form_list(r->arena, call_site, items, body_n);
+    }
+    int idx;
+    if ((idx = try_dollar_index(t)) > 0) {
+        if ((uint32_t)idx > body_n) {
+            diag_emit(DIAG_ERROR, t->span,
+                      "reader macro template references $%d but body has "
+                      "only %u form%s",
+                      idx, (unsigned)body_n, body_n == 1 ? "" : "s");
+            r->error = true;
+            return NULL;
+        }
+        return items[idx - 1];  /* keep the body form's own span */
+    }
+    if (t->tag == F_LIST || t->tag == F_VEC) {
+        uint32_t in_n = t->as.list.len;
+        /* Worst case: every child is `$body` and there are body_n items. */
+        uint32_t cap  = in_n + body_n + 1;
+        Form  **out   = (Form **)arena_alloc(r->arena, sizeof(Form *) * cap);
+        uint32_t out_n = 0;
+        for (uint32_t i = 0; i < in_n; ++i) {
+            const Form *child = t->as.list.items[i];
+            if (is_dollar_body_form(child)) {
+                if (out_n + body_n > cap) {
+                    cap = (out_n + body_n) * 2;
+                    Form **bigger = (Form **)arena_alloc(
+                        r->arena, sizeof(Form *) * cap);
+                    memcpy(bigger, out, sizeof(Form *) * out_n);
+                    out = bigger;
+                }
+                for (uint32_t j = 0; j < body_n; ++j) out[out_n++] = items[j];
+                continue;
+            }
+            int cidx = try_dollar_index(child);
+            if (cidx > 0) {
+                if ((uint32_t)cidx > body_n) {
+                    diag_emit(DIAG_ERROR, child->span,
+                              "reader macro template references $%d but "
+                              "body has only %u form%s",
+                              cidx, (unsigned)body_n,
+                              body_n == 1 ? "" : "s");
+                    r->error = true;
+                    return NULL;
+                }
+                out[out_n++] = items[cidx - 1];
+                continue;
+            }
+            Form *expanded =
+                expand_datum_template(r, child, items, body_n, call_site);
+            if (r->error) return NULL;
+            out[out_n++] = expanded;
+        }
+        return (t->tag == F_LIST)
+            ? form_list(r->arena, call_site, out, out_n)
+            : form_vec(r->arena, call_site, out, out_n);
+    }
+    /* Anything else (atoms, quotes, keywords, ...) — clone with call_site. */
+    return form_clone_with_span(r->arena, t, call_site);
+}
+
+/* User-macro dispatch hook. Called from read_form when it sees a '#'.
+ *
+ * Returns:
+ *   - a Form*  → consumed the input, produced an expansion
+ *   - NULL with r->error=false → no user macro matched; rolled back to the
+ *                                '#' so the caller can try built-ins
+ *   - NULL with r->error=true  → matched but body was malformed
+ *
+ * In RM1 only RM_BODY_NONE (bare) and RM_BODY_RAW are honored end-to-end;
+ * RM_BODY_DATUM lands in RM2. */
+static Form *try_read_user_macro(Reader *r) {
+    if (!r->user_macros || r->user_macros->len == 0) return NULL;
+
+    size_t   save_pos  = r->pos;
+    uint32_t save_line = r->line;
+    uint32_t save_col  = r->col;
+
+    uint32_t call_line = r->line;
+    uint32_t call_col  = r->col;
+    size_t   call_off  = r->pos;
+
+    advance(r); /* consume '#' */
+
+    if (!is_macro_id_start(peek(r))) {
+        r->pos = save_pos; r->line = save_line; r->col = save_col;
+        return NULL;
+    }
+    size_t id_start = r->pos;
+    while (is_macro_id_cont(peek(r))) advance(r);
+    StrSlice name = strslice(r->src + id_start,
+                             (uint32_t)(r->pos - id_start));
+
+    int delim_char = peek(r);
+    int try_delim  = 0;
+    if (delim_char == '(' || delim_char == '[' || delim_char == '{') {
+        try_delim = delim_char;
+    }
+
+    /* Prefer a matching-delim registration; fall back to a bare entry. */
+    const ReaderMacroEntry *e = NULL;
+    if (try_delim != 0) {
+        e = reader_macros_lookup(r->user_macros, name, try_delim);
+    }
+    if (!e) {
+        e = reader_macros_lookup(r->user_macros, name, 0);
+    }
+    if (!e) {
+        /* No exact (name, delim) match. If a macro with this name exists
+         * under a different delimiter, the user almost certainly meant it —
+         * emit a targeted diagnostic instead of silently rewinding into
+         * the generic "unexpected character" path. */
+        const ReaderMacroEntry *any =
+            reader_macros_lookup_any(r->user_macros, name);
+        if (any) {
+            if (any->mode == RM_BODY_NONE) {
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "reader macro '#%.*s' takes no body, "
+                          "but a '%c' delimiter follows",
+                          (int)name.len, name.p, (char)delim_char);
+            } else {
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "reader macro '#%.*s' expects '%c' body, got '%c'",
+                          (int)name.len, name.p,
+                          (char)any->delim,
+                          delim_char == -1 ? '?' : (char)delim_char);
+            }
+            r->error = true;
+            return NULL;
+        }
+        /* Truly unknown — rewind so the caller's built-in checks (and the
+         * final "unexpected character" fallback) still apply. */
+        r->pos = save_pos; r->line = save_line; r->col = save_col;
+        return NULL;
+    }
+
+    Span name_site = span_from_to(r, call_line, call_col, call_off, r->pos);
+
+    if (e->mode == RM_BODY_NONE) {
+        /* Bare form: any following delimiter is not part of this macro. */
+        return expand_raw_template(r, e->template, "", 0, name_site);
+    }
+
+    if (try_delim == 0 || try_delim != e->delim) {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "reader macro '#%.*s' expects '%c' body",
+                  (int)name.len, name.p, (char)e->delim);
+        r->error = true;
+        return NULL;
+    }
+
+    int close = matching_close_for(e->delim);
+
+    if (e->mode == RM_BODY_RAW) {
+        uint32_t body_len = 0;
+        char *body = read_raw_body(r, e->delim, close, &body_len);
+        if (r->error) return NULL;
+        Span full_site =
+            span_from_to(r, call_line, call_col, call_off, r->pos);
+        return expand_raw_template(r, e->template, body, body_len, full_site);
+    }
+
+    /* RM_BODY_DATUM: recursively read forms until the matched close. */
+    const char *unterm_msg;
+    switch (e->delim) {
+        case '(': unterm_msg =
+            "unterminated reader macro body (missing ')')"; break;
+        case '[': unterm_msg =
+            "unterminated reader macro body (missing ']')"; break;
+        case '{': unterm_msg =
+            "unterminated reader macro body (missing '}')"; break;
+        default:  unterm_msg = "unterminated reader macro body";
+    }
+    /* read_seq picks the underlying container type from `tag`; for the
+     * purposes of splicing into the template we only need access to its
+     * items + len, so F_LIST for paren/brace and F_VEC for bracket is a
+     * reasonable choice (preserves the natural sequence shape). */
+    FormTag body_tag = (e->delim == '[') ? F_VEC : F_LIST;
+    Form *seq = read_seq(r, (char)e->delim, (char)close, body_tag, unterm_msg);
+    if (!seq || r->error) return NULL;
+    Span full_site = span_from_to(r, call_line, call_col, call_off, r->pos);
+    return expand_datum_template(r, e->template,
+                                 seq->as.list.items, seq->as.list.len,
+                                 full_site);
+}
+
 static Form *read_form(Reader *r) {
     skip_ws_and_comments(r);
     if (r->error) return NULL;
     int c = peek(r);
     if (c == -1) return NULL;
+
+    /* RM0: Try user-registered #-dispatch macros before built-ins. The
+     * registry rejects any name that would shadow a built-in, so order
+     * is correctness-neutral; user-first just keeps the common case fast.
+     * In RM0 this always returns NULL (no registry / empty registry). */
+    if (c == '#') {
+        Form *m = try_read_user_macro(r);
+        if (m || r->error) return m;
+    }
 
     /* DC1/DC2: Datum comment #;datum -- read and discard one form */
     if (c == '#' && peek2(r) == ';') {
@@ -1610,8 +2014,137 @@ static Form *read_form(Reader *r) {
 
 #include <stdio.h>
 
-Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
-                uint32_t *out_count) {
+/* RM4: implementation backing both `#use-reader-macros "..."` and the
+ * spice-manifest `:reader-macros [...]` preloader. Reads `abs_path` and
+ * recursively reads its top-level forms into `registry`. Non-directive
+ * forms are silently discarded. Returns 0 on success, -1 on failure
+ * (diagnostic emitted at the global level). */
+int reader_macros_load_file(Arena *arena, SymbolTable *st,
+                            const char *abs_path,
+                            struct ReaderMacroRegistry *registry) {
+    FILE *fp = fopen(abs_path, "rb");
+    if (!fp) {
+        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                  "reader-macros: cannot open '%s'", abs_path);
+        return -1;
+    }
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (sz < 0) {
+        fclose(fp);
+        diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                  "reader-macros: cannot stat '%s'", abs_path);
+        return -1;
+    }
+    char *buf = (char *)arena_alloc(arena, (size_t)sz + 1);
+    size_t got = fread(buf, 1, (size_t)sz, fp);
+    buf[got] = '\0';
+    fclose(fp);
+
+    SourceFile *sf = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
+    sf->path        = arena_strdup(arena, abs_path, strlen(abs_path));
+    sf->src         = buf;
+    sf->len         = (uint32_t)got;
+    /* Use a near-max file_id so we don't overwrite an existing slot.
+     * MAX_FILES (in diag.c) is currently 64; pick the last slot. This is
+     * best-effort — collisions across multiple preloads in the same
+     * compile only affect diagnostic snippet rendering, not correctness. */
+    sf->file_id     = 63;
+    sf->reader_type = READER_TURMERIC;
+    diag_register_file(sf);
+
+    uint32_t sub_nforms = 0;
+    Form **sub_forms = read_all_with_registry(arena, st, sf,
+                                              registry, &sub_nforms);
+    (void)sub_forms;
+    return diag_had_error() ? -1 : 0;
+}
+
+/* RM4: resolve a relative path against the directory containing
+ * `base_path`. Absolute paths pass through unchanged. The result is
+ * written into `out` (at most `out_sz` bytes including the NUL). */
+static void rm_resolve_relative(const char *base_path, const char *rel,
+                                char *out, size_t out_sz) {
+    if (rel[0] == '/') {
+        snprintf(out, out_sz, "%s", rel);
+        return;
+    }
+    const char *slash = base_path ? strrchr(base_path, '/') : NULL;
+    if (slash) {
+        size_t dir_len = (size_t)(slash - base_path + 1);
+        snprintf(out, out_sz, "%.*s%s", (int)dir_len, base_path, rel);
+    } else {
+        snprintf(out, out_sz, "%s", rel);
+    }
+}
+
+/* RM4: attempt to consume a `#use-reader-macros "path"` directive at the
+ * current reader position. Returns:
+ *   - 1 if a directive was consumed (and processed; r->error may be set
+ *     on failure to load / parse the named file)
+ *   - 0 if the input doesn't look like the directive (reader untouched).
+ *
+ * Only meaningful at the top level — the caller (read_all_with_registry)
+ * invokes this between top-level forms.
+ *
+ * The named file is read with its own sub-Reader against `reg`, so any
+ * `(reader-macros/define ...)` directives in it register into the
+ * caller's registry. Non-directive forms in the loaded file are silently
+ * discarded — `#use-reader-macros` is a syntax-only mechanism. */
+static int try_consume_use_directive(Reader *r,
+                                     struct ReaderMacroRegistry *reg) {
+    static const char kKeyword[] = "use-reader-macros";
+    const size_t kKwLen = sizeof(kKeyword) - 1;
+
+    if (peek(r) != '#') return 0;
+    if (r->pos + 1 + kKwLen > r->len) return 0;
+    if (memcmp(r->src + r->pos + 1, kKeyword, kKwLen) != 0) return 0;
+    /* Make sure the keyword isn't a prefix of a longer identifier. */
+    int after = (r->pos + 1 + kKwLen < r->len)
+        ? (unsigned char)r->src[r->pos + 1 + kKwLen] : -1;
+    if (after != -1 && is_macro_id_cont(after)) return 0;
+
+    /* Commit: consume '#' + keyword bytes. */
+    uint32_t kw_line = r->line;
+    uint32_t kw_col  = r->col;
+    size_t   kw_off  = r->pos;
+    advance(r);
+    for (size_t i = 0; i < kKwLen; ++i) advance(r);
+
+    skip_ws_and_comments(r);
+    if (peek(r) != '"') {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "#use-reader-macros: expected a string literal "
+                  "(file path) after the directive");
+        r->error = true;
+        return 1;
+    }
+
+    Form *path_form = read_string(r);
+    if (!path_form || r->error) {
+        r->error = true;
+        return 1;
+    }
+
+    char abs_path[4096];
+    rm_resolve_relative(r->file->path, path_form->as.s.p,
+                        abs_path, sizeof(abs_path));
+
+    if (reader_macros_load_file(r->arena, r->st, abs_path, reg) != 0) {
+        /* reader_macros_load_file emitted its own diagnostic; flag the
+         * outer reader so the calling read_all bails out. The kw_*
+         * captures stay around in case we want to re-anchor later. */
+        (void)kw_line; (void)kw_col; (void)kw_off;
+        r->error = true;
+    }
+    return 1;
+}
+
+Form **read_all_with_registry(Arena *arena, SymbolTable *st,
+                              const SourceFile *file,
+                              struct ReaderMacroRegistry *external_reg,
+                              uint32_t *out_count) {
     Reader r;
     r.file = file;
     r.arena = arena;
@@ -1625,7 +2158,17 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
     /* Phase S1: Set syntax feature flags based on reader type from SourceFile */
     r.curly_infix_enabled = false;
     r.neoteric_enabled = false;
-    
+    /* RM1: Reader-macro registry. If the caller supplied one, dispatch and
+     * registration happen against it directly (REPL session semantics);
+     * otherwise we keep a per-call local one (file semantics). */
+    ReaderMacroRegistry local_reg;
+    ReaderMacroRegistry *reg = external_reg;
+    if (!reg) {
+        reader_macros_init(&local_reg, arena);
+        reg = &local_reg;
+    }
+    r.user_macros = reg;
+
     switch (file->reader_type) {
         case READER_TURMERIC:
             /* Standard s-expression syntax only */
@@ -1655,6 +2198,12 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
             return NULL;
         }
         if (peek(&r) == -1) break;
+        /* RM4: top-level `#use-reader-macros "path"` directive — read
+         * macros from another file before continuing this one. */
+        if (try_consume_use_directive(&r, reg)) {
+            if (r.error) { free(forms); return NULL; }
+            continue;
+        }
         Form *f = read_form(&r);
         if (!f) {
             /* A NULL return with no error flag set means the reader hit EOF
@@ -1665,6 +2214,18 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
             free(forms);
             return NULL;
         }
+        /* RM1: top-level `(reader-macros/define ...)` is a directive: it
+         * registers an entry in the registry that subsequent forms can
+         * dispatch off, and is stripped from the output Form stream. */
+        if (reader_macros_is_define_form(f)) {
+            if (reader_macros_register_from_form(reg, f) != 0) {
+                r.error = true;
+                free(forms);
+                return NULL;
+            }
+            continue;
+        }
+
         if (n == cap) {
             cap = cap ? cap * 2 : 4;
             forms = (Form **)realloc(forms, cap * sizeof(Form *));
@@ -1680,6 +2241,11 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 
     *out_count = (uint32_t)n;
     return out;
+}
+
+Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
+                uint32_t *out_count) {
+    return read_all_with_registry(arena, st, file, NULL, out_count);
 }
 
 /* #lang directive detection and reader type utilities */

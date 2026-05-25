@@ -1,3 +1,8 @@
+;;; tur/args -- CLI argument parser with a builder-pattern API.
+;;;
+;;; Structured argument parsing for Turmeric CLI scripts.
+;;;
+;;; Since: Phase B1
 ;; stdlib/args.tur -- Argument parser for Turmeric CLI scripts
 ;;
 ;; Builder-pattern API for parsing CLI arguments.

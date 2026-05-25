@@ -1,0 +1,5 @@
+;; No :reader-macros, so the `#bogus{...}` inside the imported module
+;; below is genuinely unrecognised. The user should see the parse error
+;; in lib/syntax.tur AND a `while loading module 'lib/syntax'` note at
+;; the import site so they can trace it back.
+(defpackage reader-macros-import-chain)

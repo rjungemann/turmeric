@@ -1,4 +1,9 @@
-;; stdlib/threadpool.tur — WorkQueue<T> and ThreadPool (Phase T20-B and T20-D)
+;;; tur/threadpool -- WorkQueue<T> and ThreadPool for task-based parallelism.
+;;;
+;;; WorkQueue is a thread-safe FIFO backed by a mutex and condvar.
+;;;
+;;; Since: Phase T20-B
+;; stdlib/threadpool.tur -- WorkQueue<T> and ThreadPool (Phase T20-B and T20-D)
 ;;
 ;; WorkQueue: thread-safe FIFO queue backed by a mutex + condvar.
 ;;

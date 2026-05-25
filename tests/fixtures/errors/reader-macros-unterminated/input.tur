@@ -1,0 +1,5 @@
+; An unterminated raw body should produce a clear diagnostic from the
+; reader, not silently consume to EOF.
+(reader-macros/define 'frag :raw-brace '$body)
+
+(println #frag{ open but no close

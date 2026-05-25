@@ -1,0 +1,10 @@
+; Transitive-RM decision #2: batch-compile registries are strict, so
+; registering the same (name, delim) twice in a single compile is a hard
+; error with a note pointing at the first registration's site. The REPL
+; (which uses TuriEnv->reader_macros with strict=false) deliberately
+; allows silent re-registration so `src_acc` replay and iterative
+; redefinition stay smooth.
+(reader-macros/define 'sum :datum-bracket '(+ $body))
+(reader-macros/define 'sum :datum-bracket '(* $body))
+
+(defn main [] :int 0)

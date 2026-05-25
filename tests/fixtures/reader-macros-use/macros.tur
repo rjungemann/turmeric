@@ -1,0 +1,10 @@
+; Sidecar file loaded by `#use-reader-macros` from input.tur.
+;
+; The loader (`try_consume_use_directive` in src/compiler/reader.c)
+; recurses into this file's top-level forms; any
+; `(reader-macros/define ...)` it finds is registered into the *parent*
+; file's reader-macro registry. Everything else here is silently
+; discarded -- this file is meant for syntax definitions only.
+
+(reader-macros/define 'sum :datum-bracket '(+ $body))
+(reader-macros/define 'pi  :none          '3.14159)

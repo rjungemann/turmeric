@@ -1,3 +1,9 @@
+;;; tur/macros -- core control-flow and utility macros (cond, when, for, do-m, ...).
+;;;
+;;; Auto-loaded for all programs. Macros here are globally visible without an
+;;; explicit import because the tur/ namespace is implicitly imported.
+;;;
+;;; Since: Phase M7
 ;; Standard library macros for Turmeric
 ;; Phase 7: Core macros
 ;; Phase M7: Wrapped in (defmodule tur/macros ...). The auto-loader treats

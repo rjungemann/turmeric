@@ -1,3 +1,8 @@
+;;; tur/concurrent -- stub concurrency types for linear resource tracking.
+;;;
+;;; Defines MutexGuard as a move-only struct wrapping a pthread_mutex_t pointer.
+;;;
+;;; Since: Phase LT4
 ;; LT4: concurrent.tur -- stub concurrency types for linear resource tracking.
 ;;
 ;; Defines MutexGuard as a move-only struct wrapping a pthread_mutex_t pointer.

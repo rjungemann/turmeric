@@ -1,3 +1,9 @@
+;;; tur/fix -- Fix type: the fixed-point of a functor, with cata and ana.
+;;;
+;;; Fix f is the least fixed point of f. Provides catamorphism (cata)
+;;; and anamorphism (ana) for structured recursion.
+;;;
+;;; Since: Phase B1
 ;; Fix -- the type-level fixed-point combinator.
 ;;
 ;; Fix f is the least fixed point of the functor f:

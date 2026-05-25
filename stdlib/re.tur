@@ -1,3 +1,8 @@
+;;; tur/re -- POSIX extended regular expressions via regcomp/regexec.
+;;;
+;;; Always available on POSIX systems; no external regex library needed.
+;;;
+;;; Since: Phase B1
 ;; stdlib/re.tur -- POSIX extended regular expressions via regex.h.
 ;;
 ;; Uses regcomp(3)/regexec(3) which are always available on POSIX systems.

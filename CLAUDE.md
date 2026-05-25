@@ -53,6 +53,31 @@ for the full rules.
 Use `;;;` (triple-semicolon) as the doc-comment marker. A docstring block
 immediately precedes a `defn`, `defmacro`, `defstruct`, or `definstance`.
 
+### Module docstrings
+
+A contiguous `;;;` block that appears **before the first real definition**
+(`defn`, `defmacro`, `defstruct`, `definstance`, `defopaque`) in a file
+becomes the *module docstring*. Place it at the very top of the file,
+followed by a `;;` comment line (which acts as the separator):
+
+```turmeric
+;;; tur/list -- untyped singly-linked Cons/nil list.
+;;;
+;;; Legacy list implementation; prefer tur/tlist for new code.
+;;;
+;;; Since: Phase B1
+;; List type for Turmeric        <- ;; line terminates the module block
+(defstruct Cons ...)
+```
+
+The `tools/gendocs.py` parser captures this block as `module['docstring']`
+and renders it as a description paragraph on the per-module HTML page.
+It also registers the module name as a key in the doc-lookup table so
+`(doc 'tur/list)` returns the summary.
+
+The separator can also be any non-comment, non-blank, non-definition form
+(e.g. `(defmodule ...)`, `(export ...)`, `(extern-c ...)`).
+
 ### Format
 
 ```turmeric

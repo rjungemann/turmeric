@@ -1,3 +1,8 @@
+;;; tur/bits -- bitwise operations not expressible as arithmetic in Turmeric.
+;;;
+;;; Logical shifts, bit extraction, popcount, and byte-swap helpers.
+;;;
+;;; Since: Phase B1
 ;; bits.tur -- bitwise operations not expressible as arithmetic in Turmeric.
 
 ;;; bit-shr -- logical (unsigned) right shift of x by n bits.

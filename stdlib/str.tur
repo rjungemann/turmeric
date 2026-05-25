@@ -1,3 +1,9 @@
+;;; tur/str -- UTF-8 string view (pointer + length).
+;;;
+;;; Borrowed string view type. Does not own its memory; the underlying
+;;; buffer must outlive the str handle.
+;;;
+;;; Since: Phase B1
 ;; Str type for Turmeric
 ;; UTF-8 string as a borrowed view (pointer + length)
 

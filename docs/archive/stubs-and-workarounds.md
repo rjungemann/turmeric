@@ -393,7 +393,7 @@ carries a `show` function pointer.
 
 ### 4.4 [x] Signal/DSP Filter Stubs
 
-- `stdlib/signal/dsp.tur` ~130-150:
+- *(Extracted to `tur-signal` spice: `spices/signal/src/signal/dsp.tur`)* `stdlib/signal/dsp.tur` ~130-150:
   - `low-pass`: returns `amplitude * signal` instead of a real IIR/FIR filter.
   - `high-pass`: returns the signal unchanged.
 

@@ -1,4 +1,9 @@
-; Phase G3: Type equality witnesses
+;;; tur/equal -- type-equality witness (Equal GADT) for type-safe coercions.
+;;;
+;;; (Equal a a) has one constructor Refl. Matching on Refl refines type variable a.
+;;;
+;;; Since: Phase G3
+;; Phase G3: Type equality witnesses
 ; The Equal GADT witnesses type equality: (Equal a a) has one constructor Refl.
 ; Matching on Refl in a GADT arm refines the type variable a.
 

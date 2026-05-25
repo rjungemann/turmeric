@@ -1,0 +1,11 @@
+; RM4: `#use-reader-macros "path"` directive.
+;
+; Loads the named file (relative to this source file's directory),
+; processes its `(reader-macros/define ...)` directives, and continues
+; reading. The directive must appear between top-level forms.
+
+#use-reader-macros "macros.tur"
+
+(println #sum[1 2 3 4 5])   ; 15
+(println #pi)               ; 3.14159
+(println (+ #pi #pi))       ; 6.28318

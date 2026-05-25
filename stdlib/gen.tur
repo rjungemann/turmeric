@@ -1,3 +1,8 @@
+;;; tur/gen -- generator helpers and macros for consuming and composing generators.
+;;;
+;;; Auto-loaded alongside stdlib/macros.tur.
+;;;
+;;; Since: Phase GF2
 ;; stdlib/gen.tur -- Generator standard library (GF2)
 ;; Helpers and macros for consuming and composing generators.
 ;; Auto-loaded by the compiler alongside stdlib/macros.tur.

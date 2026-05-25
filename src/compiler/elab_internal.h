@@ -147,6 +147,9 @@ typedef struct ElabModule {
     bool          is_loading;    /* circular import detection */
 } ElabModule;
 
+/* Forward-declared so this header doesn't drag in reader_macros.h. */
+struct ReaderMacroRegistry;
+
 typedef struct Elab {
     Arena       *arena;
     SymbolTable *st;
@@ -154,6 +157,11 @@ typedef struct Elab {
     Scope        global;
     uint32_t     next_id;
     uint32_t     next_gensym_id;  /* Phase 6: for generating unique symbol names */
+    /* Transitive-RM: shared reader-macro registry, set by the driver
+     * before elaborate_program runs. Module loaders (elab_module.c,
+     * elab_toplevel.c) read with this so imported files see the same
+     * user macros the entry file did. May be NULL. */
+    struct ReaderMacroRegistry *user_macros;
 
     /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
     Expr       **file_scope_defs;

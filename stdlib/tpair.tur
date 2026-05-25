@@ -1,3 +1,9 @@
+;;; tur/tpair -- typed Pair[A B]: parameterized two-element tuple.
+;;;
+;;; Generic two-element tuple with typed first and second elements.
+;;; Runtime layout identical to tur/pair.
+;;;
+;;; Since: Phase TC1-F
 ;; Phase TC1-F: Typed Pair[A B]
 ;; Generic two-element tuple with typed first and second elements.
 ;; Runtime layout identical to pair.tur: { int64_t first; int64_t second; }

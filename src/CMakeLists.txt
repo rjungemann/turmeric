@@ -84,6 +84,7 @@ set(TUR_CORE_SOURCES
     compiler/forms.c
     compiler/pkg.c
     compiler/reader.c
+    compiler/reader_macros.c
     compiler/symbols.c
     compiler/typeclass.c
     compiler/types.c

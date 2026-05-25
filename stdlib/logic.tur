@@ -1,4 +1,9 @@
-;; stdlib/logic.tur — miniKanren-style logic programming
+;;; tur/logic -- miniKanren-style logic programming (unification, goals, streams).
+;;;
+;;; Terms are tagged heap structs. Goals are functions from substitution to stream.
+;;;
+;;; Since: Phase B1
+;; stdlib/logic.tur -- miniKanren-style logic programming
 ;;
 ;; Term = tagged heap struct { int64_t tag; int64_t data1; int64_t data2 }
 ;;   tag=0: INT,  data1=value

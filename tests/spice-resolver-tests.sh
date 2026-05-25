@@ -231,6 +231,145 @@ else
 fi
 rm -rf "$SN3_TMP" "$SN3_STDERR"
 
+# RM4: `tur run` on a file inside a spice picks up the manifest's
+# `:reader-macros [...]` entry and preloads the named files into the
+# reader-macro registry, so the source can use `#sum[...]` / `#pi`
+# without a per-file `#use-reader-macros` directive.
+RM_FIXTURE="tests/fixtures/reader-macros-manifest"
+RM_ENTRY="$RM_FIXTURE/src/main.tur"
+RM_OUT=$(mktemp)
+"$TUR" run "$RM_ENTRY" >"$RM_OUT" 2>/dev/null
+rm_rc=$?
+RM_EXPECTED="15
+3.14159
+6.28318"
+if [ "$rm_rc" -eq 0 ] && [ "$(cat "$RM_OUT")" = "$RM_EXPECTED" ]; then
+    echo "PASS RM4: tur run preloads :reader-macros from build.tur"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL RM4: tur run :reader-macros -- exit $rm_rc"
+    echo "  expected:"; printf '    %s\n' "$RM_EXPECTED"
+    echo "  got:"; sed 's/^/    /' "$RM_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("RM4: tur run preloads :reader-macros")
+fi
+rm -f "$RM_OUT"
+
+# RM4: same fixture via `tur build` should also pick up the manifest's
+# reader-macros (top-level `tur build` dispatch walks up to find build.tur).
+RM_BIN=$(mktemp)
+"$TUR" build "$RM_ENTRY" -o "$RM_BIN" 2>/dev/null
+rm_build_rc=$?
+if [ "$rm_build_rc" -eq 0 ] && [ -x "$RM_BIN" ]; then
+    RM_BIN_OUT=$("$RM_BIN")
+    if [ "$RM_BIN_OUT" = "$RM_EXPECTED" ]; then
+        echo "PASS RM4: tur build preloads :reader-macros from build.tur"
+        PASS=$((PASS + 1))
+    else
+        echo "FAIL RM4: tur build :reader-macros -- output mismatch"
+        echo "  expected:"; printf '    %s\n' "$RM_EXPECTED"
+        echo "  got:"; printf '    %s\n' "$RM_BIN_OUT"
+        FAIL=$((FAIL + 1))
+        FAILED+=("RM4: tur build preloads :reader-macros")
+    fi
+else
+    echo "FAIL RM4: tur build :reader-macros -- exit $rm_build_rc"
+    FAIL=$((FAIL + 1))
+    FAILED+=("RM4: tur build preloads :reader-macros")
+fi
+rm -f "$RM_BIN"
+
+# RM4 follow-up: every other compile entry point should also pick up the
+# manifest's :reader-macros via discover_manifest_reader_macros. Each
+# command below would fail to parse src/main.tur (which uses #sum / #pi)
+# without the preload.
+assert_exit 0 "RM4: tur check picks up :reader-macros from build.tur" \
+    "$TUR" check "$RM_ENTRY"
+
+assert_exit 0 "RM4: tur emit-c picks up :reader-macros from build.tur" \
+    "$TUR" emit-c "$RM_ENTRY"
+
+assert_exit 0 "RM4: tur emit-h picks up :reader-macros from build.tur" \
+    "$TUR" emit-h "$RM_ENTRY"
+
+# RM4: tur format pretty-prints a file that uses manifest-declared macros.
+# Without manifest preload the reader would fail with "unexpected character '#'".
+assert_exit 0 "RM4: tur format picks up :reader-macros from build.tur" \
+    "$TUR" format "$RM_ENTRY"
+
+# RM4: tur emit-c --output-dir <dir> exercises the multi-file emit path
+# (cmd_emit_c_to_dir + compile_to_h + compile_to_implementation).
+RM_EMIT_DIR=$(mktemp -d)
+assert_exit 0 "RM4: tur emit-c --output-dir picks up :reader-macros" \
+    "$TUR" emit-c --output-dir "$RM_EMIT_DIR" "$RM_ENTRY"
+rm -rf "$RM_EMIT_DIR"
+
+# Transitive-RM T1: a spice with `:reader-macros` in build.tur AND an
+# imported module that *uses* those macros. Without the T1 wiring
+# (elab_module.c reads the imported file via read_all_with_registry
+# instead of bare read_all), the import would fail with the generic
+# "unexpected character '#'" error.
+RMT_ENTRY="tests/fixtures/reader-macros-transitive/src/main.tur"
+RMT_EXPECTED="15
+6.28318
+60"
+RMT_OUT=$(mktemp)
+"$TUR" run "$RMT_ENTRY" >"$RMT_OUT" 2>/dev/null
+rmt_rc=$?
+if [ "$rmt_rc" -eq 0 ] && [ "$(cat "$RMT_OUT")" = "$RMT_EXPECTED" ]; then
+    echo "PASS T1: imported module sees spice :reader-macros"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL T1: imported module sees spice :reader-macros -- exit $rmt_rc"
+    echo "  expected:"; printf '    %s\n' "$RMT_EXPECTED"
+    echo "  got:"; sed 's/^/    /' "$RMT_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("T1: imported module sees spice :reader-macros")
+fi
+rm -f "$RMT_OUT"
+
+# Transitive-RM T3: cross-module define visibility. A module that only
+# registers reader macros (lib/syntax) can be imported by a sibling
+# (lib/user) that uses those macros, as long as the entry file lists
+# the syntax import first so it's loaded before the user import is read.
+RMX_ENTRY="tests/fixtures/reader-macros-cross-module/src/main.tur"
+RMX_OUT=$(mktemp)
+"$TUR" run "$RMX_ENTRY" >"$RMX_OUT" 2>/dev/null
+rmx_rc=$?
+if [ "$rmx_rc" -eq 0 ] && [ "$(cat "$RMX_OUT")" = "15" ]; then
+    echo "PASS T3: cross-module define visibility (sibling imports in order)"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL T3: cross-module define visibility -- exit $rmx_rc"
+    echo "  expected: 15"
+    echo "  got:"; sed 's/^/    /' "$RMX_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("T3: cross-module define visibility")
+fi
+rm -f "$RMX_OUT"
+
+# Transitive-RM T1 (negative): a parse error inside an imported module
+# should surface BOTH the original error at the import target AND a
+# `while loading module 'X'` note at the import site so the user can
+# trace it back.
+RMC_ENTRY="tests/fixtures/errors/reader-macros-import-chain/src/main.tur"
+RMC_STDERR=$(mktemp)
+"$TUR" run "$RMC_ENTRY" >/dev/null 2>"$RMC_STDERR"
+rmc_rc=$?
+if [ "$rmc_rc" -ne 0 ] && \
+   grep -qF "unexpected character '#'" "$RMC_STDERR" && \
+   grep -qF "while loading module 'lib/syntax'" "$RMC_STDERR"; then
+    echo "PASS T1: import-chain note attached to reader error in imported module"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL T1: import-chain note missing or unexpected exit"
+    echo "  exit: $rmc_rc (want non-zero)"
+    echo "  stderr:"; sed 's/^/    /' "$RMC_STDERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("T1: import-chain note attached to reader error in imported module")
+fi
+rm -f "$RMC_STDERR"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

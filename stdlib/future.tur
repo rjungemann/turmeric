@@ -1,3 +1,8 @@
+;;; tur/future -- Future<T> and Promise<T> for asynchronous results.
+;;;
+;;; A Promise is written once by the producer; the Future is read by the consumer.
+;;;
+;;; Since: Phase T20-C
 ;; stdlib/future.tur -- Future<T> and Promise<T> (Phase T20-C)
 ;;
 ;; Promise/Future pair for asynchronous computation results.
