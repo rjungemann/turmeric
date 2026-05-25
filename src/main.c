@@ -430,6 +430,10 @@ static int  parse_include_flags(int argc, char **argv, int start, char ***out_di
 static bool is_include_flag(int argc, char **argv, int i, int *consumed);
 static int  usage_run(void);
 
+/* SC4 forward decl: --no-auto-spice flag inspected by auto_append_spice_src
+ * (defined below find_spice_root) but set by parse_no_auto_spice in main(). */
+static bool g_no_auto_spice;
+
 /* Global state for symbol collection -- set by tur_collect_symbols before
  * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
 static LspSymbol  *g_collect_syms_out   = NULL;
@@ -1208,6 +1212,109 @@ static char *find_project_root(const char *start) {
     return NULL;
 }
 
+/* SC3: maximum number of parent directories find_spice_root walks before
+ * giving up.  The deepest known intra-spice file is `<root>/src/<mod>/x.tur`
+ * (3 levels above the spice root); 16 leaves ample headroom for worktrees,
+ * nested temp checkouts, and `node_modules`-style nesting without ever
+ * climbing all the way to `/` on a filesystem that has no `build.tur`. */
+#define TUR_SPICE_WALK_MAX 16
+
+/* SC3: walk up from `file_path`'s directory looking for a sibling
+ * `build.tur`.  Returns a heap-allocated absolute path to the directory
+ * containing the manifest (the spice root), or NULL if no build.tur is
+ * found within TUR_SPICE_WALK_MAX steps.
+ *
+ * The plan calls for an absolute result so callers don't have to worry
+ * about cwd drift between resolution and use.  We canonicalize the
+ * starting directory via realpath() when possible; on failure we fall
+ * back to a cwd-prefixed path so a relative input file still resolves
+ * predictably. */
+static char *find_spice_root(const char *file_path) {
+    if (!file_path) return NULL;
+
+    char raw_dir[4096];
+    dir_of_path(file_path, raw_dir, sizeof(raw_dir));
+
+    /* Canonicalize.  realpath() requires the path to exist; for a file
+     * the caller is about to read, the directory always exists, so this
+     * should generally succeed.  If it fails (e.g. permissions), fall
+     * back to cwd-prefixing for a relative path. */
+    char dir[4096];
+    if (realpath(raw_dir, dir) == NULL) {
+        if (raw_dir[0] == '/') {
+            strncpy(dir, raw_dir, sizeof(dir) - 1);
+            dir[sizeof(dir) - 1] = '\0';
+        } else {
+            char cwd[4096];
+            if (!getcwd(cwd, sizeof(cwd))) return NULL;
+            int n;
+            if (raw_dir[0] == '.' && raw_dir[1] == '\0') {
+                n = snprintf(dir, sizeof(dir), "%s", cwd);
+            } else {
+                n = snprintf(dir, sizeof(dir), "%s/%s", cwd, raw_dir);
+            }
+            if (n < 0 || (size_t)n >= sizeof(dir)) return NULL;
+        }
+    }
+
+    for (int steps = 0; steps < TUR_SPICE_WALK_MAX; steps++) {
+        char candidate[4096];
+        int n = snprintf(candidate, sizeof(candidate), "%s/build.tur", dir);
+        if (n > 0 && (size_t)n < sizeof(candidate)) {
+            struct stat st;
+            if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
+                size_t dl = strlen(dir);
+                char *res = (char *)malloc(dl + 1);
+                if (res) memcpy(res, dir, dl + 1);
+                return res;
+            }
+        }
+        char *slash = strrchr(dir, '/');
+        if (!slash || slash == dir) break;
+        *slash = '\0';
+    }
+    return NULL;
+}
+
+/* SC4: if `input` lives inside a spice (a build.tur exists somewhere in
+ * its ancestor chain) AND `<spice_root>/src/` exists, strdup that path,
+ * append it to the include list, and return the same pointer so the
+ * caller can free it on cleanup.
+ *
+ * The auto-discovered path is appended LAST so any explicit `-I` flags
+ * win on name collisions (the elaborator searches include dirs in
+ * order; first match wins).
+ *
+ * Returns NULL if:
+ *   - g_no_auto_spice is set (user opted out via --no-auto-spice), OR
+ *   - no build.tur is found within TUR_SPICE_WALK_MAX ancestors, OR
+ *   - the spice root has no `src/` subdirectory, OR
+ *   - any allocation fails (caller's existing -I list is left intact).
+ *
+ * On success, both `*inc` (the pointer array) and `*n_inc` are updated.
+ * `*inc` must have been heap-allocated by parse_include_flags(); we
+ * realloc() it in place. */
+static char *auto_append_spice_src(const char *input,
+                                   char ***inc, int *n_inc) {
+    if (g_no_auto_spice || !input) return NULL;
+    char *root = find_spice_root(input);
+    if (!root) return NULL;
+    char src[4096];
+    int n = snprintf(src, sizeof(src), "%s/src", root);
+    free(root);
+    if (n < 0 || (size_t)n >= sizeof(src)) return NULL;
+    struct stat st;
+    if (stat(src, &st) != 0 || !S_ISDIR(st.st_mode)) return NULL;
+
+    char *src_copy = strdup(src);
+    if (!src_copy) return NULL;
+    char **bigger = (char **)realloc(*inc, (size_t)(*n_inc + 1) * sizeof(char *));
+    if (!bigger) { free(src_copy); return NULL; }
+    *inc = bigger;
+    (*inc)[(*n_inc)++] = src_copy;
+    return src_copy;
+}
+
 /* Collect all .tur files in a directory. Returns malloc'd array, sets *n_out. */
 static char **collect_tur_files(const char *dir, int *n_out) {
     DIR *d = opendir(dir);
@@ -1297,11 +1404,12 @@ static int cmd_run(int argc, char **argv) {
     const char **spice_inc_dirs = NULL;
     int          n_spice_inc_dirs = 0;
 
-    /* Helper: build 'entry', exec with optional passthrough args. */
+    /* Helper: build 'entry', exec with optional passthrough args.
+     * Cleans up user_inc, spice_inc_dirs, and auto_src_run on every exit. */
 #define RUN_ENTRY(entry_path) do {                                       \
         char out_path[] = "/tmp/tur-run-XXXXXX";                         \
         int _fd = mkstemp(out_path);                                     \
-        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; } \
+        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); free(auto_src_run); return 2; } \
         close(_fd);                                                      \
         int _n_inc = n_user_inc + n_spice_inc_dirs;                      \
         const char **_inc = NULL;                                        \
@@ -1312,7 +1420,7 @@ static int cmd_run(int argc, char **argv) {
         }                                                                \
         int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL); \
         free(_inc);                                                      \
-        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); return _rc; } \
+        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); free(auto_src_run); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
         if (passthrough_start >= 0) {                                    \
@@ -1325,8 +1433,19 @@ static int cmd_run(int argc, char **argv) {
         unlink(out_path);                                                \
         free(spice_inc_dirs);                                            \
         free(user_inc);                                                  \
+        free(auto_src_run);                                              \
         return decode_exit_status(_sys);                                 \
     } while (0)
+
+    /* SC4: in explicit-file mode, auto-discover the file's enclosing
+     * spice and add its `src/` to the include path so intra-spice
+     * imports resolve without an explicit -I (matching `tur check`).
+     * Project mode below sets up its own spice_inc_dirs from build.tur,
+     * so auto-discovery is skipped there. */
+    char *auto_src_run = NULL;
+    if (explicit_file && strcmp(explicit_file, "-") != 0) {
+        auto_src_run = auto_append_spice_src(explicit_file, &user_inc, &n_user_inc);
+    }
 
     /* Single-file mode: explicit file provided, skip project lookup. */
     if (explicit_file) {
@@ -4369,12 +4488,15 @@ static int usage_run(void) {
 static int usage_check(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur check [-I <dir>...] <file.tur>   type-check only, no codegen\n"
+        "  tur check [-I <dir>...] [--no-auto-spice] <file.tur>\n"
+        "                                       type-check only, no codegen\n"
         "\n"
         "flags:\n"
-        "  -I <dir>   add an include directory for module resolution\n"
-        "             (repeat to add multiple; intra-spice imports usually\n"
-        "             want `-I src` from the spice root)\n"
+        "  -I <dir>           add an include directory for module resolution\n"
+        "                     (repeat to add multiple)\n"
+        "  --no-auto-spice    don't auto-discover the enclosing spice's src/\n"
+        "                     (default behavior walks up from the file looking\n"
+        "                     for build.tur and adds <spice>/src to the path)\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -4538,6 +4660,18 @@ static bool parse_no_color(int argc, char **argv) {
     return false;
 }
 
+/* SC4: --no-auto-spice disables the per-file subcommand walk-up that
+ * adds the enclosing spice's `src/` to the include path.  Inspected by
+ * auto_append_spice_src(). */
+static bool g_no_auto_spice = false;
+
+static bool parse_no_auto_spice(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-auto-spice") == 0) return true;
+    }
+    return false;
+}
+
 /* Phase R5: Handle --panic-abort flag */
 static bool parse_panic_abort(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -4689,10 +4823,20 @@ int main(int argc, char **argv) {
     g_lint_panic = parse_lint_panic(argc, argv);
     /* F4: --Werror=deprecated promotes ^deprecated warnings to errors */
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
-    
+    /* SC4: --no-auto-spice disables enclosing-spice auto-discovery in
+     * per-file subcommands (check/emit-c/emit-h/run). */
+    g_no_auto_spice = parse_no_auto_spice(argc, argv);
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
             /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--no-auto-spice") == 0) {
+            /* SC4: already parsed into g_no_auto_spice; strip from argv. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -5002,8 +5146,16 @@ int main(int argc, char **argv) {
                 if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_build(); }
                 inputs[n_inputs++] = argv[i];
             }
+            /* SC4: auto-discover spice src for the FIRST input only.  For
+             * the multi-file --output-dir form, that input typically lives
+             * inside the same spice as the others; if it doesn't, an
+             * explicit -I is the right escape hatch. */
+            char *auto_src_md = (n_inputs > 0)
+                ? auto_append_spice_src(inputs[0], &emit_inc, &n_emit_inc)
+                : NULL;
             int rc = cmd_emit_c_to_dir(out_dir, inputs, n_inputs,
                                        (const char **)emit_inc, n_emit_inc);
+            free(auto_src_md);
             free(inputs);
             free(emit_inc);
             return rc;
@@ -5022,12 +5174,15 @@ int main(int argc, char **argv) {
             free(emit_inc); return usage_build();
         }
         if (!input) { free(emit_inc); return usage_build(); }
+        char *auto_src = auto_append_spice_src(input, &emit_inc, &n_emit_inc);
         int rc = cmd_emit_c(input, (const char **)emit_inc, n_emit_inc);
+        free(auto_src);
         free(emit_inc);
         return rc;
     }
     if (strcmp(cmd, "emit-h") == 0) {
-        /* SC2: accept -I just like emit-c / check / build. */
+        /* SC2: accept -I just like emit-c / check / build.
+         * SC4: auto-discover enclosing spice src/. */
         char **eh_inc = NULL;
         int    n_eh_inc = parse_include_flags(argc, argv, 2, &eh_inc);
         if (n_eh_inc < 0) { free(eh_inc); return usage_build(); }
@@ -5043,14 +5198,18 @@ int main(int argc, char **argv) {
             free(eh_inc); return usage_build();
         }
         if (!input) { free(eh_inc); return usage_build(); }
+        char *auto_src = auto_append_spice_src(input, &eh_inc, &n_eh_inc);
         int rc = cmd_emit_h(input, (const char **)eh_inc, n_eh_inc);
+        free(auto_src);
         free(eh_inc);
         return rc;
     }
     if (strcmp(cmd, "check") == 0) {
         /* Phase 8: tur check subcommand - type-check only, no codegen
          * SC1: now accepts -I <dir> flags so per-file checks inside a spice
-         * resolve their intra-spice imports the same way `tur build` does. */
+         * resolve their intra-spice imports the same way `tur build` does.
+         * SC4: walks up to find an enclosing build.tur and auto-adds its
+         * `src/` so editors / format-on-save don't need explicit -I. */
         char       **check_inc = NULL;
         int          n_check_inc = parse_include_flags(argc, argv, 2, &check_inc);
         if (n_check_inc < 0) { free(check_inc); return usage_check(); }
@@ -5069,6 +5228,7 @@ int main(int argc, char **argv) {
             free(check_inc); return usage_check();
         }
         if (!input) { free(check_inc); return usage_check(); }
+        char *auto_src = auto_append_spice_src(input, &check_inc, &n_check_inc);
         int rc;
         if (use_json_output) {
             diag_lsp_begin();
@@ -5085,6 +5245,7 @@ int main(int argc, char **argv) {
             rc = compile_to_c(input, &out, (const char **)check_inc, n_check_inc);
             buf_free(&out);
         }
+        free(auto_src);
         free(check_inc);
         return rc;
     }

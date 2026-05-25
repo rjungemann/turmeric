@@ -78,32 +78,35 @@ assert_exit 0 "SC1: tur check -I<src> (no space) also works" \
     "$TUR" check -I"$SRC_ROOT" "$ENTRY"
 
 # SC0: `tur check <file>` without -I fails with the new searched/hint diag.
-assert_exit 1 "SC0: tur check (no -I) fails on intra-spice import" \
-    "$TUR" check "$ENTRY"
+# Pass --no-auto-spice so SC4 auto-discovery doesn't quietly satisfy the
+# import; the test exists to prove the diagnostic still triggers for users
+# who explicitly opt out.
+assert_exit 1 "SC0: tur check (--no-auto-spice, no -I) fails on intra-spice import" \
+    "$TUR" --no-auto-spice check "$ENTRY"
 
 assert_stderr_contains "searched:" \
     "SC0: diagnostic lists searched paths" \
-    "$TUR" check "$ENTRY"
+    "$TUR" --no-auto-spice check "$ENTRY"
 
 assert_stderr_contains "intra-spice import" \
     "SC0: diagnostic mentions intra-spice import" \
-    "$TUR" check "$ENTRY"
+    "$TUR" --no-auto-spice check "$ENTRY"
 
 # SC2: `tur emit-c -I <src> <file>` succeeds and emits valid C to stdout.
 assert_exit 0 "SC2: tur emit-c -I <src> resolves intra-spice import" \
     "$TUR" emit-c -I "$SRC_ROOT" "$ENTRY"
 
-# SC2: `tur emit-c` without -I fails with the same diagnostic.
-assert_exit 1 "SC2: tur emit-c (no -I) fails on intra-spice import" \
-    "$TUR" emit-c "$ENTRY"
+# SC2: `tur emit-c` without -I (and without auto-discovery) fails.
+assert_exit 1 "SC2: tur emit-c (--no-auto-spice, no -I) fails on intra-spice import" \
+    "$TUR" --no-auto-spice emit-c "$ENTRY"
 
 # SC2: `tur emit-h -I <src> <file>` succeeds.
 assert_exit 0 "SC2: tur emit-h -I <src> resolves intra-spice import" \
     "$TUR" emit-h -I "$SRC_ROOT" "$ENTRY"
 
-# SC2: `tur emit-h` without -I fails.
-assert_exit 1 "SC2: tur emit-h (no -I) fails on intra-spice import" \
-    "$TUR" emit-h "$ENTRY"
+# SC2: `tur emit-h` without -I (and without auto-discovery) fails.
+assert_exit 1 "SC2: tur emit-h (--no-auto-spice, no -I) fails on intra-spice import" \
+    "$TUR" --no-auto-spice emit-h "$ENTRY"
 
 # SC2: `tur emit-c --output-dir <dir> -I <src> <file>` succeeds and writes
 # files to the output directory.
@@ -125,6 +128,49 @@ rm -rf "$EMIT_OUT"
 # the value `main` returns (42 in our fixture).
 assert_exit 42 "SC2: tur run -I <src> compiles and executes intra-spice import" \
     "$TUR" run -I "$SRC_ROOT" "$ENTRY"
+
+# SC4: with auto-discovery, `tur check <file>` (no -I) inside a spice now
+# succeeds because find_spice_root walks up from b.tur to the build.tur
+# at the fixture root and adds <root>/src to the include path.
+assert_exit 0 "SC4: tur check auto-discovers enclosing spice src/" \
+    "$TUR" check "$ENTRY"
+
+assert_exit 0 "SC4: tur emit-c auto-discovers enclosing spice src/" \
+    "$TUR" emit-c "$ENTRY"
+
+assert_exit 0 "SC4: tur emit-h auto-discovers enclosing spice src/" \
+    "$TUR" emit-h "$ENTRY"
+
+assert_exit 42 "SC4: tur run auto-discovers enclosing spice src/" \
+    "$TUR" run "$ENTRY"
+
+# SC4 escape hatch: --no-auto-spice restores the pre-SC4 behavior, so
+# the check should fail again with the SC0 diagnostic.
+assert_exit 1 "SC4: --no-auto-spice opts out of auto-discovery (check fails again)" \
+    "$TUR" --no-auto-spice check "$ENTRY"
+
+assert_stderr_contains "intra-spice import" \
+    "SC4: --no-auto-spice falls through to SC0 hint" \
+    "$TUR" --no-auto-spice check "$ENTRY"
+
+# SC4: works the same way when invoked from a deeply-nested unrelated
+# cwd, since find_spice_root canonicalizes via realpath() and walks
+# ancestors of the *file*, not the cwd.
+ABS_TUR="$PWD/$TUR"
+ABS_ENTRY="$PWD/$ENTRY"
+NESTED=$(mktemp -d)
+mkdir -p "$NESTED/a/b/c/d"
+( cd "$NESTED/a/b/c/d" && "$ABS_TUR" check "$ABS_ENTRY" ) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    echo "PASS SC4: auto-discovery works from a deeply-nested unrelated cwd"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SC4: auto-discovery from deeply-nested cwd -- expected exit 0, got $rc"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SC4: auto-discovery from nested cwd")
+fi
+rm -rf "$NESTED"
 
 echo
 echo "summary: $PASS passed, $FAIL failed"
