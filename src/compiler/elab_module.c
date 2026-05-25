@@ -92,6 +92,16 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     char *src_raw = NULL;
     size_t src_len = 0;
     if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+        /* SC0: collect every path we attempt so a final failure can list
+         * the full search. `attempted` grows via snprintf; we leave headroom
+         * for one more append and the trailing NUL so overflow truncates
+         * cleanly rather than producing a torn message. */
+        char attempted[8192];
+        int alen = 0;
+        int w = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                         "    %s    (importing file's directory)\n", path_buf);
+        if (w > 0 && (size_t)w < sizeof(attempted) - (size_t)alen) alen += w;
+
         /* Fallback: try the stdlib directory (e.g. for `import turi/eval`). */
         bool found_in_stdlib = false;
         if (e->module_stdlib_dir) {
@@ -103,6 +113,10 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                     memcpy(path_buf, stdlib_path, (size_t)splen + 1);
                     plen = splen;
                     found_in_stdlib = true;
+                } else if (alen < (int)sizeof(attempted) - 256) {
+                    int sw = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                                      "    %s    (stdlib)\n", stdlib_path);
+                    if (sw > 0 && (size_t)sw < sizeof(attempted) - (size_t)alen) alen += sw;
                 }
             }
         }
@@ -118,12 +132,31 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                         memcpy(path_buf, inc_path, (size_t)iplen + 1);
                         plen = iplen;
                         found_in_includes = true;
+                    } else if (alen < (int)sizeof(attempted) - 256) {
+                        int iw = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
+                                          "    %s    (-I %s)\n", inc_path,
+                                          e->module_include_dirs[ii]);
+                        if (iw > 0 && (size_t)iw < sizeof(attempted) - (size_t)alen) alen += iw;
                     }
                 }
             }
             if (!found_in_includes) {
+                /* SC0: list every searched path and suggest a workaround.
+                 * When no -I paths were passed, this is almost always an
+                 * intra-spice import that needs the spice's src/ on the
+                 * search path -- point at that explicitly. */
+                const char *hint;
+                if (e->n_module_include_dirs > 0) {
+                    hint = "  hint: check the -I paths you passed, "
+                           "or run `tur build <spice-src-dir>` to compile the whole spice";
+                } else {
+                    hint = "  hint: this looks like an intra-spice import.\n"
+                           "        try `tur check -I src <file>` from the spice root,\n"
+                           "        or build the whole spice with `tur build src/`";
+                }
                 diag_emit(DIAG_ERROR, import_span,
-                          "module '%s' not found (looked for '%s')", name->name, path_buf);
+                          "module '%s' not found\n  searched:\n%s%s",
+                          name->name, attempted, hint);
                 slot->is_loading = false;
                 return NULL;
             }

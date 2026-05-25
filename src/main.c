@@ -29,6 +29,9 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/wait.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>     /* SN1: _NSGetExecutablePath for stdlib resolution */
+#endif
 
 #include "arena.h"
 #include "assert.h"
@@ -128,11 +131,129 @@ static void dir_of_path(const char *path, char *out, size_t cap) {
     }
 }
 
+/* SN1: argv[0] stashed at startup as the last-resort exe-path hint.
+ * Resolved via platform APIs in get_exe_path() first; argv[0] is only used
+ * if those fail. */
+static const char *g_argv0 = NULL;
+
+/* SN1: write the absolute path of the running `tur` executable to out.
+ * Returns 0 on success, -1 on failure (in which case out is unmodified). */
+static int get_exe_path(char *out, size_t cap) {
+#ifdef __APPLE__
+    uint32_t sz = (uint32_t)cap;
+    if (_NSGetExecutablePath(out, &sz) == 0) {
+        /* _NSGetExecutablePath returns a path that may contain symlinks
+         * or `..`; resolve to a canonical form so the walk-up sees the
+         * real directory layout. */
+        char real[4096];
+        if (realpath(out, real)) {
+            size_t rl = strlen(real);
+            if (rl < cap) { memcpy(out, real, rl + 1); }
+        }
+        return 0;
+    }
+#else
+    ssize_t n = readlink("/proc/self/exe", out, cap - 1);
+    if (n > 0) { out[n] = '\0'; return 0; }
+#endif
+    if (g_argv0 && strchr(g_argv0, '/')) {
+        /* argv[0] contains a path component -- resolve it. */
+        if (realpath(g_argv0, out)) return 0;
+    }
+    return -1;
+}
+
+/* SN1: resolved stdlib root directory.  Set lazily on first call to
+ * resolve_stdlib_root(), reused thereafter.  Empty string means "we
+ * tried and could not find one"; NULL means "not yet attempted". */
+static char  g_stdlib_root[4096] = "";
+static int   g_stdlib_root_state = 0;  /* 0=unresolved, 1=found, 2=not-found */
+
+/* SN1: locate the stdlib root directory.  Precedence:
+ *   1. $TUR_STDLIB_DIR (verbatim, no walk-up)
+ *   2. walk up from exe directory looking for `stdlib/macros.tur`
+ *      -- supports both the in-tree dev layout (sibling of `build/`) and
+ *      a sibling `stdlib/` in any ancestor.
+ *   3. `<exe_dir>/../share/turmeric/stdlib` -- prefix-style installed layout.
+ *   4. literal "stdlib" -- last-resort fallback matching the legacy
+ *      cwd-relative behavior so users running from a repo root still work.
+ * Returns a pointer to a static buffer, or NULL if no directory was found
+ * and the legacy fallback was not desired.  The current implementation
+ * always returns non-NULL: in the worst case it returns the literal
+ * "stdlib" so callers can still attempt the open. */
+static const char *resolve_stdlib_root(void) {
+    if (g_stdlib_root_state != 0) {
+        return g_stdlib_root[0] ? g_stdlib_root : "stdlib";
+    }
+    g_stdlib_root_state = 2;  /* assume not-found until we succeed */
+
+    const char *env = getenv("TUR_STDLIB_DIR");
+    if (env && *env) {
+        size_t n = strlen(env);
+        if (n < sizeof(g_stdlib_root)) {
+            memcpy(g_stdlib_root, env, n + 1);
+            g_stdlib_root_state = 1;
+            return g_stdlib_root;
+        }
+    }
+
+    char exe[4096];
+    if (get_exe_path(exe, sizeof(exe)) == 0) {
+        char dir[4096];
+        dir_of_path(exe, dir, sizeof(dir));
+
+        /* Walk up to 8 levels looking for `<dir>/stdlib/macros.tur`.
+         * macros.tur is the anchor: it's the first file every preload
+         * loop touches, so if it's missing nothing else will resolve. */
+        char probe[4096];
+        for (int depth = 0; depth < 8; depth++) {
+            int n = snprintf(probe, sizeof(probe), "%s/stdlib/macros.tur", dir);
+            if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+                int rn = snprintf(g_stdlib_root, sizeof(g_stdlib_root),
+                                  "%s/stdlib", dir);
+                if (rn > 0 && (size_t)rn < sizeof(g_stdlib_root)) {
+                    g_stdlib_root_state = 1;
+                    /* Propagate to TUR_STDLIB_DIR so the elaborator
+                     * (elab_toplevel.c) sees the same value without
+                     * needing its own copy of this resolver.  Use
+                     * overwrite=0 so an explicit user override wins;
+                     * we already returned above if env was set. */
+                    setenv("TUR_STDLIB_DIR", g_stdlib_root, 0);
+                    return g_stdlib_root;
+                }
+            }
+            /* Try installed prefix layout: `<dir>/share/turmeric/stdlib`. */
+            n = snprintf(probe, sizeof(probe),
+                         "%s/share/turmeric/stdlib/macros.tur", dir);
+            if (n > 0 && (size_t)n < sizeof(probe) && access(probe, R_OK) == 0) {
+                int rn = snprintf(g_stdlib_root, sizeof(g_stdlib_root),
+                                  "%s/share/turmeric/stdlib", dir);
+                if (rn > 0 && (size_t)rn < sizeof(g_stdlib_root)) {
+                    g_stdlib_root_state = 1;
+                    setenv("TUR_STDLIB_DIR", g_stdlib_root, 0);
+                    return g_stdlib_root;
+                }
+            }
+            /* Step up one level. */
+            char *slash = strrchr(dir, '/');
+            if (!slash || slash == dir) break;
+            *slash = '\0';
+        }
+    }
+
+    /* Legacy fallback: literal "stdlib" relative to cwd.  Preserved so
+     * developers running from the repo root still get a working binary
+     * even if the exe-walk failed (e.g. unusual sandbox).  Callers that
+     * want a hard error on missing stdlib should check g_stdlib_root_state. */
+    return "stdlib";
+}
+
 /* Resolve a stdlib basename like "macros.tur" to a full path.
  *
  * Order of precedence:
  *   1. $TUR_STDLIB_DIR/<basename>  -- explicit env-var override
- *   2. ./stdlib/<basename>         -- in-repo development default
+ *   2. <exe_walk_up>/stdlib/<basename> -- walk up from the tur binary
+ *   3. ./stdlib/<basename>         -- legacy cwd-relative fallback
  *
  * Returns a pointer to `out` (NUL-terminated). On overflow, the path is
  * truncated and a warning is emitted to stderr; callers still get a usable
@@ -140,8 +261,7 @@ static void dir_of_path(const char *path, char *out, size_t cap) {
  */
 static const char *tur_stdlib_path(const char *basename,
                                    char *out, size_t outlen) {
-    const char *sdir = getenv("TUR_STDLIB_DIR");
-    if (!sdir || !*sdir) sdir = "stdlib";
+    const char *sdir = resolve_stdlib_root();
     int n = snprintf(out, outlen, "%s/%s", sdir, basename);
     if (n < 0 || (size_t)n >= outlen) {
         fprintf(stderr,
@@ -149,6 +269,28 @@ static const char *tur_stdlib_path(const char *basename,
                 basename, sdir);
     }
     return out;
+}
+
+/* SN2: read a file without printing on failure.  Used by stdlib preload
+ * loops where missing optional files should be silent.  Returns 0 on
+ * success (out + out_len populated, caller frees out), -1 if the file
+ * cannot be opened or read.  Never writes to stderr. */
+static int read_entire_file_quiet(const char *path, char **out, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    if (size < 0) { fclose(f); return -1; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return -1; }
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t nread = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (nread != (size_t)size) { free(buf); return -1; }
+    buf[size] = '\0';
+    *out = buf;
+    *out_len = (size_t)size;
+    return 0;
 }
 
 static int read_entire_file(const char *path, char **out, size_t *out_len) {
@@ -457,7 +599,11 @@ static int compile_to_c(const char *path, Buf *out_c,
         tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
         char *stdlib_src = NULL;
         size_t stdlib_len = 0;
-        if (read_entire_file(path_buf, &stdlib_src, &stdlib_len) == 0) {
+        /* SN2: use the quiet reader so a missing stdlib file does not
+         * spam stderr on every invocation.  If the stdlib root is
+         * mis-configured the downstream compile will fail with an
+         * actionable error (missing symbols / module not found). */
+        if (read_entire_file_quiet(path_buf, &stdlib_src, &stdlib_len) == 0) {
             /* strdup the source so it lives in the arena and won't be freed prematurely */
             char *src_copy = (char *)arena_alloc(&arena, stdlib_len);
             memcpy(src_copy, stdlib_src, stdlib_len);
@@ -4411,6 +4557,15 @@ static bool use_json_diagnostics = false;
 
 
 int main(int argc, char **argv) {
+    /* SN1: stash argv[0] for exe-path fallback in resolve_stdlib_root().
+     * Platform APIs (_NSGetExecutablePath / /proc/self/exe) are tried
+     * first; argv[0] is the last-resort path source. */
+    g_argv0 = (argc > 0) ? argv[0] : NULL;
+    /* Resolve the stdlib root once at startup so TUR_STDLIB_DIR is
+     * propagated into the process env before any subsystem (elaborator,
+     * worker, interpreter) reads it. */
+    (void)resolve_stdlib_root();
+
     /* Phase 8: Check for global flags before command */
     bool no_color = parse_no_color(argc, argv);
     bool explain_mode = false;
