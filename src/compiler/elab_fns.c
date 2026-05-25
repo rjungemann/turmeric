@@ -526,6 +526,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     params[n_params - 1]->type = type_from_kind(ck);
                     params[n_params - 1]->type.copy_kind = typekind_default_copy_kind(ck);
                 } else {
+                    /* Phase TA1: check defalias table */
+                    const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
+                    TypeKind ak = TY_UNKNOWN;
+                    for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
+                        if (e->type_alias_names[ai] == ksym) { ak = e->type_alias_kinds[ai]; break; }
+                    }
+                    if (ak != TY_UNKNOWN) {
+                        param_kinds[n_params - 1] = ak;
+                        params[n_params - 1]->type = type_from_kind(ak);
+                    } else {
                     /* Try to look up as ADT name */
                     AdtDef *param_adt = NULL;
                     for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
@@ -545,6 +555,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         param_kinds[n_params - 1] = TY_TYVAR;
                         params[n_params - 1]->type = type_tyvar_named(kw->name);
                     }
+                    } /* end TA1 else */
                 }
             }
             continue;
@@ -686,6 +697,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (ck != TY_UNKNOWN) {
                     return_kind = ck;
                 } else {
+                    /* Phase TA1: check defalias table */
+                    bool alias_found = false;
+                    {
+                        const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
+                        for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
+                            if (e->type_alias_names[ai] == ksym) {
+                                return_kind = e->type_alias_kinds[ai];
+                                alias_found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!alias_found) {
                     /* Try to look up as ADT name */
                     for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
                         if (strcmp(e->adt_defs[ai]->name, kw->name) == 0) {
@@ -718,6 +742,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                             return NULL;
                         }
                     }
+                    } /* end !alias_found */
                 }
             }
             body_start++;

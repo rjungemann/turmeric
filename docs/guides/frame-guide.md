@@ -1,0 +1,672 @@
+---
+title: Frame Guide
+category: Data & Libraries
+description: In-memory columnar dataframes with tur-frame -- building, querying, joining, and exporting via the Arrow C Data Interface
+---
+
+# Frame Guide
+
+`tur-frame` is a pure-Turmeric spice that provides in-memory columnar
+dataframes modeled on R's `data.frame`, pandas `DataFrame`, and Racket's
+`data-frame`. Columns are stored in **Apache Arrow's in-memory format**
+(C Data Interface compatible), which enables zero-copy hand-off to Python,
+R, DuckDB, and Polars without serialization.
+
+## Installing
+
+```sh
+tur add https://github.com/rjungemann/turmeric-spices \
+  --ref frame-v0.1.0 --subdir spices/frame --name frame
+tur fetch
+```
+
+Then in your `build.tur`:
+
+```turmeric
+{:name "myapp"
+ :spices ["frame"]}
+```
+
+## Importing
+
+```turmeric
+(import frame/frame  :refer [frame frame-from-cols frame-from-rows
+                               frame-nrows frame-ncols frame-schema
+                               frame-column frame-head frame-tail
+                               frame-slice frame=?])
+(import frame/column :refer [column-int64 column-float64 column-utf8
+                               column-type column-length column-get
+                               column-int64-at column-float64-at
+                               column-utf8-at])
+(import frame/type   :refer [type-int64 type-float64 type-utf8 type-name])
+(import frame/schema :refer [schema])
+(import frame/select :refer [select-cols drop-cols rename with-col
+                               map-col mutate])
+(import frame/filter :refer [filter drop-nulls distinct sample])
+(import frame/sort   :refer [arrange]]
+(import frame/group  :refer [group-by agg agg-sum agg-mean agg-count
+                               agg-min agg-max summarize])
+(import frame/join   :refer [inner-join left-join join])
+(import frame/reshape :refer [melt])
+(import frame/csv    :refer [read-csv write-csv default-csv-opts])
+(import frame/interop :refer [arrow-export arrow-import])
+(import frame/print  :refer [print-frame frame-describe])
+```
+
+```sweet-exp
+import frame/frame  :refer [frame frame-from-cols frame-from-rows
+                              frame-nrows frame-ncols frame-schema
+                              frame-column frame-head frame-tail
+                              frame-slice frame=?]
+import frame/column :refer [column-int64 column-float64 column-utf8
+                              column-type column-length column-get
+                              column-int64-at column-float64-at
+                              column-utf8-at]
+import frame/type   :refer [type-int64 type-float64 type-utf8 type-name]
+import frame/schema :refer [schema]
+import frame/select :refer [select-cols drop-cols rename with-col
+                              map-col mutate]
+import frame/filter :refer [filter drop-nulls distinct sample]
+import frame/sort   :refer [arrange]
+import frame/group  :refer [group-by agg agg-sum agg-mean agg-count
+                              agg-min agg-max summarize]
+import frame/join   :refer [inner-join left-join join]
+import frame/reshape :refer [melt]
+import frame/csv    :refer [read-csv write-csv default-csv-opts]
+import frame/interop :refer [arrow-export arrow-import]
+import frame/print  :refer [print-frame frame-describe]
+```
+
+---
+
+## 1. Building a Frame
+
+### From parallel columns
+
+```turmeric
+;; Build columns from cons lists.  Pass 0 (nil) for validity to mean "all valid".
+(let [names (column-utf8  (cons "Alice" (cons "Bob" (cons "Carol" 0))) 0 0)
+      ages  (column-int64 (cons 30      (cons 25    (cons 35      0))) 0 0)
+      score (column-float64 (cons 8.5  (cons 7.0   (cons 9.1     0))) 0 0)
+
+      s (schema (cons (field "name"  (type-utf8)    0)
+                 (cons (field "age"  (type-int64)   0)
+                 (cons (field "score" (type-float64) 0) 0))))
+
+      df (frame s (cons names (cons ages (cons score 0))))]
+
+  ;; quick sanity check
+  (print-frame df)
+  ;; =>  name   age  score
+  ;;    Alice    30    8.5
+  ;;      Bob    25    7.0
+  ;;    Carol    35    9.1
+  )
+```
+
+```sweet-exp
+let [names column-utf8(cons("Alice" cons("Bob" cons("Carol" 0))) 0 0)
+     ages  column-int64(cons(30 cons(25 cons(35 0))) 0 0)
+     score column-float64(cons(8.5 cons(7.0 cons(9.1 0))) 0 0)
+
+     s schema $ cons field("name"  type-utf8()    0)
+               $ cons field("age"  type-int64()   0)
+               $ cons field("score" type-float64() 0) 0
+
+     df frame(s cons(names cons(ages cons(score 0))))]
+
+  print-frame(df)
+```
+
+### From an association list
+
+`frame-from-cols` infers the schema from the column types:
+
+```turmeric
+(let [df (frame-from-cols
+           (cons (cons "name"  (column-utf8  (cons "Alice" (cons "Bob" 0)) 0 0))
+           (cons (cons "age"   (column-int64 (cons 30      (cons 25    0)) 0 0))
+           0)))]
+  (print-frame df))
+```
+
+```sweet-exp
+let [df frame-from-cols $ cons cons("name" column-utf8(cons("Alice" cons("Bob" 0)) 0 0))
+                          $ cons cons("age" column-int64(cons(30 cons(25 0)) 0 0))
+                          0]
+  print-frame(df)
+```
+
+### From rows
+
+`frame-from-rows` accepts a schema and a cons list of rows. Each row is a cons
+list of values in schema order. This is slower than column-wise construction and
+is intended for small literals and tests:
+
+```turmeric
+(let [s  (schema (cons (field "x" (type-int64) 0)
+                 (cons (field "y" (type-float64) 0) 0)))
+      df (frame-from-rows s
+           (cons (cons 1 (cons 1.5 0))
+           (cons (cons 2 (cons 2.5 0)) 0)))]
+  (print-frame df))
+```
+
+```sweet-exp
+let [s  schema $ cons field("x" type-int64() 0)
+               $ cons field("y" type-float64() 0) 0
+     df frame-from-rows s $ cons cons(1 cons(1.5 0))
+                          $ cons cons(2 cons(2.5 0)) 0]
+  print-frame(df)
+```
+
+### From CSV
+
+`read-csv` infers column types from the first 100 rows by default:
+
+```turmeric
+(let [df (read-csv "data/sales.csv" (default-csv-opts))]
+  (match df
+    [(ok f)  (print-frame f)]
+    [(err e) (println "error:" e)]))
+```
+
+```sweet-exp
+let [df read-csv("data/sales.csv" default-csv-opts())]
+  match df
+    [ok(f)  print-frame(f)]
+    [err(e) println("error:" e)]
+```
+
+The type inference order is int64 → float64 → date32 → timestamp → bool → utf8.
+Use `read-csv-typed` to supply an explicit schema and skip inference:
+
+```turmeric
+(let [s (schema (cons (field "id"    (type-int64)   0)
+               (cons (field "name"  (type-utf8)    0)
+               (cons (field "price" (type-float64) 0) 0))))
+      df (read-csv-typed "products.csv" s (default-csv-opts))]
+  ...)
+```
+
+```sweet-exp
+let [s schema $ cons field("id"    type-int64()   0)
+              $ cons field("name"  type-utf8()    0)
+              $ cons field("price" type-float64() 0) 0
+     df read-csv-typed("products.csv" s default-csv-opts())]
+  ...
+```
+
+Write a frame back to CSV with `write-csv`:
+
+```turmeric
+(write-csv df "output.csv" (default-csv-opts))
+```
+
+```sweet-exp
+write-csv(df "output.csv" default-csv-opts())
+```
+
+---
+
+## 2. Selecting, Filtering, and Mutating
+
+Frames are **immutable values**. Every transformation returns a new frame;
+unchanged columns are shared with the original (no copying).
+
+### select-cols and drop-cols
+
+```turmeric
+;; Keep only named columns
+(let [small (select-cols df (cons "name" (cons "score" 0)))]
+  (print-frame small))
+
+;; Drop named columns
+(let [no-age (drop-cols df (cons "age" 0))]
+  (print-frame no-age))
+```
+
+```sweet-exp
+let [small select-cols(df cons("name" cons("score" 0)))]
+  print-frame(small)
+
+let [no-age drop-cols(df cons("age" 0))]
+  print-frame(no-age)
+```
+
+### rename and with-col
+
+```turmeric
+;; Rename a column
+(let [df2 (rename df "score" "rating")]
+  (print-frame df2))
+
+;; Add or replace a column (length must match nrows)
+(let [bonus (column-float64 (cons 100.0 (cons 80.0 (cons 120.0 0))) 0 0)
+      df2   (with-col df "bonus" bonus)]
+  (print-frame df2))
+```
+
+```sweet-exp
+let [df2 rename(df "score" "rating")]
+  print-frame(df2)
+
+let [bonus column-float64(cons(100.0 cons(80.0 cons(120.0 0))) 0 0)
+     df2   with-col(df "bonus" bonus)]
+  print-frame(df2)
+```
+
+### filter
+
+Pass a predicate `(fn [frame row-index] :int)` -- return non-zero to keep the row:
+
+```turmeric
+;; Keep rows where age >= 30
+(let [seniors (filter df (fn [f i]
+                           (let [age (column-int64-at (frame-column f "age") i)]
+                             (>= age 30))))]
+  (print-frame seniors))
+```
+
+```sweet-exp
+let [seniors filter(df fn([f i]
+                      let [age column-int64-at(frame-column(f "age") i)]
+                        >= age 30))]
+  print-frame(seniors)
+```
+
+### drop-nulls and distinct
+
+```turmeric
+;; Drop rows with any null in the named columns; pass 0 for all columns
+(let [clean (drop-nulls df (cons "score" 0))]
+  ...)
+
+;; De-duplicate by named columns; 0 = all columns
+(let [uniq (distinct df (cons "name" 0))]
+  ...)
+```
+
+```sweet-exp
+let [clean drop-nulls(df cons("score" 0))]
+  ...
+
+let [uniq distinct(df cons("name" 0))]
+  ...
+```
+
+### mutate
+
+`mutate` derives a new column by calling `row-fn` once per row:
+
+```turmeric
+;; Add a "grade" :utf8 column derived from score
+(let [df2 (mutate df "grade" (type-utf8)
+            (fn [f i]
+              (let [s (column-float64-at (frame-column f "score") i)]
+                (if (>= s 9.0) "A"
+                (if (>= s 7.0) "B" "C")))))]
+  (print-frame df2))
+```
+
+```sweet-exp
+let [df2 mutate(df "grade" type-utf8()
+          fn([f i]
+            let [s column-float64-at(frame-column(f "score") i)]
+              if >= s 9.0 "A"
+              if >= s 7.0 "B" "C"))]
+  print-frame(df2)
+```
+
+---
+
+## 3. Sorting and De-duplicating
+
+`arrange` sorts by one or more columns. The `keys` argument is two parallel cons
+lists: column names and sort directions (0 = ascending, 1 = descending):
+
+```turmeric
+;; Sort by score descending, then by name ascending
+(let [sorted (arrange df
+               (cons "score" (cons "name" 0))
+               (cons 1       (cons 0      0)))]
+  (print-frame sorted))
+```
+
+```sweet-exp
+let [sorted arrange(df
+              cons("score" cons("name" 0))
+              cons(1       cons(0      0)))]
+  print-frame(sorted)
+```
+
+`arrange-indices` returns the permutation without applying it, so you can apply
+the same ordering to multiple frames with `reorder`:
+
+```turmeric
+(let [idx     (arrange-indices df (cons "score" 0) (cons 1 0))
+      sorted1 (reorder df   idx)
+      sorted2 (reorder df2  idx)]
+  ...)
+```
+
+```sweet-exp
+let [idx     arrange-indices(df cons("score" 0) cons(1 0))
+     sorted1 reorder(df  idx)
+     sorted2 reorder(df2 idx)]
+  ...
+```
+
+`distinct` removes duplicate rows by the named key columns (or all columns if
+you pass `0`). Combined with `arrange`, this is the typical "keep first
+occurrence" pattern:
+
+```turmeric
+(let [top-per-name (distinct (arrange df (cons "score" 0) (cons 1 0))
+                             (cons "name" 0))]
+  (print-frame top-per-name))
+```
+
+```sweet-exp
+let [top-per-name distinct(arrange(df cons("score" 0) cons(1 0))
+                           cons("name" 0))]
+  print-frame(top-per-name)
+```
+
+---
+
+## 4. Group-By and Aggregation
+
+`group-by` returns an opaque *grouped-frame*. Call `agg` on it to produce one
+summary row per group. The `agg` argument is three parallel cons lists:
+output column names, input column names, and aggregation tags.
+
+```turmeric
+;; Sum and count scores, grouped by grade
+(let [grouped (group-by df (cons "grade" 0))
+      summary (agg grouped
+                (cons "total_score" (cons "count" 0))
+                (cons "score"       (cons "name"  0))
+                (cons (agg-sum)     (cons (agg-count) 0)))]
+  (match summary
+    [(ok f)  (print-frame f)]
+    [(err e) (println "agg error:" e)]))
+```
+
+```sweet-exp
+let [grouped group-by(df cons("grade" 0))
+     summary agg(grouped
+               cons("total_score" cons("count" 0))
+               cons("score"       cons("name"  0))
+               cons agg-sum() cons(agg-count() 0))]
+  match summary
+    [ok(f)  print-frame(f)]
+    [err(e) println("agg error:" e)]
+```
+
+Available aggregation functions:
+
+| Function | Meaning |
+|---|---|
+| `(agg-count)` | Number of rows |
+| `(agg-sum)` | Sum of column values |
+| `(agg-mean)` | Arithmetic mean |
+| `(agg-min)` / `(agg-max)` | Min / max value |
+| `(agg-median)` | Median |
+| `(agg-std)` / `(agg-var)` | Sample std / variance |
+| `(agg-first)` / `(agg-last)` | First / last value in group |
+
+`summarize` applies aggregations without grouping -- useful for whole-frame
+summary statistics:
+
+```turmeric
+;; Overall mean and max score
+(let [stats (summarize df
+              (cons "mean_score" (cons "max_score" 0))
+              (cons "score"      (cons "score"     0))
+              (cons (agg-mean)   (cons (agg-max)   0)))]
+  (match stats
+    [(ok f) (print-frame f)]
+    [_ 0]))
+```
+
+```sweet-exp
+let [stats summarize(df
+              cons("mean_score" cons("max_score" 0))
+              cons("score"      cons("score"     0))
+              cons agg-mean() cons(agg-max() 0))]
+  match stats
+    [ok(f) print-frame(f)]
+    [_ 0]
+```
+
+`frame-describe` produces a pandas-style summary -- count, mean, std, min,
+25th/50th/75th percentile, and max for every numeric column:
+
+```turmeric
+(print-frame (frame-describe df))
+```
+
+```sweet-exp
+print-frame frame-describe(df)
+```
+
+---
+
+## 5. Joining Two Frames
+
+All joins return `result<frame>`. The `keys` argument is two parallel cons lists
+of column names -- left-side key names and right-side key names.
+
+```turmeric
+(let [orders   (read-csv "orders.csv"   (default-csv-opts))
+      products (read-csv "products.csv" (default-csv-opts))]
+  (match (cons orders products)
+    [(cons (ok o) (ok p))
+     ;; inner join on orders.product_id = products.id
+     (let [result (inner-join o p
+                    (cons "product_id" 0)
+                    (cons "id"         0))]
+       (match result
+         [(ok df) (print-frame df)]
+         [(err e) (println "join error:" e)]))]
+    [_ (println "csv read error")]))
+```
+
+```sweet-exp
+let [orders   read-csv("orders.csv"   default-csv-opts())
+     products read-csv("products.csv" default-csv-opts())]
+  match cons(orders products)
+    [cons(ok(o) ok(p))
+     let [result inner-join(o p
+                   cons("product_id" 0)
+                   cons("id"         0))]
+       match result
+         [ok(df) print-frame(df)]
+         [err(e) println("join error:" e)]]
+    [_ println("csv read error")]
+```
+
+The convenience `join` function takes a `how` string and a single key list (for
+when the key column has the same name on both sides):
+
+```turmeric
+;; Left join on the shared "category" column
+(join orders products "left" (cons "category" 0))
+```
+
+```sweet-exp
+join(orders products "left" cons("category" 0))
+```
+
+Available join kinds: `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`,
+`"anti"`, and `cross-join` (no keys needed):
+
+```turmeric
+;; Semi-join: keep left rows that have a match in right
+(semi-join orders products (cons "product_id" 0) (cons "id" 0))
+
+;; Cross join: Cartesian product
+(cross-join sizes colors)
+```
+
+```sweet-exp
+semi-join(orders products cons("product_id" 0) cons("id" 0))
+
+cross-join(sizes colors)
+```
+
+When both frames have a column with the same name (other than the join key), the
+right-frame copy gets a `_r` suffix in the output.
+
+---
+
+## 6. Reshaping with `melt`
+
+`melt` converts a wide frame to long format. The identity columns stay unchanged;
+the remaining columns each become a row, with their name stored in `var-name` and
+their value in `value-name`:
+
+```turmeric
+;; Wide frame:
+;;   name   q1   q2   q3
+;;   Alice  10   20   15
+;;   Bob    12   18   22
+;;
+;; After melt with id-cols=["name"]:
+;;   name   quarter  sales
+;;   Alice  q1       10
+;;   Alice  q2       20
+;;   ...
+
+(let [df    (read-csv "quarterly.csv" (default-csv-opts))
+      long  (melt df
+              (cons "name" 0)    ; identity columns
+              "quarter"          ; variable column name
+              "sales")]          ; value column name
+  (match (cons df long)
+    [(cons (ok wide) melted)
+     (when melted (print-frame melted))]
+    [_ 0]))
+```
+
+```sweet-exp
+let [df   read-csv("quarterly.csv" default-csv-opts())
+     long melt $ match df [ok(f) f] [_ 0]
+               cons("name" 0)
+               "quarter"
+               "sales"]
+  when long
+    print-frame(long)
+```
+
+All non-identity columns must share the same type. `melt` returns `0` if they
+do not.
+
+> **Note:** `pivot` (long → wide) and `transpose` are not included in v0.1.0.
+> For those operations, export to Arrow and use the receiving runtime's native
+> pivot/transpose.
+
+---
+
+## 7. Arrow C Data Interface
+
+`tur-frame` stores data in the Arrow in-memory format. Zero-copy hand-off to
+other runtimes uses the Arrow C Data Interface -- two small C structs
+(`ArrowSchema*` and `ArrowArray*`) that any Arrow-aware library can consume
+directly.
+
+### Exporting to Python (PyArrow)
+
+```turmeric
+;; Export returns a cons pair of (schema-ptr . array-ptr)
+(let [ptrs      (arrow-export df)
+      schema-p  (head ptrs)
+      array-p   (head (tail ptrs))]
+  ;; Hand the two raw pointers to Python via ctypes or cffi:
+  ;; import pyarrow as pa
+  ;; tbl = pa.RecordBatch._import_from_c(array_ptr, schema_ptr)
+  (println "schema ptr:" schema-p)
+  (println "array ptr:"  array-p))
+```
+
+```sweet-exp
+let [ptrs     arrow-export(df)
+     schema-p head(ptrs)
+     array-p  head tail(ptrs)]
+  println("schema ptr:" schema-p)
+  println("array ptr:"  array-p)
+```
+
+The exporting side transfers ownership: the consumer must call the release
+callbacks embedded in the structs when done. PyArrow does this automatically.
+
+### Exporting to R (nanoarrow) and DuckDB
+
+- **R / nanoarrow**: `nanoarrow::as_nanoarrow_array(array_ptr, schema_ptr)`
+- **DuckDB**: `duckdb.arrow_scan(schema_ptr, array_ptr)`
+- **Polars**: `pl.from_arrow(pa.RecordBatch._import_from_c(array_ptr, schema_ptr))`
+
+### Importing from another runtime
+
+```turmeric
+;; Import an (ArrowSchema*, ArrowArray*) pair produced by another runtime.
+;; Turmeric takes ownership and calls the release callbacks on GC.
+(let [df (arrow-import schema-ptr array-ptr)]
+  (match df
+    [(ok f)  (print-frame f)]
+    [(err e) (println "import error:" e)]))
+```
+
+```sweet-exp
+let [df arrow-import(schema-ptr array-ptr)]
+  match df
+    [ok(f)  print-frame(f)]
+    [err(e) println("import error:" e)]
+```
+
+### Column-level export
+
+For single-column hand-off (e.g. passing a vector to a numeric routine):
+
+```turmeric
+(let [col  (frame-column df "score")
+      ptrs (arrow-export-column col "score")]
+  ...)
+```
+
+```sweet-exp
+let [col  frame-column(df "score")
+     ptrs arrow-export-column(col "score")]
+  ...
+```
+
+---
+
+## Column Type Reference
+
+| Type tag function | Arrow format | Turmeric element accessor |
+|---|---|---|
+| `(type-int32)` | `"i"` | `(column-int32-at col i)` → `:int` |
+| `(type-int64)` | `"l"` | `(column-int64-at col i)` → `:int` |
+| `(type-float32)` | `"f"` | `(column-float32-at col i)` → `:float` |
+| `(type-float64)` | `"g"` | `(column-float64-at col i)` → `:float` |
+| `(type-bool)` | `"b"` | `(column-bool-at col i)` → `:int` (0 or 1) |
+| `(type-utf8)` | `"u"` | `(column-utf8-at col i)` → `:cstr` |
+| `(type-date32)` | `"tdD"` | `(column-int32-at col i)` → days since epoch |
+| `(type-timestamp)` | `"tsu:"` | `(column-int64-at col i)` → µs since epoch |
+| `(type-null)` | `"n"` | all rows null |
+
+Typed fast-path accessors (`column-int64-at`, etc.) are undefined if called on
+the wrong column type or out of range. Use `column-type` to check first, or call
+`column-get` for a bounds-checked option-typed result.
+
+---
+
+## What's Coming in v0.2
+
+- `pivot-agg` -- long-to-wide reshape with an explicit reduction function
+- Lazy query plans (`tur-frame-lazy`)
+- Parquet I/O (`tur-frame-parquet`)
+- Line-delimited JSON I/O (`tur-frame-stream`)
+- Zero-copy Arrow export (share column buffers via refcount rather than deep-copy)

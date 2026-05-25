@@ -324,6 +324,13 @@ typedef struct Elab {
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
     const Symbol *sym_deftype;      /* deftype */
+    /* Phase TA1: defalias — primitive type alias declarations */
+    const Symbol *sym_defalias;
+
+    const Symbol **type_alias_names;  /* interned alias name symbols */
+    TypeKind      *type_alias_kinds;  /* resolved target TypeKind */
+    uint32_t       n_type_aliases;    /* number of declared aliases */
+    uint32_t       cap_type_aliases;  /* allocated capacity */
     /* Phase HKT-P1: type-app — type-level application */
     const Symbol *sym_type_app;    /* type-app */
     /* Phase HRT0: Higher-ranked type quantifiers (type-level only; reject in expression position) */
@@ -811,6 +818,7 @@ Expr *elab_borrow_mut(Elab *e, const Form *call);
 /* elab_types.c */
 Expr *elab_defkind(Elab *e, const Form *call);
 Expr *elab_defrec(Elab *e, const Form *call);
+Expr *elab_defalias(Elab *e, const Form *call);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);

@@ -1,0 +1,5 @@
+(defalias Hz :float)
+(defn make-osc [freq :Hz] :Hz freq)
+(defn main [] :int
+  (println (make-osc 440.0))
+  0)

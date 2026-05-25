@@ -1,0 +1,5 @@
+(defalias Sample :int)
+(defn id-sample [x :Sample] :Sample x)
+(defn main [] :int
+  (println (id-sample 42))
+  0)

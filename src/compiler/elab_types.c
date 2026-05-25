@@ -67,6 +67,72 @@ Expr *elab_defkind(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
+/* Phase TA1: (defalias Name :primitive-type)
+ *
+ * Declares a type alias for a primitive TypeKind.  The alias is stored in
+ * e->type_alias_names / e->type_alias_kinds and consulted during type-
+ * annotation resolution in type_expr_from_form and elab_fns parameter parsing.
+ *
+ * Syntax: (defalias Sample :int)
+ *         (defalias Timestamp :int64)
+ */
+Expr *elab_defalias(Elab *e, const Form *call) {
+    /* Minimum: (defalias Name :keyword) — 3 elements */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defalias requires (defalias Name :primitive-type)");
+        return NULL;
+    }
+
+    /* Parse alias name */
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defalias: name must be a symbol");
+        return NULL;
+    }
+    const Symbol *alias_name = name_form->as.sym;
+
+    /* Parse target type — must be a primitive keyword */
+    Form *type_form = call->as.list.items[2];
+    if (type_form->tag != F_KEYWORD) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "defalias: target type must be a keyword (e.g. :int, :float)");
+        return NULL;
+    }
+    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    if (target_kind == TY_UNKNOWN) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "defalias: '%s' is not a recognised primitive type",
+                  type_form->as.sym->name);
+        return NULL;
+    }
+
+    /* Grow the alias table if needed */
+    if (e->n_type_aliases >= e->cap_type_aliases) {
+        uint32_t new_cap = e->cap_type_aliases ? e->cap_type_aliases * 2 : 8;
+        const Symbol **new_names = (const Symbol **)arena_alloc(e->arena,
+            new_cap * sizeof(const Symbol *));
+        TypeKind *new_kinds = (TypeKind *)arena_alloc(e->arena,
+            new_cap * sizeof(TypeKind));
+        if (e->n_type_aliases > 0) {
+            memcpy(new_names, e->type_alias_names,
+                   e->n_type_aliases * sizeof(const Symbol *));
+            memcpy(new_kinds, e->type_alias_kinds,
+                   e->n_type_aliases * sizeof(TypeKind));
+        }
+        e->type_alias_names = new_names;
+        e->type_alias_kinds = new_kinds;
+        e->cap_type_aliases = new_cap;
+    }
+    e->type_alias_names[e->n_type_aliases] = alias_name;
+    e->type_alias_kinds[e->n_type_aliases] = target_kind;
+    e->n_type_aliases++;
+
+    /* defalias has no runtime effect — return nil */
+    return e_nil(e, call->span);
+}
+
 /* Elaborate (defrec Name [params])
  *
  * Defines a recursive type constructor Name and registers it in global scope
@@ -1208,6 +1274,17 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_from_kind(k);
             return t;
+        }
+        /* Phase TA1: check defalias table before struct/ADT fallback */
+        {
+            const Symbol *alias_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
+            for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
+                if (e->type_alias_names[ai] == alias_sym) {
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *t = type_from_kind(e->type_alias_kinds[ai]);
+                    return t;
+                }
+            }
         }
         /* F6-1 (cross-plan-followups): look up unknown keyword as a
          * user-defined ADT or struct name so callers that round-trip a

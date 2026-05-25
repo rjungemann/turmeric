@@ -144,3 +144,6 @@
   ```c
   printf("%.6f\n", x);
   ```)
+
+;;; PI -- mathematical constant pi.
+(def PI 3.14159265358979323846)

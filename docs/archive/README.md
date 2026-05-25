@@ -36,6 +36,8 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[autodoc-plan.md](autodoc-plan.md)** -- Docstring standard and doc generator (see also CLAUDE.md); doctest integration pending
 - **[doctest-plan.md](doctest-plan.md)** -- Executable doctests from `;;;` Example blocks; not yet started
 - **[guide-syntax-toggle-plan.md](guide-syntax-toggle-plan.md)** -- Toggle widget for S-expression/sweet-exp paired examples in guides
+- **[lsp-hover-definition-completion-plan.md](lsp-hover-definition-completion-plan.md)** -- LD0-LD4: hover, go-to-definition, completion for the LSP server; not started
+- **[datum-comment-plan.md](datum-comment-plan.md)** -- `#;` datum comments (DC0-DC3); no prerequisites; not yet started
 
 ### Try Turmeric / Web REPL
 
@@ -48,12 +50,13 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[performance-improvement-plan.md](performance-improvement-plan.md)** -- Compiler optimization roadmap
 - **[performance-comparison-plan.md](performance-comparison-plan.md)** -- Five-language performance comparison framework
 - **[perf-comparison-improvements-plan.md](perf-comparison-improvements-plan.md)** -- Idiomatic Turmeric refactor + turi/Rust targets
-- **[test-perf-plan.md](test-perf-plan.md)** -- Test suite and performance testing strategy
+- **[test-suite-cleanup-plan.md](test-suite-cleanup-plan.md)** -- Documents root causes of intentionally-failing fixtures (956 pass, 5 tracked)
+- **[skipped-spices-cleanup-plan.md](skipped-spices-cleanup-plan.md)** -- Phase 1 complete (Category A fixed); six spices still have `requires.typecheck-skip`; companion to `spice-aware-check-plan.md` (history)
+- **[spice-test-runner-fix-plan.md](spice-test-runner-fix-plan.md)** -- Five-bug investigation blocking `tur test` / `tur fetch` in all spices; root cause: `{...}` parsed as `F_CONTRACT_TYPE`
 - **[interpret-perf-tests-plan.md](interpret-perf-tests-plan.md)** -- Benchmarks runnable via `tur --interpret`
 
 ### Design Explorations (Not Yet Scoped)
 
-- **[signal-processing-arrows-plan.md](signal-processing-arrows-plan.md)** -- Signal processing with arrows and HKTs (tutorial plan; depends on Phase 19 + HKT)
 - **[remove-exceptions-plan.md](remove-exceptions-plan.md)** -- Plan to remove remaining exception machinery
 - **[set-literal-plan.md](set-literal-plan.md)** -- `#s(...)` set literal syntax
 - **[scscm-tidal-spices-plan.md](scscm-tidal-spices-plan.md)** -- SuperCollider/Tidal live coding spice pair (Phase 20+ target)
@@ -62,11 +65,24 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[linear-continuations-plan.md](linear-continuations-plan.md)** -- Linear continuations; deferred to v5+
 - **[self-hosted-interpreter-plan.md](self-hosted-interpreter-plan.md)** -- `libturi` importable eval API + self-hosted REPL (speculative; future project)
 - **[stubs-and-workarounds.md](stubs-and-workarounds.md)** -- Catalog of known placeholders and test workarounds
+- **[c-dsl-plan.md](c-dsl-plan.md)** -- Lisp-to-C99 DSL embedded in Turmeric; type-safe FFI code generation; speculative
+- **[glsl-dsl-plan.md](glsl-dsl-plan.md)** -- GLSL shader DSL compiling to GLSL source; pairs with `c-dsl-plan.md`; speculative
+- **[opengl-spice-plan.md](opengl-spice-plan.md)** -- `tur-opengl` wrapping OpenGL 3.3 + GLFW + GLAD; draft spice design
+- **[new-spices-plan.md](new-spices-plan.md)** -- Seven new Tier-2 spices: postgres, valkey, osc, rtaudio, rtmidi, wav, png; none started
+- **[design-mf4-struct-gadt-namespaces.md](design-mf4-struct-gadt-namespaces.md)** -- Separate struct/GADT namespaces to resolve `Vec` name collision (MF4)
+- **[reader-macros-plan.md](reader-macros-plan.md)** -- User-defined `#foo[...]` reader macros (RM0-RM4); not started
+- **[reader-macros-transitive-plan.md](reader-macros-transitive-plan.md)** -- Thread reader-macro registry through module loading; depends on RM0-RM4
+- **[per-spice-docs-plan.md](per-spice-docs-plan.md)** -- Per-spice HTML pages from `README.md` + `;;;` docstrings; tooling plan
+- **[web-cleanup-plan.md](web-cleanup-plan.md)** -- CSS consolidation, Prism.js syntax highlighting, web component unification
 
 ### Current Plans (Recently Added)
 
 - **[sandboxed-eval-plan.md](sandboxed-eval-plan.md)** -- SB0--SB4 sandboxed eval implementation; SB1--SB4 close remaining gaps
 - **[turmeric-spices-plan.md](turmeric-spices-plan.md)** -- Official first-party spice monorepo; all seven spices shipped; see [github.com/rjungemann/turmeric-spices](https://github.com/rjungemann/turmeric-spices)
+- **[cross-plan-followups-plan.md](cross-plan-followups-plan.md)** -- Cross-plan follow-up tasks (F3-2..F3-7 dictionary passing, F5 MutableMap, F6 turi fixture gaps, F8 defstruct compound annotations)
+- **[defstruct-field-types-plan.md](defstruct-field-types-plan.md)** -- Residual hardening after F8 landed; `exg5-exists-cycle` and `exg4-pack-into-struct` still blocked
+- **[existential-gc-followup-plan.md](existential-gc-followup-plan.md)** -- GC integration for packed existentials; cycle-construction fixtures blocked on defstruct compound annotations
+- **[existential-types-plan.md](existential-types-plan.md)** -- `pack`/`open` with typeclass constraints; phases partially in progress
 
 ## Extracted Guides
 
@@ -104,8 +120,15 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [dynamic-vars-guide.md](../guides/dynamic-vars-guide.md) | `dynamic-vars-plan.md` (history; DV0--DV4 complete) |
 | [web-continuations-tutorial.md](../guides/web-continuations-tutorial.md) | `web-continuations-tutorial-plan.md` (complete) |
 | [web-emscripten-tutorial.md](../guides/web-emscripten-tutorial.md) | `web-emscripten-tutorial-plan.md` (history) |
+| [frame-guide.md](../guides/frame-guide.md) | `frame-spice-plan.md` (history; FR0-FR10 complete) |
 
 ## Historical Documents
 
 Completed implementation plans and superseded design explorations are in
-[history/](history/).
+[history/](history/). Recent additions:
+
+- **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)
+- **[module-docstrings-plan.md](history/module-docstrings-plan.md)** -- Module-level `;;;` docstring rendering; implemented and documented in CLAUDE.md
+- **[signal-processing-arrows-plan.md](history/signal-processing-arrows-plan.md)** -- Arrow-based DSP tutorial; extracted to `tur-signal` v0.1.0; see [arrows-guide.md](../guides/arrows-guide.md)
+- **[spice-aware-check-plan.md](history/spice-aware-check-plan.md)** -- Per-file `tur check` auto-discovers `build.tur`; implemented and documented in CLAUDE.md
+- **[test-perf-plan.md](history/test-perf-plan.md)** -- Stamp caching + ccache; T1-A/B/C/D and T2-A/C complete

@@ -12,12 +12,9 @@ static bool type_is_concrete_for_disjoint(Type *t);
 /* Helper to create a Type from TypeKind. */
 Type type_from_kind(TypeKind k) {
     Type t;
+    memset(&t, 0, sizeof(t));
     t.kind = k;
     t.copy_kind = typekind_default_copy_kind(k);
-    t.as.fn.arity = 0;
-    t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
-    t.typeclass_instances = NULL;
-    t.n_typeclass_instances = 0;
     t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     return t;
 }
@@ -1142,6 +1139,12 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase HKT-P2: defrec */
     e->sym_defrec = intern_cstr(st, "defrec");
     e->sym_deftype = intern_cstr(st, "deftype");
+    /* Phase TA1: defalias */
+    e->sym_defalias      = intern_cstr(st, "defalias");
+    e->type_alias_names  = NULL;
+    e->type_alias_kinds  = NULL;
+    e->n_type_aliases    = 0;
+    e->cap_type_aliases  = 0;
     /* Phase HKT-P1: type-app */
     e->sym_type_app = intern_cstr(st, "type-app");
     /* Phase HRT0: forall/exists */

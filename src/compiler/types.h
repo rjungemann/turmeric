@@ -330,7 +330,7 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
             return CK_MOVE;
     }
 }
-#define MAX_FN_ARITY 8
+#define MAX_FN_ARITY 16
 
 /* Phase 13: Maximum lifetime parameters per type */
 #define MAX_TYPE_LIFETIMES 4

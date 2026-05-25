@@ -1,10 +1,10 @@
 ---
-title: MiniKanren Tutorial
+title: "MiniKanren Part 1: Relations and Queries"
 category: Tutorials and Examples
-description: Logic programming with miniKanren
+description: Logic programming with miniKanren -- relations, composition, and bidirectional queries
 ---
 
-# MiniKanren-Style Tutorial
+# MiniKanren Part 1: Relations and Queries
 
 A practical introduction to relational programming in Turmeric using a small, runnable example project in `examples/minikanren`.
 
@@ -99,15 +99,8 @@ mona
 
 ---
 
-## Next steps toward full miniKanren
+## Next steps
 
-After this tutorial, extend the example toward core miniKanren operators:
-
-- represent terms (`LVAR`, `SYM`, `PAIR`, `NIL`)
-- add unification (`=`, `==`)
-- add `fresh`, `conde`, and `run` combinators
-- reify results into user-friendly outputs
-
-For the full roadmap, see:
-
-- `docs/minikanren-plan.md`
+Continue to [MiniKanren Part 2: Core Operators](minikanren-2-core-operators.md), which
+builds the real miniKanren engine inside Turmeric -- term representation, unification,
+`fresh`, `conde`, `run`, and reification.

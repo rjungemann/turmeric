@@ -406,6 +406,8 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase HKT-P2: recursive type binders */
     if (name == e->sym_defrec) return elab_defrec(e, call);
     if (name == e->sym_deftype) return elab_deftype(e, call);
+    /* Phase TA1: defalias */
+    if (name == e->sym_defalias) return elab_defalias(e, call);
     /* Phase HRT0: forall/exists are type-level forms; reject in expression position */
     if (name == e->sym_forall || name == e->sym_forall_u) {
         diag_emit(DIAG_ERROR, call->span,

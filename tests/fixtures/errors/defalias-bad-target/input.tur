@@ -1,0 +1,1 @@
+(defalias Bad :not-a-type)
