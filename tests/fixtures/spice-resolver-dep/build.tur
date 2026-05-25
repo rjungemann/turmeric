@@ -1,0 +1,3 @@
+;; SC5 fixture: producer spice that exports helper/util.
+(defpackage spice-resolver-dep
+  :modules [helper/util])

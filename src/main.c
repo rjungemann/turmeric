@@ -1276,43 +1276,128 @@ static char *find_spice_root(const char *file_path) {
     return NULL;
 }
 
-/* SC4: if `input` lives inside a spice (a build.tur exists somewhere in
- * its ancestor chain) AND `<spice_root>/src/` exists, strdup that path,
- * append it to the include list, and return the same pointer so the
- * caller can free it on cleanup.
- *
- * The auto-discovered path is appended LAST so any explicit `-I` flags
- * win on name collisions (the elaborator searches include dirs in
- * order; first match wins).
- *
- * Returns NULL if:
- *   - g_no_auto_spice is set (user opted out via --no-auto-spice), OR
- *   - no build.tur is found within TUR_SPICE_WALK_MAX ancestors, OR
- *   - the spice root has no `src/` subdirectory, OR
- *   - any allocation fails (caller's existing -I list is left intact).
- *
- * On success, both `*inc` (the pointer array) and `*n_inc` are updated.
- * `*inc` must have been heap-allocated by parse_include_flags(); we
- * realloc() it in place. */
-static char *auto_append_spice_src(const char *input,
-                                   char ***inc, int *n_inc) {
-    if (g_no_auto_spice || !input) return NULL;
-    char *root = find_spice_root(input);
-    if (!root) return NULL;
-    char src[4096];
-    int n = snprintf(src, sizeof(src), "%s/src", root);
-    free(root);
-    if (n < 0 || (size_t)n >= sizeof(src)) return NULL;
-    struct stat st;
-    if (stat(src, &st) != 0 || !S_ISDIR(st.st_mode)) return NULL;
+/* Append `path` (taken by ownership of a strdup'd copy of `s`) to both
+ * the active include list and the owned-pointers ledger.  The owned
+ * ledger lets the caller free each strdup'd path after the compile
+ * completes.  Returns 0 on success, -1 on allocation failure (no
+ * partial state -- both arrays untouched). */
+static int append_inc_owned(const char *s,
+                            char ***inc, int *n_inc,
+                            char ***owned, int *n_owned) {
+    char *copy = strdup(s);
+    if (!copy) return -1;
+    char **bigger_inc = (char **)realloc(*inc, (size_t)(*n_inc + 1) * sizeof(char *));
+    if (!bigger_inc) { free(copy); return -1; }
+    *inc = bigger_inc;
+    char **bigger_own = (char **)realloc(*owned, (size_t)(*n_owned + 1) * sizeof(char *));
+    if (!bigger_own) {
+        /* Roll back the inc realloc growth so caller's view is consistent. */
+        free(copy);
+        return -1;
+    }
+    *owned = bigger_own;
+    (*inc)[(*n_inc)++]   = copy;
+    (*owned)[(*n_owned)++] = copy;
+    return 0;
+}
 
-    char *src_copy = strdup(src);
-    if (!src_copy) return NULL;
-    char **bigger = (char **)realloc(*inc, (size_t)(*n_inc + 1) * sizeof(char *));
-    if (!bigger) { free(src_copy); return NULL; }
-    *inc = bigger;
-    (*inc)[(*n_inc)++] = src_copy;
-    return src_copy;
+/* SC4+SC5: auto-discover the enclosing spice and append both its own
+ * `src/` (SC4) and every `:spices` dep's `src/` (SC5) to the include
+ * list.  Each appended path is strdup'd; the returned `*owned` array
+ * (size in `*n_owned`) is the strdup'd pointers in insertion order so
+ * the caller can free them after the compile call.
+ *
+ * Order matters: explicit `-I` flags from the user are already at the
+ * front of `*inc`, so the elaborator's first-match-wins behavior keeps
+ * them as the highest priority.  Within the auto-appended block, the
+ * enclosing spice's own src/ comes before fetched-dep src/ dirs (so a
+ * local module shadows a vendored one of the same name).
+ *
+ * Skipped (returns 0 with no entries) when:
+ *   - g_no_auto_spice is set, OR
+ *   - no build.tur is found within TUR_SPICE_WALK_MAX ancestors, OR
+ *   - both checks (own src/, manifest deps) yield nothing.
+ *
+ * The caller must own/free the returned pointer array even when empty:
+ *
+ *     char **owned = NULL;
+ *     int    n_owned = 0;
+ *     auto_append_spice_includes(input, &inc, &n_inc, &owned, &n_owned);
+ *     // ...compile...
+ *     for (int i = 0; i < n_owned; i++) free(owned[i]);
+ *     free(owned);
+ */
+static int auto_append_spice_includes(const char *input,
+                                      char ***inc, int *n_inc,
+                                      char ***owned, int *n_owned) {
+    *owned = NULL;
+    *n_owned = 0;
+    if (g_no_auto_spice || !input) return 0;
+
+    char *root = find_spice_root(input);
+    if (!root) return 0;
+
+    /* SC4: own src/ (always preferred over deps on name collision). */
+    char own_src[4096];
+    int n = snprintf(own_src, sizeof(own_src), "%s/src", root);
+    if (n > 0 && (size_t)n < sizeof(own_src)) {
+        struct stat st;
+        if (stat(own_src, &st) == 0 && S_ISDIR(st.st_mode)) {
+            (void)append_inc_owned(own_src, inc, n_inc, owned, n_owned);
+        }
+    }
+
+    /* SC5: parse the manifest and append every fetched `:spices` dep's
+     * src/.  Layout mirrors the convention used by cmd_run's project
+     * mode: spices/<name>-<ref>/src/  (preferred), or spices/<name>/src/
+     * for unversioned, or <root>/<s->path>/src/ for local-path deps.
+     * If a `:subdir` is set (monorepo sub-package), descend into it
+     * first, then look for src/.  If no src/ exists, fall back to the
+     * dep dir itself so the user gets *some* search path. */
+    char manifest_path[4096];
+    int mn = snprintf(manifest_path, sizeof(manifest_path), "%s/build.tur", root);
+    if (mn > 0 && (size_t)mn < sizeof(manifest_path)) {
+        PkgManifest m;
+        memset(&m, 0, sizeof(m));
+        if (pkg_manifest_read(manifest_path, &m)) {
+            char spices_dir[4096];
+            snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
+            for (int i = 0; i < m.n_spices; i++) {
+                const PkgSpice *s = &m.spices[i];
+                char dep_dir[4096];
+                if (s->path) {
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
+                } else if (s->ref) {
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                             spices_dir, s->name, s->ref);
+                } else {
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
+                             spices_dir, s->name);
+                }
+                if (s->subdir) {
+                    char joined[4096];
+                    snprintf(joined, sizeof(joined), "%s/%s", dep_dir, s->subdir);
+                    strncpy(dep_dir, joined, sizeof(dep_dir) - 1);
+                    dep_dir[sizeof(dep_dir) - 1] = '\0';
+                }
+                char dep_src[4096];
+                snprintf(dep_src, sizeof(dep_src), "%s/src", dep_dir);
+                struct stat ss;
+                const char *chosen = (stat(dep_src, &ss) == 0 && S_ISDIR(ss.st_mode))
+                                     ? dep_src : dep_dir;
+                /* Only add the path if it actually exists on disk.  A
+                 * missing fetched dep (offline run, etc.) shouldn't
+                 * pollute the include path with bogus dirs. */
+                if (stat(chosen, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                    (void)append_inc_owned(chosen, inc, n_inc, owned, n_owned);
+                }
+            }
+            pkg_manifest_free(&m);
+        }
+    }
+
+    free(root);
+    return 0;
 }
 
 /* Collect all .tur files in a directory. Returns malloc'd array, sets *n_out. */
@@ -1409,7 +1494,8 @@ static int cmd_run(int argc, char **argv) {
 #define RUN_ENTRY(entry_path) do {                                       \
         char out_path[] = "/tmp/tur-run-XXXXXX";                         \
         int _fd = mkstemp(out_path);                                     \
-        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); free(auto_src_run); return 2; } \
+        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        free(auto_run_owned); return 2; } \
         close(_fd);                                                      \
         int _n_inc = n_user_inc + n_spice_inc_dirs;                      \
         const char **_inc = NULL;                                        \
@@ -1420,7 +1506,8 @@ static int cmd_run(int argc, char **argv) {
         }                                                                \
         int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL); \
         free(_inc);                                                      \
-        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); free(auto_src_run); return _rc; } \
+        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        free(auto_run_owned); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
         if (passthrough_start >= 0) {                                    \
@@ -1433,18 +1520,22 @@ static int cmd_run(int argc, char **argv) {
         unlink(out_path);                                                \
         free(spice_inc_dirs);                                            \
         free(user_inc);                                                  \
-        free(auto_src_run);                                              \
+        for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        free(auto_run_owned);                                              \
         return decode_exit_status(_sys);                                 \
     } while (0)
 
-    /* SC4: in explicit-file mode, auto-discover the file's enclosing
-     * spice and add its `src/` to the include path so intra-spice
-     * imports resolve without an explicit -I (matching `tur check`).
-     * Project mode below sets up its own spice_inc_dirs from build.tur,
-     * so auto-discovery is skipped there. */
-    char *auto_src_run = NULL;
+    /* SC4+SC5: in explicit-file mode, auto-discover the file's enclosing
+     * spice and add its `src/` AND every :spices dep's src/ to the
+     * include path so intra-spice and cross-spice imports resolve
+     * without explicit -I (matching `tur check`).  Project mode below
+     * sets up its own spice_inc_dirs from build.tur, so auto-discovery
+     * is skipped there to avoid double-adding the same paths. */
+    char **auto_run_owned = NULL;
+    int    n_auto_run_owned = 0;
     if (explicit_file && strcmp(explicit_file, "-") != 0) {
-        auto_src_run = auto_append_spice_src(explicit_file, &user_inc, &n_user_inc);
+        auto_append_spice_includes(explicit_file, &user_inc, &n_user_inc,
+                                   &auto_run_owned, &n_auto_run_owned);
     }
 
     /* Single-file mode: explicit file provided, skip project lookup. */
@@ -5146,16 +5237,21 @@ int main(int argc, char **argv) {
                 if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_build(); }
                 inputs[n_inputs++] = argv[i];
             }
-            /* SC4: auto-discover spice src for the FIRST input only.  For
-             * the multi-file --output-dir form, that input typically lives
-             * inside the same spice as the others; if it doesn't, an
-             * explicit -I is the right escape hatch. */
-            char *auto_src_md = (n_inputs > 0)
-                ? auto_append_spice_src(inputs[0], &emit_inc, &n_emit_inc)
-                : NULL;
+            /* SC4+SC5: auto-discover spice src + cross-spice deps for the
+             * FIRST input only.  For the multi-file --output-dir form,
+             * that input typically lives inside the same spice as the
+             * others; if it doesn't, an explicit -I is the right escape
+             * hatch. */
+            char **md_owned = NULL;
+            int    n_md_owned = 0;
+            if (n_inputs > 0) {
+                auto_append_spice_includes(inputs[0], &emit_inc, &n_emit_inc,
+                                           &md_owned, &n_md_owned);
+            }
             int rc = cmd_emit_c_to_dir(out_dir, inputs, n_inputs,
                                        (const char **)emit_inc, n_emit_inc);
-            free(auto_src_md);
+            for (int i = 0; i < n_md_owned; i++) free(md_owned[i]);
+            free(md_owned);
             free(inputs);
             free(emit_inc);
             return rc;
@@ -5174,15 +5270,18 @@ int main(int argc, char **argv) {
             free(emit_inc); return usage_build();
         }
         if (!input) { free(emit_inc); return usage_build(); }
-        char *auto_src = auto_append_spice_src(input, &emit_inc, &n_emit_inc);
+        char **ec_owned = NULL; int n_ec_owned = 0;
+        auto_append_spice_includes(input, &emit_inc, &n_emit_inc,
+                                   &ec_owned, &n_ec_owned);
         int rc = cmd_emit_c(input, (const char **)emit_inc, n_emit_inc);
-        free(auto_src);
+        for (int i = 0; i < n_ec_owned; i++) free(ec_owned[i]);
+        free(ec_owned);
         free(emit_inc);
         return rc;
     }
     if (strcmp(cmd, "emit-h") == 0) {
         /* SC2: accept -I just like emit-c / check / build.
-         * SC4: auto-discover enclosing spice src/. */
+         * SC4+SC5: auto-discover enclosing spice src/ and dep src/. */
         char **eh_inc = NULL;
         int    n_eh_inc = parse_include_flags(argc, argv, 2, &eh_inc);
         if (n_eh_inc < 0) { free(eh_inc); return usage_build(); }
@@ -5198,9 +5297,12 @@ int main(int argc, char **argv) {
             free(eh_inc); return usage_build();
         }
         if (!input) { free(eh_inc); return usage_build(); }
-        char *auto_src = auto_append_spice_src(input, &eh_inc, &n_eh_inc);
+        char **eh_owned = NULL; int n_eh_owned = 0;
+        auto_append_spice_includes(input, &eh_inc, &n_eh_inc,
+                                   &eh_owned, &n_eh_owned);
         int rc = cmd_emit_h(input, (const char **)eh_inc, n_eh_inc);
-        free(auto_src);
+        for (int i = 0; i < n_eh_owned; i++) free(eh_owned[i]);
+        free(eh_owned);
         free(eh_inc);
         return rc;
     }
@@ -5228,7 +5330,9 @@ int main(int argc, char **argv) {
             free(check_inc); return usage_check();
         }
         if (!input) { free(check_inc); return usage_check(); }
-        char *auto_src = auto_append_spice_src(input, &check_inc, &n_check_inc);
+        char **ck_owned = NULL; int n_ck_owned = 0;
+        auto_append_spice_includes(input, &check_inc, &n_check_inc,
+                                   &ck_owned, &n_ck_owned);
         int rc;
         if (use_json_output) {
             diag_lsp_begin();
@@ -5245,7 +5349,8 @@ int main(int argc, char **argv) {
             rc = compile_to_c(input, &out, (const char **)check_inc, n_check_inc);
             buf_free(&out);
         }
-        free(auto_src);
+        for (int i = 0; i < n_ck_owned; i++) free(ck_owned[i]);
+        free(ck_owned);
         free(check_inc);
         return rc;
     }

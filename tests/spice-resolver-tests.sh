@@ -21,6 +21,11 @@ FIXTURE="tests/fixtures/spice-resolver-ok"
 SRC_ROOT="$FIXTURE/src"
 ENTRY="$SRC_ROOT/foo/b.tur"
 
+# SC5 fixtures: a consumer spice that depends on a sibling producer spice
+# via :spices :path.  See tests/fixtures/spice-resolver-deps/build.tur.
+DEPS_FIXTURE="tests/fixtures/spice-resolver-deps"
+DEPS_ENTRY="$DEPS_FIXTURE/src/app/main.tur"
+
 PASS=0
 FAIL=0
 FAILED=()
@@ -152,6 +157,26 @@ assert_exit 1 "SC4: --no-auto-spice opts out of auto-discovery (check fails agai
 assert_stderr_contains "intra-spice import" \
     "SC4: --no-auto-spice falls through to SC0 hint" \
     "$TUR" --no-auto-spice check "$ENTRY"
+
+# SC5: with cross-spice deps wired via auto-discovery, `tur check` on a
+# consumer spice resolves `import helper/util` (from the sibling
+# spice-resolver-dep) without any explicit -I.
+assert_exit 0 "SC5: tur check resolves :spices :path dep via auto-discovery" \
+    "$TUR" check "$DEPS_ENTRY"
+
+# SC5: same for emit-c.
+assert_exit 0 "SC5: tur emit-c resolves :spices :path dep via auto-discovery" \
+    "$TUR" emit-c "$DEPS_ENTRY"
+
+# SC5: tur run also resolves the dep and produces a working binary.
+# The dep's `bonus` returns 100, so main's exit code is 100.
+assert_exit 100 "SC5: tur run with :spices :path dep returns dep's value (100)" \
+    "$TUR" run "$DEPS_ENTRY"
+
+# SC5: --no-auto-spice disables the manifest read too, so the same check
+# falls back to the SC0 diagnostic for the missing helper/util.
+assert_exit 1 "SC5: --no-auto-spice disables :spices auto-resolution as well" \
+    "$TUR" --no-auto-spice check "$DEPS_ENTRY"
 
 # SC4: works the same way when invoked from a deeply-nested unrelated
 # cwd, since find_spice_root canonicalizes via realpath() and walks
