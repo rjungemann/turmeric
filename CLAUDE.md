@@ -28,6 +28,26 @@ just wasm        # build WebAssembly module (runs docs first)
 just web-dev     # run web dev server
 ```
 
+## Per-file Commands Inside a Spice
+
+`tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>` walk up
+from the input file looking for an enclosing `build.tur`. When they
+find one, the spice's `src/` is added to the module-resolution search
+path, and every `:spices` dep declared in the manifest contributes its
+`src/` too. The result is that intra-spice imports (like
+`(import frame/schema)`) resolve without per-spice `-I` configuration
+in your editor, LSP, or format-on-save hook.
+
+- Explicit `-I <dir>` flags still work and win on name collisions.
+- `--no-auto-spice` (global flag, before the subcommand) opts out.
+- `tur build <file>` (single-file build) does **not** auto-discover --
+  use `tur run <file>` for the same convenience, or pass `-I` explicitly.
+- `tur build <dir>` and `tur run` (project mode) already configure
+  themselves from `build.tur`; auto-discovery is a no-op there.
+
+See [docs/guides/developing-spices-guide.md](docs/guides/developing-spices-guide.md#per-file-commands-inside-a-spice)
+for the full rules.
+
 ## Docstring Standard (`;;;`)
 
 Use `;;;` (triple-semicolon) as the doc-comment marker. A docstring block

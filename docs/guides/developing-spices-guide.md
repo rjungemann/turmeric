@@ -454,6 +454,67 @@ package and consumers will use `tur add spice/<name>` without a Git URL.
 
 ---
 
+## Per-file Commands Inside a Spice
+
+`tur build <dir>` and `tur run` (project mode) know about the spice they
+live in because they start by reading `build.tur`. The per-file
+subcommands `tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>`
+get the same behavior automatically -- they walk up from the input file
+looking for a sibling `build.tur` and add that spice's `src/` to the
+include path. If the manifest declares `:spices` dependencies, those
+deps' `src/` directories are added too.
+
+This means editors, format-on-save hooks, LSP clients, and quick
+"compile this one file" loops work without per-spice configuration:
+
+```sh
+cd spices/frame
+tur check src/frame/frame.tur     # resolves intra-spice imports
+tur emit-c src/frame/schema.tur   # same
+tur run src/frame/quickstart.tur  # builds and executes
+```
+
+The walk-up is capped at 16 ancestor directories, so a stray
+`build.tur` far above your working tree won't accidentally win.
+
+### `-I` for extra directories
+
+Explicit `-I <dir>` flags still work and take priority over
+auto-discovered paths -- useful for fixtures, vendored copies, or when
+you want to test against a different version of a dep:
+
+```sh
+tur check -I vendor/alternate src/main.tur
+```
+
+`-I` accepts both the spaced (`-I path`) and concatenated (`-Ipath`)
+forms.
+
+### `--no-auto-spice` escape hatch
+
+If you need to compile a file as if no spice exists around it (rare --
+typically only useful for resolver-fixture tests or when an unrelated
+`build.tur` is in the ancestor chain), pass `--no-auto-spice`:
+
+```sh
+tur --no-auto-spice check tests/fixtures/resolver/input.tur
+```
+
+This restores the pre-auto-discovery behavior: only the input file's
+own directory, the stdlib, and any explicit `-I` paths are searched.
+
+### When auto-discovery does not apply
+
+- `tur build <dir>` -- already configures itself from the directory's
+  `build.tur`.
+- `tur build <file>` -- the single-file build doesn't auto-discover;
+  use `tur run <file>` if you want the same convenience for a one-off
+  invocation, or pass `-I` explicitly.
+- `tur format <file>` -- the formatter doesn't resolve imports, so
+  include paths are irrelevant.
+
+---
+
 ## Supporting CMake Consumers
 
 If you want C and C++ projects to consume your spice via CMake or CPM

@@ -158,6 +158,12 @@ assert_stderr_contains "intra-spice import" \
     "SC4: --no-auto-spice falls through to SC0 hint" \
     "$TUR" --no-auto-spice check "$ENTRY"
 
+# SC6: --json output exercises the same auto-discovery code path the LSP
+# server uses via tur_check_only().  No -I, no --no-auto-spice; expect a
+# successful JSON envelope and exit 0.
+assert_exit 0 "SC6: tur --json check inherits auto-discovery (LSP-equivalent path)" \
+    "$TUR" --json check "$ENTRY"
+
 # SC5: with cross-spice deps wired via auto-discovery, `tur check` on a
 # consumer spice resolves `import helper/util` (from the sibling
 # spice-resolver-dep) without any explicit -I.

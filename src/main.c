@@ -434,6 +434,12 @@ static int  usage_run(void);
  * (defined below find_spice_root) but set by parse_no_auto_spice in main(). */
 static bool g_no_auto_spice;
 
+/* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
+ * (called by the LSP server) and the per-file dispatchers. */
+static int auto_append_spice_includes(const char *input,
+                                      char ***inc, int *n_inc,
+                                      char ***owned, int *n_owned);
+
 /* Global state for symbol collection -- set by tur_collect_symbols before
  * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
 static LspSymbol  *g_collect_syms_out   = NULL;
@@ -834,12 +840,27 @@ static int generate_main_c(Buf *out, const char **h_files, int n_files, const ch
 }
 
 /* Run type-check only on `path`; discard generated C.
- * Used by the LSP server. Must be called with diag_lsp_begin active. */
+ * Used by the LSP server. Must be called with diag_lsp_begin active.
+ *
+ * SC6: applies the same SC4+SC5 auto-discovery that `tur check` uses,
+ * so editor diagnostics in spice files don't show bogus "module not
+ * found" errors for intra-spice and cross-spice imports.  --no-auto-spice
+ * is honored if the user passed it at the top level. */
 int tur_check_only(const char *path) {
+    char **inc = NULL;
+    int    n_inc = 0;
+    char **owned = NULL;
+    int    n_owned = 0;
+    auto_append_spice_includes(path, &inc, &n_inc, &owned, &n_owned);
+
     Buf discard;
     buf_init(&discard);
-    int rc = compile_to_c(path, &discard, NULL, 0);
+    int rc = compile_to_c(path, &discard, (const char **)inc, n_inc);
     buf_free(&discard);
+
+    for (int i = 0; i < n_owned; i++) free(owned[i]);
+    free(owned);
+    free(inc);
     return rc;
 }
 
