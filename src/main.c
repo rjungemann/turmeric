@@ -424,6 +424,12 @@ static int run_core_passes(PassContext *ctx) {
 static int compile_to_c(const char *path, Buf *out_c,
                         const char **include_dirs, int n_include_dirs);
 
+/* SC1/SC2 forward decls: include-flag helpers used from cmd_run before
+ * their definitions later in this file. */
+static int  parse_include_flags(int argc, char **argv, int start, char ***out_dirs);
+static bool is_include_flag(int argc, char **argv, int i, int *consumed);
+static int  usage_run(void);
+
 /* Global state for symbol collection -- set by tur_collect_symbols before
  * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
 static LspSymbol  *g_collect_syms_out   = NULL;
@@ -695,7 +701,8 @@ static int compile_to_c(const char *path, Buf *out_c,
 }
 
 /* Compile a .tur file to a C header (.h). Returns 0 on success. */
-static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
+static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
+                        const char **include_dirs, int n_include_dirs) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -733,6 +740,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
         ctx.forms  = forms;
         ctx.nforms = nforms;
         ctx.module_base_dir = base_dir;
+        ctx.include_dirs    = include_dirs;
+        ctx.n_include_dirs  = n_include_dirs;
         ctx.separate_compilation = true;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_header(out_h, module_name, ctx.prog, true) != 0) {
@@ -747,7 +756,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
 }
 
 /* Compile a .tur file to a C implementation (.c). Returns 0 on success. */
-static int compile_to_implementation(const char *path, Buf *out_c, const char *module_name) {
+static int compile_to_implementation(const char *path, Buf *out_c, const char *module_name,
+                                     const char **include_dirs, int n_include_dirs) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -785,6 +795,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         ctx.forms  = forms;
         ctx.nforms = nforms;
         ctx.module_base_dir = base_dir;
+        ctx.include_dirs    = include_dirs;
+        ctx.n_include_dirs  = n_include_dirs;
         ctx.separate_compilation = true;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true) != 0) {
@@ -827,10 +839,11 @@ int tur_check_only(const char *path) {
     return rc;
 }
 
-static int cmd_emit_c(const char *path) {
+static int cmd_emit_c(const char *path,
+                      const char **include_dirs, int n_include_dirs) {
     Buf out;
     buf_init(&out);
-    int rc = compile_to_c(path, &out, NULL, 0);
+    int rc = compile_to_c(path, &out, include_dirs, n_include_dirs);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
     return rc;
@@ -839,7 +852,8 @@ static int cmd_emit_c(const char *path) {
 /* Phase B: emit per-module .h and .c files to a directory.
  * Usage: tur emit-c --output-dir <dir> <file1.tur> [<file2.tur> ...]
  * Each input produces <dir>/<module>.h and <dir>/<module>.c. */
-static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs) {
+static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
+                             const char **include_dirs, int n_include_dirs) {
     if (n_inputs < 1) {
         fprintf(stderr, "tur emit-c --output-dir: at least one input required\n");
         return 1;
@@ -875,8 +889,10 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs) {
         buf_init(&h_buf);
         buf_init(&c_buf);
 
-        int h_rc = compile_to_h(input, &h_buf, mod_name);
-        int c_rc = compile_to_implementation(input, &c_buf, mod_name);
+        int h_rc = compile_to_h(input, &h_buf, mod_name,
+                                include_dirs, n_include_dirs);
+        int c_rc = compile_to_implementation(input, &c_buf, mod_name,
+                                             include_dirs, n_include_dirs);
 
         if (h_rc != 0 || c_rc != 0) {
             rc = (h_rc != 0) ? h_rc : c_rc;
@@ -893,7 +909,8 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs) {
 }
 
 /* Phase M3: emit the .h for a single module file to stdout. */
-static int cmd_emit_h(const char *path) {
+static int cmd_emit_h(const char *path,
+                      const char **include_dirs, int n_include_dirs) {
     const char *base = basename_of(path);
     size_t base_len = strlen(base);
     char mod_name[256];
@@ -905,7 +922,7 @@ static int cmd_emit_h(const char *path) {
 
     Buf out;
     buf_init(&out);
-    int rc = compile_to_h(path, &out, mod_name);
+    int rc = compile_to_h(path, &out, mod_name, include_dirs, n_include_dirs);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
     return rc;
@@ -1239,20 +1256,33 @@ static int decode_exit_status(int status) {
 }
 
 static int cmd_run(int argc, char **argv) {
-    /* tur run [--release] [--offline] [<file>] [-- <args>...] */
+    /* tur run [-I <dir>...] [--release] [--offline] [<file>] [-- <args>...] */
     bool        release           = false;
     bool        offline           = false;
     const char *explicit_file     = NULL;
     int         passthrough_start = -1;
 
+    /* SC2: collect -I flags up front (stops scanning at `--`, since
+     * everything after is passthrough to the spawned program). */
+    int  scan_end = argc;
     for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) { scan_end = i; break; }
+    }
+    char **user_inc = NULL;
+    int    n_user_inc = parse_include_flags(scan_end, argv, 2, &user_inc);
+    if (n_user_inc < 0) { free(user_inc); return usage_run(); }
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) {
+            passthrough_start = i + 1;
+            break;
+        }
+        int c;
+        if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
         if (strcmp(argv[i], "--release") == 0) {
             release = true;
         } else if (strcmp(argv[i], "--offline") == 0) {
             offline = true;
-        } else if (strcmp(argv[i], "--") == 0) {
-            passthrough_start = i + 1;
-            break;
         } else if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
             if (!explicit_file) explicit_file = argv[i];
         }
@@ -1260,7 +1290,10 @@ static int cmd_run(int argc, char **argv) {
     (void)release; /* passed to compiler when --release build is supported */
 
     /* spice_inc_dirs: populated below during project-mode setup.
-     * RUN_ENTRY captures these via the enclosing scope. */
+     * RUN_ENTRY captures these via the enclosing scope.  User-supplied
+     * -I flags (user_inc above) are merged in with priority over
+     * project-inferred dirs (first match wins in the elaborator's
+     * include search). */
     const char **spice_inc_dirs = NULL;
     int          n_spice_inc_dirs = 0;
 
@@ -1268,11 +1301,18 @@ static int cmd_run(int argc, char **argv) {
 #define RUN_ENTRY(entry_path) do {                                       \
         char out_path[] = "/tmp/tur-run-XXXXXX";                         \
         int _fd = mkstemp(out_path);                                     \
-        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; } \
+        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; } \
         close(_fd);                                                      \
-        int _rc = cmd_build((entry_path), out_path,                      \
-                            spice_inc_dirs, n_spice_inc_dirs, NULL);     \
-        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); return _rc; } \
+        int _n_inc = n_user_inc + n_spice_inc_dirs;                      \
+        const char **_inc = NULL;                                        \
+        if (_n_inc > 0) {                                                \
+            _inc = (const char **)malloc((size_t)_n_inc * sizeof(char *)); \
+            for (int _i = 0; _i < n_user_inc; _i++) _inc[_i] = user_inc[_i]; \
+            for (int _i = 0; _i < n_spice_inc_dirs; _i++) _inc[n_user_inc + _i] = spice_inc_dirs[_i]; \
+        }                                                                \
+        int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL); \
+        free(_inc);                                                      \
+        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
         if (passthrough_start >= 0) {                                    \
@@ -1284,6 +1324,7 @@ static int cmd_run(int argc, char **argv) {
         buf_free(&_cmd);                                                  \
         unlink(out_path);                                                \
         free(spice_inc_dirs);                                            \
+        free(user_inc);                                                  \
         return decode_exit_status(_sys);                                 \
     } while (0)
 
@@ -1293,7 +1334,7 @@ static int cmd_run(int argc, char **argv) {
         if (strcmp(explicit_file, "-") == 0) {
             char src_tmp[] = "/tmp/tur-stdin-XXXXXX.tur";
             int src_fd = mkstemps(src_tmp, 4);
-            if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+            if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
             char ibuf[4096]; size_t nr;
             int ok = 1;
             while ((nr = fread(ibuf, 1, sizeof(ibuf), stdin)) > 0)
@@ -1302,15 +1343,19 @@ static int cmd_run(int argc, char **argv) {
             if (!ok) {
                 unlink(src_tmp);
                 fprintf(stderr, "tur: error reading stdin\n");
+                free(user_inc);
                 return 2;
             }
             char out_path[] = "/tmp/tur-run-XXXXXX";
             int out_fd = mkstemp(out_path);
-            if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+            if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
             close(out_fd);
-            int brc = cmd_build(src_tmp, out_path, spice_inc_dirs, n_spice_inc_dirs, NULL);
+            /* SC2: stdin mode never enters project setup, so spice_inc_dirs
+             * is empty here; we can pass user_inc straight through. */
+            int brc = cmd_build(src_tmp, out_path,
+                                (const char **)user_inc, n_user_inc, NULL);
             unlink(src_tmp);
-            if (brc != 0) { unlink(out_path); free(spice_inc_dirs); return brc; }
+            if (brc != 0) { unlink(out_path); free(user_inc); return brc; }
             Buf run_cmd; buf_init(&run_cmd);
             buf_printf(&run_cmd, "'%s'", out_path);
             if (passthrough_start >= 0)
@@ -1320,7 +1365,7 @@ static int cmd_run(int argc, char **argv) {
             int sys = system(run_cmd.data);
             buf_free(&run_cmd);
             unlink(out_path);
-            free(spice_inc_dirs);
+            free(user_inc);
             return decode_exit_status(sys);
         }
         RUN_ENTRY(explicit_file);
@@ -1785,7 +1830,7 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
 
         Buf h_out;
         buf_init(&h_out);
-        if (compile_to_h(tur_files[i], &h_out, mod_name_no_ext) != 0) {
+        if (compile_to_h(tur_files[i], &h_out, mod_name_no_ext, NULL, 0) != 0) {
             fprintf(stderr, "tur: failed to compile %s to header\n", tur_files[i]);
             buf_free(&h_out);
             for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
@@ -1805,7 +1850,7 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
 
         Buf c_out;
         buf_init(&c_out);
-        if (compile_to_implementation(tur_files[i], &c_out, mod_name_no_ext) != 0) {
+        if (compile_to_implementation(tur_files[i], &c_out, mod_name_no_ext, NULL, 0) != 0) {
             fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
             buf_free(&c_out);
             for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
@@ -4286,12 +4331,17 @@ static int usage(void) {
 static int usage_build(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur build <file.tur> [-o <out>]   build a single file\n"
-        "  tur build <dir> [-o <out>]        build all .tur files in directory\n"
+        "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
+        "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
+        "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
+        "  tur emit-c [-I <dir>...] --output-dir <dir> <files...>  emit per-module .h/.c\n"
+        "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
         "\n"
         "flags:\n"
         "  -o <out>          output file path\n"
-        "  -I <dir>          add include directory\n"
+        "  -I <dir>          add include directory for module resolution\n"
+        "                    (repeat to add multiple; intra-spice imports usually\n"
+        "                    want `-I src` from the spice root)\n"
         "  --target wasm     compile to WebAssembly via emcc (requires Emscripten)\n"
         "\n"
         "Try 'tur --help' for global options.\n");
@@ -4301,10 +4351,13 @@ static int usage_build(void) {
 static int usage_run(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur run <file.tur> [-- <args...>]   build and execute a single file\n"
-        "  tur run - [-- <args...>]            read source from stdin, build and execute\n"
+        "  tur run [-I <dir>...] <file.tur> [-- <args...>]\n"
+        "                                  build and execute a single file\n"
+        "  tur run [-I <dir>...] - [-- <args...>]\n"
+        "                                  read source from stdin, build and execute\n"
         "\n"
         "flags:\n"
+        "  -I <dir>    add an include directory for module resolution\n"
         "  --release   optimized build\n"
         "  --offline   skip dependency fetch\n"
         "  --          pass remaining arguments to the program\n"
@@ -4923,18 +4976,76 @@ int main(int argc, char **argv) {
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "emit-c") == 0) {
-        /* tur emit-c --output-dir <dir> <file1> [<file2> ...] */
-        if (argc >= 4 && strcmp(argv[2], "--output-dir") == 0) {
-            const char *out_dir = argv[3];
-            return cmd_emit_c_to_dir(out_dir, argv + 4, argc - 4);
+        /* SC2: collect -I flags up front so both emit-c forms see them. */
+        char **emit_inc = NULL;
+        int    n_emit_inc = parse_include_flags(argc, argv, 2, &emit_inc);
+        if (n_emit_inc < 0) { free(emit_inc); return usage_build(); }
+
+        /* tur emit-c [-I <dir>...] --output-dir <dir> <file1> [<file2> ...] */
+        int od_idx = -1;
+        for (int i = 2; i < argc; i++) {
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (strcmp(argv[i], "--output-dir") == 0) { od_idx = i; break; }
         }
-        /* tur emit-c <file> -- single file to stdout (legacy) */
-        if (argc != 3) return usage_build();
-        return cmd_emit_c(argv[2]);
+        if (od_idx >= 0) {
+            if (od_idx + 1 >= argc) { free(emit_inc); return usage_build(); }
+            const char *out_dir = argv[od_idx + 1];
+            /* Inputs are every non-flag arg that isn't --output-dir or its
+             * value or a -I value.  Build a clean inputs list. */
+            char **inputs = (char **)malloc((size_t)argc * sizeof(char *));
+            int    n_inputs = 0;
+            for (int i = 2; i < argc; i++) {
+                int c;
+                if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+                if (i == od_idx) { i++; continue; }   /* skip --output-dir and its value */
+                if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_build(); }
+                inputs[n_inputs++] = argv[i];
+            }
+            int rc = cmd_emit_c_to_dir(out_dir, inputs, n_inputs,
+                                       (const char **)emit_inc, n_emit_inc);
+            free(inputs);
+            free(emit_inc);
+            return rc;
+        }
+
+        /* tur emit-c [-I <dir>...] <file>   single file to stdout (legacy) */
+        const char *input = NULL;
+        for (int i = 2; i < argc; i++) {
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (argv[i][0] != '-') {
+                if (input) { free(emit_inc); return usage_build(); }
+                input = argv[i];
+                continue;
+            }
+            free(emit_inc); return usage_build();
+        }
+        if (!input) { free(emit_inc); return usage_build(); }
+        int rc = cmd_emit_c(input, (const char **)emit_inc, n_emit_inc);
+        free(emit_inc);
+        return rc;
     }
     if (strcmp(cmd, "emit-h") == 0) {
-        if (argc != 3) return usage_build();
-        return cmd_emit_h(argv[2]);
+        /* SC2: accept -I just like emit-c / check / build. */
+        char **eh_inc = NULL;
+        int    n_eh_inc = parse_include_flags(argc, argv, 2, &eh_inc);
+        if (n_eh_inc < 0) { free(eh_inc); return usage_build(); }
+        const char *input = NULL;
+        for (int i = 2; i < argc; i++) {
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (argv[i][0] != '-') {
+                if (input) { free(eh_inc); return usage_build(); }
+                input = argv[i];
+                continue;
+            }
+            free(eh_inc); return usage_build();
+        }
+        if (!input) { free(eh_inc); return usage_build(); }
+        int rc = cmd_emit_h(input, (const char **)eh_inc, n_eh_inc);
+        free(eh_inc);
+        return rc;
     }
     if (strcmp(cmd, "check") == 0) {
         /* Phase 8: tur check subcommand - type-check only, no codegen

@@ -89,6 +89,43 @@ assert_stderr_contains "intra-spice import" \
     "SC0: diagnostic mentions intra-spice import" \
     "$TUR" check "$ENTRY"
 
+# SC2: `tur emit-c -I <src> <file>` succeeds and emits valid C to stdout.
+assert_exit 0 "SC2: tur emit-c -I <src> resolves intra-spice import" \
+    "$TUR" emit-c -I "$SRC_ROOT" "$ENTRY"
+
+# SC2: `tur emit-c` without -I fails with the same diagnostic.
+assert_exit 1 "SC2: tur emit-c (no -I) fails on intra-spice import" \
+    "$TUR" emit-c "$ENTRY"
+
+# SC2: `tur emit-h -I <src> <file>` succeeds.
+assert_exit 0 "SC2: tur emit-h -I <src> resolves intra-spice import" \
+    "$TUR" emit-h -I "$SRC_ROOT" "$ENTRY"
+
+# SC2: `tur emit-h` without -I fails.
+assert_exit 1 "SC2: tur emit-h (no -I) fails on intra-spice import" \
+    "$TUR" emit-h "$ENTRY"
+
+# SC2: `tur emit-c --output-dir <dir> -I <src> <file>` succeeds and writes
+# files to the output directory.
+EMIT_OUT=$(mktemp -d)
+assert_exit 0 "SC2: tur emit-c --output-dir -I <src> succeeds" \
+    "$TUR" emit-c -I "$SRC_ROOT" --output-dir "$EMIT_OUT" "$ENTRY"
+if [ -f "$EMIT_OUT/b.h" ] && [ -f "$EMIT_OUT/b.c" ]; then
+    echo "PASS SC2: emit-c --output-dir produced b.h and b.c"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SC2: emit-c --output-dir missing b.h or b.c in $EMIT_OUT"
+    ls -la "$EMIT_OUT" || true
+    FAIL=$((FAIL + 1))
+    FAILED+=("SC2: emit-c --output-dir output present")
+fi
+rm -rf "$EMIT_OUT"
+
+# SC2: `tur run -I <src> <file>` succeeds and the produced binary exits with
+# the value `main` returns (42 in our fixture).
+assert_exit 42 "SC2: tur run -I <src> compiles and executes intra-spice import" \
+    "$TUR" run -I "$SRC_ROOT" "$ENTRY"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
