@@ -1445,12 +1445,10 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     Type result_type;
     if (fn_type.kind == TY_FN) {
         TypeKind result_kind = fn_type.as.fn.result_kind;
-        /* SS3a: Use full session return type when available (preserves the protocol
-         * pointer inside Session[P]).  Without this, type_from_kind(TY_SESSION)
-         * produces a bare Session shell with NULL protocol, causing silent failures
-         * when the returned channel is used in subsequent session operations. */
-        if (g_sessions_enabled && result_kind == TY_SESSION &&
-                fn_type.as.fn.result_full_type) {
+        /* Preserve the full return type payload when available.
+         * This keeps compound returns such as Session[P], Role[...], and
+         * higher-order TY_FN results from collapsing into a bare TypeKind shell. */
+        if (fn_type.as.fn.result_full_type) {
             result_type = *fn_type.as.fn.result_full_type;
         } else {
             result_type = type_from_kind(result_kind);

@@ -604,6 +604,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_session_type = NULL; /* SS3a/SS7: full session/role return type */
     Type *return_app_type = NULL; /* PTC4: full TY_APP return type for concrete type threading */
     Type *return_exists_type = NULL; /* F1-1: full TY_EXISTS/TY_FORALL return type so callers see the forall_ payload (without it elab_open SEGVs reading body) */
+    Type *return_fn_type = NULL; /* Issue 1b: full TY_FN return type so callers see the complete function signature (arity, result_kind) rather than a zeroed TY_FN shell */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -744,6 +745,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * garbage `body` pointer. */
                     if (ann->kind == TY_EXISTS || ann->kind == TY_FORALL) {
                         return_exists_type = ann;
+                    }
+                    /* Issue 1b: capture full TY_FN return type so callers see
+                     * the complete function signature (arity, result_kind). */
+                    if (ann->kind == TY_FN) {
+                        return_fn_type = ann;
                     }
                     /* F2-1: a `:linear` existential cannot escape past the
                      * scope that packs it -- the linear discipline relies on
@@ -1095,6 +1101,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
             *rft = body->type;
             return_session_type = rft;
         }
+        /* Issue 1b: propagate full TY_FN type from body so callers see the
+         * complete function signature (arity, result_kind) rather than a zeroed
+         * TY_FN shell from type_from_kind(TY_FN). */
+        if (body->type.kind == TY_FN && !return_fn_type) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = body->type;
+            return_fn_type = rft;
+        }
     }
 
     /* Create function type */
@@ -1129,6 +1143,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * returned channel is used in subsequent session operations. */
     if (return_session_type) {
         fn_type.as.fn.result_full_type = return_session_type;
+    }
+    /* Issue 1b: attach full TY_FN return type so callers see the complete
+     * function signature (arity, result_kind) rather than a zeroed TY_FN
+     * shell.  Only set if not already filled by a more specific path (e.g.
+     * ADT, struct, session, TY_APP, TY_EXISTS). */
+    if (return_fn_type && !fn_type.as.fn.result_full_type) {
+        fn_type.as.fn.result_full_type = return_fn_type;
     }
     /* PTC4: attach full TY_APP return type so call sites can extract concrete elem types. */
     if (return_app_type) {
@@ -1336,6 +1357,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     /* Parse return type annotation and body */
     TypeKind return_kind = TY_NIL;
+    Type *return_fn_type = NULL; /* Preserve full TY_FN returns for higher-order calls. */
     uint32_t body_start = 2;
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type. */
@@ -1398,7 +1420,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
             /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
             if (ret_f->as.list.len > 0) {
                 Type *ann = type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0);
-                if (ann) return_kind = ann->kind;
+                if (ann) {
+                    return_kind = ann->kind;
+                    if (ann->kind == TY_FN) {
+                        return_fn_type = ann;
+                    }
+                }
             }
             body_start++;
         }
@@ -1464,6 +1491,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* Infer return type from body if not specified */
     if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
         return_kind = body->type.kind;
+        if (body->type.kind == TY_FN) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = body->type;
+            return_fn_type = rft;
+        }
     }
     
     /* Create function type */
@@ -1472,6 +1504,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
         arg_kinds[i] = TY_INT;  /* All int for phase 2 */
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+    if (return_fn_type) {
+        fn_type.as.fn.result_full_type = return_fn_type;
+    }
 
     /* Check if we're at top level */
     bool at_top_level = (e->scope == &e->global);
@@ -1570,6 +1605,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
             new_arg_kinds[i + 1] = TY_INT;
         }
         Type new_fn_type = type_fn(new_arg_kinds, new_n_params, return_kind);
+        if (return_fn_type) {
+            new_fn_type.as.fn.result_full_type = return_fn_type;
+        }
         b->type = new_fn_type;
         fd->binding->type = new_fn_type;
         fn_def_expr->type = new_fn_type;

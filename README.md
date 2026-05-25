@@ -2,6 +2,8 @@
 
 A Lisp that compiles to C99.
 
+**Latest release:** `v0.10.0` -- fixes higher-order returned-function typing and brings the signal spice back into the normal typecheck matrix.
+
 ## What
 
 Turmeric is a statically-typed Lisp compiler that targets C99. Write expressive Lisp code and get fast, portable C out. The compiler (`tur`) elaborates surface syntax into a typed IR, performs borrow checking, reference-count elision, and then emits C source that you can compile with any C99 compiler.

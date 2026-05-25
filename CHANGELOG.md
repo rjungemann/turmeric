@@ -2,6 +2,13 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.10.0] -- 2026-05-25
+
+### Fixed
+
+- Higher-order function return types now preserve their full `TY_FN` payload through elaboration and calls, so let-bound functions returned from other functions remain callable instead of degrading to a non-callable shell type.
+- The signal spice no longer needs `requires.typecheck-skip`; `signal/core.tur`, `signal/dsp.tur`, `signal/envelope.tur`, and `signal/synth.tur` all typecheck cleanly against the current compiler and signal API surface.
+
 ## [0.9.0] -- 2026-05-22
 
 ### Added
