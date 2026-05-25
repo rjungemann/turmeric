@@ -16,16 +16,19 @@ One new spice for the `turmeric-spices` monorepo:
 
 `tur-notebook` is a pair of complementary tools that share one file format:
 
-1. **The format.** A strict superset of CommonMark. A `.turmd` file is plain
-   markdown; fenced code blocks tagged `turmeric` or `tursweet` are
-   *executable cells*. Everything else is prose.
-2. **The renderer.** `tur nb render foo.turmd` evaluates every cell in order
-   in a fresh session and emits either:
+1. **The format.** A strict superset of CommonMark. A `.tur.md` file is plain
+   markdown -- it opens cleanly in GitHub, VS Code preview, Obsidian, and
+   pandoc with no plugin -- where fenced code blocks tagged `turmeric` or
+   `tursweet` are *executable cells*. Everything else is prose.
+2. **The renderer / exporter.** `tur nb render foo.tur.md` evaluates every
+   cell in order in a fresh session and emits either:
    - `foo.md` -- the source with each cell followed by an `output` fenced
      block (Quarto / R Markdown pattern), or
-   - `foo.html` -- a standalone HTML page (reusing `tools/gendocs.py`'s
-     existing CSS so it matches the stdlib docs look).
-3. **The interactive TUI.** `tur nb tui foo.turmd` opens the file in a
+   - `foo.html` -- a standalone HTML page using a vendored copy of the
+     stdlib docs CSS so it matches the rest of the docs site.
+   A dedicated `tur nb export <fmt> foo.tur.md` subcommand is provided as a
+   discoverable alias (see [CLI](#cli)).
+3. **The interactive TUI.** `tur nb tui foo.tur.md` opens the file in a
    terminal UI with **Jupyter-style modal navigation** -- a *command mode*
    for moving between cells and re-running them, and an *edit mode* that
    shells out to `$EDITOR` for the focused cell. State persists across
@@ -36,16 +39,20 @@ The interactive piece is the most consequential design choice in this plan;
 see [Interactive design](#interactive-design) below for the rationale and the
 alternatives I considered.
 
-`tur-notebook` has no cmake C dependency of its own. It links against
-**libturi** for the embedded interpreter (already exposed via the WASM
-glue layer), and uses raw ANSI escape sequences for the TUI rather than
-pulling in ncurses.
+`tur-notebook` has **no C dependencies**. It links against **libturi** for
+the embedded interpreter (already exposed via the WASM glue layer), uses
+raw ANSI escape sequences for the TUI rather than pulling in ncurses, and
+ships a **pure-Turmeric CommonMark subset parser** (`notebook/cmark`) so the
+spice has no third-party C code to vendor. The parser scope is deliberately
+narrowed to "what notebooks actually use"; see
+[Parser scope](#parser-scope) below for the included / deferred feature
+list.
 
 ---
 
 ## File format
 
-A `.turmd` file is CommonMark with two recognized fence languages:
+A `.tur.md` file is CommonMark with two recognized fence languages:
 
 - ```` ```turmeric ```` -- a Turmeric cell (s-expression syntax).
 - ```` ```tursweet ```` -- a sweet-expression cell (`#lang sweet-exp`
@@ -103,7 +110,7 @@ sibling-file link, depending on `image=`.
 - We do not need to write a custom parser; we feed the file through any
   CommonMark library (a tiny one is vendored as part of NB1) and walk the
   AST for fence nodes whose info string starts with `turmeric` or `tursweet`.
-- Round-trip safe: render emits markdown that is itself valid `.turmd`, so
+- Round-trip safe: render emits markdown that is itself valid `.tur.md`, so
   rendered + re-edited + re-rendered files do not drift.
 
 ---
@@ -116,31 +123,33 @@ Standard spice layout:
 spices/notebook/
   build.tur
   src/notebook/
-    cmark.h          -- vendored single-file CommonMark parser (md4c)
-    format.tur       -- "notebook/format"  parse + serialize .turmd
+    cmark.tur        -- "notebook/cmark"   pure-Turmeric CommonMark subset parser
+    format.tur       -- "notebook/format"  parse + serialize .tur.md (uses cmark)
     cell.tur         -- "notebook/cell"    cell struct, attribute parsing
     session.tur      -- "notebook/session" embedded interpreter session
     eval.tur         -- "notebook/eval"    cell evaluation + output capture
     cache.tur        -- "notebook/cache"   source-hash cache for cache=true cells
     render_md.tur    -- "notebook/rmd"     evaluate + emit .md
-    render_html.tur  -- "notebook/rhtml"   evaluate + emit .html (reuses gendocs CSS)
+    render_html.tur  -- "notebook/rhtml"   evaluate + emit .html (vendored CSS)
+    style.css        -- vendored copy of stdlib docs CSS (no code; static asset)
     image.tur        -- "notebook/image"   PNG capture + base64 / sibling-file
     tui.tur          -- "notebook/tui"     interactive TUI driver
     keys.tur         -- "notebook/keys"    key parsing, default bindings
     ansi.tur         -- "notebook/ansi"    cursor / color / clear helpers
     cli.tur          -- "notebook/cli"     argv dispatch for `tur nb ...`
   tests/notebook/
+    cmark_test.tur          -- block + inline parser, GFM tables, golden fixtures
     format_test.tur
     cell_test.tur
     eval_test.tur
     render_md_test.tur
     render_html_test.tur
     cache_test.tur
-    tui_test.tur          -- TUI tested via scripted key sequences against a fake terminal
+    tui_test.tur            -- TUI tested via scripted key sequences against a fake terminal
   examples/
-    quickstart.turmd
-    stats-walkthrough.turmd
-    plot-gallery.turmd
+    quickstart.tur.md
+    stats-walkthrough.tur.md
+    plot-gallery.tur.md
 ```
 
 ---
@@ -148,10 +157,13 @@ spices/notebook/
 ## Architecture
 
 ```
-                 .turmd file
+                 .tur.md file
                       |
                       v
-            notebook/format       (md4c parse, fence walk)
+            notebook/cmark        (pure-Turmeric block + inline parse)
+                      |
+                      v
+            notebook/format       (fence walk, prose/cell node list)
                       |
                       v
             notebook/cell list    (id, lang, source, attrs, span)
@@ -186,21 +198,36 @@ persists across cells -- exactly like a Jupyter kernel.
 A single binary, `tur-nb`, with subcommands:
 
 ```sh
-tur nb render foo.turmd                         # writes foo.md beside the source
-tur nb render foo.turmd --to html               # writes foo.html
-tur nb render foo.turmd --to html --out site/   # write into site/foo.html
-tur nb render foo.turmd --cache                 # use .turnb-cache/ for cache=true cells
-tur nb render foo.turmd --watch                 # re-render on save (uses inotify/kqueue)
+tur nb render foo.tur.md                         # writes foo.md beside the source (default)
+tur nb render foo.tur.md --to html               # writes foo.html
+tur nb render foo.tur.md --to html --out site/   # write into site/foo.html
+tur nb render foo.tur.md --cache                 # use .turnb-cache/ for cache=true cells
+tur nb render foo.tur.md --watch                 # re-render on save (uses inotify/kqueue)
 
-tur nb tui foo.turmd                            # interactive
-tur nb tui foo.turmd --no-color                 # disable ANSI colors
-tur nb tui foo.turmd --keybindings ~/.turnb-keys # override default keybindings
+# Export is a discoverable alias for `render --to <fmt>`; same flags accepted.
+tur nb export html foo.tur.md                    # writes foo.html beside the source
+tur nb export html foo.tur.md --out site/        # write into site/foo.html
+tur nb export md foo.tur.md                      # writes foo.md beside the source
+tur nb export md foo.tur.md --no-output          # strip all output blocks (clean source export)
+tur nb export md foo.tur.md --no-source          # outputs only (rare; useful for diffing runs)
 
-tur nb exec foo.turmd --cell load-data          # one-shot: run named cell, print output, exit
-tur nb exec foo.turmd --all                     # like render, but to stdout, no .md emission
+tur nb tui foo.tur.md                            # interactive
+tur nb tui foo.tur.md --no-color                 # disable ANSI colors
+tur nb tui foo.tur.md --keybindings ~/.turnb-keys # override default keybindings
 
-tur nb new foo.turmd                            # scaffold a starter file
+tur nb exec foo.tur.md --cell load-data          # one-shot: run named cell, print output, exit
+tur nb exec foo.tur.md --all                     # like render, but to stdout, no file emission
+
+tur nb new foo.tur.md                            # scaffold a starter file
 ```
+
+Both `render` and `export` go through the same evaluator and emit identical
+artifacts; the split is purely ergonomic. `export` reads as a verb that
+matches user intent ("give me an HTML copy of this notebook") and is easier
+to discover via `tur nb --help`. Future export targets (PDF, slides, ipynb)
+will live as new `export` subcommand values and ship as separate spices
+(see [Future spices](#future-spices)); the v0.1.0 set is just `md` and `html`,
+both of which require no additional dependencies.
 
 `tur-nb` is registered as a `bin` in `build.tur` so `tur install tur-notebook`
 puts it on `$PATH`.
@@ -320,7 +347,7 @@ and easy to test (no text-editing state machine to verify).
 ### File saving
 
 - The file is dirty whenever a cell's source or output differs from disk.
-- `s` re-serializes the cell list back to `.turmd`. Cells without outputs
+- `s` re-serializes the cell list back to `.tur.md`. Cells without outputs
   in memory are written without `output` blocks; cells with outputs are
   written with current outputs (so saving after a run gives you a
   "rendered" file). Users who prefer source-only files can save before
@@ -341,7 +368,7 @@ and `notebook/eval` unchanged.
 ## Style and option types
 
 ```turmeric
-;;; cell -- one executable code block in a .turmd file.
+;;; cell -- one executable code block in a .tur.md file.
 (defstruct cell
   id          :cstr   ;; user-supplied or auto-generated
   lang        :int    ;; 0 = turmeric, 1 = tursweet
@@ -384,20 +411,90 @@ and `notebook/eval` unchanged.
 
 ## Modules and exports
 
+### notebook/cmark
+
+A pure-Turmeric CommonMark subset parser. Walks the input once at the block
+level (lines -> blocks), then walks block contents once at the inline level
+(text -> spans). Produces an AST that `notebook/format` walks to find
+executable cells and that `notebook/render-html` walks to emit HTML.
+
+See [Parser scope](#parser-scope) below for the feature matrix.
+
+```turmeric
+;; AST tags returned by md-node-tag.
+(md-tag-document)        ;; 0
+(md-tag-heading)         ;; 1   ATX 1-6
+(md-tag-paragraph)       ;; 2
+(md-tag-blockquote)      ;; 3
+(md-tag-list)            ;; 4   ordered or unordered
+(md-tag-list-item)       ;; 5   may carry a task-list checkbox marker
+(md-tag-code-block)      ;; 6   fenced (with info string) or indented
+(md-tag-thematic-break)  ;; 7
+(md-tag-table)           ;; 8   GFM
+(md-tag-table-row)       ;; 9
+(md-tag-table-cell)      ;; 10
+(md-tag-text)            ;; 11  inline literal
+(md-tag-emph)            ;; 12
+(md-tag-strong)          ;; 13
+(md-tag-code-span)       ;; 14
+(md-tag-link)            ;; 15
+(md-tag-image)           ;; 16
+(md-tag-strikethrough)   ;; 17  GFM
+(md-tag-autolink)        ;; 18
+(md-tag-hard-break)      ;; 19
+(md-tag-soft-break)      ;; 20
+(md-tag-raw-html)        ;; 21  inline only; block-level HTML is deferred
+
+;; Parse: produces an md-node rooted at md-tag-document.
+(md-parse s)                               ;; => md-node :int
+
+;; Inspection.
+(md-node-tag n)                            ;; => :int
+(md-node-children n)                       ;; => list<md-node>
+(md-node-text n)                           ;; => :cstr   (for text/code-span/code-block)
+(md-node-info n)                           ;; => :cstr   (fence info string, link url, image src, etc.)
+(md-node-meta n)                           ;; => :int    (heading level, list start number, table alignment bitset, ...)
+
+;; Walk helpers used by format + render layers.
+(md-walk-fences n callback)                ;; => :void   (visit every code-block child in document order)
+(md-source-span n)                         ;; => (cons start-line end-line)
+
+;; Emit normalized CommonMark back from an AST.  Used by notebook/format
+;; nodes->str and by tests that round-trip parse(serialize(parse(x))) == parse(x).
+(md-emit n)                                ;; => :cstr
+
+;; Emit HTML.  link-resolver and image-resolver let callers rewrite URLs
+;; (e.g. to embed sibling PNGs as data URLs).  Pass 0 for default identity.
+(md-emit-html n link-resolver image-resolver)
+                                           ;; => :cstr
+```
+
+The parser is **commonmark-spec conformant on the included feature set**;
+tests assert behavior against extracts from the CommonMark 0.30 spec test
+suite for every block / inline kind we claim to support. Features outside
+the included set parse as their literal source text (e.g. raw HTML blocks
+appear as paragraphs containing escaped angle brackets), so files written
+against full GitHub-flavored markdown still render -- they just render
+sub-optimally.
+
+---
+
 ### notebook/format
 
 ```turmeric
-;; Parse a .turmd file into a list of nodes: text spans and cell structs
-;; preserve original document order.
+;; Parse a .tur.md file into a list of nodes: text spans and cell structs
+;; preserve original document order.  Internally calls md-parse and walks
+;; the resulting AST for fence nodes tagged "turmeric" / "tursweet".
 (parse-file path)                          ;; => result<list<node>>
 (parse-string s)                           ;; => result<list<node>>
 
-;; node-tag => 0 (prose chunk, :cstr) or 1 (cell struct)
+;; node-tag => 0 (prose chunk, md-node) or 1 (cell struct)
 (node-tag n)                               ;; => :int
-(node-prose n)                             ;; => :cstr   (when tag = 0)
+(node-prose n)                             ;; => :int    (md-node when tag = 0)
 (node-cell n)                              ;; => cell    (when tag = 1)
 
-;; Serialize back to .turmd source.
+;; Serialize back to .tur.md source.  Prose chunks round-trip via md-emit;
+;; cells re-form as ```turmeric / ```tursweet fences with their attrs.
 (nodes->str nodes)                         ;; => :cstr
 
 ;; Update a single cell's source in place inside a node list (returns a new
@@ -487,7 +584,7 @@ finishes).
 ### notebook/render-md and notebook/render-html
 
 ```turmeric
-;; Evaluate and emit foo.md beside foo.turmd (or under opts.output-dir).
+;; Evaluate and emit foo.md beside foo.tur.md (or under opts.output-dir).
 (render-md path opts)                      ;; => result<:cstr>   (path written)
 
 ;; Render to HTML using the same CSS as the stdlib API docs.
@@ -498,11 +595,19 @@ finishes).
 (render-html-string nodes outputs opts)    ;; => :cstr
 ```
 
-The HTML renderer uses `tools/gendocs.py`'s existing CSS (already used for
-the stdlib docs and guides) so notebook output blends into the docs site.
-It also injects the syntax-toggle widget already present in guides, so
-turmeric / tursweet cells of the same content can be displayed side-by-side
-when both are provided.
+The HTML renderer walks the AST through `md-emit-html` for prose, wraps each
+cell in a styled `<pre class="turmeric-cell">` (or `tursweet-cell`), and
+attaches its output block as a sibling `<pre class="cell-output">`. Styling
+comes from `src/notebook/style.css`, a **vendored snapshot** of the stdlib
+docs CSS -- copying the file keeps `tur-notebook` self-contained as a
+spice (no path back into the main turmeric repo at runtime) while
+preserving the visual match with the docs site. The snapshot is refreshed
+manually when the docs CSS changes meaningfully; the README documents the
+update procedure.
+
+It also injects the syntax-toggle widget present in guides, so turmeric /
+tursweet cells of the same content render side-by-side when both are
+provided.
 
 ---
 
@@ -529,7 +634,7 @@ the PNG explicitly and include it via markdown image syntax.
 ### notebook/tui
 
 ```turmeric
-;; Launch the interactive TUI on a .turmd file.
+;; Launch the interactive TUI on a .tur.md file.
 ;; Returns the process exit code (0 = clean quit, 1 = quit with unsaved changes after warning).
 (tui-run path opts)                        ;; => result<:int>
 
@@ -593,53 +698,153 @@ and exits 2.
 
 ## Implementation phases
 
-- [ ] **NB0** -- `build.tur`; vendor `md4c` (~2k lines, single .c / .h, MIT)
-  as `cmark.h` and a one-file companion `cmark.c`; `notebook/format` parse
-  and serialize round-trip on the `examples/quickstart.turmd` fixture.
+The first three phases stand up the markdown parser, since everything else
+depends on it. Each parser phase ships against a curated subset of the
+CommonMark 0.30 spec test suite as its acceptance criterion.
 
-- [ ] **NB1** -- `notebook/cell` (attribute parser, defaults, id assignment);
-  golden-file tests against fenced blocks with all known attributes.
+- [ ] **NB0** -- `build.tur`; `notebook/cmark` block-level parser:
+  paragraphs, ATX headings (`#`..`######`), setext headings, blank lines,
+  fenced code blocks (` ``` ` and `~~~` with info strings), indented code
+  blocks, thematic breaks (`---`, `***`, `___`), blockquotes, bullet lists
+  (`-`, `*`, `+`), ordered lists (`1.`, `1)`). AST built from md-node
+  structs; `md-emit` round-trips block-level documents.
 
-- [ ] **NB2** -- `notebook/session` wrapping libturi (open, eval, close, reset);
-  stdout / stderr capture via the inline-C output-redirect hook;
+- [ ] **NB1** -- `notebook/cmark` inline parser: text runs, emphasis (`*`,
+  `_`), strong (`**`, `__`), inline code spans (`` ` ``), inline links
+  (`[text](url)`), inline images (`![alt](src)`), autolinks
+  (`<http://...>`, `<email@host>`), hard breaks (line ending in `\` or
+  two spaces), soft breaks, character escapes, ASCII punctuation entities.
+  `md-emit-html` produces conformant HTML for everything implemented so
+  far.
+
+- [ ] **NB2** -- `notebook/cmark` GFM extensions: pipe tables (with `:--`
+  alignment markers), task list items (`- [ ]`, `- [x]`), strikethrough
+  (`~~`); cell attribute strings on fence info lines (Quarto-style
+  `{id=foo eval=true}` -- recognized but not interpreted yet).
+
+- [ ] **NB3** -- `notebook/format` (parse-file / parse-string / nodes->str /
+  nodes-update-cell) walking the AST for turmeric/tursweet fences;
+  `notebook/cell` (attribute parser, defaults, id assignment); golden-file
+  tests against fenced blocks with all known attributes.
+
+- [ ] **NB4** -- `notebook/session` wrapping libturi (open, eval, close,
+  reset); stdout / stderr capture via the inline-C output-redirect hook;
   `notebook/eval` (eval-cell, eval-all, eval-from) with `eval`, `echo`,
   `output`, `error` attributes honored.
 
-- [ ] **NB3** -- `notebook/cache` (SHA-256-keyed disk cache under
+- [ ] **NB5** -- `notebook/cache` (SHA-256-keyed disk cache under
   `.turnb-cache/`); `cache=true` and `depends=` attributes honored;
   invalidation test: changing an upstream cell busts every downstream cell
   that lists it in `depends`.
 
-- [ ] **NB4** -- `notebook/render-md` writing valid round-trippable `.md`;
-  `notebook/cli render` subcommand; `--watch` flag using `kqueue` on Darwin
-  and `inotify` on Linux (small inline-C bridge per OS).
+- [ ] **NB6** -- `notebook/render-md` writing valid round-trippable `.md`;
+  `notebook/cli render` and `tur nb export md` subcommands; `--watch`
+  flag using `kqueue` on Darwin and `inotify` on Linux (small inline-C
+  bridge per OS).
 
-- [ ] **NB5** -- `notebook/render-html` using the gendocs CSS; image embedding
-  (base64 inline and sibling-file modes); syntax-toggle wrapping for
-  turmeric+tursweet sibling cells. Verify a rendered notebook looks
-  consistent with the stdlib docs (visual diff against a fixture page).
+- [ ] **NB7** -- `notebook/render-html` using the vendored `style.css`;
+  `tur nb export html` subcommand; image embedding (base64 inline and
+  sibling-file modes); syntax-toggle wrapping for turmeric+tursweet
+  sibling cells. Verify a rendered notebook looks consistent with the
+  stdlib docs (visual diff against a fixture page).
 
-- [ ] **NB6** -- `notebook/ansi` (raw mode, key reading, cursor moves);
+- [ ] **NB8** -- `notebook/ansi` (raw mode, key reading, cursor moves);
   `notebook/keys` (default bindings, file loader, action dispatch);
-  `notebook/tui` with command mode navigation (`j`, `k`, `gg`, `G`, `Enter`,
-  `Shift-Enter`, `R`, `r`, `s`, `q`). No edit mode yet.
+  `notebook/tui` with command mode navigation (`j`, `k`, `gg`, `G`,
+  `Enter`, `Shift-Enter`, `R`, `r`, `s`, `q`). No edit mode yet.
 
-- [ ] **NB7** -- TUI edit mode: `e` spawns `$EDITOR` on a temp file, reads
-  it back, updates the cell, re-renders. Insert / delete / paste (`a`, `b`,
-  `dd`, `p`). File-dirty detection and save prompt on quit.
+- [ ] **NB9** -- TUI edit mode: `e` spawns `$EDITOR` on a temp file, reads
+  it back, updates the cell, re-renders. Insert / delete / paste (`a`,
+  `b`, `dd`, `p`). File-dirty detection and save prompt on quit.
 
-- [ ] **NB8** -- TUI search (`/`, `n`, `N`); help overlay (`?`); output
+- [ ] **NB10** -- TUI search (`/`, `n`, `N`); help overlay (`?`); output
   toggle (`o`); search across both cell sources and output text. User
   keybindings override file (`--keybindings`).
 
-- [ ] **NB9** -- `notebook/image` hook; integration glue documented for
+- [ ] **NB11** -- `notebook/image` hook; integration glue documented for
   `tur-plot` and `tur-plutovg`; inline graphics show in the TUI's output
   region via the Kitty / iTerm2 image protocol when the terminal supports
   it, sixel where available, or a `[image: path]` placeholder otherwise.
 
-- [ ] **NB10** -- `notebook/cli exec`, `notebook/cli new` (starter file
+- [ ] **NB12** -- `notebook/cli exec`, `notebook/cli new` (starter file
   scaffold); end-to-end tests for every subcommand; README in
-  `turmeric-spices`; `docs/guides/notebook-guide.md`; `notebook-v0.1.0` tag.
+  `turmeric-spices`; `docs/guides/notebook-guide.md`;
+  `notebook-v0.1.0` tag.
+
+---
+
+## Parser scope
+
+The pure-Turmeric parser ships a deliberately *narrow* CommonMark subset --
+"what a Turmeric notebook author actually writes." Anything outside this set
+is parsed as a literal text fragment, which preserves the source bytes for
+round-trip but renders verbatim in HTML output. Authors who hit a missing
+feature can either avoid it or file an issue against the post-v0 roadmap.
+
+### Included
+
+**Block-level (NB0):**
+
+- Paragraphs (with lazy continuation)
+- ATX headings (`#` through `######`)
+- Setext headings (`===` and `---` underlines)
+- Blank lines
+- Fenced code blocks (` ``` ` and `~~~`), with info strings carrying
+  language + Quarto-style attribute block
+- Indented code blocks (4-space)
+- Thematic breaks (`---`, `***`, `___`)
+- Blockquotes (`>`, including lazy and nested)
+- Unordered lists (`-`, `*`, `+`) with tight / loose detection
+- Ordered lists (`1.`, `1)`) with tight / loose detection and `start` attribute
+
+**Inline (NB1):**
+
+- Text runs with HTML entity passthrough
+- Emphasis (`*`, `_`) and strong (`**`, `__`)
+- Inline code spans (`` ` ``, with multi-backtick delimiters)
+- Inline links (`[text](url "title")`)
+- Inline images (`![alt](src "title")`)
+- Autolinks (`<https://...>`, `<user@host>`)
+- Hard breaks (trailing `\` or two spaces)
+- Soft breaks
+- Backslash escapes for ASCII punctuation
+
+**GFM extensions (NB2):**
+
+- Pipe tables with `:--` / `--:` / `:--:` alignment markers
+- Task list items (`- [ ]`, `- [x]`)
+- Strikethrough (`~~`)
+
+### Deferred (renders as literal source)
+
+- HTML blocks and inline raw HTML (substantial spec; not needed for
+  notebooks; future spice `tur-notebook-html-passthrough` if demand
+  appears)
+- Reference-style links and images (two-pass parser; rarely written by
+  hand)
+- Link reference definitions
+- Footnotes (GFM extension; can be added in v0.2)
+- Definition lists
+- Math blocks (`$$ ... $$`); a `math` fence language could carry MathJax /
+  KaTeX content in a future render extension
+
+### Size estimate
+
+A working subset implementation is on the order of 1500-2000 lines of
+Turmeric, dominated by inline emphasis-pair resolution (the most fiddly
+part of CommonMark). The block parser is straightforward line-by-line
+state. Tests piggyback on the public CommonMark spec test suite, filtered
+to the included feature set.
+
+### Why this scope and not full CommonMark
+
+Full CommonMark is well-specified but large -- the reference implementation
+(cmark) is ~6kLoC of careful C. Most of that complexity lives in the
+features we are explicitly deferring (HTML block sniffing, reference link
+definitions, edge cases in nested list lazy continuation). For *notebooks
+about Turmeric code*, the included subset covers everything users actually
+write. Shrinking the scope buys us a parser we can finish, test, and
+maintain in pure Turmeric.
 
 ---
 
@@ -729,11 +934,16 @@ than warm caches. For warm caches use the TUI.
    from a snapshot taken at session-open, but Turmeric's interpreter
    does not currently expose that hook.
 
-4. **md4c bundling.** md4c is small (~2k LoC, single C file, MIT) but it
-   is the first vendored C file in a spice that is more than a header. We
-   could instead parse CommonMark in Turmeric directly. The decision in
-   this plan is to vendor; the implementation phase NB0 includes a check
-   that the file size and license remain acceptable.
+4. **Parser scope creep.** The included CommonMark subset is the *most
+   likely place* the v0.1.0 plan slips, because every notebook author who
+   tries to write something unusual (a nested admonition, a footnote, a
+   raw `<details>` block) is one issue away from arguing the missing
+   feature is essential. Mitigation: NB0/NB1/NB2 each ship against a
+   frozen subset of the CommonMark spec test suite, and any addition
+   requires an explicit revision to the [Parser scope](#parser-scope)
+   section before code lands. Features outside the list are tracked as
+   "deferred" and addressed in v0.2 or a follow-up extension spice, not
+   smuggled into v0.1.0.
 
 5. **Multi-cell undo.** v0.1.0 has no undo for cell-level edits (insert,
    delete, paste). The save-on-quit prompt protects against accidental
@@ -749,13 +959,13 @@ Add row once v0.1.0 is tagged:
 
 | Spice | Description | Tier | Depends on |
 |-------|-------------|------|------------|
-| `tur-notebook` | Literate `.turmd` notebooks: renderer (md/html) + interactive TUI | 1 -- pure Turmeric | (none) |
+| `tur-notebook` | Literate `.tur.md` notebooks: renderer (md/html) + interactive TUI | 1 -- pure Turmeric | (none) |
 
 ### Guide
 
 Deliver `docs/guides/notebook-guide.md` alongside the `v0.1.0` tag. Sections:
 
-1. Your first `.turmd` (cells, attributes, running it)
+1. Your first `.tur.md` (cells, attributes, running it)
 2. Rendering: markdown vs HTML, watch mode
 3. The TUI: command mode tour, editing via `$EDITOR`, restart vs partial re-run
 4. Caching expensive cells (`cache=true`, `depends=`)
@@ -773,7 +983,7 @@ Deliver `docs/guides/notebook-guide.md` alongside the `v0.1.0` tag. Sections:
 - Pair with `tur-plot` for inline figures (NB9 image hook is wired through
   `plot-write-png` automatically; in the TUI on a supporting terminal,
   figures display inline below the cell).
-- The `per-spice-docs-plan.md` HTML pipeline can ingest rendered `.turmd`
+- The `per-spice-docs-plan.md` HTML pipeline can ingest rendered `.tur.md`
   files as guide pages; this is a follow-up integration once both plans
   land.
 

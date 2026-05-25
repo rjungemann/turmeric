@@ -796,6 +796,26 @@ pre {
     letter-spacing: 0.03em;
 }
 
+.doc-result-spice {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--info-color);
+    flex-shrink: 0;
+    background: var(--bg-panel);
+    padding: 1px 4px;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+}
+
+.doc-summary {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 .doc-result-summary {
     font-size: 11px;
     color: var(--text-sec);

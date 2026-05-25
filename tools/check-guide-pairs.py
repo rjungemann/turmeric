@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-tools/check-guide-pairs.py -- Verify toggle pairs in Turmeric guide markdown files.
+tools/check-guide-pairs.py -- Verify toggle pairs in Turmeric guide markdown files
+and spice READMEs.
 
 Usage:
-    python3 tools/check-guide-pairs.py docs/guides/          # all guides
-    python3 tools/check-guide-pairs.py docs/guides/quickstart.md  # single file
+    python3 tools/check-guide-pairs.py docs/guides/                # all guides
+    python3 tools/check-guide-pairs.py docs/guides/quickstart.md   # single file
+    python3 tools/check-guide-pairs.py --spices                    # spice READMEs
+    python3 tools/check-guide-pairs.py docs/guides/ --strict-unpaired
 
 For each adjacent turmeric+sweet-exp block pair found, the checker reports:
-  - The guide file and approximate line number
+  - The file and approximate line number
   - Whether the pair is non-empty on both sides
   - (if 'tur' binary available) parse-equality: both blocks parse to the same AST
+
+With --strict-unpaired the checker also fails when a turmeric block is NOT
+followed by an adjacent sweet-exp sibling. Mark a block ```turmeric no-check
+to opt out (used for install / config / API signature blocks).
 
 Exit code: 0 if all checks pass, 1 if any pair fails or no pairs are found
 and --require-pairs is set.
@@ -30,6 +37,17 @@ PAIR_RE = re.compile(
 )
 
 NO_CHECK_RE = re.compile(r'(?m)^```turmeric no-check\n')
+
+# Any turmeric block (with or without modifiers like "no-check"), captured so we
+# can identify ones that lack an adjacent sweet-exp sibling.
+TURMERIC_BLOCK_RE = re.compile(
+    r'(?m)^```turmeric(?P<mods>[^\n]*)\n(?P<body>.*?)^```',
+    re.DOTALL | re.MULTILINE,
+)
+
+SWEET_AFTER_RE = re.compile(r'\A\s*\n?```sweet-exp\n', re.MULTILINE)
+
+SPICES_ROOT = Path('../turmeric-spices/spices')
 
 
 def find_pairs(text: str) -> list[tuple[str, str, int]]:
@@ -91,11 +109,32 @@ def try_parse_check(tur_src: str, sweet_src: str, tur_bin: str) -> list[str]:
     return errors
 
 
-def check_file(path: Path, tur_bin: str | None, verbose: bool) -> tuple[int, int, int]:
-    """Returns (pairs_found, pairs_ok, pairs_failed)."""
+def find_unpaired_turmeric(text: str) -> list[tuple[int, str]]:
+    """
+    Return list of (line_number, modifier_string) for every turmeric block
+    that is NOT followed by an adjacent sweet-exp block and is NOT marked
+    `no-check`.
+    """
+    unpaired = []
+    for m in TURMERIC_BLOCK_RE.finditer(text):
+        mods = (m.group('mods') or '').strip()
+        if 'no-check' in mods.split():
+            continue
+        # Adjacent means only whitespace between the closing ``` and the next ```sweet-exp.
+        rest = text[m.end():]
+        if SWEET_AFTER_RE.match(rest):
+            continue
+        line_no = text[:m.start()].count('\n') + 1
+        unpaired.append((line_no, mods))
+    return unpaired
+
+
+def check_file(path: Path, tur_bin: str | None, verbose: bool,
+               strict_unpaired: bool = False) -> tuple[int, int, int, int]:
+    """Returns (pairs_found, pairs_ok, pairs_failed, unpaired_failed)."""
     text = path.read_text(encoding='utf-8')
     pairs = find_pairs(text)
-    ok = failed = 0
+    ok = failed = unpaired_failed = 0
     for tur_src, sweet_src, line_no in pairs:
         errors: list[str] = []
         errors += check_nonempty(tur_src, sweet_src)
@@ -111,36 +150,90 @@ def check_file(path: Path, tur_bin: str | None, verbose: bool) -> tuple[int, int
             ok += 1
             if verbose:
                 print(f'ok    {path}:{line_no}')
-    return len(pairs), ok, failed
+
+    if strict_unpaired:
+        for line_no, mods in find_unpaired_turmeric(text):
+            unpaired_failed += 1
+            mods_str = f' {mods}' if mods else ''
+            print(f'FAIL  {path}:{line_no}')
+            print(f'      turmeric block (```turmeric{mods_str}) has no adjacent '
+                  '```sweet-exp sibling')
+            print(f'      add a sweet-exp companion, or mark as ```turmeric no-check')
+
+    return len(pairs), ok, failed, unpaired_failed
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description='Check guide toggle pair equivalence.')
-    p.add_argument('paths', nargs='+', help='Guide file(s) or directory of .md files')
-    p.add_argument('--tur', default=None, help='Path to tur binary (default: auto-detect)')
-    p.add_argument('--verbose', '-v', action='store_true')
-    p.add_argument('--require-pairs', action='store_true',
-                   help='Exit 1 if no pairs are found at all')
-    args = p.parse_args()
-
-    tur_bin = args.tur or shutil.which('tur')
-
+def collect_md_files(paths: list[str], include_readme: bool) -> list[Path]:
+    """Resolve CLI path arguments to a flat list of markdown files."""
     md_files: list[Path] = []
-    for raw in args.paths:
+    for raw in paths:
         pt = Path(raw)
         if pt.is_dir():
-            md_files += sorted(f for f in pt.glob('*.md') if f.stem != 'README')
+            # Directory with .md files directly under it (guides).
+            direct = sorted(
+                f for f in pt.glob('*.md')
+                if include_readme or f.stem != 'README'
+            )
+            md_files += direct
+            # Directory of subdirs containing READMEs (spices/*).
+            for sub in sorted(p for p in pt.iterdir() if p.is_dir()):
+                readme = sub / 'README.md'
+                if readme.is_file():
+                    md_files.append(readme)
         elif pt.suffix == '.md':
             md_files.append(pt)
         else:
             print(f'warning: skipping {pt} (not a .md file or directory)', file=sys.stderr)
-
-    total_pairs = total_ok = total_failed = 0
+    # Dedupe while preserving order
+    seen = set()
+    unique = []
     for f in md_files:
-        n, ok, fail = check_file(f, tur_bin, args.verbose)
+        key = f.resolve()
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+    return unique
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description='Check guide toggle pair equivalence.')
+    p.add_argument('paths', nargs='*', help='Guide file(s) or directory of .md files')
+    p.add_argument('--tur', default=None, help='Path to tur binary (default: auto-detect)')
+    p.add_argument('--verbose', '-v', action='store_true')
+    p.add_argument('--require-pairs', action='store_true',
+                   help='Exit 1 if no pairs are found at all')
+    p.add_argument('--strict-unpaired', action='store_true',
+                   help='Also fail when a turmeric block has no adjacent '
+                        'sweet-exp sibling (mark with `no-check` to opt out).')
+    p.add_argument('--spices', action='store_true',
+                   help=f'Shortcut: check spice READMEs under {SPICES_ROOT} '
+                        'with --strict-unpaired.')
+    args = p.parse_args()
+
+    if args.spices:
+        if not SPICES_ROOT.is_dir():
+            print(f'error: {SPICES_ROOT} not found. Clone the sibling repo '
+                  f'next to this checkout.', file=sys.stderr)
+            sys.exit(1)
+        args.paths.append(str(SPICES_ROOT))
+        args.strict_unpaired = True
+
+    if not args.paths:
+        p.error('no paths given (use --spices or pass a path)')
+
+    tur_bin = args.tur or shutil.which('tur')
+
+    md_files = collect_md_files(args.paths, include_readme=args.spices)
+
+    total_pairs = total_ok = total_failed = total_unpaired = 0
+    for f in md_files:
+        n, ok, fail, unpaired = check_file(
+            f, tur_bin, args.verbose, strict_unpaired=args.strict_unpaired,
+        )
         total_pairs += n
         total_ok += ok
         total_failed += fail
+        total_unpaired += unpaired
 
     paired_guides = sum(
         1 for f in md_files
@@ -148,17 +241,19 @@ def main() -> None:
     )
 
     print()
-    print(f'Guides checked : {len(md_files)}')
-    print(f'Guides with pairs: {paired_guides}')
-    print(f'Pairs found    : {total_pairs}')
-    print(f'Pairs ok       : {total_ok}')
-    print(f'Pairs failed   : {total_failed}')
+    print(f'Files checked    : {len(md_files)}')
+    print(f'Files with pairs : {paired_guides}')
+    print(f'Pairs found      : {total_pairs}')
+    print(f'Pairs ok         : {total_ok}')
+    print(f'Pairs failed     : {total_failed}')
+    if args.strict_unpaired:
+        print(f'Unpaired blocks  : {total_unpaired}')
     if tur_bin:
-        print(f'Checker        : {tur_bin} (parse-check)')
+        print(f'Checker          : {tur_bin} (parse-check)')
     else:
-        print('Checker        : basic only (tur binary not found; skipped parse-check)')
+        print('Checker          : basic only (tur binary not found; skipped parse-check)')
 
-    if total_failed > 0:
+    if total_failed > 0 or total_unpaired > 0:
         sys.exit(1)
     if args.require_pairs and total_pairs == 0:
         print('error: no pairs found', file=sys.stderr)

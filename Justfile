@@ -156,22 +156,33 @@ rebuild: clean configure build
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup,
 # and web/public/doc-names.json for the web REPL search bar.
+# Spice symbols are folded into doc-names.json via --extra-json so the web
+# search bar surfaces stdlib + spices in a single list.
 docs: guides spices
-    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json
+    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur --emit-json web/public/doc-names.json --extra-json docs/html/spices/doc-names-spices.json
 
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
     python3 tools/genguides.py docs/guides/ --out docs/html/guides/
 
-# Generate the Spices directory page.
-# Reads ../turmeric-spices/README.md (local) or fetches from GitHub as fallback.
+# Generate per-spice doc pages from the sibling ../turmeric-spices/ checkout.
+# Also emits docs/html/spices/doc-names-spices.json which gendocs merges into
+# web/public/doc-names.json on the next step.
 spices:
-    python3 tools/genspices.py --out docs/html/spices/
+    python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json
 
 
 # Check that every turmeric+sweet-exp toggle pair in the guides is valid.
 check-guides:
     python3 tools/check-guide-pairs.py docs/guides/
+
+# Strict check for spice READMEs: every `turmeric block must have an adjacent
+# `sweet-exp sibling (or be marked `turmeric no-check`).
+check-spices:
+    python3 tools/check-guide-pairs.py --spices
+
+# Run both guide and spice README checks.
+check-docs: check-guides check-spices
 
 # ---------------------------------------------------------------------------
 # WebAssembly & Web REPL targets

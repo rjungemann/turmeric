@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_TOGGLE_JS, SYNTAX_TOGGLE_JS,
                        TURMERIC_HIGHLIGHT_JS, GUIDE_CSS,
                        inject_syntax_toggles, toc_tokens_to_sidebar)
-from gendocs import render_tree
+from gendocs import render_tree, collect_doc_entries
 
 GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
 SPICES_REPO = Path('../turmeric-spices')
@@ -215,19 +215,22 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
 # Per-spice API reference (delegates to gendocs.render_tree)
 # ---------------------------------------------------------------------------
 
-def render_api_reference(meta: SpiceMeta, out_dir: Path) -> bool:
-    """Generate the per-spice API tree under out_dir/api/. Returns True if done."""
+def render_api_reference(meta: SpiceMeta, out_dir: Path):
+    """
+    Generate the per-spice API tree under out_dir/api/.
+    Returns the parsed module list (for collect_doc_entries), or None when
+    the spice has no src/ directory.
+    """
     src_dir = meta['path'] / 'src'
     if not src_dir.is_dir():
-        return False
+        return None
     api_out = out_dir / 'api'
-    render_tree(
+    return render_tree(
         src_dir,
         api_out,
         brand=f'tur-{meta["name"]}',
         brand_label=f'tur-{meta["name"]} API',
     )
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +329,16 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    import json
+
     p = argparse.ArgumentParser(description='Generate per-spice doc pages.')
     p.add_argument('--out', default='docs/html/spices/', help='Output directory')
+    p.add_argument(
+        '--emit-json',
+        metavar='PATH',
+        help='Write a JSON array of {name, summary, kind, spice} entries to PATH. '
+             'Used by `just docs` to fold spice symbols into web/public/doc-names.json.',
+    )
     args = p.parse_args()
 
     out_dir = Path(args.out)
@@ -339,15 +350,28 @@ def main() -> None:
     metas = collect_spice_meta(spice_dirs, table)
 
     print(f'Generating docs for {len(metas)} spices into {out_dir}/')
+    all_entries: list[dict] = []
     for meta in metas:
         print(f'-> {meta["name"]}')
         spice_out = out_dir / meta['name']
         # Front page links to /docs/html/api/style.css via two-level relative path
         render_front_page(meta, spice_out, style_rel='../../api/style.css')
-        if not render_api_reference(meta, spice_out):
+        modules = render_api_reference(meta, spice_out)
+        if modules is None:
             print(f'   (no src/ directory; skipping API reference)')
+            continue
+        all_entries.extend(collect_doc_entries(modules, spice=meta['name']))
 
     render_top_index(metas, out_dir)
+    if args.emit_json:
+        out_json = Path(args.emit_json)
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        out_json.write_text(
+            json.dumps(all_entries, ensure_ascii=True, indent=None,
+                       separators=(',', ':')),
+            encoding='utf-8',
+        )
+        print(f'Wrote {out_json} ({len(all_entries)} spice doc entries)')
     print(f'Done: {out_dir / "index.html"}')
 
 

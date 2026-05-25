@@ -1105,9 +1105,13 @@ function initDocSearch() {
         }
         results.innerHTML = items.slice(0, 40).map((item, i) => {
             const shortSummary = item.summary.replace(/^[\w/\-!?*+<>]+\s+--\s+/, '');
+            const spiceTag = item.spice
+                ? `<span class="doc-result-spice">tur-${escapeHtml(item.spice)}</span>`
+                : '';
             return `<div class="doc-result-item" data-name="${escapeHtml(item.name)}" data-index="${i}">
                 <span class="doc-result-name">${escapeHtml(item.name)}</span>
                 <span class="doc-result-kind">${escapeHtml(item.kind)}</span>
+                ${spiceTag}
                 <span class="doc-result-summary">${escapeHtml(shortSummary)}</span>
             </div>`;
         }).join('');
@@ -1130,7 +1134,8 @@ function initDocSearch() {
     function selectResult(name) {
         input.value = '';
         hideResults();
-        wasmDocLookup(name).then(docText => showDocPanel(name, docText));
+        const entry = docNames.find(d => d.name === name) || null;
+        wasmDocLookup(name).then(docText => showDocPanel(name, docText, entry));
     }
 
     function highlightActive() {
@@ -1218,7 +1223,7 @@ function wasmDocLookup(name) {
 /**
  * Show the doc panel with content for `name`.
  */
-function showDocPanel(name, docText) {
+function showDocPanel(name, docText, entry) {
     const pane = document.getElementById('doc-pane');
     const body = document.getElementById('doc-body');
     const title = document.getElementById('doc-title');
@@ -1227,18 +1232,37 @@ function showDocPanel(name, docText) {
 
     if (!pane || !body) return;
 
+    // Fall back to entry if the caller didn't supply one (e.g. (doc name) eval)
+    if (entry === undefined) {
+        entry = (typeof docNames !== 'undefined')
+            ? docNames.find(d => d.name === name) || null
+            : null;
+    }
+
     title.textContent = name || 'Documentation';
 
     if (docText) {
         body.textContent = docText;
+    } else if (entry && entry.summary) {
+        // wasm doc-lookup table only carries stdlib entries; for spice symbols
+        // surface the JSON summary so the panel still has useful content.
+        const tag = entry.spice
+            ? `<p class="doc-placeholder">From <code>tur-${escapeHtml(entry.spice)}</code>.</p>`
+            : '';
+        body.innerHTML = tag +
+            `<pre class="doc-summary">${escapeHtml(entry.summary)}</pre>`;
     } else {
         body.innerHTML = `<p class="doc-placeholder">No documentation found for <code>${escapeHtml(name)}</code>.</p>`;
     }
 
-    // Build a link to the module page: guess the module from the function name
-    // The function table is in docs/api/index.html; link there as fallback
-    link.href = '/docs/html/api/index.html';
-    link.textContent = 'Open full docs \u2197';
+    // Link to the per-spice API page for spice symbols, stdlib index otherwise.
+    if (entry && entry.spice) {
+        link.href = `/docs/html/spices/${entry.spice}/api/`;
+        link.textContent = `Open tur-${entry.spice} API \u2197`;
+    } else {
+        link.href = '/docs/html/api/index.html';
+        link.textContent = 'Open full docs \u2197';
+    }
 
     pane.style.display = 'flex';
     container?.classList.add('doc-open');

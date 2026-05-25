@@ -1404,13 +1404,12 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
 # JSON name list emitter  (--emit-json)
 # ---------------------------------------------------------------------------
 
-def emit_doc_names_json(modules, out_path):
+def collect_doc_entries(modules, *, spice=None):
     """
-    Emit a JSON array of {name, summary, kind} objects for the web search bar.
-    Summary is the first line of the doc entry text.
+    Return a list of {name, summary, kind, [spice]} entries derived from the
+    given parsed modules. When `spice` is set, each entry is tagged with that
+    short name so the web search bar can show which spice it came from.
     """
-    import json
-
     entries = []
     seen = set()
     for module in modules:
@@ -1422,24 +1421,40 @@ def emit_doc_names_json(modules, out_path):
             seen.add(key)
 
             doc = defn['docstring']
-            if doc and doc.get('summary'):
-                summary = doc['summary']
-            else:
-                summary = key
+            summary = doc['summary'] if (doc and doc.get('summary')) else key
 
-            entries.append({
-                'name': key,
-                'summary': summary,
-                'kind': defn['kind'],
-            })
+            entry = {'name': key, 'summary': summary, 'kind': defn['kind']}
+            if spice:
+                entry['spice'] = spice
+            entries.append(entry)
+    return entries
 
-    # Sort alphabetically for deterministic output
+
+def emit_doc_names_json(modules, out_path, extra_entries=None):
+    """
+    Emit a JSON array of {name, summary, kind} objects for the web search bar.
+    Summary is the first line of the doc entry text. `extra_entries`, if
+    provided, is appended after the locally derived entries (typically used
+    to merge spice entries into the stdlib payload).
+    """
+    import json
+
+    entries = collect_doc_entries(modules)
+    if extra_entries:
+        # Skip duplicate keys so stdlib wins on collisions
+        seen = {e['name'] for e in entries}
+        for e in extra_entries:
+            if e.get('name') not in seen:
+                entries.append(e)
+                seen.add(e.get('name'))
+
     entries.sort(key=lambda e: e['name'].lower())
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(entries, ensure_ascii=True, indent=None, separators=(',', ':')), encoding='utf-8')
-    print(f'  Wrote {out_path} ({len(entries)} entries)')
+    extra_n = len(extra_entries) if extra_entries else 0
+    print(f'  Wrote {out_path} ({len(entries)} entries; {extra_n} merged)')
 
 
 # ---------------------------------------------------------------------------
@@ -1461,7 +1476,7 @@ def collect_tur_files(source):
 
 
 def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
-                emit_tur=None, emit_json=None):
+                emit_tur=None, emit_json=None, extra_json_entries=None):
     """
     Generate an HTML doc tree from a .tur source root.
 
@@ -1542,7 +1557,7 @@ def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
 
     # Optionally emit doc-names.json for the web search bar
     if emit_json:
-        emit_doc_names_json(modules, emit_json)
+        emit_doc_names_json(modules, emit_json, extra_entries=extra_json_entries)
 
     print(f'\nDone. {len(modules)} modules -> {out_dir}/')
     return modules
@@ -1581,7 +1596,21 @@ def main():
         default=None,
         help='Human-readable brand label for the index heading',
     )
+    parser.add_argument(
+        '--extra-json',
+        metavar='PATH',
+        help='Read extra doc-name entries (JSON array) from PATH and merge '
+             'them into the --emit-json output. Used to fold spice symbols '
+             'into the stdlib payload.',
+    )
     args = parser.parse_args()
+
+    extra_entries = None
+    if args.extra_json:
+        import json
+        extra_path = Path(args.extra_json)
+        if extra_path.is_file():
+            extra_entries = json.loads(extra_path.read_text(encoding='utf-8'))
 
     render_tree(
         args.source,
@@ -1590,6 +1619,7 @@ def main():
         brand_label=args.brand_label,
         emit_tur=args.emit_tur,
         emit_json=args.emit_json,
+        extra_json_entries=extra_entries,
     )
 
 
