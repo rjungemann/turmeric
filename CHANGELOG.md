@@ -2,6 +2,19 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.12.0] -- 2026-05-25
+
+### Changed
+
+- **Typed stdlib modules now use canonical names**
+  - The old `t*` module names were dropped in favor of unprefixed modules such as `vec.tur`, `map.tur`, `option.tur`, `result.tur`, `pair.tur`, `list.tur`, `grid.tur`, `zipper.tur`, `set.tur`, and `mutmap.tur`
+  - Compiler preloads and synthesized structural-equality helpers were updated to use the new module and helper names
+  - Tests, benchmarks, and generated docs were refreshed to use the unprefixed APIs throughout
+
+- **Docs layout cleanup**
+  - `drop-typed-prefix-plan.md` moved into `docs/archive/`
+  - Several roadmap docs were promoted out of `docs/upcoming/` into the main `docs/` tree
+
 ## [0.11.0] -- 2026-05-25
 
 ### Added

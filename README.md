@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.11.0` -- adds `defalias` for primitive type aliases, plus new `tur-frame` and `tur/logic` guides and a refreshed docs archive.
+**Latest release:** `v0.12.0` -- drops the old `t*` typed-stdlib prefixes in favor of canonical module names like `vec`, `map`, `option`, `result`, `set`, and `mutmap`, with the docs layout cleaned up to match.
 
 ## What
 
@@ -478,8 +478,8 @@ for C/CMake dependency details.
 
 ## Status
 
-**v0.7.0** -- The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), dynamic vars (DV0–DV4), and sized types (SZ0–SZ1).
+**v0.12.0** -- The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), dynamic vars (DV0–DV4), and sized types (SZ0–SZ1).
 
-New in this release: sized types (`-Xsized-types`) with `SizedVec`, `SizedBuf`, `SizedMatrix`, and `SizedBitVec`; literal match patterns for int/bool/float/str arms; `async-race` and `with-timeout` in the interpreter; tail call optimization in `turi`; `stdlib/args.tur` CLI argument parser; `stdlib/math.tur` and `stdlib/bits.tur`; a cross-language performance comparison suite benchmarking C, Turmeric, Rust, Clojure, Racket, and Python; and a four-part Datalog-style database tutorial.
+New in this release: the old typed-stdlib `t*` module names were retired in favor of canonical module names such as `vec.tur`, `map.tur`, `option.tur`, `result.tur`, `pair.tur`, `list.tur`, `grid.tur`, `zipper.tur`, `set.tur`, and `mutmap.tur`; compiler preloads and synthesized equality helpers were updated to match; and the docs tree was cleaned up by archiving the typed-prefix plan and promoting several roadmap docs out of `docs/upcoming/`.
 
 See [docs/advanced-type-system-feasibility-plan.md](docs/advanced-type-system-feasibility-plan.md) for the type system roadmap and [docs/guides/](docs/guides/) for user guides.
