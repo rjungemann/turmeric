@@ -2,6 +2,24 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.11.0] -- 2026-05-25
+
+### Added
+
+- **`defalias` for primitive type aliases**
+  - New `(defalias Name :primitive-type)` form for defining named aliases of primitive types such as `:int` and `:float`
+  - Function parameter and return annotations now resolve these aliases during elaboration
+  - Added coverage for basic aliases, float aliases, and invalid alias targets
+
+- **New guides**
+  - `frame-guide.md` -- using the `tur-frame` spice for in-memory columnar dataframes and Arrow interop
+  - `tur-logic-guide.md` -- miniKanren-style relational programming with `tur/logic`
+
+### Changed
+
+- Documentation archive reorganized under `docs/archive/` and `docs/archive/history/`, with the archive index refreshed
+- The miniKanren tutorial was renamed to `minikanren-1-relations-and-queries.md` to make room for a multi-part guide series
+
 ## [0.10.0] -- 2026-05-25
 
 ### Fixed

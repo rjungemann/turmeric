@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.10.0` -- fixes higher-order returned-function typing and brings the signal spice back into the normal typecheck matrix.
+**Latest release:** `v0.11.0` -- adds `defalias` for primitive type aliases, plus new `tur-frame` and `tur/logic` guides and a refreshed docs archive.
 
 ## What
 
