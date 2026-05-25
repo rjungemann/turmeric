@@ -203,6 +203,34 @@ else
 fi
 rm -rf "$NESTED"
 
+# SN3: regression guard against the launcher's cwd-relative stdlib path.
+# Before SN1, running `tur check` from any cwd other than the repo root
+# produced ~18 lines of `tur: cannot open 'stdlib/X.tur'` stderr noise
+# on every invocation, even on success. After SN1+SN2 those should be
+# silent. Running from `/tmp` (a directory with no stdlib/ subtree)
+# exercises the exe-relative resolver and reaffirms the fix.
+SN3_TMP=$(mktemp -d)
+SN3_TUR_ABS="$PWD/$TUR"
+SN3_ENTRY_ABS="$PWD/$ENTRY"
+SN3_STDERR=$(mktemp)
+( cd "$SN3_TMP" && "$SN3_TUR_ABS" check "$SN3_ENTRY_ABS" ) >/dev/null 2>"$SN3_STDERR"
+rc=$?
+SN3_LINES=$(wc -l <"$SN3_STDERR" | tr -d ' ')
+if [ "$rc" -eq 0 ] && [ "$SN3_LINES" -eq 0 ]; then
+    echo "PASS SN3: tur check from non-repo cwd has empty stderr on success"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SN3: tur check from non-repo cwd"
+    echo "  cwd:    $SN3_TMP"
+    echo "  exit:   $rc (want 0)"
+    echo "  stderr lines: $SN3_LINES (want 0)"
+    echo "  stderr content:"
+    sed 's/^/    /' "$SN3_STDERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SN3: empty stderr on success from non-repo cwd")
+fi
+rm -rf "$SN3_TMP" "$SN3_STDERR"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
