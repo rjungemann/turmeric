@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
 """
-tools/genspices.py -- Generate the Spices directory page.
+tools/genspices.py -- Generate per-spice documentation pages.
 
-Data source priority:
-  1. ../turmeric-spices/README.md  (local sibling repo, relative to CWD)
-  2. https://raw.githubusercontent.com/rjungemann/turmeric-spices/main/README.md
+For each spice in ../turmeric-spices/spices/<name>/ produces:
+  docs/html/spices/<name>/index.html  -- front page rendered from README.md
+  docs/html/spices/<name>/api/        -- auto-generated API reference from src/
+
+Also produces the top-level index at docs/html/spices/index.html with one row
+per spice (tier, description, links to the front page and API reference).
+
+Requires the sibling repo ../turmeric-spices/ to be present; the previous
+GitHub-fetch fallback was dropped because per-spice generation needs the
+full source tree, not just one README.
 
 Usage:
     python3 tools/genspices.py [--out docs/html/spices/]
 """
 
 import argparse
+import html as html_module
 import re
 import sys
-import urllib.request
 from pathlib import Path
 
 import markdown as md_lib
 
-# Share constants and helpers from genguides.py (same tools/ directory).
 sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_TOGGLE_JS, SYNTAX_TOGGLE_JS,
                        TURMERIC_HIGHLIGHT_JS, GUIDE_CSS,
                        inject_syntax_toggles, toc_tokens_to_sidebar)
+from gendocs import render_tree
 
 GITHUB_BASE = 'https://github.com/rjungemann/turmeric-spices'
-GITHUB_RAW_README = 'https://raw.githubusercontent.com/rjungemann/turmeric-spices/main/README.md'
-LOCAL_README = Path('../turmeric-spices/README.md')
-STYLE_REL = '../api/style.css'
+SPICES_REPO = Path('../turmeric-spices')
 
 PAGE_HEADER = '''\
   <header class="site-header">
@@ -47,31 +52,102 @@ PAGE_HEADER = '''\
   </header>'''
 
 
-def load_readme() -> tuple[str, str]:
-    """Return (text, source_label). Tries local sibling repo first, then GitHub."""
-    if LOCAL_README.exists():
-        return LOCAL_README.read_text(encoding='utf-8'), str(LOCAL_README)
-    print(f'  {LOCAL_README} not found locally; fetching from GitHub...')
-    try:
-        with urllib.request.urlopen(GITHUB_RAW_README, timeout=15) as resp:
-            return resp.read().decode('utf-8'), GITHUB_RAW_README
-    except Exception as exc:
-        sys.exit(f'error: could not load spices README: {exc}')
+# ---------------------------------------------------------------------------
+# Spice metadata
+# ---------------------------------------------------------------------------
+
+SpiceMeta = dict  # {name, description, tier, c_dep}
 
 
-def rewrite_links(text: str) -> str:
-    """Point relative spice subdir links at the canonical GitHub tree URL."""
-    return re.sub(
-        r'\[([^\]]+)\]\((spices/[^)]+)\)',
-        lambda m: f'[{m.group(1)}]({GITHUB_BASE}/tree/main/{m.group(2)})',
-        text,
+def discover_spices() -> list[Path]:
+    """Return sorted spice directories under ../turmeric-spices/spices/."""
+    root = SPICES_REPO / 'spices'
+    if not root.is_dir():
+        sys.exit(
+            f'error: sibling repo not found at {SPICES_REPO.resolve()}. '
+            f'Clone it next to this checkout, or run `tur fetch`.'
+        )
+    return sorted(p for p in root.iterdir() if p.is_dir())
+
+
+def parse_readme_table(readme_text: str) -> dict[str, SpiceMeta]:
+    """
+    Parse the spices table in the top-level README.md and return a dict keyed
+    by spice short-name (e.g. 'json' for 'tur-json').
+    """
+    rows: dict[str, SpiceMeta] = {}
+    # Match table rows like: | [`tur-foo`](spices/foo/) | desc | tier | c dep |
+    row_re = re.compile(
+        r'^\|\s*\[`tur-([\w\-]+)`\]\(spices/[^)]+\)\s*\|'
+        r'\s*([^|]+?)\s*\|'
+        r'\s*([^|]+?)\s*\|'
+        r'\s*([^|]+?)\s*\|',
+        re.MULTILINE,
     )
+    for m in row_re.finditer(readme_text):
+        name, desc, tier, c_dep = m.groups()
+        rows[name] = {
+            'name': name,
+            'description': desc.strip(),
+            'tier': tier.strip(),
+            'c_dep': c_dep.strip(),
+        }
+    return rows
 
 
-def render_page(text: str, source: str, out_dir: Path) -> None:
+def extract_build_description(build_tur: Path) -> str:
+    """Read :description from a build.tur file, or return ''."""
+    if not build_tur.is_file():
+        return ''
+    text = build_tur.read_text(encoding='utf-8', errors='replace')
+    m = re.search(r':description\s+"([^"]+)"', text)
+    return m.group(1) if m else ''
+
+
+def collect_spice_meta(spice_dirs: list[Path],
+                       table: dict[str, SpiceMeta]) -> list[SpiceMeta]:
+    """Merge README table info with on-disk discovery, falling back to build.tur."""
+    out: list[SpiceMeta] = []
+    for d in spice_dirs:
+        name = d.name
+        meta = dict(table.get(name, {}))
+        meta['name'] = name
+        meta['path'] = d
+        if not meta.get('description'):
+            meta['description'] = extract_build_description(d / 'build.tur')
+        meta.setdefault('tier', '--')
+        meta.setdefault('c_dep', '--')
+        out.append(meta)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Per-spice front page
+# ---------------------------------------------------------------------------
+
+STUB_FRONT_PAGE = '''\
+# tur-{name}
+
+Docs in progress.
+
+## See also
+
+- [API reference](api/)
+- Source: <{github}/tree/main/spices/{name}>
+'''
+
+
+def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
+    """Render docs/html/spices/<name>/index.html from the spice's README.md."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    readme = meta['path'] / 'README.md'
 
-    text = rewrite_links(text)
+    if readme.is_file():
+        text = readme.read_text(encoding='utf-8')
+        source_label = f'spices/{meta["name"]}/README.md'
+    else:
+        text = STUB_FRONT_PAGE.format(name=meta['name'], github=GITHUB_BASE)
+        source_label = '(no README -- stub)'
 
     conv = md_lib.Markdown(
         extensions=['fenced_code', 'tables', 'toc'],
@@ -83,24 +159,32 @@ def render_page(text: str, source: str, out_dir: Path) -> None:
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = (
+        '<div style="margin-bottom:0.5rem">'
+        '<a href="/" style="font-size:0.8rem;color:var(--text-sec)">&larr; Home</a>'
+        '</div>\n      '
         '<div style="margin-bottom:1.25rem">'
-        '<a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a>'
+        '<a href="../index.html" style="font-size:0.8rem;color:var(--text-sec)">&larr; All Spices</a>'
+        '</div>\n      '
+        '<div style="margin-bottom:1.25rem">'
+        '<a href="api/" style="font-size:0.85rem;color:var(--gold-bright)">API reference &rarr;</a>'
         '</div>\n      '
         f'<h3>On this page</h3>\n      <ul>{sidebar_items}</ul>'
     )
+
+    title = f'tur-{meta["name"]} | Turmeric Spices'
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Spices | Turmeric</title>
+  <title>{html_module.escape(title)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
-  <link rel="stylesheet" href="{STYLE_REL}">
+  <link rel="stylesheet" href="{style_rel}">
   <style>
 {GUIDE_CSS}
   </style>
@@ -117,27 +201,153 @@ def render_page(text: str, source: str, out_dir: Path) -> None:
     </div>
   </div>
   <footer class="site-footer">
-    Auto-generated by <code>tools/genspices.py</code> &mdash; source: <code>{source}</code>
+    Auto-generated by <code>tools/genspices.py</code> &mdash; source: <code>{html_module.escape(source_label)}</code>
   </footer>
 {TURMERIC_HIGHLIGHT_JS}
 {SYNTAX_TOGGLE_JS}
 </body>
 </html>
 '''
-    out_path = out_dir / 'index.html'
-    out_path.write_text(html, encoding='utf-8')
-    print(f'  index.html  (source: {source})')
+    (out_dir / 'index.html').write_text(html, encoding='utf-8')
 
+
+# ---------------------------------------------------------------------------
+# Per-spice API reference (delegates to gendocs.render_tree)
+# ---------------------------------------------------------------------------
+
+def render_api_reference(meta: SpiceMeta, out_dir: Path) -> bool:
+    """Generate the per-spice API tree under out_dir/api/. Returns True if done."""
+    src_dir = meta['path'] / 'src'
+    if not src_dir.is_dir():
+        return False
+    api_out = out_dir / 'api'
+    render_tree(
+        src_dir,
+        api_out,
+        brand=f'tur-{meta["name"]}',
+        brand_label=f'tur-{meta["name"]} API',
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Top-level spices index
+# ---------------------------------------------------------------------------
+
+def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
+    """Render docs/html/spices/index.html with one row per spice."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for meta in metas:
+        name = meta['name']
+        desc = meta.get('description', '') or ''
+        tier = meta.get('tier', '--')
+        c_dep = meta.get('c_dep', '--')
+        rows.append(
+            '      <tr>'
+            f'<td><a href="{html_module.escape(name)}/"><code>tur-{html_module.escape(name)}</code></a></td>'
+            f'<td>{html_module.escape(desc)}</td>'
+            f'<td>{html_module.escape(tier)}</td>'
+            f'<td>{html_module.escape(c_dep)}</td>'
+            f'<td><a href="{html_module.escape(name)}/api/">API</a></td>'
+            '</tr>'
+        )
+    table_html = (
+        '<table class="spices-table">\n'
+        '  <thead><tr>'
+        '<th>Spice</th><th>Description</th><th>Tier</th><th>C dep</th><th>Docs</th>'
+        '</tr></thead>\n'
+        '  <tbody>\n'
+        + '\n'.join(rows)
+        + '\n  </tbody>\n</table>'
+    )
+
+    intro = (
+        '<p>First-party spices for the Turmeric ecosystem. Each spice has its '
+        'own docs -- click through for a front page and a per-spice API '
+        'reference.</p>'
+    )
+
+    sidebar_html = (
+        '<div style="margin-bottom:1.25rem">'
+        '<a href="/" style="font-size:0.8rem;color:var(--text-sec)">&larr; Home</a>'
+        '</div>\n      '
+        '<h3>About</h3>\n'
+        '      <ul>\n'
+        f'        <li><a href="{GITHUB_BASE}">GitHub repo</a></li>\n'
+        '      </ul>'
+    )
+
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spices | Turmeric</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+{GUIDE_CSS}
+    .spices-table {{ width:100%; margin-top:1rem; }}
+    .spices-table td code {{ font-size:0.85rem; }}
+  </style>
+</head>
+<body>
+{PAGE_HEADER}
+{SIDEBAR_TOGGLE_JS}
+  <div class="page-layout">
+    <div class="sidebar">
+      {sidebar_html}
+    </div>
+    <div class="content guide-content">
+      <h1>Spices</h1>
+      {intro}
+      {table_html}
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genspices.py</code>
+  </footer>
+{TURMERIC_HIGHLIGHT_JS}
+{SYNTAX_TOGGLE_JS}
+</body>
+</html>
+'''
+    (out_dir / 'index.html').write_text(html, encoding='utf-8')
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    p = argparse.ArgumentParser(description='Generate the Spices directory page.')
+    p = argparse.ArgumentParser(description='Generate per-spice doc pages.')
     p.add_argument('--out', default='docs/html/spices/', help='Output directory')
     args = p.parse_args()
 
-    text, source = load_readme()
     out_dir = Path(args.out)
-    print('Generating spices page:')
-    render_page(text, source, out_dir)
+
+    spice_dirs = discover_spices()
+    readme_path = SPICES_REPO / 'README.md'
+    table = parse_readme_table(readme_path.read_text(encoding='utf-8')) \
+        if readme_path.is_file() else {}
+    metas = collect_spice_meta(spice_dirs, table)
+
+    print(f'Generating docs for {len(metas)} spices into {out_dir}/')
+    for meta in metas:
+        print(f'-> {meta["name"]}')
+        spice_out = out_dir / meta['name']
+        # Front page links to /docs/html/api/style.css via two-level relative path
+        render_front_page(meta, spice_out, style_rel='../../api/style.css')
+        if not render_api_reference(meta, spice_out):
+            print(f'   (no src/ directory; skipping API reference)')
+
+    render_top_index(metas, out_dir)
     print(f'Done: {out_dir / "index.html"}')
 
 

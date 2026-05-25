@@ -1111,7 +1111,7 @@ def _render_def_card(defn, anchor_prefix=''):
     return h
 
 
-def render_module_page(module, out_dir):
+def render_module_page(module, out_dir, brand='stdlib'):
     """Render a per-module HTML page and return the filename."""
     mod_name = module['name']
     # tur/list -> tur-list.html
@@ -1135,10 +1135,14 @@ def render_module_page(module, out_dir):
         sidebar += '  </ul>\n'
     sidebar += '</div>\n'
 
+    # Path display: prefer the relative path stored on the module (when generated
+    # by render_tree); fall back to "<brand>/<stem>.tur" for legacy callers.
+    rel_path = module.get('rel_path') or f'{brand}/{module["file_stem"]}.tur'
+
     content = '<div class="content">\n'
     content += '  <div class="module-heading">\n'
     content += f'    <h1>{html_module.escape(mod_name)}</h1>\n'
-    content += f'    <div class="module-path">stdlib/{html_module.escape(module["file_stem"])}.tur</div>\n'
+    content += f'    <div class="module-path">{html_module.escape(rel_path)}</div>\n'
     content += '  </div>\n'
 
     for defn in exported:
@@ -1202,10 +1206,12 @@ def _index_card_html(module):
     return h
 
 
-def render_index_page(modules, out_dir):
+def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
     """Render the module index page, grouped by subdirectory."""
+    if brand_label is None:
+        brand_label = 'Turmeric Standard Library' if brand == 'stdlib' else f'{brand} API'
     content = '<div class="content">\n'
-    content += '  <h1 style="color:var(--gold);font-size:2rem;margin-bottom:0.5rem">Turmeric Standard Library</h1>\n'
+    content += f'  <h1 style="color:var(--gold);font-size:2rem;margin-bottom:0.5rem">{html_module.escape(brand_label)}</h1>\n'
     content += '  <p style="color:var(--faint);margin-bottom:1.5rem">Auto-generated API reference. Run <code>just docs</code> to regenerate.</p>\n'
 
     # Group by subdir; None -> 'Core'
@@ -1235,7 +1241,7 @@ def render_index_page(modules, out_dir):
     sidebar += '  <div style="margin-bottom:1.25rem"><a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a></div>\n'
     sidebar += '</div>\n'
 
-    page = _html_header('Turmeric Standard Library | API Docs', css_path='style.css')
+    page = _html_header(f'{brand_label} | API Docs', css_path='style.css')
     page += '<div class="page-layout">\n'
     page += sidebar
     page += content
@@ -1454,6 +1460,94 @@ def collect_tur_files(source):
     return files
 
 
+def render_tree(source, out_dir, *, brand='stdlib', brand_label=None,
+                emit_tur=None, emit_json=None):
+    """
+    Generate an HTML doc tree from a .tur source root.
+
+    source       -- a directory of .tur files (or a single .tur file).
+    out_dir      -- output directory; created if missing.
+    brand        -- short identifier used for path display ('stdlib', 'tur-json').
+    brand_label  -- human-readable label for the index heading and page title.
+                    Defaults to 'Turmeric Standard Library' when brand == 'stdlib',
+                    or '<brand> API' otherwise.
+    emit_tur     -- optional Path; when set, also emit a docstrings.tur lookup.
+    emit_json    -- optional Path; when set, also emit a JSON name list.
+    """
+    source = Path(source)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write CSS
+    css_path = out_dir / 'style.css'
+    css_path.write_text(CSS, encoding='utf-8')
+    print(f'  Wrote {css_path}')
+
+    # Collect and parse files
+    tur_files = collect_tur_files(source)
+    if not tur_files:
+        print(f'No .tur files found in {source}', file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve the source root for subdir computation (only meaningful for dirs)
+    source_root = source.resolve() if source.is_dir() else None
+    # Display prefix for module-path lines: use the source dir name (e.g. "stdlib"
+    # or "json" for spices/json/src/) so the path label matches the on-disk layout.
+    if source_root:
+        path_prefix = source_root.name
+    else:
+        path_prefix = brand
+
+    modules = []
+    for f in tur_files:
+        try:
+            module = parse_tur_file(f)
+            if source_root:
+                try:
+                    rel_parts = Path(f).resolve().relative_to(source_root).parts
+                    module['subdir'] = rel_parts[0] if len(rel_parts) > 1 else None
+                    module['rel_path'] = f'{path_prefix}/' + '/'.join(rel_parts)
+                except ValueError:
+                    module['subdir'] = None
+                    module['rel_path'] = None
+            else:
+                module['subdir'] = None
+                module['rel_path'] = f'{path_prefix}/{Path(f).name}'
+            modules.append(module)
+            exported_count = sum(1 for d in module['definitions'] if d['exported'])
+            print(f'  Parsed {f} -> {module["name"]} ({exported_count} exported defs)')
+        except Exception as e:
+            print(f'  Warning: failed to parse {f}: {e}', file=sys.stderr)
+
+    # Render per-module pages
+    for module in modules:
+        page = render_module_page(module, out_dir, brand=brand)
+        print(f'  Wrote {out_dir}/{page}')
+
+    # Render index
+    render_index_page(modules, out_dir, brand=brand, brand_label=brand_label)
+    print(f'  Wrote {out_dir}/index.html')
+
+    # Optionally emit docstrings.tur
+    if emit_tur:
+        # Phase D5: read verified function names from doctest manifest if present
+        verified_names = None
+        verified_path = Path('tests/doctest-generated/verified.txt')
+        if verified_path.exists():
+            verified_names = set(
+                l.strip() for l in verified_path.read_text(encoding='utf-8').splitlines()
+                if l.strip()
+            )
+        emit_docstrings_tur(modules, emit_tur, verified_names=verified_names)
+
+    # Optionally emit doc-names.json for the web search bar
+    if emit_json:
+        emit_doc_names_json(modules, emit_json)
+
+    print(f'\nDone. {len(modules)} modules -> {out_dir}/')
+    return modules
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate HTML API docs from Turmeric stdlib files.'
@@ -1477,70 +1571,26 @@ def main():
         metavar='PATH',
         help='Also emit a JSON name list at PATH (for web search bar)',
     )
+    parser.add_argument(
+        '--brand',
+        default='stdlib',
+        help='Brand identifier for path display (default: stdlib)',
+    )
+    parser.add_argument(
+        '--brand-label',
+        default=None,
+        help='Human-readable brand label for the index heading',
+    )
     args = parser.parse_args()
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write CSS
-    css_path = out_dir / 'style.css'
-    css_path.write_text(CSS, encoding='utf-8')
-    print(f'  Wrote {css_path}')
-
-    # Collect and parse files
-    tur_files = collect_tur_files(args.source)
-    if not tur_files:
-        print(f'No .tur files found in {args.source}', file=sys.stderr)
-        sys.exit(1)
-
-    # Resolve the source root for subdir computation (only meaningful for dirs)
-    source_root = Path(args.source).resolve() if Path(args.source).is_dir() else None
-
-    modules = []
-    for f in tur_files:
-        try:
-            module = parse_tur_file(f)
-            # Attach subdirectory relative to the source root (e.g. 'scscm', 'tidal', None)
-            if source_root:
-                try:
-                    rel_parts = Path(f).resolve().relative_to(source_root).parts
-                    module['subdir'] = rel_parts[0] if len(rel_parts) > 1 else None
-                except ValueError:
-                    module['subdir'] = None
-            else:
-                module['subdir'] = None
-            modules.append(module)
-            exported_count = sum(1 for d in module['definitions'] if d['exported'])
-            print(f'  Parsed {f} -> {module["name"]} ({exported_count} exported defs)')
-        except Exception as e:
-            print(f'  Warning: failed to parse {f}: {e}', file=sys.stderr)
-
-    # Render per-module pages
-    for module in modules:
-        page = render_module_page(module, out_dir)
-        print(f'  Wrote {out_dir}/{page}')
-
-    # Render index
-    render_index_page(modules, out_dir)
-    print(f'  Wrote {out_dir}/index.html')
-
-    # Optionally emit docstrings.tur
-    if args.emit_tur:
-        # Phase D5: read verified function names from doctest manifest if present
-        verified_names = None
-        verified_path = Path('tests/doctest-generated/verified.txt')
-        if verified_path.exists():
-            verified_names = set(
-                l.strip() for l in verified_path.read_text(encoding='utf-8').splitlines()
-                if l.strip()
-            )
-        emit_docstrings_tur(modules, args.emit_tur, verified_names=verified_names)
-
-    # Optionally emit doc-names.json for the web search bar
-    if args.emit_json:
-        emit_doc_names_json(modules, args.emit_json)
-
-    print(f'\nDone. {len(modules)} modules -> {out_dir}/')
+    render_tree(
+        args.source,
+        args.out,
+        brand=args.brand,
+        brand_label=args.brand_label,
+        emit_tur=args.emit_tur,
+        emit_json=args.emit_json,
+    )
 
 
 if __name__ == '__main__':
