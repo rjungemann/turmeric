@@ -1,4 +1,4 @@
-; Phase G0: Move-only ADT -- without :copy, assigning an ADT ok? a new
+; Phase G0: Move-only ADT -- without :copy, assigning an ADT to a new
 ; binding transfers ownership and the original binding cannot be used again.
 
 (defdata Handle
@@ -8,7 +8,7 @@
 (defn main [] :int
   (let [h (Open 42)]
     (let [h2 h]
-      ; h was moved inok? h2 -- using h here is a use-aferr?-move error.
+      ; h was moved into h2 -- using h here is a use-after-move error.
       (match h
         (Open n) (println n)
         (Closed) (println "closed"))

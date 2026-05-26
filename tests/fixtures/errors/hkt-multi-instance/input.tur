@@ -1,8 +1,8 @@
-;; Phase HKT §1: Two instances of the same HKT typeclass (Funcok?r) in one program.
-;; Funcok?r[option] and Funcok?r[vec] must coexist and dispatch ok? the correct
+;; Phase HKT §1: Two instances of the same HKT typeclass (Functor) in one program.
+;; Functor[option] and Functor[vec] must coexist and dispatch to the correct
 ;; implementation at each call site.
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; --- option helpers ---
@@ -67,11 +67,11 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-;; Two Funcok?r instances for different type construcok?rs
-(definstance Funcok?r [option]
+;; Two Functor instances for different type constructors
+(definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-(definstance Funcok?r [vec]
+(definstance Functor [vec]
   (fmap [container fn] (__fmap_vec container fn)))
 
 (defn add5 [x] :int (+ x 5))
@@ -79,14 +79,14 @@
 
 (defn main [] :int
   (do
-    ;; Funcok?r[option]: fmap add5 (some 10) => some 15
+    ;; Functor[option]: fmap add5 (some 10) => some 15
     (let [o (__opt_some 10)]
       (let [o2 (.fmap o add5)]
         (do
           (println (__opt_some? o2))   ;; true
           (println (__opt_unwrap o2))))) ;; 15
 
-    ;; Funcok?r[vec]: fmap twice (vec-of 7) => vec-of 14
+    ;; Functor[vec]: fmap twice (vec-of 7) => vec-of 14
     (let [v (__vec_of 7)]
       (let [v2 (.fmap v twice)]
         (println (__vec_get0 v2))))    ;; 14

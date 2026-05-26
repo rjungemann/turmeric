@@ -1,7 +1,7 @@
 ;; Phase SEL2: select-fairness -- PRNG fairness check.
 ;;
 ;; Both channels are pre-filled with 1000 items before any select runs.
-;; A select loop runs 1000 ierr?ations counting how many times ch-a fires
+;; A select loop runs 1000 iterations counting how many times ch-a fires
 ;; vs ch-b.
 ;;
 ;; Expected: ch-a selected between 300 and 700 times (30--70% window).
@@ -16,7 +16,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waierr?s; void *send_waierr?s;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
@@ -26,7 +26,7 @@
   pthread_cond_init(&ch->not_full, NULL);
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
-  ch->recv_waierr?s = NULL; ch->send_waierr?s = NULL;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
   return (void *)ch;
   ```)
 
@@ -36,7 +36,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waierr?s; void *send_waierr?s;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   int64_t i;
@@ -52,7 +52,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-      void *recv_waierr?s; void *send_waierr?s;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_destroy(&c->lock);
@@ -62,17 +62,17 @@
   free(c);
   ```)
 
-;; Tail-recursive loop: run ierr? selects; return count of ch-a wins.
+;; Tail-recursive loop: run iter selects; return count of ch-a wins.
 ;; Both channels are pre-filled with 0s, so (+ v 1) == 1 and (+ v 2) == 2,
 ;; but we only use the result as a flag (1=a, 0=b) -- the (+ v N) form
 ;; ensures the recv binding v is referenced, suppressing unused-variable
 ;; warnings in the generated C.
-(defn count-loop [ch-a :ptr<void> ch-b :ptr<void> ierr? :int acc :int] :int
-  (if (= ierr? 0)
+(defn count-loop [ch-a :ptr<void> ch-b :ptr<void> iter :int acc :int] :int
+  (if (= iter 0)
     acc
     (let [hit (select ((ch-a :recv va) (+ va 1))
                       ((ch-b :recv vb) (* vb 0)))]
-      (count-loop ch-a ch-b (- ierr? 1) (+ acc hit)))))
+      (count-loop ch-a ch-b (- iter 1) (+ acc hit)))))
 
 (defn main [] :int
   (let [ch-a (chan-new 1000)

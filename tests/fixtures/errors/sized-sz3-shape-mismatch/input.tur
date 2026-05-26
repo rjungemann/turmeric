@@ -1,7 +1,7 @@
 ; Phase SZ3: Compile-time type error when passing int where Size is expected.
 ;
 ; sized-matrix-assert-shape! expects (Size) arguments.
-; Passing a plain int lierr?al triggers TUR-E0001.
+; Passing a plain int literal triggers TUR-E0001.
 
 (defgadt Size []
   (Static (int) : (Size))

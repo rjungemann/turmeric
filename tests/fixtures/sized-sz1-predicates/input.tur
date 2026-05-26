@@ -58,7 +58,7 @@
   ; size-ge? and size-gt?
   (println (size-ge? (size-static 5) (size-static 5)))
   (println (size-gt? (size-static 6) (size-static 5)))
-  ; size-normalize: compound expression folds ok? Static
+  ; size-normalize: compound expression folds to Static
   (println (size-eval (size-normalize (size-add (size-static 2) (size-mul (size-static 3) (size-static 4))))))
   ; size-simplify: identity law 0+s = s
   (println (size-eval (size-simplify (size-add (size-static 0) (size-static 7)))))

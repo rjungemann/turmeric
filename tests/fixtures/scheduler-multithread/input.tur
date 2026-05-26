@@ -21,7 +21,7 @@
       (let [fb (fiber-new fiber-b 0)]
         (scheduler-mt-spawn sched fa)
         (scheduler-mt-spawn sched fb)
-        ;; Sleep ok? allow threads ok? process
+        ;; Sleep to allow threads to process
         (thread-sleep 100)
         (scheduler-mt-free sched)
         (fiber-free fa)

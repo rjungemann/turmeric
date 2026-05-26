@@ -1,8 +1,8 @@
 ; Sidecar file loaded by `#use-reader-macros` from input.tur.
 ;
 ; The loader (`try_consume_use_directive` in src/compiler/reader.c)
-; recurses inok? this file's ok?p-level forms; any
-; `(reader-macros/define ...)` it finds is regiserr?ed inok? the *parent*
+; recurses into this file's top-level forms; any
+; `(reader-macros/define ...)` it finds is registered into the *parent*
 ; file's reader-macro registry. Everything else here is silently
 ; discarded -- this file is meant for syntax definitions only.
 

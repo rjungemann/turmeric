@@ -1,8 +1,8 @@
-;; Phase HKT H3: once Funcok?r (or any other HKT typeclass) has been defined,
-;; attempting ok? redefine it should produce a clear "already defined" diagnostic.
-;; Defining Funcok?r the first time succeeds; redefining it immediately fails.
-(defclass Funcok?r [^f]
+;; Phase HKT H3: once Functor (or any other HKT typeclass) has been defined,
+;; attempting to redefine it should produce a clear "already defined" diagnostic.
+;; Defining Functor the first time succeeds; redefining it immediately fails.
+(defclass Functor [^f]
   (fmap [container fn] :int))
 ;; This second definition must fail.
-(defclass Funcok?r [a]
+(defclass Functor [a]
   (map [x fn] :int))

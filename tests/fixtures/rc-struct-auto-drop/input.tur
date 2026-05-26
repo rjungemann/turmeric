@@ -1,4 +1,4 @@
-;; auok?-drop of RC<struct> with cleanup
+;; auto-drop of RC<struct> with cleanup
 (defstruct Wrapper :move [val :rc<int>])
 
 (defn main [] :int

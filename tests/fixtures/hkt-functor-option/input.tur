@@ -1,9 +1,9 @@
-;; Phase HKT H3: Funcok?r instance for option.
-;; fmap applies a function ok? the contained value if some,
+;; Phase HKT H3: Functor instance for option.
+;; fmap applies a function to the contained value if some,
 ;; propagates none unchanged.
 
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers (inline layout: { bool is_some; int64_t value; })
@@ -34,7 +34,7 @@
   return (int)(p->value);
   ```)
 
-;; Funcok?r[option]: apply fn ok? the inner value, wrap result in a new option.
+;; Functor[option]: apply fn to the inner value, wrap result in a new option.
 (defn __fmap_option [container fn] :int
   ```c
   struct { bool is_some; int64_t value; } *c =
@@ -46,10 +46,10 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Funcok?r [option]
+(definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-;; Helper function: double an integer (renamed ok? avoid C keyword conflict).
+;; Helper function: double an integer (renamed to avoid C keyword conflict).
 (defn twice [x] :int (* x 2))
 
 (defn main [] :int

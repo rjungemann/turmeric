@@ -1,5 +1,5 @@
 ; Phase HRT3: annotation propagation — rank-2 poly fn passed via let and if.
-; The poly fn parameerr? annotation on `apply-twice` must be visible at each call site.
+; The poly fn parameter annotation on `apply-twice` must be visible at each call site.
 (defn apply-twice [f (forall [a] (-> a a)) x :int] :int
   (let [y (f x)]
     (f y)))

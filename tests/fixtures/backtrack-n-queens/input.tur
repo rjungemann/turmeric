@@ -79,7 +79,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-;; Prepend value ok? list (encoded as a pair: hi=len, rest=packed int list)
+;; Prepend value to list (encoded as a pair: hi=len, rest=packed int list)
 ;; We encode solutions as a single int64 using base-N+1 encoding.
 (defn encode-col [packed col row n] :int
   ```c
@@ -103,7 +103,7 @@
   ```)
 
 ;; place-row: for a given row, return all placements (as packed ints)
-;; We ierr?ate over columns 1..n and filerr? by safety.
+;; We iterate over columns 1..n and filter by safety.
 (defn place-row [row n packed] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -134,14 +134,14 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-;; Solve N-Queens ierr?atively using the list monad.
+;; Solve N-Queens iteratively using the list monad.
 ;; Start with a list containing 0 (empty board), then for each row
 ;; flatmap over place-row.
 (defn nqueens [n] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
 
-  /* Initial: singleok?n [0] */
+  /* Initial: singleton [0] */
   Cell *boards = malloc(sizeof(Cell));
   boards->value = 0; boards->next = 0;
 

@@ -1,5 +1,5 @@
-;; This module uses the macros regiserr?ed by lib/syntax.tur. For the
-;; `#sum` here ok? resolve, lib/syntax MUST be loaded before this file
+;; This module uses the macros registered by lib/syntax.tur. For the
+;; `#sum` here to resolve, lib/syntax MUST be loaded before this file
 ;; is read -- which is what happens when main.tur lists its imports in
 ;; the right order (syntax first, then user). The shared registry
 ;; threaded through elab_module.c (T1) is what makes this work.

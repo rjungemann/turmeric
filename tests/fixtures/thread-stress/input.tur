@@ -1,43 +1,43 @@
-;; Phase T19-E: thread-stress — spawn 100 threads, each increments an aok?mic
-;; counerr? by 1, then join all.  Expected final count: 100.
+;; Phase T19-E: thread-stress — spawn 100 threads, each increments an atomic
+;; counter by 1, then join all.  Expected final count: 100.
 ;;
 ;; Designed as a TSan stress test; requires.tsan ensures it only runs when
 ;; ThreadSanitizer is active.
 
-;; Aok?mic counerr? helpers (seq-cst __aok?mic builtins).
-(defn aok?mic-new [init :int] :ptr<void>
+;; Atomic counter helpers (seq-cst __atomic builtins).
+(defn atomic-new [init :int] :ptr<void>
   ```c
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
-  if (!cell) { fprintf(stderr, "aok?mic-new: oom\n"); abort(); }
-  __aok?mic_sok?re_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
+  if (!cell) { fprintf(stderr, "atomic-new: oom\n"); abort(); }
+  __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
   return (void *)cell;
   ```)
 
-(defn aok?mic-load [p :ptr<void>] :int
+(defn atomic-load [p :ptr<void>] :int
   ```c
-  return (int64_t)__aok?mic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
+  return (int64_t)__atomic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-add! [p :ptr<void> delta :int] :int
+(defn atomic-add! [p :ptr<void> delta :int] :int
   ```c
-  return (int64_t)__aok?mic_fetch_add((int64_t *)p, (int64_t)delta, __ATOMIC_SEQ_CST);
+  return (int64_t)__atomic_fetch_add((int64_t *)p, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-free [p :ptr<void>] :nil
+(defn atomic-free [p :ptr<void>] :nil
   ```c
   free(p);
   ```)
 
-;; Thread arg: poinerr? ok? the shared counerr?.
-(defn counerr?-arg-new [counerr? :ptr<void>] :ptr<void>
+;; Thread arg: pointer to the shared counter.
+(defn counter-arg-new [counter :ptr<void>] :ptr<void>
   ```c
-  return counerr?;   /* pass counerr? directly as arg */
+  return counter;   /* pass counter directly as arg */
   ```)
 
-;; Worker: increments the counerr? by 1.
+;; Worker: increments the counter by 1.
 (defn stress-worker [arg :ptr<void>] :ptr<void>
   ```c
-  __aok?mic_fetch_add((int64_t *)arg, (int64_t)1, __ATOMIC_SEQ_CST);
+  __atomic_fetch_add((int64_t *)arg, (int64_t)1, __ATOMIC_SEQ_CST);
   return NULL;
   ```)
 
@@ -56,10 +56,10 @@
   free(t);
   ```)
 
-;; Spawn N threads running stress-worker against the counerr?; join them all;
+;; Spawn N threads running stress-worker against the counter; join them all;
 ;; return an array (ptr<void>) of N pthread_t handles.
-;; We spawn in a loop via inline C ok? avoid 100 explicit let bindings.
-(defn spawn-all [counerr? :ptr<void> n :int] :ptr<void>
+;; We spawn in a loop via inline C to avoid 100 explicit let bindings.
+(defn spawn-all [counter :ptr<void> n :int] :ptr<void>
   ```c
   pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
   if (!handles) { fprintf(stderr, "spawn-all: oom\n"); abort(); }
@@ -69,7 +69,7 @@
       if (!t) { fprintf(stderr, "spawn-all: thread oom\n"); abort(); }
       pthread_create(t, NULL,
           (void *(*)(void *))stress_worker,
-          (void *)counerr?);
+          (void *)counter);
       handles[i] = t;
   }
   return (void *)handles;
@@ -87,9 +87,9 @@
   ```)
 
 (defn main [] :int
-  (let [counerr? (aok?mic-new 0)]
-    (let [handles (spawn-all counerr? 100)]
+  (let [counter (atomic-new 0)]
+    (let [handles (spawn-all counter 100)]
       (join-all handles 100))
-    (println (aok?mic-load counerr?))   ;; 100
-    (aok?mic-free counerr?))
+    (println (atomic-load counter))   ;; 100
+    (atomic-free counter))
   0)

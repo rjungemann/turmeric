@@ -1,4 +1,4 @@
-; GF2 fixture: gen-collect -- maerr?ialise all generaok?r values inok? an array.
+; GF2 fixture: gen-collect -- materialise all generator values into an array.
 
 (load "stdlib/gen.tur")
 

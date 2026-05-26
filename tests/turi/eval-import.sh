@@ -4,12 +4,12 @@
 # Compiles tests/fixtures/eval-import/input.tur with tur build, then runs
 # the binary and checks output.  The fixture uses (import turi/eval) which
 # triggers the stdlib fallback search (stdlib/turi/eval.tur) and the
-# __tur_auok?link__ mechanism ok? link -lturi.
+# __tur_autolink__ mechanism to link -lturi.
 #
 # TUR_CC_FLAGS must include the right -I and -L paths for libturi.
 # When run from the project root (e.g. via CTest), set:
 #   TUR_CC_FLAGS="-O2 -std=c99 -Wall -I./src -L./build/src"
-# The -lturi flag is injected auok?matically by cmd_build from the generated C.
+# The -lturi flag is injected automatically by cmd_build from the generated C.
 
 set -u
 cd "$(dirname "$0")/../.."

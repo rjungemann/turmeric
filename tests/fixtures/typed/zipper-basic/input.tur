@@ -1,7 +1,7 @@
 ;;
 ;; Phase TC2: tzipper basic operations test
 
-(exerr?n-c free [p :ptr<void>] :void)
+(extern-c free [p :ptr<void>] :void)
 
 (defn make-arr3 [] :ptr<void>
   ```c

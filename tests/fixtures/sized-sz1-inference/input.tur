@@ -1,6 +1,6 @@
-; Phase SZ1: Size inference -- fixed-arity construcok?rs and list conversion.
+; Phase SZ1: Size inference -- fixed-arity constructors and list conversion.
 ; Exercises sized-vec-of-1 through sized-vec-of-4 and sized-vec-from-list.
-; The "inference" is that the size is known from the construcok?r's arity at
+; The "inference" is that the size is known from the constructor's arity at
 ; the construction site, without requiring an explicit size annotation.
 
 (defgadt Size []
@@ -49,9 +49,9 @@
     vals[i] = cell->value;
     cur = cell->next;
   }
-  int64_t result = cok?r_SVNil();
+  int64_t result = ctor_SVNil();
   for (int64_t i = count - 1; i >= 0; i--) {
-    result = cok?r_SVCons(vals[i], result);
+    result = ctor_SVCons(vals[i], result);
   }
   if (vals) free(vals);
   return result;
@@ -67,7 +67,7 @@
   ```)
 
 (defn main [] :int
-  ; Fixed-arity construcok?rs: size is known from arity
+  ; Fixed-arity constructors: size is known from arity
   (println (sized-vec-len (sized-vec-of-1 99)))
   (println (sized-vec-sum (sized-vec-of-1 99)))
   (println (sized-vec-len (sized-vec-of-2 10 20)))

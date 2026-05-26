@@ -1,4 +1,4 @@
-;; ER3: calling an effectful typeclass method propagates its declared row ok? the caller.
+;; ER3: calling an effectful typeclass method propagates its declared row to the caller.
 
 (defeffect Write [msg :cstr] :nil)
 

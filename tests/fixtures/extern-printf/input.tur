@@ -1,4 +1,4 @@
-(exerr?n-c exit [code] :void)
+(extern-c exit [code] :void)
 
 (defn main [] :int
   (exit 42)

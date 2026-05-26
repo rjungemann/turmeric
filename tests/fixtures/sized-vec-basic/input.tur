@@ -1,4 +1,4 @@
-; Phase SZ0: SizedVec -- phanok?m-typed list annotated with a size.
+; Phase SZ0: SizedVec -- phantom-typed list annotated with a size.
 ; Exercises sized-vec-nil, sized-vec-cons, sized-vec-len, sized-vec-head-or,
 ; sized-vec-tail, sized-vec-sum, and sized-vec-size.
 
@@ -58,6 +58,6 @@
   (println (sized-vec-sum (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil))))))
   ; tail of [1,2,3] has len 2
   (println (sized-vec-len (sized-vec-tail (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil)))))))
-  ; sized-vec-size evaluates ok? 3
+  ; sized-vec-size evaluates to 3
   (println (size-eval (sized-vec-size (sized-vec-cons 1 (sized-vec-cons 2 (sized-vec-cons 3 (sized-vec-nil)))))))
   0)

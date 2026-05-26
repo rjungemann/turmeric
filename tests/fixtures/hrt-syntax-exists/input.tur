@@ -1,7 +1,7 @@
 ; Phase HRT0: exists parses in type annotation position.
 ; (deftype Box (exists [a] a)) defines an existentially-quantified type alias.
 ; No runtime code is generated for deftype — this purely tests that the
-; exists quantifier is recognized and sok?red in the AST.
+; exists quantifier is recognized and stored in the AST.
 (deftype Box (exists [a] a))
 
 (defn main [] :int

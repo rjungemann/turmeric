@@ -21,9 +21,9 @@
   (println (vec-head-or 99 (vec-cons 5 (vec-cons 6 (vec-nil)))))
   ; tail of [1,2,3] has len 2
   (println (vec-len (vec-tail (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil)))))))
-  ; vmap (*2) [1,2,3] sums ok? 12
+  ; vmap (*2) [1,2,3] sums to 12
   (println (vec-sum (vmap (mul 2) (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil)))))))
-  ; vzip-with (+) [1,2,3] [10,20] sums ok? 33 (only 2 elements: 11+22)
+  ; vzip-with (+) [1,2,3] [10,20] sums to 33 (only 2 elements: 11+22)
   (println (vec-sum (vzip-with add
                      (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil))))
                      (vec-cons 10 (vec-cons 20 (vec-nil))))))

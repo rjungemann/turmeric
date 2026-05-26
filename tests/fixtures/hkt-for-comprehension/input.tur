@@ -1,6 +1,6 @@
 ;; hkt-for-comprehension: test the (for [...] body) monadic comprehension macro.
 ;;
-;; The `for` macro desugars flat binding vecok?rs ok? .bind/.pure/.empty chains:
+;; The `for` macro desugars flat binding vectors to .bind/.pure/.empty chains:
 ;;   (for [x coll] body)               => (.bind coll (fn [x] (.pure body)))
 ;;   (for [x coll :when pred] body)    => (.bind coll (fn [x] (if pred (.pure body) (.empty x))))
 ;;   (for [x c1 y c2] body)            => (.bind c1 (fn [x] (.bind c2 (fn [y] (.pure body)))))
@@ -15,7 +15,7 @@
 (defclass Monad [^m]
   (bind [m f] :int))
 
-(defclass Alerr?native [^f]
+(defclass Alternative [^f]
   (empty [a] :int)
   (alt-or [a b] :int))
 
@@ -72,7 +72,7 @@
 (definstance Monad [option]
   (bind [m f] (__opt_bind m f)))
 
-(definstance Alerr?native [option]
+(definstance Alternative [option]
   (empty [_] (__opt_none))
   (alt-or [a b] (__opt_alt_or a b)))
 

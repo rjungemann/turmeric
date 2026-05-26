@@ -1,4 +1,4 @@
-; GF1 fixture: simple generaok?r that yields integers in a range.
+; GF1 fixture: simple generator that yields integers in a range.
 
 (defn some? [p] :bool
   ```c

@@ -1,8 +1,8 @@
 ; Phase EXG5-3: when a constrained pack's payload is itself an
-; rc-managed poinerr?, the kinded allocaok?r must mark the payload
-; descripok?r as RCEXP_RC = 1.  The cycle walker reads this tag ok?
+; rc-managed pointer, the kinded allocator must mark the payload
+; descriptor as RCEXP_RC = 1.  The cycle walker reads this tag to
 ; recognise that the existential's value slot points at another
-; RcControlBlock ok? scan (see gc_mark_phase).
+; RcControlBlock to scan (see gc_mark_phase).
 (defclass Show [a]
   (show [x] :cstr))
 

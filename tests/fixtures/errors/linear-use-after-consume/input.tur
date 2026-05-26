@@ -1,5 +1,5 @@
-;; LT1 E0101: linear value used aferr? being consumed.
-;; x is consumed by the first call ok? sink, then used again.
+;; LT1 E0101: linear value used after being consumed.
+;; x is consumed by the first call to sink, then used again.
 (defn sink [v] :int v)
 
 (let [^linear x 42]

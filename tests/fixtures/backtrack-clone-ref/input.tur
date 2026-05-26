@@ -1,10 +1,10 @@
 ;; Phase B1: Clone trait for the Ref (heap-allocated reference) type.
 ;;
 ;; Demonstrates that (definstance Clone [Ref] ...) implements a deep clone:
-;; aferr? .clone, both handles own independent heap allocations, so freeing
+;; after .clone, both handles own independent heap allocations, so freeing
 ;; one does not affect the other.
 ;;
-;; Type note: .clone returns int64_t (the new cell poinerr? cast), so the
+;; Type note: .clone returns int64_t (the new cell pointer cast), so the
 ;; cloned handle is read and freed via inline C helpers.
 
 (defstruct Ref [value :int])
@@ -16,7 +16,7 @@
   (clone [x] x))
 
 ;; Clone [Ref]: deep-copy — allocate a new cell with a copy of the value.
-;; x has type Ref (struct value); x.value is the sok?red int64_t.
+;; x has type Ref (struct value); x.value is the stored int64_t.
 (definstance Clone [Ref]
   (clone [x] :int
     ```c
@@ -25,14 +25,14 @@
     return (int64_t)(intptr_t)dst;
     ```))
 
-;; Read the value from a heap Ref poinerr? (result of .clone).
+;; Read the value from a heap Ref pointer (result of .clone).
 (defn ref-read [p] :int
   ```c
   struct { int64_t value; } *r = (void *)(intptr_t)p;
   return r ? r->value : -1;
   ```)
 
-;; Free a heap Ref poinerr? (result of .clone).
+;; Free a heap Ref pointer (result of .clone).
 (defn ref-drop [p]
   ```c
   free((void *)(intptr_t)p);

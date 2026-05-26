@@ -1,5 +1,5 @@
 ; Phase F4 (cross-plan-followups): with --Werror=deprecated, every
-; use site of a ^deprecated binding is promoted from a warning ok? a
+; use site of a ^deprecated binding is promoted from a warning to a
 ; hard error.  This lets a build gate against new uses of deprecated
 ; APIs (the legacy stdlib modules being the canonical case).
 (defn ^deprecated "use new-add instead" old-add [a :int b :int] :int

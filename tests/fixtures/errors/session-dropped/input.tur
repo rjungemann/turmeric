@@ -1,4 +1,4 @@
-;; SS1 E0211: session channel dropped before prook?col completion.
+;; SS1 E0211: session channel dropped before protocol completion.
 ;; 's' is Session[Send int Close] but goes out of scope without being
 ;; consumed -- the send step and close were never performed.
 (defn drop-session [^linear s :(Session (Send int Close))] :int

@@ -1,10 +1,10 @@
-;; Phase 19 C5: exerr?n-c with #{Effect} effect-row annotation.
-;; Annotations on exerr?n-c are advisory in v1 — the imported C function
+;; Phase 19 C5: extern-c with #{Effect} effect-row annotation.
+;; Annotations on extern-c are advisory in v1 — the imported C function
 ;; ignores Turmeric effect semantics. The compiler accepts and discards them.
 
 (defeffect IO [] :nil)
 
-;; Use a cusok?m C function so there's no conflict with system headers.
+;; Use a custom C function so there's no conflict with system headers.
 ;; The #{IO} row annotation is accepted and silently discarded.
 (defn c-write-int [n :int] #{IO} :nil
   ```c

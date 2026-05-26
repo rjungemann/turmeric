@@ -1,4 +1,4 @@
-;; Phase B4: Parser combinaok?rs — run-parser-full requires full input consumption.
+;; Phase B4: Parser combinators — run-parser-full requires full input consumption.
 ;; (run-parser-full (pchar 97) "a") → 1 result (consumes all of "a").
 ;; (run-parser-full (pchar 97) "ab") → 0 results (only consumes 'a', leaving "b").
 

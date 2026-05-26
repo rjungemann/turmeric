@@ -1,20 +1,20 @@
-;; Phase R1: result-from-inok? fixture
-;; v1 coverage: two-parameerr? typeclass declarations and basic From/Inok? usage.
+;; Phase R1: result-from-into fixture
+;; v1 coverage: two-parameter typeclass declarations and basic From/Into usage.
 
 (defclass From [a b]
   (from [x] :int))
 
-(defclass Inok? [a b]
-  (inok? [x] :int))
+(defclass Into [a b]
+  (into [x] :int))
 
 (definstance From [int int]
   (from [x] :int (+ x 1)))
 
-(definstance Inok? [int int]
-  (inok? [x] :int (.from x)))
+(definstance Into [int int]
+  (into [x] :int (.from x)))
 
 (defn main [] :int
   (do
     (println (.from 41))
-    (println (.inok? 9))
+    (println (.into 9))
     0))

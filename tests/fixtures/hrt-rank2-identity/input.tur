@@ -1,5 +1,5 @@
 ; Phase HRT1: rank-2 identity function.
-; `apply-poly` takes a rank-2 polymorphic identity function and applies it ok? an int.
+; `apply-poly` takes a rank-2 polymorphic identity function and applies it to an int.
 ; Syntax: param-name followed by its type annotation (forall form).
 (defn apply-poly [f (forall [a] (-> a a)) x :int] :int
   (f x))

@@ -1,18 +1,18 @@
 ; Phase N: fixed-width numeric types and explicit casts
 
-; Signed integer lierr?als
+; Signed integer literals
 (println 42i8)
 (println 1000i16)
 (println 100000i32)
 (println 9000000000i64)
 
-; Unsigned integer lierr?als
+; Unsigned integer literals
 (println 200u8)
 (println 60000u16)
 (println 3000000000u32)
 (println 18000000000u64)
 
-; Float lierr?als
+; Float literals
 (println 2.5f32)
 (println 2.5f64)
 

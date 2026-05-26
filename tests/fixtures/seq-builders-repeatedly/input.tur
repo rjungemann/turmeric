@@ -1,11 +1,11 @@
 ; LZ1 fixture: seq/repeatedly -- infinite seq from a zero-arg fat closure.
-; The closure must capture a variable ok? satisfy the fat-closure convention.
+; The closure must capture a variable to satisfy the fat-closure convention.
 
 (load "stdlib/seq/builders.tur")
 
 (defn main [] :void
   (let [^mut n 0
-        g (seq-ierr? (seq/repeatedly (fn [] (let [r n] (set! n (+ n 1)) r))))
+        g (seq-iter (seq/repeatedly (fn [] (let [r n] (set! n (+ n 1)) r))))
         ^mut count 0]
     (while (< count 4)
       (let [v (seq-gen-next g)]

@@ -2,7 +2,7 @@
 ;
 ; Exercises the stdlib/vec-existential.tur macros that close Option B
 ; from typed-collections-plan.md:
-;   - vec-of-sized: wraps any SizedVec inok? a size-hiding Vec
+;   - vec-of-sized: wraps any SizedVec into a size-hiding Vec
 ;   - open-vec:     binds [n sv] in the body, recovering the SizedVec
 ;                   under a fresh abstract size index
 (load "stdlib/sized.tur")

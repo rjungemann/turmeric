@@ -1,6 +1,6 @@
-(defmodule geom/vecok?r
+(defmodule geom/vector
   (export add2)
   (defn add2 [x y] :int (+ x y))
   (defn main [] :int
-    (println (geom/vecok?r/add2 10 5))
+    (println (geom/vector/add2 10 5))
     0))

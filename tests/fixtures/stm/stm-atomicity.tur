@@ -1,13 +1,13 @@
-;; stm-aok?micity.tur - Verify aok?micity of transactions
+;; stm-atomicity.tur - Verify atomicity of transactions
 
 ;; Test that writes are not visible until commit
-(defn test-aok?micity [] :ptr
+(defn test-atomicity [] :ptr
   (let [tv (tvar/new 0)]
     (let [result
-          (aok?mically
+          (atomically
            (stm
             (tvar/write tv 42)
             (tvar/read tv)))]
       result)))
 
-(test-aok?micity)
+(test-atomicity)

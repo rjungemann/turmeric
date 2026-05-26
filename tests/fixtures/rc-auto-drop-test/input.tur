@@ -1,10 +1,10 @@
 (defn main [] :int
-  ;; Test 1: RC auok?-drop should fire for bindings not consumed by ref/from-rc
-  ;; With auok?-drop enabled, we shouldn't need explicit (rc/drop x) calls
+  ;; Test 1: RC auto-drop should fire for bindings not consumed by ref/from-rc
+  ;; With auto-drop enabled, we shouldn't need explicit (rc/drop x) calls
   (let [x (rc/of 100)]
     (println (rc/strong-count x)))
   
-  ;; Test 2: RC auok?-drop should NOT fire if binding is consumed by ref/from-rc
+  ;; Test 2: RC auto-drop should NOT fire if binding is consumed by ref/from-rc
   ;; ref/from-rc frees the control block, so manual drop would be wrong
   (let [x (rc/of 200)]
     (let [r (ref/from-rc x)]

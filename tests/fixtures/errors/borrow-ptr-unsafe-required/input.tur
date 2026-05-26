@@ -1,5 +1,5 @@
 ;; Phase 12: Borrowing from ptr<void> requires (unsafe ../..)
-;; Attempting ok? borrow from a raw poinerr? outside unsafe must be rejected.
+;; Attempting to borrow from a raw pointer outside unsafe must be rejected.
 
 (defn main [] :int
   (let [r (rc/of 42)]

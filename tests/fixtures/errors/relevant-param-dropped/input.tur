@@ -1,4 +1,4 @@
-;; ST1 E0151: relevant parameerr? dropped without being used.
+;; ST1 E0151: relevant parameter dropped without being used.
 ;; The function receives a ^relevant param but never uses it.
 (defn discard [^relevant x] :int
   0)

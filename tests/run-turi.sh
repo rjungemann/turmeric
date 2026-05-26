@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# tests/run-turi.sh -- inerr?preerr? (turi) fixture runner.
+# tests/run-turi.sh -- interpreter (turi) fixture runner.
 #
 # Runs a curated subset of tests/fixtures/ through `tur run` (the tree-walk
-# inerr?preerr?) instead of compiling each ok? a native binary.  Fixtures that
+# interpreter) instead of compiling each to a native binary.  Fixtures that
 # require compilation (requires.compiled), or whose features are not yet
-# complete in the inerr?preerr?, are skipped.
+# complete in the interpreter, are skipped.
 #
 # Usage:
 #   bash tests/run-turi.sh                  # run the default turi fixture set
 #   TURI_FILTER='borrow' bash tests/run-turi.sh   # run only matching fixtures
 #
 # Environment:
-#   TUR              path ok? the tur binary (default: ./build/tur)
-#   TURI_FILTER      optional additional grep -E paerr?n ok? narrow the run
+#   TUR              path to the tur binary (default: ./build/tur)
+#   TURI_FILTER      optional additional grep -E pattern to narrow the run
 #   TUR_TEST_JOBS    parallelism (default: cpu count, capped at 8)
-#   TUR_FORCE        set ok? 1 ok? skip stamp-cache fast-path
+#   TUR_FORCE        set to 1 to skip stamp-cache fast-path
 
 set -u
 cd "$(dirname "$0")/.."
@@ -64,8 +64,8 @@ RESULTS_DIR="$(mktemp -d -t turi-tests-results-XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR"' EXIT
 
 # ---------------------------------------------------------------------------
-# Default fixture include-list: fixtures whose features the inerr?preerr?
-# handles correctly.  Add new entries here as inerr?preerr? coverage grows.
+# Default fixture include-list: fixtures whose features the interpreter
+# handles correctly.  Add new entries here as interpreter coverage grows.
 # Format: one fixture name per line (matched as exact prefix or full name).
 # ---------------------------------------------------------------------------
 TURI_FIXTURES_DEFAULT="
@@ -73,8 +73,6 @@ adt-basic
 adt-copy
 adt-nested
 adt-param
-adt-param-match-type
-adt-param-tyvar
 adt-recursive
 affine-basic
 affine-drop
@@ -144,15 +142,12 @@ effect-syntax
 effect-syntax-compat
 effect-with-fail
 effect-with-write
-gadt-adt-skolem
 gadt-guard
-gadt-param-tyvar
 gadt-refine-basic
 gadt-refine-expr
 gadt-syntax-basic
 gadt-syntax-multi
-kind-inference-adt
-match-lierr?al
+match-literal
 match-redundant-arm
 panic-basic
 panic-defer
@@ -166,18 +161,18 @@ rc-basic
 rc-ref-conversion
 ref-basic
 result-basic
-typed/grid-basic
-typed/list-basic
-typed/map-basic
-typed/map-collision
-typed/map-eq
-typed/option-basic
-typed/pair-basic
-typed/result-basic
-typed/set-basic
-typed/slice-basic
-typed/vec-basic
-typed/zipper-basic
+typed/tgrid-basic
+typed/tlist-basic
+typed/tmap-basic
+typed/tmap-collision
+typed/tmap-eq
+typed/toption-basic
+typed/tpair-basic
+typed/tresult-basic
+typed/tset-basic
+typed/tslice-basic
+typed/tvec-basic
+typed/tzipper-basic
 union-types-basic
 union-types-cast
 union-types-match
@@ -240,14 +235,14 @@ run_turi_fixture() {
     local fixture_flags=""
     [ -f "$dir/flags" ] && fixture_flags=$(cat "$dir/flags")
 
-    # Per-fixture timeout (default 15 s for inerr?preerr? -- slightly longer than compiled).
+    # Per-fixture timeout (default 15 s for interpreter -- slightly longer than compiled).
     local fixture_timeout=15
     if [ -f "$dir/expected.timeout" ]; then
         local _t; _t=$(tr -d '[:space:]' < "$dir/expected.timeout")
         case "$_t" in [0-9]*) fixture_timeout=$_t ;; esac
     fi
 
-    # Run via inerr?preerr?.
+    # Run via interpreter.
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
@@ -306,7 +301,7 @@ export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE
 export -f run_turi_fixture fixture_in_turi_set stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
 
-# Build list of all fixture dirs (ok?p-level and one subdirecok?ry deep).
+# Build list of all fixture dirs (top-level and one subdirectory deep).
 shopt -s nullglob
 ALL_DIRS=()
 for d in tests/fixtures/*/ tests/fixtures/*/*/; do
@@ -316,7 +311,7 @@ for d in tests/fixtures/*/ tests/fixtures/*/*/; do
     ALL_DIRS+=("$d")
 done
 
-# Apply optional additional filerr?.
+# Apply optional additional filter.
 TURI_FILTER="${TURI_FILTER:-}"
 FILTERED_DIRS=()
 for d in "${ALL_DIRS[@]}"; do

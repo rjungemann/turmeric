@@ -5,7 +5,7 @@
 ;; Expected output:
 ;;   ok: 42
 
-;; Use inline C ok? avoid needing Send/Sync enforcement (T19-B) for closures.
+;; Use inline C to avoid needing Send/Sync enforcement (T19-B) for closures.
 
 ;; ---- FutureCell helpers (matching stdlib/future.tur layout) ----
 
@@ -141,7 +141,7 @@
   ```)
 
 ;; make-worker-arg : ptr<void> × int → ptr<void>
-;; Packs (cell, value) inok? a heap-allocated void*[2] for passing ok? a thread.
+;; Packs (cell, value) into a heap-allocated void*[2] for passing to a thread.
 ;; The worker thread is responsible for freeing this allocation.
 (defn make-worker-arg [cell :ptr<void> val :int] :ptr<void>
   ```c

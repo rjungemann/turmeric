@@ -1,5 +1,5 @@
 ;; Phase B3: Backtracking monad — basic mreturn and run-backtrack.
-;; mreturn wraps a value in a singleok?n result list; run-backtrack
+;; mreturn wraps a value in a singleton result list; run-backtrack
 ;; is the identity runner (list monad is eager).
 
 (defn mzero [] :int

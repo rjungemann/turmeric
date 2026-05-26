@@ -6,19 +6,19 @@
     (let [tv2 (tvar/new 0)]
       (let [tv3 (tvar/new 0)]
         ;; Transaction accessing TVars in different orders
-        (aok?mically
+        (atomically
          (stm
           (tvar/write tv1 1)
           (tvar/write tv2 2)
           (tvar/write tv3 3)))
          
-        (aok?mically
+        (atomically
          (stm
           (tvar/write tv3 30)
           (tvar/write tv1 10)
           (tvar/write tv2 20)))
          
-        (aok?mically
+        (atomically
          (stm
           (tvar/write tv2 200)
           (tvar/write tv3 300)

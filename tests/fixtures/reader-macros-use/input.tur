@@ -1,8 +1,8 @@
 ; RM4: `#use-reader-macros "path"` directive.
 ;
-; Loads the named file (relative ok? this source file's direcok?ry),
+; Loads the named file (relative to this source file's directory),
 ; processes its `(reader-macros/define ...)` directives, and continues
-; reading. The directive must appear between ok?p-level forms.
+; reading. The directive must appear between top-level forms.
 
 #use-reader-macros "macros.tur"
 

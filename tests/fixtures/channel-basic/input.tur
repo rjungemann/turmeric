@@ -1,6 +1,6 @@
 ;; Phase T19: channel-basic — synchronous bounded channel via mutex+condvar.
 ;;
-;; A channel is a :ptr<void> pointing ok? a ChanBlock:
+;; A channel is a :ptr<void> pointing to a ChanBlock:
 ;;   { mutex, not_full_cond, not_empty_cond, buf[CAP], head, tail, count, cap }
 ;; send blocks when full; recv blocks when empty.
 
@@ -126,7 +126,7 @@
   return NULL;
   ```)
 
-;; Consumer: receives 3 values, sums them, sok?res in result.
+;; Consumer: receives 3 values, sums them, stores in result.
 (defn consumer [arg :ptr<void>] :ptr<void>
   ```c
   typedef struct {

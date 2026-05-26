@@ -82,7 +82,7 @@ static tur_set_t *tur_set_union(tur_set_t *a, tur_set_t *b) {
     if (b) memcpy(tmp+na, b->items, nb*sizeof(int64_t));
     return tur_set_from_items(cap, tmp);
 }
-static tur_set_t *tur_set_inerr?section(tur_set_t *a, tur_set_t *b) {
+static tur_set_t *tur_set_intersection(tur_set_t *a, tur_set_t *b) {
     if (!a || !b || !a->n || !b->n) return tur_set_from_items(0, NULL);
     int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));
     uint32_t k = 0;
@@ -222,7 +222,7 @@ bool tur_stm_commit(STM_Transaction *tx) {
         tx->write_set[i]->value = tx->new_values[i];
         tx->write_set[i]->version++;
     }
-    /* Notify waierr?s */
+    /* Notify waiters */
     for (int i = 0; i < tx->write_count; i++) {
         pthread_cond_broadcast(&tx->write_set[i]->cond);
     }
@@ -241,7 +241,7 @@ static bool __tur_stm_should_retry(STM_Transaction *tx) {
     if (tx->aborted) return true;
     return false;
 }
-void *tur_aok?mically(void *(*fn)(void *), void *env) {
+void *tur_atomically(void *(*fn)(void *), void *env) {
     STM_Transaction *tx = tur_stm_new_transaction();
     STM_Transaction *prev = tur_stm_current_tx();
     while (1) {
@@ -286,7 +286,7 @@ static const char *tur_test_registry_names[TUR_TEST_REGISTRY_MAX];
 static tur_test_callback_t tur_test_registry_fns[TUR_TEST_REGISTRY_MAX];
 static int64_t tur_test_registry_count = 0;
 
-int64_t tur_test_regiserr?(const char *name, void *test_fn) {
+int64_t tur_test_register(const char *name, void *test_fn) {
     if (!test_fn) return 0;
     if (tur_test_registry_count >= TUR_TEST_REGISTRY_MAX) return 0;
     tur_test_registry_names[tur_test_registry_count] = name ? name : "<unnamed>";
@@ -557,7 +557,7 @@ struct FiberBlock {
     void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */
     void (*entry_fn)(void);
-    void *fiber_local; /* Phase T21: fiber-local sok?rage */
+    void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
     bool cancelled; /* Set when parent TaskGroup is cancelled */
     jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
@@ -609,7 +609,7 @@ typedef struct {
     TurThreadState *state;
 } TurThreadSpawnArg;
 
-/* TC0: thread-local poinerr? ok? this thread's cancel state (NULL on main thread) */
+/* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */
 static __thread TurThreadState *tur_current_thread_state = NULL;
 /* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */
 static __thread jmp_buf tur_cancel_jmpbuf;
@@ -626,10 +626,10 @@ static void *tur_thread_trampoline(void *raw) {
 
 static int tur_thread_cancel_requested(void) {
     TurThreadState *s = tur_current_thread_state;
-    return s ? __aok?mic_load_n(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;
+    return s ? __atomic_load_n(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;
 }
 
-/* TC0: cancel action -- longjmp inok? cancel guard if active, else exit thread */
+/* TC0: cancel action -- longjmp into cancel guard if active, else exit thread */
 static void tur_thread_do_cancel(void) {
     if (tur_cancel_jmpbuf_valid) {
         tur_cancel_jmpbuf_valid = 0;
@@ -647,7 +647,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
         int prev_global_valid = global_panic_jmpbuf_valid;
         jmp_buf prev_global_buf;
         if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
-        /* Clear global ok? prevent inerr?ference */
+        /* Clear global to prevent interference */
         global_panic_jmpbuf_valid = 0;
         /* Set up per-fiber panic handler */
         if (setjmp(f->panic_jmpbuf) == 0) {
@@ -660,11 +660,11 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
                 panic_payload_free(global_panic_payload);
                 global_panic_payload = NULL;
             }
-            /* Resok?re previous global panic handler */
+            /* Restore previous global panic handler */
             global_panic_jmpbuf_valid = prev_global_valid;
             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
         } else {
-            /* Panic caught - auok?-cancel task group (TG-004-3) */
+            /* Panic caught - auto-cancel task group (TG-004-3) */
             f->panic_jmpbuf_valid = 0;
             tur_current_fiber = NULL;
             if (global_panic_payload) {
@@ -680,7 +680,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
                 panic_payload_free(global_panic_payload);
                 global_panic_payload = NULL;
             }
-            /* Resok?re previous global panic handler */
+            /* Restore previous global panic handler */
             global_panic_jmpbuf_valid = prev_global_valid;
             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
         }
@@ -814,7 +814,7 @@ static void tur_task_group_notify_done(void *task_group) {
     pthread_mutex_unlock(&g->lock);
 }
 
-static int64_t tur_monook?nic_ns(void) {
+static int64_t tur_monotonic_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
@@ -840,22 +840,22 @@ static TurTimerWheel *tur_global_timers = NULL;
 #define TUR_IO_READ  1
 #define TUR_IO_WRITE 2
 
-typedef struct TurIOWaierr? {
+typedef struct TurIOWaiter {
     int fd;
     int events;
     FiberBlock *fiber;
-    struct TurIOWaierr? *next;
-} TurIOWaierr?;
+    struct TurIOWaiter *next;
+} TurIOWaiter;
 
-static TurIOWaierr? *tur_io_waierr?s = NULL;
+static TurIOWaiter *tur_io_waiters = NULL;
 
 static void tur_timer_wheel_tick(TurTimerWheel *w);
 static int64_t tur_timer_wheel_next_deadline_ns(TurTimerWheel *w);
 static int64_t tur_timer_wheel_insert(TurTimerWheel *w, int64_t deadline_ns, void (*cb)(void *), void *arg);
 static void tur_timer_wheel_cancel(TurTimerWheel *w, int64_t id);
 static TurTimerWheel *tur_timer_wheel_new(void);
-static void tur_io_regiserr?(int fd, int events, FiberBlock *fiber);
-static void tur_io_unregiserr?(int fd);
+static void tur_io_register(int fd, int events, FiberBlock *fiber);
+static void tur_io_unregister(int fd);
 static void tur_io_poll(int64_t timeout_us);
 static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg);
 static void tur_tick_timers(void);
@@ -948,7 +948,7 @@ static void tur_scheduler_run(TurScheduler *s) {
     s->running = false;
 }
 
-static void tur_scheduler_run_ok?_completion(TurScheduler *s) {
+static void tur_scheduler_run_to_completion(TurScheduler *s) {
     s->running = true;
     while (s->running) {
         tur_tick_timers();
@@ -1055,7 +1055,7 @@ static void tur_timer_wheel_cancel(TurTimerWheel *w, int64_t id) {
 }
 
 static void tur_timer_wheel_tick(TurTimerWheel *w) {
-    int64_t now = tur_monook?nic_ns();
+    int64_t now = tur_monotonic_ns();
     while (w->len > 0 && w->heap[0]->deadline_ns <= now) {
         TurTimerEntry *e = w->heap[0];
         w->len--;
@@ -1084,25 +1084,25 @@ static int64_t tur_timer_wheel_next_deadline_ns(TurTimerWheel *w) {
 
 static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg) {
     if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
-    int64_t deadline = tur_monook?nic_ns() + ms * 1000000LL;
+    int64_t deadline = tur_monotonic_ns() + ms * 1000000LL;
     tur_timer_wheel_insert(tur_global_timers, deadline, callback, arg);
 }
 
-static void tur_io_regiserr?(int fd, int events, FiberBlock *fiber) {
-    TurIOWaierr? *w = (TurIOWaierr? *)malloc(sizeof(TurIOWaierr?));
-    if (!w) { fprintf(stderr, "io waierr?: oom\n"); abort(); }
+static void tur_io_register(int fd, int events, FiberBlock *fiber) {
+    TurIOWaiter *w = (TurIOWaiter *)malloc(sizeof(TurIOWaiter));
+    if (!w) { fprintf(stderr, "io waiter: oom\n"); abort(); }
     w->fd = fd;
     w->events = events;
     w->fiber = fiber;
-    w->next = tur_io_waierr?s;
-    tur_io_waierr?s = w;
+    w->next = tur_io_waiters;
+    tur_io_waiters = w;
 }
 
-static void tur_io_unregiserr?(int fd) {
-    TurIOWaierr? **pp = &tur_io_waierr?s;
+static void tur_io_unregister(int fd) {
+    TurIOWaiter **pp = &tur_io_waiters;
     while (*pp) {
         if ((*pp)->fd == fd) {
-            TurIOWaierr? *tmp = *pp;
+            TurIOWaiter *tmp = *pp;
             *pp = tmp->next;
             free(tmp);
             return;
@@ -1112,12 +1112,12 @@ static void tur_io_unregiserr?(int fd) {
 }
 
 static void tur_io_poll(int64_t timeout_us) {
-    if (!tur_io_waierr?s) return;
+    if (!tur_io_waiters) return;
     fd_set rfds, wfds;
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
     int maxfd = -1;
-    for (TurIOWaierr? *w = tur_io_waierr?s; w; w = w->next) {
+    for (TurIOWaiter *w = tur_io_waiters; w; w = w->next) {
         if (w->events & TUR_IO_READ)  FD_SET(w->fd, &rfds);
         if (w->events & TUR_IO_WRITE) FD_SET(w->fd, &wfds);
         if (w->fd > maxfd) maxfd = w->fd;
@@ -1127,9 +1127,9 @@ static void tur_io_poll(int64_t timeout_us) {
     tv.tv_usec = (long)(timeout_us % 1000000);
     int ret = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
     if (ret <= 0) return;
-    TurIOWaierr? **pp = &tur_io_waierr?s;
+    TurIOWaiter **pp = &tur_io_waiters;
     while (*pp) {
-        TurIOWaierr? *w = *pp;
+        TurIOWaiter *w = *pp;
         bool ready = false;
         if ((w->events & TUR_IO_READ)  && FD_ISSET(w->fd, &rfds))  ready = true;
         if ((w->events & TUR_IO_WRITE) && FD_ISSET(w->fd, &wfds)) ready = true;
@@ -1149,7 +1149,7 @@ static void tur_tick_timers(void) {
 }
 
 static void tur_poll_io(int64_t timeout_us) {
-    if (tur_io_waierr?s) tur_io_poll(timeout_us);
+    if (tur_io_waiters) tur_io_poll(timeout_us);
 }
 
 static bool tur_has_pending_timers(void) {
@@ -1157,14 +1157,14 @@ static bool tur_has_pending_timers(void) {
 }
 
 static bool tur_has_pending_io(void) {
-    return tur_io_waierr?s != NULL;
+    return tur_io_waiters != NULL;
 }
 
 static int64_t tur_next_timer_wait_us(void) {
     if (!tur_global_timers || tur_global_timers->len == 0) return -1;
     int64_t next = tur_timer_wheel_next_deadline_ns(tur_global_timers);
     if (next < 0) return -1;
-    int64_t diff = (next - tur_monook?nic_ns()) / 1000;
+    int64_t diff = (next - tur_monotonic_ns()) / 1000;
     return diff > 0 ? diff : 0;
 }
 
@@ -1278,7 +1278,7 @@ static void tur_scheduler_mt_spawn(TurSchedulerMT *s, FiberBlock *f) {
 }
 
 static void tur_scheduler_mt_run(TurSchedulerMT *s) {
-    /* Worker threads run auok?matically; this is a no-op for the
+    /* Worker threads run automatically; this is a no-op for the
      * shared-queue impl.  Kept for API compatibility. */
     (void)s;
 }
@@ -1398,7 +1398,7 @@ static int64_t tur_await_future(TurFuture *f) {
         }
     } else {
         /* In a fiber - yield and let scheduler resume us */
-        /* Regiserr? a callback ok? re-enqueue this fiber when future completes */
+        /* Register a callback to re-enqueue this fiber when future completes */
         f->on_complete.fn = (void (*)(TurFuture *, int64_t))tur_fiber_block_resume;
         f->on_complete.env = (void *)tur_current_fiber;
         tur_fiber_block_yield(0);
@@ -1424,22 +1424,22 @@ static void tur_future_free(TurFuture *f) {
 /* Backward compatibility: TurAsyncTask = TurFuture */
 typedef TurFuture TurAsyncTask;
 
-/* Phase SEL0: TurSelectWaierr? -- select waierr? for fair multi-channel blocking */
-typedef struct TurSelectWaierr? TurSelectWaierr?;
-struct TurSelectWaierr? {
+/* Phase SEL0: TurSelectWaiter -- select waiter for fair multi-channel blocking */
+typedef struct TurSelectWaiter TurSelectWaiter;
+struct TurSelectWaiter {
     pthread_mutex_t *wakeup_mutex;
     pthread_cond_t  *wakeup_cond;
     volatile int    *selected_idx;
     int              clause_idx;
-    TurSelectWaierr? *next;
+    TurSelectWaiter *next;
 };
 
-/* Phase SEL0: signal the first unselected waierr? in the list */
-static void tur_waierr?_signal_one(void *waierr?_list) {
-    TurSelectWaierr? *w = (TurSelectWaierr? *)waierr?_list;
+/* Phase SEL0: signal the first unselected waiter in the list */
+static void tur_waiter_signal_one(void *waiter_list) {
+    TurSelectWaiter *w = (TurSelectWaiter *)waiter_list;
     while (w) {
         int exp = -1;
-        if (__aok?mic_compare_exchange_n(w->selected_idx, &exp, w->clause_idx, 0,
+        if (__atomic_compare_exchange_n(w->selected_idx, &exp, w->clause_idx, 0,
                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
             pthread_mutex_lock(w->wakeup_mutex);
             pthread_cond_signal(w->wakeup_cond);
@@ -1450,7 +1450,7 @@ static void tur_waierr?_signal_one(void *waierr?_list) {
     }
 }
 
-/* Phase SEL1: TurSelectClause -- clause descripok?r for tur_select_blocking */
+/* Phase SEL1: TurSelectClause -- clause descriptor for tur_select_blocking */
 typedef struct { void *chan; int op; int64_t val; } TurSelectClause;
 
 /* Phase SEL1: persistent xorshift32 PRNG for fair select */
@@ -1465,7 +1465,7 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
         int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-        void *recv_waierr?s; void *send_waierr?s;
+        void *recv_waiters; void *send_waiters;
     } ChanBlock_;
     if (n <= 0) return -2;
     /* Phase 1: non-blocking scan -- try all clauses without blocking */
@@ -1508,12 +1508,12 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
             clauses[winner].val = wch->buf[wch->head];
             wch->head = (wch->head + 1) % wch->cap; wch->count--;
             pthread_cond_signal(&wch->not_full);
-            tur_waierr?_signal_one(wch->send_waierr?s);
+            tur_waiter_signal_one(wch->send_waiters);
         } else { /* send */
             wch->buf[wch->tail] = clauses[winner].val;
             wch->tail = (wch->tail + 1) % wch->cap; wch->count++;
             pthread_cond_signal(&wch->not_empty);
-            tur_waierr?_signal_one(wch->recv_waierr?s);
+            tur_waiter_signal_one(wch->recv_waiters);
         }
         for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
         return winner;
@@ -1523,26 +1523,26 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
         for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
         return -1;
     }
-    /* Phase 3: regiserr? waierr?s and sleep until one fires */
+    /* Phase 3: register waiters and sleep until one fires */
     pthread_mutex_t wakeup_mutex;
     pthread_cond_t  wakeup_cond;
     pthread_mutex_init(&wakeup_mutex, NULL);
     pthread_cond_init(&wakeup_cond, NULL);
     volatile int selected_idx = -1;
-    TurSelectWaierr? waierr?s[64];
+    TurSelectWaiter waiters[64];
     int wn = n < 64 ? n : 64;
     for (int i = 0; i < wn; i++) {
-        waierr?s[i].wakeup_mutex = &wakeup_mutex;
-        waierr?s[i].wakeup_cond  = &wakeup_cond;
-        waierr?s[i].selected_idx = &selected_idx;
-        waierr?s[i].clause_idx   = i;
+        waiters[i].wakeup_mutex = &wakeup_mutex;
+        waiters[i].wakeup_cond  = &wakeup_cond;
+        waiters[i].selected_idx = &selected_idx;
+        waiters[i].clause_idx   = i;
         ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;
-        if (clauses[i].op == 0) { /* recv waierr? */
-            waierr?s[i].next = (TurSelectWaierr? *)ch->recv_waierr?s;
-            ch->recv_waierr?s = &waierr?s[i];
-        } else { /* send waierr? */
-            waierr?s[i].next = (TurSelectWaierr? *)ch->send_waierr?s;
-            ch->send_waierr?s = &waierr?s[i];
+        if (clauses[i].op == 0) { /* recv waiter */
+            waiters[i].next = (TurSelectWaiter *)ch->recv_waiters;
+            ch->recv_waiters = &waiters[i];
+        } else { /* send waiter */
+            waiters[i].next = (TurSelectWaiter *)ch->send_waiters;
+            ch->send_waiters = &waiters[i];
         }
     }
     /* Release all channel locks */
@@ -1552,17 +1552,17 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     while (selected_idx == -1) {
         if (tur_thread_cancel_requested()) {
             pthread_mutex_unlock(&wakeup_mutex);
-            /* Deregiserr? all waierr?s before cancelling */
+            /* Deregister all waiters before cancelling */
             for (int __ci = 0; __ci < wn; __ci++) {
                 ChanBlock_ *__cch = (ChanBlock_ *)clauses[__ci].chan;
                 pthread_mutex_lock(&__cch->lock);
                 if (clauses[__ci].op == 0) {
-                    TurSelectWaierr? **pp = (TurSelectWaierr? **)&__cch->recv_waierr?s;
-                    while (*pp && *pp != &waierr?s[__ci]) pp = &(*pp)->next;
+                    TurSelectWaiter **pp = (TurSelectWaiter **)&__cch->recv_waiters;
+                    while (*pp && *pp != &waiters[__ci]) pp = &(*pp)->next;
                     if (*pp) *pp = (*pp)->next;
                 } else {
-                    TurSelectWaierr? **pp = (TurSelectWaierr? **)&__cch->send_waierr?s;
-                    while (*pp && *pp != &waierr?s[__ci]) pp = &(*pp)->next;
+                    TurSelectWaiter **pp = (TurSelectWaiter **)&__cch->send_waiters;
+                    while (*pp && *pp != &waiters[__ci]) pp = &(*pp)->next;
                     if (*pp) *pp = (*pp)->next;
                 }
                 pthread_mutex_unlock(&__cch->lock);
@@ -1580,17 +1580,17 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     }
     int winner = selected_idx;
     pthread_mutex_unlock(&wakeup_mutex);
-    /* Deregiserr? all waierr?s */
+    /* Deregister all waiters */
     for (int i = 0; i < wn; i++) {
         ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;
         pthread_mutex_lock(&ch->lock);
         if (clauses[i].op == 0) {
-            TurSelectWaierr? **pp = (TurSelectWaierr? **)&ch->recv_waierr?s;
-            while (*pp && *pp != &waierr?s[i]) pp = &(*pp)->next;
+            TurSelectWaiter **pp = (TurSelectWaiter **)&ch->recv_waiters;
+            while (*pp && *pp != &waiters[i]) pp = &(*pp)->next;
             if (*pp) *pp = (*pp)->next;
         } else {
-            TurSelectWaierr? **pp = (TurSelectWaierr? **)&ch->send_waierr?s;
-            while (*pp && *pp != &waierr?s[i]) pp = &(*pp)->next;
+            TurSelectWaiter **pp = (TurSelectWaiter **)&ch->send_waiters;
+            while (*pp && *pp != &waiters[i]) pp = &(*pp)->next;
             if (*pp) *pp = (*pp)->next;
         }
         pthread_mutex_unlock(&ch->lock);
@@ -1603,13 +1603,13 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
         clauses[winner].val = wch->buf[wch->head];
         wch->head = (wch->head + 1) % wch->cap; wch->count--;
         pthread_cond_signal(&wch->not_full);
-        tur_waierr?_signal_one(wch->send_waierr?s);
+        tur_waiter_signal_one(wch->send_waiters);
     } else { /* send */
         while (wch->count == wch->cap) pthread_cond_wait(&wch->not_full, &wch->lock);
         wch->buf[wch->tail] = clauses[winner].val;
         wch->tail = (wch->tail + 1) % wch->cap; wch->count++;
         pthread_cond_signal(&wch->not_empty);
-        tur_waierr?_signal_one(wch->recv_waierr?s);
+        tur_waiter_signal_one(wch->recv_waiters);
     }
     pthread_mutex_unlock(&wch->lock);
     pthread_mutex_destroy(&wakeup_mutex);
@@ -1626,7 +1626,7 @@ static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
             if (strcmp(frame->cases[__i].effect_name, name) == 0) {
                 if (frame->cases[__i].handler_fn == NULL) {
-                    /* Phase 19D: inerr?cept case - yield fiber ok? parent dispatch loop */
+                    /* Phase 19D: intercept case - yield fiber to parent dispatch loop */
                     FiberBlock *__cur = tur_current_fiber;
                     if (!__cur || !__cur->eff_ctx) { fprintf(stderr, "Unhandled effect: %s\n", name); abort(); }
                     TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)__cur->eff_ctx;
@@ -1716,14 +1716,14 @@ static GcColor gc_get_color(RcControlBlock *cb) {
     return GC_WHITE;
 }
 
-static void gc_regiserr?_block(RcControlBlock *cb) {
+static void gc_register_block(RcControlBlock *cb) {
     if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;
     gc_all_blocks[gc_all_blocks_count++] = cb;
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
 }
 
-static void gc_unregiserr?_block(RcControlBlock *cb) {
+static void gc_unregister_block(RcControlBlock *cb) {
     if (!cb) return;
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         if (gc_all_blocks[i] == cb) {
@@ -1742,7 +1742,7 @@ static void gc_add_suspect(RcControlBlock *cb) {
     if (gc_suspect_count >= GC_MAX_SUSPECTS) return;
     gc_suspect_roots[gc_suspect_count++] = cb;
     cb->color = GC_PURPLE;
-    /* Threshold mode: auok?-collect when buffer is full */
+    /* Threshold mode: auto-collect when buffer is full */
     if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {
         gc_collect();
     }
@@ -1777,7 +1777,7 @@ static uint32_t rc_free_queue_drain(void) {
         memmove(rc_free_queue, rc_free_queue + 1,
                 (rc_free_queue_count - 1) * sizeof(RcControlBlock *));
         rc_free_queue_count--;
-        gc_unregiserr?_block(cb);
+        gc_unregister_block(cb);
         if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
             int64_t __raw = *(const int64_t *)cb->value;
             RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
@@ -1830,8 +1830,8 @@ static RcDropFn default_drop_fn_for_type(int value_type_kind) {
 #define RCEXP_OPAQUE     0
 #define RCEXP_RC         1
 RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {
-    size_t ok?tal_size = sizeof(RcControlBlock) + value_size;
-    RcControlBlock *cb = (RcControlBlock *)malloc(ok?tal_size);
+    size_t total_size = sizeof(RcControlBlock) + value_size;
+    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);
     if (!cb) { fprintf(stderr, "rc: out of memory\n"); abort(); }
     cb->strong_count = 1;
     cb->weak_count = 0;
@@ -1842,8 +1842,8 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDro
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;
-    /* Regiserr? with GC; primitives (type_kind<=7) cannot form cycles */
-    gc_regiserr?_block(cb);
+    /* Register with GC; primitives (type_kind<=7) cannot form cycles */
+    gc_register_block(cb);
     if (value_type_kind <= 7) cb->may_contain_cycles = false;
     return cb;
 }
@@ -1887,7 +1887,7 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     if (!cb) return false;
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
-        gc_unregiserr?_block(cb);
+        gc_unregister_block(cb);
         if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
             int64_t __raw = *(const int64_t *)cb->value;
             RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
@@ -1944,7 +1944,7 @@ RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
     memset(cb->reserved, 0, sizeof(cb->reserved));
-    gc_regiserr?_block(cb);
+    gc_register_block(cb);
     return cb;
 }
 
@@ -1957,12 +1957,12 @@ void *tur_ref_from_rc(RcControlBlock *cb) {
     }
     void *value = cb->value;
     cb->value = NULL;
-    gc_unregiserr?_block(cb);
+    gc_unregister_block(cb);
     free(cb);
     return value;
 }
 
-/* gc (Bacon-Rajan cycle collecok?r - trial deletion) - Phase 10 */
+/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */
 static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {
     (void)ctx;
     if (child && child->color != GC_BLACK) {
@@ -2019,8 +2019,8 @@ static void gc_trial_deletion_phase(void) {
             cb->drop_fn(cb->value);
             cb->value = NULL;
         }
-        /* Unregiserr? from global registry (cb stays alive for weak refs) */
-        gc_unregiserr?_block(cb);
+        /* Unregister from global registry (cb stays alive for weak refs) */
+        gc_unregister_block(cb);
         /* Remove from suspect buffer without advancing i */
         gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
         gc_suspect_count--;
@@ -2040,7 +2040,7 @@ static void gc_force(void) {
 
 static void gc_enable(void) {
     gc_enabled = true;
-    /* Default ok? manual mode when enabled */
+    /* Default to manual mode when enabled */
     if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;
 }
 
@@ -2116,35 +2116,35 @@ typedef struct Set {
 } Set;
 
 typedef struct MutableMap {
-    void * sok?rage;
+    void * storage;
 } MutableMap;
 
 
-exerr?n void * tur_hamt_new();
-exerr?n void tur_hamt_free(void *);
-exerr?n void * tur_hamt_retain(void *);
-exerr?n int64_t tur_hamt_count(void *);
-exerr?n void * tur_hamt_set(void *, int64_t, void *, void *);
-exerr?n void * tur_hamt_del(void *, int64_t, void *);
-exerr?n bool tur_hamt_has(void *, int64_t, void *);
-exerr?n void * tur_hamt_get(void *, int64_t, void *);
-exerr?n void * tur_hamt_merge(void *, void *);
-exerr?n int64_t tur_hamt_hash_str(const char *);
-exerr?n int64_t tur_hamt_hash_ptr(void *);
-exerr?n void tur_hamt_ierr?_init(void *, void *);
-exerr?n void tur_hamt_ierr?_free(void *);
-exerr?n bool tur_hamt_ierr?_next(void *, void *, void *, void *);
-exerr?n void * tur_hamt_map(void *, void *, void *);
-exerr?n void * tur_hamt_filerr?(void *, void *, void *);
-exerr?n void * tur_hamt_reduce(void *, void *, void *, void *);
-exerr?n void * tur_hamt_merge_with(void *, void *, void *, void *);
-exerr?n const char * tur_hamt_show(void *);
-exerr?n void tur_hamt_dump_dot(void *, void *);
-exerr?n void tur_hamt_dump_dot_stderr(void *);
-exerr?n void * tur_hamt_transient(void *);
-exerr?n void tur_hamt_transient_set(void *, int64_t, void *, void *);
-exerr?n void tur_hamt_transient_del(void *, int64_t, void *);
-exerr?n void * tur_hamt_persistent(void *);
+extern void * tur_hamt_new();
+extern void tur_hamt_free(void *);
+extern void * tur_hamt_retain(void *);
+extern int64_t tur_hamt_count(void *);
+extern void * tur_hamt_set(void *, int64_t, void *, void *);
+extern void * tur_hamt_del(void *, int64_t, void *);
+extern bool tur_hamt_has(void *, int64_t, void *);
+extern void * tur_hamt_get(void *, int64_t, void *);
+extern void * tur_hamt_merge(void *, void *);
+extern int64_t tur_hamt_hash_str(const char *);
+extern int64_t tur_hamt_hash_ptr(void *);
+extern void tur_hamt_iter_init(void *, void *);
+extern void tur_hamt_iter_free(void *);
+extern bool tur_hamt_iter_next(void *, void *, void *, void *);
+extern void * tur_hamt_map(void *, void *, void *);
+extern void * tur_hamt_filter(void *, void *, void *);
+extern void * tur_hamt_reduce(void *, void *, void *, void *);
+extern void * tur_hamt_merge_with(void *, void *, void *, void *);
+extern const char * tur_hamt_show(void *);
+extern void tur_hamt_dump_dot(void *, void *);
+extern void tur_hamt_dump_dot_stderr(void *);
+extern void * tur_hamt_transient(void *);
+extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
+extern void tur_hamt_transient_del(void *, int64_t, void *);
+extern void * tur_hamt_persistent(void *);
 
 static bool __inst_Eq_eq__int(int64_t, int64_t);
 static bool __inst_Eq_eq__bool(bool, bool);
@@ -2198,11 +2198,11 @@ static int64_t hamt_count(void *);
 static void * hamt_merge(void *, void *);
 static int64_t hamt_hash_str(const char *);
 static int64_t hamt_hash_ptr(void *);
-static void hamt_ierr?_init(void *, void *);
-static void hamt_ierr?_free(void *);
-static bool hamt_ierr?_next(void *, void *, void *, void *);
+static void hamt_iter_init(void *, void *);
+static void hamt_iter_free(void *);
+static bool hamt_iter_next(void *, void *, void *, void *);
 static void * hamt_map(void *, void *, void *);
-static void * hamt_filerr?(void *, void *, void *);
+static void * hamt_filter(void *, void *, void *);
 static void * hamt_reduce(void *, void *, void *, void *);
 static void * hamt_merge_with(void *, void *, void *, void *);
 static const char * hamt_show(void *);
@@ -2211,7 +2211,7 @@ static void * hamt_transient(void *);
 static void hamt_transient_set_(void *, int64_t, void *, void *);
 static void hamt_transient_del_(void *, int64_t, void *);
 static void * hamt_persistent_(void *);
-static int64_t hamt_auok?link_hint();
+static int64_t hamt_autolink_hint();
 static void * map_new();
 static void * assoc(void *, void *, void *);
 static void * dissoc(void *, void *);
@@ -2271,20 +2271,20 @@ static int64_t tslice_len(int64_t);
 static int64_t tslice_get(int64_t, int64_t);
 static void tslice_free(int64_t);
 static bool tslice_eq_(int64_t, int64_t, int64_t);
-static int64_t some?(int64_t);
-static int64_t none();
-static bool some?_(int64_t);
-static int64_t unwrap(int64_t);
-static int64_t unwrap_or(int64_t, int64_t);
-static void ok?ption_free(int64_t);
-static int64_t ok?ption_map(int64_t, int64_t);
-static bool ok?ption_eq_(int64_t, int64_t, int64_t);
-static int64_t ok?(int64_t);
-static int64_t err?(int64_t);
-static bool ok?_(int64_t);
-static bool err?_(int64_t);
-static int64_t ok?_val(int64_t);
-static int64_t err?_val(int64_t);
+static int64_t tsome(int64_t);
+static int64_t tnone();
+static bool tsome_(int64_t);
+static int64_t tunwrap(int64_t);
+static int64_t tunwrap_or(int64_t, int64_t);
+static void toption_free(int64_t);
+static int64_t toption_map(int64_t, int64_t);
+static bool toption_eq_(int64_t, int64_t, int64_t);
+static int64_t tok(int64_t);
+static int64_t terr(int64_t);
+static bool tok_(int64_t);
+static bool terr_(int64_t);
+static int64_t tok_val(int64_t);
+static int64_t terr_val(int64_t);
 static void tresult_free(int64_t);
 static int64_t tresult_map(int64_t, int64_t);
 static bool tresult_eq_(int64_t, int64_t, int64_t, int64_t);
@@ -2317,7 +2317,7 @@ static int64_t tset_remove(int64_t, int64_t, int64_t);
 static bool tset_member_(int64_t, int64_t, int64_t);
 static int64_t tset_count(int64_t);
 static int64_t tset_union(int64_t, int64_t);
-static int64_t tset_inerr?sect(int64_t, int64_t);
+static int64_t tset_intersect(int64_t, int64_t);
 static int64_t tset_diff(int64_t, int64_t);
 static bool tset_eq_(int64_t, int64_t);
 static bool tset_eq_cmp_(int64_t, int64_t, int64_t);
@@ -2339,7 +2339,7 @@ typedef struct dict_Eq_int {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_int;
 
-static dict_Eq_int dict_Eq_int_singleok?n = {
+static dict_Eq_int dict_Eq_int_singleton = {
     .eq_ = __inst_Eq_eq__int,
 };
 
@@ -2351,7 +2351,7 @@ typedef struct dict_Eq_bool {
     bool (*eq_)(bool, bool);
 } dict_Eq_bool;
 
-static dict_Eq_bool dict_Eq_bool_singleok?n = {
+static dict_Eq_bool dict_Eq_bool_singleton = {
     .eq_ = __inst_Eq_eq__bool,
 };
 
@@ -2366,7 +2366,7 @@ typedef struct dict_Eq_cstr {
     bool (*eq_)(const char *, const char *);
 } dict_Eq_cstr;
 
-static dict_Eq_cstr dict_Eq_cstr_singleok?n = {
+static dict_Eq_cstr dict_Eq_cstr_singleton = {
     .eq_ = __inst_Eq_eq__cstr,
 };
 
@@ -2378,7 +2378,7 @@ typedef struct dict_Eq_T {
     bool (*eq_)(double, double);
 } dict_Eq_T;
 
-static dict_Eq_T dict_Eq_T_singleok?n = {
+static dict_Eq_T dict_Eq_T_singleton = {
     .eq_ = __inst_Eq_eq__T,
 };
 
@@ -2390,7 +2390,7 @@ typedef struct dict_Eq_int8 {
     bool (*eq_)(int8_t, int8_t);
 } dict_Eq_int8;
 
-static dict_Eq_int8 dict_Eq_int8_singleok?n = {
+static dict_Eq_int8 dict_Eq_int8_singleton = {
     .eq_ = __inst_Eq_eq__int8,
 };
 
@@ -2402,7 +2402,7 @@ typedef struct dict_Eq_int16 {
     bool (*eq_)(int16_t, int16_t);
 } dict_Eq_int16;
 
-static dict_Eq_int16 dict_Eq_int16_singleok?n = {
+static dict_Eq_int16 dict_Eq_int16_singleton = {
     .eq_ = __inst_Eq_eq__int16,
 };
 
@@ -2414,7 +2414,7 @@ typedef struct dict_Eq_int32 {
     bool (*eq_)(int32_t, int32_t);
 } dict_Eq_int32;
 
-static dict_Eq_int32 dict_Eq_int32_singleok?n = {
+static dict_Eq_int32 dict_Eq_int32_singleton = {
     .eq_ = __inst_Eq_eq__int32,
 };
 
@@ -2426,7 +2426,7 @@ typedef struct dict_Eq_uint8 {
     bool (*eq_)(uint8_t, uint8_t);
 } dict_Eq_uint8;
 
-static dict_Eq_uint8 dict_Eq_uint8_singleok?n = {
+static dict_Eq_uint8 dict_Eq_uint8_singleton = {
     .eq_ = __inst_Eq_eq__uint8,
 };
 
@@ -2438,7 +2438,7 @@ typedef struct dict_Eq_uint16 {
     bool (*eq_)(uint16_t, uint16_t);
 } dict_Eq_uint16;
 
-static dict_Eq_uint16 dict_Eq_uint16_singleok?n = {
+static dict_Eq_uint16 dict_Eq_uint16_singleton = {
     .eq_ = __inst_Eq_eq__uint16,
 };
 
@@ -2450,7 +2450,7 @@ typedef struct dict_Eq_uint32 {
     bool (*eq_)(uint32_t, uint32_t);
 } dict_Eq_uint32;
 
-static dict_Eq_uint32 dict_Eq_uint32_singleok?n = {
+static dict_Eq_uint32 dict_Eq_uint32_singleton = {
     .eq_ = __inst_Eq_eq__uint32,
 };
 
@@ -2462,7 +2462,7 @@ typedef struct dict_Eq_uint64 {
     bool (*eq_)(uint64_t, uint64_t);
 } dict_Eq_uint64;
 
-static dict_Eq_uint64 dict_Eq_uint64_singleok?n = {
+static dict_Eq_uint64 dict_Eq_uint64_singleton = {
     .eq_ = __inst_Eq_eq__uint64,
 };
 
@@ -2474,7 +2474,7 @@ typedef struct dict_Eq_float32 {
     bool (*eq_)(float, float);
 } dict_Eq_float32;
 
-static dict_Eq_float32 dict_Eq_float32_singleok?n = {
+static dict_Eq_float32 dict_Eq_float32_singleton = {
     .eq_ = __inst_Eq_eq__float32,
 };
 
@@ -2490,7 +2490,7 @@ typedef struct dict_Eq_Map {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Map;
 
-static dict_Eq_Map dict_Eq_Map_singleok?n = {
+static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
@@ -2506,7 +2506,7 @@ typedef struct dict_Eq_Vec {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Vec;
 
-static dict_Eq_Vec dict_Eq_Vec_singleok?n = {
+static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
@@ -2515,14 +2515,14 @@ static bool __fn_486(int64_t a, int64_t b) {
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return ok?ption_eq_(x, y, (int64_t)(intptr_t)(__fn_486));
+        return toption_eq_(x, y, (int64_t)(intptr_t)(__fn_486));
 }
 
 typedef struct dict_Eq_Option {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Option;
 
-static dict_Eq_Option dict_Eq_Option_singleok?n = {
+static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
@@ -2542,7 +2542,7 @@ typedef struct dict_Eq_Result {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Result;
 
-static dict_Eq_Result dict_Eq_Result_singleok?n = {
+static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
@@ -2562,7 +2562,7 @@ typedef struct dict_Eq_Pair {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Pair;
 
-static dict_Eq_Pair dict_Eq_Pair_singleok?n = {
+static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
@@ -2578,7 +2578,7 @@ typedef struct dict_Eq_Cons {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Cons;
 
-static dict_Eq_Cons dict_Eq_Cons_singleok?n = {
+static dict_Eq_Cons dict_Eq_Cons_singleton = {
     .eq_ = __inst_Eq_eq__Cons,
 };
 
@@ -2590,7 +2590,7 @@ typedef struct dict_Eq_Set {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_Set;
 
-static dict_Eq_Set dict_Eq_Set_singleok?n = {
+static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
@@ -2606,7 +2606,7 @@ typedef struct dict_Eq_MutableMap {
     bool (*eq_)(int64_t, int64_t);
 } dict_Eq_MutableMap;
 
-static dict_Eq_MutableMap dict_Eq_MutableMap_singleok?n = {
+static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
 
@@ -2684,14 +2684,14 @@ static void tur_contract_check_inv(int64_t obj, int64_t pred, const char * msg) 
 }
 
 static void set_contract_handler_(int64_t handler) {
-        exerr?n void tur_set_contract_handler(void (*h)(const char*));
+        extern void tur_set_contract_handler(void (*h)(const char*));
   tur_set_contract_handler((void (*)(const char*))(intptr_t)handler);
   
 }
 
 static int64_t with_contract_handler(int64_t h, int64_t body) {
-        exerr?n void tur_set_contract_handler(void (*h)(const char*));
-  exerr?n void* tur_get_contract_handler(void);
+        extern void tur_set_contract_handler(void (*h)(const char*));
+  extern void* tur_get_contract_handler(void);
   void* prev = tur_get_contract_handler();
   tur_set_contract_handler((void (*)(const char*))(intptr_t)h);
   typedef int64_t (*thunk_fn)(void);
@@ -2746,24 +2746,24 @@ static int64_t hamt_hash_ptr(void * ptr) {
         return tur_hamt_hash_ptr((void *)(intptr_t)(ptr));
 }
 
-static void hamt_ierr?_init(void * ierr?, void * m) {
-        tur_hamt_ierr?_init((void *)(intptr_t)(ierr?), (void *)(intptr_t)(m));
+static void hamt_iter_init(void * iter, void * m) {
+        tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
 }
 
-static void hamt_ierr?_free(void * ierr?) {
-        tur_hamt_ierr?_free((void *)(intptr_t)(ierr?));
+static void hamt_iter_free(void * iter) {
+        tur_hamt_iter_free((void *)(intptr_t)(iter));
 }
 
-static bool hamt_ierr?_next(void * ierr?, void * hash_out, void * key_out, void * val_out) {
-        return tur_hamt_ierr?_next((void *)(intptr_t)(ierr?), (void *)(intptr_t)(hash_out), (void *)(intptr_t)(key_out), (void *)(intptr_t)(val_out));
+static bool hamt_iter_next(void * iter, void * hash_out, void * key_out, void * val_out) {
+        return tur_hamt_iter_next((void *)(intptr_t)(iter), (void *)(intptr_t)(hash_out), (void *)(intptr_t)(key_out), (void *)(intptr_t)(val_out));
 }
 
 static void * hamt_map(void * m, void * fn, void * ctx) {
         return tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
-static void * hamt_filerr?(void * m, void * fn, void * ctx) {
-        return tur_hamt_filerr?((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
+static void * hamt_filter(void * m, void * fn, void * ctx) {
+        return tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
 }
 
 static void * hamt_reduce(void * m, void * fn, void * init, void * ctx) {
@@ -2798,8 +2798,8 @@ static void * hamt_persistent_(void * t) {
         return tur_hamt_persistent((void *)(intptr_t)(t));
 }
 
-static int64_t hamt_auok?link_hint() {
-        /* __tur_auok?link__: src/runtime/hamt.c -Isrc/runtime */
+static int64_t hamt_autolink_hint() {
+        /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
   return 0;
   
 }
@@ -2835,20 +2835,20 @@ static void * merge(void * a, void * b) {
 static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
         if (tur_hamt_count((void*)(intptr_t)m1) !=
       tur_hamt_count((void*)(intptr_t)m2)) return false;
-  uint64_t ierr?_buf[32];
-  for (int __i = 0; __i < 32; __i++) ierr?_buf[__i] = 0;
-  tur_hamt_ierr?_init(ierr?_buf, (void*)(intptr_t)m1);
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, (void*)(intptr_t)m1);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_ierr?_next(ierr?_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
       void *val_in_b = tur_hamt_get(
           (void*)(intptr_t)m2, (int64_t)hash_out, key_out);
-      if (!val_in_b) { tur_hamt_ierr?_free(ierr?_buf); return false; }
+      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
       bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
           (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
-      if (!vals_eq) { tur_hamt_ierr?_free(ierr?_buf); return false; }
+      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
   }
-  tur_hamt_ierr?_free(ierr?_buf);
+  tur_hamt_iter_free(iter_buf);
   return true;
   
 }
@@ -2997,7 +2997,7 @@ static void * ok_or(void * opt, int64_t e) {
 }
 
 static void * err_context(void * r, const char * ctx) {
-        exerr?n size_t strlen(const char*);
+        extern size_t strlen(const char*);
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || res->is_ok) return r;
   const char *orig = (const char *)(intptr_t)res->err_val;
@@ -3223,19 +3223,19 @@ static bool tmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
         struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
-  uint64_t ierr?_buf[32];
-  for (int __i = 0; __i < 32; __i++) ierr?_buf[__i] = 0;
-  tur_hamt_ierr?_init(ierr?_buf, map1->hamt);
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, map1->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_ierr?_next(ierr?_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
       void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
-      if (!val_in_b) { tur_hamt_ierr?_free(ierr?_buf); return false; }
+      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
       bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
           (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
-      if (!vals_eq) { tur_hamt_ierr?_free(ierr?_buf); return false; }
+      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
   }
-  tur_hamt_ierr?_free(ierr?_buf);
+  tur_hamt_iter_free(iter_buf);
   return true;
   
 }
@@ -3288,7 +3288,7 @@ static int64_t tvec_pop_(int64_t v) {
 static void tvec_set_(int64_t v, int64_t i, int64_t val) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
-  fprintf(stderr, "vec-set! index out of bounds\n");
+  fprintf(stderr, "tvec-set! index out of bounds\n");
   exit(1);
   
 }
@@ -3352,7 +3352,7 @@ static bool tslice_eq_(int64_t s1, int64_t s2, int64_t cmp_fn) {
   
 }
 
-static int64_t some?(int64_t x) {
+static int64_t tsome(int64_t x) {
         struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
   opt->value = x;
@@ -3360,37 +3360,37 @@ static int64_t some?(int64_t x) {
   
 }
 
-static int64_t none() {
+static int64_t tnone() {
         return 0;
   
 }
 
-static bool some?_(int64_t o) {
+static bool tsome_(int64_t o) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   return opt != NULL && opt->is_some;
   
 }
 
-static int64_t unwrap(int64_t o) {
+static int64_t tunwrap(int64_t o) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) tur_panic("unwrap called on none");
+  if (!opt || !opt->is_some) tur_panic("tunwrap called on none");
   return (int64_t)opt->value;
   
 }
 
-static int64_t unwrap_or(int64_t o, int64_t dflt) {
+static int64_t tunwrap_or(int64_t o, int64_t dflt) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return dflt;
   return (int64_t)opt->value;
   
 }
 
-static void ok?ption_free(int64_t o) {
+static void toption_free(int64_t o) {
         if (o) free((void*)(intptr_t)o);
   
 }
 
-static int64_t ok?ption_map(int64_t o, int64_t f) {
+static int64_t toption_map(int64_t o, int64_t f) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
@@ -3400,7 +3400,7 @@ static int64_t ok?ption_map(int64_t o, int64_t f) {
   
 }
 
-static bool ok?ption_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
+static bool toption_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
         struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;
@@ -3411,7 +3411,7 @@ static bool ok?ption_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
   
 }
 
-static int64_t ok?(int64_t x) {
+static int64_t tok(int64_t x) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true;
   r->ok_val = x;
@@ -3420,7 +3420,7 @@ static int64_t ok?(int64_t x) {
   
 }
 
-static int64_t err?(int64_t e) {
+static int64_t terr(int64_t e) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false;
   r->ok_val = 0;
@@ -3429,28 +3429,28 @@ static int64_t err?(int64_t e) {
   
 }
 
-static bool ok?_(int64_t r) {
+static bool tok_(int64_t r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res && res->is_ok;
   
 }
 
-static bool err?_(int64_t r) {
+static bool terr_(int64_t r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return !res || !res->is_ok;
   
 }
 
-static int64_t ok?_val(int64_t r) {
+static int64_t tok_val(int64_t r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || !res->is_ok) tur_panic("ok-val called on err");
+  if (!res || !res->is_ok) tur_panic("tok-val called on err");
   return (int64_t)res->ok_val;
   
 }
 
-static int64_t err?_val(int64_t r) {
+static int64_t terr_val(int64_t r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || res->is_ok) tur_panic("err-val called on ok");
+  if (!res || res->is_ok) tur_panic("terr-val called on ok");
   return (int64_t)res->err_val;
   
 }
@@ -3734,21 +3734,21 @@ static int64_t tset_union(int64_t a, int64_t b) {
   
 }
 
-static int64_t tset_inerr?sect(int64_t a, int64_t b) {
+static int64_t tset_intersect(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
-  uint64_t ierr?_buf[32];
-  for (int __i = 0; __i < 32; __i++) ierr?_buf[__i] = 0;
-  tur_hamt_ierr?_init(ierr?_buf, sa->hamt);
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_ierr?_next(ierr?_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
       if (tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
       }
   }
-  tur_hamt_ierr?_free(ierr?_buf);
+  tur_hamt_iter_free(iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
   return (int64_t)(intptr_t)r;
@@ -3759,17 +3759,17 @@ static int64_t tset_diff(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
-  uint64_t ierr?_buf[32];
-  for (int __i = 0; __i < 32; __i++) ierr?_buf[__i] = 0;
-  tur_hamt_ierr?_init(ierr?_buf, sa->hamt);
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_ierr?_next(ierr?_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
       }
   }
-  tur_hamt_ierr?_free(ierr?_buf);
+  tur_hamt_iter_free(iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
   return (int64_t)(intptr_t)r;
@@ -3780,56 +3780,56 @@ static bool tset_eq_(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
-  uint64_t ierr?_buf[32];
-  for (int __i = 0; __i < 32; __i++) ierr?_buf[__i] = 0;
-  tur_hamt_ierr?_init(ierr?_buf, sa->hamt);
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_ierr?_next(ierr?_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          tur_hamt_ierr?_free(ierr?_buf);
+          tur_hamt_iter_free(iter_buf);
           return false;
       }
   }
-  tur_hamt_ierr?_free(ierr?_buf);
+  tur_hamt_iter_free(iter_buf);
   return true;
   
 }
 
 static bool tset_eq_cmp_(int64_t a, int64_t b, int64_t cmp_fn) {
-        /* O(n*m) comparison: ierr?ate a's elements, scan b for a structural
-   * match per element.  Bigger constant than set-eq?'s hash lookup
+        /* O(n*m) comparison: iterate a's elements, scan b for a structural
+   * match per element.  Bigger constant than tset-eq?'s hash lookup
    * but correct for arbitrarily-structured element types.  Used by
    * the F3-5 dispatcher synthesis for Set[T] where T is a TY_APP. */
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
-  uint64_t ierr?_a[32];
-  for (int __i = 0; __i < 32; __i++) ierr?_a[__i] = 0;
-  tur_hamt_ierr?_init(ierr?_a, sa->hamt);
+  uint64_t iter_a[32];
+  for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
+  tur_hamt_iter_init(iter_a, sa->hamt);
   uint64_t hash_a;
   void *key_a = NULL, *val_a = NULL;
-  while (tur_hamt_ierr?_next(ierr?_a, &hash_a, &key_a, &val_a)) {
+  while (tur_hamt_iter_next(iter_a, &hash_a, &key_a, &val_a)) {
       bool found = false;
-      uint64_t ierr?_b[32];
-      for (int __j = 0; __j < 32; __j++) ierr?_b[__j] = 0;
-      tur_hamt_ierr?_init(ierr?_b, sb->hamt);
+      uint64_t iter_b[32];
+      for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
+      tur_hamt_iter_init(iter_b, sb->hamt);
       uint64_t hash_b;
       void *key_b = NULL, *val_b = NULL;
-      while (tur_hamt_ierr?_next(ierr?_b, &hash_b, &key_b, &val_b)) {
+      while (tur_hamt_iter_next(iter_b, &hash_b, &key_b, &val_b)) {
           if (((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(
                 (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
               found = true;
               break;
           }
       }
-      tur_hamt_ierr?_free(ierr?_b);
+      tur_hamt_iter_free(iter_b);
       if (!found) {
-          tur_hamt_ierr?_free(ierr?_a);
+          tur_hamt_iter_free(iter_a);
           return false;
       }
   }
-  tur_hamt_ierr?_free(ierr?_a);
+  tur_hamt_iter_free(iter_a);
   return true;
   
 }
@@ -3840,10 +3840,10 @@ static void tset_free(int64_t s) {
 }
 
 static int64_t tmutmap_new() {
-        /* Backing sok?rage layout:
+        /* Backing storage layout:
    *   uint64_t cap;        capacity (power of two)
    *   uint64_t len;        live entry count (OCCUPIED slots only)
-   *   uint64_t ok?mb;       ok?mbsok?ne count (DELETED slots)
+   *   uint64_t tomb;       tombstone count (DELETED slots)
    *   Slot     slots[cap];
    *
    * Slot layout:
@@ -3854,25 +3854,25 @@ static int64_t tmutmap_new() {
    */
   enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_sok?rage { uint64_t cap; uint64_t len; uint64_t ok?mb; struct __tur_mm_slot slots[]; };
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
   size_t init_cap = 16;
-  struct __tur_mm_sok?rage *s = (struct __tur_mm_sok?rage *)
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)
       malloc(sizeof(*s) + init_cap * sizeof(struct __tur_mm_slot));
-  s->cap = init_cap; s->len = 0; s->ok?mb = 0;
+  s->cap = init_cap; s->len = 0; s->tomb = 0;
   for (size_t i = 0; i < init_cap; i++) {
       s->slots[i].tag = TUR_MM_EMPTY;
       s->slots[i].hash = 0; s->slots[i].key = 0; s->slots[i].value = 0;
   }
-  struct { void *sok?rage; } *m = malloc(sizeof(*m));
-  m->sok?rage = s;
+  struct { void *storage; } *m = malloc(sizeof(*m));
+  m->storage = s;
   return (int64_t)(intptr_t)m;
   
 }
 
 static int64_t tmutmap_len(int64_t m) {
-        struct __tur_mm_sok?rage_l { uint64_t cap; uint64_t len; uint64_t ok?mb; };
-  struct { void *sok?rage; } *mm = (void*)(intptr_t)m;
-  struct __tur_mm_sok?rage_l *s = (struct __tur_mm_sok?rage_l *)mm->sok?rage;
+        struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
   return (int64_t)s->len;
   
 }
@@ -3880,15 +3880,15 @@ static int64_t tmutmap_len(int64_t m) {
 static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_sok?rage { uint64_t cap; uint64_t len; uint64_t ok?mb; struct __tur_mm_slot slots[]; };
-  struct { void *sok?rage; } *mm = (void*)(intptr_t)m;
-  struct __tur_mm_sok?rage *s = (struct __tur_mm_sok?rage *)mm->sok?rage;
-  /* Resize when load facok?r (len + ok?mb) / cap >= 0.75. */
-  if ((s->len + s->ok?mb) * 4 >= s->cap * 3) {
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
+  /* Resize when load factor (len + tomb) / cap >= 0.75. */
+  if ((s->len + s->tomb) * 4 >= s->cap * 3) {
       uint64_t new_cap = s->cap * 2;
-      struct __tur_mm_sok?rage *ns = (struct __tur_mm_sok?rage *)
+      struct __tur_mm_storage *ns = (struct __tur_mm_storage *)
           malloc(sizeof(*ns) + new_cap * sizeof(struct __tur_mm_slot));
-      ns->cap = new_cap; ns->len = 0; ns->ok?mb = 0;
+      ns->cap = new_cap; ns->len = 0; ns->tomb = 0;
       for (uint64_t i = 0; i < new_cap; i++) {
           ns->slots[i].tag = TUR_MM_EMPTY;
           ns->slots[i].hash = 0; ns->slots[i].key = 0; ns->slots[i].value = 0;
@@ -3902,21 +3902,21 @@ static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
           ns->len++;
       }
       free(s);
-      mm->sok?rage = ns;
+      mm->storage = ns;
       s = ns;
   }
   uint64_t mask = s->cap - 1;
   uint64_t idx = ((uint64_t)h) & mask;
-  int64_t first_ok?mb = -1;
+  int64_t first_tomb = -1;
   for (;;) {
       struct __tur_mm_slot *slot = &s->slots[idx];
       if (slot->tag == TUR_MM_EMPTY) {
-          /* Not present: insert at first ok?mbsok?ne if any, else here. */
-          if (first_ok?mb >= 0) {
-              struct __tur_mm_slot *ts = &s->slots[first_ok?mb];
+          /* Not present: insert at first tombstone if any, else here. */
+          if (first_tomb >= 0) {
+              struct __tur_mm_slot *ts = &s->slots[first_tomb];
               ts->tag = TUR_MM_OCCUPIED;
               ts->hash = h; ts->key = key; ts->value = val;
-              s->ok?mb--;
+              s->tomb--;
               s->len++;
           } else {
               slot->tag = TUR_MM_OCCUPIED;
@@ -3930,8 +3930,8 @@ static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
           slot->value = val;
           return;
       }
-      if (slot->tag == TUR_MM_DELETED && first_ok?mb < 0) {
-          first_ok?mb = (int64_t)idx;
+      if (slot->tag == TUR_MM_DELETED && first_tomb < 0) {
+          first_tomb = (int64_t)idx;
       }
       idx = (idx + 1) & mask;
   }
@@ -3941,9 +3941,9 @@ static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
 static int64_t tmutmap_get(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_sok?rage { uint64_t cap; uint64_t len; uint64_t ok?mb; struct __tur_mm_slot slots[]; };
-  struct { void *sok?rage; } *mm = (void*)(intptr_t)m;
-  struct __tur_mm_sok?rage *s = (struct __tur_mm_sok?rage *)mm->sok?rage;
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
   uint64_t mask = s->cap - 1;
   uint64_t idx = ((uint64_t)h) & mask;
   for (;;) {
@@ -3960,9 +3960,9 @@ static int64_t tmutmap_get(int64_t m, int64_t h, int64_t key) {
 static bool tmutmap_has_(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_sok?rage { uint64_t cap; uint64_t len; uint64_t ok?mb; struct __tur_mm_slot slots[]; };
-  struct { void *sok?rage; } *mm = (void*)(intptr_t)m;
-  struct __tur_mm_sok?rage *s = (struct __tur_mm_sok?rage *)mm->sok?rage;
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
   uint64_t mask = s->cap - 1;
   uint64_t idx = ((uint64_t)h) & mask;
   for (;;) {
@@ -3979,9 +3979,9 @@ static bool tmutmap_has_(int64_t m, int64_t h, int64_t key) {
 static bool tmutmap_delete_(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_sok?rage { uint64_t cap; uint64_t len; uint64_t ok?mb; struct __tur_mm_slot slots[]; };
-  struct { void *sok?rage; } *mm = (void*)(intptr_t)m;
-  struct __tur_mm_sok?rage *s = (struct __tur_mm_sok?rage *)mm->sok?rage;
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *mm = (void*)(intptr_t)m;
+  struct __tur_mm_storage *s = (struct __tur_mm_storage *)mm->storage;
   uint64_t mask = s->cap - 1;
   uint64_t idx = ((uint64_t)h) & mask;
   for (;;) {
@@ -3991,7 +3991,7 @@ static bool tmutmap_delete_(int64_t m, int64_t h, int64_t key) {
           slot->tag = TUR_MM_DELETED;
           slot->hash = 0; slot->key = 0; slot->value = 0;
           s->len--;
-          s->ok?mb++;
+          s->tomb++;
           return true;
       }
       idx = (idx + 1) & mask;
@@ -4002,11 +4002,11 @@ static bool tmutmap_delete_(int64_t m, int64_t h, int64_t key) {
 static bool tmutmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
-  struct __tur_mm_sok?rage { uint64_t cap; uint64_t len; uint64_t ok?mb; struct __tur_mm_slot slots[]; };
-  struct { void *sok?rage; } *a = (void*)(intptr_t)m1;
-  struct { void *sok?rage; } *b = (void*)(intptr_t)m2;
-  struct __tur_mm_sok?rage *sa = (struct __tur_mm_sok?rage *)a->sok?rage;
-  struct __tur_mm_sok?rage *sb = (struct __tur_mm_sok?rage *)b->sok?rage;
+  struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
+  struct { void *storage; } *a = (void*)(intptr_t)m1;
+  struct { void *storage; } *b = (void*)(intptr_t)m2;
+  struct __tur_mm_storage *sa = (struct __tur_mm_storage *)a->storage;
+  struct __tur_mm_storage *sb = (struct __tur_mm_storage *)b->storage;
   if (sa->len != sb->len) return false;
   for (uint64_t i = 0; i < sa->cap; i++) {
       if (sa->slots[i].tag != TUR_MM_OCCUPIED) continue;
@@ -4036,8 +4036,8 @@ static bool tmutmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 }
 
 static void tmutmap_free(int64_t m) {
-        struct { void *sok?rage; } *mm = (void*)(intptr_t)m;
-  if (mm->sok?rage) free(mm->sok?rage);
+        struct { void *storage; } *mm = (void*)(intptr_t)m;
+  if (mm->storage) free(mm->storage);
   free(mm);
   
 }

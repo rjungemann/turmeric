@@ -1,25 +1,25 @@
 (load "stdlib/free.tur")
 
-;; RF3: Free monad as a small DSL inerr?preerr?.
+;; RF3: Free monad as a small DSL interpreter.
 ;;
-;; DSL: a ok?y calculaok?r effect
+;; DSL: a toy calculator effect
 ;;   (CalcAdd a b) -- add two numbers
 ;;   (CalcMul a b) -- multiply two numbers
 ;;
-;; We encode operations as Free DSL values and inerr?pret them.
+;; We encode operations as Free DSL values and interpret them.
 
 (defdata CalcOp
   (CalcAdd :int :int)
   (CalcMul :int :int))
 
-;; Smart construcok?rs: lift each operation inok? Free
+;; Smart constructors: lift each operation into Free
 (defn calc-add [a :int b :int] :int
   (free-lift (CalcAdd a b)))
 
 (defn calc-mul [a :int b :int] :int
   (free-lift (CalcMul b a)))
 
-;; Inerr?preerr?: evaluate one CalcOp
+;; Interpreter: evaluate one CalcOp
 (defn run-calc-op [op :int] :int
   (match op
     (CalcAdd a b) (+ a b)

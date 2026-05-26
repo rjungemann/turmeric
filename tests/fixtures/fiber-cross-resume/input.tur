@@ -1,14 +1,14 @@
 ;; Phase T21-E: fiber-cross-resume — cross-fiber continuation resume check.
 ;;
-;; Uses inline C ok? call the emitted cross-fiber guard directly:
+;; Uses inline C to call the emitted cross-fiber guard directly:
 ;; manufactures a TurContK whose origin_fiber is a non-NULL dummy FiberBlock,
-;; then attempts ok? "resume" it from the main thread (tur_current_fiber==NULL).
+;; then attempts to "resume" it from the main thread (tur_current_fiber==NULL).
 ;; The guard must abort with "continuation error: resume on wrong fiber" on stderr.
 
 (defn cross-resume-test [] :int
   ```c
   /* We are on the main thread: tur_current_fiber == NULL.
-   * Create a fake TurContK with origin_fiber pointing ok? a dummy block. */
+   * Create a fake TurContK with origin_fiber pointing to a dummy block. */
   FiberBlock dummy_fiber;
   TurContK fake_k = {false, (void *)&dummy_fiber};
   /* Directly invoke the same guard that (resume k v) emits. */

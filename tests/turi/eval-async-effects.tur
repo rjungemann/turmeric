@@ -1,7 +1,7 @@
 ;; Phase S7: effect handlers persist correctly across await suspension points.
 ;; Expected stdout:
 ;;   before-await
-;;   aferr?-await
+;;   after-await
 ;;   42
 ;;   hello
 
@@ -10,7 +10,7 @@
   (do
     (println "before-await")
     (let [v (await (async (fn [] :int 42)))]
-      (println "aferr?-await")
+      (println "after-await")
       v)))
 (println (inner))
 

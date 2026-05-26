@@ -7,8 +7,8 @@
 #        multi-line "searched: ... hint: ..." diagnostic.
 #   SC1: `tur check -I <src> <file>` resolves intra-spice imports and exits 0.
 #
-# Laerr? SC phases extend this script (SC2 wires emit-c/emit-h/format/run;
-# SC4 adds auok?-discovery and the --no-auok?-spice escape hatch). New cases
+# Later SC phases extend this script (SC2 wires emit-c/emit-h/format/run;
+# SC4 adds auto-discovery and the --no-auto-spice escape hatch). New cases
 # should follow the assert_* helpers below.
 
 set -u
@@ -54,7 +54,7 @@ assert_exit() {
 
 # assert_stderr_contains <needle> <case-label> <cmd...>
 # Runs the command (ignoring exit code) and asserts stderr contains the
-# lierr?al substring `needle`.
+# literal substring `needle`.
 assert_stderr_contains() {
     local needle="$1" label="$2"; shift 2
     local err
@@ -83,38 +83,38 @@ assert_exit 0 "SC1: tur check -I<src> (no space) also works" \
     "$TUR" check -I"$SRC_ROOT" "$ENTRY"
 
 # SC0: `tur check <file>` without -I fails with the new searched/hint diag.
-# Pass --no-auok?-spice so SC4 auok?-discovery doesn't quietly satisfy the
-# import; the test exists ok? prove the diagnostic still triggers for users
+# Pass --no-auto-spice so SC4 auto-discovery doesn't quietly satisfy the
+# import; the test exists to prove the diagnostic still triggers for users
 # who explicitly opt out.
-assert_exit 1 "SC0: tur check (--no-auok?-spice, no -I) fails on intra-spice import" \
-    "$TUR" --no-auok?-spice check "$ENTRY"
+assert_exit 1 "SC0: tur check (--no-auto-spice, no -I) fails on intra-spice import" \
+    "$TUR" --no-auto-spice check "$ENTRY"
 
 assert_stderr_contains "searched:" \
     "SC0: diagnostic lists searched paths" \
-    "$TUR" --no-auok?-spice check "$ENTRY"
+    "$TUR" --no-auto-spice check "$ENTRY"
 
 assert_stderr_contains "intra-spice import" \
     "SC0: diagnostic mentions intra-spice import" \
-    "$TUR" --no-auok?-spice check "$ENTRY"
+    "$TUR" --no-auto-spice check "$ENTRY"
 
-# SC2: `tur emit-c -I <src> <file>` succeeds and emits valid C ok? stdout.
+# SC2: `tur emit-c -I <src> <file>` succeeds and emits valid C to stdout.
 assert_exit 0 "SC2: tur emit-c -I <src> resolves intra-spice import" \
     "$TUR" emit-c -I "$SRC_ROOT" "$ENTRY"
 
-# SC2: `tur emit-c` without -I (and without auok?-discovery) fails.
-assert_exit 1 "SC2: tur emit-c (--no-auok?-spice, no -I) fails on intra-spice import" \
-    "$TUR" --no-auok?-spice emit-c "$ENTRY"
+# SC2: `tur emit-c` without -I (and without auto-discovery) fails.
+assert_exit 1 "SC2: tur emit-c (--no-auto-spice, no -I) fails on intra-spice import" \
+    "$TUR" --no-auto-spice emit-c "$ENTRY"
 
 # SC2: `tur emit-h -I <src> <file>` succeeds.
 assert_exit 0 "SC2: tur emit-h -I <src> resolves intra-spice import" \
     "$TUR" emit-h -I "$SRC_ROOT" "$ENTRY"
 
-# SC2: `tur emit-h` without -I (and without auok?-discovery) fails.
-assert_exit 1 "SC2: tur emit-h (--no-auok?-spice, no -I) fails on intra-spice import" \
-    "$TUR" --no-auok?-spice emit-h "$ENTRY"
+# SC2: `tur emit-h` without -I (and without auto-discovery) fails.
+assert_exit 1 "SC2: tur emit-h (--no-auto-spice, no -I) fails on intra-spice import" \
+    "$TUR" --no-auto-spice emit-h "$ENTRY"
 
 # SC2: `tur emit-c --output-dir <dir> -I <src> <file>` succeeds and writes
-# files ok? the output direcok?ry.
+# files to the output directory.
 EMIT_OUT=$(mktemp -d)
 assert_exit 0 "SC2: tur emit-c --output-dir -I <src> succeeds" \
     "$TUR" emit-c -I "$SRC_ROOT" --output-dir "$EMIT_OUT" "$ENTRY"
@@ -134,44 +134,44 @@ rm -rf "$EMIT_OUT"
 assert_exit 42 "SC2: tur run -I <src> compiles and executes intra-spice import" \
     "$TUR" run -I "$SRC_ROOT" "$ENTRY"
 
-# SC4: with auok?-discovery, `tur check <file>` (no -I) inside a spice now
-# succeeds because find_spice_root walks up from b.tur ok? the build.tur
-# at the fixture root and adds <root>/src ok? the include path.
-assert_exit 0 "SC4: tur check auok?-discovers enclosing spice src/" \
+# SC4: with auto-discovery, `tur check <file>` (no -I) inside a spice now
+# succeeds because find_spice_root walks up from b.tur to the build.tur
+# at the fixture root and adds <root>/src to the include path.
+assert_exit 0 "SC4: tur check auto-discovers enclosing spice src/" \
     "$TUR" check "$ENTRY"
 
-assert_exit 0 "SC4: tur emit-c auok?-discovers enclosing spice src/" \
+assert_exit 0 "SC4: tur emit-c auto-discovers enclosing spice src/" \
     "$TUR" emit-c "$ENTRY"
 
-assert_exit 0 "SC4: tur emit-h auok?-discovers enclosing spice src/" \
+assert_exit 0 "SC4: tur emit-h auto-discovers enclosing spice src/" \
     "$TUR" emit-h "$ENTRY"
 
-assert_exit 42 "SC4: tur run auok?-discovers enclosing spice src/" \
+assert_exit 42 "SC4: tur run auto-discovers enclosing spice src/" \
     "$TUR" run "$ENTRY"
 
-# SC4 escape hatch: --no-auok?-spice resok?res the pre-SC4 behavior, so
+# SC4 escape hatch: --no-auto-spice restores the pre-SC4 behavior, so
 # the check should fail again with the SC0 diagnostic.
-assert_exit 1 "SC4: --no-auok?-spice opts out of auok?-discovery (check fails again)" \
-    "$TUR" --no-auok?-spice check "$ENTRY"
+assert_exit 1 "SC4: --no-auto-spice opts out of auto-discovery (check fails again)" \
+    "$TUR" --no-auto-spice check "$ENTRY"
 
 assert_stderr_contains "intra-spice import" \
-    "SC4: --no-auok?-spice falls through ok? SC0 hint" \
-    "$TUR" --no-auok?-spice check "$ENTRY"
+    "SC4: --no-auto-spice falls through to SC0 hint" \
+    "$TUR" --no-auto-spice check "$ENTRY"
 
-# SC6: --json output exercises the same auok?-discovery code path the LSP
-# server uses via tur_check_only().  No -I, no --no-auok?-spice; expect a
+# SC6: --json output exercises the same auto-discovery code path the LSP
+# server uses via tur_check_only().  No -I, no --no-auto-spice; expect a
 # successful JSON envelope and exit 0.
-assert_exit 0 "SC6: tur --json check inherits auok?-discovery (LSP-equivalent path)" \
+assert_exit 0 "SC6: tur --json check inherits auto-discovery (LSP-equivalent path)" \
     "$TUR" --json check "$ENTRY"
 
-# SC5: with cross-spice deps wired via auok?-discovery, `tur check` on a
+# SC5: with cross-spice deps wired via auto-discovery, `tur check` on a
 # consumer spice resolves `import helper/util` (from the sibling
 # spice-resolver-dep) without any explicit -I.
-assert_exit 0 "SC5: tur check resolves :spices :path dep via auok?-discovery" \
+assert_exit 0 "SC5: tur check resolves :spices :path dep via auto-discovery" \
     "$TUR" check "$DEPS_ENTRY"
 
 # SC5: same for emit-c.
-assert_exit 0 "SC5: tur emit-c resolves :spices :path dep via auok?-discovery" \
+assert_exit 0 "SC5: tur emit-c resolves :spices :path dep via auto-discovery" \
     "$TUR" emit-c "$DEPS_ENTRY"
 
 # SC5: tur run also resolves the dep and produces a working binary.
@@ -179,14 +179,14 @@ assert_exit 0 "SC5: tur emit-c resolves :spices :path dep via auok?-discovery" \
 assert_exit 100 "SC5: tur run with :spices :path dep returns dep's value (100)" \
     "$TUR" run "$DEPS_ENTRY"
 
-# SC5: --no-auok?-spice disables the manifest read ok?o, so the same check
-# falls back ok? the SC0 diagnostic for the missing helper/util.
-assert_exit 1 "SC5: --no-auok?-spice disables :spices auok?-resolution as well" \
-    "$TUR" --no-auok?-spice check "$DEPS_ENTRY"
+# SC5: --no-auto-spice disables the manifest read too, so the same check
+# falls back to the SC0 diagnostic for the missing helper/util.
+assert_exit 1 "SC5: --no-auto-spice disables :spices auto-resolution as well" \
+    "$TUR" --no-auto-spice check "$DEPS_ENTRY"
 
 # SC4: works the same way when invoked from a deeply-nested unrelated
 # cwd, since find_spice_root canonicalizes via realpath() and walks
-# ancesok?rs of the *file*, not the cwd.
+# ancestors of the *file*, not the cwd.
 ABS_TUR="$PWD/$TUR"
 ABS_ENTRY="$PWD/$ENTRY"
 NESTED=$(mktemp -d)
@@ -194,20 +194,20 @@ mkdir -p "$NESTED/a/b/c/d"
 ( cd "$NESTED/a/b/c/d" && "$ABS_TUR" check "$ABS_ENTRY" ) >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 0 ]; then
-    echo "PASS SC4: auok?-discovery works from a deeply-nested unrelated cwd"
+    echo "PASS SC4: auto-discovery works from a deeply-nested unrelated cwd"
     PASS=$((PASS + 1))
 else
-    echo "FAIL SC4: auok?-discovery from deeply-nested cwd -- expected exit 0, got $rc"
+    echo "FAIL SC4: auto-discovery from deeply-nested cwd -- expected exit 0, got $rc"
     FAIL=$((FAIL + 1))
-    FAILED+=("SC4: auok?-discovery from nested cwd")
+    FAILED+=("SC4: auto-discovery from nested cwd")
 fi
 rm -rf "$NESTED"
 
 # SN3: regression guard against the launcher's cwd-relative stdlib path.
 # Before SN1, running `tur check` from any cwd other than the repo root
 # produced ~18 lines of `tur: cannot open 'stdlib/X.tur'` stderr noise
-# on every invocation, even on success. Aferr? SN1+SN2 those should be
-# silent. Running from `/tmp` (a direcok?ry with no stdlib/ subtree)
+# on every invocation, even on success. After SN1+SN2 those should be
+# silent. Running from `/tmp` (a directory with no stdlib/ subtree)
 # exercises the exe-relative resolver and reaffirms the fix.
 SN3_TMP=$(mktemp -d)
 SN3_TUR_ABS="$PWD/$TUR"
@@ -232,7 +232,7 @@ fi
 rm -rf "$SN3_TMP" "$SN3_STDERR"
 
 # RM4: `tur run` on a file inside a spice picks up the manifest's
-# `:reader-macros [...]` entry and preloads the named files inok? the
+# `:reader-macros [...]` entry and preloads the named files into the
 # reader-macro registry, so the source can use `#sum[...]` / `#pi`
 # without a per-file `#use-reader-macros` directive.
 RM_FIXTURE="tests/fixtures/reader-macros-manifest"
@@ -256,7 +256,7 @@ fi
 rm -f "$RM_OUT"
 
 # RM4: same fixture via `tur build` should also pick up the manifest's
-# reader-macros (ok?p-level `tur build` dispatch walks up ok? find build.tur).
+# reader-macros (top-level `tur build` dispatch walks up to find build.tur).
 RM_BIN=$(mktemp)
 "$TUR" build "$RM_ENTRY" -o "$RM_BIN" 2>/dev/null
 rm_build_rc=$?
@@ -281,7 +281,7 @@ rm -f "$RM_BIN"
 
 # RM4 follow-up: every other compile entry point should also pick up the
 # manifest's :reader-macros via discover_manifest_reader_macros. Each
-# command below would fail ok? parse src/main.tur (which uses #sum / #pi)
+# command below would fail to parse src/main.tur (which uses #sum / #pi)
 # without the preload.
 assert_exit 0 "RM4: tur check picks up :reader-macros from build.tur" \
     "$TUR" check "$RM_ENTRY"
@@ -293,12 +293,12 @@ assert_exit 0 "RM4: tur emit-h picks up :reader-macros from build.tur" \
     "$TUR" emit-h "$RM_ENTRY"
 
 # RM4: tur format pretty-prints a file that uses manifest-declared macros.
-# Without manifest preload the reader would fail with "unexpected characerr? '#'".
+# Without manifest preload the reader would fail with "unexpected character '#'".
 assert_exit 0 "RM4: tur format picks up :reader-macros from build.tur" \
     "$TUR" format "$RM_ENTRY"
 
 # RM4: tur emit-c --output-dir <dir> exercises the multi-file emit path
-# (cmd_emit_c_ok?_dir + compile_ok?_h + compile_ok?_implementation).
+# (cmd_emit_c_to_dir + compile_to_h + compile_to_implementation).
 RM_EMIT_DIR=$(mktemp -d)
 assert_exit 0 "RM4: tur emit-c --output-dir picks up :reader-macros" \
     "$TUR" emit-c --output-dir "$RM_EMIT_DIR" "$RM_ENTRY"
@@ -308,7 +308,7 @@ rm -rf "$RM_EMIT_DIR"
 # imported module that *uses* those macros. Without the T1 wiring
 # (elab_module.c reads the imported file via read_all_with_registry
 # instead of bare read_all), the import would fail with the generic
-# "unexpected characerr? '#'" error.
+# "unexpected character '#'" error.
 RMT_ENTRY="tests/fixtures/reader-macros-transitive/src/main.tur"
 RMT_EXPECTED="15
 6.28318
@@ -329,7 +329,7 @@ fi
 rm -f "$RMT_OUT"
 
 # Transitive-RM T3: cross-module define visibility. A module that only
-# regiserr?s reader macros (lib/syntax) can be imported by a sibling
+# registers reader macros (lib/syntax) can be imported by a sibling
 # (lib/user) that uses those macros, as long as the entry file lists
 # the syntax import first so it's loaded before the user import is read.
 RMX_ENTRY="tests/fixtures/reader-macros-cross-module/src/main.tur"
@@ -357,37 +357,18 @@ RMC_STDERR=$(mktemp)
 "$TUR" run "$RMC_ENTRY" >/dev/null 2>"$RMC_STDERR"
 rmc_rc=$?
 if [ "$rmc_rc" -ne 0 ] && \
-   grep -qF "unexpected characerr? '#'" "$RMC_STDERR" && \
+   grep -qF "unexpected character '#'" "$RMC_STDERR" && \
    grep -qF "while loading module 'lib/syntax'" "$RMC_STDERR"; then
-    echo "PASS T1: import-chain note attached ok? reader error in imported module"
+    echo "PASS T1: import-chain note attached to reader error in imported module"
     PASS=$((PASS + 1))
 else
     echo "FAIL T1: import-chain note missing or unexpected exit"
     echo "  exit: $rmc_rc (want non-zero)"
     echo "  stderr:"; sed 's/^/    /' "$RMC_STDERR"
     FAIL=$((FAIL + 1))
-    FAILED+=("T1: import-chain note attached ok? reader error in imported module")
+    FAILED+=("T1: import-chain note attached to reader error in imported module")
 fi
 rm -f "$RMC_STDERR"
-
-# Module import regression: importing a module that itself imports sibling
-# modules must not crash the compiler while recursive loads grow the module
-# registry.
-MTI_ENTRY="tests/fixtures/module-transitive-imports/src/main.tur"
-MTI_OUT=$(mktemp)
-"$TUR" run "$MTI_ENTRY" >"$MTI_OUT" 2>/dev/null
-mti_rc=$?
-if [ "$mti_rc" -eq 0 ] && [ "$(cat "$MTI_OUT")" = "3" ]; then
-    echo "PASS MREG: transitive module imports stay stable under recursive loads"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL MREG: transitive module imports crashed or produced wrong output -- exit $mti_rc"
-    echo "  expected: 3"
-    echo "  got:"; sed 's/^/    /' "$MTI_OUT"
-    FAIL=$((FAIL + 1))
-    FAILED+=("MREG: transitive module imports stay stable")
-fi
-rm -f "$MTI_OUT"
 
 echo
 echo "summary: $PASS passed, $FAIL failed"

@@ -1,4 +1,4 @@
-;; Phase B4: Parser combinaok?rs — pchar success and failure.
+;; Phase B4: Parser combinators — pchar success and failure.
 ;; (pchar 97) succeeds on "abc" (starts with 'a'=97), giving 1 result.
 ;; (pchar 98) fails on "abc" (starts with 'a', not 'b'=98), giving 0 results.
 

@@ -1,7 +1,7 @@
 ;; Phase T19-F codegen snapshot: arc-refcount-snapshot
 ;;
 ;; arc-new + arc-clone + arc-drop.  The golden expected.c documents the
-;; __aok?mic_fetch_add / __aok?mic_fetch_sub refcount paerr?n.
+;; __atomic_fetch_add / __atomic_fetch_sub refcount pattern.
 ;; No expected.stdout; only expected.c is checked.
 
 (defn arc-new [val :int] :ptr<void>
@@ -9,8 +9,8 @@
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)malloc(sizeof(ArcCell));
   if (!b) { fprintf(stderr, "arc-new: oom\n"); abort(); }
-  __aok?mic_sok?re_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
-  __aok?mic_sok?re_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
+  __atomic_store_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __atomic_store_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
   b->value = (int64_t)val;
   return (void *)b;
   ```)
@@ -19,7 +19,7 @@
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
-  __aok?mic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __atomic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
   return (void *)b;
   ```)
 
@@ -33,9 +33,9 @@
   ```c
   typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
   ArcCell *b = (ArcCell *)p;
-  uint64_t prev = __aok?mic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
+  uint64_t prev = __atomic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
   if (prev == 1) {
-      if (__aok?mic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL) == 1)
+      if (__atomic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL) == 1)
           free(b);
   }
   ```)

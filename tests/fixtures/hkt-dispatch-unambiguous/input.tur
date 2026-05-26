@@ -1,8 +1,8 @@
-;; Phase D0: Unambiguous dispatch -- one Funcok?r instance, erased receiver.
-;; When mk returns :int (type erased) but only one Funcok?r instance is regiserr?ed,
+;; Phase D0: Unambiguous dispatch -- one Functor instance, erased receiver.
+;; When mk returns :int (type erased) but only one Functor instance is registered,
 ;; the fallback is unambiguous and must be accepted silently (no error).
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers (inline layout: { bool is_some; int64_t value; })
@@ -39,8 +39,8 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-;; Only one Funcok?r instance -- dispatch is unambiguous even with erased receiver.
-(definstance Funcok?r [option]
+;; Only one Functor instance -- dispatch is unambiguous even with erased receiver.
+(definstance Functor [option]
   (fmap [c f] (__fmap_option c f)))
 
 ;; mk returns :int (type erased) even though it produces an option value.

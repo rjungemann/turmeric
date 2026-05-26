@@ -1,45 +1,45 @@
 ;;
-;; Phase TC1: tresult basic operations test
+;; Phase TC1: result basic operations test
 
-(defn test-ok? [] :bool
-  (ok?? (ok? 1)))
+(defn test-ok [] :bool
+  (ok? (ok 1)))
 
-(defn test-err-not-ok? [] :bool
-  (ok?? (err? 0)))
+(defn test-err-not-ok [] :bool
+  (ok? (err 0)))
 
-(defn test-err?? [] :bool
-  (err?? (err? 5)))
+(defn test-err? [] :bool
+  (err? (err 5)))
 
 (defn test-ok-val [] :int
-  (ok-val (ok? 42)))
+  (ok-val (ok 42)))
 
 (defn test-err-val [] :int
-  (err-val (err? 404)))
+  (err-val (err 404)))
 
 (defn test-result-eq-ok [] :bool
   (let [eq (fn [a b] (= a b))]
-    (result-eq? (ok? 1) (ok? 1) eq eq)))
+    (result-eq? (ok 1) (ok 1) eq eq)))
 
 (defn test-result-eq-err [] :bool
   (let [eq (fn [a b] (= a b))]
-    (result-eq? (err? 5) (err? 5) eq eq)))
+    (result-eq? (err 5) (err 5) eq eq)))
 
 (defn test-result-neq [] :bool
   (let [eq (fn [a b] (= a b))]
-    (result-eq? (ok? 1) (ok? 2) eq eq)))
+    (result-eq? (ok 1) (ok 2) eq eq)))
 
 (defn test-result-map-ok [] :int
-  (ok-val (result-map (ok? 5) (fn [x] (* x 3)))))
+  (ok-val (result-map (ok 5) (fn [x] (* x 3)))))
 
 (defn test-result-map-err [] :int
-  (err-val (result-map (err? 42) (fn [x] (* x 3)))))
+  (err-val (result-map (err 42) (fn [x] (* x 3)))))
 
 (defn test-result-map-preserves-tag [] :bool
-  (ok?? (result-map (ok? 1) (fn [x] (+ x 1)))))
+  (ok? (result-map (ok 1) (fn [x] (+ x 1)))))
 
-(println (test-ok?))
-(println (test-err-not-ok?))
-(println (test-err??))
+(println (test-ok))
+(println (test-err-not-ok))
+(println (test-err?))
 (println (test-ok-val))
 (println (test-err-val))
 (println (test-result-eq-ok))

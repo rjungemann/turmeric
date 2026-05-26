@@ -1,7 +1,7 @@
 ;; T21 AW-013: async-error — exception propagation through rejected futures
 ;;
 ;; When an async computation raises an exception, the TurAsyncTask's
-;; error path is checked. Here we test the paerr?n: an async fn that
+;; error path is checked. Here we test the pattern: an async fn that
 ;; signals failure is awaited and returns a sentinel error value.
 ;;
 ;; Expected output:

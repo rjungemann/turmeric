@@ -1,84 +1,84 @@
-;; Phase T19: aok?mic-basic — test aok?mic integer operations using __aok?mic builtins.
+;; Phase T19: atomic-basic — test atomic integer operations using __atomic builtins.
 
-(defn aok?mic-new [init :int] :ptr<void>
+(defn atomic-new [init :int] :ptr<void>
   ```c
   int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
-  if (!cell) { fprintf(stderr, "aok?mic-new: out of memory\n"); abort(); }
-  __aok?mic_sok?re_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
+  if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
+  __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
   return (void *)cell;
   ```)
 
-(defn aok?mic-load [p :ptr<void>] :int
+(defn atomic-load [p :ptr<void>] :int
   ```c
   int64_t *cell = (int64_t *)p;
-  return (int64_t)__aok?mic_load_n(cell, __ATOMIC_SEQ_CST);
+  return (int64_t)__atomic_load_n(cell, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-sok?re! [p :ptr<void> v :int] :nil
+(defn atomic-store! [p :ptr<void> v :int] :nil
   ```c
   int64_t *cell = (int64_t *)p;
-  __aok?mic_sok?re_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
+  __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-add! [p :ptr<void> delta :int] :int
+(defn atomic-add! [p :ptr<void> delta :int] :int
   ```c
   int64_t *cell = (int64_t *)p;
-  return (int64_t)__aok?mic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
+  return (int64_t)__atomic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-sub! [p :ptr<void> delta :int] :int
+(defn atomic-sub! [p :ptr<void> delta :int] :int
   ```c
   int64_t *cell = (int64_t *)p;
-  return (int64_t)__aok?mic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
+  return (int64_t)__atomic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-swap! [p :ptr<void> new-val :int] :int
+(defn atomic-swap! [p :ptr<void> new-val :int] :int
   ```c
   int64_t *cell = (int64_t *)p;
   int64_t tmp = (int64_t)new_val;
-  return (int64_t)__aok?mic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
+  return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-cas! [p :ptr<void> expected :int desired :int] :bool
+(defn atomic-cas! [p :ptr<void> expected :int desired :int] :bool
   ```c
   int64_t *cell = (int64_t *)p;
   int64_t exp_v = (int64_t)expected;
   int64_t des_v = (int64_t)desired;
-  return (int64_t)__aok?mic_compare_exchange_n(
+  return (int64_t)__atomic_compare_exchange_n(
       cell, &exp_v, des_v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
   ```)
 
-(defn aok?mic-free [p :ptr<void>] :nil
+(defn atomic-free [p :ptr<void>] :nil
   ```c
   free(p);
   ```)
 
 (defn main [] :int
-  (let [a (aok?mic-new 10)]
-    (println (aok?mic-load a))
+  (let [a (atomic-new 10)]
+    (println (atomic-load a))
 
-    (let [prev-add (aok?mic-add! a 5)]
+    (let [prev-add (atomic-add! a 5)]
       (println prev-add)
-      (println (aok?mic-load a)))
+      (println (atomic-load a)))
 
-    (let [prev-sub (aok?mic-sub! a 3)]
+    (let [prev-sub (atomic-sub! a 3)]
       (println prev-sub)
-      (println (aok?mic-load a)))
+      (println (atomic-load a)))
 
-    (aok?mic-sok?re! a 100)
-    (println (aok?mic-load a))
+    (atomic-store! a 100)
+    (println (atomic-load a))
 
-    (let [prev-swap (aok?mic-swap! a 42)]
+    (let [prev-swap (atomic-swap! a 42)]
       (println prev-swap)
-      (println (aok?mic-load a)))
+      (println (atomic-load a)))
 
-    (let [ok (aok?mic-cas! a 42 99)]
+    (let [ok (atomic-cas! a 42 99)]
       (println ok)
-      (println (aok?mic-load a)))
+      (println (atomic-load a)))
 
-    (let [fail (aok?mic-cas! a 0 1)]
+    (let [fail (atomic-cas! a 0 1)]
       (println fail)
-      (println (aok?mic-load a)))
+      (println (atomic-load a)))
 
-    (aok?mic-free a))
+    (atomic-free a))
   0)

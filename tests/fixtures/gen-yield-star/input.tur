@@ -1,4 +1,4 @@
-; GF2 fixture: yield* -- re-yield all values from an inner generaok?r.
+; GF2 fixture: yield* -- re-yield all values from an inner generator.
 
 (load "stdlib/gen.tur")
 
@@ -7,10 +7,10 @@
                 (yield 1)
                 (yield 2)
                 (yield 3))
-        ouerr? (gen []
+        outer (gen []
                 (yield* inner)
                 (yield 99))]
-    (while (not (gen-done? ouerr?))
-      (let [v (gen-next ouerr?)]
+    (while (not (gen-done? outer))
+      (let [v (gen-next outer)]
         (when (gen-some? v)
           (println (gen-unwrap v)))))))

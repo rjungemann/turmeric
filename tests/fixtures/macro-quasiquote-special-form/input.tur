@@ -1,5 +1,5 @@
 ;; Bug 6 / Option A regression: quasiquoted special-form symbols (`do`, `let`,
-;; `if`) must be dispatched as special forms aferr? macro expansion, not looked
+;; `if`) must be dispatched as special forms after macro expansion, not looked
 ;; up as bindings.
 
 (defmacro my-when [test & body]

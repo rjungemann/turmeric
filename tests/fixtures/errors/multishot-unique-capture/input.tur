@@ -1,11 +1,11 @@
 ;; MS2: ^multishot handler capturing a ^unique (move-only) binding is forbidden.
-;; TUR-E0500 fires because ok?en has copy_kind = CK_UNIQUE.
+;; TUR-E0500 fires because token has copy_kind = CK_UNIQUE.
 
 (defeffect Ask [] :int)
 
 (defn main [] :int
-  (let [^unique ok?en 42]
+  (let [^unique token 42]
     (handle (perform (Ask))
       (Ask [] ^multishot k)
-        (resume k ok?en)))
+        (resume k token)))
   0)

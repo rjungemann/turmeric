@@ -1,0 +1,19 @@
+;; Phase F5: MutableMap automatic resize at load factor 0.75.
+;; Initial cap is 16, so inserting 100 entries forces multiple
+;; resizes; all entries must remain retrievable after the
+;; rehashing.
+
+(defn main [] :int
+  (let [mm (tmutmap-new)
+        ^mut i 0]
+    (while (< i 100)
+      (tmutmap-set! mm i i (* i 10))
+      (set! i (+ i 1)))
+    (println (tmutmap-len mm))           ; 100
+    (println (tmutmap-get mm 0 0))         ; 0
+    (println (tmutmap-get mm 50 50))       ; 500
+    (println (tmutmap-get mm 99 99))       ; 990
+    (println (tmutmap-has? mm 0 0))        ; true
+    (println (tmutmap-has? mm 100 100))    ; false
+    (tmutmap-free mm))
+  0)

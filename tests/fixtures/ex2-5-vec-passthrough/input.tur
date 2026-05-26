@@ -1,17 +1,17 @@
 ; Phase EX2-5: a function that accepts a Vec without knowing the size index
-; must still be able ok? call sized-vec-len inside an open-vec block.
+; must still be able to call sized-vec-len inside an open-vec block.
 ;
-; describe-vec takes the size-erased Vec at the boundary, opens it ok? recover
+; describe-vec takes the size-erased Vec at the boundary, opens it to recover
 ; the underlying SizedVec under a fresh abstract n, and reports the length as
-; an :int (which carries no phanok?m residue and so passes the escape check).
+; an :int (which carries no phantom residue and so passes the escape check).
 ;
 ; This is the EX2-4 round-trip exercised across a function boundary -- the
-; caller never sees the index, but the callee can still measure the vecok?r.
+; caller never sees the index, but the callee can still measure the vector.
 (load "stdlib/sized.tur")
 (load "stdlib/vec-existential.tur")
 
 ; The Vec arrives as :ptr<void> at the C-level ABI -- the size index is
-; gone -- but we re-ascribe it ok? the existential type so open-vec can
+; gone -- but we re-ascribe it to the existential type so open-vec can
 ; recover the underlying SizedVec under a fresh abstract n.
 (defn describe-vec [v :ptr<void>] :int
   (let [vec (:: v (exists [n] (SizedVec n int)))]

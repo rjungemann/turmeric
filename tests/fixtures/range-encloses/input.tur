@@ -1,4 +1,4 @@
-; LZ4 fixture: range-encloses? -- every value of inner is in ouerr?.
+; LZ4 fixture: range-encloses? -- every value of inner is in outer.
 
 (load "stdlib/range.tur")
 

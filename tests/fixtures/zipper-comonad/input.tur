@@ -1,4 +1,4 @@
-;; Test Zipper Comonad: basic operations and 1D cellular auok?mata step.
+;; Test Zipper Comonad: basic operations and 1D cellular automata step.
 
 ;; ── Comonad typeclass ────────────────────────────────────────────────────────
 (defclass Comonad [^w]
@@ -48,12 +48,12 @@
   size_t k = (size_t)offset - 1; return k < p->right_len ? p->right[k] : def_val;
   ```)
 
-(defn zipper-ok?-array [z] :int
+(defn zipper-to-array [z] :int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
-  size_t ok?tal = p->left_len + 1 + p->right_len;
-  int64_t *out = malloc(ok?tal * sizeof(int64_t));
+  size_t total = p->left_len + 1 + p->right_len;
+  int64_t *out = malloc(total * sizeof(int64_t));
   for (size_t k = 0; k < p->left_len; k++) out[k] = p->left[p->left_len - 1 - k];
   out[p->left_len] = p->focus;
   for (size_t k = 0; k < p->right_len; k++) out[p->left_len + 1 + k] = p->right[k];
@@ -66,9 +66,9 @@
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *src = (Zip *)(intptr_t)z;
-  size_t ok?tal = src->left_len + 1 + src->right_len;
-  int64_t *results = malloc(ok?tal * sizeof(int64_t));
-  /* go ok? leftmost position */
+  size_t total = src->left_len + 1 + src->right_len;
+  int64_t *results = malloc(total * sizeof(int64_t));
+  /* go to leftmost position */
   Zip *cur = src;
   while (cur->left_len > 0) {
     Zip *nz = malloc(sizeof(Zip));
@@ -82,9 +82,9 @@
     if (cur->right_len) memcpy(nz->right + 1, cur->right, cur->right_len * sizeof(int64_t));
     cur = nz;
   }
-  for (size_t i = 0; i < ok?tal; i++) {
+  for (size_t i = 0; i < total; i++) {
     results[i] = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)cur);
-    if (i + 1 < ok?tal) {
+    if (i + 1 < total) {
       Zip *nz = malloc(sizeof(Zip));
       nz->focus = cur->right[0];
       size_t nl = cur->left_len + 1; nz->left_len = nl;
@@ -98,7 +98,7 @@
     }
   }
   size_t fi = src->left_len;
-  size_t new_ll = fi, new_rl = ok?tal - fi - 1;
+  size_t new_ll = fi, new_rl = total - fi - 1;
   Zip *out = malloc(sizeof(Zip));
   out->focus = results[fi];
   out->left = new_ll ? malloc(new_ll * sizeof(int64_t)) : NULL; out->left_len = new_ll;
@@ -143,13 +143,13 @@
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
-  size_t ok?tal = p->left_len + 1 + p->right_len;
-  /* rebuild left-ok?-right */
+  size_t total = p->left_len + 1 + p->right_len;
+  /* rebuild left-to-right */
   for (size_t k = 0; k < p->left_len; k++) putchar(p->left[p->left_len - 1 - k] ? '#' : '.');
   putchar(p->focus ? '#' : '.');
   for (size_t k = 0; k < p->right_len; k++) putchar(p->right[k] ? '#' : '.');
   putchar('\n');
-  (void)ok?tal;
+  (void)total;
   return 0;
   ```)
 

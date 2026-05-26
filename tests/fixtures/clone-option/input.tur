@@ -1,7 +1,7 @@
 ;; Phase B1: Clone trait for an option-like struct type
 ;;
 ;; Uses a user-defined Opt struct (mirroring the built-in option layout)
-;; ok? demonstrate that Clone performs an independent deep copy of the value.
+;; to demonstrate that Clone performs an independent deep copy of the value.
 
 (defstruct Opt [value :int])
 
@@ -11,7 +11,7 @@
 (definstance Clone [int]
   (clone [x] x))
 
-;; Clone [Opt]: deep-copy the struct value inok? a heap allocation.
+;; Clone [Opt]: deep-copy the struct value into a heap allocation.
 ;; x has type Opt (struct value) inside the generated C function;
 ;; field access uses x.value.
 (definstance Clone [Opt]
@@ -22,7 +22,7 @@
     return (int64_t)(intptr_t)dst;
     ```))
 
-;; Accessor for a heap-allocated Opt poinerr? (returned by Clone.clone).
+;; Accessor for a heap-allocated Opt pointer (returned by Clone.clone).
 (defn heap-option-value [p] :int
   ```c
   struct { int64_t value; } *opt = (void *)(intptr_t)p;

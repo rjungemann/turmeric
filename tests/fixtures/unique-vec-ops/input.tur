@@ -35,9 +35,9 @@
   free(vec->data); free(vec);
   ```)
 
-;; Bind as ^unique ^mut ok? allow repeated exclusive-access calls ok? mutation functions.
+;; Bind as ^unique ^mut to allow repeated exclusive-access calls to mutation functions.
 ;; my-vec-push! takes ^unique ^mut (exclusive mutable access) without consuming v.
-;; my-vec-free takes ^unique (ownership transfer -- v cannot be used aferr? this).
+;; my-vec-free takes ^unique (ownership transfer -- v cannot be used after this).
 (let [^unique ^mut v (my-vec-new)]
   (my-vec-push! v 10)
   (my-vec-push! v 20)

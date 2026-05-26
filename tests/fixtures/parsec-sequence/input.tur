@@ -1,4 +1,4 @@
-;; Phase B4: Parser combinaok?rs — then-parser sequences two parsers.
+;; Phase B4: Parser combinators — then-parser sequences two parsers.
 ;; (then-parser pa pb) parses pa then pb, returning pb's value.
 ;; On "ab": parses 'a' then 'b' → 1 result, value = 98 ('b').
 ;; On "ac": parses 'a' then fails on 'c' → 0 results.

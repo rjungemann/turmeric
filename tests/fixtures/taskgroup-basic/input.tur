@@ -1,7 +1,7 @@
 ;; Phase T22: taskgroup-basic — basic task group coordination
 ;;
 ;; Simple test: create task group, increment task count, signal completions,
-;; wait for all ok? complete. No actual fibers in v1 - just coordination logic.
+;; wait for all to complete. No actual fibers in v1 - just coordination logic.
 ;;
 ;; Expected output: 42
 

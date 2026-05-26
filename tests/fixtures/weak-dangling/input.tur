@@ -1,4 +1,4 @@
-;; Verify that upgrading a weak ref aferr? the rc is dropped returns none.
+;; Verify that upgrading a weak ref after the rc is dropped returns none.
 
 (defn some? [o :ptr<void>] :bool
   ```c

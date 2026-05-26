@@ -1,8 +1,8 @@
 ;; Phase HKT H5: defkind parses without error (compile-only test).
-;; Regiserr?s kind aliases for documentation and future enforcement.
+;; Registers kind aliases for documentation and future enforcement.
 
-(defkind Funcok?r1 (* -> *))
-(defkind Bifuncok?r2 (* -> * -> *))
+(defkind Functor1 (* -> *))
+(defkind Bifunctor2 (* -> * -> *))
 (defkind Identity0 *)
 
 (defn main [] :int 0)

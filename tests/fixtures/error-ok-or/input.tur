@@ -1,4 +1,4 @@
-;; Phase R3: error-ok-or — convert option ok? result using u-ok-or
+;; Phase R3: error-ok-or — convert option to result using u-ok-or
 
 ;; ─── inline option helpers ───────────────────────────────────────────────────
 (defn u-some [x :int] :ptr<void>
@@ -26,7 +26,7 @@
   return (int)res->ok_val;
   ```)
 
-;; u-ok-or — convert option ok? result: u-some(v) → u-ok(v), u-none → u-err(e)
+;; u-ok-or — convert option to result: u-some(v) → u-ok(v), u-none → u-err(e)
 (defn u-ok-or [opt :ptr<void> e :int] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *o = (void*)opt;

@@ -1,4 +1,4 @@
-; Phase SZ3: SizedBitVec -- packed bit vecok?r.
+; Phase SZ3: SizedBitVec -- packed bit vector.
 
 (defgadt Size []
   (Static (int) : (Size))
@@ -9,7 +9,7 @@
   (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
             (Mul a b) (* (size-eval a) (size-eval b))))
 
-(defn sized-bivec-new [n] #{Unsafe} :int
+(defn sized-bitvec-new [n] #{Unsafe} :int
   ```c
   struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
   bv->len  = n;
@@ -18,63 +18,63 @@
   return (int64_t)(intptr_t)bv;
   ```)
 
-(defn sized-bivec-free [bv] #{Unsafe} :nil
+(defn sized-bitvec-free [bv] #{Unsafe} :nil
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (b->bits) free(b->bits);
   free(b);
   ```)
 
-(defn sized-bivec-len [bv] #{Unsafe} :int
+(defn sized-bitvec-len [bv] #{Unsafe} :int
   ```c
   return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
   ```)
 
-(defn sized-bivec-size [bv] #{Unsafe} :Size
+(defn sized-bitvec-size [bv] #{Unsafe} :Size
   ```c
-  return cok?r_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
+  return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
   ```)
 
-(defn sized-bivec-get [bv i] #{Unsafe} :int
+(defn sized-bitvec-get [bv i] #{Unsafe} :int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bivec-get: out of bounds\n"); exit(1);
+    fprintf(stderr, "sized-bitvec-get: out of bounds\n"); exit(1);
   }
   return (b->bits[i / 8] >> (i % 8)) & 1;
   ```)
 
-(defn sized-bivec-set! [bv i] #{Unsafe} :int
+(defn sized-bitvec-set! [bv i] #{Unsafe} :int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bivec-set!: out of bounds\n"); exit(1);
+    fprintf(stderr, "sized-bitvec-set!: out of bounds\n"); exit(1);
   }
   b->bits[i / 8] |= (uint8_t)(1 << (i % 8));
   return bv;
   ```)
 
-(defn sized-bivec-clear! [bv i] #{Unsafe} :int
+(defn sized-bitvec-clear! [bv i] #{Unsafe} :int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bivec-clear!: out of bounds\n"); exit(1);
+    fprintf(stderr, "sized-bitvec-clear!: out of bounds\n"); exit(1);
   }
   b->bits[i / 8] &= (uint8_t)~(1 << (i % 8));
   return bv;
   ```)
 
-(defn sized-bivec-ok?ggle! [bv i] #{Unsafe} :int
+(defn sized-bitvec-toggle! [bv i] #{Unsafe} :int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bivec-ok?ggle!: out of bounds\n"); exit(1);
+    fprintf(stderr, "sized-bitvec-toggle!: out of bounds\n"); exit(1);
   }
   b->bits[i / 8] ^= (uint8_t)(1 << (i % 8));
   return bv;
   ```)
 
-(defn sized-bivec-count [bv] #{Unsafe} :int
+(defn sized-bitvec-count [bv] #{Unsafe} :int
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   int64_t nbytes = (b->len + 7) / 8;
@@ -86,41 +86,41 @@
   return count;
   ```)
 
-(defn sized-bivec-assert-len! [bv expected :Size] #{Unsafe} :nil
+(defn sized-bitvec-assert-len! [bv expected :Size] #{Unsafe} :nil
   (require-msg!
-    (= (sized-bivec-len bv) (size-eval expected))
-    "sized-bivec-assert-len!: bit count mismatch"))
+    (= (sized-bitvec-len bv) (size-eval expected))
+    "sized-bitvec-assert-len!: bit count mismatch"))
 
 (defn main [] :int
-  (let [bv (unsafe (sized-bivec-new 16))]
+  (let [bv (unsafe (sized-bitvec-new 16))]
     ; Length and size annotation
-    (println (unsafe (sized-bivec-len bv)))
-    (println (size-eval (unsafe (sized-bivec-size bv))))
+    (println (unsafe (sized-bitvec-len bv)))
+    (println (size-eval (unsafe (sized-bitvec-size bv))))
     ; All bits start clear
-    (println (unsafe (sized-bivec-get bv 0)))
-    (println (unsafe (sized-bivec-get bv 7)))
+    (println (unsafe (sized-bitvec-get bv 0)))
+    (println (unsafe (sized-bitvec-get bv 7)))
     ; Set some bits
-    (unsafe (sized-bivec-set! bv 0))
-    (unsafe (sized-bivec-set! bv 3))
-    (unsafe (sized-bivec-set! bv 7))
-    (println (unsafe (sized-bivec-get bv 0)))
-    (println (unsafe (sized-bivec-get bv 3)))
-    (println (unsafe (sized-bivec-get bv 7)))
-    (println (unsafe (sized-bivec-get bv 1)))
+    (unsafe (sized-bitvec-set! bv 0))
+    (unsafe (sized-bitvec-set! bv 3))
+    (unsafe (sized-bitvec-set! bv 7))
+    (println (unsafe (sized-bitvec-get bv 0)))
+    (println (unsafe (sized-bitvec-get bv 3)))
+    (println (unsafe (sized-bitvec-get bv 7)))
+    (println (unsafe (sized-bitvec-get bv 1)))
     ; Popcount
-    (println (unsafe (sized-bivec-count bv)))
+    (println (unsafe (sized-bitvec-count bv)))
     ; Toggle clears bit 0, sets bit 1
-    (unsafe (sized-bivec-ok?ggle! bv 0))
-    (unsafe (sized-bivec-ok?ggle! bv 1))
-    (println (unsafe (sized-bivec-get bv 0)))
-    (println (unsafe (sized-bivec-get bv 1)))
-    (println (unsafe (sized-bivec-count bv)))
+    (unsafe (sized-bitvec-toggle! bv 0))
+    (unsafe (sized-bitvec-toggle! bv 1))
+    (println (unsafe (sized-bitvec-get bv 0)))
+    (println (unsafe (sized-bitvec-get bv 1)))
+    (println (unsafe (sized-bitvec-count bv)))
     ; Clear bit 3
-    (unsafe (sized-bivec-clear! bv 3))
-    (println (unsafe (sized-bivec-get bv 3)))
-    (println (unsafe (sized-bivec-count bv)))
+    (unsafe (sized-bitvec-clear! bv 3))
+    (println (unsafe (sized-bitvec-get bv 3)))
+    (println (unsafe (sized-bitvec-count bv)))
     ; Assertion on length passes
-    (unsafe (sized-bivec-assert-len! bv (Static 16)))
+    (unsafe (sized-bitvec-assert-len! bv (Static 16)))
     (println 1)
-    (unsafe (sized-bivec-free bv)))
+    (unsafe (sized-bitvec-free bv)))
   0)

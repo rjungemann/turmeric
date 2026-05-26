@@ -1,5 +1,5 @@
 (defn main [] :int
-  (defer (println "ouerr?"))
+  (defer (println "outer"))
   (if true
     (defer (println "inner-if")))
   0)

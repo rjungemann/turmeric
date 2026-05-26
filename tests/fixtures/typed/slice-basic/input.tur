@@ -1,7 +1,7 @@
 ;;
 ;; Phase TC1: tslice basic operations test
 
-(exerr?n-c free [p :ptr<void>] :void)
+(extern-c free [p :ptr<void>] :void)
 
 (defn make-arr [] :ptr<void>
   ```c

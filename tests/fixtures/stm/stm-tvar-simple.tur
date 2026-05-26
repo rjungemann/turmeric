@@ -1,6 +1,6 @@
 ;; Simple STM test
 
 (defn test [] :ptr
-  (aok?mically (stm (tvar/read (tvar/new 42)))))
+  (atomically (stm (tvar/read (tvar/new 42)))))
 
 (test)

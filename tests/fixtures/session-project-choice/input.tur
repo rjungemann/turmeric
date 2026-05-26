@@ -1,8 +1,8 @@
 ;; SS6: projection through a choice.
-;; Prook?col: A chooses: left -> A sends int ok? B; right -> prook?col ends.
+;; Protocol: A chooses: left -> A sends int to B; right -> protocol ends.
 ;; project(Choose2, A) = Session[Choose (Send int Close) Close]
 ;; project(Choose2, B) = Session[Branch (Recv int Close) Close]
-(defprook?col Choose2 [A B]
+(defprotocol Choose2 [A B]
   (choice A
     [left  (-> A B int)]
     [right]))

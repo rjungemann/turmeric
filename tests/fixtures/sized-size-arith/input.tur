@@ -17,7 +17,7 @@
     (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
 
 (defn main [] :int
-  ; lierr?al: 0, 1, 8
+  ; literal: 0, 1, 8
   (println (size-eval (size-static 0)))
   (println (size-eval (size-static 1)))
   (println (size-eval (size-static 8)))

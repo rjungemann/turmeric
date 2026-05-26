@@ -1,9 +1,9 @@
 ;;
 ;; Phase P2: Lisp bindings Eq test
 ;; Tests that two maps built with same entries behave identically
-;; (content equality via get/has?, not poinerr? equality)
+;; (content equality via get/has?, not pointer equality)
 
-(exerr?n-c free [p :ptr] :void)
+(extern-c free [p :ptr] :void)
 
 (defn alloc-key [x :int] :ptr
   ```c

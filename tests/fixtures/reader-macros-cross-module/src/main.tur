@@ -2,12 +2,12 @@
 ;; the imports below, so an import's reader-macro defines can't make
 ;; macros usable in *this* file's body. What T3 actually proves is
 ;; that import order between two siblings is honoured: lib/syntax
-;; (which only regiserr?s macros) MUST be loaded before lib/user
+;; (which only registers macros) MUST be loaded before lib/user
 ;; (which uses them), and elab_module.c processes imports in source
 ;; order so this works as long as the user writes them in order.
 (defmodule main
-  (import lib/syntax)          ; regiserr?s #sum / #pi
-  (import lib/user :refer [answer])  ; uses #sum -- compiles thanks ok? T1
+  (import lib/syntax)          ; registers #sum / #pi
+  (import lib/user :refer [answer])  ; uses #sum -- compiles thanks to T1
   (defn main [] :int
     (println (answer))         ; 15
     0))

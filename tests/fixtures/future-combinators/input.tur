@@ -1,6 +1,6 @@
-;; Phase T21 AW-013: future-combinaok?rs — map, then, race, all2, any2, of, error-of, cancel
+;; Phase T21 AW-013: future-combinators — map, then, race, all2, any2, of, error-of, cancel
 ;;
-;; Tests the new Future combinaok?rs using inline C (following existing fixture paerr?n).
+;; Tests the new Future combinators using inline C (following existing fixture pattern).
 ;; Expected output:
 ;;   42
 ;;   -1
@@ -129,7 +129,7 @@
   return (void *)out;
   ```)
 
-;; Return first future ok? fulfill; if fa is already fulfilled, return it.
+;; Return first future to fulfill; if fa is already fulfilled, return it.
 ;; If fa rejects, try fb. If both reject, return fb's rejection.
 (defn future-any2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
   ```c

@@ -1,8 +1,8 @@
-;; Phase CCL: capturing closures passed directly ok? typeclass methods.
+;; Phase CCL: capturing closures passed directly to typeclass methods.
 ;; Exercises the (fn, env) pairs in dict structs feature: fat closures
-;; whose environment poinerr? is packed inok? tur_poly_fn_t at call sites.
+;; whose environment pointer is packed into tur_poly_fn_t at call sites.
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container [fn :fn]] :int))
 
 (defclass Monad [^m]
@@ -36,8 +36,8 @@
   return (int)(p->value);
   ```)
 
-;; Funcok?r [option] -- fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Funcok?r [option]
+;; Functor [option] -- fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
+(definstance Functor [option]
   (fmap [container fn]
     ```c
     struct { bool is_some; int64_t value; } *c =

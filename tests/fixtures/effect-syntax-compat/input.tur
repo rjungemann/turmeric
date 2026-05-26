@@ -1,4 +1,4 @@
-;; Phase 19 compatibility: hisok?rical defeffect return type syntax (symbol form).
+;; Phase 19 compatibility: historical defeffect return type syntax (symbol form).
 
 (defeffect Read [] int)
 

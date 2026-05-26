@@ -1,9 +1,9 @@
 ; F1-1: a function whose return type is a constrained existential
-; spelled directly (rather than erased ok? :ptr<void>).  Before the
+; spelled directly (rather than erased to :ptr<void>).  Before the
 ; F1-1 fix, the return-type annotation parsed but only the `kind`
-; field survived inok? the function type; the as.forall_ payload was
+; field survived into the function type; the as.forall_ payload was
 ; left uninitialised, so the first downstream consumer (`elab_open`)
-; SEGV'd dereferencing a garbage `body` poinerr?.
+; SEGV'd dereferencing a garbage `body` pointer.
 (defclass Show [a]
   (show [x] :cstr))
 

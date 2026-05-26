@@ -1,6 +1,6 @@
-;; Phase 19: with-getenv stdlib handler — delegates GetEnv ok? C getenv(3).
+;; Phase 19: with-getenv stdlib handler — delegates GetEnv to C getenv(3).
 (defeffect GetEnv [key :cstr] :cstr)
-(exerr?n-c getenv [key :cstr] :cstr)
+(extern-c getenv [key :cstr] :cstr)
 
 (defmacro with-getenv [body]
   (handle body

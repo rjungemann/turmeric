@@ -30,7 +30,7 @@ check_line() {
 }
 
 check_line "println before await"        "before-await"
-check_line "println aferr? await"         "aferr?-await"
+check_line "println after await"         "after-await"
 check_line "async body result (42)"      "42"
 check_line "effect inside async body"    "hello"
 

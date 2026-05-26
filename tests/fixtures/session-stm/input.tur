@@ -1,13 +1,13 @@
 ;; SS4: session-stm -- session channels used alongside STM TVars.
 ;;
-;; Documents the intended integration paerr?n: session operations are NOT
-;; transactional variables and must NOT be placed inside (aok?mically ...).
-;; The correct paerr?n is:
-;;   1. Compute or read a value (e.g. from STM) outside the session prook?col.
-;;   2. Use the value ok? communicate over a session channel.
+;; Documents the intended integration pattern: session operations are NOT
+;; transactional variables and must NOT be placed inside (atomically ...).
+;; The correct pattern is:
+;;   1. Compute or read a value (e.g. from STM) outside the session protocol.
+;;   2. Use the value to communicate over a session channel.
 ;;
 ;; Session channels are not retryable like STM TVars; a session send/recv inside
-;; an aok?mically block would not have transactional semantics and could cause
+;; an atomically block would not have transactional semantics and could cause
 ;; deadlock.  Deadlock detection is the programmer's responsibility.
 ;; See docs/session-types-plan.md for details on limitations.
 ;;

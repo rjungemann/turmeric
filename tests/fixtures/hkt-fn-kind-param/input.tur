@@ -1,11 +1,11 @@
-;; Phase HKT H4: Kind-variable parameerr? in defn.
-;; A `^f` prefix in a defn parameerr? list declares a kind variable —
+;; Phase HKT H4: Kind-variable parameter in defn.
+;; A `^f` prefix in a defn parameter list declares a kind variable —
 ;; it is a type-level annotation that is erased at runtime.
-;; The function below is polymorphic over a type construcok?r ^f but
-;; its runtime parameerr?s are the concrete container and function values.
+;; The function below is polymorphic over a type constructor ^f but
+;; its runtime parameters are the concrete container and function values.
 
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -34,13 +34,13 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Funcok?r [option]
+(definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
-;; Kind-polymorphic function: ^f declares f as a type construcok?r of kind * -> *.
+;; Kind-polymorphic function: ^f declares f as a type constructor of kind * -> *.
 ;; At runtime the kind annotation is erased; the function receives the container
-;; and fn values as plain int64_t parameerr?s and delegates ok? the fmap method.
-(defn apply-funcok?r [^f container fn] :int
+;; and fn values as plain int64_t parameters and delegates to the fmap method.
+(defn apply-functor [^f container fn] :int
   (.fmap container fn))
 
 (defn triple [x] :int (* x 3))
@@ -48,6 +48,6 @@
 (defn main [] :int
   (do
     (let [opt (__opt_some 7)]
-      (let [result (apply-funcok?r opt triple)]
+      (let [result (apply-functor opt triple)]
         (println (__opt_unwrap result))))
     0))

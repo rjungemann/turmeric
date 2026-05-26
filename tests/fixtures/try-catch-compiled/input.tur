@@ -1,5 +1,5 @@
 ;; Phase S4: try/catch in compiled mode.
-;; Demonstrates tur_catch_unwind thunk wrapping for panic inerr?ception.
+;; Demonstrates tur_catch_unwind thunk wrapping for panic interception.
 
 (defn safe-div [a b] :int
   (try (do

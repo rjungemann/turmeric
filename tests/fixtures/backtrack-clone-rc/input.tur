@@ -1,10 +1,10 @@
 ;; Phase B1: Clone trait for the built-in rc type.
 ;;
 ;; Demonstrates that (definstance Clone [rc] ...) implements a shallow clone
-;; (refcount increment): aferr? .clone, both handles point ok? the same
+;; (refcount increment): after .clone, both handles point to the same
 ;; RcControlBlock and the strong-count reflects both owners.
 ;;
-;; Type note: .clone returns int64_t (the rc poinerr? cast), so the cloned
+;; Type note: .clone returns int64_t (the rc pointer cast), so the cloned
 ;; handle is freed via an inline C helper rather than rc/drop.
 
 (defclass Clone [a]
@@ -13,7 +13,7 @@
 (definstance Clone [rc]
   (clone [x] :int
     ```c
-    /* x is RcControlBlock *; increment refcount, return same poinerr?. */
+    /* x is RcControlBlock *; increment refcount, return same pointer. */
     rc_strong_increment(x);
     return (int64_t)(intptr_t)x;
     ```))
@@ -30,6 +30,6 @@
     (let [r2 (.clone r)]
       (println (rc/strong-count r))  ;; 2 — shared with r2
       (rc-drop-raw r2)               ;; release r2
-      (println (rc/strong-count r))) ;; 1 — back ok? sole owner
+      (println (rc/strong-count r))) ;; 1 — back to sole owner
     (rc/drop r)
     0))

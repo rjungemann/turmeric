@@ -1,12 +1,12 @@
-(defn regiserr?-test [name :cstr test-fn :ptr<void>] :int
+(defn register-test [name :cstr test-fn :ptr<void>] :int
   ```c
-  exerr?n int64_t tur_test_regiserr?(const char *name, void *test_fn);
-  return (int)tur_test_regiserr?((const char *)name, (void *)test_fn);
+  extern int64_t tur_test_register(const char *name, void *test_fn);
+  return (int)tur_test_register((const char *)name, (void *)test_fn);
   ```)
 
 (defn run-tests! [] :int
   ```c
-  exerr?n int64_t tur_test_run_all(void);
+  extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)
 
@@ -14,6 +14,6 @@
 (defn t-fail [] :int 0)
 
 (defn main [] :int
-  (regiserr?-test "t-pass" t-pass)
-  (regiserr?-test "t-fail" t-fail)
+  (register-test "t-pass" t-pass)
+  (register-test "t-fail" t-fail)
   (run-tests!))

@@ -1,0 +1,46 @@
+tests/fixtures/adt-param-match-type/input.tur:9:8: error: defdata: constructor field type must be a keyword like :int, :bool, :cstr
+ 6 | ;; scrutinee is Opt2 with a=int.
+ 7 | (defdata Opt2 [a]
+ 8 |   (Nope)
+ 9 |   (Yep a))
+   |        ^
+10 | 
+11 | (defn double-if-some [x :int] :int
+/Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44: runtime error: member access within null pointer of type 'CtorDef' (aka 'struct CtorDef')
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44 
+/Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44: runtime error: load of null pointer of type 'const char *'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44 
+AddressSanitizer:DEADLYSIGNAL
+=================================================================
+==57119==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000 (pc 0x00010036de50 bp 0x00016fbed110 sp 0x00016fbe9bc0 T0)
+==57119==The signal is caused by a READ memory access.
+==57119==Hint: address points to the zero page.
+    #0 0x00010036de50 in elab_match elab_structs.c:2236
+    #1 0x00010030a8f4 in elab_call elab_call.c:524
+    #2 0x00010040d068 in elab_form elab_toplevel.c:333
+    #3 0x000100294964 in elab_let elab_forms.c:513
+    #4 0x000100308d4c in elab_call elab_call.c:435
+    #5 0x00010040d068 in elab_form elab_toplevel.c:333
+    #6 0x0001002e2304 in elab_defn elab_fns.c:1092
+    #7 0x00010030dfac in elab_call elab_call.c:686
+    #8 0x00010040d068 in elab_form elab_toplevel.c:333
+    #9 0x00010041981c in elaborate_program elab_toplevel.c:745
+    #10 0x000100206708 in run_core_passes main.c:339
+    #11 0x0001001eaa4c in compile_to_c main.c:726
+    #12 0x0001001fbb70 in cmd_build main.c:1104
+    #13 0x0001001fde3c in cmd_run main.c:1797
+    #14 0x0001001f46f8 in main main.c:5699
+    #15 0x00019b8f9d50  (<unknown module>)
+
+==57119==Register values:
+ x[0] = 0x0000000000000000   x[1] = 0x0000000000000000   x[2] = 0x0000000000000000   x[3] = 0x0000000107900f40  
+ x[4] = 0x0000000063000000   x[5] = 0x0000000000000000   x[6] = 0x0000000000000000   x[7] = 0x0000000000000000  
+ x[8] = 0x0000000000000000   x[9] = 0x00000001014ce6f8  x[10] = 0x0000007000020000  x[11] = 0x1000000000000000  
+x[12] = 0x0000000000000000  x[13] = 0x000000016fbe8ce0  x[14] = 0x0000000000000000  x[15] = 0x0000000000000000  
+x[16] = 0x0000000000000049  x[17] = 0x0000000101428070  x[18] = 0x0000000000000000  x[19] = 0x000000016fbecbe0  
+x[20] = 0x0000631000001040  x[21] = 0x0000000000000008  x[22] = 0x0000631000000f90  x[23] = 0x00006310000009e8  
+x[24] = 0x0000000000000001  x[25] = 0x0000000000000000  x[26] = 0x0000000000000000  x[27] = 0x000063100007a708  
+x[28] = 0x0000000000000001     fp = 0x000000016fbed110     lr = 0x000000010036df44     sp = 0x000000016fbe9bc0  
+AddressSanitizer can not provide additional info.
+SUMMARY: AddressSanitizer: SEGV elab_structs.c:2236 in elab_match
+==57119==ABORTING

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/turi/eval-test.sh — Phase S0 REPL smoke test
 #
-# Pipes scripted input ok? `tur repl` and verifies expected output.
+# Pipes scripted input to `tur repl` and verifies expected output.
 
 set -u
 cd "$(dirname "$0")/../.."

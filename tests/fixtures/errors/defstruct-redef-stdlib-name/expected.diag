@@ -1,2 +1,2 @@
 defstruct: 'Cons' is already defined
-auok?-loaded stdlib module
+auto-loaded stdlib module

@@ -49,6 +49,6 @@
 
 (defn main []
   ;; A fresh variable must not equal 0 (it uses INT64_MIN as unbound sentinel).
-  ;; Capture zero ok? force a fat-closure (required by fresh's calling convention).
+  ;; Capture zero to force a fat-closure (required by fresh's calling convention).
   (let [zero 0]
     (bt-print (fresh (fn [x] (let [_ zero] (mreturn (if (= x 0) 0 1))))))))

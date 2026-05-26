@@ -1,9 +1,9 @@
-;; Phase T24: async-file — async write ok? a temp file, read it back.
+;; Phase T24: async-file — async write to a temp file, read it back.
 ;;
 ;; Two fibers run under the scheduler:
-;;   1. Wrierr?: opens /tmp/tur-async-file-test.txt, writes "hello async world",
+;;   1. Writer: opens /tmp/tur-async-file-test.txt, writes "hello async world",
 ;;      closes the file, then prints "wrote".
-;;   2. Reader: sleeps briefly ok? ensure wrierr? finishes, opens the file,
+;;   2. Reader: sleeps briefly to ensure writer finishes, opens the file,
 ;;      reads contents, prints them, closes the file.
 ;;
 ;; Note: On regular files, O_NONBLOCK doesn't actually make reads/writes
@@ -17,7 +17,7 @@
 ;;   all done
 
 ;; Note: open/write/read/close are available via the headers included in the
-;; runtime preamble (unistd.h, fcntl.h) — no exerr?n-c needed.
+;; runtime preamble (unistd.h, fcntl.h) — no extern-c needed.
 
 (defn mk-scheduler [] :ptr<void>
   ```c
@@ -47,7 +47,7 @@
   FiberBlock *me = tur_current_fiber;
   if (!me || !tur_scheduler) return;
   if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
-  int64_t deadline = tur_monook?nic_ns() + (int64_t)ms * 1000000LL;
+  int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
   tur_timer_wheel_insert(tur_global_timers, deadline,
       (void(*)(void*))tur_scheduler_unpark, me);
   me->parked = 1;
@@ -56,7 +56,7 @@
 
 ;; --- Fiber bodies ---
 
-(defn fiber-wrierr? [] :nil
+(defn fiber-writer [] :nil
   ```c
   int fd = open("/tmp/tur-async-file-test.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) { fprintf(stderr, "open write failed\n"); abort(); }
@@ -68,10 +68,10 @@
 
 (defn fiber-reader [] :nil
   ```c
-  /* Sleep briefly ok? let wrierr? finish */
+  /* Sleep briefly to let writer finish */
   FiberBlock *me = tur_current_fiber;
   if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
-  int64_t deadline = tur_monook?nic_ns() + 50LL * 1000000LL;
+  int64_t deadline = tur_monotonic_ns() + 50LL * 1000000LL;
   tur_timer_wheel_insert(tur_global_timers, deadline,
       (void(*)(void*))tur_scheduler_unpark, me);
   me->parked = 1;
@@ -89,7 +89,7 @@
 (defn main [] :int
   (println "start")
   (let [s (mk-scheduler)]
-    (sched-spawn s (mk-fiber fiber-wrierr?))
+    (sched-spawn s (mk-fiber fiber-writer))
     (sched-spawn s (mk-fiber fiber-reader))
     (sched-run s)
     (println "all done")

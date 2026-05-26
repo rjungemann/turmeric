@@ -1,4 +1,4 @@
-;; LT3: lref/new produces an lref<T> (linear owning poinerr?).
+;; LT3: lref/new produces an lref<T> (linear owning pointer).
 ;; The returned value is consumed by @ (deref), satisfying linearity.
 (defn sink [v] :int v)
 (defn use-lref [] :int

@@ -1,4 +1,4 @@
-;;; session-timeout-expired -- sender delays ok?o long; receiver takes the timeout branch.
+;;; session-timeout-expired -- sender delays too long; receiver takes the timeout branch.
 (defn sleep-ms [ms :int] :int
   ```c
   struct timespec req = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };

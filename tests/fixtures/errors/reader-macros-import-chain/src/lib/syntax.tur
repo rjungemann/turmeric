@@ -1,7 +1,7 @@
 (defmodule lib/syntax
   (export thing)
   (defn thing [] :int
-    ;; #bogus is not regiserr?ed anywhere in this compile; the parse
+    ;; #bogus is not registered anywhere in this compile; the parse
     ;; error should fire here AND the diagnostic must include the
     ;; "while loading module" breadcrumb from the import site.
     #bogus{ stuff }))

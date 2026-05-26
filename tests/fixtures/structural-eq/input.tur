@@ -1,21 +1,21 @@
 ;; Phase E1: structural equality tests
 ;; Tests standalone *-eq? functions for str, pair, option, result, vec, list, map.
-;; All helper functions are defined inline since stdlib files are not auok?-loaded
+;; All helper functions are defined inline since stdlib files are not auto-loaded
 ;; except hamt.tur and map.tur (which provide map-new, assoc, map-eq?).
 
 ;; ---------------------------------------------------------------------------
 ;; Test runner helpers
 ;; ---------------------------------------------------------------------------
 
-(defn regiserr?-test [name :cstr test-fn :ptr<void>] :int
+(defn register-test [name :cstr test-fn :ptr<void>] :int
   ```c
-  exerr?n int64_t tur_test_regiserr?(const char *name, void *test_fn);
-  return (int)tur_test_regiserr?((const char *)name, (void *)test_fn);
+  extern int64_t tur_test_register(const char *name, void *test_fn);
+  return (int)tur_test_register((const char *)name, (void *)test_fn);
   ```)
 
 (defn run-tests! [] :int
   ```c
-  exerr?n int64_t tur_test_run_all(void);
+  extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)
 
@@ -25,7 +25,7 @@
 
 (defn str-from-cstr [s :cstr] :int
   ```c
-  exerr?n size_t strlen(const char *);
+  extern size_t strlen(const char *);
   const char *cs = (const char *)s;
   size_t len = strlen(cs);
   struct { const char *p; size_t len; } *str = malloc(sizeof(*str));
@@ -36,7 +36,7 @@
 
 (defn str-eq? [s1 s2] :bool
   ```c
-  exerr?n int memcmp(const void *, const void *, size_t);
+  extern int memcmp(const void *, const void *, size_t);
   struct { const char *p; size_t len; } *a =
       (struct { const char *p; size_t len; } *)(intptr_t)s1;
   struct { const char *p; size_t len; } *b =
@@ -280,7 +280,7 @@
   return 1;
   ```)
 
-;; map: two empty maps are equal (uses auok?-loaded map-eq? from map.tur)
+;; map: two empty maps are equal (uses auto-loaded map-eq? from map.tur)
 (defn test-map-empty-eq [] :int
   ```c
   void *m1 = tur_hamt_new();
@@ -291,7 +291,7 @@
   return (c1 == 0 && c2 == 0) ? 1 : 0;
   ```)
 
-;; map: two maps with same poinerr? key and equal int values are equal
+;; map: two maps with same pointer key and equal int values are equal
 (defn test-map-same-entries [] :int
   ```c
   int64_t *k = malloc(8); *k = 42;
@@ -301,10 +301,10 @@
   void *m3 = tur_hamt_new();
   void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k), k, v);
   int result = 1;
-  if (tur_hamt_count(m2) != tur_hamt_count(m4)) { result = 0; gook? done; }
+  if (tur_hamt_count(m2) != tur_hamt_count(m4)) { result = 0; goto done; }
   {
       void *got = tur_hamt_get(m4, tur_hamt_hash_ptr(k), k);
-      if (!got || *(int64_t*)got != *v) { result = 0; gook? done; }
+      if (!got || *(int64_t*)got != *v) { result = 0; goto done; }
   }
   done:
   tur_hamt_free(m1); tur_hamt_free(m2);
@@ -337,102 +337,102 @@
 
 (defn main [] :int
   ;; --- str-eq? ---
-  (regiserr?-test "str-eq? equal strings"
+  (register-test "str-eq? equal strings"
     (fn []
       (if (str-eq? (str-from-cstr "hello") (str-from-cstr "hello")) 1 0)))
 
-  (regiserr?-test "str-eq? unequal strings"
+  (register-test "str-eq? unequal strings"
     (fn []
       (if (str-eq? (str-from-cstr "hello") (str-from-cstr "world")) 0 1)))
 
   ;; --- pair-eq? ---
-  (regiserr?-test "pair-eq? equal pairs"
+  (register-test "pair-eq? equal pairs"
     (fn []
       (if (pair-eq? (pair-new 1 2) (pair-new 1 2) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "pair-eq? unequal pairs"
+  (register-test "pair-eq? unequal pairs"
     (fn []
       (if (pair-eq? (pair-new 1 2) (pair-new 1 3) (fn [a b] (= a b))) 0 1)))
 
   ;; --- option-eq? ---
-  (regiserr?-test "option-eq? u-some equal"
+  (register-test "option-eq? u-some equal"
     (fn []
       (if (option-eq? (u-some 42) (u-some 42) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "option-eq? none equal"
+  (register-test "option-eq? none equal"
     (fn []
       (if (option-eq? (none) (none) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "option-eq? u-some vs none"
+  (register-test "option-eq? u-some vs none"
     (fn []
       (if (option-eq? (u-some 1) (none) (fn [a b] (= a b))) 0 1)))
 
-  (regiserr?-test "option-eq? u-some different values"
+  (register-test "option-eq? u-some different values"
     (fn []
       (if (option-eq? (u-some 1) (u-some 2) (fn [a b] (= a b))) 0 1)))
 
   ;; --- u-result-eq? ---
-  (regiserr?-test "u-result-eq? u-ok equal"
+  (register-test "u-result-eq? u-ok equal"
     (fn []
       (if (u-result-eq? (u-ok 1) (u-ok 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "u-result-eq? u-err equal"
+  (register-test "u-result-eq? u-err equal"
     (fn []
       (if (u-result-eq? (u-err 2) (u-err 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "u-result-eq? u-ok vs u-err"
+  (register-test "u-result-eq? u-ok vs u-err"
     (fn []
       (if (u-result-eq? (u-ok 1) (u-err 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
 
-  (regiserr?-test "u-result-eq? u-ok different values"
+  (register-test "u-result-eq? u-ok different values"
     (fn []
       (if (u-result-eq? (u-ok 1) (u-ok 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
 
   ;; --- vec-eq? ---
-  (regiserr?-test "vec-eq? empty vecs equal"
+  (register-test "vec-eq? empty vecs equal"
     (fn []
       (if (vec-eq? (vec-new) (vec-new) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "vec-eq? same integer elements"
+  (register-test "vec-eq? same integer elements"
     (fn []
       (if (vec-eq? (make-vec2 10 20) (make-vec2 10 20) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "vec-eq? different lengths"
+  (register-test "vec-eq? different lengths"
     (fn [] (test-vec-diff-len)))
 
-  (regiserr?-test "vec-eq? same length different elements"
+  (register-test "vec-eq? same length different elements"
     (fn []
       (if (vec-eq? (make-vec2 10 20) (make-vec2 10 99) (fn [a b] (= a b))) 0 1)))
 
   ;; --- list-eq? ---
-  (regiserr?-test "list-eq? nil lists equal"
+  (register-test "list-eq? nil lists equal"
     (fn []
       (if (list-eq? (nil-value) (nil-value) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "list-eq? same elements"
+  (register-test "list-eq? same elements"
     (fn []
       (if (list-eq? (make-list2 1 2) (make-list2 1 2) (fn [a b] (= a b))) 1 0)))
 
-  (regiserr?-test "list-eq? different lengths"
+  (register-test "list-eq? different lengths"
     (fn []
       (if (list-eq? (make-list2 1 2) (list-cons 1 (nil-value)) (fn [a b] (= a b))) 0 1)))
 
-  (regiserr?-test "list-eq? same length different elements"
+  (register-test "list-eq? same length different elements"
     (fn []
       (if (list-eq? (make-list2 1 2) (make-list2 1 9) (fn [a b] (= a b))) 0 1)))
 
-  ;; --- map-eq? (using ok?p-level helpers ok? avoid ptr<void> in closures) ---
-  (regiserr?-test "map-eq? empty maps equal"
+  ;; --- map-eq? (using top-level helpers to avoid ptr<void> in closures) ---
+  (register-test "map-eq? empty maps equal"
     (fn [] (test-map-empty-eq)))
 
-  (regiserr?-test "map-eq? same poinerr?-keyed entries"
+  (register-test "map-eq? same pointer-keyed entries"
     (fn [] (test-map-same-entries)))
 
-  (regiserr?-test "map-eq? different entry counts"
+  (register-test "map-eq? different entry counts"
     (fn [] (test-map-diff-count)))
 
-  ;; --- nested: vec of options with option-eq? comparaok?r ---
-  (regiserr?-test "vec-eq? with option-eq? comparaok?r"
+  ;; --- nested: vec of options with option-eq? comparator ---
+  (register-test "vec-eq? with option-eq? comparator"
     (fn [] (test-vec-nested-options)))
 
   (run-tests!))

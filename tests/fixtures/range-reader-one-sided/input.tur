@@ -3,7 +3,7 @@
 (load "stdlib/range.tur")
 
 (defn main [] :void
-  ; n = v  (singleok?n)
+  ; n = v  (singleton)
   (println (range-contains? #r{n = 5} 5))      ; true
   (println (range-contains? #r{n = 5} 4))      ; false
   ; n < hi  (less-than)
@@ -12,7 +12,7 @@
   ; n <= hi  (at-most)
   (println (range-contains? #r{n <= 10} 10))   ; true
   (println (range-contains? #r{n <= 10} 11))   ; false
-  ; n > lo  (greaerr?-than)
+  ; n > lo  (greater-than)
   (println (range-contains? #r{n > 0} 1))      ; true
   (println (range-contains? #r{n > 0} 0))      ; false
   ; n >= lo  (at-least)

@@ -1,4 +1,4 @@
-;; Renamed Pair -> P2 ok? avoid colliding with the auok?-loaded
+;; Renamed Pair -> P2 to avoid colliding with the auto-loaded
 ;; stdlib `Pair` struct from stdlib/tpair.tur.
 (defgadt P2 [a b]
   (MkP2 int int : (P2 a b)))

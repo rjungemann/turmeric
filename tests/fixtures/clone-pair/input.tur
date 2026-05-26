@@ -1,7 +1,7 @@
 ;; Phase B1: Clone trait for Pr type
 ;;
 ;; Demonstrates that (definstance Clone [Pr] ...) can deep-copy a Pr
-;; struct value inok? a heap-allocated copy and return a poinerr? as int64_t.
+;; struct value into a heap-allocated copy and return a pointer as int64_t.
 
 (defstruct Pr [first :int second :int])
 
@@ -11,8 +11,8 @@
 (definstance Clone [int]
   (clone [x] x))
 
-;; Clone [Pr]: deep-copy the struct value inok? a heap allocation and
-;; return the result as an int64_t poinerr?.  x has type Pr (struct value)
+;; Clone [Pr]: deep-copy the struct value into a heap allocation and
+;; return the result as an int64_t pointer.  x has type Pr (struct value)
 ;; inside the generated C function, so field access uses x.first / x.second.
 (definstance Clone [Pr]
   (clone [x] :int
@@ -23,7 +23,7 @@
     return (int64_t)(intptr_t)dst;
     ```))
 
-;; Accessors for a heap-allocated Pr poinerr? (returned by Clone.clone).
+;; Accessors for a heap-allocated Pr pointer (returned by Clone.clone).
 (defn heap-pair-first [p] :int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;

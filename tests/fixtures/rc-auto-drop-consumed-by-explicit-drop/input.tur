@@ -1,10 +1,10 @@
 ;; Phase 9 Prerequisite 2: RC Binding-Consumption Detection.
 ;; When an rc binding is explicitly dropped via (rc/drop x), the binding
-;; is consumed and no auok?-drop defer should be injected (which would
+;; is consumed and no auto-drop defer should be injected (which would
 ;; cause a double-free).
 ;;
 ;; Expected: one rc_strong_decrement for the explicit (rc/drop x) call,
-;; no additional auok?-drop defer injected for x.
+;; no additional auto-drop defer injected for x.
 
 (defn main [] :int
   (let [x (rc/of 200)]

@@ -1,4 +1,4 @@
-;; Phase R1: result combinaok?rs — map, flat-map, map-err, or, or-else, expect
+;; Phase R1: result combinators — map, flat-map, map-err, or, or-else, expect
 
 (defn u-ok [x :int] :ptr<void>
   ```c

@@ -1,10 +1,10 @@
 ;; SS4: session-delegated-rpc -- delegated session integration test.
 ;;
-;; Demonstrates that a session channel can be passed ok? a helper function
+;; Demonstrates that a session channel can be passed to a helper function
 ;; (do-send-recv) that takes ownership of the linear channel and completes
-;; the prook?col.  The caller loses the binding aferr? delegation.
+;; the protocol.  The caller loses the binding after delegation.
 ;;
-;; Prook?col (client view): Send int (Recv int Close)
+;; Protocol (client view): Send int (Recv int Close)
 ;;
 ;; Expected output: 99
 
@@ -30,7 +30,7 @@
       (close ch)
       resp)))
 
-;; request: delegate the entire send+recv ok? do-send-recv.
+;; request: delegate the entire send+recv to do-send-recv.
 (defn request [^linear ch :(Session (Send int (Recv int Close))) val :int] :int
   (do-send-recv ch val))
 

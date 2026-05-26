@@ -1,12 +1,12 @@
 ;; ET3-F2: Two handlers for different effects composed.
 (defeffect Log [msg :cstr] :nil)
-(defeffect Counerr? [] :int)
+(defeffect Counter [] :int)
 (defn main [] :int
   (let [result
     (handle
       (handle
-        (do (perform (Log "tick")) (+ (perform (Counerr?)) 1))
-        (Counerr? [] k) (resume k 41))
+        (do (perform (Log "tick")) (+ (perform (Counter)) 1))
+        (Counter [] k) (resume k 41))
       (Log [msg] k) (do (println msg) (resume k nil)))]
     (println result)
     0))

@@ -1,4 +1,4 @@
-;; Negative test: ok?o few args ok? a variadic macro (missing required fixed args)
+;; Negative test: too few args to a variadic macro (missing required fixed args)
 (defmacro needs-name [name & rest]
   (do (println name) ~@rest))
 

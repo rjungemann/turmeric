@@ -1,11 +1,11 @@
-PASS ok?enize-basic
-PASS ok?enize-defn
-PASS ok?enize-string
-PASS ok?enize-comment
+PASS tokenize-basic
+PASS tokenize-defn
+PASS tokenize-string
+PASS tokenize-comment
 PASS compile-number
 PASS compile-float
-PASS compile-aok?m-nil
-PASS compile-aok?m-true
+PASS compile-atom-nil
+PASS compile-atom-true
 PASS compile-string
 PASS compile-symbol
 PASS compile-symbol-pred
@@ -19,7 +19,7 @@ PASS compile-call-nested
 PASS compile-dot-access
 PASS compile-dot-call
 PASS compile-dotdot
-PASS compile-vecok?r
+PASS compile-vector
 PASS compile-fn
 PASS compile-fn-noparams
 PASS compile-var

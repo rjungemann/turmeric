@@ -1,4 +1,4 @@
-; P4: Transient isolation — original map unchanged aferr? transient mutations
+; P4: Transient isolation — original map unchanged after transient mutations
 
 (defn alloc-str [s :cstr] :ptr<void>
   ```c
@@ -26,8 +26,8 @@
               (println (hamt/count m1))
               ; m2 should have 2 entries
               (println (hamt/count m2))
-              ; k1 is the same poinerr? used in build-base hamt/set via hash
-              ; Since the key sok?red is alloc-str inside build-base, use hash lookup
+              ; k1 is the same pointer used in build-base hamt/set via hash
+              ; Since the key stored is alloc-str inside build-base, use hash lookup
               ; We just verify counts are correct for isolation
               (println (hamt/has? m2 (hamt/hash-str "key2") k2))
               0)))))))

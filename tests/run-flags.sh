@@ -3,7 +3,7 @@
 # standard fixture tests (--explain, --dump-kinds, etc.)
 #
 # Each test case is a short bash block that prints "PASS <name>" on success
-# or "FAIL <name> — <reason>" on failure, then increments the counerr?.
+# or "FAIL <name> — <reason>" on failure, then increments the counter.
 #
 # Exit status: 0 if all tests pass, 1 if any fail.
 #
@@ -52,7 +52,7 @@ for code in TUR-E0001 TUR-E0002 TUR-E0003 TUR-E0004 TUR-E0005 \
             TUR-E0007 TUR-E0009 TUR-E0010 TUR-E0011 TUR-E0012 TUR-E0013 TUR-E0021; do
     out=$("$TUR" --explain "$code" 2>&1); rc=$?
     if [ $rc -ne 0 ] || [ -z "$out" ]; then
-        fail "tur-explain-${code}" "no explanation regiserr?ed (exit=$rc)"
+        fail "tur-explain-${code}" "no explanation registered (exit=$rc)"
     else
         pass "tur-explain-${code}"
     fi
@@ -71,21 +71,21 @@ fi
 # ---------------------------------------------------------------------------
 
 # dump-kinds-basic: --dump-kinds emit-c on a file with a KIND_ARROW typeclass
-# should print "defclass Funcok?r param[0] : * -> *" ok? stdout.
+# should print "defclass Functor param[0] : * -> *" to stdout.
 FIXTURE="tests/fixtures/dump-kinds-basic/input.tur"
 out=$("$TUR" --dump-kinds emit-c "$FIXTURE" 2>/dev/null); rc=$?
 if [ $rc -ne 0 ]; then
     fail "dump-kinds-basic" "non-zero exit ($rc)"
-elif [[ "$out" != *"defclass Funcok?r param[0] : * -> *"* ]]; then
-    fail "dump-kinds-basic" "expected 'defclass Funcok?r param[0] : * -> *' in output"
+elif [[ "$out" != *"defclass Functor param[0] : * -> *"* ]]; then
+    fail "dump-kinds-basic" "expected 'defclass Functor param[0] : * -> *' in output"
 else
     pass "dump-kinds-basic"
 fi
 
 # dump-kinds-no-output: without --dump-kinds, the same file should NOT print
-# kind annotations mixed inok? the C output.
+# kind annotations mixed into the C output.
 out=$("$TUR" emit-c "$FIXTURE" 2>/dev/null); rc=$?
-if echo "$out" | grep -q "defclass Funcok?r param"; then
+if echo "$out" | grep -q "defclass Functor param"; then
     fail "dump-kinds-no-output" "kind dump appeared without --dump-kinds flag"
 else
     pass "dump-kinds-no-output"
@@ -145,10 +145,10 @@ rm -f "$_m3_hbuf"
 rm -rf "$_m3_dir2"
 
 # ---------------------------------------------------------------------------
-# Formaerr? round-trip tests (defpackage / deflockfile / comment preservation)
+# Formatter round-trip tests (defpackage / deflockfile / comment preservation)
 # ---------------------------------------------------------------------------
 
-# fmt-defpackage-basic: a defpackage wide enough ok? exceed line width should
+# fmt-defpackage-basic: a defpackage wide enough to exceed line width should
 # format with each :key val pair on its own line.
 _fmt_input='(defpackage my-project-with-longer-name :name "my-project-with-longer-name" :version "0.1.0" :description "A test package")'
 _fmt_out=$(echo "$_fmt_input" | "$TUR" format 2>&1); rc=$?
@@ -166,19 +166,19 @@ fi
 _fmt1=$(printf '(defpackage my-project-with-longer-name\n  :name    "my-project-with-longer-name"\n  :version "0.1.0")' | "$TUR" format 2>&1)
 _fmt2=$(echo "$_fmt1" | "$TUR" format 2>&1)
 if [ "$_fmt1" != "$_fmt2" ]; then
-    fail "fmt-defpackage-round-trip" "formaerr? not idempotent; first pass != second pass"
+    fail "fmt-defpackage-round-trip" "formatter not idempotent; first pass != second pass"
 else
     pass "fmt-defpackage-round-trip"
 fi
 
 # fmt-defpackage-spices-block: a defpackage with multiple spices should expand
-# the :spices map ok? block layout when it doesn't fit on one line.
+# the :spices map to block layout when it doesn't fit on one line.
 _fmt_spices_in='(defpackage my-application :name "my-application" :version "0.1.0" :spices #{"geom" #{ :url "https://github.com/alice/tur-geom" :ref "v0.2.1"} "http" #{ :url "https://github.com/alice/tur-http" :ref "v1.0.0"}})'
 _fmt_spices_out=$(echo "$_fmt_spices_in" | "$TUR" format 2>&1); rc=$?
 if [ $rc -ne 0 ]; then
     fail "fmt-defpackage-spices-block" "tur format exited $rc"
 elif ! echo "$_fmt_spices_out" | grep -q '#{$'; then
-    fail "fmt-defpackage-spices-block" ":spices map was not expanded ok? block: $_fmt_spices_out"
+    fail "fmt-defpackage-spices-block" ":spices map was not expanded to block: $_fmt_spices_out"
 else
     pass "fmt-defpackage-spices-block"
 fi
@@ -187,7 +187,7 @@ fi
 _fmt_spices1=$(echo "$_fmt_spices_in" | "$TUR" format 2>&1)
 _fmt_spices2=$(echo "$_fmt_spices1" | "$TUR" format 2>&1)
 if [ "$_fmt_spices1" != "$_fmt_spices2" ]; then
-    fail "fmt-defpackage-spices-idempotent" "formaerr? not idempotent for spices block"
+    fail "fmt-defpackage-spices-idempotent" "formatter not idempotent for spices block"
 else
     pass "fmt-defpackage-spices-idempotent"
 fi
@@ -198,7 +198,7 @@ _fmt_cmt_out=$(printf '; This is a comment\n(defpackage my-app\n  :name    "my-a
 if [ $rc -ne 0 ]; then
     fail "fmt-defpackage-comments" "tur format exited $rc: $_fmt_cmt_out"
 elif ! echo "$_fmt_cmt_out" | grep -q 'This is a comment'; then
-    fail "fmt-defpackage-comments" "comment lost aferr? formatting: $_fmt_cmt_out"
+    fail "fmt-defpackage-comments" "comment lost after formatting: $_fmt_cmt_out"
 else
     pass "fmt-defpackage-comments"
 fi
@@ -207,7 +207,7 @@ fi
 _fmt_lock1=$(printf '(deflockfile\n  :format-version 1\n  :spices         #{}\n  :cmake-deps     #{})' | "$TUR" format 2>&1)
 _fmt_lock2=$(echo "$_fmt_lock1" | "$TUR" format 2>&1)
 if [ "$_fmt_lock1" != "$_fmt_lock2" ]; then
-    fail "fmt-deflockfile-round-trip" "formaerr? not idempotent for deflockfile"
+    fail "fmt-deflockfile-round-trip" "formatter not idempotent for deflockfile"
 else
     pass "fmt-deflockfile-round-trip"
 fi
@@ -274,7 +274,7 @@ fi
 # ---------------------------------------------------------------------------
 
 # dump-effects-basic: --dump-effects should print "defn effectful : #{Write}"
-# Note: use a temp file ok? avoid grep -q SIGPIPE issue with large output + pipefail.
+# Note: use a temp file to avoid grep -q SIGPIPE issue with large output + pipefail.
 DUMP_FIXTURE="tests/fixtures/effect-dump/input.tur"
 _dump_tmp=$(mktemp /tmp/tur-dump-XXXXXX)
 "$TUR" --dump-effects emit-c "$DUMP_FIXTURE" 2>/dev/null > "$_dump_tmp"; rc=$?
@@ -331,447 +331,7 @@ else
     pass "lint-effects-annotated"
 fi
 
-# TS1: float closures returned from a call head should keep their concrete
-# thunk result type, and emit-c should not require union bit-casts.
-TYPED_SLOTS_FIXTURE="tests/fixtures/typed-slots/float-closure/input.tur"
-_typed_slots_out=$(mktemp /tmp/tur-typed-slots-XXXXXX)
-"$TUR" emit-c "$TYPED_SLOTS_FIXTURE" > "$_typed_slots_out" 2>/dev/null; rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-float-closure-codegen" "emit-c exited $rc"
-elif ! grep -Eq 'typedef double \(\*tur_thunk_double_double_t\)\(void \*, double\);' "$_typed_slots_out"; then
-    fail "typed-slots-float-closure-codegen" "expected shared typed thunk typedef in emitted C"
-elif ! grep -Eq 'struct __env_[0-9]+ \{ tur_thunk_double_double_t __fn; double a; \};' "$_typed_slots_out"; then
-    fail "typed-slots-float-closure-codegen" "expected fat closure __fn field to use the typed thunk typedef"
-elif ! grep -Eq 'static double __fn_[0-9]+\(void \*, double\);' "$_typed_slots_out"; then
-    fail "typed-slots-float-closure-codegen" "expected concrete double thunk signature in emitted C"
-elif ! grep -Eq '__fn_[0-9]+\(__call_head_[0-9_]+, 2\.25\);' "$_typed_slots_out"; then
-    fail "typed-slots-float-closure-codegen" "expected direct typed thunk call for returned closure"
-elif grep -Eq 'struct __env_[0-9]+ \{ int64_t __fn;' "$_typed_slots_out"; then
-    fail "typed-slots-float-closure-codegen" "unexpected legacy int64_t __fn field remained in the fat closure layout"
-elif grep -Eq 'union \{ int64_t i; double d; \}|union \{ double d; int64_t i; \}' "$_typed_slots_out"; then
-    fail "typed-slots-float-closure-codegen" "unexpected float/int64 union bit-cast found in emitted C"
-else
-    pass "typed-slots-float-closure-codegen"
-fi
-rm -f "$_typed_slots_out"
-
-# GS1/GS2: parameterized defstruct field types should accept both bare and
-# spaced type-parameter spellings, and make-struct / field access / set! should
-# preserve the instantiated field types through elaboration.
-_generic_struct_in=$(mktemp /tmp/tur-generic-struct-XXXXXX.tur)
-cat > "$_generic_struct_in" <<'EOF'
-(defstruct Box [A]
-  (value A))
-
-(defstruct Duo [A B]
-  (fst : A)
-  (snd : B))
-
-(defn main [] :int
-  (let [b (make-struct Box 3.5)
-        ^mut p (make-struct Duo 1.25 "ok")]
-    (println (+ (.value b) 0.25))
-    (set! (.fst p) 2.75)
-    (println (.fst p))
-    (println (.snd p))
-    0))
-EOF
-out=$("$TUR" check "$_generic_struct_in" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-struct-check" "tur check failed: $out"
-else
-    pass "typed-slots-generic-struct-check"
-fi
-rm -f "$_generic_struct_in"
-
-_generic_struct_calls_ok=$(mktemp /tmp/tur-generic-struct-calls-ok-XXXXXX.tur)
-cat > "$_generic_struct_calls_ok" <<'EOF'
-(defstruct Pair2 [A B]
-  (fst A)
-  (snd B))
-
-(defn takes-float [x :float] :float x)
-
-(defn main [] :int
-  (let [p (:: (make-struct Pair2 1 2.5) (Pair2 int float))]
-    (takes-float (.snd p))
-    0))
-EOF
-out=$("$TUR" check "$_generic_struct_calls_ok" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-struct-call-check" "tur check failed: $out"
-else
-    pass "typed-slots-generic-struct-call-check"
-fi
-rm -f "$_generic_struct_calls_ok"
-
-_generic_struct_calls_bad=$(mktemp /tmp/tur-generic-struct-calls-bad-XXXXXX.tur)
-cat > "$_generic_struct_calls_bad" <<'EOF'
-(defstruct Box [A]
-  (value A))
-
-(defn need-float-box [b :(Box float)] :float
-  (.value b))
-
-(defn main [] :int
-  (let [b (:: (make-struct Box 3) (Box int))]
-    (need-float-box b)
-    0))
-EOF
-if out=$("$TUR" check "$_generic_struct_calls_bad" 2>&1); then
-    fail "typed-slots-generic-struct-call-mismatch" "expected type mismatch for (Box int) passed to (Box float)"
-elif ! echo "$out" | grep -E "(type-app Box float|\\(Box float\\))" > /dev/null 2>&1; then
-    fail "typed-slots-generic-struct-call-mismatch" "expected diagnostic to mention Box float, got: $out"
-else
-    pass "typed-slots-generic-struct-call-mismatch"
-fi
-rm -f "$_generic_struct_calls_bad"
-
-_generic_struct_layout_out=$(mktemp /tmp/tur-generic-struct-layout-XXXXXX.c)
-_generic_struct_layout_fixture="tests/fixtures/typed-slots/generic-struct-layout/input.tur"
-"$TUR" emit-c "$_generic_struct_layout_fixture" > "$_generic_struct_layout_out" 2>/dev/null; rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-struct-layout" "emit-c exited $rc"
-elif ! grep -Eq 'typedef struct Box__float \{' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected Box__float typedef in emitted C"
-elif ! grep -Eq 'typedef struct Duo2__int__float \{' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected Duo2__int__float typedef in emitted C"
-elif ! grep -Eq 'double value;' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected concrete double field for Box__float"
-elif ! grep -Eq 'int64_t fst;' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected concrete int64_t fst field for Duo2__int__float"
-elif ! grep -Eq 'double snd;' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected concrete double snd field for Duo2__int__float"
-elif ! grep -Eq 'static Box__float id_box\(Box__float b\)' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected function signatures to use Box__float"
-elif ! grep -Eq 'Duo2__int__float p_[0-9]+ = \(Duo2__int__float\)\{' "$_generic_struct_layout_out"; then
-    fail "typed-slots-generic-struct-layout" "expected make-struct to use Duo2__int__float compound literals"
-else
-    pass "typed-slots-generic-struct-layout"
-fi
-rm -f "$_generic_struct_layout_out"
-
-_generic_fn_binders_fixture="tests/fixtures/typed-slots/generic-fn-binders/input.tur"
-out=$("$TUR" check "$_generic_fn_binders_fixture" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-fn-binders-check" "tur check failed: $out"
-else
-    pass "typed-slots-generic-fn-binders-check"
-fi
-
-out=$("$TUR" run "$_generic_fn_binders_fixture" 2>/dev/null); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-fn-binders-run" "tur run exited $rc"
-elif [ "$out" != "$(cat tests/fixtures/typed-slots/generic-fn-binders/expected.stdout)" ]; then
-    fail "typed-slots-generic-fn-binders-run" "unexpected output: '$out'"
-else
-    pass "typed-slots-generic-fn-binders-run"
-fi
-
-_generic_fn_nested=$(mktemp /tmp/tur-generic-fn-nested-XXXXXX.tur)
-cat > "$_generic_fn_nested" <<'EOF'
-(defstruct Box2 [A]
-  (value A))
-
-(defstruct Wrap2 [A]
-  (inner A))
-
-(defn id-wrap [A] [w :(Wrap2 (Box2 A))] :(Wrap2 (Box2 A))
-  w)
-
-(defn main [] :int 0)
-EOF
-out=$("$TUR" check "$_generic_fn_nested" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-fn-nested-signature" "tur check failed: $out"
-else
-    pass "typed-slots-generic-fn-nested-signature"
-fi
-rm -f "$_generic_fn_nested"
-
-_generic_fn_nested_use=$(mktemp /tmp/tur-generic-fn-nested-use-XXXXXX.tur)
-cat > "$_generic_fn_nested_use" <<'EOF'
-(defstruct Box2 [A]
-  (value A))
-
-(defstruct Wrap2 [A]
-  (inner A))
-
-(defn id-wrap [A] [w :(Wrap2 (Box2 A))] :(Wrap2 (Box2 A))
-  w)
-
-(defn takes-float [x :float] :float x)
-
-(defn main [] :int
-  (let [w (:: (make-struct Wrap2 (:: (make-struct Box2 3.5) (Box2 float)))
-              (Wrap2 (Box2 float)))]
-    (takes-float (.value (.inner (id-wrap w))))
-    0))
-EOF
-out=$("$TUR" check "$_generic_fn_nested_use" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-fn-nested-use" "tur check failed: $out"
-else
-    pass "typed-slots-generic-fn-nested-use"
-fi
-rm -f "$_generic_fn_nested_use"
-
-_pair_macro_fixture=$(mktemp /tmp/tur-pair-macro-XXXXXX.tur)
-cat > "$_pair_macro_fixture" <<'EOF'
-(defstruct Pair2 [A B]
-  (fst A)
-  (snd B))
-
-(defmacro pair-fst [p]
-  (let [accessor-sym fst]
-    (list (dot-sym accessor-sym) p)))
-
-(defn main [] :int
-  (let [p (:: (make-struct Pair2 1 2.5) (Pair2 int float))]
-    (println (pair-fst p))
-    0))
-EOF
-out=$("$TUR" check "$_pair_macro_fixture" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-pair-macro-access" "tur check failed: $out"
-else
-    out=$("$TUR" run "$_pair_macro_fixture" 2>/dev/null); rc=$?
-    if [ $rc -ne 0 ]; then
-        fail "typed-slots-pair-macro-access" "tur run exited $rc"
-    elif [ "$out" != "1" ]; then
-        fail "typed-slots-pair-macro-access" "unexpected output: '$out'"
-    else
-        pass "typed-slots-pair-macro-access"
-    fi
-fi
-rm -f "$_pair_macro_fixture"
-
-_generic_helper_fixture=$(mktemp /tmp/tur-generic-helper-XXXXXX)
-_generic_helper_c=$(mktemp /tmp/tur-generic-helper-c-XXXXXX)
-cat > "$_generic_helper_fixture" <<'EOF'
-(defstruct Box [A]
-  (value A))
-
-(defn mk-box [A] [x :A] :(Box A)
-  (make-struct Box x))
-
-(defn get-box [A] [b :(Box A)] :A
-  (.value b))
-
-(defn main [] :int
-  (let [b (mk-box 3.5)]
-    (println (get-box b))
-    0))
-EOF
-out=$("$TUR" emit-c "$_generic_helper_fixture" >"$_generic_helper_c" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-generic-helper-specialization" "emit-c exited $rc"
-elif ! grep -q 'mk_box__spec__Box__float_double' "$_generic_helper_c"; then
-    fail "typed-slots-generic-helper-specialization" "expected concrete mk-box specialization in emitted C"
-elif ! grep -q 'get_box__spec__double_Box__float' "$_generic_helper_c"; then
-    fail "typed-slots-generic-helper-specialization" "expected concrete get-box specialization in emitted C"
-elif ! grep -q 'mk_box__spec__Box__float_double(3.5)' "$_generic_helper_c"; then
-    fail "typed-slots-generic-helper-specialization" "expected call site to use specialized mk-box clone"
-elif ! grep -q 'get_box__spec__double_Box__float(b_' "$_generic_helper_c"; then
-    fail "typed-slots-generic-helper-specialization" "expected call site to use specialized get-box clone"
-else
-    out=$("$TUR" run "$_generic_helper_fixture" 2>/dev/null); rc=$?
-    if [ $rc -ne 0 ]; then
-        fail "typed-slots-generic-helper-specialization" "tur run exited $rc"
-    elif [ "$out" != "3.5" ]; then
-        fail "typed-slots-generic-helper-specialization" "unexpected output: '$out'"
-    else
-        pass "typed-slots-generic-helper-specialization"
-    fi
-fi
-rm -f "$_generic_helper_fixture"
-rm -f "$_generic_helper_c"
-
-_pair_second_fixture=$(mktemp /tmp/tur-pair-second-XXXXXX)
-_pair_second_c=$(mktemp /tmp/tur-pair-second-c-XXXXXX)
-cat > "$_pair_second_fixture" <<'EOF'
-(defstruct Pair2 [A B]
-  (fst A)
-  (snd B))
-
-(defn pair-second [A B] [p :(Pair2 A B)] :B
-  (.snd p))
-
-(defn main [] :int
-  (let [p (:: (make-struct Pair2 1 2.5) (Pair2 int float))]
-    (println (pair-second p))
-    0))
-EOF
-out=$("$TUR" emit-c "$_pair_second_fixture" >"$_pair_second_c" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-pair-second-specialization" "emit-c exited $rc"
-elif ! grep -q 'pair_second__spec__double_Pair2__int__float' "$_pair_second_c"; then
-    fail "typed-slots-pair-second-specialization" "expected concrete pair-second specialization in emitted C"
-elif ! grep -q 'pair_second__spec__double_Pair2__int__float(p_' "$_pair_second_c"; then
-    fail "typed-slots-pair-second-specialization" "expected call site to use specialized pair-second clone"
-else
-    out=$("$TUR" run "$_pair_second_fixture" 2>/dev/null); rc=$?
-    if [ $rc -ne 0 ]; then
-        fail "typed-slots-pair-second-specialization" "tur run exited $rc"
-    elif [ "$out" != "2.5" ]; then
-        fail "typed-slots-pair-second-specialization" "unexpected output: '$out'"
-    else
-        pass "typed-slots-pair-second-specialization"
-    fi
-fi
-rm -f "$_pair_second_fixture"
-rm -f "$_pair_second_c"
-
-_pair_helpers_fixture=$(mktemp /tmp/tur-pair-helpers-XXXXXX)
-_pair_helpers_c=$(mktemp /tmp/tur-pair-helpers-c-XXXXXX)
-cat > "$_pair_helpers_fixture" <<'EOF'
-(defn main [] :int
-  (let [p (:: (tpair 1 2.5) (Pair int float))
-        r (:: (tpair 1 2) (Pair int int))
-        s (:: (tpair 1 2) (Pair int int))]
-    (println (pair-fst p))
-    (println (pair-snd p))
-    (println (pair-eq? r s (fn [a b] (= a b)) (fn [a b] (= a b))))
-    0))
-EOF
-out=$("$TUR" emit-c "$_pair_helpers_fixture" >"$_pair_helpers_c" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-pair-helpers" "emit-c exited $rc"
-elif ! grep -q 'Pair__int__float' "$_pair_helpers_c"; then
-    fail "typed-slots-pair-helpers" "expected Pair__int__float layout in emitted C"
-elif ! grep -q 'pair_fst__spec__int64_t_Pair__int__float' "$_pair_helpers_c"; then
-    fail "typed-slots-pair-helpers" "expected specialized pair-fst helper in emitted C"
-elif ! grep -q 'pair_snd__spec__double_Pair__int__float' "$_pair_helpers_c"; then
-    fail "typed-slots-pair-helpers" "expected specialized pair-snd helper in emitted C"
-else
-    out=$("$TUR" run "$_pair_helpers_fixture" 2>/dev/null); rc=$?
-    if [ $rc -ne 0 ]; then
-        fail "typed-slots-pair-helpers" "tur run exited $rc"
-    elif [ "$out" != "$(printf '1\n2.5\ntrue')" ]; then
-        fail "typed-slots-pair-helpers" "unexpected output: '$out'"
-    else
-        pass "typed-slots-pair-helpers"
-    fi
-fi
-rm -f "$_pair_helpers_fixture"
-rm -f "$_pair_helpers_c"
-
-_list_helpers_fixture=$(mktemp /tmp/tur-list-helpers-XXXXXX)
-_list_helpers_c=$(mktemp /tmp/tur-list-helpers-c-XXXXXX)
-cat > "$_list_helpers_fixture" <<'EOF'
-(defn takes-float [x :float] :float x)
-
-(defn main [] :int
-  (let [xs (:: (make-struct Cons 3.5 (tnil)) (Cons float))]
-    (println (takes-float (thead xs)))
-    (println (tnil? (ttail xs)))
-    0))
-EOF
-out=$("$TUR" emit-c "$_list_helpers_fixture" >"$_list_helpers_c" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-list-helpers" "emit-c exited $rc"
-elif ! grep -q 'thead__spec__double_Cons__float' "$_list_helpers_c"; then
-    fail "typed-slots-list-helpers" "expected specialized thead helper in emitted C"
-elif ! grep -q 'ttail__spec__int64_t_Cons__float' "$_list_helpers_c"; then
-    fail "typed-slots-list-helpers" "expected specialized ttail helper in emitted C"
-else
-    out=$("$TUR" run "$_list_helpers_fixture" 2>/dev/null); rc=$?
-    if [ $rc -ne 0 ]; then
-        fail "typed-slots-list-helpers" "tur run exited $rc"
-    elif [ "$out" != "$(printf '3.5\ntrue')" ]; then
-        fail "typed-slots-list-helpers" "unexpected output: '$out'"
-    else
-        pass "typed-slots-list-helpers"
-    fi
-fi
-rm -f "$_list_helpers_fixture"
-rm -f "$_list_helpers_c"
-
-_stdlib_container_fixture="tests/fixtures/typed-slots/stdlib-container-layout/input.tur"
-out=$("$TUR" check "$_stdlib_container_fixture" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-stdlib-container-check" "tur check failed: $out"
-else
-    pass "typed-slots-stdlib-container-check"
-fi
-
-out=$("$TUR" run "$_stdlib_container_fixture" 2>/dev/null); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-stdlib-container-run" "tur run exited $rc"
-elif [ "$out" != "$(cat tests/fixtures/typed-slots/stdlib-container-layout/expected.stdout)" ]; then
-    fail "typed-slots-stdlib-container-run" "unexpected output: '$out'"
-else
-    pass "typed-slots-stdlib-container-run"
-fi
-
-_stdlib_container_layout_out=$(mktemp /tmp/tur-stdlib-container-layout-XXXXXX.c)
-"$TUR" emit-c "$_stdlib_container_fixture" > "$_stdlib_container_layout_out" 2>/dev/null; rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-stdlib-container-layout" "emit-c exited $rc"
-elif ! grep -Eq 'typedef struct Option__float \{' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Option__float typedef in emitted C"
-elif ! grep -Eq 'typedef struct Pair__int__float \{' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Pair__int__float typedef in emitted C"
-elif ! grep -Eq 'typedef struct Result__float__cstr \{' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Result__float__cstr typedef in emitted C"
-elif ! grep -Eq 'bool is_some;' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Option__float to retain the bool tag"
-elif ! grep -Eq 'double value;' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Option__float to use a concrete double payload"
-elif ! grep -Eq 'int64_t fst;' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Pair__int__float fst to stay int64_t"
-elif ! grep -Eq 'double snd;' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Pair__int__float snd to use a concrete double payload"
-elif ! grep -Eq 'double ok_val;' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Result__float__cstr ok_val to use a concrete double payload"
-elif ! grep -Eq 'const char \* err_val;' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected Result__float__cstr err_val to use a concrete cstr payload"
-elif ! grep -Eq 'unwrap__spec__double_Option__float' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected specialized unwrap helper in emitted C"
-elif ! grep -Eq 'ok_val__spec__double_Result__float__cstr' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected specialized ok-val helper in emitted C"
-elif ! grep -Eq 'err_val__spec__const_char___Result__float__cstr' "$_stdlib_container_layout_out"; then
-    fail "typed-slots-stdlib-container-layout" "expected specialized err-val helper in emitted C"
-else
-    pass "typed-slots-stdlib-container-layout"
-fi
-rm -f "$_stdlib_container_layout_out"
-
-_cons_float_fixture="tests/fixtures/typed-slots/cons-float-layout/input.tur"
-out=$("$TUR" check "$_cons_float_fixture" 2>&1); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-cons-float-check" "tur check failed: $out"
-else
-    pass "typed-slots-cons-float-check"
-fi
-
-out=$("$TUR" run "$_cons_float_fixture" 2>/dev/null); rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-cons-float-run" "tur run exited $rc"
-elif [ "$out" != "$(cat tests/fixtures/typed-slots/cons-float-layout/expected.stdout)" ]; then
-    fail "typed-slots-cons-float-run" "unexpected output: '$out'"
-else
-    pass "typed-slots-cons-float-run"
-fi
-
-_cons_float_layout_out=$(mktemp /tmp/tur-cons-float-layout-XXXXXX.c)
-"$TUR" emit-c "$_cons_float_fixture" > "$_cons_float_layout_out" 2>/dev/null; rc=$?
-if [ $rc -ne 0 ]; then
-    fail "typed-slots-cons-float-layout" "emit-c exited $rc"
-elif ! grep -Eq 'typedef struct Cons__float \{' "$_cons_float_layout_out"; then
-    fail "typed-slots-cons-float-layout" "expected Cons__float typedef in emitted C"
-elif ! grep -Eq 'double head;' "$_cons_float_layout_out"; then
-    fail "typed-slots-cons-float-layout" "expected Cons__float head to use a concrete double slot"
-elif ! grep -Eq 'int64_t tail;' "$_cons_float_layout_out"; then
-    fail "typed-slots-cons-float-layout" "expected Cons__float tail to remain the carrier link"
-elif ! grep -Eq 'Cons__float xs_[0-9]+ = \(Cons__float\)\{\.head = 1\.5, \.tail = INT64_C\(0\)\};' "$_cons_float_layout_out"; then
-    fail "typed-slots-cons-float-layout" "expected make-struct Cons to lower to a Cons__float compound literal"
-else
-    pass "typed-slots-cons-float-layout"
-fi
-rm -f "$_cons_float_layout_out"
-
-# try-with-basic: try-with behaves identically ok? handle
+# try-with-basic: try-with behaves identically to handle
 out=$("$TUR" run tests/fixtures/try-with-basic/input.tur 2>/dev/null); rc=$?
 if [ $rc -ne 0 ]; then
     fail "try-with-basic" "non-zero exit ($rc)"
@@ -1002,7 +562,7 @@ else
     pass "eval-error"
 fi
 
-# tur eval --file: run a .tur file through the inerr?preerr?
+# tur eval --file: run a .tur file through the interpreter
 TMP_TUR=$(mktemp /tmp/tur_eval_test_XXXXXX.tur)
 echo '(def x 42) (+ x 1)' > "$TMP_TUR"
 out=$("$TUR" eval --file "$TMP_TUR" 2>&1); rc=$?

@@ -1,12 +1,12 @@
-; Phase EX2-2: AST_OPEN must accept a phanok?m type-variable binder.
+; Phase EX2-2: AST_OPEN must accept a phantom type-variable binder.
 ;
-; When the existential's body is (Cok?r i1 .. in) the index variables are
-; phanok?m -- the runtime payload is the Cok?r itself.  Opening such an
-; existential should bind v ok? the underlying carrier type (here SizedVec),
+; When the existential's body is (Ctor i1 .. in) the index variables are
+; phantom -- the runtime payload is the Ctor itself.  Opening such an
+; existential should bind v to the underlying carrier type (here SizedVec),
 ; so that callers expecting :SizedVec accept v unchanged.
 ;
 ; The bound type variable [n] has no runtime binding; only the value
-; variable [v] is maerr?ialised at runtime.
+; variable [v] is materialised at runtime.
 (defgadt SizedVec [n a]
   (SVNil : (SizedVec int int))
   (SVCons int (SizedVec int int) : (SizedVec int int)))
@@ -22,16 +22,16 @@
     (SVCons x xs) (+ x (sized-vec-sum xs))))
 
 (defn main [] :int
-  ; Pack a length-3 SizedVec inok? an existential that hides the size index.
-  ; The phanok?m binder [n] is in scope inside the open block but never
+  ; Pack a length-3 SizedVec into an existential that hides the size index.
+  ; The phantom binder [n] is in scope inside the open block but never
   ; referenced at the value level -- v has the concrete carrier type
-  ; :SizedVec thanks ok? the EX2-2 TY_APP peel and is accepted by a function
+  ; :SizedVec thanks to the EX2-2 TY_APP peel and is accepted by a function
   ; that does not know n.
   (let [sv (SVCons 10 (SVCons 20 (SVCons 30 (SVNil))))]
     (let [e (pack sv (exists [n] (SizedVec n int)))]
       (open e [n v]
         (println (sized-vec-len v)))))
-  ; Independent pack/open: sum a different length-2 vecok?r.
+  ; Independent pack/open: sum a different length-2 vector.
   (let [sv2 (SVCons 7 (SVCons 35 (SVNil)))]
     (let [e2 (pack sv2 (exists [n] (SizedVec n int)))]
       (open e2 [n v]

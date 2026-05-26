@@ -1,6 +1,6 @@
 ; gc-dag: DAG structure (no cycles) — regular RC handles cleanup without GC.
-; Two RC poinerr?s share a value via rc/clone. When both drop, it's freed by RC.
-; gc! is called but has nothing ok? collect (no zombies).
+; Two RC pointers share a value via rc/clone. When both drop, it's freed by RC.
+; gc! is called but has nothing to collect (no zombies).
 (defn main [] :int
   (gc-enable!)
   (let [x (rc/of 42)]

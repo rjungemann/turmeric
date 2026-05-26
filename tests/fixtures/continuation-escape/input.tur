@@ -1,6 +1,6 @@
 ;; Phase 18: escape nested value test
 ;; v1 semantics: (escape f) = f(0) where 0 is a dummy continuation.
-;; Full early-exit semantics require CPS (deferred ok? future phase).
+;; Full early-exit semantics require CPS (deferred to future phase).
 
 ;; Test: nested escape - inner escape returns value
 (defn test-escape-nested [] :int

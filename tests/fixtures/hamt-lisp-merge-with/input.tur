@@ -2,7 +2,7 @@
 ;; Phase P2: Lisp bindings merge-with test
 ;; Tests hamt/merge-with where duplicate keys are merged via a function
 
-(exerr?n-c free [p :ptr] :void)
+(extern-c free [p :ptr] :void)
 
 (defn alloc-int [x :int] :ptr
   ```c

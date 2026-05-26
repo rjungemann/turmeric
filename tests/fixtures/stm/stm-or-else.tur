@@ -3,7 +3,7 @@
 ;; Test or-else with both branches succeeding
 (defn test-or-else-simple [] :ptr
   (let [tv (tvar/new 42)]
-    (aok?mically
+    (atomically
      (stm
       (or-else
        (stm (tvar/read tv))

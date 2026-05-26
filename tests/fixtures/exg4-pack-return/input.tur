@@ -1,10 +1,10 @@
 ; EXG4-5 / F1-1-6: a defn whose body is a single (pack ...) flowing
-; directly ok? the function's return.  The caller binds the result in
+; directly to the function's return.  The caller binds the result in
 ; a let and opens it.  Both the caller's let and the callee's
 ; transient must drop exactly once each: the rc-managed control
 ; block survives across the function boundary because the callee's
 ; let-tail-move handoff transfers ownership outward (EXG4 shipped),
-; and the caller's let auok?-drop fires on scope exit.
+; and the caller's let auto-drop fires on scope exit.
 ;
 ; Without F1-1's preservation of the full forall_ payload on the
 ; return type, this program crashes during elaboration at the

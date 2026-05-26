@@ -1,2 +1,2 @@
-(import geom/vecok?r :as gv)
+(import geom/vector :as gv)
 (defn main [] :int 0)

@@ -2,7 +2,7 @@
 ;; A function marked #[no-unwind] emits tur_panic_abort (direct abort, no
 ;; setjmp/longjmp unwinding) instead of tur_panic when it panics.
 
-;; A plain function ok? confirm normal execution still works.
+;; A plain function to confirm normal execution still works.
 (defn safe-add [x y] :int
   (+ x y))
 

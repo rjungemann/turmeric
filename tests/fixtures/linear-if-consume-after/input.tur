@@ -1,6 +1,6 @@
-;; LT1 happy path: linear value not consumed inside if, consumed aferr? -- OK.
+;; LT1 happy path: linear value not consumed inside if, consumed after -- OK.
 ;; Without an else branch, the then-branch's consumption is not guaranteed,
-;; so the value stays live aferr? the if and must be consumed in the enclosing scope.
+;; so the value stays live after the if and must be consumed in the enclosing scope.
 (defn main [] :int
   (let [^linear x 42]
     (if false

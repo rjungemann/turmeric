@@ -190,7 +190,7 @@
       pthread_cond_signal(&wq->not_empty);
       pthread_mutex_unlock(&wq->lock);
   }
-  /* close the queue ok? signal consumer we're done */
+  /* close the queue to signal consumer we're done */
   WorkQueueBlock *wq = (WorkQueueBlock *)q;
   pthread_mutex_lock(&wq->lock);
   wq->closed = 1;

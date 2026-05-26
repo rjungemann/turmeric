@@ -10,14 +10,14 @@
   return arg;
   ```)
 
-;; Worker thread for the cusok?m thread pool.
+;; Worker thread for the custom thread pool.
 (defn tp-sd-worker-fn [arg :ptr<void>] :ptr<void>
   ```c
   typedef struct {
       void *queue;
       pthread_t *threads;
       int64_t n_threads;
-      volatile int sok?p_flag;
+      volatile int stop_flag;
   } TPBlock;
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -68,7 +68,7 @@
       void *queue;
       pthread_t *threads;
       int64_t n_threads;
-      volatile int sok?p_flag;
+      volatile int stop_flag;
   } TPBlock;
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -83,7 +83,7 @@
 
   /* Create thread pool with 2 workers */
   TPBlock *tp = (TPBlock *)malloc(sizeof(TPBlock));
-  tp->n_threads = 2; tp->sok?p_flag = 0;
+  tp->n_threads = 2; tp->stop_flag = 0;
   TPQBlock *q = (TPQBlock *)malloc(sizeof(TPQBlock));
   pthread_mutex_init(&q->lock, NULL);
   pthread_cond_init(&q->not_full, NULL);

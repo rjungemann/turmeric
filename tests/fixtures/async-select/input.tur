@@ -1,6 +1,6 @@
 ;; Phase T24: select! macro — await the first of multiple futures
 ;;
-;; Tests that we can await the first of multiple futures ok? complete.
+;; Tests that we can await the first of multiple futures to complete.
 
 (defn async-done? [fut :ptr<void>] :bool
   ```c

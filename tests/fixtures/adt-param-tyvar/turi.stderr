@@ -1,0 +1,49 @@
+tests/fixtures/adt-param-tyvar/input.tur:6:8: error: defdata: constructor field type must be a keyword like :int, :bool, :cstr
+3 | ;; Uses Opt2 to avoid collision with stdlib Option struct.
+4 | (defdata Opt2 [a]
+5 |   (Nope)
+6 |   (Yep a))
+  |        ^
+7 | 
+8 | (defn main [] :int
+/Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44: runtime error: member access within misaligned address 0xbebebebebebebebe for type 'CtorDef' (aka 'struct CtorDef'), which requires 8 byte alignment
+0xbebebebebebebebe: note: pointer points here
+<memory cannot be printed>
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44 
+/Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44: runtime error: load of misaligned address 0xbebebebebebebebe for type 'const char *', which requires 8 byte alignment
+0xbebebebebebebebe: note: pointer points here
+<memory cannot be printed>
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /Users/rjungemann/Projects/turmeric/src/compiler/elab_structs.c:2236:44 
+AddressSanitizer:DEADLYSIGNAL
+=================================================================
+==57118==ERROR: AddressSanitizer: SEGV on unknown address 0xffffd847d7d9d7d7 (pc 0x000102c2de48 bp 0x00016d32d130 sp 0x00016d329be0 T0)
+==57118==The signal is caused by a READ memory access.
+    #0 0x000102c2de48 in elab_match elab_structs.c:2236
+    #1 0x000102bca8f4 in elab_call elab_call.c:524
+    #2 0x000102ccd068 in elab_form elab_toplevel.c:333
+    #3 0x000102b55530 in elab_let elab_forms.c:518
+    #4 0x000102bc8d4c in elab_call elab_call.c:435
+    #5 0x000102ccd068 in elab_form elab_toplevel.c:333
+    #6 0x000102ba2304 in elab_defn elab_fns.c:1092
+    #7 0x000102bcdfac in elab_call elab_call.c:686
+    #8 0x000102ccd068 in elab_form elab_toplevel.c:333
+    #9 0x000102cd981c in elaborate_program elab_toplevel.c:745
+    #10 0x000102ac6708 in run_core_passes main.c:339
+    #11 0x000102aaaa4c in compile_to_c main.c:726
+    #12 0x000102abbb70 in cmd_build main.c:1104
+    #13 0x000102abde3c in cmd_run main.c:1797
+    #14 0x000102ab46f8 in main main.c:5699
+    #15 0x00019b8f9d50  (<unknown module>)
+
+==57118==Register values:
+ x[0] = 0x0000000000000000   x[1] = 0x0000000000000000   x[2] = 0x0000000000000000   x[3] = 0x000000010a300f40  
+ x[4] = 0x0000000063000000   x[5] = 0x0000000000000000   x[6] = 0x0000000000000000   x[7] = 0x0000000000000000  
+ x[8] = 0x17d7d7d7d7d7d7d7   x[9] = 0x0000000103cce6f8  x[10] = 0x0000007000020000  x[11] = 0x1000000000000000  
+x[12] = 0x0000000000000000  x[13] = 0x000000016d328d00  x[14] = 0x0000000000000000  x[15] = 0x0000000000000000  
+x[16] = 0x0000000000000049  x[17] = 0x0000000103c28070  x[18] = 0x0000000000000000  x[19] = 0x000000016d32cc00  
+x[20] = 0x0000631000001040  x[21] = 0x0000000000000008  x[22] = 0x0000631000000f90  x[23] = 0x00006310000009e8  
+x[24] = 0x0000000000000001  x[25] = 0xbebebebebebebebe  x[26] = 0x0000000000000000  x[27] = 0x000063100007a6f8  
+x[28] = 0x0000000000000001     fp = 0x000000016d32d130     lr = 0x0000000102c2df44     sp = 0x000000016d329be0  
+AddressSanitizer can not provide additional info.
+SUMMARY: AddressSanitizer: SEGV elab_structs.c:2236 in elab_match
+==57118==ABORTING

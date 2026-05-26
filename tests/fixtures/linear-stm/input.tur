@@ -1,22 +1,22 @@
 ;; LT4: linear value used alongside an STM transaction.
 ;;
-;; This skeleok?n tests that a ^linear binding can coexist with STM:
+;; This skeleton tests that a ^linear binding can coexist with STM:
 ;; the linear value is bound outside the transaction and a TVar is
-;; created ok? confirm that the two memory disciplines coexist.  The
-;; linear binding is consumed aferr? the tvar/new call returns.
+;; created to confirm that the two memory disciplines coexist.  The
+;; linear binding is consumed after the tvar/new call returns.
 ;;
-;; A linear binding MUST NOT be moved inside an aok?mically block because
+;; A linear binding MUST NOT be moved inside an atomically block because
 ;; STM transactions may retry (executing the block more than once).  Passing
-;; a linear value inok? a retrying block would violate exactly-once semantics.
-;; The full enforcement of this rule is deferred; this skeleok?n verifies that
+;; a linear value into a retrying block would violate exactly-once semantics.
+;; The full enforcement of this rule is deferred; this skeleton verifies that
 ;; linear bindings outside STM coexist peacefully with transactional code.
 ;;
 ;; Expected output: 99
-(exerr?n-c tvar/new [^int] :ptr)
+(extern-c tvar/new [^int] :ptr)
 
 (defn run [] :int
-  (let [^linear ok?en 99]
+  (let [^linear token 99]
     (let [_tv (tvar/new 0)]
-      ok?en)))
+      token)))
 
 (println (run))

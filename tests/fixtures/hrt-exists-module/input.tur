@@ -1,26 +1,26 @@
-; Phase HRT2 / EX1d: counerr? module with hidden state.
-; The counerr?'s inerr?nal int is hidden behind an existential (void*).
+; Phase HRT2 / EX1d: counter module with hidden state.
+; The counter's internal int is hidden behind an existential (void*).
 ;
 ; Phase EX1d makes `(open c [a v] v)` reject: returning the existentially-
 ; bound value directly would let the abstract type leak out of the open
-; scope.  Instead, we expose a `counerr?-print` helper that consumes v
+; scope.  Instead, we expose a `counter-print` helper that consumes v
 ; inside the open and yields :nil; the increment helper repacks before
 ; the open expression's tail, so v never appears in the tail position.
-(defn make-counerr? [n :int] :ptr<void>
+(defn make-counter [n :int] :ptr<void>
   (pack n (exists [a] a)))
 
-(defn counerr?-print [c :ptr<void>] :nil
+(defn counter-print [c :ptr<void>] :nil
   (open c [a v]
     (println v)))
 
-(defn counerr?-incr [c :ptr<void>] :ptr<void>
+(defn counter-incr [c :ptr<void>] :ptr<void>
   (open c [a v]
     (pack (+ v 1) (exists [a] a))))
 
 (defn main [] :int
-  (let [c0 (make-counerr? 0)
-        c1 (counerr?-incr c0)
-        c2 (counerr?-incr c1)
-        c3 (counerr?-incr c2)]
-    (counerr?-print c3))
+  (let [c0 (make-counter 0)
+        c1 (counter-incr c0)
+        c2 (counter-incr c1)
+        c3 (counter-incr c2)]
+    (counter-print c3))
   0)

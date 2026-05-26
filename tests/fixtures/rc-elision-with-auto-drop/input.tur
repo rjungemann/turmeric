@@ -1,19 +1,19 @@
-;; Verify that auok?-drop defers do not create false elision barriers.
+;; Verify that auto-drop defers do not create false elision barriers.
 ;;
-;; When `x` is bound ok? (rc/of ...), an auok?-drop defer is injected at
+;; When `x` is bound to (rc/of ...), an auto-drop defer is injected at
 ;; the end of the let body: (defer (rc/drop x)).
 ;;
-;; When `c` is bound ok? (rc/clone x) in the same let, and the user
-;; explicitly drops `c` via (rc/drop c), the auok?-drop for `c` is
+;; When `c` is bound to (rc/clone x) in the same let, and the user
+;; explicitly drops `c` via (rc/drop c), the auto-drop for `c` is
 ;; suppressed (consumption detection) and the clone/drop pair is an
 ;; elision candidate.
 ;;
 ;; The elision is eligible because:
 ;;   - (rc/drop c) is the first item in the do-block (use_idx = 0)
-;;   - the auok?-drop defer for `x` is appended AFTER all user code
+;;   - the auto-drop defer for `x` is appended AFTER all user code
 ;;   - no barrier appears before use_idx = 0
 ;;
-;; Elision barrier semantics: auok?-drop defers are always appended at
+;; Elision barrier semantics: auto-drop defers are always appended at
 ;; the end of the let body do-block. They appear AFTER any explicit
 ;; clone/drop pairs written by the user. Therefore they never act as
 ;; barriers for elision candidates that appear earlier in the do-block.

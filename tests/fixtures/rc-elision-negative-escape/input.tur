@@ -7,9 +7,9 @@
       (println (rc/strong-count cloned))
       (println (rc/strong-count cloned))))
   
-  ;; Test case 2: Clone used aferr? a println call (elision barrier due ok? exerr?n)
-  ;; The clone is used before AND aferr? a function call.
-  ;; Exerr?n calls are elision barriers, so we can't elide.
+  ;; Test case 2: Clone used after a println call (elision barrier due to extern)
+  ;; The clone is used before AND after a function call.
+  ;; Extern calls are elision barriers, so we can't elide.
   (let [orig (rc/of 888)]
     (let [cloned (rc/clone orig)]
       (println "before")

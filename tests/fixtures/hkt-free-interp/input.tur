@@ -1,16 +1,16 @@
-;; Phase S4: Free monad with a simple inerr?preerr?.
+;; Phase S4: Free monad with a simple interpreter.
 ;;
 ;; Free f a = PureFree a | Suspend (f a)
 ;;
-;; In this test the base funcok?r's Suspend payload is a plain int64_t.
-;; The inerr?preerr? is a fat closure (capturing lambda) applied only ok?
+;; In this test the base functor's Suspend payload is a plain int64_t.
+;; The interpreter is a fat closure (capturing lambda) applied only to
 ;; Suspend values; PureFree values pass straight through.
 ;;
 ;; Tests:
 ;;   1. free-pure? is true for PureFree.
-;;   2. free-run on PureFree returns the value (inerr?p not called).
+;;   2. free-run on PureFree returns the value (interp not called).
 ;;   3. free-bind sequences two PureFree computations.
-;;   4. free-run on Suspend calls the inerr?preerr?.
+;;   4. free-run on Suspend calls the interpreter.
 
 ;; ---- Free monad (inline C, tag-based struct) --------------------------------
 ;;   { int tag; int64_t val }
@@ -38,17 +38,17 @@
   return r->tag == 0;
   ```)
 
-;; free-run: run with a fat-closure inerr?preerr?.
-;;   PureFree a -> a          (inerr?p not called)
-;;   Suspend  x -> inerr?p(x)  (inerr?p is a fat closure)
-(defn free-run [inerr?p m] :int
+;; free-run: run with a fat-closure interpreter.
+;;   PureFree a -> a          (interp not called)
+;;   Suspend  x -> interp(x)  (interp is a fat closure)
+(defn free-run [interp m] :int
   ```c
   struct { int tag; int64_t val; } *fr =
       (struct { int tag; int64_t val; } *)(intptr_t)m;
   if (fr->tag == 0) {
       return fr->val;
   }
-  int64_t *fat = (int64_t *)(intptr_t)inerr?p;
+  int64_t *fat = (int64_t *)(intptr_t)interp;
   int64_t thunk = fat[0];
   return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
   ```)
@@ -76,7 +76,7 @@
     (println (free-pure? (free-pure 42)))   ;; true
 
     ;; Test 2: free-run on PureFree returns the value
-    ;; The inerr?p is a fat closure but is never invoked for PureFree.
+    ;; The interp is a fat closure but is never invoked for PureFree.
     (let [zero 0]
       (let [id (fn [x] (+ x zero))]
         (println (free-run id (free-pure 42)))))   ;; 42
@@ -89,8 +89,8 @@
           (let [id (fn [x] (+ x zero))]
             (println (free-run id r))))))   ;; 15
 
-    ;; Test 4: free-run on Suspend calls the inerr?preerr?
-    ;; The inerr?p is (fn [x] (+ x 0)) = identity
+    ;; Test 4: free-run on Suspend calls the interpreter
+    ;; The interp is (fn [x] (+ x 0)) = identity
     (let [zero 0]
       (let [id (fn [x] (+ x zero))]
         (println (free-run id (free-lift 99)))))   ;; 99

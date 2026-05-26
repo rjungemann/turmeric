@@ -2,8 +2,8 @@
 
 (load "stdlib/seq/transform.tur")
 
-;;; make-ouerr?-seq -- build a Seq that yields each inner Seq in a gen-arr
-(defn make-ouerr?-seq [arr :int] :int
+;;; make-outer-seq -- build a Seq that yields each inner Seq in a gen-arr
+(defn make-outer-seq [arr :int] :int
   (seq-new (fn []
              (let [^mut i 0]
                (gen []
@@ -16,4 +16,4 @@
     (gen-arr-push! arr (seq/range 1 3))
     (gen-arr-push! arr (seq/range 5 7))
     (gen-arr-push! arr (seq/range 9 10))
-    (seq-for-each println (seq/flatten (make-ouerr?-seq arr)))))
+    (seq-for-each println (seq/flatten (make-outer-seq arr)))))

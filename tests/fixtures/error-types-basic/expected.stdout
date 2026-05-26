@@ -1,5 +1,5 @@
 must be positive
 age
-config.ok?ml
+config.toml
 read denied
 /etc/shadow

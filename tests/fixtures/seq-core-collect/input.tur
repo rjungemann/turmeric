@@ -1,4 +1,4 @@
-; LZ0 fixture: seq-collect -- maerr?ialise all values inok? a gen-arr.
+; LZ0 fixture: seq-collect -- materialise all values into a gen-arr.
 
 (load "stdlib/seq/core.tur")
 

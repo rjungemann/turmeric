@@ -1,7 +1,7 @@
 ;; Phase T22 TG-006: taskgroup-async — async computations inside a TaskGroup
 ;;
 ;; Demonstrates fiber-based async/await integrated with TaskGroup lifecycle:
-;;   1. Two async computations are spawned inok? a TaskGroup via tg-spawn-async.
+;;   1. Two async computations are spawned into a TaskGroup via tg-spawn-async.
 ;;   2. Each spawned computation runs as a real fiber in the cooperative scheduler.
 ;;   3. The caller drives execution by awaiting each returned Future.
 ;;   4. The TaskGroup tracks completion; done=true when all tasks finish.
@@ -17,7 +17,7 @@
 
 ;; ---- Helper: fiber entry point for tg-spawn-async ----
 ;;
-;; Each async fiber sok?res a {fn, future} pair in fiber_local.
+;; Each async fiber stores a {fn, future} pair in fiber_local.
 ;; This entry function reads that pair, calls fn(), and fulfills the future.
 ;; tur_fiber_shim sets tur_current_fiber before calling entry_fn, so
 ;; tur_current_fiber is valid here.
@@ -89,7 +89,7 @@
 ;; Allocates a TgAsyncArg{fn, future}, creates a fiber with __tg-async-entry
 ;; as its entry point, and enqueues it in the scheduler. Sets fiber->task_group
 ;; so tur_fiber_shim calls tur_task_group_notify_done on completion.
-;; Returns the (pending) TurFuture* for the caller ok? await.
+;; Returns the (pending) TurFuture* for the caller to await.
 (defn tg-spawn-async [group :ptr<void> f :ptr<void>] :ptr<void>
   ```c
   typedef struct {
@@ -118,7 +118,7 @@
   FiberBlock *fiber = tur_fiber_block_new((void(*)(void))__tg_async_entry, 0);
   if (!fiber) { fprintf(stderr, "tg-spawn-async: fiber oom\n"); abort(); }
   fiber->fiber_local = (void *)arg;
-  fiber->task_group  = (void *)g;   /* enables auok?-notify on done */
+  fiber->task_group  = (void *)g;   /* enables auto-notify on done */
   fiber->cancelled   = g->cancelled;
 
   tur_scheduler_spawn(tur_scheduler, fiber);
@@ -139,7 +139,7 @@
 
 ;; ---- Main ----
 ;;
-;; Spawn two async computations inok? a task group. Each (await) drives the
+;; Spawn two async computations into a task group. Each (await) drives the
 ;; scheduler until that computation's fiber completes.
 (defn main [] :int
   (let [tg (tg-new)]

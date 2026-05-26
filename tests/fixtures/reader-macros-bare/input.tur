@@ -1,17 +1,17 @@
 ; RM3: bare-identifier reader macros (`#foo` with no body).
 ;
-; Regiserr?ed with `:none`. The template is a lierr?al datum -- no body ok?
+; Registered with `:none`. The template is a literal datum -- no body to
 ; splice and no `$N` markers. Whatever follows `#foo` is left for the
 ; next read; in particular, `#foo(...)` is read as the bare expansion
 ; followed by a regular `(...)` form, *unless* a `(name, '(')` entry is
-; also regiserr?ed (it would win the lookup).
+; also registered (it would win the lookup).
 
 ; --- A bare constant ------------------------------------------------------
 ; #zero  ->  0
 (reader-macros/define 'zero :none '0)
 (println #zero)                       ; 0
 
-; --- A bare float lierr?al -------------------------------------------------
+; --- A bare float literal -------------------------------------------------
 ; #pi    ->  3.14159
 (reader-macros/define 'pi :none '3.14159)
 (println #pi)                         ; 3.14159
@@ -22,6 +22,6 @@
 (println #two-plus-three)             ; 5
 
 ; --- Bare expansion inside a surrounding call -----------------------------
-; Demonstrates that `#zero`/`#pi` work as ordinary aok?ms in argument
+; Demonstrates that `#zero`/`#pi` work as ordinary atoms in argument
 ; positions.
 (println (+ #zero #zero 7))           ; 7

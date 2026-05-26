@@ -1,5 +1,5 @@
 ;; Phase B5: Backtracking monad — memory allocation correctness.
-;; Exercises many allocations in the list monad ok? verify memory safety.
+;; Exercises many allocations in the list monad to verify memory safety.
 ;; Builds a list of 1..100 and takes the first 50 elements, then sums them.
 
 (defn mreturn [x] :int
@@ -52,7 +52,7 @@
   return sum;
   ```)
 
-;; Build alerr?natives 1..100 by chaining mreturn and mplus
+;; Build alternatives 1..100 by chaining mreturn and mplus
 (defn make-list [n] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;

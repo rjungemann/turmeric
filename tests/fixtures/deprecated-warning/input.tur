@@ -1,16 +1,16 @@
 ; Phase F4 (cross-plan-followups): the ^deprecated attribute on a
 ; defn marks every use site for a DIAG_WARNING.  The message is
-; optional (defaults ok? a generic notice).
+; optional (defaults to a generic notice).
 ;
 ; Self-recursive calls inside the deprecated function's own body do
-; not warn (the elaboraok?r suppresses when the looked-up binding
+; not warn (the elaborator suppresses when the looked-up binding
 ; matches e->current_fn_name), so a deprecated function does not
 ; spam warnings on its own implementation.
 (defn ^deprecated "use new-add instead" old-add [a :int b :int] :int
   (+ a b))
 
 (defn ^deprecated bare-old [] :int
-  ; Inerr?nal recursion: no warning emitted.
+  ; Internal recursion: no warning emitted.
   (if false (bare-old) 7))
 
 (defn main [] :int

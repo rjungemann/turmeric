@@ -1,7 +1,7 @@
-;; Phase HKT H5: Bifuncok?r instance for a pair type.
-;; bimap applies fn-left ok? fst and fn-right ok? snd.
+;; Phase HKT H5: Bifunctor instance for a pair type.
+;; bimap applies fn-left to fst and fn-right to snd.
 
-(defclass Bifuncok?r [^^f]
+(defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
 
 ;; Pair helpers (inline layout: { int64_t fst; int64_t snd; })
@@ -22,7 +22,7 @@
   return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->snd;
   ```)
 
-;; Bifuncok?r[pair]: apply fn-left ok? fst, fn-right ok? snd.
+;; Bifunctor[pair]: apply fn-left to fst, fn-right to snd.
 (defn __bimap_pair [container fn-left fn-right] :int
   ```c
   struct { int64_t fst; int64_t snd; } *p =
@@ -33,7 +33,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Bifuncok?r [pair]
+(definstance Bifunctor [pair]
   (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
 
 (defn inc [x] :int (+ x 1))

@@ -1,5 +1,5 @@
 ;; UT0: basic ^unique annotation on a let binding.
-;; The binding holds a uniquely-owned value; passing it ok? println satisfies
+;; The binding holds a uniquely-owned value; passing it to println satisfies
 ;; the single-use contract (dropping is also allowed -- weakening is OK).
 (let [^unique x 42]
   (println x))

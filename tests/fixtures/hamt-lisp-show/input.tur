@@ -2,8 +2,8 @@
 ;; Phase P2: Lisp bindings show test
 ;; Tests hamt/show returns a string representation
 
-(exerr?n-c free [p :ptr] :void)
-(exerr?n-c strlen [s :cstr] :int)
+(extern-c free [p :ptr] :void)
+(extern-c strlen [s :cstr] :int)
 
 (defn cstr-free [s :cstr] :void
   ```c

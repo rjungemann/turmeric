@@ -1,5 +1,5 @@
 ;; Phase B3: Backtracking monad — run-backtrack-depth limits result count.
-;; Takes the first n results from an alerr?natives list.
+;; Takes the first n results from an alternatives list.
 
 (defn mzero [] :int
   ```c return 0; ```)

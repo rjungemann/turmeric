@@ -1,11 +1,11 @@
-;; Phase 9 Prerequisite 1: Move-state tracking in ref auok?-drop.
-;; When a ref binding is moved (consumed by rc/from-ref), the ouerr? let
-;; must NOT inject an auok?-drop defer for that ref binding.
+;; Phase 9 Prerequisite 1: Move-state tracking in ref auto-drop.
+;; When a ref binding is moved (consumed by rc/from-ref), the outer let
+;; must NOT inject an auto-drop defer for that ref binding.
 ;;
-;; If auok?-drop were injected for `r` despite it being moved ok? `rc`,
-;; the emit phase would crash or produce invalid code (use-aferr?-move).
+;; If auto-drop were injected for `r` despite it being moved to `rc`,
+;; the emit phase would crash or produce invalid code (use-after-move).
 ;;
-;; Expected: r is moved inok? rc/from-ref, so no (drop! r) defer is emitted.
+;; Expected: r is moved into rc/from-ref, so no (drop! r) defer is emitted.
 ;; The rc binding owns the data from this point on.
 
 (defn main [] :int

@@ -1,5 +1,5 @@
 ;; SI2: derive-show generates a Show instance for a struct.
-;; Tests that (derive-show Point x y) expands ok? the correct Show instance.
+;; Tests that (derive-show Point x y) expands to the correct Show instance.
 (defclass Show [a]
   (show [x] :cstr))
 

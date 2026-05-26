@@ -1,5 +1,5 @@
-;; ER4: passing a wide-row function ok? a narrow-row parameerr? is rejected.
-;; apply-pure expects f ok? be pure (#{}) but write-fn has #{Write}.
+;; ER4: passing a wide-row function to a narrow-row parameter is rejected.
+;; apply-pure expects f to be pure (#{}) but write-fn has #{Write}.
 
 (defeffect Write [msg :cstr] :nil)
 

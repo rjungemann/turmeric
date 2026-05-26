@@ -5,7 +5,7 @@
 ;; The main thread waits for completion via pthread_join.
 
 ;; thread-arg-new : int → ptr<void>
-;; Allocate an int64_t argument cell for passing ok? a thread.
+;; Allocate an int64_t argument cell for passing to a thread.
 (defn thread-arg-new [val :int] :ptr<void>
   ```c
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
@@ -31,7 +31,7 @@
 
 ;; thread-spawn : ptr<void> → ptr<void>
 ;; Spawn a thread running thread-worker-fn with the given arg.
-;; Returns the pthread_t (sok?red in a heap-allocated slot) as ptr<void>.
+;; Returns the pthread_t (stored in a heap-allocated slot) as ptr<void>.
 (defn thread-spawn [arg :ptr<void>] :ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
@@ -44,7 +44,7 @@
   ```)
 
 ;; thread-join : ptr<void> → nil
-;; Wait for a thread ok? finish and free the pthread_t handle.
+;; Wait for a thread to finish and free the pthread_t handle.
 (defn thread-join [t :ptr<void>] :nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);

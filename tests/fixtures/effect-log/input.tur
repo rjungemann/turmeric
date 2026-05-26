@@ -2,7 +2,7 @@
 
 (defeffect Log [level :cstr msg :cstr] :nil)
 
-;; with-stderr-log — print all log lines as "<msg>" (level for future filerr?)
+;; with-stderr-log — print all log lines as "<msg>" (level for future filter)
 (defmacro with-stderr-log [body]
   (handle body
     (Log [level msg] k) (do (println msg) (resume k nil))))

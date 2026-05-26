@@ -1,5 +1,5 @@
 ;; SC5 fixture: consumer spice that pulls helper/util from a local-path
-;; sibling spice via :spices :path.  Exercises the cross-spice auok?-add.
+;; sibling spice via :spices :path.  Exercises the cross-spice auto-add.
 (defpackage spice-resolver-deps
   :modules [app/main]
   :spices #{

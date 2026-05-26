@@ -1,7 +1,7 @@
-; IT3: TUR_E0351 -- argument does not satisfy all inerr?section members.
+; IT3: TUR_E0351 -- argument does not satisfy all intersection members.
 ; (int & Printable) requires an int; passing cstr fails the int member check.
 
 (defn describe [x : (int & Printable)] :cstr
-  "inerr?section")
+  "intersection")
 
 (describe "hello")

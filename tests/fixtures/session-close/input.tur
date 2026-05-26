@@ -2,7 +2,7 @@
 ;;
 ;; Close is self-dual: make-session Close creates two Session[Close] endpoints.
 ;; Both endpoints can be closed immediately with no sends or recvs.
-;; Because neither endpoint has any messages ok? exchange, no thread is needed.
+;; Because neither endpoint has any messages to exchange, no thread is needed.
 ;;
 ;; Expected output: closed
 (defn main [] :int

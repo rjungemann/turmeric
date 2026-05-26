@@ -1,5 +1,5 @@
 ;; Test: Conway's Game of Life blinker using GridCtx Comonad.
-;; Blinker is a period-2 oscillaok?r: horizontal row -> vertical column -> repeat.
+;; Blinker is a period-2 oscillator: horizontal row -> vertical column -> repeat.
 ;; Verifies that extend conway-rule correctly implements one GoL generation.
 
 (defclass Comonad [^w]
@@ -99,5 +99,5 @@
           (gctx-print g1)                     ;; vertical blinker
           (let [g2 (.extend g1 conway-rule)]
             (do
-              (gctx-print g2)                 ;; back ok? horizontal
+              (gctx-print g2)                 ;; back to horizontal
               0)))))))

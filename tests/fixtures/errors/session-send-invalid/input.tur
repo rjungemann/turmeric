@@ -1,6 +1,6 @@
 ;; SS1 E0212: send not valid on Session[Recv int Close].
-;; 'r' has prook?col Recv int Close; calling send on it violates the prook?col --
-;; the remote end expects ok? send, not receive.
+;; 'r' has protocol Recv int Close; calling send on it violates the protocol --
+;; the remote end expects to send, not receive.
 (defn use-wrong [^linear r :(Session (Recv int Close))] :int
   (let [r (send r 42)]
     (close r))

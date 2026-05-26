@@ -1,6 +1,6 @@
 ;; Phase 19: combined Write and Read console handlers.
-;; Read is answered with a fixed value for deerr?ministic output.
-;; Write routes ok? println via its handler.
+;; Read is answered with a fixed value for deterministic output.
+;; Write routes to println via its handler.
 (defeffect Write [s :cstr] :nil)
 (defeffect Read [] :int)
 

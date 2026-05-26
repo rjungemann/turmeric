@@ -1,8 +1,8 @@
 ;; Phase T24: async-sleep — suspend current fiber for specified milliseconds
 ;;
-;; Tests that async-sleep suspends the fiber and resumes aferr? the timeout.
+;; Tests that async-sleep suspends the fiber and resumes after the timeout.
 ;; Note: v1 uses nanosleep directly (blocks thread). Full scheduler-based
-;; timeout is deferred ok? Phase T24 proper.
+;; timeout is deferred to Phase T24 proper.
 
 (defn async-sleep [ms :int] :nil
   ```c

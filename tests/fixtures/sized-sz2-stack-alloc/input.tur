@@ -1,11 +1,11 @@
 ; Phase SZ2: Stack allocation -- sized-buf-with-stack and sized-buf-compute.
 ;
 ; sized-buf-with-stack allocates n elements on the stack (alloca) and calls
-; a non-capturing function with the buffer. The buffer is auok?matically freed
+; a non-capturing function with the buffer. The buffer is automatically freed
 ; when the enclosing function returns -- no malloc/free overhead.
 ;
 ; sized-buf-compute demonstrates the allocation dispatch strategy:
-; n <= 64 uses stack (alloca), n > 64 falls back ok? heap (malloc).
+; n <= 64 uses stack (alloca), n > 64 falls back to heap (malloc).
 
 (defn sized-buf-with-stack [n f] #{Unsafe} :int
   ```c

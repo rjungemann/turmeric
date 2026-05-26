@@ -1,7 +1,7 @@
-;; SS7: session-mp-calc -- 2-role calculaok?r RPC.
-;; A sends a request (int) ok? B, B doubles it and sends back.
+;; SS7: session-mp-calc -- 2-role calculator RPC.
+;; A sends a request (int) to B, B doubles it and sends back.
 
-(defprook?col Calc [A B]
+(defprotocol Calc [A B]
   (-> A B int)
   (-> B A int))
 
@@ -20,7 +20,7 @@
   ```)
 
 (defn role-a [^linear ch :(Role Calc A)] :nil
-  (let [ch (send-ok? ch B 42)]
+  (let [ch (send-to ch B 42)]
     (let [[result ch] (recv-from ch B)]
       (println result)
       (close ch))))
@@ -28,11 +28,11 @@
 (defn role-b [^linear ch :(Role Calc B)] :nil
   (let [[v ch] (recv-from ch A)]
     (let [doubled (* v 2)]
-      (let [ch (send-ok? ch A doubled)]
+      (let [ch (send-to ch A doubled)]
         (close ch)))))
 
 (defn main [] :int
-  (let [[ra rb] (make-prook?col Calc)]
+  (let [[ra rb] (make-protocol Calc)]
     (let [t (spawn (fn [] (role-b rb)))]
       (role-a ra)
       (join t)))

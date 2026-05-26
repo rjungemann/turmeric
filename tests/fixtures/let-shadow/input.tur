@@ -1,4 +1,4 @@
-; Inner `let` should shadow ouerr? binding without affecting it.
+; Inner `let` should shadow outer binding without affecting it.
 (let [x 1]
   (println x)               ; 1
   (let [x 2]

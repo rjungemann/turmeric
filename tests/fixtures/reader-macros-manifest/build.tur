@@ -1,5 +1,5 @@
 ;; RM4 fixture: a spice whose build.tur declares `:reader-macros`. The
-;; named file is preloaded inok? the reader-macro registry for every
+;; named file is preloaded into the reader-macro registry for every
 ;; source file in the spice, so the source can use `#foo{...}` /
 ;; `#bar` etc. without a per-file `#use-reader-macros` directive.
 (defpackage reader-macros-manifest

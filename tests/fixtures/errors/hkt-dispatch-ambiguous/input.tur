@@ -1,9 +1,9 @@
-;; Phase D0: Ambiguous dispatch -- two Funcok?r instances, erased receiver.
+;; Phase D0: Ambiguous dispatch -- two Functor instances, erased receiver.
 ;; When mk returns :int (erased type), calling .fmap on the result must
 ;; emit TUR_E0020_AMBIGUOUS_DISPATCH rather than silently picking the
-;; first regiserr?ed instance.
+;; first registered instance.
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -41,10 +41,10 @@
   return container;
   ```)
 
-(definstance Funcok?r [option]
+(definstance Functor [option]
   (fmap [c f] (__fmap_option c f)))
 
-(definstance Funcok?r [vec]
+(definstance Functor [vec]
   (fmap [c f] (__fmap_vec c f)))
 
 ;; mk returns :int (type erased) even though it produces an option value.

@@ -1,5 +1,5 @@
 ;; CPS-CL9: Verify DEFER_REPLAY fires once per resume.
-;; Each call ok? tur_cloneable_cont_resume should fire DEFER_REPLAY defers.
+;; Each call to tur_cloneable_cont_resume should fire DEFER_REPLAY defers.
 
 (defn k-identity [k] :int k)
 

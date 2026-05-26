@@ -1,4 +1,4 @@
-; Phase X3: basic set lierr?al tests -- construction, membership, count.
+; Phase X3: basic set literal tests -- construction, membership, count.
 
 (defn set-member? [s :set x] :bool
   ```c

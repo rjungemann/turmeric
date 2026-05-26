@@ -1,7 +1,7 @@
 /* SB0: sandbox eval test harness.
  *
  * Evaluates each fixture in tests/fixtures/sandbox/ using a sandboxed
- * environment and asserts that every result is TURI_ERROR.  Aferr? SB1-SB4
+ * environment and asserts that every result is TURI_ERROR.  After SB1-SB4
  * land, all fixtures must pass; until then, only the already-blocked cases
  * (inline-C, println, dlopen, async) will pass.
  *
@@ -83,7 +83,7 @@ static void run_api_smoke_tests(void) {
     TuriEnv *env = turi_env_new_sandboxed();
     if (!env) { fprintf(stderr, "FAIL [api-smoke]: env alloc\n"); failures++; return; }
 
-    /* Setting fuel ok? a large value and running a short program must succeed. */
+    /* Setting fuel to a large value and running a short program must succeed. */
     turi_env_set_fuel(env, 1000000u);
     turi_env_allow(env, TURI_CAP_IO); /* allow I/O so println works */
     TuriValue r = turi_eval(env, "(+ 1 2)");
@@ -112,7 +112,7 @@ static void run_api_smoke_tests(void) {
 int main(void) {
     turi_init(false);
 
-    /* Locate fixture direcok?ry relative ok? working direcok?ry (project root). */
+    /* Locate fixture directory relative to working directory (project root). */
     const char *fixture_dir = "tests/fixtures/sandbox";
 
     struct { const char *name; const char *file; } fixtures[] = {
@@ -128,7 +128,7 @@ int main(void) {
         { "sb-raw-memset",  "sb-raw-memset.tur"   },
         { "sb-raw-memcpy",  "sb-raw-memcpy.tur"   },
         { "sb-unsafe-cast", "sb-unsafe-cast.tur"  },
-        { "sb-reinerr?pret", "sb-reinerr?pret.tur"  },
+        { "sb-reinterpret", "sb-reinterpret.tur"  },
         { "sb-transmute",   "sb-transmute.tur"    },
         { "sb-import",      "sb-import.tur"       },
         { "sb-step-limit",  "sb-step-limit.tur"   },

@@ -1,5 +1,5 @@
 ;; ER6: static one-shot enforcement -- double use of continuation `k`
-;; is caught at compile time by the borrow checker (use-aferr?-move), not runtime.
+;; is caught at compile time by the borrow checker (use-after-move), not runtime.
 
 (defeffect Ask [] :int)
 

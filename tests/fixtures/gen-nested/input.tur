@@ -1,4 +1,4 @@
-; GF1 fixture: ouerr? generaok?r that advances an inner generaok?r and re-yields values.
+; GF1 fixture: outer generator that advances an inner generator and re-yields values.
 
 (defn some? [p] :bool
   ```c
@@ -11,18 +11,18 @@
   ```)
 
 (defn main [] :void
-  ; Inner generaok?r: yields 1, 2, 3
+  ; Inner generator: yields 1, 2, 3
   (let [inner (gen []
                 (yield 1)
                 (yield 2)
                 (yield 3))
-        ; Ouerr? generaok?r: pulls from inner and re-yields doubled values
-        ouerr? (gen []
+        ; Outer generator: pulls from inner and re-yields doubled values
+        outer (gen []
                 (while (not (gen-done? inner))
                   (let [v (gen-next inner)]
                     (when (some? v)
                       (yield (* (unwrap v) 2))))))]
-    (while (not (gen-done? ouerr?))
-      (let [w (gen-next ouerr?)]
+    (while (not (gen-done? outer))
+      (let [w (gen-next outer)]
         (when (some? w)
           (println (unwrap w)))))))

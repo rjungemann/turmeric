@@ -1,4 +1,4 @@
-;; ET2-F2: Effect-polymorphic bracket (with-resource) paerr?n.
+;; ET2-F2: Effect-polymorphic bracket (with-resource) pattern.
 ;; bracket acquires a resource, runs a body function, then releases it.
 ;; The body function carries effect row #{e}, which propagates through bracket.
 

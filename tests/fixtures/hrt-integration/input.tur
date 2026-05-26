@@ -1,8 +1,8 @@
 ; Phase HRT5: Integration fixture combining HRT + typeclasses + let-binding.
 ; Demonstrates:
 ;   - Typeclass with rank-2 method (Transform)
-;   - let-bound poly fn alias forwarded ok? typeclass method
-;   - Recursive poly fn using typeclass dispatch inerr?nally
+;   - let-bound poly fn alias forwarded to typeclass method
+;   - Recursive poly fn using typeclass dispatch internally
 ;   - apply-twice using the typeclass for both applications
 
 (defclass Transform []

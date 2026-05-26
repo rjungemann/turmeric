@@ -1,5 +1,5 @@
 ; Phase EX1d: a single branch of an `if` that returns the bound value is
-; enough ok? leak the abstract type out of the open's tail position.
+; enough to leak the abstract type out of the open's tail position.
 (defn leak [e :ptr<void> flag :bool] :int
   (open e [a v]
     (if flag v 0)))

@@ -1,5 +1,5 @@
 ; Phase EX1f: showable/show-it work for any concrete type with a Show
-; instance.  This fixture uses bool ok? exercise a non-int payload.
+; instance.  This fixture uses bool to exercise a non-int payload.
 (defclass Show [a]
   (show [x] :cstr))
 

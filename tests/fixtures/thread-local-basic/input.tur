@@ -2,7 +2,7 @@
 ;;
 ;; Each thread has its own copy of a __thread variable.  Writes in one thread
 ;; are not visible in another.  Demonstrated here with two threads each writing
-;; their thread-id inok? a TLS slot and reading it back.
+;; their thread-id into a TLS slot and reading it back.
 
 ;; tls-set!/tls-get operate on a named __thread int64_t.
 ;; We use a single named global TLS var for the test.
@@ -39,7 +39,7 @@
   free(a);
   ```)
 
-;; Worker: sets TLS ok? its id, does some work, then reads it back.
+;; Worker: sets TLS to its id, does some work, then reads it back.
 ;; If TLS were shared, threads would clobber each other.
 (defn thread-worker [arg :ptr<void>] :ptr<void>
   ```c

@@ -1,10 +1,10 @@
 ; Phase EXG4: clone the rc-managed existential, then transfer ownership
 ; out of the inner scope.  The inner let returns the clone as its tail;
-; the ouerr? scope owns both the original (via e1) and the moved clone
-; (via ouerr?).  Each opens once before its enclosing scope drops it.
+; the outer scope owns both the original (via e1) and the moved clone
+; (via outer).  Each opens once before its enclosing scope drops it.
 ;
 ; Without EXG4's let-tail move-tracking and the EXG4-2 rc/clone
-; relaxation, the inner let would auok?-drop before the clone escaped.
+; relaxation, the inner let would auto-drop before the clone escaped.
 (defclass Show [a]
   (show [x] :cstr))
 
@@ -18,9 +18,9 @@
 
 (defn main [] :int
   (let [e1 (pack 11 (exists [a] [(Show a)] a))
-        ouerr? (let [c (rc/clone e1)] c)]
+        outer (let [c (rc/clone e1)] c)]
     (open e1 [_ v]
       (println (.show v)))
-    (open ouerr? [_ v]
+    (open outer [_ v]
       (println (.show v))))
   0)

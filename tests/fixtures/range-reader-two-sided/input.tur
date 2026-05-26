@@ -3,31 +3,31 @@
 (load "stdlib/range.tur")
 
 (defn main [] :void
-  ; left-ok?-right closed [0, 10]
+  ; left-to-right closed [0, 10]
   (println (range-contains? #r{0 <= n <= 10} 0))    ; true
   (println (range-contains? #r{0 <= n <= 10} 10))   ; true
   (println (range-contains? #r{0 <= n <= 10} 11))   ; false
-  ; left-ok?-right open (0, 10)
+  ; left-to-right open (0, 10)
   (println (range-contains? #r{0 < n < 10} 0))      ; false
   (println (range-contains? #r{0 < n < 10} 5))      ; true
   (println (range-contains? #r{0 < n < 10} 10))     ; false
-  ; left-ok?-right closed-open [0, 10)
+  ; left-to-right closed-open [0, 10)
   (println (range-contains? #r{0 <= n < 10} 0))     ; true
   (println (range-contains? #r{0 <= n < 10} 10))    ; false
-  ; left-ok?-right open-closed (0, 10]
+  ; left-to-right open-closed (0, 10]
   (println (range-contains? #r{0 < n <= 10} 0))     ; false
   (println (range-contains? #r{0 < n <= 10} 10))    ; true
-  ; right-ok?-left closed [0, 10]
+  ; right-to-left closed [0, 10]
   (println (range-contains? #r{10 >= n >= 0} 0))    ; true
   (println (range-contains? #r{10 >= n >= 0} 10))   ; true
   (println (range-contains? #r{10 >= n >= 0} -1))   ; false
-  ; right-ok?-left open (0, 10)
+  ; right-to-left open (0, 10)
   (println (range-contains? #r{10 > n > 0} 0))      ; false
   (println (range-contains? #r{10 > n > 0} 5))      ; true
   (println (range-contains? #r{10 > n > 0} 10))     ; false
-  ; right-ok?-left: 10 > n >= 0  =>  [0, 10)
+  ; right-to-left: 10 > n >= 0  =>  [0, 10)
   (println (range-contains? #r{10 > n >= 0} 0))     ; true
   (println (range-contains? #r{10 > n >= 0} 10))    ; false
-  ; right-ok?-left: 10 >= n > 0  =>  (0, 10]
+  ; right-to-left: 10 >= n > 0  =>  (0, 10]
   (println (range-contains? #r{10 >= n > 0} 0))     ; false
   (println (range-contains? #r{10 >= n > 0} 10)))   ; true

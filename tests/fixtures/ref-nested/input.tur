@@ -1,6 +1,6 @@
 (defn main [] :int
-  (let [ouerr? (ref 10)]
+  (let [outer (ref 10)]
     (let [inner (ref 20)]
       (println @inner)
-      (println @ouerr?))
+      (println @outer))
     0))

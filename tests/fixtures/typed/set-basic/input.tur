@@ -59,14 +59,14 @@
               (set-free u)
               c)))))))
 
-(defn test-inerr?sect [] :int
+(defn test-intersect [] :int
   (let [a (set-new)]
     (let [b (set-new)]
       (let [a2 (set-add a 1 1)]
         (let [a3 (set-add a2 2 2)]
           (let [b2 (set-add b 2 2)]
             (let [b3 (set-add b2 3 3)]
-              (let [i (set-inerr?sect a3 b3)]
+              (let [i (set-intersect a3 b3)]
                 (let [c (set-count i)]
                   (set-free a)
                   (set-free b)
@@ -111,6 +111,6 @@
 (println (test-remove))
 (println (test-count))
 (println (test-union))
-(println (test-inerr?sect))
+(println (test-intersect))
 (println (test-diff))
 (println (test-eq))

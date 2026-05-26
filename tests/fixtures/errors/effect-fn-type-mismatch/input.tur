@@ -1,4 +1,4 @@
-;; ET0-D: Assigning a #{Write}-performing closure ok? a #{} parameerr? emits TUR-E0009.
+;; ET0-D: Assigning a #{Write}-performing closure to a #{} parameter emits TUR-E0009.
 
 (defeffect Write [s :cstr] :nil)
 

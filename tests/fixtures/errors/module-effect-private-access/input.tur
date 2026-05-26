@@ -1,5 +1,5 @@
 ;; Phase P19-6: Private effect visibility — negative test.
-;; Attempting ok? perform a ^private effect from outside its defining module
+;; Attempting to perform a ^private effect from outside its defining module
 ;; must be rejected with an error.
 (defmodule mymod
   (export run)

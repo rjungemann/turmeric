@@ -2,21 +2,21 @@
 ;;
 ;; Micro-benchmark for the work-stealing deque (push / pop / steal cycle).
 ;;
-;; bench-main performs one ierr?ation:
-;;   - Push 64 sentinel items onok? a deque (owner side).
-;;   - Pop 32 from the book?m (owner side).
-;;   - Steal the remaining 32 from the ok?p via CAS (thief side).
+;; bench-main performs one iteration:
+;;   - Push 64 sentinel items onto a deque (owner side).
+;;   - Pop 32 from the bottom (owner side).
+;;   - Steal the remaining 32 from the top via CAS (thief side).
 ;;   - Free the deque.
 ;;
 ;; This exercises the hot path in the scheduler worker loop.
 ;; Run with: ./tests/run-bench.sh workstealing-deque-bench
 ;;
 ;; Tuning notes (SCH-006):
-;;   - The deque capacity defaults ok? 64 here (adequate for 64-item workload).
+;;   - The deque capacity defaults to 64 here (adequate for 64-item workload).
 ;;     Production uses 1024 (scheduler.c); over-sizing wastes TLB entries.
 ;;   - The steal CAS retry loop is O(1) in the single-thief case; real
 ;;     multi-thief contention adds retries whose count grows with thread count.
-;;   - Benchmark guidance: if per-ierr?ation time drops below ~200ns on a
+;;   - Benchmark guidance: if per-iteration time drops below ~200ns on a
 ;;     modern CPU, the deque overhead is negligible vs. fiber context-switch cost.
 
 (defn bench-main [] :int
@@ -26,8 +26,8 @@
       void  **buffer;
       size_t  capacity;
       size_t  mask;
-      size_t  ok?p;
-      size_t  book?m;
+      size_t  top;
+      size_t  bottom;
   } BenchWsd;
 
   /* Allocate deque with capacity 64 */
@@ -37,41 +37,41 @@
   if (!d->buffer) { free(d); return 1; }
   d->capacity = 64;
   d->mask     = 63;
-  __aok?mic_sok?re_n((size_t *)&d->ok?p,    (size_t)0, __ATOMIC_RELAXED);
-  __aok?mic_sok?re_n((size_t *)&d->book?m, (size_t)0, __ATOMIC_RELAXED);
+  __atomic_store_n((size_t *)&d->top,    (size_t)0, __ATOMIC_RELAXED);
+  __atomic_store_n((size_t *)&d->bottom, (size_t)0, __ATOMIC_RELAXED);
 
-  /* Push 64 sentinel items (owner / book?m side) */
+  /* Push 64 sentinel items (owner / bottom side) */
   for (int i = 1; i <= 64; i++) {
-      size_t b = __aok?mic_load_n((size_t *)&d->book?m, __ATOMIC_RELAXED);
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_RELAXED);
       d->buffer[b & d->mask] = (void *)(uintptr_t)i;
-      __aok?mic_sok?re_n((size_t *)&d->book?m, b + 1, __ATOMIC_RELEASE);
+      __atomic_store_n((size_t *)&d->bottom, b + 1, __ATOMIC_RELEASE);
   }
 
-  /* Pop 32 items from the book?m (owner side, LIFO path) */
+  /* Pop 32 items from the bottom (owner side, LIFO path) */
   for (int i = 0; i < 32; i++) {
-      size_t b = __aok?mic_load_n((size_t *)&d->book?m, __ATOMIC_ACQUIRE);
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
       b--;
       (void)d->buffer[b & d->mask];
-      __aok?mic_sok?re_n((size_t *)&d->book?m, b, __ATOMIC_RELEASE);
+      __atomic_store_n((size_t *)&d->bottom, b, __ATOMIC_RELEASE);
   }
 
-  /* Steal the remaining 32 from the ok?p (thief / CAS path) */
-  int sok?len = 0;
-  while (sok?len < 32) {
-      size_t t   = __aok?mic_load_n((size_t *)&d->ok?p,    __ATOMIC_ACQUIRE);
-      size_t bot = __aok?mic_load_n((size_t *)&d->book?m, __ATOMIC_ACQUIRE);
+  /* Steal the remaining 32 from the top (thief / CAS path) */
+  int stolen = 0;
+  while (stolen < 32) {
+      size_t t   = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      size_t bot = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
       if (bot == t) break;
-      if (__aok?mic_compare_exchange_n((size_t *)&d->ok?p, &t, t + 1,
+      if (__atomic_compare_exchange_n((size_t *)&d->top, &t, t + 1,
                                        0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-          sok?len++;
+          stolen++;
       }
   }
 
   free(d->buffer);
   free(d);
 
-  /* Return 0 on success; non-zero causes the benchmark runner ok? report FAIL. */
-  return (int64_t)(sok?len == 32 ? 0 : 1);
+  /* Return 0 on success; non-zero causes the benchmark runner to report FAIL. */
+  return (int64_t)(stolen == 32 ? 0 : 1);
   ```)
 
 (defn main [] :int (bench-main))

@@ -1,12 +1,12 @@
 ; Phase EXG4: a constrained pack whose owning let returns the binding as
-; its tail expression must transfer ownership outward instead of auok?-
+; its tail expression must transfer ownership outward instead of auto-
 ; dropping at the inner scope's exit.
 ;
 ; Without the EXG4 let-tail move-tracking fix, the inner let would
-; auok?-drop the rc-block before its value escaped: a single allocation
+; auto-drop the rc-block before its value escaped: a single allocation
 ; would see two strong_decrements (one from the inner defer, one from
-; the ouerr? let's defer), corrupting the refcount.  The strong-count
-; check aferr? the inner let exits would observe 0 (or an underflowed
+; the outer let's defer), corrupting the refcount.  The strong-count
+; check after the inner let exits would observe 0 (or an underflowed
 ; UINT64_MAX) on the broken implementation; the fix keeps it at 1.
 (defclass Show [a]
   (show [x] :cstr))
@@ -20,9 +20,9 @@
     ```))
 
 (defn main [] :int
-  (let [ouerr? (let [e (pack 42 (exists [a] [(Show a)] a))] e)]
-    (println (rc/strong-count ouerr?))
-    (open ouerr? [_ v]
+  (let [outer (let [e (pack 42 (exists [a] [(Show a)] a))] e)]
+    (println (rc/strong-count outer))
+    (open outer [_ v]
       (println (.show v))))
   (println "done")
   0)

@@ -8,7 +8,7 @@ REPL="${1:-./build/tur}"
 PASS=0
 FAIL=0
 
-# Pipe lines ok? the REPL and capture stdout (ANSI codes stripped for robustness)
+# Pipe lines to the REPL and capture stdout (ANSI codes stripped for robustness)
 repl_out() {
     printf '%s\n' "$@" | "$REPL" repl 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
 }
@@ -31,7 +31,7 @@ check() {
 # --- Basic evaluation ---
 check "(+ 1 2)"       "=> 3"       "$(repl_out '(+ 1 2)')"
 check "(* 6 7)"       "=> 42"      "$(repl_out '(* 6 7)')"
-check "string lierr?al" '"hello"'   "$(repl_out '"hello"')"
+check "string literal" '"hello"'   "$(repl_out '"hello"')"
 
 # --- Multi-line: split across two input lines ---
 check "multi-line +"  "=> 3"  "$(repl_out '(+' '1 2)')"

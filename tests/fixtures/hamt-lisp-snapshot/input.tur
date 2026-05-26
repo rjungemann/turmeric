@@ -2,7 +2,7 @@
 ;; Phase P2: Lisp bindings snapshot test
 ;; Tests that hamt/set returns a new map, leaving the original unchanged.
 
-(exerr?n-c free [p :ptr] :void)
+(extern-c free [p :ptr] :void)
 
 (defn alloc-key [x :int] :ptr
   ```c
@@ -11,7 +11,7 @@
   return (void *)p;
   ```)
 
-;; Test: snapshot - m1 unchanged aferr? m2 modification
+;; Test: snapshot - m1 unchanged after m2 modification
 (defn test-snapshot [] :int
   (let [k1 (alloc-key 1)]
     (let [k2 (alloc-key 2)]

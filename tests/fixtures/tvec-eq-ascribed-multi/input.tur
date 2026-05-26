@@ -1,0 +1,38 @@
+;; Phase F3-7 (cross-plan-followups): sticky-ascription dispatch
+;; works across multiple primitive element types, not just int.
+;; Verifies that the auto-loaded primitive Eq instances (int, bool,
+;; cstr, float, plus int8..uint64, float32) all satisfy the
+;; `(Eq A)` constraint on `Eq[Vec[A]]` so `(.eq? v v)` resolves
+;; without an explicit `(load "stdlib/typeclass.tur")`.
+
+(defn main [] :int
+  (let [a (:: (tvec-new) (Vec int))
+        b (:: (tvec-new) (Vec int))]
+    (tvec-push! a 42)
+    (tvec-push! b 42)
+    (println (.eq? a b)))   ; true (Vec[int])
+
+  (let [a (:: (tvec-new) (Vec bool))
+        b (:: (tvec-new) (Vec bool))]
+    (tvec-push! a 1)        ; bool stored as int64
+    (tvec-push! b 1)
+    (tvec-push! a 0)
+    (tvec-push! b 0)
+    (println (.eq? a b)))   ; true (Vec[bool])
+
+  (let [a (:: (tvec-new) (Vec cstr))
+        b (:: (tvec-new) (Vec cstr))]
+    (println (.eq? a b)))   ; true (Vec[cstr], both empty)
+
+  (let [a (:: (tvec-new) (Vec int32))
+        b (:: (tvec-new) (Vec int32))]
+    (tvec-push! a 7)
+    (tvec-push! b 7)
+    (println (.eq? a b)))   ; true (Vec[int32])
+
+  (let [a (:: (tvec-new) (Vec uint64))
+        b (:: (tvec-new) (Vec uint64))]
+    (tvec-push! a 100)
+    (tvec-push! b 200)
+    (println (.eq? a b)))   ; false (Vec[uint64], differ)
+  0)

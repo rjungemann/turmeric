@@ -1,5 +1,5 @@
 ;; ER2: two higher-order functions with different row variables composed;
-;; the ouerr? caller's inferred row is the union of both.
+;; the outer caller's inferred row is the union of both.
 
 (defeffect Ask [] :int)
 (defeffect Tell [s :cstr] :nil)

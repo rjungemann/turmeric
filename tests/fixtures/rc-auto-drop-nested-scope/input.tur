@@ -1,6 +1,6 @@
-;; Phase 9 auok?-drop: nested scope should drop inner rc before ouerr? rc via LIFO defers.
+;; Phase 9 auto-drop: nested scope should drop inner rc before outer rc via LIFO defers.
 
-(defn rc-auok?-drop-nested-scope []
-  (let [ouerr? (rc/of 10)]
+(defn rc-auto-drop-nested-scope []
+  (let [outer (rc/of 10)]
     (let [inner (rc/of 20)]
-      (+ (rc/strong-count ouerr?) (rc/strong-count inner)))))
+      (+ (rc/strong-count outer) (rc/strong-count inner)))))

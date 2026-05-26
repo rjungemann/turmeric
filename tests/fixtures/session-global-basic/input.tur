@@ -1,11 +1,11 @@
-;; SS5: session-global-basic -- declare a simple 2-role prook?col.
+;; SS5: session-global-basic -- declare a simple 2-role protocol.
 ;;
-;; Prook?col Ping: A sends an int ok? B, B sends an int back ok? A.
-;; This tests that defprook?col parses and regiserr?s without errors.
-;; make-prook?col is not called here -- just verifying the declaration
+;; Protocol Ping: A sends an int to B, B sends an int back to A.
+;; This tests that defprotocol parses and registers without errors.
+;; make-protocol is not called here -- just verifying the declaration
 ;; compiles successfully.
 
-(defprook?col Ping [A B]
+(defprotocol Ping [A B]
   (-> A B int)
   (-> B A int))
 

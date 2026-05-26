@@ -1,5 +1,5 @@
 ;; DV1 P2: nested binding forms compose correctly.
-;; The inner binding takes precedence; the ouerr? value is resok?red on inner exit.
+;; The inner binding takes precedence; the outer value is restored on inner exit.
 (defdynamic *log-level* :int 0)
 (binding [*log-level* 1]
   (binding [*log-level* 3]

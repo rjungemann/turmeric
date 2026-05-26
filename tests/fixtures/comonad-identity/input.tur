@@ -46,7 +46,7 @@
       ;; extract returns the inner value
       (println (.extract w))                                       ;; 42
 
-      ;; extend applies f ok? the whole comonad, wraps result
+      ;; extend applies f to the whole comonad, wraps result
       (let [w2 (.extend w (fn [wa] (+ (identity-get wa) 1)))]
         (println (.extract w2)))                                   ;; 43
 

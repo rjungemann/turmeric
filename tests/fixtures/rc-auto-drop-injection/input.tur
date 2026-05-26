@@ -2,5 +2,5 @@
   (let [rc (rc/of 42)]
     (println (rc/strong-count rc))
     0)
-  (println "aferr? scope")
+  (println "after scope")
   0)

@@ -5,8 +5,8 @@
 (defn main [] :int
   ;; free-lift wraps a value in Suspend(PureFree(fx))
   (let [lifted (free-lift 10)]
-    ;; free-run on a Suspend passes the inner value ok? inerr?p
-    ;; Use a capturing closure as inerr?p
+    ;; free-run on a Suspend passes the inner value to interp
+    ;; Use a capturing closure as interp
     (let [scale 3
           result (free-run (fn [inner] (let [_ scale] (* inner scale))) lifted)]
       (println result)

@@ -1,6 +1,6 @@
 ; Phase 5: ref<T> used inside a function — the function creates a ref,
-; uses it ok? derive a return value, and the drop fires at function exit.
-; The caller receives the int value; no dangling poinerr?.
+; uses it to derive a return value, and the drop fires at function exit.
+; The caller receives the int value; no dangling pointer.
 
 (defn use-ref [] :int
   (let [r (ref 100)]

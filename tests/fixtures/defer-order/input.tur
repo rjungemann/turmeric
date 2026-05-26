@@ -1,8 +1,8 @@
 (defn main [] :int
   (let [x 1]
     (println "before")
-    (defer (println "first-regiserr?ed"))
-    (defer (println "second-regiserr?ed"))
-    (defer (println "third-regiserr?ed"))
-    (println "aferr?"))
+    (defer (println "first-registered"))
+    (defer (println "second-registered"))
+    (defer (println "third-registered"))
+    (println "after"))
   0)

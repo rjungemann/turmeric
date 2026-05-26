@@ -1,7 +1,7 @@
 ;; Phase T22: taskgroup-nested — nested task groups
 ;;
 ;; Tests:
-;;   1. Create ouerr? task group
+;;   1. Create outer task group
 ;;   2. Create inner task group  
 ;;   3. Spawn tasks in both groups
 ;;   4. Complete all tasks
@@ -101,26 +101,26 @@
   ```)
 
 (defn main [] :int
-  (let [ouerr? (tg-new)
+  (let [outer (tg-new)
         inner (tg-new)]
-    ;; Spawn tasks in ouerr? group
-    (tg-spawn ouerr?)
-    (tg-spawn ouerr?)
+    ;; Spawn tasks in outer group
+    (tg-spawn outer)
+    (tg-spawn outer)
     
     ;; Spawn tasks in inner group
     (tg-spawn inner)
     
     ;; Complete all tasks
-    (tg-task-done ouerr?)
-    (tg-task-done ouerr?)
+    (tg-task-done outer)
+    (tg-task-done outer)
     (tg-task-done inner)
     
     ;; Wait for both groups
     (tg-wait inner)
-    (tg-wait ouerr?)
+    (tg-wait outer)
     
     (println "nested-complete")
     
     (tg-free inner)
-    (tg-free ouerr?)
+    (tg-free outer)
     0))

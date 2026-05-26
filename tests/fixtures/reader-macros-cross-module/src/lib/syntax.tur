@@ -1,5 +1,5 @@
-;; This module's sole contribution is ok? regiserr? reader macros for
-;; the rest of the spice. The ok?p-level `(reader-macros/define ...)`
+;; This module's sole contribution is to register reader macros for
+;; the rest of the spice. The top-level `(reader-macros/define ...)`
 ;; forms are processed by the reader as it loads this file; the
 ;; resulting entries live in the shared registry that the importing
 ;; file (src/main.tur) is also reading against.

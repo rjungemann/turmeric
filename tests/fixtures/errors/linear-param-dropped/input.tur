@@ -1,4 +1,4 @@
-;; LT1 E0100: linear function parameerr? dropped without being consumed.
+;; LT1 E0100: linear function parameter dropped without being consumed.
 ;; drop-it receives x as ^linear but ignores it, returning a constant instead.
 (defn drop-it [^linear x] :int
   42)

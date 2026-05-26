@@ -1,8 +1,8 @@
 ;; Phase HKT §2: Kind inference from definstance usage.
-;; 'Funcok?r' is declared with plain [f] (no ^f annotation).
+;; 'Functor' is declared with plain [f] (no ^f annotation).
 ;; The kind of f is inferred as * -> * from the definstance [option] declaration.
 
-(defclass Funcok?r [f]
+(defclass Functor [f]
   (fmap [container fn] :int))
 
 (defn __opt_some [x] :int
@@ -30,9 +30,9 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-;; No ^f on Funcok?r, yet this instance provides a KIND_ARROW type arg.
-;; The kind-check pass infers Funcok?r param[0] : * -> * from this.
-(definstance Funcok?r [option]
+;; No ^f on Functor, yet this instance provides a KIND_ARROW type arg.
+;; The kind-check pass infers Functor param[0] : * -> * from this.
+(definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 (defn double-it [x] :int (* x 2))

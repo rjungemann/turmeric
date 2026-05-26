@@ -1,9 +1,9 @@
-;; PTC4 basic test: type-parameerr? constraint substitution.
+;; PTC4 basic test: type-parameter constraint substitution.
 ;;
 ;; Measurable[Box[A]] requires Measurable[A].
 ;; When dispatching (.measure (box-new 42)), the concrete type of A
 ;; is extracted from the TY_APP(Box,int) result type of box-new and
-;; used ok? satisfy the (Measurable A) constraint.
+;; used to satisfy the (Measurable A) constraint.
 
 (defclass Measurable [a]
   (measure [x] :int))

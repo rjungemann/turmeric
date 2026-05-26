@@ -1,14 +1,14 @@
 ;; SS4: session-effects -- session channels and algebraic effects coexist.
 ;;
 ;; Demonstrates that a session channel (linear) and an effect handler can be
-;; used in the same function without inerr?fering with each other.
+;; used in the same function without interfering with each other.
 ;;
 ;; A SessionLog effect is declared for logging.  A function performs a session
 ;; send+recv AND performs SessionLog effects; both are wrapped in a handler
-;; that inerr?cepts SessionLog, prints the message, and resumes the continuation.
+;; that intercepts SessionLog, prints the message, and resumes the continuation.
 ;;
-;; The session linearity obligation is satisfied by closing the channel aferr?
-;; the recv.  The handler never holds or ok?uches the channel.
+;; The session linearity obligation is satisfied by closing the channel after
+;; the recv.  The handler never holds or touches the channel.
 ;;
 ;; Expected output:
 ;; sending 99

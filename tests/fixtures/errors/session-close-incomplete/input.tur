@@ -1,5 +1,5 @@
-;; SS1 E0212: close not valid when prook?col is not at Close.
-;; 's' has prook?col Send int Close; calling close before completing the send
-;; step is a prook?col violation -- the endpoint is not yet at Close.
+;; SS1 E0212: close not valid when protocol is not at Close.
+;; 's' has protocol Send int Close; calling close before completing the send
+;; step is a protocol violation -- the endpoint is not yet at Close.
 (defn use-wrong [^linear s :(Session (Send int Close))] :nil
   (close s))

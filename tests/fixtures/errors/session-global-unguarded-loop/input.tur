@@ -1,6 +1,6 @@
-;; SS5 E0223: defprook?col with unguarded recursion.
-;; (loop X (continue X)) has no inerr?actions before the continue.
-(defprook?col Bad [A B]
+;; SS5 E0223: defprotocol with unguarded recursion.
+;; (loop X (continue X)) has no interactions before the continue.
+(defprotocol Bad [A B]
   (loop X
     (continue X)))
 

@@ -1,4 +1,4 @@
-; GF1 fixture: generaok?r that err?minates early with (return).
+; GF1 fixture: generator that terminates early with (return).
 
 (defn some? [p] :bool
   ```c

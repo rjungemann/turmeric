@@ -1,5 +1,5 @@
 ; A missing path on a `#use-reader-macros` directive should produce a
-; clear diagnostic from the reader, not a confusing laerr?-stage error.
+; clear diagnostic from the reader, not a confusing later-stage error.
 #use-reader-macros "no-such-file.tur"
 
 (defn main [] :int 0)

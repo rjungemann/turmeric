@@ -1,7 +1,7 @@
 ; Phase EXG4-2: rc/clone accepts a constrained existential and returns
-; a counted reference ok? the same record.  Both the original binding and
-; the clone open successfully; each auok?-drop fires once at scope exit,
-; balancing the pack's strong count back ok? zero exactly once.
+; a counted reference to the same record.  Both the original binding and
+; the clone open successfully; each auto-drop fires once at scope exit,
+; balancing the pack's strong count back to zero exactly once.
 (defclass Show [a]
   (show [x] :cstr))
 

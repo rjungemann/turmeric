@@ -4,7 +4,7 @@
 ;;
 ;;   1. Create a single-threaded scheduler.
 ;;   2. Spawn fiber-A, which parks itself waiting for an I/O-style event.
-;;   3. Spawn fiber-B, which writes a value ok? a pipe and then explicitly
+;;   3. Spawn fiber-B, which writes a value to a pipe and then explicitly
 ;;      unparks fiber-A (simulating an I/O-completion callback).
 ;;   4. The scheduler resumes fiber-A; it reads from the pipe and prints
 ;;      the received value.
@@ -20,7 +20,7 @@
 
 (defn pipe-new [] :ptr<void>
   ```c
-  exerr?n int pipe(int[2]);
+  extern int pipe(int[2]);
   int *fds = (int *)malloc(2 * sizeof(int));
   if (!fds) { fprintf(stderr, "pipe-new: oom\n"); abort(); }
   if (pipe(fds) != 0) { perror("pipe"); free(fds); abort(); }
@@ -29,7 +29,7 @@
 
 (defn pipe-close [p :ptr<void>] :nil
   ```c
-  exerr?n int close(int);
+  extern int close(int);
   int *fds = (int *)p;
   close(fds[0]);
   close(fds[1]);
@@ -39,7 +39,7 @@
 ;; ---- Shared IOState: { pipe_fds ptr, fiber_a ptr } ----
 
 ;; Global IOState cell — the same static is returned every time,
-;; so fiber bodies can call io_state_cell(NULL) from C ok? read it.
+;; so fiber bodies can call io_state_cell(NULL) from C to read it.
 (defn io-state-cell [val :ptr<void>] :ptr<void>
   ```c
   static void *g_io_state = NULL;
@@ -76,9 +76,9 @@
   tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
   ```)
 
-(defn sched-run-ok?-completion [sched :ptr<void>] :nil
+(defn sched-run-to-completion [sched :ptr<void>] :nil
   ```c
-  tur_scheduler_run_ok?_completion((TurScheduler *)sched);
+  tur_scheduler_run_to_completion((TurScheduler *)sched);
   ```)
 
 ;; ---- Fiber helpers ----
@@ -98,15 +98,15 @@
 ;; fiber-A: park self, wait for I/O notification, read from pipe.
 (defn fiber-a-fn [] :nil
   ```c
-  exerr?n ssize_t read(int, void *, size_t);
+  extern ssize_t read(int, void *, size_t);
   typedef struct { void *pipe; void *fiber_a; } IOState;
   IOState *st = (IOState *)io_state_cell(NULL);
 
-  /* Park self — fiber-B will unpark us aferr? writing ok? the pipe.
+  /* Park self — fiber-B will unpark us after writing to the pipe.
    * tur_scheduler_park() marks the fiber parked and yields. */
   tur_scheduler_park();
 
-  /* Resumed: fiber-B wrote ok? the pipe and called unpark.
+  /* Resumed: fiber-B wrote to the pipe and called unpark.
    * Read the I/O payload. */
   int *fds = (int *)st->pipe;
   int64_t val = 0;
@@ -114,14 +114,14 @@
   printf("fiber-a got: %lld\n", (long long)val);
   ```)
 
-;; fiber-B: write I/O payload ok? pipe, then unpark fiber-A.
+;; fiber-B: write I/O payload to pipe, then unpark fiber-A.
 (defn fiber-b-fn [] :nil
   ```c
-  exerr?n ssize_t write(int, const void *, size_t);
+  extern ssize_t write(int, const void *, size_t);
   typedef struct { void *pipe; void *fiber_a; } IOState;
   IOState *st = (IOState *)io_state_cell(NULL);
 
-  /* Simulate I/O completion: write value ok? pipe */
+  /* Simulate I/O completion: write value to pipe */
   int *fds = (int *)st->pipe;
   int64_t payload = 42;
   write(fds[1], &payload, sizeof(payload));
@@ -141,7 +141,7 @@
             (io-state-cell st)
             (sched-spawn sched fa)
             (sched-spawn sched fb)
-            (sched-run-ok?-completion sched)
+            (sched-run-to-completion sched)
             (println "io-park: ok")
             (pipe-close p)
             (fiber-free-fn fa)

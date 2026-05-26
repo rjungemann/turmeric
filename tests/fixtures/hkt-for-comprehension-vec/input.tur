@@ -1,7 +1,7 @@
 ;; Phase S7: for comprehension with the vec (list) monad.
 ;;
 ;; Demonstrates that (for [x coll] body) and (for [x coll :when pred] body)
-;; work when the collection is a vec, desugaring ok?:
+;; work when the collection is a vec, desugaring to:
 ;;   (for [x coll] body)           = (.bind coll (fn [x] (.pure body)))
 ;;   (for [x coll :when p] body)   = (.bind coll (fn [x] (if p (.pure body) (.empty x))))
 ;;
@@ -17,7 +17,7 @@
 (defclass Monad [^m]
   (bind [m f] :int))
 
-(defclass Alerr?native [^f]
+(defclass Alternative [^f]
   (empty [a] :int)
   (alt-or [a b] :int))
 
@@ -62,24 +62,24 @@
 
 ;; ---- Vec typeclass instances ------------------------------------------------
 
-;; Monad.bind: flatMap -- apply f ok? each element, concatenate results.
-;; f is a non-capturing closure (raw function poinerr?) for single-binding for.
+;; Monad.bind: flatMap -- apply f to each element, concatenate results.
+;; f is a non-capturing closure (raw function pointer) for single-binding for.
 (defn __vec_bind [ma f] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
   if (!v) return 0;
-  /* Two-pass: count ok?tal length, then fill. Safe for pure f. */
-  size_t ok?tal = 0;
+  /* Two-pass: count total length, then fill. Safe for pure f. */
+  size_t total = 0;
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)f)(v->data[i]);
       struct { int64_t *data; size_t len; size_t cap; } *sv =
           (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
-      if (sv) ok?tal += sv->len;
+      if (sv) total += sv->len;
   }
   struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
-  r->len = ok?tal; r->cap = ok?tal;
-  r->data = ok?tal > 0 ? malloc(sizeof(int64_t) * ok?tal) : NULL;
+  r->len = total; r->cap = total;
+  r->data = total > 0 ? malloc(sizeof(int64_t) * total) : NULL;
   size_t idx = 0;
   for (size_t i = 0; i < v->len; i++) {
       int64_t sub = ((int64_t(*)(int64_t))(intptr_t)f)(v->data[i]);
@@ -100,7 +100,7 @@
   return (int64_t)(intptr_t)v;
   ```)
 
-;; Alerr?native.empty: return an empty vec (zero element for alt-or).
+;; Alternative.empty: return an empty vec (zero element for alt-or).
 (defn __vec_empty [_] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -114,7 +114,7 @@
 (definstance Monad [vec]
   (bind [m f] (__vec_bind m f)))
 
-(definstance Alerr?native [vec]
+(definstance Alternative [vec]
   (empty [a] (__vec_empty a))
   (alt-or [a b] 0))
 
@@ -130,7 +130,7 @@
           (println (__vec_len r))   ;; 3
           (print-vec r))))          ;; 2 4 6
 
-    ;; T2: filerr? (> x 1) from [1 2 3] => [2 3]
+    ;; T2: filter (> x 1) from [1 2 3] => [2 3]
     ;; (for [x [1 2 3] :when (> x 1)] x) = bind [1 2 3] (fn [x] (if (> x 1) (pure x) (empty x)))
     (let [v2 (__vec_push (__vec_push (__vec_push (__vec_new) 1) 2) 3)]
       (let [r2 (for [x v2 :when (> x 1)] x)]

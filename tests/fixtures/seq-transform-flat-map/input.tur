@@ -1,4 +1,4 @@
-; LZ2 fixture: seq/flat-map -- map each element ok? a Seq, yield all elements.
+; LZ2 fixture: seq/flat-map -- map each element to a Seq, yield all elements.
 
 (load "stdlib/seq/transform.tur")
 

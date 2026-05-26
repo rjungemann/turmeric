@@ -1,11 +1,11 @@
 ;; SS8: session-mp-handshake -- 2-role three-way handshake.
-;; Initiaok?r sends SYN=1, Responder sends SYN-ACK=syn+1=2,
-;; Initiaok?r sends ACK=synack+1=3, Responder prints ACK.
+;; Initiator sends SYN=1, Responder sends SYN-ACK=syn+1=2,
+;; Initiator sends ACK=synack+1=3, Responder prints ACK.
 
-(defprook?col Handshake [Initiaok?r Responder]
-  (-> Initiaok?r Responder int)
-  (-> Responder Initiaok?r int)
-  (-> Initiaok?r Responder int))
+(defprotocol Handshake [Initiator Responder]
+  (-> Initiator Responder int)
+  (-> Responder Initiator int)
+  (-> Initiator Responder int))
 
 (defn spawn [f :ptr<void>] :ptr<void>
   ```c
@@ -21,22 +21,22 @@
   return 0;
   ```)
 
-(defn role-initiaok?r [^linear ch :(Role Handshake Initiaok?r)] :nil
-  (let [ch (send-ok? ch Responder 1)]
+(defn role-initiator [^linear ch :(Role Handshake Initiator)] :nil
+  (let [ch (send-to ch Responder 1)]
     (let [[synack ch] (recv-from ch Responder)]
-      (let [ch (send-ok? ch Responder (+ synack 1))]
+      (let [ch (send-to ch Responder (+ synack 1))]
         (close ch)))))
 
 (defn role-responder [^linear ch :(Role Handshake Responder)] :nil
-  (let [[syn ch] (recv-from ch Initiaok?r)]
-    (let [ch (send-ok? ch Initiaok?r (+ syn 1))]
-      (let [[ack ch] (recv-from ch Initiaok?r)]
+  (let [[syn ch] (recv-from ch Initiator)]
+    (let [ch (send-to ch Initiator (+ syn 1))]
+      (let [[ack ch] (recv-from ch Initiator)]
         (println ack)
         (close ch)))))
 
 (defn main [] :int
-  (let [[ri rr] (make-prook?col Handshake)]
+  (let [[ri rr] (make-protocol Handshake)]
     (let [t (spawn (fn [] (role-responder rr)))]
-      (role-initiaok?r ri)
+      (role-initiator ri)
       (join t)))
   0)

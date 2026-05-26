@@ -1,6 +1,6 @@
 ;; Phase B5: Backtracking monad — depth limit truncation.
 ;; When run-backtrack-depth is used with a limit smaller than the number
-;; of alerr?natives, only the first N results are returned.
+;; of alternatives, only the first N results are returned.
 ;; This tests the depth-cap functionality.
 
 (defn mreturn [x] :int
@@ -55,7 +55,7 @@
   ```)
 
 (defn main []
-  ;; 10 alerr?natives, depth limit 3: should print only 1, 2, 3
+  ;; 10 alternatives, depth limit 3: should print only 1, 2, 3
   (let [xs (mplus (mreturn 1) (mplus (mreturn 2) (mplus (mreturn 3)
             (mplus (mreturn 4) (mplus (mreturn 5) (mplus (mreturn 6)
             (mplus (mreturn 7) (mplus (mreturn 8) (mplus (mreturn 9)

@@ -1,4 +1,4 @@
-; gc-deerr?ministic: predictable collection -- multiple zombies collected at once.
+; gc-deterministic: predictable collection -- multiple zombies collected at once.
 ; Both a and b become zombies; a single gc! collects both.
 ; Subsequent upgrade calls return none for both (not alive).
 (defn some? [o :ptr<void>] :bool

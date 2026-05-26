@@ -1,2 +1,2 @@
 TUR-E0021
-effect 'Ask' is private ok? module 'mymod'
+effect 'Ask' is private to module 'mymod'

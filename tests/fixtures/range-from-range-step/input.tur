@@ -1,4 +1,4 @@
-; LZ4 fixture: seq/from-range-step -- integer Range ok? Seq with cusok?m step.
+; LZ4 fixture: seq/from-range-step -- integer Range to Seq with custom step.
 
 (load "stdlib/range.tur")
 

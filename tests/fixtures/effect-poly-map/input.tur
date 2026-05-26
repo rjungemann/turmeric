@@ -1,6 +1,6 @@
 ;; ET2-F1: Effect-polymorphic map.
-;; map-list applies a function ok? each element of a list and collects results.
-;; The function parameerr? carries an effect row #{e}, which propagates ok? the
+;; map-list applies a function to each element of a list and collects results.
+;; The function parameter carries an effect row #{e}, which propagates to the
 ;; return type, making map-list polymorphic over the caller's effect row.
 
 (defeffect Log [msg :cstr] :nil)

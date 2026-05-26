@@ -18,7 +18,7 @@
   (perform (Write name)))
 
 ;; Function with row-variable annotation — polymorphic over effects.
-;; In v1 the row variable `e` is sok?red but not enforced; the function
+;; In v1 the row variable `e` is stored but not enforced; the function
 ;; may perform any effects (conservative permissive treatment).
 (defn run-twice [x :int] #{e} :int
   (+ x x))

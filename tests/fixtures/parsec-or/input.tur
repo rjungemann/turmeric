@@ -1,4 +1,4 @@
-;; Phase B4: Parser combinaok?rs — or-parser tries both alerr?natives.
+;; Phase B4: Parser combinators — or-parser tries both alternatives.
 ;; (or-parser pa pb) succeeds on "abc" (matches 'a'), "bcd" (matches 'b'),
 ;; and fails on "xyz" (neither 'a' nor 'b').
 

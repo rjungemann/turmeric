@@ -1,12 +1,12 @@
 ; Transitive-RM T2 fixture: `(load "...")` splices another file's
-; ok?p-level forms in. With the T2 wiring (elab_ok?plevel.c reads via
+; top-level forms in. With the T2 wiring (elab_toplevel.c reads via
 ; read_all_with_registry instead of bare read_all), reader macros
 ; declared in the entry file are visible inside the loaded file.
 (reader-macros/define 'sum :datum-bracket '(+ $body))
 
 ; Path is resolved against cwd (which is the project root when the
-; test runner invokes us), not the source file's direcok?ry. See the
-; existing gen-collect / scscm-compile fixtures for the same paerr?n.
+; test runner invokes us), not the source file's directory. See the
+; existing gen-collect / scscm-compile fixtures for the same pattern.
 (load "tests/fixtures/reader-macros-load-transitive/helper.tur")
 
 (println (helper-sum))

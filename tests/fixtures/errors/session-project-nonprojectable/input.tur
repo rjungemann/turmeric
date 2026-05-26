@@ -1,8 +1,8 @@
-;; SS6: TUR-E0220 -- prook?col is not projectable because role C behaves
+;; SS6: TUR-E0220 -- protocol is not projectable because role C behaves
 ;; differently in different branches but is not the deciding role.
-;; In the left branch C receives from B; in the right branch C sends ok? B.
+;; In the left branch C receives from B; in the right branch C sends to B.
 ;; These projections are not equal, so merge fails.
-(defprook?col Bad3 [A B C]
+(defprotocol Bad3 [A B C]
   (choice A
     [left  (-> B C int)]
     [right (-> C B int)]))

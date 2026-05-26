@@ -1,4 +1,4 @@
 reading config: file not found
 ok passed through
 IoError: connection refused
-ParseError: unexpected ok?en at <unknown>:12:0
+ParseError: unexpected token at <unknown>:12:0

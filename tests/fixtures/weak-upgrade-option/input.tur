@@ -1,6 +1,6 @@
 ;; Verify that (upgrade w) returns option<rc<T>>:
 ;;   - some (non-NULL) when the rc is still alive
-;;   - none (NULL) aferr? the rc has been dropped
+;;   - none (NULL) after the rc has been dropped
 
 (defn some? [o :ptr<void>] :bool
   ```c

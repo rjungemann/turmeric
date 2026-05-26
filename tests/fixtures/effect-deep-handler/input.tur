@@ -1,7 +1,7 @@
 ;; Phase P19-5: Deep handler — the handler frame stays active across
 ;; multiple sequential effect invocations.  Each invocation receives a
 ;; fresh TurContK (not the constant 0LL from pre-P19-5), so (cont? k)
-;; returns true for an unconsumed k and transitions ok? false aferr? resume.
+;; returns true for an unconsumed k and transitions to false after resume.
 (defeffect Step [] :int)
 
 ;; A computation that performs Step three times and accumulates the results.
@@ -14,7 +14,7 @@
 ;; Deep handler: the handler frame remains installed for all three
 ;; Step invocations.  Each call gets a fresh k; (cont? k) must return
 ;; true before resume (k is unconsumed) and the handler returns 1 for
-;; each invocation so the ok?tal is 3.
+;; each invocation so the total is 3.
 (println
   (handle (three-steps)
     (Step [] k)

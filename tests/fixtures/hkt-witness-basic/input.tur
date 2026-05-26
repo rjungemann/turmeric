@@ -1,8 +1,8 @@
 ;; Phase D1: Type witness @TypeName -- basic case.
-;; Two Funcok?r instances (option, vec). The receiver has erased type (TY_INT).
-;; @option witness pins dispatch ok? Funcok?r[option] at zero runtime cost.
+;; Two Functor instances (option, vec). The receiver has erased type (TY_INT).
+;; @option witness pins dispatch to Functor[option] at zero runtime cost.
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -65,10 +65,10 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Funcok?r [option]
+(definstance Functor [option]
   (fmap [c f] (__fmap_option c f)))
 
-(definstance Funcok?r [vec]
+(definstance Functor [vec]
   (fmap [c f] (__fmap_vec c f)))
 
 (defn twice [x] :int (* x 2))
@@ -79,7 +79,7 @@
 (defn main [] :int
   (let [obj (mk)]
     ;; Without @option this would trigger TUR_E0020_AMBIGUOUS_DISPATCH.
-    ;; @option pins dispatch ok? Funcok?r[option] at compile time.
+    ;; @option pins dispatch to Functor[option] at compile time.
     (let [result (.fmap @option obj twice)]
       (do
         (println (__opt_some? result))

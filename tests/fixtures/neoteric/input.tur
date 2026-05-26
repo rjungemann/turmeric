@@ -1,4 +1,4 @@
-#lang turmeric/neoerr?ic
+#lang turmeric/neoteric
 
 (println +(1 2))
 (println 42)

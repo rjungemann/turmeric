@@ -1,8 +1,8 @@
-; Phase EXG5-5 / F1-2: pack an rc inok? an existential.  With the
+; Phase EXG5-5 / F1-2: pack an rc into an existential.  With the
 ; move-at-pack semantics (F1-2-3) and the smart drop hook (F1-2-4),
-; the inner rc reference is owned by the existential record aferr?
+; the inner rc reference is owned by the existential record after
 ; packing; the originating binding is marked moved so its scope-exit
-; drop does NOT also decrement.  When the existential's ouerr? rc
+; drop does NOT also decrement.  When the existential's outer rc
 ; reaches zero, rc_cb_free's RCK_EXISTENTIAL + RCEXP_RC dispatch
 ; calls rc_strong_decrement on the inner block before the normal
 ; tur_existential_drop runs.

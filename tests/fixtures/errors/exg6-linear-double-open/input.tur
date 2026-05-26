@@ -1,4 +1,4 @@
-; Phase EXG6-2: opening a `:linear` existential twice is a use-aferr?-
+; Phase EXG6-2: opening a `:linear` existential twice is a use-after-
 ; consume; the second open's EX_VAR lookup must trip LT1's
 ; TUR_E0101 diagnostic under -Xlinear.
 (defclass Show [a]

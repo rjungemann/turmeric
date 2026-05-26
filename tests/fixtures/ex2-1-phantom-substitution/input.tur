@@ -1,17 +1,17 @@
-; Phase EX2-1: Audit -- phanok?m type variables in existential bodies.
+; Phase EX2-1: Audit -- phantom type variables in existential bodies.
 ;
-; A phanok?m variable is one that appears only in type-index position (nested
+; A phantom variable is one that appears only in type-index position (nested
 ; inside a type application) and never carries a runtime payload of its own.
 ; The EX1b-4 substitution path must keep the bound variable's identity inside
-; the body and must not leak an ouerr? unification inok? the binder's scope.
+; the body and must not leak an outer unification into the binder's scope.
 ;
 ; This fixture exercises three representative shapes:
 ;   1. (exists [n] int)                -- n unused in body (vacuous binder)
 ;   2. (exists [n] (SizedVec n int))   -- n appears nested in a TY_APP
-;   3. (exists [n m] (SizedVec n m))   -- two phanok?m indices, both nested
+;   3. (exists [n m] (SizedVec n m))   -- two phantom indices, both nested
 ;
 ; Successful compilation + matching stdout demonstrates the audit invariant:
-; the body parses, the bound variable resolves ok? a fresh local tyvar, and the
+; the body parses, the bound variable resolves to a fresh local tyvar, and the
 ; existential's overall type/runtime layout does not depend on the indices.
 (defgadt SizedVec [n a]
   (SVNil : (SizedVec int int))
@@ -22,12 +22,12 @@
   (let [e1 (pack 7 (exists [n] int))]
     (open e1 [n v]
       (println v)))
-  ; (2) Phanok?m binder appearing nested in a TY_APP.
+  ; (2) Phantom binder appearing nested in a TY_APP.
   (let [sv (SVCons 1 (SVCons 2 (SVNil)))]
     (let [e2 (pack sv (exists [n] (SizedVec n int)))]
       (open e2 [n v]
         (println 22))))
-  ; (3) Two phanok?m indices, both nested.
+  ; (3) Two phantom indices, both nested.
   (let [sv2 (SVCons 9 (SVNil))]
     (let [e3 (pack sv2 (exists [n m] (SizedVec n m)))]
       (open e3 [n v]

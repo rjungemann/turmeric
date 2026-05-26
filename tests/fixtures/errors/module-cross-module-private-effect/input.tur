@@ -1,6 +1,6 @@
 ;; Phase P19-A/F: Private effect blocked across module boundary.
 ;; Module effects/ask declares Ask as ^private.
-;; Module myapp attempts ok? handle Ask from outside — must be rejected.
+;; Module myapp attempts to handle Ask from outside — must be rejected.
 (defmodule myapp
   (export run)
   (import effects/ask :as ea)

@@ -1,12 +1,12 @@
 ;; Phase H6: Integration test — HKTs + closures + defers + refs.
 ;;
 ;; Scenario:
-;;   1. A Funcok?r typeclass is applied via a capturing closure.
-;;   2. A ref<int> holds a counerr? that the closure captures by borrow.
+;;   1. A Functor typeclass is applied via a capturing closure.
+;;   2. A ref<int> holds a counter that the closure captures by borrow.
 ;;   3. A defer in main logs "done" on scope exit.
 ;;   4. The combined result is printed.
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -39,7 +39,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Funcok?r [option]
+(definstance Functor [option]
   (fmap [container fn] (__fmap_option_clos container fn)))
 
 (defn main [] :int
@@ -47,7 +47,7 @@
     ;; ref holds the addend; closure captures it via borrow
     (let [addend (ref 7)]
       (let [b (& addend)]
-        (defer (println "done"))           ;; fires last, aferr? result printed
+        (defer (println "done"))           ;; fires last, after result printed
         (let [opt (__opt_some 10)]
           (let [result (__fmap_option_clos opt (fn [x] (+ x @b)))]
             (println (__opt_unwrap result)))) ;; 17

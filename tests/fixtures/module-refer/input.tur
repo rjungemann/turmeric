@@ -1,4 +1,4 @@
-(defmodule calculaok?r
+(defmodule calculator
   (export run)
   (import math/ops :refer [add sub])
   (defn run [] :int

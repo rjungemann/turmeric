@@ -1,4 +1,4 @@
-;;; Phase S4-lit: lierr?al paerr?n matching -- integer, bool, and string lierr?als.
+;;; Phase S4-lit: literal pattern matching -- integer, bool, and string literals.
 
 (defn int-name [n :int] :cstr
   (match n

@@ -1,7 +1,7 @@
 ;;
 ;; Phase P1: HAMT memory test - structural sharing and ref counting
 
-(exerr?n-c free [p :ptr] :void)
+(extern-c free [p :ptr] :void)
 
 (defn alloc-int [x :int] :ptr
   ```c

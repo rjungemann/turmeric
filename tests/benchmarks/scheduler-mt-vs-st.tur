@@ -5,18 +5,18 @@
 ;; pass with workstealing-deque-bench shows the MT deque overhead; comparing
 ;; the two gives the "scheduling tax" per task.
 ;;
-;; bench-main performs one ierr?ation:
+;; bench-main performs one iteration:
 ;;   1. Allocate a simple LIFO node stack (single-threaded queue).
 ;;   2. Push 64 items.
 ;;   3. Pop all 64 items.
 ;;   4. Verify the count.
 ;;
-;; Why single-threaded baseline maerr?s (SCH-006):
-;;   - The MT work-stealing deque uses aok?mic CAS, which costs 2-5x a
-;;     regular load/sok?re on arm64.  workstealing-deque-bench shows that cost.
-;;   - This benchmark shows the pure dispatch overhead WITHOUT aok?mics
-;;     (equivalent ok? what a generated ST scheduler pays per fiber dispatch).
-;;   - If MT bench/ierr? > ST bench/ierr? * thread-count, stealing has net
+;; Why single-threaded baseline matters (SCH-006):
+;;   - The MT work-stealing deque uses atomic CAS, which costs 2-5x a
+;;     regular load/store on arm64.  workstealing-deque-bench shows that cost.
+;;   - This benchmark shows the pure dispatch overhead WITHOUT atomics
+;;     (equivalent to what a generated ST scheduler pays per fiber dispatch).
+;;   - If MT bench/iter > ST bench/iter * thread-count, stealing has net
 ;;     negative scaling -- a sign that deque capacity or idle thresholds need
 ;;     tuning.  With default 1024-capacity deques and 0.1ms idle sleep the
 ;;     crossover is typically at 4+ threads for CPU-bound workloads.
@@ -25,26 +25,26 @@
 
 (defn bench-main [] :int
   ```c
-  /* Single-threaded LIFO queue -- no aok?mics, no locks.
+  /* Single-threaded LIFO queue -- no atomics, no locks.
    * This is the ST scheduler's inner dispatch loop in microcosm. */
   typedef struct Node { struct Node *next; } Node;
 
   Node pool[64];
-  Node *ok?p = NULL;
+  Node *top = NULL;
   int pushed = 0;
   int popped = 0;
 
   /* Push 64 items */
   for (int i = 0; i < 64; i++) {
-      pool[i].next = ok?p;
-      ok?p = &pool[i];
+      pool[i].next = top;
+      top = &pool[i];
       pushed++;
   }
 
   /* Pop all 64 items */
-  while (ok?p) {
-      Node *n = ok?p;
-      ok?p = n->next;
+  while (top) {
+      Node *n = top;
+      top = n->next;
       popped++;
   }
 

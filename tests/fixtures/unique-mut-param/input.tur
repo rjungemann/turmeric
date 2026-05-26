@@ -1,4 +1,4 @@
-;; UT2: ^unique ^mut parameerr? -- exclusive mutable ownership.
+;; UT2: ^unique ^mut parameter -- exclusive mutable ownership.
 ;; increment! receives x as a uniquely-owned mutable int, mutates it, and returns it.
 (defn increment! [^unique ^mut x] :int
   (set! x (+ x 1))

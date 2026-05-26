@@ -86,7 +86,7 @@
         (println (ValidationError-field ve))
         (ValidationError-free ve)))
     ;; NotFoundError
-    (let [ne (NotFoundError. "config.ok?ml")]
+    (let [ne (NotFoundError. "config.toml")]
       (do
         (println (NotFoundError-what ne))
         (NotFoundError-free ne)))

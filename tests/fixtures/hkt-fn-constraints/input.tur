@@ -1,10 +1,10 @@
 ;; Phase HKT H4: Kind-polymorphic function with multiple kind-variable annotations.
-;; Multiple ^-prefixed annotations can appear before the runtime parameerr?s.
+;; Multiple ^-prefixed annotations can appear before the runtime parameters.
 ;; All kind-variable annotations are type-level only and are erased at runtime;
-;; the function compiles ok? a regular function that takes container and fn.
+;; the function compiles to a regular function that takes container and fn.
 
 
-(defclass Funcok?r [^f]
+(defclass Functor [^f]
   (fmap [container fn] :int))
 
 (defn __opt_some [x] :int
@@ -32,11 +32,11 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Funcok?r [option]
+(definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Both ^f and ^g kind-variable annotations are erased at runtime.
-;; The function receives only the concrete container and fn parameerr?s.
+;; The function receives only the concrete container and fn parameters.
 (defn fmap-twice [^f ^g container fn] :int
   (.fmap (.fmap container fn) fn))
 

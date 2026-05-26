@@ -1,4 +1,4 @@
-; LZ3 fixture: seq/foldl -- left fold with initial accumulaok?r.
+; LZ3 fixture: seq/foldl -- left fold with initial accumulator.
 ; Sum [1,6) starting from 0 = 15.
 
 (load "stdlib/seq/consume.tur")

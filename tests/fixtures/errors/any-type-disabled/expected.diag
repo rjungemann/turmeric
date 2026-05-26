@@ -1,1 +1,1 @@
-'any' type requires -Xunion-types or -Xinerr?section-types
+'any' type requires -Xunion-types or -Xintersection-types

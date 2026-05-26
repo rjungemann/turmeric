@@ -1,7 +1,7 @@
 ;; Phase T19: rwlock-basic — read/write lock via pthread_rwlock_t.
 ;;
-;; Multiple readers can hold the lock concurrently; wrierr?s get exclusive access.
-;; Represented as a :ptr<void> ok? a heap-allocated pthread_rwlock_t.
+;; Multiple readers can hold the lock concurrently; writers get exclusive access.
+;; Represented as a :ptr<void> to a heap-allocated pthread_rwlock_t.
 
 (defn rwlock-new [] :ptr<void>
   ```c

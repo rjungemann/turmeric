@@ -1,4 +1,4 @@
-;; Phase 19: with-fail-panic stdlib handler -- bridges Fail effect ok? panic.
+;; Phase 19: with-fail-panic stdlib handler -- bridges Fail effect to panic.
 (defeffect Fail [msg :cstr] :nil)
 
 ;; Local handler that prints the fail message instead of panicking,

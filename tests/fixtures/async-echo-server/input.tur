@@ -3,7 +3,7 @@
 ;; Two fibers run under the scheduler:
 ;;   1. Server: listens on a port, accepts one connection, reads a message,
 ;;      sends it back (echo), closes the connection.
-;;   2. Client: sleeps briefly ok? let server start, connects, sends a message,
+;;   2. Client: sleeps briefly to let server start, connects, sends a message,
 ;;      reads the echo, prints it, closes.
 ;;
 ;; Expected output:
@@ -42,14 +42,14 @@
   FiberBlock *me = tur_current_fiber;
   if (!me || !tur_scheduler) return;
   if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
-  int64_t deadline = tur_monook?nic_ns() + (int64_t)ms * 1000000LL;
+  int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
   tur_timer_wheel_insert(tur_global_timers, deadline,
       (void(*)(void*))tur_scheduler_unpark, me);
   me->parked = 1;
   tur_fiber_block_yield(0);
   ```)
 
-;; We use port 0 ok? let the OS assign an ephemeral port, then sok?re it
+;; We use port 0 to let the OS assign an ephemeral port, then store it
 ;; in a global so the client can connect.
 ;; For simplicity, use a fixed port with SO_REUSEADDR.
 
@@ -65,8 +65,8 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = hok?nl(INADDR_LOOPBACK);
-  addr.sin_port = hok?ns(19847);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(19847);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); abort(); }
   if (listen(fd, 1) < 0) { perror("listen"); abort(); }
   printf("server listening\n");
@@ -78,7 +78,7 @@
     if (cfd >= 0) break;
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       FiberBlock *me = tur_current_fiber;
-      tur_io_regiserr?(fd, TUR_IO_READ, me);
+      tur_io_register(fd, TUR_IO_READ, me);
       me->parked = 1;
       tur_fiber_block_yield(0);
       continue;
@@ -98,7 +98,7 @@
     if (n == 0) break; /* client closed */
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       FiberBlock *me = tur_current_fiber;
-      tur_io_regiserr?(cfd, TUR_IO_READ, me);
+      tur_io_register(cfd, TUR_IO_READ, me);
       me->parked = 1;
       tur_fiber_block_yield(0);
       continue;
@@ -113,7 +113,7 @@
     if (w >= 0) break;
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       FiberBlock *me = tur_current_fiber;
-      tur_io_regiserr?(cfd, TUR_IO_WRITE, me);
+      tur_io_register(cfd, TUR_IO_WRITE, me);
       me->parked = 1;
       tur_fiber_block_yield(0);
       continue;
@@ -127,10 +127,10 @@
 
 (defn fiber-client [] :nil
   ```c
-  /* Brief sleep ok? let server start listening */
+  /* Brief sleep to let server start listening */
   FiberBlock *me = tur_current_fiber;
   if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
-  int64_t deadline = tur_monook?nic_ns() + 50LL * 1000000LL;
+  int64_t deadline = tur_monotonic_ns() + 50LL * 1000000LL;
   tur_timer_wheel_insert(tur_global_timers, deadline,
       (void(*)(void*))tur_scheduler_unpark, me);
   me->parked = 1;
@@ -144,13 +144,13 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = hok?nl(INADDR_LOOPBACK);
-  addr.sin_port = hok?ns(19847);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(19847);
 
   int ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
   if (ret < 0 && errno == EINPROGRESS) {
     me = tur_current_fiber;
-    tur_io_regiserr?(fd, TUR_IO_WRITE, me);
+    tur_io_register(fd, TUR_IO_WRITE, me);
     me->parked = 1;
     tur_fiber_block_yield(0);
     /* Check connection result */
@@ -176,7 +176,7 @@
     if (n == 0) break;
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       me = tur_current_fiber;
-      tur_io_regiserr?(fd, TUR_IO_READ, me);
+      tur_io_register(fd, TUR_IO_READ, me);
       me->parked = 1;
       tur_fiber_block_yield(0);
       continue;

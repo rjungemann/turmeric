@@ -1,11 +1,11 @@
 ; RR3 fixture: #r{...} variable shadowing warning.
-; When the single-leerr? variable name in #r{...} matches an ouerr? binding,
-; the elaboraok?r emits a DIAG_WARNING -- but compilation succeeds and the
+; When the single-letter variable name in #r{...} matches an outer binding,
+; the elaborator emits a DIAG_WARNING -- but compilation succeeds and the
 ; program produces correct output.
 
 (load "stdlib/range.tur")
 
-; n is a function parameerr?; using 'n' as the range variable should warn.
+; n is a function parameter; using 'n' as the range variable should warn.
 (defn safe-lt [n :int limit :int] :bool
   (range-contains? #r{n < limit} n))
 
