@@ -650,12 +650,17 @@ int emit_program(Buf *out, const Expr *program) {
         else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
             char adt_c_name[256];
-            snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", def->name);
+            {
+                char *_mn = mangle_field_name(def->name);
+                snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
+                free(_mn);
+            }
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
             buf_printf(&early_file, "    int tag;\n");
             buf_printf(&early_file, "    union {\n");
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
+                char *mctor = mangle_field_name(ctor->name);
                 buf_printf(&early_file, "        struct {");
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     const char *ctype;
@@ -683,7 +688,8 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                     buf_printf(&early_file, " %s _%u;", ctype, fi);
                 }
-                buf_printf(&early_file, " } %s;\n", ctor->name);
+                buf_printf(&early_file, " } %s;\n", mctor);
+                free(mctor);
             }
             buf_printf(&early_file, "    } as;\n");
             buf_printf(&early_file, "} %s;\n\n", adt_c_name);
@@ -691,7 +697,8 @@ int emit_program(Buf *out, const Expr *program) {
             /* Emit constructor functions */
             for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
                 CtorDef *ctor = def->ctors[ci];
-                buf_printf(&early_file, "static int64_t ctor_%s(", ctor->name);
+                char *mctor = mangle_field_name(ctor->name);
+                buf_printf(&early_file, "static int64_t ctor_%s(", mctor);
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     if (fi > 0) buf_puts(&early_file, ", ");
                     const char *ctype;
@@ -725,10 +732,11 @@ int emit_program(Buf *out, const Expr *program) {
                 buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
-                               ctor->name, fi, fi);
+                               mctor, fi, fi);
                 }
                 buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
                 buf_printf(&early_file, "}\n\n");
+                free(mctor);
             }
         }
     }

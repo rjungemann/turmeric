@@ -1402,8 +1402,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */
             if (fn_binding->type.kind == TY_ADT) {
+                char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);
-                buf_printf(&out, "ctor_%s()", fn_binding->name->name);
+                buf_printf(&out, "ctor_%s()", _mc);
+                free(_mc);
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
@@ -1422,8 +1424,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                 }
+                char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);
-                buf_printf(&out, "ctor_%s(", fn_binding->name->name);
+                buf_printf(&out, "ctor_%s(", _mc);
+                free(_mc);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     if (i > 0) buf_puts(&out, ", ");
                     buf_puts(&out, arg_strs[i]);
@@ -3156,7 +3160,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             AdtDef *adt = e->as.match_.scrutinee->type.as.adt_.def;
             char adt_c_name[256];
-            snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", adt->name);
+            {
+                char *_mn = mangle_field_name(adt->name);
+                snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
+                free(_mn);
+            }
 
             bool nil_result = (e->type.kind == TY_NIL);
             char *tmp = NULL;
@@ -3203,15 +3211,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                     /* Bind fields */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
+                        char *_mctor = mangle_field_name(pat->ctor->name);
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
                             buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                       ctype, bname, ctype, pat->ctor->name, bi);
+                                       ctype, bname, ctype, _mctor, bi);
                             free(bname);
                         }
+                        free(_mctor);
                     }
 
                     /* Emit guard */
@@ -3294,6 +3304,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                     /* Bind field variables for constructor patterns */
                     if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
+                        char *_mctor = mangle_field_name(pat->ctor->name);
                         for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                             Binding *fb = pat->bindings[bi];
                             const char *ctype = type_c_name(fb->type);
@@ -3301,9 +3312,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             char *bname = name_for_binding(ctx, fb);
                             indent_buf(body, ctx->indent);
                             buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                       ctype, bname, ctype, pat->ctor->name, bi);
+                                       ctype, bname, ctype, _mctor, bi);
                             free(bname);
                         }
+                        free(_mctor);
                     }
 
                     /* Emit body */

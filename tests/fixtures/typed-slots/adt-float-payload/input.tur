@@ -1,0 +1,27 @@
+;; TS4: Typed ADT payload codegen.
+;;
+;; A defdata constructor with a :float field emits a `double` typed struct
+;; field in C. The payload is extracted without reinterpretation, so the
+;; round-trip through a polymorphic (int-ABI) boundary is lossless.
+
+(defdata MaybeF
+  (JustF :float)
+  (NothingF))
+
+;; Pass the ADT through a generic int boundary; the heap pointer is intact.
+(defn passthrough [x :int] :int x)
+
+(defn main [] :int
+  ;; Direct match: JustF payload should be 1.5.
+  (match (JustF 1.5)
+    (JustF x)  (println x)
+    (NothingF) (println 0))
+  ;; Through polymorphic boundary: pointer survives as int64, value unchanged.
+  (match (passthrough (JustF 2.5))
+    (JustF x)  (println x)
+    (NothingF) (println 0))
+  ;; NothingF arm.
+  (match (NothingF)
+    (JustF x)  (println x)
+    (NothingF) (println "nothing"))
+  0)
