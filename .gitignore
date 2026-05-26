@@ -31,6 +31,7 @@ tests/out/
 tests/fixtures/**/actual.*
 tests/.stamp-cache/
 tests/.stamp-cache-doctest/
+tests/.stamp-cache-turi/
 tests/doctest-generated/
 /tmp/tur-build/
 tur

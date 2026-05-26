@@ -1,0 +1,19 @@
+;; TP6: match arm binding types for defdata with type parameters
+;; When matching a parameterized ADT, the bound variable should get
+;; the concrete type from the scrutinee's type arguments.
+;;
+;; In this test, `v` in `(Yep v)` should be bound to :int since the
+;; scrutinee is Opt2 with a=int.
+(defdata Opt2 [a]
+  (Nope)
+  (Yep a))
+
+(defn double-if-some [x :int] :int
+  (let [v (Yep x)]
+    (match v
+      (Nope)  0
+      (Yep n) (* n 2))))
+
+(defn main [] :int
+  (println (double-if-some 21))
+  0)

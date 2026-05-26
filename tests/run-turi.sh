@@ -73,6 +73,8 @@ adt-basic
 adt-copy
 adt-nested
 adt-param
+adt-param-match-type
+adt-param-tyvar
 adt-recursive
 affine-basic
 affine-drop
@@ -142,11 +144,14 @@ effect-syntax
 effect-syntax-compat
 effect-with-fail
 effect-with-write
+gadt-adt-skolem
 gadt-guard
+gadt-param-tyvar
 gadt-refine-basic
 gadt-refine-expr
 gadt-syntax-basic
 gadt-syntax-multi
+kind-inference-adt
 match-lierr?al
 match-redundant-arm
 panic-basic

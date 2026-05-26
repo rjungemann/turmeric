@@ -1,0 +1,12 @@
+;; TP4: kind inference for type parameters in defdata
+;; A type param appearing directly in a field is kind KIND_STAR.
+;; Two params in a 2-tuple are both kind KIND_STAR.
+;; Uses Duo to avoid collision with stdlib Pair struct.
+(defdata Duo [a b]
+  (MkDuo a b))
+
+(defn main [] :int
+  (let [p (MkDuo 1 2)]
+    (match p
+      (MkDuo x y) (println (+ x y)))
+    0))

@@ -1,0 +1,16 @@
+;; TP3: GADT with an ADT-typed skolem argument in the return type
+;; The return type (Expr Foo) gives `a -> Foo` binding; field should be Foo-typed
+(defdata Foo
+  (FooVal :int))
+
+(defgadt Expr [a]
+  (Lit :int : (Expr int))
+  (Box (Foo) : (Expr Foo)))
+
+(defn main [] :int
+  (let [e (Box (FooVal 7))]
+    (match e
+      (Lit n)   (println n)
+      (Box foo) (match foo
+                  (FooVal n) (println n)))
+    0))

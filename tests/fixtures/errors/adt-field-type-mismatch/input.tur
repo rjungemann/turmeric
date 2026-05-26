@@ -1,0 +1,9 @@
+;; TP5: call-site type-argument consistency check
+;; (MkBoth a a) -- both fields have the same type variable `a`.
+;; Calling with mismatched types should produce an error.
+(defdata Both [a]
+  (MkBoth a a))
+
+(defn main [] :int
+  (let [_ (MkBoth 1 "hello")]
+    0))

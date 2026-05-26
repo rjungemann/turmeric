@@ -1,0 +1,12 @@
+;; TP2: defgadt with a type variable in constructor field
+;; Uses concrete type args in return types so match arm bindings resolve correctly.
+(defgadt NumBox [a]
+  (IntBox :int : (NumBox int))
+  (Empty : (NumBox int)))
+
+(defn main [] :int
+  (let [b (IntBox 99)]
+    (match b
+      (IntBox v) (println v)
+      (Empty)    (println "empty"))
+    0))

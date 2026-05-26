@@ -1,0 +1,13 @@
+;; TP1: defdata with a type variable -- basic parse and construction
+;; The type variable `a` in (Just a) should be accepted as a field type.
+;; Uses Opt2 to avoid collision with stdlib Option struct.
+(defdata Opt2 [a]
+  (Nope)
+  (Yep a))
+
+(defn main [] :int
+  (let [v (Yep 42)]
+    (match v
+      (Nope)   (println "none")
+      (Yep x)  (println x))
+    0))
