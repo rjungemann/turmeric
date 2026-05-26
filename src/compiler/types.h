@@ -1049,6 +1049,8 @@ bool         type_is_subtype(Type sub, Type super_);
 int          fn_type_subtype(Type actual, Type expected);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
+void         type_codegen_reset_struct_apps(void);
+void         type_codegen_emit_struct_apps(Buf *out);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 

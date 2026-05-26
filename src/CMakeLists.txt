@@ -306,6 +306,31 @@ set_target_properties(tur_eval_sandbox PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# TS2: compiler-side EX_REINTERPRET codegen test
+# ---------------------------------------------------------------------------
+add_executable(tur_codegen_reinterpret
+    ${CMAKE_SOURCE_DIR}/tests/compiler/reinterpret-codegen.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_codegen_reinterpret PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_codegen_reinterpret PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_codegen_reinterpret PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+target_link_libraries(tur_codegen_reinterpret PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_codegen_reinterpret PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_codegen_reinterpret PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_codegen_reinterpret PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # Phase WASM: WebAssembly build target for try.turmeric-lang.io
 # ---------------------------------------------------------------------------
 

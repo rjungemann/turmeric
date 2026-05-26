@@ -5,8 +5,12 @@
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
+    bool use_abi_spec = ctx->current_abi_specialization &&
+        ctx->current_abi_specialization->fn == fd;
     /* Use raw name (without ID suffix) for function name */
-    const char *fn_name = raw_name_for_binding(fd->binding);
+    const char *fn_name = ctx->fn_name_override
+        ? ctx->fn_name_override
+        : raw_name_for_binding(fd->binding);
 
     /* Phase 19: Drain any pending effect handler functions accumulated while
      * elaborating the PREVIOUS top-level expression.  They must appear before
@@ -50,6 +54,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
         }
         if (!already_emitted) {
+            Type thunk_result = (e->type.kind == TY_FN && e->type.as.fn.result_full_type)
+                ? *e->type.as.fn.result_full_type
+                : emit_type_from_kind(e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL);
+            Type *thunk_params = fd->n_params > 1 ? &fd->param_types[1] : NULL;
+            uint8_t thunk_arity = fd->n_params > 0 ? (uint8_t)(fd->n_params - 1) : 0;
+            char *thunk_typedef = ensure_typed_thunk_typedef(ctx, file, thunk_result, thunk_params, thunk_arity);
             if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
                 ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
                 ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
@@ -61,13 +71,18 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * captures.  The fat pointer doubles as the env ptr for the thunk:
              * thunk receives fat_ptr as self, accesses captures via ->field
              * (which are at the correct offsets after __fn). */
-            buf_printf(file, "struct %s { int64_t __fn; ", env_name->name);
+            if (thunk_typedef) {
+                buf_printf(file, "struct %s { %s __fn; ", env_name->name, thunk_typedef);
+            } else {
+                buf_printf(file, "struct %s { int64_t __fn; ", env_name->name);
+            }
             for (uint8_t i = 0; i < fd->closure->n_captures; i++) {
                 Binding *captured = fd->closure->captures[i];
                 buf_printf(file, "%s %s; ",
                            type_c_name(captured->type), captured->name->name);
             }
             buf_puts(file, "};\n");
+            free(thunk_typedef);
         }
     }
 
@@ -87,21 +102,17 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         TypeKind result = e->type.as.fn.result_kind;
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
-        } else if (result == TY_STRUCT) {
-            /* LT4/SI4-C: TY_STRUCT return types lower to the struct name in C,
-             * EXCEPT for inline-C bodies (return int64_t heap pointer) and
-             * defopaque types (always int64_t). */
+        } else if (use_abi_spec) {
+            buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->result_type));
+        } else if (e->type.as.fn.result_full_type) {
             bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-            const struct Type *rft = e->type.as.fn.result_full_type;
-            if (!body_is_inline_c && rft && rft->kind == TY_STRUCT &&
-                rft->as.struct_.def && !rft->as.struct_.def->is_opaque &&
-                rft->as.struct_.def->name) {
-                buf_puts(file, rft->as.struct_.def->name);
+            if (!body_is_inline_c) {
+                buf_puts(file, emit_type_c_name(ctx, *e->type.as.fn.result_full_type));
             } else {
                 buf_puts(file, "int64_t");
             }
         } else {
-            buf_puts(file, type_c_name(emit_type_from_kind(result)));
+            buf_puts(file, emit_type_c_name(ctx, emit_type_from_kind(result)));
         }
     } else {
         buf_puts(file, "void");
@@ -118,11 +129,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* ER4: function-typed parameters are passed as int64_t (opaque
              * function pointer) in Turmeric's calling convention. */
             buf_puts(file, "int64_t");
-        } else if (fd->param_types[i].kind == TY_STRUCT) {
-            /* LT4/SI4-C: struct params lower to struct name; opaque (defopaque) → int64_t. */
-            buf_puts(file, type_c_name(fd->param_types[i]));
+        } else if (use_abi_spec) {
+            buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]));
+        } else if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i]) {
+            buf_puts(file, emit_type_c_name(ctx, *e->type.as.fn.arg_full_types[i]));
         } else {
-            buf_puts(file, type_c_name(fd->param_types[i]));
+            buf_puts(file, emit_type_c_name(ctx, fd->param_types[i]));
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
         buf_printf(file, " %s", pn);
@@ -183,7 +195,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* Get the return type */
-    TypeKind result_kind = e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL;
+    TypeKind result_kind = use_abi_spec
+        ? ctx->current_abi_specialization->result_type.kind
+        : (e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL);
 
     /* Phase 3/4: If the body diverges on every path (return/panic), emit it as
      * statements only -- a trailing `return` would be dead code.  A body that
@@ -236,7 +250,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     ctx->indent -= 4;
     buf_printf(file, "}\n\n");
-    free((void*)fn_name);
+    if (!ctx->fn_name_override) free((void*)fn_name);
 
     /* Phase 19 (per-fiber): flush handlers accumulated during this body, then
      * commit the temp function buffer to the real file. */
@@ -250,8 +264,4 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_free(&fn_tmp);
     ctx->file = real_file;
 }
-
-
-
-
 

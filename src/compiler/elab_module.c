@@ -70,10 +70,15 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                              e->cap_loaded_modules * sizeof(ElabModule));
         if (!e->loaded_modules) { fprintf(stderr, "tur: oom\n"); abort(); }
     }
-    ElabModule *slot = &e->loaded_modules[e->n_loaded_modules++];
+    uint32_t slot_idx = e->n_loaded_modules++;
+    ElabModule *slot = &e->loaded_modules[slot_idx];
     slot->name = name;
     slot->exports = NULL;
     slot->n_exports = 0;
+    slot->exported_macros = NULL;
+    slot->n_exported_macros = 0;
+    slot->exported_effects = NULL;
+    slot->n_exported_effects = 0;
     slot->is_loading = true;
 
     /* Build file path: 'geom/vector' -> '{base_dir}/geom/vector.tur'
@@ -231,6 +236,7 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
             e->has_defmodule       = saved_has_defmodule;
             e->current_module_name = saved_module_name;
             e->current_module      = saved_module;
+            slot = &e->loaded_modules[slot_idx];
             slot->is_loading = false;
             return NULL;
         }
@@ -247,6 +253,11 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     e->has_defmodule       = saved_has_defmodule;
     e->current_module_name = saved_module_name;
     e->current_module      = saved_module;
+
+    /* Recursive imports during elab_form() can grow e->loaded_modules and
+     * invalidate the earlier `slot` pointer. Re-acquire the reserved slot
+     * by index before writing the collected exports back into it. */
+    slot = &e->loaded_modules[slot_idx];
 
     /* Collect exported bindings: those in the global scope owned by this module. */
     uint32_t n_exp = 0;

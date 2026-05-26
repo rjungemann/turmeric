@@ -34,11 +34,81 @@ const Expr **flatten_program_items(const Expr *program, uint32_t *out_n) {
 
 /* Helper to create a Type from TypeKind (mirrors the one in types.c). */
 Type emit_type_from_kind(TypeKind k) {
-    Type t;
+    Type t = {0};
     t.kind = k;
     t.as.fn.arity = 0;
     t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     return t;
+}
+
+static bool emit_find_abi_binding(const EmitAbiSpecialization *spec,
+                                  const char *name, uint8_t *out_idx) {
+    if (!spec || !name) return false;
+    for (uint8_t i = 0; i < spec->n_bindings; i++) {
+        if (spec->bindings[i].name && strcmp(spec->bindings[i].name, name) == 0) {
+            if (out_idx) *out_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+Type emit_resolve_type(EmitCtx *ctx, Type t) {
+    const EmitAbiSpecialization *spec = ctx ? ctx->current_abi_specialization : NULL;
+    if (!spec) return t;
+    switch (t.kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t.as.tyvar_.name && emit_find_abi_binding(spec, t.as.tyvar_.name, &idx)) {
+                return spec->bindings[idx].type;
+            }
+            return t;
+        }
+        case TY_APP: {
+            if (!t.as.app.fn || !t.as.app.arg) return t;
+            Type fn = emit_resolve_type(ctx, *t.as.app.fn);
+            Type arg = emit_resolve_type(ctx, *t.as.app.arg);
+            Type out = t;
+            out.as.app.fn = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        case TY_UNION: {
+            Type out = t;
+            if (t.as.union_.n_members == 0 || !t.as.union_.members) return out;
+            Type **members = (Type **)malloc(t.as.union_.n_members * sizeof(Type *));
+            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            out.as.union_.members = members;
+            for (uint8_t i = 0; i < t.as.union_.n_members; i++) {
+                members[i] = (Type *)malloc(sizeof(Type));
+                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
+                *members[i] = emit_resolve_type(ctx, *t.as.union_.members[i]);
+            }
+            return out;
+        }
+        case TY_INTERSECTION: {
+            Type out = t;
+            if (t.as.intersection_.n_members == 0 || !t.as.intersection_.members) return out;
+            Type **members = (Type **)malloc(t.as.intersection_.n_members * sizeof(Type *));
+            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            out.as.intersection_.members = members;
+            for (uint8_t i = 0; i < t.as.intersection_.n_members; i++) {
+                members[i] = (Type *)malloc(sizeof(Type));
+                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
+                *members[i] = emit_resolve_type(ctx, *t.as.intersection_.members[i]);
+            }
+            return out;
+        }
+        default:
+            return t;
+    }
+}
+
+const char *emit_type_c_name(EmitCtx *ctx, Type t) {
+    return type_c_name(emit_resolve_type(ctx, t));
 }
 
 void indent_buf(Buf *b, int n) {
@@ -414,6 +484,43 @@ char *raw_name_for_binding(const Binding *b) {
     }
     p[k] = '\0';
     return p;
+}
+
+char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
+    const Expr *cur = NULL;
+    if (ctx && call) {
+        for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+            if (ctx->specialized_call_exprs[i] == call) {
+                char *name = strdup(ctx->specialized_call_names[i]);
+                if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+                return name;
+            }
+        }
+        if (call->kind == EX_CALL && b) {
+            for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+                const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+                if (spec->binding != b || spec->n_args != call->as.call_.n_args) continue;
+                bool args_match = true;
+                for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++) {
+                    cur = call->as.call_.args[ai];
+                    while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                    Type actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
+                        ? cur->as.reinterpret_.expr->type
+                        : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                    if (!type_eq(spec->arg_types[ai], actual)) {
+                        args_match = false;
+                        break;
+                    }
+                }
+                if (args_match) {
+                    char *name = strdup(spec->clone_name);
+                    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    return name;
+                }
+            }
+        }
+    }
+    return raw_name_for_binding(b);
 }
 
 /* Return a sanitized C identifier for a Binding. If the binding is a
@@ -1290,4 +1397,3 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
     *n_out = ncaps;
     return caps;
 }
-

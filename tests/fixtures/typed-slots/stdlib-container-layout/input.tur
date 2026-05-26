@@ -1,0 +1,10 @@
+(defn main [] :int
+  (let [o (:: (make-struct Option true 2.5) (Option float))
+        p (:: (make-struct Pair 1 2.5) (Pair int float))
+        r (:: (make-struct Result true 3.75 "err") (Result float cstr))]
+    (println (unwrap o))
+    (println (pair-fst p))
+    (println (pair-snd p))
+    (println (ok-val r))
+    (println (err-val r))
+    0))

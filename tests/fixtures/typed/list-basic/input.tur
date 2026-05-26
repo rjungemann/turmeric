@@ -8,10 +8,12 @@
   (tnil? (tcons 1 (tnil))))
 
 (defn test-head [] :int
-  (thead (tcons 42 (tnil))))
+  (let [l (:: (make-struct Cons 42 (tnil)) (Cons int))]
+    (thead l)))
 
 (defn test-tail-nil [] :bool
-  (tnil? (ttail (tcons 1 (tnil)))))
+  (let [l (:: (make-struct Cons 1 (tnil)) (Cons int))]
+    (tnil? (ttail l))))
 
 (defn test-length [] :int
   (list-length (tcons 1 (tcons 2 (tcons 3 (tnil))))))

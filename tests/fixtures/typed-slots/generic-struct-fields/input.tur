@@ -1,0 +1,15 @@
+(defstruct Box [A]
+  (value A))
+
+(defstruct Duo [A B]
+  (fst : A)
+  (snd : B))
+
+(defn main [] :int
+  (let [b (make-struct Box 3)
+        ^mut p (make-struct Duo 1 2)]
+    (println (+ (.value b) 4))
+    (set! (.fst p) 5)
+    (println (.fst p))
+    (println (.snd p))
+    0))

@@ -220,6 +220,15 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.cast_.expr);
             buf_putc(b, ')');
             break;
+        case EX_REINTERPRET:
+            buf_puts(b, "(reinterpret ");
+            buf_puts(b, typekind_to_string(e->as.reinterpret_.source_kind));
+            buf_puts(b, " -> ");
+            buf_puts(b, typekind_to_string(e->as.reinterpret_.target_kind));
+            buf_putc(b, ' ');
+            expr_print(b, e->as.reinterpret_.expr);
+            buf_putc(b, ')');
+            break;
         /* Phase H §1: dictionary passing */
         case EX_DICT:
             buf_printf(b, "(dict %s)", e->as.dict_.dict_name);

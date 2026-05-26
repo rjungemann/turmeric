@@ -50,6 +50,9 @@ struct Binding {
     Span          span;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
+    /* Returned-closure metadata: if evaluating this binding yields a closure value,
+     * this points at the closure's thunk binding. */
+    struct Binding *returns_closure_fn_binding;
     /* Phase 5: Move semantics - whether this ref binding has been moved */
     bool          is_moved;
     /* Phase 11: span of first move for note chaining diagnostics */
@@ -212,6 +215,7 @@ typedef enum ExprKind {
     EX_TVAR_CAS,       /* (TVar::cas tvar old new) - compare-and-swap within stm block */
     /* Phase N: numeric cast */
     EX_CAST,           /* (as TargetType expr) — explicit numeric cast */
+    EX_REINTERPRET,    /* compiler-only bit reinterpret between same-size scalar types */
     /* Phase H §1: dictionary passing */
     EX_DICT,           /* implicit dictionary argument — address of a typeclass instance singleton */
     /* Phase 11: Struct operations */
@@ -455,6 +459,16 @@ typedef struct SelectClauseEntry {
     struct Expr     *body;        /* clause body expression */
 } SelectClauseEntry;
 
+/* GS5/CS3: named-tyvar -> concrete type binding produced during call elaboration.
+ * Attached to EX_CALL so emit_module.c can drive ABI specialization without
+ * re-deriving the substitution. Owned by the elab arena. */
+typedef struct AbiTypeBinding {
+    const char *name;
+    Type        type;
+} AbiTypeBinding;
+
+#define ABI_TYPE_BINDINGS_MAX 16
+
 struct Expr {
     ExprKind kind;
     Type     type;
@@ -488,7 +502,10 @@ struct Expr {
                  bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
                  uint32_t poly_arg_mask; /* Phase HRT3: bitmask of args that are nested poly fns.
                                           * In poly_call: bit i → pass arg by pointer (stack-alloc).
-                                          * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */ } call_;
+                                          * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */
+                 AbiTypeBinding *abi_bindings; /* GS5/CS3: named-tyvar substitution captured at the call site;
+                                                * NULL when the call has no named-tyvar bindings. Arena-owned. */
+                 uint8_t  n_abi_bindings; } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
@@ -600,6 +617,7 @@ struct Expr {
         struct { Expr *tvar; Expr *old_val; Expr *new_val; } tvar_cas_; /* (TVar::cas tvar old new) */
         /* Phase N: numeric cast */
         struct { Expr *expr; TypeKind target_kind; } cast_;        /* (as T e) */
+        struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; } reinterpret_;
         /* Phase H §1: dictionary passing */
         struct {
             TypeClassInstance *instance;

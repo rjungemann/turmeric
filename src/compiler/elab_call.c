@@ -10,6 +10,133 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding);
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr);
 
+/* GS5/CS3: shared AbiTypeBinding lives in expr.h so emit can consume what
+ * elaboration produced. Keep CallTypeBinding as a local alias for minimal
+ * churn in the body of this file. */
+typedef AbiTypeBinding CallTypeBinding;
+
+static bool call_type_has_named_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name != NULL;
+        case TY_APP:
+            return call_type_has_named_tyvar(t->as.app.fn) ||
+                   call_type_has_named_tyvar(t->as.app.arg);
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
+                if (call_type_has_named_tyvar(t->as.union_.members[i])) return true;
+            }
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
+                if (call_type_has_named_tyvar(t->as.intersection_.members[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings,
+                                   const char *name, uint8_t *out_idx) {
+    if (!name) return false;
+    for (uint8_t i = 0; i < n_bindings; i++) {
+        if (bindings[i].name && strcmp(bindings[i].name, name) == 0) {
+            if (out_idx) *out_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool call_collect_type_bindings(const Type *expected, Type actual,
+                                       CallTypeBinding *bindings, uint8_t *n_bindings) {
+    if (!expected) return true;
+    switch (expected->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (!expected->as.tyvar_.name) return true;
+            if (call_find_type_binding(bindings, *n_bindings, expected->as.tyvar_.name, &idx)) {
+                return type_eq(bindings[idx].type, actual);
+            }
+            if (*n_bindings >= 16) return false;
+            bindings[*n_bindings].name = expected->as.tyvar_.name;
+            bindings[*n_bindings].type = actual;
+            (*n_bindings)++;
+            return true;
+        }
+        case TY_APP:
+            if (actual.kind != TY_APP || !expected->as.app.fn || !expected->as.app.arg ||
+                !actual.as.app.fn || !actual.as.app.arg) {
+                return false;
+            }
+            return call_collect_type_bindings(expected->as.app.fn, *actual.as.app.fn,
+                                              bindings, n_bindings) &&
+                   call_collect_type_bindings(expected->as.app.arg, *actual.as.app.arg,
+                                              bindings, n_bindings);
+        case TY_UNION:
+        case TY_INTERSECTION:
+            return type_eq(*expected, actual);
+        default:
+            return type_eq(*expected, actual);
+    }
+}
+
+static Type call_instantiate_type(Elab *e, const Type *t,
+                                  CallTypeBinding *bindings, uint8_t n_bindings) {
+    if (!t) return TYPE_UNKNOWN;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name &&
+                call_find_type_binding(bindings, n_bindings, t->as.tyvar_.name, &idx)) {
+                return bindings[idx].type;
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn = call_instantiate_type(e, t->as.app.fn, bindings, n_bindings);
+            Type arg = call_instantiate_type(e, t->as.app.arg, bindings, n_bindings);
+            return type_app(e->arena, fn, arg, (Span){0});
+        }
+        case TY_UNION: {
+            uint8_t n = t->as.union_.n_members;
+            Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
+            for (uint8_t i = 0; i < n; i++) {
+                members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *members[i] = call_instantiate_type(e, t->as.union_.members[i], bindings, n_bindings);
+            }
+            return type_union_build(e->arena, members, n);
+        }
+        case TY_INTERSECTION: {
+            uint8_t n = t->as.intersection_.n_members;
+            Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
+            for (uint8_t i = 0; i < n; i++) {
+                members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *members[i] = call_instantiate_type(e, t->as.intersection_.members[i], bindings, n_bindings);
+            }
+            return type_intersection_build(e->arena, members, n);
+        }
+        default:
+            return *t;
+    }
+}
+
+static Expr *call_wrap_reinterpret(Elab *e, Expr *inner, TypeKind target_kind, Span span) {
+    if (!inner) return NULL;
+    TypeKind source_kind = inner->type.kind;
+    if (source_kind == target_kind) return inner;
+    int src_size = type_size_bytes(source_kind);
+    int dst_size = type_size_bytes(target_kind);
+    if (src_size <= 0 || dst_size <= 0 || src_size != dst_size) return inner;
+    Expr *out = expr_new(e->arena, EX_REINTERPRET, type_from_kind(target_kind), span);
+    out->as.reinterpret_.expr = inner;
+    out->as.reinterpret_.source_kind = source_kind;
+    out->as.reinterpret_.target_kind = target_kind;
+    return out;
+}
+
 /* Phase P3: HAMT lowering - create a call to a HAMT function binding */
 static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32_t n_args, Expr **args) {
     /* Look up the HAMT function binding */
@@ -266,12 +393,9 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     while (source_expr && source_expr->kind == EX_ASCRIBE) {
         source_expr = source_expr->as.ascribe_.inner;
     }
-    if (source_expr && source_expr->kind == EX_CLOSURE &&
-        source_expr->as.closure_.closure && source_expr->as.closure_.closure->fn) {
-        tmp_b->closure_fn_binding = source_expr->as.closure_.closure->fn->binding;
-    } else if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
+    tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+    if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
         Binding *source_b = source_expr->as.var.binding;
-        tmp_b->closure_fn_binding = source_b->closure_fn_binding;
         if (source_b->is_poly_fn) {
             tmp_b->is_poly_fn = true;
             tmp_b->poly_type = source_b->poly_type;
@@ -670,12 +794,6 @@ Expr *elab_call(Elab *e, Form *call) {
          * gets TY_STRUCT with def=NULL from type_from_kind(TY_STRUCT). */
         if (call_expr && fn_binding->type.kind == TY_FN &&
             fn_binding->type.as.fn.result_kind == TY_STRUCT &&
-            fn_binding->type.as.fn.result_full_type) {
-            call_expr->type = *fn_binding->type.as.fn.result_full_type;
-        }
-        /* PTC4: patch TY_APP return type so dispatch can extract concrete elem types. */
-        if (call_expr && fn_binding->type.kind == TY_FN &&
-            fn_binding->type.as.fn.result_kind == TY_APP &&
             fn_binding->type.as.fn.result_full_type) {
             call_expr->type = *fn_binding->type.as.fn.result_full_type;
         }
@@ -1119,6 +1237,9 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
 
     /* Elaborate arguments */
     Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    CallTypeBinding type_bindings[16];
+    uint8_t n_type_bindings = 0;
+    for (uint8_t bi = 0; bi < 16; bi++) type_bindings[bi].name = NULL;
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
@@ -1197,6 +1318,21 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             /* Phase HKT/G4: Allow passing a TY_TYVAR where TY_APP is expected.
              * Type variables and applied types share int64_t representation. */
             arg_ok = true;
+        }
+        /* GS2: when the callee preserved a full applied parameter type, compare
+         * the full TY_APP structure rather than accepting any TY_APP argument. */
+        if (arg_ok && fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t fn_arg_idx_app = fn_binding->closure_fn_binding ? i + 1 : i;
+            Type *expected_full = (fn_arg_idx_app < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[fn_arg_idx_app] : NULL;
+            if (expected_full && call_type_has_named_tyvar(expected_full)) {
+                arg_ok = call_collect_type_bindings(expected_full, args[i]->type,
+                                                    type_bindings, &n_type_bindings);
+            } else if (arg_ok && expected_arg_kind == TY_APP &&
+                       args[i]->type.kind == TY_APP &&
+                       expected_full && expected_full->kind == TY_APP) {
+                arg_ok = type_eq(args[i]->type, *expected_full);
+            }
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
             /* Phase HKT H3/H4: Allow passing a function value where int64_t is expected.
@@ -1345,7 +1481,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * For compound types (union, intersection) that store their full type in
              * arg_full_types, look it up there so the name includes member types. */
             const char *expected_str;
-            if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION) &&
+            if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
+                 expected_arg_kind == TY_APP) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
@@ -1361,6 +1498,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                 expected_str,
                                 type_name(args[i]->type));
             return NULL;
+        }
+
+        if (fn_type.kind == TY_FN) {
+            uint32_t fn_arg_idx_cast = fn_binding->closure_fn_binding ? i + 1 : i;
+            Type *expected_full = (fn_type.as.fn.arg_full_types &&
+                                   fn_arg_idx_cast < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[fn_arg_idx_cast] : NULL;
+            if ((expected_arg_kind == TY_TYVAR ||
+                 (expected_full && expected_full->kind == TY_TYVAR)) &&
+                args[i]->type.kind != TY_INT) {
+                args[i] = call_wrap_reinterpret(e, args[i], TY_INT, args[i]->span);
+            }
         }
 
         /* Phase HRT1/HRT4: wrap rank-2 args with EX_POLY_WRAP + create wrapper thunk.
@@ -1456,7 +1605,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
          * This keeps compound returns such as Session[P], Role[...], and
          * higher-order TY_FN results from collapsing into a bare TypeKind shell. */
         if (fn_type.as.fn.result_full_type) {
-            result_type = *fn_type.as.fn.result_full_type;
+            if (call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+                n_type_bindings > 0) {
+                result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
+                                                    type_bindings, n_type_bindings);
+            } else {
+                result_type = *fn_type.as.fn.result_full_type;
+            }
         } else {
             result_type = type_from_kind(result_kind);
         }
@@ -1467,11 +1622,31 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         result_type = TYPE_NIL;
     }
 
-    Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
+    Type call_result_type = result_type;
+    bool wrap_generic_result = false;
+    if (fn_type.kind == TY_FN &&
+        fn_type.as.fn.result_kind == TY_TYVAR) {
+        call_result_type = TYPE_INT;
+        wrap_generic_result = (result_type.kind != TY_INT);
+    }
+
+    Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
     out->as.call_.fn_binding = fn_binding;
     out->as.call_.args = args;
     out->as.call_.n_args = n_args;
     out->as.call_.fn_expr = NULL;
+    /* GS5/CS3: hand the named-tyvar substitution to emit so it can drive ABI
+     * specialization without re-deriving it from the call's argument types. */
+    if (n_type_bindings > 0) {
+        AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+            e->arena, n_type_bindings * sizeof(AbiTypeBinding));
+        for (uint8_t bi = 0; bi < n_type_bindings; bi++) saved[bi] = type_bindings[bi];
+        out->as.call_.abi_bindings = saved;
+        out->as.call_.n_abi_bindings = n_type_bindings;
+    }
+    if (wrap_generic_result) {
+        return call_wrap_reinterpret(e, out, result_type.kind, call->span);
+    }
     return out;
 }
 

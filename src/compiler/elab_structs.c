@@ -129,6 +129,246 @@ static StructDef *lookup_rc_inner_struct_def(Elab *e, const char *tname, uint32_
     return NULL;
 }
 
+static Kind struct_type_param_kind(uint8_t n_type_params, uint8_t idx) {
+    (void)idx;
+    if (n_type_params >= 2) return KIND_ARROW2;
+    if (n_type_params == 1) return KIND_ARROW;
+    return KIND_STAR;
+}
+
+static bool struct_type_param_index(const StructDef *def, const char *name, uint8_t *out_idx) {
+    if (!def || !name) return false;
+    for (uint8_t i = 0; i < def->n_type_params; i++) {
+        if (def->type_params[i] && strcmp(def->type_params[i], name) == 0) {
+            if (out_idx) *out_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool struct_type_has_named_tyvar(const StructDef *def, const Type *t) {
+    if (!def || !t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, NULL);
+        case TY_APP:
+            return struct_type_has_named_tyvar(def, t->as.app.fn)
+                || struct_type_has_named_tyvar(def, t->as.app.arg);
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
+                if (struct_type_has_named_tyvar(def, t->as.union_.members[i])) return true;
+            }
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
+                if (struct_type_has_named_tyvar(def, t->as.intersection_.members[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+static void struct_field_storage_from_type(const Type *t, TypeKind *out_kind, TypeKind *out_inner) {
+    *out_kind = TY_UNKNOWN;
+    *out_inner = TY_UNKNOWN;
+    if (!t) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+        case TY_APP:
+        case TY_EXISTS:
+        case TY_FORALL:
+        case TY_STRUCT:
+        case TY_ADT:
+            *out_kind = TY_INT;
+            return;
+        case TY_REF:
+        case TY_LREF:
+            *out_kind = t->kind;
+            *out_inner = t->as.ref.inner;
+            return;
+        case TY_RC:
+        case TY_WEAK:
+            *out_kind = t->kind;
+            *out_inner = t->as.rc.inner;
+            return;
+        default:
+            *out_kind = t->kind;
+            return;
+    }
+}
+
+static Type *struct_field_type_from_form(Elab *e, const Form *form,
+                                         const Symbol **type_params,
+                                         Kind *type_param_kinds,
+                                         uint8_t n_type_params) {
+    if (!form) return NULL;
+    if (form->tag == F_TYPE_ANN && form->as.list.len > 0) {
+        return struct_field_type_from_form(e, form->as.list.items[0],
+                                           type_params, type_param_kinds, n_type_params);
+    }
+    if (form->tag == F_SYM) {
+        for (uint8_t i = 0; i < n_type_params; i++) {
+            if (type_params[i] == form->as.sym) {
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_tyvar_named(form->as.sym->name);
+                t->hkt_kind = type_param_kinds ? type_param_kinds[i] : KIND_STAR;
+                return t;
+            }
+        }
+        return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+    }
+    if (form->tag == F_LIST && form->as.list.len >= 1 &&
+        form->as.list.items[0]->tag == F_SYM) {
+        const Symbol *head = form->as.list.items[0]->as.sym;
+        if (head == e->sym_forall || head == e->sym_exists ||
+            head == e->sym_forall_u || head == e->sym_exists_u) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        bool has_pipe = false, has_amp = false;
+        for (uint32_t i = 0; i < form->as.list.len; i++) {
+            Form *item = form->as.list.items[i];
+            if (item->tag != F_SYM) continue;
+            if (item->as.sym == e->sym_pipe) has_pipe = true;
+            if (item->as.sym == e->sym_ampersand) has_amp = true;
+        }
+        if (has_pipe || has_amp) {
+            return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        Type *cur = struct_field_type_from_form(e, form->as.list.items[0],
+                                                type_params, type_param_kinds, n_type_params);
+        if (!cur) return NULL;
+        for (uint32_t i = 1; i < form->as.list.len; i++) {
+            Type *arg = struct_field_type_from_form(e, form->as.list.items[i],
+                                                    type_params, type_param_kinds, n_type_params);
+            if (!arg) return NULL;
+            Type *next = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *next = type_app(e->arena, *cur, *arg, form->span);
+            cur = next;
+        }
+        return cur;
+    }
+    return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+}
+
+bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *out_args) {
+    if (!t || !def || def->n_type_params == 0 || !out_args) return false;
+    const Type *cur = t;
+    uint8_t n_raw = 0;
+    Type *raw = (Type *)malloc(def->n_type_params * sizeof(Type));
+    if (!raw) return false;
+    while (cur && cur->kind == TY_APP && n_raw < def->n_type_params) {
+        if (!cur->as.app.arg) break;
+        raw[n_raw++] = *cur->as.app.arg;
+        cur = cur->as.app.fn;
+    }
+    bool ok = (cur && cur->kind == TY_STRUCT && cur->as.struct_.def == def &&
+               n_raw == def->n_type_params);
+    if (ok) {
+        for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
+    }
+    free(raw);
+    return ok;
+}
+
+static Type struct_field_instantiate_type(Elab *e, const StructDef *def, const Type *t,
+                                          const Type *type_args) {
+    if (!t) return TYPE_UNKNOWN;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, &idx)) {
+                return type_args[idx];
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn = struct_field_instantiate_type(e, def, t->as.app.fn, type_args);
+            Type arg = struct_field_instantiate_type(e, def, t->as.app.arg, type_args);
+            return type_app(e->arena, fn, arg, (Span){0});
+        }
+        case TY_UNION: {
+            uint8_t n = t->as.union_.n_members;
+            Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
+            for (uint8_t i = 0; i < n; i++) {
+                members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *members[i] = struct_field_instantiate_type(e, def, t->as.union_.members[i], type_args);
+            }
+            return type_union_build(e->arena, members, n);
+        }
+        case TY_INTERSECTION: {
+            uint8_t n = t->as.intersection_.n_members;
+            Type **members = (Type **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Type *));
+            for (uint8_t i = 0; i < n; i++) {
+                members[i] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *members[i] = struct_field_instantiate_type(e, def, t->as.intersection_.members[i], type_args);
+            }
+            return type_intersection_build(e->arena, members, n);
+        }
+        default:
+            return *t;
+    }
+}
+
+static bool struct_field_collect_type_args(const StructDef *def, const Type *expected,
+                                           Type actual, Type *type_args, bool *have_type_args) {
+    if (!expected || !def) return true;
+    switch (expected->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (!expected->as.tyvar_.name ||
+                !struct_type_param_index(def, expected->as.tyvar_.name, &idx)) {
+                return true;
+            }
+            if (!have_type_args[idx]) {
+                type_args[idx] = actual;
+                have_type_args[idx] = true;
+                return true;
+            }
+            return type_eq(type_args[idx], actual);
+        }
+        case TY_APP:
+            if (actual.kind != TY_APP || !expected->as.app.fn || !expected->as.app.arg ||
+                !actual.as.app.fn || !actual.as.app.arg) {
+                return false;
+            }
+            return struct_field_collect_type_args(def, expected->as.app.fn, *actual.as.app.fn,
+                                                  type_args, have_type_args) &&
+                   struct_field_collect_type_args(def, expected->as.app.arg, *actual.as.app.arg,
+                                                  type_args, have_type_args);
+        case TY_UNION:
+        case TY_INTERSECTION:
+            return type_eq(*expected, actual);
+        default:
+            return type_eq(*expected, actual);
+    }
+}
+
+Type elab_struct_field_use_type(Elab *e, const Type *container_type,
+                                const StructDef *def, const StructField *field) {
+    if (field->full_type) {
+        if (def && def->n_type_params > 0 && container_type) {
+            Type *type_args = (Type *)arena_alloc(e->arena, def->n_type_params * sizeof(Type));
+            if (elab_struct_type_extract_args(container_type, def, type_args)) {
+                return struct_field_instantiate_type(e, def, field->full_type, type_args);
+            }
+        }
+        return *field->full_type;
+    }
+    if (field->kind == TY_REF || field->kind == TY_LREF || field->kind == TY_RC || field->kind == TY_WEAK) {
+        Type t = type_from_kind(field->kind);
+        if (field->kind == TY_REF || field->kind == TY_LREF) {
+            t.as.ref.inner = field->inner_kind;
+        } else {
+            t.as.rc.inner = field->inner_kind;
+            if (field->inner_kind == TY_STRUCT && def) t.as.rc.struct_def = (StructDef *)def;
+        }
+        return t;
+    }
+    return type_from_kind(field->kind);
+}
+
 /* Phase RF0: Check if a symbol was registered as a forward-declared type stub */
 static bool elab_is_forward_type(Elab *e, const Symbol *sym) {
     for (uint32_t i = 0; i < e->n_forward_type_syms; i++) {
@@ -199,6 +439,8 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
     const char **type_params_arr = NULL;
     uint8_t n_type_params_v = 0;
     bool new_field_syntax = false;
+    const Symbol **field_type_params = NULL;
+    Kind *field_type_param_kinds = NULL;
 
     if (fields_start_idx < call->as.list.len &&
         call->as.list.items[fields_start_idx]->tag == F_VEC) {
@@ -215,8 +457,14 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             n_type_params_v = (uint8_t)maybe_tp->as.list.len;
             type_params_arr = (const char **)arena_alloc(e->arena,
                 n_type_params_v * sizeof(char *));
+            field_type_params = (const Symbol **)arena_alloc(e->arena,
+                n_type_params_v * sizeof(Symbol *));
+            field_type_param_kinds = (Kind *)arena_alloc(e->arena,
+                n_type_params_v * sizeof(Kind));
             for (uint8_t pi = 0; pi < n_type_params_v; pi++) {
                 type_params_arr[pi] = maybe_tp->as.list.items[pi]->as.sym->name;
+                field_type_params[pi] = maybe_tp->as.list.items[pi]->as.sym;
+                field_type_param_kinds[pi] = struct_type_param_kind(n_type_params_v, pi);
             }
             fields_start_idx++;
             new_field_syntax = true;
@@ -369,6 +617,9 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Phase TM0 */
         def->type_params = type_params_arr;
         def->n_type_params = n_type_params_v;
+        if (n_type_params_v >= 2) b->type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params_v == 1) b->type.hkt_kind = KIND_ARROW;
+        else b->type.hkt_kind = KIND_STAR;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
@@ -386,6 +637,8 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->n_type_params = n_type_params_v;
 
         Type struct_type = type_struct(def);
+        if (n_type_params_v >= 2) struct_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params_v == 1) struct_type.hkt_kind = KIND_ARROW;
         b = binding_new(e, name, struct_type, false, true, name_form->span);
         scope_add(&e->global, b);
         elab_register_struct_def(e, def);
@@ -412,22 +665,29 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
              * TY_FORALL all lower to int64_t at the C level (opaque
              * heap pointer), so storage layout is unchanged. */
             if (type_name_form->tag == F_LIST) {
-                Type *t = type_expr_from_form(e, (Form *)type_name_form,
-                    NULL, NULL, NULL, 0);
+                Type *t = (n_type_params_v > 0)
+                    ? struct_field_type_from_form(e, type_name_form,
+                                                  field_type_params, field_type_param_kinds, n_type_params_v)
+                    : type_expr_from_form(e, (Form *)type_name_form,
+                                          NULL, NULL, NULL, 0);
                 if (!t) return NULL;
-                full_type = t;
-                if (t->kind == TY_APP || t->kind == TY_EXISTS ||
+                if (n_type_params_v > 0 || t->kind == TY_APP || t->kind == TY_EXISTS ||
                     t->kind == TY_FORALL) {
-                    fkind = TY_INT;
-                    finner = TY_UNKNOWN;
-                } else {
-                    fkind = t->kind;
-                    finner = TY_UNKNOWN;
+                    full_type = t;
                 }
+                struct_field_storage_from_type(t, &fkind, &finner);
             } else {
                 const char *tname = type_name_form->as.sym->name;
                 uint32_t tlen = type_name_form->as.sym->len;
-                parse_struct_field_type(tname, tlen, &fkind, &finner);
+                if (n_type_params_v > 0) {
+                    Type *t = struct_field_type_from_form(e, type_name_form,
+                        field_type_params, field_type_param_kinds, n_type_params_v);
+                    if (!t) return NULL;
+                    struct_field_storage_from_type(t, &fkind, &finner);
+                    if (struct_type_has_named_tyvar(def, t)) full_type = t;
+                } else {
+                    parse_struct_field_type(tname, tlen, &fkind, &finner);
+                }
                 if (fkind == TY_UNKNOWN) {
                     const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
                     Binding *tb = scope_lookup_type_def(e->scope, type_sym);
@@ -502,22 +762,29 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
              * type_expr_from_form and store the full Type on the
              * StructField for use sites. */
             if (type_name_form->tag == F_LIST) {
-                Type *t = type_expr_from_form(e, (Form *)type_name_form,
-                    NULL, NULL, NULL, 0);
+                Type *t = (n_type_params_v > 0)
+                    ? struct_field_type_from_form(e, type_name_form,
+                                                  field_type_params, field_type_param_kinds, n_type_params_v)
+                    : type_expr_from_form(e, (Form *)type_name_form,
+                                          NULL, NULL, NULL, 0);
                 if (!t) return NULL;
-                full_type = t;
-                if (t->kind == TY_APP || t->kind == TY_EXISTS ||
+                if (n_type_params_v > 0 || t->kind == TY_APP || t->kind == TY_EXISTS ||
                     t->kind == TY_FORALL) {
-                    fkind = TY_INT;
-                    finner = TY_UNKNOWN;
-                } else {
-                    fkind = t->kind;
-                    finner = TY_UNKNOWN;
+                    full_type = t;
                 }
+                struct_field_storage_from_type(t, &fkind, &finner);
             } else {
                 const char *tname = type_name_form->as.sym->name;
                 uint32_t tlen = type_name_form->as.sym->len;
-                parse_struct_field_type(tname, tlen, &fkind, &finner);
+                if (n_type_params_v > 0) {
+                    Type *t = struct_field_type_from_form(e, type_name_form,
+                        field_type_params, field_type_param_kinds, n_type_params_v);
+                    if (!t) return NULL;
+                    struct_field_storage_from_type(t, &fkind, &finner);
+                    if (struct_type_has_named_tyvar(def, t)) full_type = t;
+                } else {
+                    parse_struct_field_type(tname, tlen, &fkind, &finner);
+                }
 
                 if (fkind == TY_UNKNOWN) {
                     /* Phase RF0: fall back to user-defined type lookup.  Any struct or
@@ -2358,6 +2625,15 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
 
     StructDef *def = struct_binding->type.as.struct_.def;
     uint32_t n_given = call->as.list.len - 2; /* args after name */
+    Type *inferred_type_args = NULL;
+    bool *have_type_args = NULL;
+
+    if (def->n_type_params > 0) {
+        inferred_type_args = (Type *)arena_alloc(e->arena, def->n_type_params * sizeof(Type));
+        have_type_args = (bool *)arena_alloc(e->arena, def->n_type_params * sizeof(bool));
+        memset(inferred_type_args, 0, def->n_type_params * sizeof(Type));
+        memset(have_type_args, 0, def->n_type_params * sizeof(bool));
+    }
 
     if (n_given != def->n_fields) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2373,21 +2649,17 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
         if (!fv) return NULL;
         field_values[i] = fv;
 
-        /* Compound field annotations (TY_APP / TY_EXISTS / TY_FORALL) all
-         * lower to TY_INT at the C level, so without this check a raw `42`
-         * passed where `(exists [a] [(Show a)] a)` is expected slips through
-         * and codegen reads the int as a `tur_existential_t *`.  TY_PTR_VOID
-         * values are treated as a wildcard so inline-C escape hatches that
-         * return an opaque pointer keep working. */
-        if (def->fields[i].full_type) {
-            Type expected = *def->fields[i].full_type;
-            Type actual   = fv->type;
-            if (actual.kind != TY_PTR_VOID && !type_eq(actual, expected)) {
-                diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
-                          "make-struct '%s': field '%s' expects %s, got %s",
-                          def->name, def->fields[i].name,
-                          type_name(expected), type_name(actual));
-                return NULL;
+        if (def->n_type_params > 0 && def->fields[i].full_type) {
+            if (!struct_field_collect_type_args(def, def->fields[i].full_type,
+                                                fv->type, inferred_type_args, have_type_args)) {
+                Type expected = elab_struct_field_use_type(e, &fv->type, def, &def->fields[i]);
+                if (fv->type.kind != TY_PTR_VOID && !type_eq(fv->type, expected)) {
+                    diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
+                              "make-struct '%s': field '%s' expects %s, got %s",
+                              def->name, def->fields[i].name,
+                              type_name(expected), type_name(fv->type));
+                    return NULL;
+                }
             }
         }
 
@@ -2405,7 +2677,43 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
     }
 
     /* Build the result type */
+    for (uint8_t i = 0; i < def->n_type_params; i++) {
+        if (have_type_args && !have_type_args[i]) {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "make-struct '%s': could not infer type parameter '%s' from field values",
+                      def->name, def->type_params[i]);
+            return NULL;
+        }
+    }
+    for (uint32_t i = 0; i < def->n_fields; i++) {
+        if (def->fields[i].full_type) {
+            Type expected = elab_struct_field_use_type(e, NULL, def, &def->fields[i]);
+            if (have_type_args && def->n_type_params > 0) {
+                Type ctor_type = type_struct(def);
+                if (def->n_type_params >= 2) ctor_type.hkt_kind = KIND_ARROW2;
+                else if (def->n_type_params == 1) ctor_type.hkt_kind = KIND_ARROW;
+                Type applied = ctor_type;
+                for (uint8_t tp = 0; tp < def->n_type_params; tp++) {
+                    applied = type_app(e->arena, applied, inferred_type_args[tp], call->span);
+                }
+                expected = elab_struct_field_use_type(e, &applied, def, &def->fields[i]);
+            }
+            if (field_values[i]->type.kind != TY_PTR_VOID && !type_eq(field_values[i]->type, expected)) {
+                diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
+                          "make-struct '%s': field '%s' expects %s, got %s",
+                          def->name, def->fields[i].name,
+                          type_name(expected), type_name(field_values[i]->type));
+                return NULL;
+            }
+        }
+    }
     Type result_type = type_struct(def);
+    if (def->n_type_params > 0) {
+        result_type = struct_binding->type;
+        for (uint8_t i = 0; i < def->n_type_params; i++) {
+            result_type = type_app(e->arena, result_type, inferred_type_args[i], call->span);
+        }
+    }
 
     Expr *out = expr_new(e->arena, EX_MAKE_STRUCT, result_type, call->span);
     out->as.make_struct_.def = def;

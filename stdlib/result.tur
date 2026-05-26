@@ -1,20 +1,20 @@
 ;;; tur/result -- typed Result[A B]: ok value A or err value B.
 ;;;
 ;;; Parameterized result type. Runtime layout:
-;;; { bool is_ok; int64_t ok_val; int64_t err_val; }.
+;;; { bool is_ok; A ok_val; B err_val; } for concrete payload types.
 ;;;
 ;;; Since: Phase TC1-E
 ;; Phase TC1-E: Typed Result[A B]
 ;; ok value of type A, err value of type B.
-;; Runtime layout: { bool is_ok; int64_t ok_val; int64_t err_val; }
+;; Runtime layout specializes ok/err payload fields for concrete A/B.
 
 ;;; Result -- parameterized result type with ok type A and err type B.
 ;;;
 ;;; Since: Phase TC1
 (defstruct Result [A B]
   (is-ok   :bool)
-  (ok-val  :int)
-  (err-val :int))
+  (ok-val  A)
+  (err-val B))
 
 ;;; ok -- wrap a success value of type A in a Result[A B].
 ;;;
@@ -95,7 +95,7 @@
   return !res || !res->is_ok;
   ```)
 
-;;; ok-val -- extract the ok value; panics if err.
+;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
 ;;; Parameters:
 ;;;   r -- Result[A B]
@@ -104,17 +104,14 @@
 ;;;   The ok value of type A.
 ;;;
 ;;; Example:
-;;;   (ok-val (ok 7))  ; => 7
+;;;   (let [r (:: (make-struct Result true 7 "err") (Result int cstr))]
+;;;     (ok-val r))  ; => 7
 ;;;
 ;;; Since: Phase TC1
-(defn ok-val [r :int] #{} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || !res->is_ok) tur_panic("ok-val called on err");
-  return (int64_t)res->ok_val;
-  ```)
+(defn ok-val [A B] [r :(Result A B)] :A
+  (.ok-val r))
 
-;;; err-val -- extract the error value; panics if ok.
+;;; err-val -- extract the error value from a typed Result[A B].
 ;;;
 ;;; Parameters:
 ;;;   r -- Result[A B]
@@ -123,15 +120,12 @@
 ;;;   The error value of type B.
 ;;;
 ;;; Example:
-;;;   (err-val (err 404))  ; => 404
+;;;   (let [r (:: (make-struct Result false 0 "boom") (Result int cstr))]
+;;;     (err-val r))  ; => "boom"
 ;;;
 ;;; Since: Phase TC1
-(defn err-val [r :int] #{} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || res->is_ok) tur_panic("err-val called on ok");
-  return (int64_t)res->err_val;
-  ```)
+(defn err-val [A B] [r :(Result A B)] :B
+  (.err-val r))
 
 ;;; result-free -- free a heap-allocated Result[A B].
 ;;;

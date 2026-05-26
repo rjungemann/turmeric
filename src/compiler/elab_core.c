@@ -1373,6 +1373,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->id = e->next_id++;
     b->span = span;
     b->closure_fn_binding = NULL;
+    b->returns_closure_fn_binding = NULL;
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
     b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
@@ -1383,6 +1384,47 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
      * code that later shadows them gets a hard diagnostic. */
     b->is_from_stdlib = is_global && e->in_stdlib_load;
     return b;
+}
+
+Binding *expr_closure_fn_binding(const Expr *expr) {
+    if (!expr) return NULL;
+
+    switch (expr->kind) {
+        case EX_ASCRIBE:
+            return expr_closure_fn_binding(expr->as.ascribe_.inner);
+        case EX_CLOSURE:
+            if (expr->as.closure_.closure && expr->as.closure_.closure->fn) {
+                return expr->as.closure_.closure->fn->binding;
+            }
+            return NULL;
+        case EX_VAR:
+            if (!expr->as.var.binding) return NULL;
+            if (expr->as.var.binding->closure_fn_binding) {
+                return expr->as.var.binding->closure_fn_binding;
+            }
+            return expr->as.var.binding->returns_closure_fn_binding;
+        case EX_CALL:
+            if (!expr->as.call_.fn_binding) return NULL;
+            return expr->as.call_.fn_binding->returns_closure_fn_binding;
+        case EX_LET:
+            return expr_closure_fn_binding(expr->as.let_.body);
+        case EX_DO:
+            for (int i = (int)expr->as.do_.n - 1; i >= 0; i--) {
+                const Expr *item = expr->as.do_.items[i];
+                if (item->kind == EX_DEFER) continue;
+                return expr_closure_fn_binding(item);
+            }
+            return NULL;
+        case EX_IF: {
+            Binding *then_binding = expr_closure_fn_binding(expr->as.if_.then_);
+            Binding *else_binding = expr->as.if_.else_or_null
+                ? expr_closure_fn_binding(expr->as.if_.else_or_null)
+                : NULL;
+            return (then_binding && then_binding == else_binding) ? then_binding : NULL;
+        }
+        default:
+            return NULL;
+    }
 }
 
 /* Phase M2: File reading helper — returns 0 on success, -1 on failure. */

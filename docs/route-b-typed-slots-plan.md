@@ -1,9 +1,10 @@
 # Plan: Route B — Monomorphised typed value slots
 
-> **Status:** Draft
+> **Status:** In progress — TS1 landed, TS2 landed, TS3 substrate through GS4 landed, TS3-GS5 started, TS4-TS6 open
 > **Last Updated:** 2026-05-25
 > **Type:** Compiler + runtime + stdlib
 > **Companion to:** [defalias-plan.md](defalias-plan.md)
+> **GS5 compiler follow-up:** [typed-slots-gs5-compiler-support-plan.md](typed-slots-gs5-compiler-support-plan.md)
 > **Supersedes (eventually):** the `defalias Sample :int` pattern in
 > `turmeric-spices/spices/signal`
 
@@ -84,6 +85,47 @@ unpack those containers.  Route B is mostly about teaching (a) to
 emit per-(arg, ret)-type thunk signatures, parameterising (b) over a
 real type variable, and inserting explicit `:reinterpret` IR nodes
 at (c)'s boundaries.
+
+**Worktree update (2026-05-25):** TS1 and TS2 are now landed.
+`float-closure` emits a shared typed thunk typedef, a fat closure with
+a typed `__fn` field, and direct typed closure calls with no user-side
+bit-cast. The table above predates those in-flight changes.
+
+**Worktree update (2026-05-26):** TS3's prerequisite generic substrate is
+now landed through GS4. Parameterized `defstruct` fields accept their own
+type binders, instantiated struct field types survive `make-struct`,
+field access, `set!`, and typed call boundaries through elaboration, and
+mismatched applied-struct calls are rejected with full instantiated type
+diagnostics. Codegen now also emits deterministic concrete struct-app
+typedefs such as `Box__float` / `Pair__int__float` and uses them in
+compound literals and typed function signatures, so direct concrete
+layouts are now present in emitted C. `defn` / `fn` also now accept
+explicit `[A]` binders, preserve named type variables through signatures,
+and reinterpret scalar generic arguments/results across the `int64_t`
+carrier boundary so generic scalar identity-style calls work for `:float`
+without user bit-casts. TS3 remains in progress until the stdlib
+container migration work lands.
+
+**Worktree update (2026-05-26, GS5 slice):** the stdlib container migration
+has now started. `Option`, `Pair`, and `Result` `defstruct` payloads use
+their type parameters directly, and `Cons` now specializes its `head`
+payload slot while leaving the `tail` link on the legacy carrier, matching
+the TS3 intermediate goal of layouts like `struct { double head; int64_t tail; }`.
+Focused typed-slots fixtures now show direct `make-struct` lowering to
+concrete emitted C types like `Option__float`, `Pair__int__float`,
+`Result__float__cstr`, and `Cons__float`. Carrier-era helper APIs are
+still the remaining part of TS3, and the missing compiler work is broken
+out in
+[`typed-slots-gs5-compiler-support-plan.md`](typed-slots-gs5-compiler-support-plan.md).
+
+## Progress checklist
+
+- [x] TS1 — Typed thunk ABI
+- [x] TS2 — Reinterpret coercion node
+- [ ] TS3 — Typed primitive containers
+- [ ] TS4 — Typed ADT payloads
+- [ ] TS5 — HKT helpers use reinterpret
+- [ ] TS6 — Signal spice migration
 
 ---
 
@@ -326,21 +368,19 @@ per-instance flag if necessary.
 
 ## Work plan
 
-| Step | Description | Status |
-|---|---|---|
-| TS1.1 | Typed-thunk typedef factory in `emit_module.c` | Open |
-| TS1.2 | Per-(arg,ret) thunk emission in `emit_fns.c` | Open |
-| TS1.3 | Update closure-build and invocation casts in `emit_expr.c` | Open |
-| TS1.4 | `float-closure.tur` fixture + emitted-C assertion | Open |
-| TS2.1 | Add `EX_REINTERPRET` IR node + codegen | Open |
-| TS2.2 | Compiler unit test for synthetic reinterpret | Open |
-| TS3.1 | Parameterise stdlib containers over `[A]` | Open |
-| TS3.2 | Monomorphised struct field layout per `A` | Open |
-| TS3.3 | Insert TS2 reinterprets at container boundaries | Open |
-| TS3.4 | Container fixtures (`cons-float`, `option-float`, …) | Open |
-| TS4.1 | Typed ADT payload codegen | Open |
-| TS4.2 | ADT fixture | Open |
-| TS5.1 | Migrate `list`, `fix`, `free` HKT helpers to TS2 reinterprets | Open |
-| TS5.2 | Functor/Monad regression fixtures | Open |
-| TS6.1 | Migrate signal spice; delete `defalias Sample :int` | Open |
-| TS6.2 | Confirm all four `tur check` exits 0; remove skip markers | Open |
+- [x] TS1.1 — Typed-thunk typedef factory in `emit_module.c`
+- [x] TS1.2 — Per-(arg,ret) thunk emission in `emit_fns.c`
+- [x] TS1.3 — Update closure-build and invocation casts in `emit_expr.c`
+- [x] TS1.4 — `float-closure.tur` fixture + emitted-C assertion
+- [x] TS2.1 — Add `EX_REINTERPRET` IR node + codegen
+- [x] TS2.2 — Compiler unit test for synthetic reinterpret
+- [ ] TS3.1 — Parameterise stdlib containers over `[A]`
+- [ ] TS3.2 — Monomorphised struct field layout per `A`
+- [ ] TS3.3 — Insert TS2 reinterprets at container boundaries
+- [ ] TS3.4 — Container fixtures (`cons-float`, `option-float`, …)
+- [ ] TS4.1 — Typed ADT payload codegen
+- [ ] TS4.2 — ADT fixture
+- [ ] TS5.1 — Migrate `list`, `fix`, `free` HKT helpers to TS2 reinterprets
+- [ ] TS5.2 — Functor/Monad regression fixtures
+- [ ] TS6.1 — Migrate signal spice; delete `defalias Sample :int`
+- [ ] TS6.2 — Confirm all four `tur check` exits 0; remove skip markers

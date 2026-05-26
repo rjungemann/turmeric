@@ -458,10 +458,12 @@ Expr *elab_let(Elab *e, const Form *call) {
             if (!binding_moved_during_init) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
         
-        /* Phase 3: If init is a closure, set closure_fn_binding on the binding */
-        if (init && init->kind == EX_CLOSURE) {
-            struct Closure *closure = init->as.closure_.closure;
-            b->closure_fn_binding = closure->fn->binding;
+        /* Propagate closure metadata through lets so a binding produced by a
+         * closure literal or a closure-returning call remains callable with the
+         * underlying thunk signature. */
+        if (init) {
+            Binding *closure_b = expr_closure_fn_binding(init);
+            if (closure_b) b->closure_fn_binding = closure_b;
         }
         /* Phase HRT4: propagate poly fn metadata through let-bindings.
          * (let [g f] ...) where f is is_poly_fn → g inherits is_poly_fn.
@@ -1141,11 +1143,23 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     StructDef *def = NULL;
     bool receiver_is_rc = false;
     Type rt = receiver->type;
+    const Type *receiver_struct_type = &receiver->type;
     if (rt.kind == TY_STRUCT) {
         def = rt.as.struct_.def;
+    } else if (rt.kind == TY_APP) {
+        Type app_args[8];
+        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+            StructDef *candidate = e->struct_defs[si];
+            if (candidate->n_type_params == 0 || candidate->n_type_params > 8) continue;
+            if (elab_struct_type_extract_args(&rt, candidate, app_args)) {
+                def = candidate;
+                break;
+            }
+        }
     } else if (rt.kind == TY_RC && rt.as.rc.struct_def) {
         def = rt.as.rc.struct_def;
         receiver_is_rc = true;
+        receiver_struct_type = &rt;
     } else if (rt.kind == TY_REF_MUT) {
         /* &mut Struct -- field write through a mutable borrow.  The
          * borrow already permits interior mutation; no ^mut on the
@@ -1201,11 +1215,7 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
     if (!value) return NULL;
 
     Type expected_field;
-    if (def->fields[fi].full_type) {
-        expected_field = *def->fields[fi].full_type;
-    } else {
-        expected_field = type_from_kind(def->fields[fi].kind);
-    }
+    expected_field = elab_struct_field_use_type(e, receiver_struct_type, def, &def->fields[fi]);
     if (value->type.kind != TY_PTR_VOID && !type_eq(value->type, expected_field)) {
         diag_emit(DIAG_ERROR, value->span,
                   "set! (.%s ...): value type %s does not match field type %s",

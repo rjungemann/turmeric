@@ -370,6 +370,25 @@ else
 fi
 rm -f "$RMC_STDERR"
 
+# Module import regression: importing a module that itself imports sibling
+# modules must not crash the compiler while recursive loads grow the module
+# registry.
+MTI_ENTRY="tests/fixtures/module-transitive-imports/src/main.tur"
+MTI_OUT=$(mktemp)
+"$TUR" run "$MTI_ENTRY" >"$MTI_OUT" 2>/dev/null
+mti_rc=$?
+if [ "$mti_rc" -eq 0 ] && [ "$(cat "$MTI_OUT")" = "3" ]; then
+    echo "PASS MREG: transitive module imports stay stable under recursive loads"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL MREG: transitive module imports crashed or produced wrong output -- exit $mti_rc"
+    echo "  expected: 3"
+    echo "  got:"; sed 's/^/    /' "$MTI_OUT"
+    FAIL=$((FAIL + 1))
+    FAILED+=("MREG: transitive module imports stay stable")
+fi
+rm -f "$MTI_OUT"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

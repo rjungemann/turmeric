@@ -1,7 +1,7 @@
 # Spice Plan: tur-plot
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-22
+> **Status:** Core `tur-plot` implementation is largely present in `../turmeric-spices/spices/plot`. Remaining polish and release-readiness work now lives in [docs/upcoming/plot-spice-followups-plan.md](upcoming/plot-spice-followups-plan.md).
+> **Last Updated:** 2026-05-25
 > **Type:** Spice Design
 
 ---
@@ -23,6 +23,24 @@ legend layout are implemented in Turmeric; plutovg provides the drawing primitiv
 dependency in `build.tur`. Inline-C is limited to thin wrappers for `<math.h>`
 functions (`sin`, `cos`, `log`, `pow`, `floor`, `fmod`) that the stdlib does not
 expose.
+
+## Current status snapshot
+
+Status below reflects the current sibling spice worktree at
+`../turmeric-spices/spices/plot` rather than this repository alone.
+
+Remaining open work has been split into
+`docs/upcoming/plot-spice-followups-plan.md`.
+
+- [x] `spices/plot/build.tur` exists and exports the planned modules.
+- [x] Core source files exist for `plot/style`, `plot/tick`, `plot/core`, `plot/decor`,
+  `plot/line`, `plot/point`, `plot/interval`, `plot/area`, and `plot/contour`.
+- [x] Smoke tests exist for `core`, `line`, `point`, `interval`, `area`, and `contour`.
+- [x] The spice README exists, and `spices/plot/docs/guides/plot-guide.md` exists.
+- [x] The top-level `turmeric-spices` README already includes a `tur-plot` row.
+- [ ] The planned adaptive sampling work called out in PL2 is implemented.
+- [ ] Pixel-level `surface-data` sanity checks from PL9 are implemented.
+- [ ] A `plot-v0.1.0` git tag exists in `../turmeric-spices`.
 
 ---
 
@@ -381,46 +399,48 @@ Fill-style controls the shaded region; line-style controls the boundary lines.
 
 ## Implementation phases
 
-- [ ] **PL0** -- `build.tur`; spice dependency on `tur-plutovg`; `plot/style` structs
+- [x] **PL0** -- `build.tur`; spice dependency on `tur-plutovg`; `plot/style` structs
   and defaults; `plot/tick` (`linear-ticks`, `format-tick`, `linear-tick-labels`);
   `plot/core` coordinate transform math (`data->viewport`, `viewport->data`,
   `auto-bounds`); `plot` and `plot-write-png` rendering a blank frame with axes,
   title, and tick labels (no data renderers yet).
 
-- [ ] **PL1** -- `plot/decor`: `axes`, `x-axis`, `y-axis`, `tick-grid`, `hrule`,
+- [x] **PL1** -- `plot/decor`: `axes`, `x-axis`, `y-axis`, `tick-grid`, `hrule`,
   `vrule`, `point-label`; legend rendering in `plot/core` (collect labels from
   renderer list, draw swatch + text in chosen corner).
 
 - [ ] **PL2** -- `plot/line`: `function`, `lines`; adaptive sampling that inserts
   extra points where the slope changes quickly; NaN gap handling in `lines`
-  (skip segment when either endpoint is NaN).
+  (skip segment when either endpoint is NaN). `function`/`lines` and NaN-gap
+  handling exist, but the adaptive sampling pass described here does not.
 
-- [ ] **PL3** -- `plot/point`: `points` (all six `sym` shapes); `error-bars`
+- [x] **PL3** -- `plot/point`: `points` (all six `sym` shapes); `error-bars`
   (vertical and horizontal); round-trip test: `points` + `error-bars` + `function`
   on one plot, write PNG.
 
-- [ ] **PL4** -- `plot/line` remainder: `parametric`, `polar`, `inverse`;
+- [x] **PL4** -- `plot/line` remainder: `parametric`, `polar`, `inverse`;
   `color-seq` in `plot/style`; multi-renderer color cycling.
 
-- [ ] **PL5** -- `plot/interval`: `function-interval`, `lines-interval`,
+- [x] **PL5** -- `plot/interval`: `function-interval`, `lines-interval`,
   `parametric-interval`, `polar-interval`; filled region clipping to plot bounds.
 
-- [ ] **PL6** -- `plot/area`: `rectangles`, `area-histogram`, `discrete-histogram`,
+- [x] **PL6** -- `plot/area`: `rectangles`, `area-histogram`, `discrete-histogram`,
   `stacked-histogram`; categorical x-axis labeling (tick labels from bar names
   instead of numbers).
 
-- [ ] **PL7** -- `plot/contour`: marching-squares isoline extraction helper (shared
+- [x] **PL7** -- `plot/contour`: marching-squares isoline extraction helper (shared
   by `isoline`, `contours`, `contour-intervals`); `isoline`, `contours`,
   `contour-intervals`; `color-field`; `log-ticks` / `log-tick-labels` in
   `plot/tick`.
 
-- [ ] **PL8** -- `plot/line`: `density` (Silverman bandwidth, Gaussian kernel);
+- [x] **PL8** -- `plot/line`: `density` (Silverman bandwidth, Gaussian kernel);
   `plot/point`: `vector-field`, `arrows`; `plot/decor`: `point-label-styled`,
   `hrule-styled`, `vrule-styled`.
 
 - [ ] **PL9** -- Tests (each renderer type produces a non-empty PNG; pixel-level
   sanity checks via `surface-data`); README section in `turmeric-spices`;
-  `plot-v0.1.0` tag.
+  `plot-v0.1.0` tag. Smoke tests, README, and guide exist, but pixel-level
+  `surface-data` checks are not present and no `plot-v0.1.0` tag exists yet.
 
 ---
 

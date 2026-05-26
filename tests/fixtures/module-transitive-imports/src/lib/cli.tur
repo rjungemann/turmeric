@@ -1,0 +1,6 @@
+(defmodule lib/cli
+  (import lib/a :refer [a])
+  (import lib/b :refer [b])
+  (export run)
+  (defn run [] :int
+    (+ (a) (b))))

@@ -38,9 +38,25 @@ extern bool g_dump_clone_plan;
 /* Forward declarations */
 struct DeferThunk;
 
+/* GS5/CS3: AbiTypeBinding is defined in expr.h and shared with elab_call.c so
+ * the emit phase consumes the substitution that elab already computed. */
+typedef struct EmitAbiSpecialization {
+    const Expr *call_expr;
+    const Expr *fn_expr;
+    FnDef *fn;
+    Binding *binding;
+    AbiTypeBinding bindings[ABI_TYPE_BINDINGS_MAX];
+    uint8_t n_bindings;
+    Type arg_types[MAX_FN_ARITY];
+    uint8_t n_args;
+    Type result_type;
+    char *clone_name;
+} EmitAbiSpecialization;
+
 typedef struct EmitCtx {
     Buf  *file;     /* file-scope decls (statics, includes) */
     Buf  *main_;    /* main() body */
+    Buf  *thunk_typedefs; /* TS1: shared thunk typedef prelude */
     int   indent;
     int   tmp_n;
     /* Phase 2: when emitting a function body, these are the parameter bindings
@@ -51,6 +67,10 @@ typedef struct EmitCtx {
     const Symbol **env_struct_names;
     uint8_t   n_env_struct_names;
     uint8_t   cap_env_struct_names;
+    /* TS1: per-signature thunk typedef tracking */
+    char    **thunk_typedef_names;
+    uint32_t  n_thunk_typedef_names;
+    uint32_t  cap_thunk_typedef_names;
     /* Phase 3: For closure thunk emission, track the current closure */
     struct Closure *closure;
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
@@ -83,6 +103,15 @@ typedef struct EmitCtx {
     const char  *gen_var_name;           /* "__g" when inside _next function (NULL outside) */
     const char  *gen_struct_type;        /* struct type name when inside _next (NULL outside) */
     bool         gen_hdr_emitted;        /* true once __tur_gen_hdr_t typedef is in ctx->file */
+    EmitAbiSpecialization *abi_specializations;
+    uint32_t     n_abi_specializations;
+    uint32_t     cap_abi_specializations;
+    const Expr **specialized_call_exprs;
+    const char **specialized_call_names;
+    uint32_t     n_specialized_calls;
+    uint32_t     cap_specialized_calls;
+    const EmitAbiSpecialization *current_abi_specialization;
+    const char  *fn_name_override;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -101,6 +130,8 @@ typedef struct DeferThunk {
 char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic);
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
 Type emit_type_from_kind(TypeKind k);
+Type emit_resolve_type(EmitCtx *ctx, Type t);
+const char *emit_type_c_name(EmitCtx *ctx, Type t);
 void indent_buf(Buf *b, int n);
 bool expr_is_divergent(const Expr *e);
 bool expr_contains_return_or_throw(const Expr *e);
@@ -117,6 +148,7 @@ void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
 char *raw_name_for_binding(const Binding *b);
+char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
 void emit_c_string(Buf *out, StrSlice s);
 char *atom_nil(void);
@@ -130,6 +162,9 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e);
 void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);
 void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *cdefs);
 Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
+bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params);
+char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
+                                 Type result_type, Type *param_types, uint8_t n_params);
 
 /* ------------ emit_effects.c: effects/CPS expression emission ------------ */
 /* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,

@@ -3373,6 +3373,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return v;
         }
     }
+    case EX_REINTERPRET:
+        /* Compiler-only in TS2. Keep interpreter traversal exhaustive until a
+         * later phase needs runtime reinterpret semantics too. */
+        return eval_expr(env, frame, e->as.reinterpret_.expr);
 
     /* --- Phase 2: type ascription is transparent at runtime ---------------- */
     case EX_ASCRIBE:

@@ -3,6 +3,465 @@
 
 /* ------------ program-level emit ------------ */
 
+static bool thunk_type_has_concrete_c_abi(Type t) {
+    switch (t.kind) {
+        case TY_NIL:
+        case TY_BOOL:
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_REF:
+        case TY_LREF:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_REF_IMMUT:
+        case TY_REF_MUT:
+        case TY_EXCEPTION:
+        case TY_CONT:
+        case TY_CLONEABLE_CONT:
+        case TY_NEVER:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_INT64:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+        case TY_SET:
+        case TY_HANDLER:
+        case TY_SESSION:
+        case TY_ROLE:
+        case TY_GENERATOR:
+            return true;
+        case TY_STRUCT:
+            return t.as.struct_.def && !t.as.struct_.def->is_opaque;
+        case TY_ADT:
+            return t.as.adt_.def != NULL;
+        default:
+            return false;
+    }
+}
+
+bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params) {
+    if (!thunk_type_has_concrete_c_abi(result_type)) return false;
+    for (uint8_t i = 0; i < n_params; i++) {
+        if (!thunk_type_has_concrete_c_abi(param_types[i])) return false;
+    }
+    return true;
+}
+
+static void append_sanitized_c_token(Buf *out, const char *raw) {
+    if (!raw || !*raw) {
+        buf_puts(out, "anon");
+        return;
+    }
+    for (const unsigned char *p = (const unsigned char *)raw; *p; p++) {
+        buf_putc(out, isalnum(*p) ? (char)*p : '_');
+    }
+}
+
+static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8_t n_params) {
+    Buf name;
+    buf_init(&name);
+    buf_puts(&name, "tur_thunk_");
+    append_sanitized_c_token(&name, type_c_name(result_type));
+    for (uint8_t i = 0; i < n_params; i++) {
+        buf_putc(&name, '_');
+        append_sanitized_c_token(&name, type_c_name(param_types[i]));
+    }
+    buf_puts(&name, "_t");
+    buf_putc(&name, '\0');
+    char *result = strdup(name.data);
+    buf_free(&name);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return result;
+}
+
+char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
+                                 Type result_type, Type *param_types, uint8_t n_params) {
+    if (!use_typed_thunk_abi(result_type, param_types, n_params)) return NULL;
+
+    char *name = typed_thunk_typedef_name(result_type, param_types, n_params);
+    for (uint32_t i = 0; i < ctx->n_thunk_typedef_names; i++) {
+        if (strcmp(ctx->thunk_typedef_names[i], name) == 0) {
+            return name;
+        }
+    }
+
+    if (ctx->n_thunk_typedef_names >= ctx->cap_thunk_typedef_names) {
+        uint32_t new_cap = ctx->cap_thunk_typedef_names ? ctx->cap_thunk_typedef_names * 2 : 8;
+        char **new_names = (char **)realloc(ctx->thunk_typedef_names, new_cap * sizeof(char *));
+        if (!new_names) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->thunk_typedef_names = new_names;
+        ctx->cap_thunk_typedef_names = new_cap;
+    }
+    ctx->thunk_typedef_names[ctx->n_thunk_typedef_names++] = strdup(name);
+    if (!ctx->thunk_typedef_names[ctx->n_thunk_typedef_names - 1]) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : out;
+    buf_printf(target, "typedef %s (*%s)(void *", type_c_name(result_type), name);
+    for (uint8_t i = 0; i < n_params; i++) {
+        buf_printf(target, ", %s", type_c_name(param_types[i]));
+    }
+    buf_puts(target, ");\n");
+    return name;
+}
+
+static bool emit_abi_type_has_named_tyvar(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name != NULL;
+        case TY_APP:
+            return emit_abi_type_has_named_tyvar(t->as.app.fn) ||
+                   emit_abi_type_has_named_tyvar(t->as.app.arg);
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
+                if (emit_abi_type_has_named_tyvar(t->as.union_.members[i])) return true;
+            }
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
+                if (emit_abi_type_has_named_tyvar(t->as.intersection_.members[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* GS5/CS3: emit_abi_collect_type_bindings / emit_abi_find_type_binding used to
+ * live here as a duplicate of elab_call.c's substitution machinery. They have
+ * been removed -- elab now attaches the substitution to EX_CALL via
+ * call_.abi_bindings, and emit_abi_register_call consumes that directly. */
+
+static bool emit_abi_find_type_binding(const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                       const char *name, uint8_t *out_idx) {
+    if (!name) return false;
+    for (uint8_t i = 0; i < n_bindings; i++) {
+        if (bindings[i].name && strcmp(bindings[i].name, name) == 0) {
+            if (out_idx) *out_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static Type emit_abi_instantiate_type(const Type *t,
+                                      const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name &&
+                emit_abi_find_type_binding(bindings, n_bindings, t->as.tyvar_.name, &idx)) {
+                return bindings[idx].type;
+            }
+            return *t;
+        }
+        case TY_APP: {
+            if (!t->as.app.fn || !t->as.app.arg) return *t;
+            Type fn = emit_abi_instantiate_type(t->as.app.fn, bindings, n_bindings);
+            Type arg = emit_abi_instantiate_type(t->as.app.arg, bindings, n_bindings);
+            Type out = *t;
+            out.as.app.fn = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        case TY_UNION: {
+            Type out = *t;
+            if (t->as.union_.n_members == 0 || !t->as.union_.members) return out;
+            Type **members = (Type **)malloc(t->as.union_.n_members * sizeof(Type *));
+            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            out.as.union_.members = members;
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
+                members[i] = (Type *)malloc(sizeof(Type));
+                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
+                *members[i] = emit_abi_instantiate_type(t->as.union_.members[i], bindings, n_bindings);
+            }
+            return out;
+        }
+        case TY_INTERSECTION: {
+            Type out = *t;
+            if (t->as.intersection_.n_members == 0 || !t->as.intersection_.members) return out;
+            Type **members = (Type **)malloc(t->as.intersection_.n_members * sizeof(Type *));
+            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            out.as.intersection_.members = members;
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
+                members[i] = (Type *)malloc(sizeof(Type));
+                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
+                *members[i] = emit_abi_instantiate_type(t->as.intersection_.members[i], bindings, n_bindings);
+            }
+            return out;
+        }
+        default:
+            return *t;
+    }
+}
+
+static const Expr *emit_abi_find_fn_expr(const Expr **items, uint32_t n_items, const Binding *binding) {
+    for (uint32_t i = 0; i < n_items; i++) {
+        if (items[i]->kind == EX_FN_DEF && items[i]->as.fn_def_.fn &&
+            items[i]->as.fn_def_.fn->binding == binding) {
+            return items[i];
+        }
+    }
+    return NULL;
+}
+
+static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type *arg_types, uint8_t n_args) {
+    Buf name;
+    buf_init(&name);
+    append_sanitized_c_token(&name, binding && binding->name ? binding->name->name : "fn");
+    buf_puts(&name, "__spec__");
+    append_sanitized_c_token(&name, type_c_name(result_type));
+    for (uint8_t i = 0; i < n_args; i++) {
+        buf_putc(&name, '_');
+        append_sanitized_c_token(&name, type_c_name(arg_types[i]));
+    }
+    buf_putc(&name, '\0');
+    char *result = strdup(name.data);
+    buf_free(&name);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return result;
+}
+
+static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, const char *clone_name) {
+    if (ctx->n_specialized_calls >= ctx->cap_specialized_calls) {
+        uint32_t new_cap = ctx->cap_specialized_calls ? ctx->cap_specialized_calls * 2 : 8;
+        const Expr **new_exprs = (const Expr **)realloc(ctx->specialized_call_exprs,
+            new_cap * sizeof(Expr *));
+        const char **new_names = (const char **)realloc(ctx->specialized_call_names,
+            new_cap * sizeof(char *));
+        if (!new_exprs || !new_names) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->specialized_call_exprs = new_exprs;
+        ctx->specialized_call_names = new_names;
+        ctx->cap_specialized_calls = new_cap;
+    }
+    ctx->specialized_call_exprs[ctx->n_specialized_calls] = call;
+    ctx->specialized_call_names[ctx->n_specialized_calls] = clone_name;
+    ctx->n_specialized_calls++;
+}
+
+static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
+                                   const Expr **items, uint32_t n_items,
+                                   const Type *result_type_override) {
+    if (!call || call->kind != EX_CALL || !call->as.call_.fn_binding) return;
+    /* GS5/CS3: elab attaches the named-tyvar substitution to the call when it
+     * matters; absence of bindings means there is nothing to specialize. */
+    const AbiTypeBinding *bindings = call->as.call_.abi_bindings;
+    uint8_t n_bindings = call->as.call_.n_abi_bindings;
+    if (!bindings || n_bindings == 0) return;
+
+    Binding *fn_binding = call->as.call_.fn_binding;
+    if (call->as.call_.fn_expr || fn_binding->type.kind != TY_FN || !fn_binding->is_global ||
+        fn_binding->closure_fn_binding) {
+        return;
+    }
+
+    const Expr *fn_expr = emit_abi_find_fn_expr(items, n_items, fn_binding);
+    if (!fn_expr || !fn_expr->as.fn_def_.fn) return;
+    FnDef *fd = fn_expr->as.fn_def_.fn;
+    if (fd->closure || !fd->body || fd->body->kind == EX_INLINE_C) return;
+
+    bool abi_changes = false;
+    Type arg_types[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < fd->n_params; i++) {
+        const Type *expected_full = (fn_binding->type.as.fn.arg_full_types &&
+                                     fn_binding->type.as.fn.arg_full_types[i])
+            ? fn_binding->type.as.fn.arg_full_types[i]
+            : &fd->params[i]->type;
+        Type generic_arg = expected_full ? *expected_full : fd->param_types[i];
+        arg_types[i] = expected_full
+            ? emit_abi_instantiate_type(expected_full, bindings, n_bindings)
+            : fd->param_types[i];
+        if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
+            abi_changes = true;
+        }
+    }
+
+    Type generic_result = fn_binding->type.as.fn.result_full_type
+        ? *fn_binding->type.as.fn.result_full_type
+        : emit_type_from_kind(fn_binding->type.as.fn.result_kind);
+    Type result_type = result_type_override ? *result_type_override : call->type;
+    if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
+        abi_changes = true;
+    }
+    if (!abi_changes) return;
+
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+        if (spec->binding != fn_binding || spec->n_args != fd->n_params ||
+            !type_eq(spec->result_type, result_type)) {
+            continue;
+        }
+        bool args_match = true;
+        for (uint8_t ai = 0; ai < fd->n_params; ai++) {
+            if (!type_eq(spec->arg_types[ai], arg_types[ai])) {
+                args_match = false;
+                break;
+            }
+        }
+        if (args_match) {
+            emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+            return;
+        }
+    }
+
+    if (ctx->n_abi_specializations >= ctx->cap_abi_specializations) {
+        uint32_t new_cap = ctx->cap_abi_specializations ? ctx->cap_abi_specializations * 2 : 8;
+        EmitAbiSpecialization *new_specs = (EmitAbiSpecialization *)realloc(
+            ctx->abi_specializations, new_cap * sizeof(EmitAbiSpecialization));
+        if (!new_specs) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->abi_specializations = new_specs;
+        ctx->cap_abi_specializations = new_cap;
+    }
+
+    EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];
+    memset(spec, 0, sizeof(*spec));
+    spec->call_expr = call;
+    spec->fn_expr = fn_expr;
+    spec->fn = fd;
+    spec->binding = fn_binding;
+    spec->n_bindings = n_bindings;
+    for (uint8_t i = 0; i < n_bindings; i++) spec->bindings[i] = bindings[i];
+    spec->n_args = fd->n_params;
+    for (uint8_t i = 0; i < fd->n_params; i++) spec->arg_types[i] = arg_types[i];
+    spec->result_type = result_type;
+    spec->clone_name = emit_abi_clone_name(fn_binding, result_type, arg_types, fd->n_params);
+    emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+}
+
+static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
+                               const Expr **items, uint32_t n_items) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++) {
+                emit_abi_scan_expr(ctx, e->as.program.items[i], items, n_items);
+            }
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) emit_abi_scan_expr(ctx, e->as.fn_def_.fn->body, items, n_items);
+            break;
+        case EX_DEF:
+            emit_abi_scan_expr(ctx, e->as.def_.init, items, n_items);
+            break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                emit_abi_scan_expr(ctx, e->as.let_.bindings[i].init, items, n_items);
+            }
+            emit_abi_scan_expr(ctx, e->as.let_.body, items, n_items);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                emit_abi_scan_expr(ctx, e->as.do_.items[i], items, n_items);
+            }
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) {
+                emit_abi_scan_expr(ctx, e->as.builtin.args[i], items, n_items);
+            }
+            break;
+        case EX_IF:
+            emit_abi_scan_expr(ctx, e->as.if_.cond, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.if_.then_, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.if_.else_or_null, items, n_items);
+            break;
+        case EX_WHILE:
+            emit_abi_scan_expr(ctx, e->as.while_.cond, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.while_.body, items, n_items);
+            break;
+        case EX_CALL:
+            emit_abi_register_call(ctx, e, items, n_items, NULL);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                emit_abi_scan_expr(ctx, e->as.call_.args[i], items, n_items);
+            }
+            emit_abi_scan_expr(ctx, e->as.call_.fn_expr, items, n_items);
+            break;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                emit_abi_scan_expr(ctx, e->as.make_struct_.field_values[i], items, n_items);
+            }
+            break;
+        case EX_GET_FIELD:
+            emit_abi_scan_expr(ctx, e->as.get_field_.struct_expr, items, n_items);
+            break;
+        case EX_SET_FIELD:
+            emit_abi_scan_expr(ctx, e->as.set_field_.receiver, items, n_items);
+            emit_abi_scan_expr(ctx, e->as.set_field_.value, items, n_items);
+            break;
+        case EX_RETURN:
+            emit_abi_scan_expr(ctx, e->as.return_.value, items, n_items);
+            break;
+        case EX_ASCRIBE:
+            emit_abi_scan_expr(ctx, e->as.ascribe_.inner, items, n_items);
+            break;
+        case EX_CAST:
+            emit_abi_scan_expr(ctx, e->as.cast_.expr, items, n_items);
+            break;
+        case EX_REINTERPRET:
+            if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
+                emit_abi_register_call(ctx, e->as.reinterpret_.expr, items, n_items, &e->type);
+                for (uint32_t i = 0; i < e->as.reinterpret_.expr->as.call_.n_args; i++) {
+                    emit_abi_scan_expr(ctx, e->as.reinterpret_.expr->as.call_.args[i], items, n_items);
+                }
+                emit_abi_scan_expr(ctx, e->as.reinterpret_.expr->as.call_.fn_expr, items, n_items);
+            } else {
+                emit_abi_scan_expr(ctx, e->as.reinterpret_.expr, items, n_items);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+static bool emit_abi_fn_is_generic_unsafe(const Expr *e) {
+    if (!e || e->kind != EX_FN_DEF || e->type.kind != TY_FN) return false;
+    if (e->type.as.fn.result_full_type &&
+        e->type.as.fn.result_full_type->kind != TY_TYVAR &&
+        emit_abi_type_has_named_tyvar(e->type.as.fn.result_full_type)) {
+        return true;
+    }
+    if (e->type.as.fn.arg_full_types) {
+        for (uint8_t i = 0; i < e->type.as.fn.arity; i++) {
+            const Type *arg = e->type.as.fn.arg_full_types[i];
+            if (arg && arg->kind != TY_TYVAR && emit_abi_type_has_named_tyvar(arg)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
+    if (!spec || !spec->fn) return;
+    buf_puts(out, "static ");
+    buf_puts(out, type_c_name(spec->result_type));
+    buf_printf(out, " %s(", spec->clone_name);
+    for (uint8_t i = 0; i < spec->n_args; i++) {
+        if (i > 0) buf_puts(out, ", ");
+        if (spec->fn->params[i]->is_poly_fn) {
+            buf_puts(out, "tur_poly_fn_t");
+        } else if (spec->fn->param_types[i].kind == TY_FN) {
+            buf_puts(out, "int64_t");
+        } else {
+            buf_puts(out, type_c_name(spec->arg_types[i]));
+        }
+    }
+    buf_puts(out, ");\n");
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -21,6 +480,7 @@ int emit_program(Buf *out, const Expr *program) {
      * Order ensures: struct typedefs visible to fwd_decls; fwd_decls visible
      * to handler functions; handler functions visible to fn definitions. */
     Buf early_file;  buf_init(&early_file);
+    Buf thunk_typedefs; buf_init(&thunk_typedefs);
     Buf fwd_decls;   buf_init(&fwd_decls);
     Buf extern_decls; buf_init(&extern_decls);
     Buf defer_thunks; buf_init(&defer_thunks);
@@ -28,6 +488,7 @@ int emit_program(Buf *out, const Expr *program) {
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.thunk_typedefs = &thunk_typedefs;
     ctx.indent = 4;
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
@@ -39,6 +500,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.env_struct_names = NULL;
     ctx.n_env_struct_names = 0;
     ctx.cap_env_struct_names = 0;
+    ctx.thunk_typedef_names = NULL;
+    ctx.n_thunk_typedef_names = 0;
+    ctx.cap_thunk_typedef_names = 0;
     /* Phase 4 v1: frame tracking */
     ctx.frame_var = NULL;
     ctx.in_scope_with_defers = false;
@@ -63,10 +527,26 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.gen_struct_bindings = NULL;
     ctx.n_gen_struct_bindings = 0;
     ctx.gen_var_name = NULL;
+    ctx.gen_struct_type = NULL;
+    ctx.gen_hdr_emitted = false;
+    ctx.abi_specializations = NULL;
+    ctx.n_abi_specializations = 0;
+    ctx.cap_abi_specializations = 0;
+    ctx.specialized_call_exprs = NULL;
+    ctx.specialized_call_names = NULL;
+    ctx.n_specialized_calls = 0;
+    ctx.cap_specialized_calls = 0;
+    ctx.current_abi_specialization = NULL;
+    ctx.fn_name_override = NULL;
+    type_codegen_reset_struct_apps();
 
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
     const Expr **items = flatten_program_items(program, &n_items);
+
+    for (uint32_t i = 0; i < n_items; i++) {
+        emit_abi_scan_expr(&ctx, items[i], items, n_items);
+    }
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -418,6 +898,9 @@ int emit_program(Buf *out, const Expr *program) {
             FnDef *fd = e->as.fn_def_.fn;
             /* Skip main - it's not called from other functions in the same file */
             if (strcmp(fd->binding->name->name, "main") == 0) continue;
+            if (emit_abi_fn_is_generic_unsafe(e)) {
+                continue;
+            }
             /* Phase M6: exported module functions don't need static on their
              * forward declaration — they already get external linkage in emit_fn_def
              * when separate_compilation is true. In single-file mode (the common
@@ -433,15 +916,13 @@ int emit_program(Buf *out, const Expr *program) {
                  * UBSan false positives in debug builds.  Instead emit the name
                  * directly from the fn_type's result_full_type if present, or fall
                  * back to "int64_t" for opaque/unresolved struct types. */
-                if (result == TY_STRUCT) {
+                if (e->type.as.fn.result_full_type) {
                     /* LT4/SI4-C: inline-C bodies returning :StructName always emit int64_t.
                      * Opaque types (defopaque) also emit int64_t via type_c_name. */
                     bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                     const struct Type *rft = e->type.as.fn.result_full_type;
-                    if (!body_is_inline_c && rft && rft->kind == TY_STRUCT &&
-                        rft->as.struct_.def && !rft->as.struct_.def->is_opaque &&
-                        rft->as.struct_.def->name) {
-                        buf_puts(&fwd_decls, rft->as.struct_.def->name);
+                    if (!body_is_inline_c && rft) {
+                        buf_puts(&fwd_decls, type_c_name(*rft));
                     } else {
                         buf_puts(&fwd_decls, "int64_t");
                     }
@@ -461,9 +942,8 @@ int emit_program(Buf *out, const Expr *program) {
                 } else if (fd->param_types[j].kind == TY_FN) {
                     /* ER4: function-typed parameters are passed as int64_t. */
                     buf_puts(&fwd_decls, "int64_t");
-                } else if (fd->param_types[j].kind == TY_STRUCT) {
-                    /* LT4/SI4-C: struct params lower to struct name, except opaque types → int64_t. */
-                    buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
+                } else if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j]) {
+                    buf_puts(&fwd_decls, type_c_name(*e->type.as.fn.arg_full_types[j]));
                 } else {
                     buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
                 }
@@ -471,6 +951,9 @@ int emit_program(Buf *out, const Expr *program) {
             buf_puts(&fwd_decls, ");\n");
             free((void*)fn_name);
         }
+    }
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+        emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
     }
 
     /* Phase M5: collect top-level EX_DEFER nodes (module-level defers). */
@@ -512,6 +995,9 @@ int emit_program(Buf *out, const Expr *program) {
             free(bn);
         } else if (e->kind == EX_FN_DEF) {
             /* Emit function definition at file scope */
+            if (emit_abi_fn_is_generic_unsafe(e)) {
+                continue;
+            }
             emit_fn_def(&ctx, &file, e);
         } else if (e->kind == EX_EXTERN_C) {
             /* Emit extern-c declaration early (before handler functions) */
@@ -571,6 +1057,13 @@ int emit_program(Buf *out, const Expr *program) {
         } else {
             emit_stmt(&ctx, &body, e);
         }
+    }
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+        ctx.current_abi_specialization = &ctx.abi_specializations[i];
+        ctx.fn_name_override = ctx.abi_specializations[i].clone_name;
+        emit_fn_def(&ctx, &file, ctx.abi_specializations[i].fn_expr);
+        ctx.fn_name_override = NULL;
+        ctx.current_abi_specialization = NULL;
     }
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
@@ -2995,24 +3488,31 @@ int emit_program(Buf *out, const Expr *program) {
      * emitted after extern_decls and fwd_decls (defer bodies may call
      * extern-c functions or forward-declared Turmeric functions). */
     emit_pending_defer_thunks(&ctx, &defer_thunks);
+    Buf concrete_struct_apps; buf_init(&concrete_struct_apps);
+    type_codegen_emit_struct_apps(&concrete_struct_apps);
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
-     *  2. extern_decls - user extern-c declarations
-     *  3. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  4. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
-     *  5. pending_handler_fns - effect handler functions (can call Turmeric fns)
-     *  6. file        - Turmeric function definitions (can reference handler fns by name)
-     *  7. main()      - entry point body
+     *  2. concrete_struct_apps - monomorphized generic struct typedefs
+     *  3. extern_decls - user extern-c declarations
+     *  4. fwd_decls   - Turmeric function forward declarations (visible to handlers)
+     *  5. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  6. pending_handler_fns - effect handler functions (can call Turmeric fns)
+     *  7. file        - Turmeric function definitions (can reference handler fns by name)
+     *  8. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
+    if (concrete_struct_apps.len) { buf_write(out, concrete_struct_apps.data, concrete_struct_apps.len); buf_putc(out, '\n'); }
+    if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
     if (defer_thunks.len){ buf_write(out, defer_thunks.data, defer_thunks.len); buf_putc(out, '\n'); }
     buf_free(&early_file);
+    buf_free(&thunk_typedefs);
     buf_free(&extern_decls);
     buf_free(&fwd_decls);
     buf_free(&defer_thunks);
+    buf_free(&concrete_struct_apps);
 
     /* Phase 19: Effect handler functions (after fwd_decls so they can call
      * user-defined Turmeric functions, before file so fn defs can reference them). */
@@ -3049,6 +3549,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&file);
     buf_free(&body);
     free(items);
+    for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
+    free(ctx.thunk_typedef_names);
     free(ctx.env_struct_names);
     return 0;
 }
@@ -3131,10 +3633,45 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
         }
     }
 
+    type_codegen_reset_struct_apps();
+
     /* Forward declarations for functions.
      * In separate_compilation mode, only emit exported symbols. */
     uint32_t h_n_items;
     const Expr **h_items = flatten_program_items(program, &h_n_items);
+    for (uint32_t i = 0; i < h_n_items; i++) {
+        const Expr *e = h_items[i];
+        if (e->kind == EX_FN_DEF) {
+            FnDef *fd = e->as.fn_def_.fn;
+            bool is_main = (strcmp(fd->binding->name->name, "main") == 0);
+            if (is_main) continue;
+            if (separate_compilation && !fd->binding->is_exported) continue;
+            if (e->type.kind == TY_FN) {
+                if (e->type.as.fn.result_full_type) {
+                    (void)type_c_name(*e->type.as.fn.result_full_type);
+                } else {
+                    (void)type_c_name(emit_type_from_kind(e->type.as.fn.result_kind));
+                }
+            }
+            for (uint8_t j = 0; j < fd->n_params; j++) {
+                if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j]) {
+                    (void)type_c_name(*e->type.as.fn.arg_full_types[j]);
+                } else {
+                    (void)type_c_name(fd->param_types[j]);
+                }
+            }
+        } else if (e->kind == EX_EXTERN_C) {
+            ExternC *ec = e->as.extern_c_.ext;
+            (void)type_c_name(ec->return_type);
+            for (uint8_t j = 0; j < ec->n_params; j++) (void)type_c_name(ec->param_types[j]);
+        } else if (e->kind == EX_DEF && !e->as.def_.struct_def) {
+            if (separate_compilation && e->as.def_.binding->is_exported) {
+                (void)type_c_name(e->as.def_.binding->type);
+            }
+        }
+    }
+    type_codegen_emit_struct_apps(out);
+
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
         if (e->kind == EX_FN_DEF) {
@@ -3151,15 +3688,23 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
 
             /* Emit function declaration */
             if (e->type.kind == TY_FN) {
-                TypeKind result = e->type.as.fn.result_kind;
-                buf_puts(out, type_c_name(emit_type_from_kind(result)));
+                if (e->type.as.fn.result_full_type) {
+                    buf_puts(out, type_c_name(*e->type.as.fn.result_full_type));
+                } else {
+                    TypeKind result = e->type.as.fn.result_kind;
+                    buf_puts(out, type_c_name(emit_type_from_kind(result)));
+                }
             } else {
                 buf_puts(out, "void");
             }
             buf_printf(out, " %s(", fn_name);
             for (uint8_t j = 0; j < fd->n_params; j++) {
                 if (j > 0) buf_puts(out, ", ");
-                buf_puts(out, type_c_name(fd->param_types[j]));
+                if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j]) {
+                    buf_puts(out, type_c_name(*e->type.as.fn.arg_full_types[j]));
+                } else {
+                    buf_puts(out, type_c_name(fd->param_types[j]));
+                }
             }
             buf_puts(out, ");\n");
             free((void*)fn_name);
@@ -3207,12 +3752,17 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
         return -1;
     }
 
+    type_codegen_reset_struct_apps();
+
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);
+
+    Buf thunk_typedefs2; buf_init(&thunk_typedefs2);
 
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.thunk_typedefs = &thunk_typedefs2;
     ctx.indent = 4;
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
@@ -3224,6 +3774,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     ctx.env_struct_names = NULL;
     ctx.n_env_struct_names = 0;
     ctx.cap_env_struct_names = 0;
+    ctx.thunk_typedef_names = NULL;
+    ctx.n_thunk_typedef_names = 0;
+    ctx.cap_thunk_typedef_names = 0;
     /* Phase 3/4: Track return emission */
     ctx.return_emitted = false;
     /* Phase 19: Pending effect handler function buffer */
@@ -3241,6 +3794,17 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     ctx.gen_struct_bindings = NULL;
     ctx.n_gen_struct_bindings = 0;
     ctx.gen_var_name = NULL;
+    ctx.gen_struct_type = NULL;
+    ctx.gen_hdr_emitted = false;
+    ctx.abi_specializations = NULL;
+    ctx.n_abi_specializations = 0;
+    ctx.cap_abi_specializations = 0;
+    ctx.specialized_call_exprs = NULL;
+    ctx.specialized_call_names = NULL;
+    ctx.n_specialized_calls = 0;
+    ctx.cap_specialized_calls = 0;
+    ctx.current_abi_specialization = NULL;
+    ctx.fn_name_override = NULL;
 
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
@@ -3358,6 +3922,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
      * In separate_compilation (M3) mode, never emit an auto-generated main():
      * each module is compiled independently and the user is responsible for
      * providing exactly one explicit main() across all modules. */
+    if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
@@ -3383,6 +3948,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
 
     buf_free(&file);
     buf_free(&body);
+    buf_free(&thunk_typedefs2);
+    for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
+    free(ctx.thunk_typedef_names);
     free(ctx.env_struct_names);
     return 0;
 }

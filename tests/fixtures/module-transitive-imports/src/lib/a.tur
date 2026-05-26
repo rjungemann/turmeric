@@ -1,0 +1,4 @@
+(defmodule lib/a
+  (export a)
+  (defn a [] :int
+    1))

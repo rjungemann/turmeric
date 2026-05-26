@@ -1,19 +1,19 @@
 ;;; tur/option -- typed Option[A]: parameterized optional value.
 ;;;
 ;;; First-class parameterized optional value type.
-;;; Runtime layout: { bool is_some; int64_t value; }.
+;;; Runtime layout specializes the payload slot for concrete A.
 ;;;
 ;;; Since: Phase TC1-D
 ;; Phase TC1-D: Typed Option[A]
 ;; First-class parameterized optional value type.
-;; Runtime layout identical to option.tur: { bool is_some; int64_t value; }
+;; Runtime layout specializes the payload slot for concrete A.
 
 ;;; Option -- parameterized optional value containing either some A or none.
 ;;;
 ;;; Since: Phase TC1
 (defstruct Option [A]
   (is-some :bool)
-  (value   :int))
+  (value   A))
 
 ;;; some -- wrap a value of type A in a some Option[A].
 ;;;
@@ -68,7 +68,7 @@
   return opt != NULL && opt->is_some;
   ```)
 
-;;; unwrap -- extract the value from a some Option[A], panicking if none.
+;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:
 ;;;   o -- Option[A]
@@ -77,15 +77,12 @@
 ;;;   The contained value of type A.
 ;;;
 ;;; Example:
-;;;   (unwrap (some 7))  ; => 7
+;;;   (let [o (:: (make-struct Option true 7) (Option int))]
+;;;     (unwrap o))  ; => 7
 ;;;
 ;;; Since: Phase TC1
-(defn unwrap [o :int] #{} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) tur_panic("unwrap called on none");
-  return (int64_t)opt->value;
-  ```)
+(defn unwrap [A] [o :(Option A)] :A
+  (.value o))
 
 ;;; unwrap-or -- extract the value or return a default.
 ;;;

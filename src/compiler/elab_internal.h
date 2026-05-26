@@ -683,6 +683,7 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
+Binding *expr_closure_fn_binding(const Expr *expr);
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st);
 MacroDef *elab_lookup_macro(Elab *e, const Symbol *name);
 Binding *binding_new(Elab *e, const Symbol *name, Type type,
@@ -812,6 +813,9 @@ Expr *elab_coerce(Elab *e, const Form *call);
 CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
 Expr *elab_match(Elab *e, const Form *call);
 Expr *elab_make_struct(Elab *e, const Form *call);
+bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *out_args);
+Type elab_struct_field_use_type(Elab *e, const Type *container_type,
+                                const StructDef *def, const StructField *field);
 Expr *elab_borrow_immut(Elab *e, const Form *call);
 Expr *elab_borrow_mut(Elab *e, const Form *call);
 

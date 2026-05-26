@@ -1,9 +1,114 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 
+static bool reinterpret_kind_is_scalar(TypeKind kind) {
+    switch (kind) {
+        case TY_BOOL:
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_INT64:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static int reinterpret_kind_size_bytes(TypeKind kind) {
+    switch (kind) {
+        case TY_BOOL:
+        case TY_INT8:
+        case TY_UINT8:
+            return 1;
+        case TY_INT16:
+        case TY_UINT16:
+            return 2;
+        case TY_INT32:
+        case TY_UINT32:
+        case TY_FLOAT32:
+            return 4;
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_INT64:
+        case TY_UINT64:
+        case TY_FLOAT64:
+            return 8;
+        default:
+            return -1;
+    }
+}
+
+static Binding *emit_expr_closure_fn_binding(const Expr *expr) {
+    if (!expr) return NULL;
+
+    switch (expr->kind) {
+        case EX_ASCRIBE:
+            return emit_expr_closure_fn_binding(expr->as.ascribe_.inner);
+        case EX_CLOSURE:
+            if (expr->as.closure_.closure && expr->as.closure_.closure->fn) {
+                return expr->as.closure_.closure->fn->binding;
+            }
+            return NULL;
+        case EX_VAR:
+            if (!expr->as.var.binding) return NULL;
+            if (expr->as.var.binding->closure_fn_binding) {
+                return expr->as.var.binding->closure_fn_binding;
+            }
+            return expr->as.var.binding->returns_closure_fn_binding;
+        case EX_CALL:
+            if (!expr->as.call_.fn_binding) return NULL;
+            return expr->as.call_.fn_binding->returns_closure_fn_binding;
+        case EX_LET:
+            return emit_expr_closure_fn_binding(expr->as.let_.body);
+        case EX_DO:
+            for (int i = (int)expr->as.do_.n - 1; i >= 0; i--) {
+                const Expr *item = expr->as.do_.items[i];
+                if (item->kind == EX_DEFER) continue;
+                return emit_expr_closure_fn_binding(item);
+            }
+            return NULL;
+        case EX_IF: {
+            Binding *then_binding = emit_expr_closure_fn_binding(expr->as.if_.then_);
+            Binding *else_binding = expr->as.if_.else_or_null
+                ? emit_expr_closure_fn_binding(expr->as.if_.else_or_null)
+                : NULL;
+            return (then_binding && then_binding == else_binding) ? then_binding : NULL;
+        }
+        default:
+            return NULL;
+    }
+}
+
+static Type emit_fn_result_type_from_type(Type fn_type) {
+    if (fn_type.kind == TY_FN && fn_type.as.fn.result_full_type) {
+        return *fn_type.as.fn.result_full_type;
+    }
+    return emit_type_from_kind(fn_type.kind == TY_FN ? fn_type.as.fn.result_kind : TY_NIL);
+}
+
+static Type emit_fn_arg_type_from_type(Type fn_type, uint8_t idx) {
+    if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types && fn_type.as.fn.arg_full_types[idx]) {
+        return *fn_type.as.fn.arg_full_types[idx];
+    }
+    return emit_type_from_kind(fn_type.kind == TY_FN ? fn_type.as.fn.arg_kinds[idx] : TY_UNKNOWN);
+}
+
 /* ------------ block-shaped emitters ------------ */
 
 static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null) {
+    type = emit_resolve_type(ctx, type);
     indent_buf(body, ctx->indent);
     if (type.kind == TY_FN) {
         buf_printf(body, "%s (*%s)(",
@@ -23,7 +128,7 @@ static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name,
         return;
     }
 
-    buf_printf(body, "%s %s", type_c_name(type), name);
+    buf_printf(body, "%s %s", emit_type_c_name(ctx, type), name);
     if (init_or_null) buf_printf(body, " = %s", init_or_null);
     buf_puts(body, ";\n");
 }
@@ -76,7 +181,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
         } else {
-            buf_printf(body, "%s %s = %s;\n", type_c_name(b->type), bn, iv);
+            buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, b->type), bn, iv);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
@@ -572,6 +677,40 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             Type target = type_simple(e->as.cast_.target_kind, CK_COPY);
             Buf out; buf_init(&out);
             buf_printf(&out, "((%s)(%s))", type_c_name(target), inner);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        case EX_REINTERPRET: {
+            if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
+                for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+                    const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+                    if (spec->call_expr == e->as.reinterpret_.expr &&
+                        type_eq(spec->result_type, e->type)) {
+                        return emit_value(ctx, body, e->as.reinterpret_.expr);
+                    }
+                }
+            }
+            TypeKind src_kind = e->as.reinterpret_.source_kind;
+            TypeKind dst_kind = e->as.reinterpret_.target_kind;
+            int src_size = reinterpret_kind_size_bytes(src_kind);
+            int dst_size = reinterpret_kind_size_bytes(dst_kind);
+            if (!reinterpret_kind_is_scalar(src_kind) || !reinterpret_kind_is_scalar(dst_kind) ||
+                src_size <= 0 || src_size != dst_size) {
+                fprintf(stderr,
+                        "tur: emit: invalid EX_REINTERPRET %s -> %s\n",
+                        typekind_to_string(src_kind), typekind_to_string(dst_kind));
+                abort();
+            }
+
+            char *inner = emit_value(ctx, body, e->as.reinterpret_.expr);
+            Type src = type_simple(src_kind, CK_COPY);
+            Type dst = type_simple(dst_kind, CK_COPY);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "((union { %s s; %s d; }){.s = %s}).d",
+                       type_c_name(src), type_c_name(dst), inner);
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);
@@ -1081,7 +1220,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             /* Phase HRT1: poly call through rank-2 fn param: emit fn_name.fn(fn_name.env, arg0, ...) */
             if (e->as.call_.is_poly_call) {
-                char *fn_name = raw_name_for_binding(fn_binding);
+                char *fn_name = emit_call_name(ctx, e, fn_binding);
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -1179,18 +1318,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * The fat closure has layout: struct { int64_t __fn; ... }
                      * Extract __fn as a function pointer and call it with fat_ptr + args. */
                     const char *ret_c = type_c_name(e->type);
+                    Type arg_types[MAX_FN_ARITY];
                     char **arg_strs = (char **)malloc(n * sizeof(char *));
                     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                     for (uint32_t i = 0; i < n; i++) {
+                        arg_types[i] = e->as.call_.args[i]->type;
                         arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
+                    char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
+                        e->type, n > 0 ? arg_types : NULL, (uint8_t)n);
                     Buf out; buf_init(&out);
-                    /* Cast the __fn field to the thunk signature and call it. */
-                    buf_printf(&out, "((%s (*)(void*", ret_c);
-                    for (uint32_t i = 0; i < n; i++) {
-                        buf_printf(&out, ", %s", type_c_name(e->as.call_.args[i]->type));
+                    if (thunk_typedef) {
+                        /* TS1: typed fat-closure layout stores __fn as a typed function pointer. */
+                        buf_printf(&out, "(*( %s *)(%s))(%s", thunk_typedef, fn_ptr, fn_ptr);
+                    } else {
+                        /* Legacy fallback: polymorphic fat closures still store __fn as int64_t. */
+                        buf_printf(&out, "((%s (*)(void*", ret_c);
+                        for (uint32_t i = 0; i < n; i++) {
+                            buf_printf(&out, ", %s", type_c_name(e->as.call_.args[i]->type));
+                        }
+                        buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     }
-                    buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
                     for (uint32_t i = 0; i < n; i++) {
                         buf_printf(&out, ", %s", arg_strs[i]);
                     }
@@ -1198,6 +1346,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
+                    free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
@@ -1291,11 +1440,42 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Regular function call */
             /* Emit function call: fn(arg1, arg2, ...) */
             /* Use raw name for function calls (functions are defined with raw names) */
-            char *fn_name = raw_name_for_binding(fn_binding);
+            char *fn_name = emit_call_name(ctx, e, fn_binding);
+            const EmitAbiSpecialization *matched_spec = NULL;
+            if (ctx) {
+                for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+                    const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+                    if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
+                    bool args_match = true;
+                    for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
+                        const Expr *cur = e->as.call_.args[ai];
+                        while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                        Type actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
+                            ? cur->as.reinterpret_.expr->type
+                            : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                        if (!type_eq(spec->arg_types[ai], actual)) {
+                            args_match = false;
+                            break;
+                        }
+                    }
+                    if (args_match) {
+                        matched_spec = spec;
+                        break;
+                    }
+                }
+            }
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                const Expr *arg_expr = e->as.call_.args[i];
+                while (arg_expr && arg_expr->kind == EX_ASCRIBE) arg_expr = arg_expr->as.ascribe_.inner;
+                const Expr *emit_arg = arg_expr;
+                if (matched_spec && arg_expr && arg_expr->kind == EX_REINTERPRET &&
+                    arg_expr->as.reinterpret_.expr &&
+                    type_eq(matched_spec->arg_types[i], arg_expr->as.reinterpret_.expr->type)) {
+                    emit_arg = arg_expr->as.reinterpret_.expr;
+                }
+                char *raw = emit_value(ctx, body, emit_arg);
                 /* Phase HKT H3/H4: When a function-reference (TY_FN) is passed to an
                  * int64_t parameter, emit an explicit (int64_t)(intptr_t) cast so the
                  * generated C99 code is valid.  Function pointers cannot be implicitly
@@ -1474,6 +1654,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
             if (!already_emitted) {
+                Type thunk_result = emit_fn_result_type_from_type(closure->fn->binding->type);
+                Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+                uint8_t thunk_arity = closure->fn->n_params > 0 ? (uint8_t)(closure->fn->n_params - 1) : 0;
+                char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file, thunk_result, thunk_params, thunk_arity);
                 /* Track this env struct */
                 if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
                     ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
@@ -1483,13 +1667,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
                 
                 /* Phase HKT §5: fat closure struct — __fn first, then captures. */
-                buf_printf(ctx->file, "struct %s { int64_t __fn; ", env_name->name);
+                if (thunk_typedef) {
+                    buf_printf(ctx->file, "struct %s { %s __fn; ", env_name->name, thunk_typedef);
+                } else {
+                    buf_printf(ctx->file, "struct %s { int64_t __fn; ", env_name->name);
+                }
                 for (uint8_t i = 0; i < closure->n_captures; i++) {
                     Binding *captured = closure->captures[i];
                     buf_printf(ctx->file, "%s %s; ",
                                type_c_name(captured->type), captured->name->name);
                 }
                 buf_puts(ctx->file, "};\n");
+                free(thunk_typedef);
             }
             
             /* Phase HKT §5: heap-allocate the fat closure struct so that the
@@ -1500,13 +1689,21 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * using the generic fat-closure protocol recover the thunk as:
              *   thunk = (int64_t(*)(void*,int64_t))(intptr_t)fat->__fn
              * and invoke it as thunk(fat_ptr, arg). */
-            const char *thunk_sym = closure->fn->binding->name->name;
+            Type thunk_result = emit_fn_result_type_from_type(closure->fn->binding->type);
+            Type *thunk_params = closure->fn->n_params > 1 ? &closure->fn->param_types[1] : NULL;
+            uint8_t thunk_arity = closure->fn->n_params > 0 ? (uint8_t)(closure->fn->n_params - 1) : 0;
+            char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file, thunk_result, thunk_params, thunk_arity);
+            char *thunk_sym = raw_name_for_binding(closure->fn->binding);
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",
                        env_name->name, fat_tmp, env_name->name, env_name->name);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+            if (thunk_typedef) {
+                buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, thunk_typedef, thunk_sym);
+            } else {
+                buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
+            }
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
                 char *cn = name_for_binding(ctx, captured);
@@ -1517,6 +1714,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *ptr_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);
+            free(thunk_typedef);
+            free(thunk_sym);
             free(fat_tmp);
 
             return ptr_tmp;
@@ -2327,7 +2526,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (make-struct StructName v1 v2 ...) - emit C99 compound literal */
             StructDef *def = e->as.make_struct_.def;
             Buf lit; buf_init(&lit);
-            buf_printf(&lit, "(%s){", def->name);
+            const char *struct_c_name = emit_type_c_name(ctx, e->type);
+            buf_printf(&lit, "(%s){", struct_c_name);
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
                 char *fv = emit_value(ctx, body, e->as.make_struct_.field_values[i]);
                 bool is_fn_field = (def->fields[i].kind == TY_FN);
@@ -2398,22 +2598,45 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (!e->as.poly_wrap_.wrapper_binding) {
                 if (e->as.poly_wrap_.is_closure) {
                     /* Phase CCL: fat closure — pack into tur_poly_fn_t.
-                     * Fat closure layout: struct { int64_t __fn; <captures...> }
-                     * __fn (the first field, at offset 0) is the thunk pointer.
-                     * Protocol: thunk(void *env, int64_t arg) where env = fat_ptr. */
+                     * Typed closures store __fn as a function pointer field;
+                     * polymorphic closures keep the legacy int64_t carrier. */
                     char *fat = emit_value(ctx, body, e->as.poly_wrap_.inner);
                     char *tmp = fresh_tmp(ctx);
+                    Binding *thunk_binding = emit_expr_closure_fn_binding(e->as.poly_wrap_.inner);
+                    char *thunk_typedef = NULL;
+                    Type thunk_params[MAX_FN_ARITY];
+                    uint8_t thunk_arity = 0;
+                    if (thunk_binding && thunk_binding->type.kind == TY_FN) {
+                        thunk_arity = thunk_binding->type.as.fn.arity > 0
+                            ? (uint8_t)(thunk_binding->type.as.fn.arity - 1) : 0;
+                        for (uint8_t i = 0; i < thunk_arity; i++) {
+                            thunk_params[i] = emit_fn_arg_type_from_type(thunk_binding->type, (uint8_t)(i + 1));
+                        }
+                        thunk_typedef = ensure_typed_thunk_typedef(
+                            ctx, ctx->file,
+                            emit_fn_result_type_from_type(thunk_binding->type),
+                            thunk_arity ? thunk_params : NULL,
+                            thunk_arity);
+                    }
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "void *%s = %s;\n", tmp, fat);
                     free(fat);
                     Buf out; buf_init(&out);
-                    buf_printf(&out,
-                        "(tur_poly_fn_t){ %s, "
-                        "(int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)%s)[0] }",
-                        tmp, tmp);
+                    if (thunk_typedef) {
+                        buf_printf(&out,
+                            "(tur_poly_fn_t){ %s, "
+                            "(int64_t(*)(void*,int64_t))(*( %s *)(%s)) }",
+                            tmp, thunk_typedef, tmp);
+                    } else {
+                        buf_printf(&out,
+                            "(tur_poly_fn_t){ %s, "
+                            "(int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)%s)[0] }",
+                            tmp, tmp);
+                    }
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
+                    free(thunk_typedef);
                     free(tmp);
                     return result;
                 }

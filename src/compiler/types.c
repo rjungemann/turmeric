@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 /* Phase 13: Helper to compare lifetimes */
 static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n, 
@@ -191,6 +192,312 @@ static void lifetimes_format(Buf *b, Type t) {
 }
 
 static void type_name_buf(Buf *b, Type t);
+
+typedef struct RegisteredStructApp {
+    Type type;
+    char *name;
+    bool emitted;
+    bool emitting;
+} RegisteredStructApp;
+
+static RegisteredStructApp *g_struct_apps = NULL;
+static uint32_t g_n_struct_apps = 0;
+static uint32_t g_cap_struct_apps = 0;
+
+static bool type_extract_struct_app(const Type *t, StructDef **out_def,
+                                    Type *out_args, uint8_t *out_n) {
+    if (!t) return false;
+    Type raw[16];
+    uint8_t n_raw = 0;
+    const Type *cur = t;
+    while (cur && cur->kind == TY_APP && n_raw < 16) {
+        if (!cur->as.app.arg) return false;
+        raw[n_raw++] = *cur->as.app.arg;
+        cur = cur->as.app.fn;
+    }
+    if (!cur || cur->kind != TY_STRUCT || !cur->as.struct_.def) return false;
+    StructDef *def = cur->as.struct_.def;
+    if (def->n_type_params == 0 || n_raw != def->n_type_params) return false;
+    if (out_def) *out_def = def;
+    if (out_n) *out_n = n_raw;
+    if (out_args) {
+        for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
+    }
+    return true;
+}
+
+static bool type_has_concrete_codegen_layout(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_NIL:
+        case TY_BOOL:
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_INT64:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_REF:
+        case TY_LREF:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_REF_IMMUT:
+        case TY_REF_MUT:
+        case TY_ADT:
+        case TY_FN:
+        case TY_EXCEPTION:
+        case TY_CONT:
+        case TY_CLONEABLE_CONT:
+        case TY_SET:
+        case TY_HANDLER:
+        case TY_SESSION:
+        case TY_ROLE:
+        case TY_GENERATOR:
+            return true;
+        case TY_STRUCT:
+            return t->as.struct_.def && !t->as.struct_.def->is_opaque &&
+                   t->as.struct_.def->n_type_params == 0;
+        case TY_APP: {
+            StructDef *def = NULL;
+            Type args[16];
+            uint8_t n_args = 0;
+            if (!type_extract_struct_app(t, &def, args, &n_args) || !def || def->is_opaque) {
+                return false;
+            }
+            for (uint8_t i = 0; i < n_args; i++) {
+                if (!type_has_concrete_codegen_layout(&args[i])) return false;
+            }
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+static void append_type_mangle(Buf *b, Type t) {
+    switch (t.kind) {
+        case TY_NIL:      buf_puts(b, "nil"); break;
+        case TY_BOOL:     buf_puts(b, "bool"); break;
+        case TY_INT:      buf_puts(b, "int"); break;
+        case TY_FLOAT:    buf_puts(b, "float"); break;
+        case TY_INT8:     buf_puts(b, "int8"); break;
+        case TY_INT16:    buf_puts(b, "int16"); break;
+        case TY_INT32:    buf_puts(b, "int32"); break;
+        case TY_INT64:    buf_puts(b, "int64"); break;
+        case TY_UINT8:    buf_puts(b, "uint8"); break;
+        case TY_UINT16:   buf_puts(b, "uint16"); break;
+        case TY_UINT32:   buf_puts(b, "uint32"); break;
+        case TY_UINT64:   buf_puts(b, "uint64"); break;
+        case TY_FLOAT32:  buf_puts(b, "float32"); break;
+        case TY_FLOAT64:  buf_puts(b, "float64"); break;
+        case TY_CSTR:     buf_puts(b, "cstr"); break;
+        case TY_PTR_VOID: buf_puts(b, "ptr_void"); break;
+        case TY_REF:      buf_puts(b, "ref"); break;
+        case TY_LREF:     buf_puts(b, "lref"); break;
+        case TY_RC:       buf_puts(b, "rc"); break;
+        case TY_WEAK:     buf_puts(b, "weak"); break;
+        case TY_REF_IMMUT: buf_puts(b, "ref_immut"); break;
+        case TY_REF_MUT:  buf_puts(b, "ref_mut"); break;
+        case TY_ADT:
+            buf_puts(b, t.as.adt_.def && t.as.adt_.def->name ? t.as.adt_.def->name : "adt");
+            break;
+        case TY_STRUCT:
+            buf_puts(b, t.as.struct_.def && t.as.struct_.def->name ? t.as.struct_.def->name : "struct");
+            break;
+        case TY_APP: {
+            StructDef *def = NULL;
+            Type args[16];
+            uint8_t n_args = 0;
+            if (type_extract_struct_app(&t, &def, args, &n_args) && def) {
+                buf_puts(b, def->name);
+                for (uint8_t i = 0; i < n_args; i++) {
+                    buf_puts(b, "__");
+                    append_type_mangle(b, args[i]);
+                }
+            } else {
+                buf_puts(b, "app");
+            }
+            break;
+        }
+        default:
+            buf_puts(b, "opaque");
+            break;
+    }
+}
+
+static Type clone_struct_app_type(Type t) {
+    if (t.kind != TY_APP) return t;
+    Type out = t;
+    out.as.app.fn = (Type *)malloc(sizeof(Type));
+    out.as.app.arg = (Type *)malloc(sizeof(Type));
+    if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+    *out.as.app.fn = clone_struct_app_type(*t.as.app.fn);
+    *out.as.app.arg = clone_struct_app_type(*t.as.app.arg);
+    return out;
+}
+
+static void free_struct_app_type(Type t) {
+    if (t.kind != TY_APP) return;
+    if (t.as.app.fn) {
+        free_struct_app_type(*t.as.app.fn);
+        free(t.as.app.fn);
+    }
+    if (t.as.app.arg) {
+        free_struct_app_type(*t.as.app.arg);
+        free(t.as.app.arg);
+    }
+}
+
+static const char *register_struct_app(Type t) {
+    if (!type_has_concrete_codegen_layout(&t)) return "int64_t";
+    for (uint32_t i = 0; i < g_n_struct_apps; i++) {
+        if (type_eq(g_struct_apps[i].type, t)) return g_struct_apps[i].name;
+    }
+    if (g_n_struct_apps >= g_cap_struct_apps) {
+        uint32_t new_cap = g_cap_struct_apps ? g_cap_struct_apps * 2 : 8;
+        RegisteredStructApp *new_items = (RegisteredStructApp *)realloc(
+            g_struct_apps, new_cap * sizeof(RegisteredStructApp));
+        if (!new_items) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_struct_apps = new_items;
+        g_cap_struct_apps = new_cap;
+    }
+    Buf name; buf_init(&name);
+    append_type_mangle(&name, t);
+    buf_putc(&name, '\0');
+    g_struct_apps[g_n_struct_apps].type = clone_struct_app_type(t);
+    g_struct_apps[g_n_struct_apps].name = tur_strdup(name.data);
+    g_struct_apps[g_n_struct_apps].emitted = false;
+    g_struct_apps[g_n_struct_apps].emitting = false;
+    buf_free(&name);
+    if (!g_struct_apps[g_n_struct_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return g_struct_apps[g_n_struct_apps++].name;
+}
+
+static bool struct_type_param_index(const StructDef *def, const char *name, uint8_t *out_idx) {
+    if (!def || !name) return false;
+    for (uint8_t i = 0; i < def->n_type_params; i++) {
+        if (def->type_params[i] && strcmp(def->type_params[i], name) == 0) {
+            if (out_idx) *out_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args) {
+    if (!t) return type_from_kind(TY_UNKNOWN);
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name && struct_type_param_index(def, t->as.tyvar_.name, &idx)) {
+                return args[idx];
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn = substitute_struct_app_type(t->as.app.fn, def, args);
+            Type arg = substitute_struct_app_type(t->as.app.arg, def, args);
+            Type out = {0};
+            out.kind = TY_APP;
+            out.copy_kind = CK_COPY;
+            out.hkt_kind = KIND_STAR;
+            out.as.app.fn = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        default:
+            return *t;
+    }
+}
+
+static const char *struct_field_c_type(const StructDef *owner, const StructField *field, const Type *args) {
+    if (field->kind == TY_FN) return "int64_t";
+    if (field->full_type && owner && args) {
+        Type resolved = substitute_struct_app_type(field->full_type, owner, args);
+        return type_c_name(resolved);
+    }
+    switch (field->kind) {
+        case TY_INT:      return "int64_t";
+        case TY_BOOL:     return "bool";
+        case TY_FLOAT:    return "double";
+        case TY_CSTR:     return "const char *";
+        case TY_PTR_VOID: return "void *";
+        case TY_RC:
+        case TY_WEAK:     return "RcControlBlock *";
+        case TY_REF:
+        case TY_LREF:     return "void *";
+        case TY_INT8:     return "int8_t";
+        case TY_INT16:    return "int16_t";
+        case TY_INT32:    return "int32_t";
+        case TY_INT64:    return "int64_t";
+        case TY_UINT8:    return "uint8_t";
+        case TY_UINT16:   return "uint16_t";
+        case TY_UINT32:   return "uint32_t";
+        case TY_UINT64:   return "uint64_t";
+        case TY_FLOAT32:  return "float";
+        case TY_FLOAT64:  return "double";
+        default:          return "int64_t";
+    }
+}
+
+static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
+    if (idx >= g_n_struct_apps) return;
+    if (g_struct_apps[idx].emitted || g_struct_apps[idx].emitting) return;
+    g_struct_apps[idx].emitting = true;
+
+    StructDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_struct_app(&g_struct_apps[idx].type, &def, args, &n_args) || !def) {
+        g_struct_apps[idx].emitting = false;
+        return;
+    }
+
+    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+        const StructField *field = &def->fields[fi];
+        if (field->full_type) {
+            Type resolved = substitute_struct_app_type(field->full_type, def, args);
+            if (resolved.kind == TY_APP) {
+                const char *dep_name = type_c_name(resolved);
+                (void)dep_name;
+                for (uint32_t di = 0; di < g_n_struct_apps; di++) {
+                    if (type_eq(g_struct_apps[di].type, resolved)) {
+                        emit_registered_struct_app_rec(out, di);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    buf_printf(out, "typedef struct %s {\n", g_struct_apps[idx].name);
+    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+        const StructField *field = &def->fields[fi];
+        char *mfn = NULL;
+        const char *ctype = struct_field_c_type(def, field, args);
+        mfn = tur_strdup(field->name);
+        if (!mfn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (char *p = mfn; *p; p++) {
+            if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
+        }
+        buf_printf(out, "    %s %s;\n", ctype, mfn);
+        free(mfn);
+    }
+    buf_printf(out, "} %s;\n\n", g_struct_apps[idx].name);
+    g_struct_apps[idx].emitted = true;
+    g_struct_apps[idx].emitting = false;
+}
 
 const char *type_name(Type t) {
     switch (t.kind) {
@@ -1049,9 +1356,15 @@ const char *type_c_name(Type t) {
         /* Phase G2: unresolved type variable — treated as int64_t at codegen level */
         case TY_TYVAR:
             return "int64_t";
-        /* Phase HKT-P1: Type application — opaque int64_t handle in v1 */
-        case TY_APP:
+        /* Phase HKT-P1: Type application — generic struct values with
+         * field-level type variables lower to the same concrete C struct as
+         * their head constructor; other applications stay opaque int64_t. */
+        case TY_APP: {
+            if (type_has_concrete_codegen_layout(&t)) {
+                return register_struct_app(t);
+            }
             return "int64_t";
+        }
         /* Phase HKT-P2: Recursive types — opaque int64_t handle in v1 */
         case TY_REC:
             return "int64_t";
@@ -1443,6 +1756,23 @@ const char *typekind_to_string(TypeKind k) {
         case TY_GLOBAL:            return "Global";
         case TY_ROLE:              return "Role";
         default:          return "<?>";
+    }
+}
+
+void type_codegen_reset_struct_apps(void) {
+    for (uint32_t i = 0; i < g_n_struct_apps; i++) {
+        free_struct_app_type(g_struct_apps[i].type);
+        free(g_struct_apps[i].name);
+    }
+    free(g_struct_apps);
+    g_struct_apps = NULL;
+    g_n_struct_apps = 0;
+    g_cap_struct_apps = 0;
+}
+
+void type_codegen_emit_struct_apps(Buf *out) {
+    for (uint32_t i = 0; i < g_n_struct_apps; i++) {
+        emit_registered_struct_app_rec(out, i);
     }
 }
 

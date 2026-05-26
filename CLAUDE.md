@@ -28,6 +28,16 @@ just wasm        # build WebAssembly module (runs docs first)
 just web-dev     # run web dev server
 ```
 
+## Spice Repository Layout
+
+Spice implementations live in the sibling repository `../turmeric-spices`, not
+under this repository.
+
+- Do not create or scaffold a local `./spices/` tree in this repo.
+- When work targets a spice, edit it in `../turmeric-spices`.
+- In this repo, only touch spice-related fixtures, docs, integration glue, or
+  references that are intentionally kept here.
+
 ## Per-file Commands Inside a Spice
 
 `tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>` walk up

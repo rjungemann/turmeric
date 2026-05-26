@@ -1,8 +1,43 @@
 # Spice Plan: tur-notebook
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-24
+> **Status:** In Progress -- NB0-NB10 implemented in `../turmeric-spices/spices/notebook`; NB11-NB12 pending
+> **Last Updated:** 2026-05-26
 > **Type:** Spice Design / Tooling
+
+---
+
+## Current status
+
+Status below reflects the implementation currently living in the sibling
+`../turmeric-spices` repository, under `spices/notebook/`.
+
+- [x] `tur-notebook` spice manifest exists (`build.tur`) and exports `notebook/cmark`,
+  `notebook/cell`, `notebook/format`, `notebook/session`, `notebook/cache`, and
+  `notebook/eval`
+- [x] Parser work through NB2 is present: block parsing, inline parsing / HTML
+  emission, GFM tables / task lists / strikethrough, and fence-attribute preservation
+- [x] Notebook structure work through NB3 is present: cell attribute parsing,
+  cell ids, `.tur.md` parse / serialize, and in-place cell updates
+- [x] Execution work through NB5 is present: session lifecycle, per-cell eval,
+  `eval=false`, `error=continue`, disk cache, and `depends=` cache invalidation
+- [x] Markdown rendering is present: `notebook/render-md`, `notebook/cli`,
+  `src/main.tur`, `render`, `export md`, and a first `--watch` implementation
+- [x] HTML rendering is present: `notebook/render-html`, vendored
+  `src/notebook/style.css`, `export html`, syntax-toggle wrapping for adjacent
+  turmeric/sweet-exp cells, and image rendering from `cell-output.image-paths`
+- [x] Command-mode TUI plumbing is present: `notebook/ansi`,
+  `notebook/keys`, `notebook/tui`, and `tur nb tui` support navigation and
+  execution keys (`j`, `k`, `gg`, `G`, `Enter`, `Shift-Enter`, `R`, `r`, `s`, `q`)
+- [x] Edit-mode workflow is present in the TUI: `e` shells out to `$EDITOR`,
+  structural actions (`a`, `b`, `dd`, `p`) update the notebook in place,
+  modified notebooks track dirty state, and `q` warns before quitting unsaved changes
+- [ ] Remaining CLI surface after NB7 is not present yet (`tur nb exec`,
+  `tur nb new`)
+- [x] NB10 interactive polish is present: search (`/`, `n`, `N`) spans cell
+  source and output text, `?` opens a help overlay, `o` toggles focused output,
+  and `--keybindings` merges user overrides onto the default TUI bindings
+- [ ] Later interactive pieces are not present yet (image protocol support)
+- [ ] Docs / release follow-through is not present yet (guide, examples, tag / release work)
 
 ---
 
@@ -702,14 +737,14 @@ The first three phases stand up the markdown parser, since everything else
 depends on it. Each parser phase ships against a curated subset of the
 CommonMark 0.30 spec test suite as its acceptance criterion.
 
-- [ ] **NB0** -- `build.tur`; `notebook/cmark` block-level parser:
+- [x] **NB0** -- `build.tur`; `notebook/cmark` block-level parser:
   paragraphs, ATX headings (`#`..`######`), setext headings, blank lines,
   fenced code blocks (` ``` ` and `~~~` with info strings), indented code
   blocks, thematic breaks (`---`, `***`, `___`), blockquotes, bullet lists
   (`-`, `*`, `+`), ordered lists (`1.`, `1)`). AST built from md-node
   structs; `md-emit` round-trips block-level documents.
 
-- [ ] **NB1** -- `notebook/cmark` inline parser: text runs, emphasis (`*`,
+- [x] **NB1** -- `notebook/cmark` inline parser: text runs, emphasis (`*`,
   `_`), strong (`**`, `__`), inline code spans (`` ` ``), inline links
   (`[text](url)`), inline images (`![alt](src)`), autolinks
   (`<http://...>`, `<email@host>`), hard breaks (line ending in `\` or
@@ -717,49 +752,50 @@ CommonMark 0.30 spec test suite as its acceptance criterion.
   `md-emit-html` produces conformant HTML for everything implemented so
   far.
 
-- [ ] **NB2** -- `notebook/cmark` GFM extensions: pipe tables (with `:--`
+- [x] **NB2** -- `notebook/cmark` GFM extensions: pipe tables (with `:--`
   alignment markers), task list items (`- [ ]`, `- [x]`), strikethrough
   (`~~`); cell attribute strings on fence info lines (Quarto-style
   `{id=foo eval=true}` -- recognized but not interpreted yet).
 
-- [ ] **NB3** -- `notebook/format` (parse-file / parse-string / nodes->str /
+- [x] **NB3** -- `notebook/format` (parse-file / parse-string / nodes->str /
   nodes-update-cell) walking the AST for turmeric/sweet-exp fences;
   `notebook/cell` (attribute parser, defaults, id assignment); golden-file
   tests against fenced blocks with all known attributes.
 
-- [ ] **NB4** -- `notebook/session` wrapping libturi (open, eval, close,
+- [x] **NB4** -- `notebook/session` wrapping libturi (open, eval, close,
   reset); stdout / stderr capture via the inline-C output-redirect hook;
   `notebook/eval` (eval-cell, eval-all, eval-from) with `eval`, `echo`,
   `output`, `error` attributes honored.
 
-- [ ] **NB5** -- `notebook/cache` (SHA-256-keyed disk cache under
+- [x] **NB5** -- `notebook/cache` (SHA-256-keyed disk cache under
   `.turnb-cache/`); `cache=true` and `depends=` attributes honored;
   invalidation test: changing an upstream cell busts every downstream cell
   that lists it in `depends`.
 
-- [ ] **NB6** -- `notebook/render-md` writing valid round-trippable `.md`;
+- [x] **NB6** -- `notebook/render-md` writing valid round-trippable `.md`;
   `notebook/cli render` and `tur nb export md` subcommands; `--watch`
   flag using `kqueue` on Darwin and `inotify` on Linux (small inline-C
   bridge per OS).
 
-- [ ] **NB7** -- `notebook/render-html` using the vendored `style.css`;
+- [x] **NB7** -- `notebook/render-html` using the vendored `style.css`;
   `tur nb export html` subcommand; image embedding (base64 inline and
   sibling-file modes); syntax-toggle wrapping for turmeric+sweet-exp
-  sibling cells. Verify a rendered notebook looks consistent with the
-  stdlib docs (visual diff against a fixture page).
+  sibling cells. A compiler regression in recursive module loading was fixed so
+  `src/main.tur` can import `notebook/cli` normally again.
 
-- [ ] **NB8** -- `notebook/ansi` (raw mode, key reading, cursor moves);
+- [x] **NB8** -- `notebook/ansi` (raw mode, key reading, cursor moves);
   `notebook/keys` (default bindings, file loader, action dispatch);
   `notebook/tui` with command mode navigation (`j`, `k`, `gg`, `G`,
   `Enter`, `Shift-Enter`, `R`, `r`, `s`, `q`). No edit mode yet.
 
-- [ ] **NB9** -- TUI edit mode: `e` spawns `$EDITOR` on a temp file, reads
+- [x] **NB9** -- TUI edit mode: `e` spawns `$EDITOR` on a temp file, reads
   it back, updates the cell, re-renders. Insert / delete / paste (`a`,
   `b`, `dd`, `p`). File-dirty detection and save prompt on quit.
 
-- [ ] **NB10** -- TUI search (`/`, `n`, `N`); help overlay (`?`); output
+- [x] **NB10** -- TUI search (`/`, `n`, `N`); help overlay (`?`); output
   toggle (`o`); search across both cell sources and output text. User
-  keybindings override file (`--keybindings`).
+  keybindings override file (`--keybindings`) merged onto built-in defaults;
+  `tur nb tui` also accepts `--no-color`.
 
 - [ ] **NB11** -- `notebook/image` hook; integration glue documented for
   `tur-plot` and `tur-plutovg`; inline graphics show in the TUI's output

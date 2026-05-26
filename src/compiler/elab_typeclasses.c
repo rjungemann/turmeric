@@ -2096,8 +2096,10 @@ Expr *elab_method_call(Elab *e, const Form *call) {
     if (call->as.list.len == 2) {
         /* Unwrap borrow types */
         Type base = obj->type;
+        const Type *field_owner_type = &obj->type;
         if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
             base = type_from_kind(base.as.ref_borrow.target);
+            field_owner_type = &base;
         }
         /* DS3-2b: auto-deref rc<Struct> receivers so (.field rc-of-s)
          * resolves through the struct def carried on the rc type. */
@@ -2106,31 +2108,29 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             rc_struct_def = base.as.rc.struct_def;
             base.kind = TY_STRUCT;
             base.as.struct_.def = rc_struct_def;
+            field_owner_type = &base;
+        }
+        StructDef *app_struct_def = NULL;
+        if (base.kind == TY_APP) {
+            Type app_args[8];
+            for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+                StructDef *candidate = e->struct_defs[si];
+                if (candidate->n_type_params == 0 || candidate->n_type_params > 8) continue;
+                if (elab_struct_type_extract_args(&base, candidate, app_args)) {
+                    app_struct_def = candidate;
+                    base = type_struct(candidate);
+                    field_owner_type = &obj->type;
+                    break;
+                }
+            }
         }
         if (base.kind == TY_STRUCT) {
             /* Object is a struct — try field lookup */
-            StructDef *def = base.as.struct_.def;
+            StructDef *def = app_struct_def ? app_struct_def : base.as.struct_.def;
             for (uint32_t i = 0; i < def->n_fields; i++) {
                 if (strcmp(def->fields[i].name, method_name) == 0) {
                     /* Found matching field — build EX_GET_FIELD */
-                    TypeKind fkind = def->fields[i].kind;
-                    TypeKind finner = def->fields[i].inner_kind;
-                    Type field_type;
-                    /* F8 (cross-plan-followups): when a struct field was
-                     * declared with a compound type (TY_EXISTS / TY_APP /
-                     * TY_FORALL), `full_type` carries the source-form Type
-                     * and we use it directly so consumers (open, .eq?,
-                     * sticky ascription) see the full payload instead of
-                     * the bare int64 storage kind. */
-                    if (def->fields[i].full_type) {
-                        field_type = *def->fields[i].full_type;
-                    } else if (fkind == TY_REF || fkind == TY_LREF || fkind == TY_RC || fkind == TY_WEAK) {
-                        field_type.kind = fkind;
-                        field_type.copy_kind = typekind_default_copy_kind(fkind);
-                        field_type.as.ref.inner = finner;
-                    } else {
-                        field_type = type_from_kind(fkind);
-                    }
+                    Type field_type = elab_struct_field_use_type(e, field_owner_type, def, &def->fields[i]);
                     Expr *out = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
                     out->as.get_field_.struct_expr = obj;
                     out->as.get_field_.field_idx = i;
@@ -2140,7 +2140,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                      * binding as moved so a second extraction of the same field triggers
                      * TUR_E0005 (use-after-move).  :linear struct receivers are already
                      * handled by the F_SYM is_linear_consumed path above. */
-                    if (g_linear_enabled && fkind == TY_LREF &&
+                    if (g_linear_enabled && def->fields[i].kind == TY_LREF &&
                             obj->kind == EX_VAR && type_is_move(obj->as.var.binding->type)) {
                         binding_mark_moved(obj->as.var.binding, call->span);
                     }
@@ -2164,13 +2164,24 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
             base = type_from_kind(base.as.ref_borrow.target);
         }
+        if (base.kind == TY_APP) {
+            Type app_args[8];
+            for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+                StructDef *candidate = e->struct_defs[si];
+                if (candidate->n_type_params == 0 || candidate->n_type_params > 8) continue;
+                if (elab_struct_type_extract_args(&base, candidate, app_args)) {
+                    base = type_struct(candidate);
+                    break;
+                }
+            }
+        }
         if (base.kind == TY_STRUCT) {
             StructDef *def = base.as.struct_.def;
             for (uint32_t i = 0; i < def->n_fields; i++) {
                 if (strcmp(def->fields[i].name, method_name) == 0 &&
                     def->fields[i].kind == TY_FN) {
                     /* Build EX_GET_FIELD for the function pointer */
-                    Type field_type = type_from_kind(TY_FN);
+                    Type field_type = elab_struct_field_use_type(e, &obj->type, def, &def->fields[i]);
                     Expr *get_field = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
                     get_field->as.get_field_.struct_expr = obj;
                     get_field->as.get_field_.field_idx = i;

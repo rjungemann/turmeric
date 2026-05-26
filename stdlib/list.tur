@@ -1,19 +1,20 @@
 ;;; tur/list -- typed singly-linked List[A] with Cons cells.
 ;;;
 ;;; Typed singly-linked list. List[A] = Option[Cons[A]].
-;;; At runtime, nil is 0 and a cons cell is a heap-allocated
-;;; { int64_t head; int64_t tail; }.
+;;; At runtime, nil is 0 and a cons cell specializes its head slot for
+;;; concrete A while the tail link remains the legacy int64_t carrier.
 ;;;
 ;;; Since: Phase TC1-B
 ;; Phase TC1-B: Typed List[A]
 ;; Typed singly-linked list. List[A] = Option[Cons[A]].
-;; At runtime, nil is 0 and a cons cell is a heap-allocated { int64_t head; int64_t tail; }.
+;; At runtime, nil is 0 and a cons cell specializes head for concrete A while
+;; the tail link remains the legacy int64_t carrier.
 
 ;;; Cons -- parameterized cons cell with typed head and tail.
 ;;;
 ;;; Since: Phase TC1
 (defstruct Cons [A]
-  (head :int)
+  (head A)
   (tail :int))
 
 ;;; tcons -- prepend a value to a typed list.
@@ -65,43 +66,37 @@
 (defn tnil? [l :int] :bool
   (= l 0))
 
-;;; thead -- return the head element of a typed list; panics if empty.
+;;; thead -- return the head element of a non-empty typed list.
 ;;;
 ;;; Parameters:
-;;;   l -- List[A] (must be non-empty)
+;;;   l -- Cons[A]
 ;;;
 ;;; Returns:
 ;;;   The head element of type A.
 ;;;
 ;;; Example:
-;;;   (thead (tcons 42 (tnil)))  ; => 42
+;;;   (let [l (:: (make-struct Cons 42 (tnil)) (Cons int))]
+;;;     (thead l))  ; => 42
 ;;;
 ;;; Since: Phase TC1
-(defn thead [l :int] #{} :int
-  ```c
-  struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
-  if (!cell) tur_panic("thead called on empty list");
-  return (int64_t)cell->head;
-  ```)
+(defn thead [A] [l :(Cons A)] :A
+  (.head l))
 
-;;; ttail -- return the tail of a typed list; panics if empty.
+;;; ttail -- return the tail carrier of a non-empty typed list.
 ;;;
 ;;; Parameters:
-;;;   l -- List[A] (must be non-empty)
+;;;   l -- Cons[A]
 ;;;
 ;;; Returns:
-;;;   The tail List[A].
+;;;   The tail list carrier.
 ;;;
 ;;; Example:
-;;;   (ttail (tcons 1 (tcons 2 (tnil))))  ; => [2]
+;;;   (let [l (:: (make-struct Cons 1 (tnil)) (Cons int))]
+;;;     (ttail l))  ; => 0
 ;;;
 ;;; Since: Phase TC1
-(defn ttail [l :int] #{} :int
-  ```c
-  struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
-  if (!cell) tur_panic("ttail called on empty list");
-  return (int64_t)cell->tail;
-  ```)
+(defn ttail [A] [l :(Cons A)] :int
+  (.tail l))
 
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
