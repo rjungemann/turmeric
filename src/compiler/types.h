@@ -149,8 +149,13 @@ typedef struct GlobalBranch GlobalBranch;
 
 /* Phase G0: Constructor field descriptor for ADTs */
 typedef struct CtorField {
-    TypeKind kind;       /* field type kind */
-    TypeKind inner_kind; /* for ref/rc: inner type; TY_UNKNOWN otherwise */
+    TypeKind kind;          /* field type kind */
+    TypeKind inner_kind;    /* for ref/rc: inner type; TY_UNKNOWN otherwise */
+    /* TP1: non-NULL when the field was declared as a type variable (e.g. `a` in
+     * `(defdata Opt2 [a] (Yep a))`).  Carries a TY_TYVAR type node so that
+     * tooling / future type-inference phases can inspect the parameter name.
+     * The runtime representation is always TY_INT (int64_t carrier). */
+    struct Type *full_type;
 } CtorField;
 
 /* Phase G2: Skolem equality binding — one entry per GADT type parameter per arm */

@@ -1,9 +1,0 @@
-/tmp/tur-build/tests_fixtures_typed_set-basic_input_tur.c:3834:96: error: use of undeclared identifier 'set_inerr_sect_569'; did you mean 'test_inerr_sect'?
- 3834 |                                     int64_t i_570 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(set_inerr_sect_569))(a3_566, b3_568);
-      |                                                                                                ^~~~~~~~~~~~~~~~~~
-      |                                                                                                test_inerr_sect
-/tmp/tur-build/tests_fixtures_typed_set-basic_input_tur.c:3807:16: note: 'test_inerr_sect' declared here
- 3807 | static int64_t test_inerr_sect() {
-      |                ^
-1 error generated.
-tur: cc invocation failed (status 256)

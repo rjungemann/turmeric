@@ -12,6 +12,8 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
 static void gadt_build_skolem_env(SkolemEnv *out, const AdtDef *def,
     const CtorDef *ctor);
 static TypeKind gadt_field_typekind_from_form(const Form *f);
+static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
+    const char **type_params, uint8_t n_type_params);
 
 /* Phase 11: defstruct - define a struct type
  * Syntax: (defstruct Name [:copy] [field1 :type1 field2 :type2 ...])
@@ -1107,6 +1109,25 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Parse field types */
         for (uint32_t fi = 0; fi < n_fields; fi++) {
             Form *ft_form = ctor_form->as.list.items[1 + fi];
+            ctor->fields[fi].full_type = NULL;
+            if (ctor->field_forms) ctor->field_forms[fi] = NULL;
+
+            /* TP1: a bare symbol (non-keyword) may be a declared type parameter.
+             * E.g. `a` in `(defdata Opt2 [a] (Yep a))`.  Accept it as a TY_INT
+             * carrier and record a TY_TYVAR node in full_type for future phases. */
+            {
+                Type *tv = adt_field_type_from_form(e->arena, ft_form,
+                                                    def->type_params,
+                                                    def->n_type_params);
+                if (tv) {
+                    ctor->fields[fi].kind = TY_INT;
+                    ctor->fields[fi].inner_kind = TY_UNKNOWN;
+                    ctor->fields[fi].full_type = tv;
+                    continue;
+                }
+                /* Not a recognised type param — fall through to keyword check. */
+            }
+
             if (ft_form->tag != F_KEYWORD) {
                 diag_emit(DIAG_ERROR, ft_form->span,
                           "defdata: constructor field type must be a keyword like :int, :bool, :cstr");
@@ -1325,6 +1346,26 @@ static TypeKind gadt_field_typekind_from_form(const Form *f) {
     }
     /* List form like (Expr int) — ADT reference, opaque int64_t */
     return TY_INT;
+}
+
+/* TP1/TP2: If ft_form is a bare symbol matching a declared type parameter,
+ * return an arena-allocated TY_TYVAR Type* carrying the parameter name.
+ * Returns NULL if the form is not a type-param reference (caller falls back
+ * to its normal field-type resolution path).
+ * The C-level storage kind remains TY_INT; full_type is elaboration-only. */
+static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
+                                       const char **type_params,
+                                       uint8_t n_type_params) {
+    if (!ft_form || ft_form->tag != F_SYM) return NULL;
+    const char *pname = ft_form->as.sym->name;
+    for (uint8_t pi = 0; pi < n_type_params; pi++) {
+        if (strcmp(type_params[pi], pname) == 0) {
+            Type *tv = (Type *)arena_alloc(arena, sizeof(Type));
+            *tv = type_tyvar_named(pname);
+            return tv;
+        }
+    }
+    return NULL;
 }
 
 /* Phase G1: defgadt — define a GADT (Generalized Algebraic Data Type).
@@ -1636,6 +1677,12 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
             TypeKind fkind = gadt_field_typekind_from_form(ft_form);
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = TY_UNKNOWN;
+            /* TP2: populate full_type when the field references a declared type
+             * parameter (e.g. `a` in `(MkBox a : (Box a))`).  The C-level kind
+             * stays TY_INT; full_type is elaboration-only. */
+            ctor->fields[fi].full_type =
+                adt_field_type_from_form(e->arena, ft_form,
+                                         def->type_params, def->n_type_params);
             if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
                 def->needs_drop_glue = true;
             }

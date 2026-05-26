@@ -398,8 +398,8 @@ each other.
 
 | Phase | Title | Status |
 |-------|-------|--------|
-| TP1 | `defdata` field types as full `Type*` | Open |
-| TP2 | `defgadt` field types as full `Type*` | Open |
+| TP1 | `defdata` field types as full `Type*` | Done |
+| TP2 | `defgadt` field types as full `Type*` | Done |
 | TP3 | ADT-typed skolem args in `gadt_build_skolem_env` | Open |
 | TP4 | Kind inference for type parameters | Open |
 | TP5 | Call-site type-argument consistency | Open |

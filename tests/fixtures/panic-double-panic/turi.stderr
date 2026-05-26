@@ -1,2 +1,2 @@
-panic at /tmp/tur-build/tests_fixtures_panic-double-panic_input_tur.c:385: ouerr? panic
+panic at /tmp/tur-build/tests_fixtures_panic-double-panic_input_tur.c:385: outer panic
 double panic: aborting

@@ -4,7 +4,7 @@ test-return-with-defer:
 defer-1
 42
 test-return-in-nested-scope:
-ouerr?-defer
+outer-defer
 inner-defer
 42
 test-return-in-if:

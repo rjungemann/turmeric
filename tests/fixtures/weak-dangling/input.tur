@@ -1,6 +1,6 @@
 ;; Verify that upgrading a weak ref after the rc is dropped returns none.
 
-(defn some? [o :ptr<void>] :bool
+(defn weak-some? [o :ptr<void>] :bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
@@ -11,5 +11,5 @@
     (let [w (weak r)]
       (rc/drop r)
       (let [u (upgrade w)]
-        (println (some? u)))))   ; expected: false -- rc was dropped
+        (println (weak-some? u)))))   ; expected: false -- rc was dropped
   0)

@@ -1,7 +1,0 @@
-tests/fixtures/weak-dangling/input.tur:3:7: error: defn: 'some?' is already defined by an auto-loaded stdlib module; rename the local definition
-1 | ;; Verify that upgrading a weak ref aferr? the rc is dropped returns none.
-2 | 
-3 | (defn some? [o :ptr<void>] :bool
-  |       ^^^^^
-4 |   ```c
-5 |   struct { bool is_some; int64_t value; } *opt = (void*)o;

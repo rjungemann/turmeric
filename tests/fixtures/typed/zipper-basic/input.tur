@@ -36,7 +36,7 @@
     (let [right (make-arr3)]
       (let [z (zipper-new empty 0 10 right 3)]
         (let [opt (zipper-move-right z)]
-          (let [z2 (unwrap opt)]
+          (let [z2 (unwrap-or opt 0)]
             (let [f (zipper-focus z2)]
               (zipper-free z)
               (free empty)
