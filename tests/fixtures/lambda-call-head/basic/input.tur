@@ -1,0 +1,2 @@
+(defn main [] :int
+  (println ((fn [x] :int (+ x 1)) 3)))

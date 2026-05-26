@@ -3,6 +3,31 @@
 
 /* ------------ block-shaped emitters ------------ */
 
+static void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null) {
+    indent_buf(body, ctx->indent);
+    if (type.kind == TY_FN) {
+        buf_printf(body, "%s (*%s)(",
+                   type_c_name(emit_type_from_kind(type.as.fn.result_kind)), name);
+        if (type.as.fn.arity == 0) {
+            buf_puts(body, "void");
+        } else {
+            for (uint8_t i = 0; i < type.as.fn.arity; i++) {
+                if (i > 0) buf_puts(body, ", ");
+                buf_printf(body, "%s",
+                           type_c_name(emit_type_from_kind(type.as.fn.arg_kinds[i])));
+            }
+        }
+        buf_puts(body, ")");
+        if (init_or_null) buf_printf(body, " = %s", init_or_null);
+        buf_puts(body, ";\n");
+        return;
+    }
+
+    buf_printf(body, "%s %s", type_c_name(type), name);
+    if (init_or_null) buf_printf(body, " = %s", init_or_null);
+    buf_puts(body, ";\n");
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -12,13 +37,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase R1: Also create temp if body has return/throw but let has non-nil type */
     if (!nil_result && !body_has_return_or_throw) {
         tmp = fresh_tmp(ctx);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
+        emit_temp_decl(ctx, body, e->type, tmp, NULL);
     } else if (!nil_result && body_has_return_or_throw) {
         /* Special case for ? operator: body may contain return but still produce a value */
         tmp = fresh_tmp(ctx);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
+        emit_temp_decl(ctx, body, e->type, tmp, NULL);
     }
     
     indent_buf(body, ctx->indent);
@@ -118,8 +141,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
     if (!nil_result && ( !any_has_return_or_throw || (then_has_return_or_throw && else_no_return))) {
         tmp = fresh_tmp(ctx);
-        indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
+        emit_temp_decl(ctx, body, e->type, tmp, NULL);
     }
     char *cond = emit_value(ctx, body, e->as.if_.cond);
     indent_buf(body, ctx->indent);
@@ -226,14 +248,16 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 emit_stmt(ctx, body, last);
             } else {
                 result = fresh_tmp(ctx);
-                indent_buf(body, ctx->indent);
                 /* Phase 19D: if nil-typed but is fiber resume, use int64_t to capture result */
                 bool is_fiber_resume = (last->kind == EX_RESUME && last->as.resume_.resume &&
                                         last->as.resume_.resume->k &&
                                         last->as.resume_.resume->k->type.kind == TY_INT);
-                const char *decl_type = (last->type.kind == TY_NIL && is_fiber_resume)
-                                        ? "int64_t" : type_c_name(last->type);
-                buf_printf(body, "%s %s;\n", decl_type, result);
+                if (last->type.kind == TY_NIL && is_fiber_resume) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "int64_t %s;\n", result);
+                } else {
+                    emit_temp_decl(ctx, body, last->type, result, NULL);
+                }
                 char *v = emit_value(ctx, body, last);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s = %s;\n", result, v);
@@ -413,8 +437,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             /* Hoist value into a temp so defers can fire after it's computed. */
             result = fresh_tmp(ctx);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s %s;\n", type_c_name(last->type), result);
+            emit_temp_decl(ctx, body, last->type, result, NULL);
             char *v = emit_value(ctx, body, last);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", result, v);
@@ -3128,4 +3151,3 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     return atom_nil();
 }
-

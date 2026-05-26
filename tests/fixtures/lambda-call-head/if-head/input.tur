@@ -1,0 +1,6 @@
+(defn inc [x] :int (+ x 1))
+
+(defn dec [x] :int (- x 1))
+
+(defn main [] :int
+  (println ((if true inc dec) 3)))

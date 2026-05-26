@@ -1,0 +1,3 @@
+(defn main [] :int
+  (let [y 2]
+    (println ((fn [x] :int (+ x y)) 3))))

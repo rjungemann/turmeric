@@ -8,6 +8,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     Type fn_type, Expr **elab_args, uint32_t n_provided);
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding);
+static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr);
 
 /* Phase P3: HAMT lowering - create a call to a HAMT function binding */
 static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32_t n_args, Expr **args) {
@@ -247,57 +248,61 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
     return NULL;
 }
 
+static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
+    TypeKind head_kind = head_expr->type.kind;
+    if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
+        diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
+                  "expression in call head has type `%s`, which is not callable",
+                  type_name(head_expr->type));
+        return NULL;
+    }
+
+    char tmp_name[32];
+    snprintf(tmp_name, sizeof(tmp_name), "__call_head_%u", e->next_id++);
+    const Symbol *tmp_sym = symtab_intern(e->st, strslice(tmp_name, (uint32_t)strlen(tmp_name)));
+    Binding *tmp_b = binding_new(e, tmp_sym, head_expr->type, false, false, call->as.list.items[0]->span);
+
+    Expr *source_expr = head_expr;
+    while (source_expr && source_expr->kind == EX_ASCRIBE) {
+        source_expr = source_expr->as.ascribe_.inner;
+    }
+    if (source_expr && source_expr->kind == EX_CLOSURE &&
+        source_expr->as.closure_.closure && source_expr->as.closure_.closure->fn) {
+        tmp_b->closure_fn_binding = source_expr->as.closure_.closure->fn->binding;
+    } else if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
+        Binding *source_b = source_expr->as.var.binding;
+        tmp_b->closure_fn_binding = source_b->closure_fn_binding;
+        if (source_b->is_poly_fn) {
+            tmp_b->is_poly_fn = true;
+            tmp_b->poly_type = source_b->poly_type;
+        }
+    }
+
+    Expr *call_expr = elab_call_fn(e, call, tmp_b);
+    if (!call_expr) return NULL;
+
+    LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    let_bs->binding = tmp_b;
+    let_bs->init = head_expr;
+
+    Expr *let_expr = expr_new(e->arena, EX_LET, call_expr->type, call->span);
+    let_expr->as.let_.bindings = let_bs;
+    let_expr->as.let_.n = 1;
+    let_expr->as.let_.body = call_expr;
+    return let_expr;
+}
+
 /* ---- general elab ---- */
 
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
 
-    /* CY1: Support ((expr) args...) where expr evaluates to a fat closure (ptr<void>).
-     * Elaborate the head expression and treat it as a fat-closure dynamic call. */
+    /* General callable-expression heads: ((expr) args...). */
     if (head->tag != F_SYM) {
         Expr *head_expr = elab_form(e, head);
         if (!head_expr) return NULL;
-        if (head_expr->type.kind != TY_PTR_VOID) {
-            diag_emit(DIAG_ERROR, head->span,
-                      "call head must be a symbol or closure expression");
-            return NULL;
-        }
-        /* Treat as a fat-closure dynamic call: create a synthetic binding for the head */
-        uint32_t n_args = call->as.list.len - 1;
-        /* Elaborate arguments */
-        Expr **args = NULL;
-        if (n_args > 0) {
-            args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
-            for (uint32_t i = 0; i < n_args; i++) {
-                args[i] = elab_form(e, call->as.list.items[1 + i]);
-                if (!args[i]) return NULL;
-            }
-        }
-        /* We need a temporary binding for the head value so emit.c can name it.
-         * Wrap in EX_LET: let [__tmp = head_expr] (call __tmp args...) */
-        char tmp_name[32];
-        snprintf(tmp_name, sizeof(tmp_name), "__ccall%u", e->next_id++);
-        const Symbol *tmp_sym = symtab_intern(e->st, strslice(tmp_name, (uint32_t)strlen(tmp_name)));
-        Binding *tmp_b = binding_new(e, tmp_sym, TYPE_PTR_VOID, false, false, head->span);
-        /* Build call expression using tmp_b as fn_binding */
-        Expr *call_expr = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
-        call_expr->as.call_.fn_binding = tmp_b;
-        call_expr->as.call_.args = args;
-        call_expr->as.call_.n_args = n_args;
-        call_expr->as.call_.fn_expr = NULL;
-        call_expr->as.call_.dict_arg = NULL;
-        call_expr->as.call_.is_poly_call = false;
-        call_expr->as.call_.poly_arg_mask = 0;
-        /* Wrap in EX_LET */
-        LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
-        let_bs->binding = tmp_b;
-        let_bs->init = head_expr;
-        Expr *let_expr = expr_new(e->arena, EX_LET, TYPE_INT, call->span);
-        let_expr->as.let_.bindings = let_bs;
-        let_expr->as.let_.n = 1;
-        let_expr->as.let_.body = call_expr;
-        return let_expr;
+        return elab_call_head_expr(e, call, head_expr);
     }
     const Symbol *name = head->as.sym;
 

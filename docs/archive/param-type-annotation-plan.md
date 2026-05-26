@@ -99,7 +99,7 @@ annotations work (`elab_fns.c:1397`). The fused form `[x :int]` is
 rejected outright by the `if (p->tag != F_SYM)` check at
 `elab_fns.c:1316`. Direct anonymous-lambda application is also a
 separate existing limitation; see
-[`docs/direct-anonymous-lambda-application-plan.md`](direct-anonymous-lambda-application-plan.md).
+[`docs/direct-anonymous-lambda-application-plan.md`](../direct-anonymous-lambda-application-plan.md).
 
 For comparison, the spaced **return** type works in `defn`:
 

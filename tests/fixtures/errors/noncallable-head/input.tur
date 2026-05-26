@@ -1,0 +1,2 @@
+(defn main [] :int
+  ((if true 1 2) 3))
