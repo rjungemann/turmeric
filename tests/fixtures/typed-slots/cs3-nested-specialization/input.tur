@@ -1,0 +1,24 @@
+;;; CS3: Specialization propagation into generic function bodies.
+;;;
+;;; When a specialized function body calls another generic function,
+;;; the inner call must also resolve to the correct specialization.
+;;;
+;;; Acceptance tests:
+;;; 1. pair-second called directly with (Pair int float) emits a concrete helper.
+;;; 2. use-second (which calls pair-second) also specializes correctly.
+;;; 3. A genuinely polymorphic call site still uses the old int64_t path.
+
+(defn pair-second [A B] [p :(Pair A B)] :B
+  (.snd p))
+
+;;; This function calls pair-second generically.
+;;; When use-second is specialized for (Pair int float),
+;;; the inner call to pair-second must also use the specialization.
+(defn use-second [A B] [p :(Pair A B)] :B
+  (pair-second p))
+
+(defn main [] :int
+  (let [p (:: (make-struct Pair 10 3.14) (Pair int float))]
+    (println (pair-second p))
+    (println (use-second p))
+    0))

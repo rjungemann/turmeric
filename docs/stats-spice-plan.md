@@ -61,6 +61,7 @@ Tracked for follow-up spices; called out so the API does not block them.
 | `tur-stats-bayes` | MCMC samplers, posterior summaries, conjugate updates |
 | `tur-stats-survival` | Kaplan-Meier, Cox proportional hazards |
 | `tur-stats-multivariate` | PCA, factor analysis, k-means (already partially in `tur-frame`?) |
+| `tur-stats-formula` | Wilkinson-style formula DSL (`y ~ x1 * x2 + I(x3^2)`): lexer, Pratt parser, term-set algebra, factor dummy-coding, intercept control; returns column lists compatible with `ols`/`ols-frame` |
 
 ---
 

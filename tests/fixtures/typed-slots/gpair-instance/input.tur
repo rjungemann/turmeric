@@ -1,0 +1,22 @@
+(defstruct GPair [A B] (fst A) (snd B))
+
+(defmacro gpair-fst [p] `(.fst ~p))
+(defmacro gpair-snd [p] `(.snd ~p))
+
+(defclass Eq2 [A]
+  (eq2? [A A] :bool))
+
+;;; CS1b: definstance body with macro-expanded field access must elaborate
+;;; without "no typeclass method found for 'fst'" (the previous bug).
+;;; The method body is compiled; the dispatch call path is a CS3 concern.
+(definstance Eq2 [GPair]
+  (eq2? [x y]
+    (and (= (gpair-fst x) (gpair-fst y))
+         (= (gpair-snd x) (gpair-snd y)))))
+
+;;; Direct field access via macro works on concrete typed-slot GPair values.
+(defn main [] :int
+  (let [p (make-struct GPair 10 20)]
+    (println (gpair-fst p))
+    (println (gpair-snd p))
+    0))

@@ -1,0 +1,22 @@
+;;; CS4: stdlib helper APIs (tpair, pair-fst, pair-snd, thead, unwrap, ok-val)
+;;; all work correctly with typed-slot values.
+;;;
+;;; This acceptance test validates helper composition -- calling stdlib helpers
+;;; on typed-slot values, not just direct make-struct access.
+
+;;; Pair helpers
+
+(defn main [] :int
+  (let [p (:: (tpair 10 3.14) (Pair int float))]
+    (println (pair-fst p))
+    (println (pair-snd p)))
+  ;; List helpers
+  (let [l (:: (make-struct Cons 42 0) (Cons int))]
+    (println (thead l)))
+  ;; Option helpers
+  (let [o (:: (make-struct Option true 7) (Option int))]
+    (println (unwrap o)))
+  ;; Result helpers
+  (let [r (:: (make-struct Result true 99 0) (Result int int))]
+    (println (ok-val r)))
+  0)

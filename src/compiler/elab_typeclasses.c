@@ -1659,14 +1659,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     /* Phase 15: Substitute type variables with type args */
                     /* For v1: if the param type is TYPE_INT (default) and we have type args,
                      * use the first type arg */
+                    /* CS1b: elab_param_type is the type used for scope bindings and body
+                     * elaboration; param_type is the ABI type used for the emitted signature. */
+                    Type elab_param_type = param_type;
                     if (param_type.kind == TY_INT && n_type_args > 0) {
-                        param_type = type_args[0];
+                        elab_param_type = type_args[0];
                         /* PTC4: KIND_ARROW struct type-constructors (have type params) are
                          * applied as TY_APP at call sites, which lowers to int64_t in C.
-                         * Use int64_t so the method signature matches the dispatch ABI. */
-                        if (param_type.kind == TY_STRUCT && param_type.as.struct_.def &&
-                            param_type.as.struct_.def->n_type_params > 0) {
+                         * Use int64_t so the method signature matches the dispatch ABI.
+                         * CS1b: preserve the full struct type in elab_param_type so that
+                         * field-access forms inside the method body can resolve correctly. */
+                        if (elab_param_type.kind == TY_STRUCT && elab_param_type.as.struct_.def &&
+                            elab_param_type.as.struct_.def->n_type_params > 0) {
                             param_type = TYPE_INT;
+                        } else {
+                            param_type = elab_param_type;
                         }
                     }
 
@@ -1679,11 +1686,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                         && tc->methods[i].param_is_fn[n_method_params]) {
                         param_is_poly = true;
                         param_type = TYPE_PTR_VOID;
+                        elab_param_type = TYPE_PTR_VOID;
                     }
                     Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                     if (p->tag == F_SYM) {
                         /* Simple parameter name */
-                        method_params[n_method_params] = binding_new(e, p->as.sym, c_param_type, false, false, p->span);
+                        method_params[n_method_params] = binding_new(e, p->as.sym, elab_param_type, false, false, p->span);
                         if (param_is_poly) {
                             method_params[n_method_params]->is_poly_fn = true;
                             Type *pt = (Type *)arena_alloc(e->arena, sizeof(Type));

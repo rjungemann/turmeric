@@ -507,6 +507,14 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
                     Type actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
                         ? cur->as.reinterpret_.expr->type
                         : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                    /* CS3: When emitting a specialized body (current_abi_specialization is
+                     * set), resolve any type variables in the arg type against the outer
+                     * specialization's bindings.  This lets inner calls like pair_second(p)
+                     * match the correct specialization even though p still has a generic
+                     * TY_TYVAR type in the original AST. */
+                    if (ctx->current_abi_specialization) {
+                        actual = emit_resolve_type(ctx, actual);
+                    }
                     if (!type_eq(spec->arg_types[ai], actual)) {
                         args_match = false;
                         break;

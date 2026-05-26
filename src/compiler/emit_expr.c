@@ -2573,16 +2573,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_GET_FIELD: {
             /* (.field s) - emit s.field_name; for rc<Struct> receivers,
-             * auto-deref through the rc-block's value pointer. */
+             * auto-deref through the rc-block's value pointer.
+             * CS1b: for parameterized struct receivers that arrive via the
+             * int64_t carrier ABI (TY_STRUCT with n_type_params > 0), cast
+             * through the unspecialized carrier typedef so field access is
+             * valid C even though the C parameter type is int64_t. */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             StructDef *def = e->as.get_field_.def;
             const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
             char *fname = mangle_field_name(fname_raw);
             bool through_rc = e->as.get_field_.struct_expr->type.kind == TY_RC;
+            bool through_carrier = !through_rc
+                && e->as.get_field_.struct_expr->type.kind == TY_STRUCT
+                && def->n_type_params > 0;
             Buf lit; buf_init(&lit);
             if (through_rc) {
                 buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
                            def->name, sv, fname);
+            } else if (through_carrier) {
+                buf_printf(&lit, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
             } else {
                 buf_printf(&lit, "(%s).%s", sv, fname);
             }

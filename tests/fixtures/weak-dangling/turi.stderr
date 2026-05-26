@@ -1,9 +1,7 @@
-
-=================================================================
-==18934==ERROR: LeakSanitizer: detected memory leaks
-
-Direct leak of 24 byte(s) in 1 object(s) allocated from:
-    #0 0x7fc7e22fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
-    #1 0x55cc8437afbb in fresh_tmp /home/user/turmeric/src/compiler/emit_core.c:194
-
-SUMMARY: AddressSanitizer: 24 byte(s) leaked in 1 allocation(s).
+tests/fixtures/weak-dangling/input.tur:3:7: error: defn: 'some?' is already defined by an auto-loaded stdlib module; rename the local definition
+1 | ;; Verify that upgrading a weak ref aferr? the rc is dropped returns none.
+2 | 
+3 | (defn some? [o :ptr<void>] :bool
+  |       ^^^^^
+4 |   ```c
+5 |   struct { bool is_some; int64_t value; } *opt = (void*)o;

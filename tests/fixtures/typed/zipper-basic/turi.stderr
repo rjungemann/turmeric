@@ -1,2 +1,16 @@
-free(): double free detected in tcache 2
-Aborted
+tests/fixtures/typed/zipper-basic/input.tur:4:12: error [TUR-E0003]: unbound symbol 'free'
+1 | ;;
+2 | ;; Phase TC2: tzipper basic operations test
+3 | 
+4 | (exerr?n-c free [p :ptr<void>] :void)
+  |            ^^^^
+5 | 
+6 | (defn make-arr3 [] :ptr<void>
+tests/fixtures/typed/zipper-basic/input.tur:39:28: error [TUR-E0001]: function 'unwrap' arg 1: expected (type-app Option tyvar), got int
+36 |     (let [right (make-arr3)]
+37 |       (let [z (zipper-new empty 0 10 right 3)]
+38 |         (let [opt (zipper-move-right z)]
+39 |           (let [z2 (unwrap opt)]
+   |                            ^^^
+40 |             (let [f (zipper-focus z2)]
+41 |               (zipper-free z)

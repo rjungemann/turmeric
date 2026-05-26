@@ -1,0 +1,26 @@
+;;; CS2: macro-safe field access on typed Pair values.
+;;;
+;;; Acceptance tests:
+;;; 1. A macro that expands to (.fst ~p) works on (Pair int float) values.
+;;; 2. The same macro inside a definstance body works (via CS1b).
+;;; 3. Existing method-style macro dispatch (.show) is unaffected.
+
+(defmacro my-pair-fst [p] `(.fst ~p))
+(defmacro my-pair-snd [p] `(.snd ~p))
+
+;;; CS2 test 2: macro-expanded field access inside a definstance body.
+;;; Verifies the instance compiles without "no typeclass method found for 'fst'".
+(defclass PairEq [A]
+  (pair-eq? [A A] :bool))
+
+(definstance PairEq [Pair]
+  (pair-eq? [x y]
+    (and (= (my-pair-fst x) (my-pair-fst y))
+         (= (my-pair-snd x) (my-pair-snd y)))))
+
+(defn main [] :int
+  ;;; CS2 test 1: macro field access on a concrete (Pair int float) value.
+  (let [p (:: (make-struct Pair 10 3.14) (Pair int float))]
+    (println (my-pair-fst p))
+    (println (my-pair-snd p))
+    0))

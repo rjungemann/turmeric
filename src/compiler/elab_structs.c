@@ -353,6 +353,13 @@ Type elab_struct_field_use_type(Elab *e, const Type *container_type,
             if (elab_struct_type_extract_args(container_type, def, type_args)) {
                 return struct_field_instantiate_type(e, def, field->full_type, type_args);
             }
+            /* CS1b: a bare TY_STRUCT (without applied type args) for a parameterized
+             * struct is the carrier representation: all fields are stored as int64_t.
+             * Use TYPE_INT so field-access expressions in carrier-path instance
+             * bodies type-check against the scalar carrier type. */
+            if (container_type->kind == TY_STRUCT) {
+                return TYPE_INT;
+            }
         }
         return *field->full_type;
     }
