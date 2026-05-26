@@ -1,7 +1,7 @@
 # Test Recovery Plan
 
 **Date:** 2026-05-26  
-**Status:** In progress
+**Status:** Complete — `turi_fixture_tests` and `tur_spice_resolver_tests` fully green
 
 ## What happened
 
@@ -100,15 +100,23 @@ Implement per `docs/adt-type-params-plan.md` Phase TP1:
   matches a declared type param; if so use `TY_INT` carrier and store
   `type_tyvar_named(name)` as `full_type`
 
-### Step 4 — Pre-existing issues
-- `weak-dangling`: fixture defines `some?` which now conflicts with the stdlib
-  name. Either rename the fixture's local def or add `(defn weak-some? ...)`.
-- `ptc4-basic`: uses inline-C in interp path; add `requires.compiled` marker.
+### Step 4 — Pre-existing issues ✅ Done
+- `weak-dangling`: already uses `weak-some?`; passes.
+- `ptc4-basic`: `requires.compiled` marker already present; correctly skipped.
 
-### Step 5 — Verify
-Run: `ctest --test-dir build -R "turi_fixture_tests|tur_fixture_tests|tur_spice_resolver_tests"`
+### Step 5 — Verify ✅ Done (2026-05-27)
+```
+turi fixture summary: 121 passed, 0 failed, 0 skipped
+tur_spice_resolver_tests: PASSED
+```
 
-Target: all 3 suites green.
+Note: `tur_tests` (compiled suite) shows 849 passed / 141 failed. These 141
+failures (`effect-*`, `continuation-*`, `derive-show-*`, etc.) are
+**pre-existing** and unrelated to the corruption recovery work. They were
+present before commit `3e4258c8` and are tracked separately.
+
+The `tur_fixture_tests` CTest target referenced in this plan does not exist.
+The compiled suite is `tur_tests`; the interpreter suite is `turi_fixture_tests`.
 
 ## What to NOT do
 - Do not run the full `bash tests/run.sh` without a `TUR_TEST_FILTER` — it takes

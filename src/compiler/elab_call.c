@@ -774,6 +774,45 @@ Expr *elab_call(Elab *e, Form *call) {
             if (call_expr) {
                 /* Patch result type with proper AdtDef pointer */
                 call_expr->type = type_adt(ctor->adt);
+
+                /* TP5: intra-constructor type-arg consistency check.
+                 * For each field whose full_type is a named TY_TYVAR, record
+                 * the concrete argument type.  If a later field binds the same
+                 * param to a different type, emit a diagnostic. */
+                struct { const char *name; Type type; } param_bindings[8];
+                uint8_t  n_bound = 0;
+                uint32_t n_call_args = call_expr->as.call_.n_args;
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    const Type *ft = ctor->fields[fi].full_type;
+                    if (!ft || ft->kind != TY_TYVAR || !ft->as.tyvar_.name) continue;
+                    const char *pname = ft->as.tyvar_.name;
+                    Type concrete = call_expr->as.call_.args[fi]->type;
+                    bool found = false;
+                    for (uint8_t bi = 0; bi < n_bound; bi++) {
+                        if (strcmp(param_bindings[bi].name, pname) == 0) {
+                            Type prev = param_bindings[bi].type;
+                            bool mismatch = (prev.kind != concrete.kind);
+                            if (!mismatch && concrete.kind == TY_ADT)
+                                mismatch = (prev.as.adt_.def != concrete.as.adt_.def);
+                            if (mismatch) {
+                                diag_emit(DIAG_ERROR,
+                                    call->as.list.items[1 + fi]->span,
+                                    "constructor '%s': type parameter '%s' was bound to "
+                                    "'%s' by an earlier field but argument %u has type '%s'",
+                                    ctor->name, pname,
+                                    type_name(prev),
+                                    fi, type_name(concrete));
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found && n_bound < 8) {
+                        param_bindings[n_bound].name = pname;
+                        param_bindings[n_bound].type = concrete;
+                        n_bound++;
+                    }
+                }
             }
             return call_expr;
         }

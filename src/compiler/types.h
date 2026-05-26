@@ -163,6 +163,8 @@ typedef struct CtorField {
 typedef struct SkolemBinding {
     const char *name;      /* type parameter name (e.g. "a") */
     TypeKind    kind;      /* concrete resolved TypeKind (e.g. TY_INT) */
+    /* TP3: full Type for ADT/struct bindings (e.g. `a → Foo`); NULL for primitives */
+    struct Type *full_type;
 } SkolemBinding;
 
 /* Phase G2: Per-arm skolem environment (stack-allocated in elab_match) */
@@ -199,6 +201,9 @@ typedef struct AdtDef {
     bool        is_gadt;         /* true for defgadt, false for defdata */
     const char **type_params;    /* arena-allocated array of type param names (interned) */
     uint8_t     n_type_params;
+    /* TP1/TP2: arena-alloc'd Kind array, one per type_params entry.
+     * Initialised to KIND_STAR; TP4 refines based on usage in CtorField.full_type. */
+    Kind       *type_param_kinds;
 } AdtDef;
 
 /* Phase 11: Struct field descriptor.

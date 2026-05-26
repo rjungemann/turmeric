@@ -9,11 +9,12 @@ static Binding *scope_lookup_type_def(Scope *s, const Symbol *name);
 static bool elab_is_forward_type(Elab *e, const Symbol *sym);
 static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form *f,
     const SkolemEnv *senv);
-static void gadt_build_skolem_env(SkolemEnv *out, const AdtDef *def,
+static void gadt_build_skolem_env(Elab *e, SkolemEnv *out, const AdtDef *def,
     const CtorDef *ctor);
 static TypeKind gadt_field_typekind_from_form(const Form *f);
 static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
     const char **type_params, uint8_t n_type_params);
+static void infer_type_param_kinds(AdtDef *def);
 
 /* Phase 11: defstruct - define a struct type
  * Syntax: (defstruct Name [:copy] [field1 :type1 field2 :type2 ...])
@@ -272,6 +273,54 @@ bool elab_struct_type_extract_args(const Type *t, const StructDef *def, Type *ou
     }
     free(raw);
     return ok;
+}
+
+/* TP6: Unpack a TY_APP chain on an ADT type to recover concrete type arguments.
+ * Analogous to elab_struct_type_extract_args but for AdtDef instead of StructDef. */
+static bool elab_adt_type_extract_args(const Type *t, const AdtDef *def, Type *out_args) {
+    if (!t || !def || def->n_type_params == 0 || !out_args) return false;
+    const Type *cur = t;
+    uint8_t n_raw = 0;
+    Type *raw = (Type *)malloc(def->n_type_params * sizeof(Type));
+    if (!raw) return false;
+    while (cur && cur->kind == TY_APP && n_raw < def->n_type_params) {
+        if (!cur->as.app.arg) break;
+        raw[n_raw++] = *cur->as.app.arg;
+        cur = cur->as.app.fn;
+    }
+    bool ok = (cur && cur->kind == TY_ADT && cur->as.adt_.def == def &&
+               n_raw == def->n_type_params);
+    if (ok) {
+        for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
+    }
+    free(raw);
+    return ok;
+}
+
+/* TP6: Instantiate a field type by substituting TY_TYVAR names with concrete type args.
+ * Analogous to struct_field_instantiate_type but uses AdtDef.type_params for name lookup. */
+static Type adt_field_instantiate_type(Elab *e, const AdtDef *def, const Type *t,
+                                       const Type *type_args) {
+    if (!t) return TYPE_UNKNOWN;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            if (!t->as.tyvar_.name) return *t;
+            for (uint8_t i = 0; i < def->n_type_params; i++) {
+                if (def->type_params[i] &&
+                    strcmp(def->type_params[i], t->as.tyvar_.name) == 0) {
+                    return type_args[i];
+                }
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn  = adt_field_instantiate_type(e, def, t->as.app.fn,  type_args);
+            Type arg = adt_field_instantiate_type(e, def, t->as.app.arg, type_args);
+            return type_app(e->arena, fn, arg, (Span){0});
+        }
+        default:
+            return *t;
+    }
 }
 
 static Type struct_field_instantiate_type(Elab *e, const StructDef *def, const Type *t,
@@ -1034,6 +1083,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         def->is_gadt = false;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
+        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        if (n_type_params > 0) {
+            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
+            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            def->type_param_kinds = tpk;
+        } else {
+            def->type_param_kinds = NULL;
+        }
         /* Refresh adt_type from the def so copy_kind reflects is_copy correctly.
          * The pre-pass stub was created with is_copy=false; now that we know the
          * real is_copy flag, regenerate the type and update the binding. */
@@ -1054,6 +1111,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         /* Phase RF1: store type parameters */
         def->type_params = type_params;
         def->n_type_params = n_type_params;
+        /* TP1: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        if (n_type_params > 0) {
+            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
+            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            def->type_param_kinds = tpk;
+        } else {
+            def->type_param_kinds = NULL;
+        }
 
         /* Pre-register ADT type so constructors can reference it.
          * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
@@ -1190,6 +1255,9 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         elab_register_adt_def(e, def);
     }
 
+    /* TP4: refine type_param_kinds based on CtorField.full_type usage */
+    infer_type_param_kinds(def);
+
     /* Return EX_DEFDATA node */
     Expr *out = expr_new(e->arena, EX_DEFDATA, TYPE_NIL, call->span);
     out->as.defdata_.def = def;
@@ -1206,6 +1274,17 @@ TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name) {
             return env->bindings[i].kind;
     }
     return TY_UNKNOWN;
+}
+
+/* TP3: Return the full Type* stored in the skolem binding for name, or NULL.
+ * Use when the concrete type is an ADT/struct and the flat TypeKind is insufficient. */
+static const Type *gadt_skolem_lookup_type(const SkolemEnv *env, const char *name) {
+    if (!env) return NULL;
+    for (uint8_t i = 0; i < env->n; i++) {
+        if (strcmp(env->bindings[i].name, name) == 0)
+            return env->bindings[i].full_type;
+    }
+    return NULL;
 }
 
 /* Phase G2: Resolve a type form to a full Type using the current skolem env.
@@ -1236,7 +1315,9 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
         if (strcmp(n, "uint64") == 0) return type_from_kind(TY_UINT64);
         if (strcmp(n, "float32")== 0) return type_from_kind(TY_FLOAT32);
         if (strcmp(n, "float64")== 0) return type_from_kind(TY_FLOAT64);
-        /* Type variable: look up in skolem env */
+        /* Type variable: look up in skolem env — prefer full Type if available (TP3) */
+        const Type *full_resolved = gadt_skolem_lookup_type(senv, n);
+        if (full_resolved) return *full_resolved;
         TypeKind resolved = gadt_skolem_lookup(senv, n);
         if (resolved != TY_UNKNOWN) return type_from_kind(resolved);
         /* Unresolved type variable → anonymous TY_TYVAR (name=NULL signals skolem escape) */
@@ -1265,12 +1346,57 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
     return type_from_kind(TY_INT); /* fallback: opaque int64_t */
 }
 
+/* TP4: Infer Kind for each type parameter of an ADT/GADT from the declared
+ * CtorField.full_type nodes populated by TP1/TP2.
+ *
+ * Rules (applied across all constructors):
+ *   - If a param appears as a direct TY_TYVAR (e.g. field `a`) → KIND_STAR.
+ *   - If a param appears as the fn-side of a TY_APP node           → KIND_ARROW.
+ *   - Default (param never mentioned in full_type)                 → KIND_STAR.
+ *
+ * The inferred kinds are written into def->type_param_kinds (allocated by TP1/TP2).
+ */
+static void infer_type_param_kinds(AdtDef *def) {
+    if (!def->type_param_kinds || def->n_type_params == 0) return;
+
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *ctor = def->ctors[ci];
+        if (!ctor) continue;
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const Type *ft = ctor->fields[fi].full_type;
+            if (!ft) continue;
+            if (ft->kind == TY_TYVAR && ft->as.tyvar_.name) {
+                /* Direct param use → KIND_STAR */
+                for (uint8_t pi = 0; pi < def->n_type_params; pi++) {
+                    if (strcmp(def->type_params[pi], ft->as.tyvar_.name) == 0) {
+                        /* Only upgrade if not already KIND_ARROW */
+                        if (def->type_param_kinds[pi] == KIND_STAR)
+                            def->type_param_kinds[pi] = KIND_STAR; /* no-op; keep default */
+                        break;
+                    }
+                }
+            } else if (ft->kind == TY_APP) {
+                /* Function-side of TY_APP — param used as a type constructor */
+                const Type *fn_side = ft->as.app.fn;
+                if (fn_side && fn_side->kind == TY_TYVAR && fn_side->as.tyvar_.name) {
+                    for (uint8_t pi = 0; pi < def->n_type_params; pi++) {
+                        if (strcmp(def->type_params[pi], fn_side->as.tyvar_.name) == 0) {
+                            def->type_param_kinds[pi] = KIND_ARROW;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* Phase G2: Build a SkolemEnv for a GADT constructor arm.
  * Parses the constructor's result_type_form (e.g. "(Expr int)") against
  * the ADT's type_params (e.g. ["a"]) to produce concrete bindings
- * such as {a → TY_INT}.  Only primitive-type args are mapped; type-variable
- * args are skipped (leaving those params unresolved → TY_TYVAR in fields). */
-static void gadt_build_skolem_env(SkolemEnv *out, const AdtDef *def,
+ * such as {a → TY_INT}.  Primitive-type args are mapped to their TypeKind;
+ * TP3: ADT/struct-type args are now also resolved and stored with their full Type. */
+static void gadt_build_skolem_env(Elab *e, SkolemEnv *out, const AdtDef *def,
                                    const CtorDef *ctor) {
     out->n = 0;
     if (!ctor->result_type_form || def->n_type_params == 0) return;
@@ -1287,6 +1413,7 @@ static void gadt_build_skolem_env(SkolemEnv *out, const AdtDef *def,
         Form *arg = rt->as.list.items[1 + i];
         const char *param_name = def->type_params[i];
         TypeKind k = TY_UNKNOWN;
+        Type *full_type = NULL;
 
         if (arg->tag == F_SYM) {
             const char *an = arg->as.sym->name;
@@ -1304,16 +1431,40 @@ static void gadt_build_skolem_env(SkolemEnv *out, const AdtDef *def,
             else if (strcmp(an, "uint64") == 0) k = TY_UINT64;
             else if (strcmp(an, "float32")== 0) k = TY_FLOAT32;
             else if (strcmp(an, "float64")== 0) k = TY_FLOAT64;
-            /* else: type variable or unknown — skip (param stays unresolved) */
+            else {
+                /* TP3: may be a named ADT/struct type — resolve via scope */
+                Binding *tb = scope_lookup(e->scope, arg->as.sym);
+                if (!tb) tb = scope_lookup(&e->global, arg->as.sym);
+                if (tb && (tb->type.kind == TY_ADT || tb->type.kind == TY_STRUCT)) {
+                    k = tb->type.kind;
+                    full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *full_type = tb->type;
+                }
+                /* else: type variable in return pos — leave unresolved */
+            }
         }
-        /* List form like (Expr int) — ADT ref; treat as int64_t / TY_INT */
-        else if (arg->tag == F_LIST) {
-            k = TY_INT; /* opaque ADT reference */
+        /* TP3: List form like (Foo int) — ADT/struct application; resolve head */
+        else if (arg->tag == F_LIST && arg->as.list.len >= 1) {
+            Form *hd = arg->as.list.items[0];
+            if (hd->tag == F_SYM) {
+                Binding *tb = scope_lookup(e->scope, hd->as.sym);
+                if (!tb) tb = scope_lookup(&e->global, hd->as.sym);
+                if (tb && (tb->type.kind == TY_ADT || tb->type.kind == TY_STRUCT)) {
+                    k = tb->type.kind;
+                    full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *full_type = tb->type;
+                } else {
+                    k = TY_INT; /* opaque ADT reference fallback */
+                }
+            } else {
+                k = TY_INT;
+            }
         }
 
         if (k != TY_UNKNOWN) {
-            out->bindings[out->n].name = param_name;
-            out->bindings[out->n].kind = k;
+            out->bindings[out->n].name      = param_name;
+            out->bindings[out->n].kind      = k;
+            out->bindings[out->n].full_type = full_type;
             out->n++;
         }
     }
@@ -1479,6 +1630,14 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
+        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        if (n_type_params > 0) {
+            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
+            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            def->type_param_kinds = tpk;
+        } else {
+            def->type_param_kinds = NULL;
+        }
         adt_type = type_adt(def);
         /* Phase G1/HKT: Apply the same KIND_ARROW fix as the non-stub branch so
          * that kind checks see the correct kind for parameterized GADTs. */
@@ -1495,6 +1654,14 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         def->is_gadt = true;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
+        /* TP2: allocate Kind array initialised to KIND_STAR (TP4 refines) */
+        if (n_type_params > 0) {
+            Kind *tpk = (Kind *)arena_alloc(e->arena, n_type_params * sizeof(Kind));
+            for (uint8_t pi = 0; pi < n_type_params; pi++) tpk[pi] = KIND_STAR;
+            def->type_param_kinds = tpk;
+        } else {
+            def->type_param_kinds = NULL;
+        }
 
         /* Pre-register ADT type so constructors can reference it.
          * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
@@ -1713,6 +1880,9 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     if (!is_forward_stub_gadt) {
         elab_register_adt_def(e, def);
     }
+
+    /* TP4: refine type_param_kinds based on CtorField.full_type usage */
+    infer_type_param_kinds(def);
 
     Expr *out = expr_new(e->arena, EX_DEFGADT, TYPE_NIL, call->span);
     out->as.defgadt_.def = def;
@@ -2158,29 +2328,49 @@ Expr *elab_match(Elab *e, const Form *call) {
     /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
      * that defaulted to TY_INT), or is TY_ADT with no def (e.g. return of
      * ADT-returning fn without result_full_type), infer the ADT from the
-     * first constructor pattern in the arm list. */
-    if (scrutinee->type.kind != TY_ADT || !scrutinee->type.as.adt_.def) {
-        AdtDef *inferred_adt = NULL;
-        for (uint32_t ai = 0; ai < n_arms && !inferred_adt; ai++) {
-            Form *pat_f = call->as.list.items[arm_start[ai]];
-            if (pat_f->tag == F_LIST && pat_f->as.list.len >= 1 &&
-                pat_f->as.list.items[0]->tag == F_SYM) {
-                CtorDef *cd = elab_lookup_ctor(e, pat_f->as.list.items[0]->as.sym);
-                if (cd) inferred_adt = cd->adt;
-            }
+     * first constructor pattern in the arm list.
+     * TP6: Also accept TY_APP chains whose base is a TY_ADT — these carry
+     * concrete type arguments from an explicit type annotation. */
+    {
+        /* Unwrap TY_APP chain to find base type */
+        const Type *base = &scrutinee->type;
+        while (base && base->kind == TY_APP && base->as.app.fn) {
+            base = base->as.app.fn;
         }
-        if (inferred_adt) {
-            /* Patch the scrutinee type to the inferred ADT */
-            scrutinee->type = type_adt(inferred_adt);
-        } else {
-            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
-                      "match: scrutinee must be an ADT type, got %s",
-                      typekind_to_string(scrutinee->type.kind));
-            return NULL;
+        if (base && base->kind == TY_ADT && base->as.adt_.def) {
+            /* Scrutinee is a TY_APP(... TY_ADT) chain — valid, nothing to patch */
+        } else if (scrutinee->type.kind != TY_ADT || !scrutinee->type.as.adt_.def) {
+            AdtDef *inferred_adt = NULL;
+            for (uint32_t ai = 0; ai < n_arms && !inferred_adt; ai++) {
+                Form *pat_f = call->as.list.items[arm_start[ai]];
+                if (pat_f->tag == F_LIST && pat_f->as.list.len >= 1 &&
+                    pat_f->as.list.items[0]->tag == F_SYM) {
+                    CtorDef *cd = elab_lookup_ctor(e, pat_f->as.list.items[0]->as.sym);
+                    if (cd) inferred_adt = cd->adt;
+                }
+            }
+            if (inferred_adt) {
+                /* Patch the scrutinee type to the inferred ADT */
+                scrutinee->type = type_adt(inferred_adt);
+            } else {
+                diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                          "match: scrutinee must be an ADT type, got %s",
+                          typekind_to_string(scrutinee->type.kind));
+                return NULL;
+            }
         }
     }
 
-    AdtDef *adt = scrutinee->type.as.adt_.def;
+    /* Extract the ADT def, looking through TY_APP chains */
+    AdtDef *adt;
+    {
+        const Type *base = &scrutinee->type;
+        while (base && base->kind == TY_APP && base->as.app.fn) {
+            base = base->as.app.fn;
+        }
+        adt = (base && base->kind == TY_ADT) ? base->as.adt_.def
+                                              : scrutinee->type.as.adt_.def;
+    }
 
     /* Allocate arms array */
     MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
@@ -2324,7 +2514,7 @@ Expr *elab_match(Elab *e, const Form *call) {
             SkolemEnv arm_senv;
             arm_senv.n = 0;
             if (adt->is_gadt && ctor->result_type_form) {
-                gadt_build_skolem_env(&arm_senv, adt, ctor);
+                gadt_build_skolem_env(e, &arm_senv, adt, ctor);
             }
             SkolemEnv *saved_senv = e->g2_skolem_env;
             const CtorDef *saved_ctor = e->g2_current_ctor;
@@ -2352,23 +2542,51 @@ Expr *elab_match(Elab *e, const Form *call) {
                 }
                 Type ftype;
                 if (adt->is_gadt && ctor->field_forms && ctor->field_forms[bi]) {
-                    /* Phase G2: resolve field type using the skolem env */
-                    ftype = gadt_resolve_type_from_form(e, adt,
-                                                        ctor->field_forms[bi], &arm_senv);
+                    /* Phase G2: resolve field type using the skolem env.
+                     * TP2: if full_type is a named TY_TYVAR, do the skolem
+                     * lookup directly — avoids re-parsing and is authoritative. */
+                    if (ctor->fields[bi].full_type &&
+                            ctor->fields[bi].full_type->kind == TY_TYVAR &&
+                            ctor->fields[bi].full_type->as.tyvar_.name) {
+                        const char *tvname = ctor->fields[bi].full_type->as.tyvar_.name;
+                        TypeKind resolved = gadt_skolem_lookup(&arm_senv, tvname);
+                        ftype = (resolved != TY_UNKNOWN)
+                            ? type_from_kind(resolved)
+                            : *ctor->fields[bi].full_type;
+                    } else {
+                        ftype = gadt_resolve_type_from_form(e, adt,
+                                                            ctor->field_forms[bi], &arm_senv);
+                    }
                 } else if (ctor->field_forms && ctor->field_forms[bi]) {
                     /* F6-1 (cross-plan-followups): defdata ctor field with
                      * a stashed type form -- re-parse the type so the binding
                      * carries the declared ADT/struct, not just the C-level
                      * `int` collapsed by parse_struct_field_type for ADT-typed
                      * fields.  Falls back to type_from_kind below if the
-                     * re-parse fails (e.g. unknown type). */
-                    Type *resolved = type_expr_from_form(e,
-                        (Form *)ctor->field_forms[bi],
-                        NULL, NULL, NULL, 0);
-                    if (resolved) {
-                        ftype = *resolved;
+                     * re-parse fails (e.g. unknown type).
+                     * TP6: If the field carries a TY_TYVAR full_type and the
+                     * scrutinee has a TY_APP chain, extract the concrete type
+                     * arg and substitute it in. */
+                    if (ctor->fields[bi].full_type &&
+                            ctor->fields[bi].full_type->kind == TY_TYVAR &&
+                            adt->n_type_params > 0) {
+                        Type *type_args = (Type *)arena_alloc(e->arena,
+                            adt->n_type_params * sizeof(Type));
+                        if (elab_adt_type_extract_args(&scrutinee->type, adt, type_args)) {
+                            ftype = adt_field_instantiate_type(e, adt,
+                                        ctor->fields[bi].full_type, type_args);
+                        } else {
+                            ftype = type_from_kind(ctor->fields[bi].kind);
+                        }
                     } else {
-                        ftype = type_from_kind(ctor->fields[bi].kind);
+                        Type *resolved = type_expr_from_form(e,
+                            (Form *)ctor->field_forms[bi],
+                            NULL, NULL, NULL, 0);
+                        if (resolved) {
+                            ftype = *resolved;
+                        } else {
+                            ftype = type_from_kind(ctor->fields[bi].kind);
+                        }
                     }
                 } else {
                     ftype = type_from_kind(ctor->fields[bi].kind);

@@ -125,3 +125,53 @@ definition passes it through.
 Rename `TURI_FILTER` to `TUR_TEST_FILTER` in `run-turi.sh`, or add a
 compatibility shim that copies `TUR_TEST_FILTER` → `TURI_FILTER` at the top
 of the script, so both names work and behave consistently with `run.sh`.
+
+---
+
+## KB-004 — `::` coercion cannot bridge `:int`-returning stdlib functions to typed accessors
+
+**Discovered:** 2026-05-27  
+**Status:** Open (architectural limitation)
+
+### Symptom
+
+`result-map`, `option-map`, and similar stdlib functions return `:int` (an
+opaque heap-pointer representation).  When the result is passed to a typed
+accessor (`ok-val`, `err-val`, `unwrap`) via a `(:: expr (Result A B))` type
+annotation, the compiler emits a specialisation of the accessor that takes the
+struct by value — but `result-map` still returns `int64_t`.  This produces a
+C-level type error at link time:
+
+```
+error: passing 'int64_t' to parameter of incompatible type 'Result__int__int'
+```
+
+### Root cause
+
+The `::` coercion changes the *callsite type* used for overload resolution but
+does not insert a pointer-dereference cast.  The typed specialisation of
+`ok-val` (`ok_val__spec__int64_t_Result__int__int`) expects its argument
+passed by value as a struct, while the heap-pointer representation stores it
+as an `int64_t` (cast from a `void *`).  The two conventions are incompatible.
+
+### Workaround
+
+For direct `ok`/`err`/`some`/`none` calls, use `make-struct` to construct the
+typed struct directly instead of going through the untyped constructor:
+
+```turmeric
+;; BROKEN: (ok-val (ok 42))
+;; WORKS:
+(ok-val (make-struct Result true 42 0))
+```
+
+For functions that return `:int` (e.g. `result-map`, `option-map`), use the
+equality-based API (`result-eq?`, `option-eq?`) to test values instead of
+trying to extract through `ok-val`/`err-val`.
+
+### Fix
+
+Needs a dedicated cast/coerce form that understands the pointer-as-int
+representation and emits the correct `*(ResultType *)(intptr_t)r` dereference.
+Track as a future compiler improvement (post-TP6).
+

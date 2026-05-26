@@ -144,6 +144,7 @@ effect-syntax
 effect-syntax-compat
 effect-with-fail
 effect-with-write
+gadt-adt-skolem
 gadt-guard
 gadt-param-tyvar
 gadt-refine-basic

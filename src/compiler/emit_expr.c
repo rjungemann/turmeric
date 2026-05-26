@@ -3158,7 +3158,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
 
-            AdtDef *adt = e->as.match_.scrutinee->type.as.adt_.def;
+            /* TP6: scrutinee may carry a TY_APP wrapper (e.g. `:(Opt2 int)` parameter).
+             * Unwrap to find the base TY_ADT before accessing the def. */
+            AdtDef *adt;
+            {
+                const Type *base = &e->as.match_.scrutinee->type;
+                while (base && base->kind == TY_APP && base->as.app.fn) {
+                    base = base->as.app.fn;
+                }
+                adt = (base && base->kind == TY_ADT) ? base->as.adt_.def
+                                                     : e->as.match_.scrutinee->type.as.adt_.def;
+            }
             char adt_c_name[256];
             {
                 char *_mn = mangle_field_name(adt->name);

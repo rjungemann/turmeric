@@ -1,0 +1,15 @@
+;; TP6: match-arm binding types for a two-parameter defdata.
+;; The scrutinee is annotated with :(Pair2 int int), which creates a
+;; TY_APP chain; elab_adt_type_extract_args unpacks that into [int, int],
+;; and adt_field_instantiate_type substitutes a->int, b->int so the
+;; bound variables carry the concrete types in the match arm.
+(defdata Pair2 [a b]
+  (MkPair2 a b))
+
+(defn fst [p :(Pair2 int int)] :int
+  (match p
+    (MkPair2 x y) x))
+
+(defn main [] :int
+  (println (fst (MkPair2 10 20)))
+  0)

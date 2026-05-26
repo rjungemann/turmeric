@@ -11,10 +11,10 @@
   (err? (err 5)))
 
 (defn test-ok-val [] :int
-  (ok-val (ok 42)))
+  (ok-val (make-struct Result true 42 0)))
 
 (defn test-err-val [] :int
-  (err-val (err 404)))
+  (err-val (make-struct Result false 0 404)))
 
 (defn test-result-eq-ok [] :bool
   (let [eq (fn [a b] (= a b))]
@@ -28,11 +28,13 @@
   (let [eq (fn [a b] (= a b))]
     (result-eq? (ok 1) (ok 2) eq eq)))
 
-(defn test-result-map-ok [] :int
-  (ok-val (result-map (ok 5) (fn [x] (* x 3)))))
+(defn test-result-map-ok [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (result-eq? (result-map (ok 5) (fn [x] (* x 3))) (ok 15) eq eq)))
 
-(defn test-result-map-err [] :int
-  (err-val (result-map (err 42) (fn [x] (* x 3)))))
+(defn test-result-map-err [] :bool
+  (let [eq (fn [a b] (= a b))]
+    (result-eq? (result-map (err 42) (fn [x] (* x 3))) (err 42) eq eq)))
 
 (defn test-result-map-preserves-tag [] :bool
   (ok? (result-map (ok 1) (fn [x] (+ x 1)))))

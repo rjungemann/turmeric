@@ -144,24 +144,24 @@ the same simplistic/absent kind-inference deficiency.
 
 #### Tasks
 
-- [ ] Add `Type *full_type` to `CtorField` (parallel to `StructField.full_type`).
-- [ ] Add `Kind *type_param_kinds` to `AdtDef` (parallel to the local
+- [x] Add `Type *full_type` to `CtorField` (parallel to `StructField.full_type`).
+- [x] Add `Kind *type_param_kinds` to `AdtDef` (parallel to the local
   `field_type_param_kinds` array already used in `defstruct`).
-- [ ] In `elab_defdata`, after parsing the `[a b ...]` type-param vector,
+- [x] In `elab_defdata`, after parsing the `[a b ...]` type-param vector,
   allocate a `Symbol **field_type_params` (intern each name) and a
   `Kind *type_param_kinds` array (initialise to `KIND_STAR`; TP4 will refine).
-- [ ] Replace the `parse_struct_field_type` call in the constructor field loop
+- [x] Replace the `parse_struct_field_type` call in the constructor field loop
   with a call to a new `adt_field_type_from_form` helper (modelled on
   `struct_field_type_from_form`) that:
   - Checks if the form's symbol matches a declared type param → returns
     `TY_TYVAR` with the named type variable.
   - Otherwise delegates to `type_expr_from_form`.
-- [ ] When the resolved `Type*` is a `TY_TYVAR`, `TY_APP`, or compound type,
+- [x] When the resolved `Type*` is a `TY_TYVAR`, `TY_APP`, or compound type,
   store it in `CtorField.full_type`.  `CtorField.kind` stays as the flattened
   C-level storage kind (`TY_INT` for pointer-sized values).
-- [ ] Update `emit_module.c` / `emit.c` codegen to ignore `full_type` (it is
+- [x] Update `emit_module.c` / `emit.c` codegen to ignore `full_type` (it is
   an elaboration-only annotation; codegen already uses the flat `kind`).
-- [ ] Add / update fixtures:
+- [x] Add / update fixtures:
   - `tests/fixtures/adt-param/` — extend existing fixture; add a case where
     a field explicitly uses the type parameter (`(Some a)`) and verify the
     output is unchanged (codegen regression).
@@ -187,14 +187,14 @@ populate `CtorField.full_type` via `adt_field_type_from_form`.
 
 #### Tasks
 
-- [ ] Reuse `adt_field_type_from_form` from TP1 in `elab_defgadt`'s field loop.
-- [ ] Populate `CtorField.full_type` for every GADT constructor field that
+- [x] Reuse `adt_field_type_from_form` from TP1 in `elab_defgadt`'s field loop.
+- [x] Populate `CtorField.full_type` for every GADT constructor field that
   references a type parameter or uses a compound type.
-- [ ] Propagate `AdtDef.type_param_kinds` for `defgadt` (same as TP1).
-- [ ] Update `gadt_resolve_type_from_form` to prefer `CtorField.full_type` over
+- [x] Propagate `AdtDef.type_param_kinds` for `defgadt` (same as TP1).
+- [x] Update `gadt_resolve_type_from_form` to prefer `CtorField.full_type` over
   the raw form re-parse when the field has already been resolved; this avoids
   double-parsing and ensures consistency between definition and match sites.
-- [ ] Add fixtures:
+- [x] Add fixtures:
   - `tests/fixtures/gadt-param-tyvar/` — GADT with a type-variable field; verify
     that the match arm sees the correct `TY_TYVAR`.
 
@@ -216,14 +216,14 @@ to `List int`.
 
 #### Tasks
 
-- [ ] In `gadt_build_skolem_env`'s argument loop, when `arg->tag == F_LIST`,
+- [x] In `gadt_build_skolem_env`'s argument loop, when `arg->tag == F_LIST`,
   attempt to resolve the head as a named ADT / struct via `scope_lookup`.  If
   found, add a `SkolemBinding { name, TY_ADT }` (or the full `Type` if the
   `SkolemBinding` struct is extended).
-- [ ] Optionally extend `SkolemBinding` to carry a full `Type` (not just
+- [x] Optionally extend `SkolemBinding` to carry a full `Type` (not just
   `TypeKind`) to support ADT-typed params beyond `TY_INT` — this is a
   prerequisite for TP6 on GADT code.
-- [ ] Add fixture: `tests/fixtures/gadt-adt-skolem/` — GADT whose return type
+- [x] Add fixture: `tests/fixtures/gadt-adt-skolem/` — GADT whose return type
   annotation includes an ADT type argument; verify the match arm body is
   accepted at the correct type.
 
@@ -246,7 +246,7 @@ inference pass over the declared field types.
 
 #### Tasks
 
-- [ ] Add `infer_type_param_kinds(AdtDef *def)` (or extend the existing
+- [x] Add `infer_type_param_kinds(AdtDef *def)` (or extend the existing
   `kind_infer_from_instances` pass in `kind_check.c`) that walks each
   constructor's `CtorField.full_type` (populated by TP1/TP2) and:
   - If a param appears directly as a `TY_TYVAR` (not applied to anything),
@@ -256,9 +256,9 @@ inference pass over the declared field types.
   - Unify across all constructors; emit `TUR-E0012` kind-mismatch if inconsistent.
 - [ ] Replace the `struct_type_param_kind` heuristic in `elab_defstruct` with
   the same pass so structs benefit too.
-- [ ] Propagate inferred kinds into `AdtDef.type_param_kinds` and
+- [x] Propagate inferred kinds into `AdtDef.type_param_kinds` and
   `StructDef`'s equivalent.
-- [ ] Add fixture: `tests/fixtures/kind-inference-adt/` — ADT with a HKT param
+- [x] Add fixture: `tests/fixtures/kind-inference-adt/` — ADT with a HKT param
   `^f` used as `(f int)` in a field; verify the compiler infers `KIND_ARROW`.
 
 #### Exit criterion
@@ -278,7 +278,7 @@ This phase adds a lightweight unification check.
 
 #### Tasks
 
-- [ ] In `elab_call.c`'s constructor-application path, when the callee is a
+- [x] In `elab_call.c`'s constructor-application path, when the callee is a
   `TY_FN` binding that originated from a constructor:
   - For each field `i`, if `CtorField.full_type` contains a `TY_TYVAR` named
     `p`, record the concrete type of argument `i` as the candidate binding for
@@ -287,10 +287,10 @@ This phase adds a lightweight unification check.
     for multi-field constructors), check that the new candidate is compatible
     (same `TypeKind`, or both `TY_ADT` pointing to the same `AdtDef`); emit a
     type-mismatch diagnostic if not.
-- [ ] This check is intra-constructor (within one `(Ctor a b)` call); inter-call
+- [x] This check is intra-constructor (within one `(Ctor a b)` call); inter-call
   unification (ensuring `(Some 1)` and `(Some "hello")` are not mixed in the
   same `Option`) is deferred to a full unification pass (out of scope here).
-- [ ] Add fixture: `tests/fixtures/errors/adt-field-type-mismatch/` — constructor
+- [x] Add fixture: `tests/fixtures/errors/adt-field-type-mismatch/` — constructor
   applied with an argument of the wrong type (once a type param has been bound
   by a prior field); verify diagnostic.
 
@@ -400,7 +400,7 @@ each other.
 |-------|-------|--------|
 | TP1 | `defdata` field types as full `Type*` | Done |
 | TP2 | `defgadt` field types as full `Type*` | Done |
-| TP3 | ADT-typed skolem args in `gadt_build_skolem_env` | Open |
-| TP4 | Kind inference for type parameters | Open |
-| TP5 | Call-site type-argument consistency | Open |
+| TP3 | ADT-typed skolem args in `gadt_build_skolem_env` | Done |
+| TP4 | Kind inference for type parameters | Done (partial — `struct_type_param_kind` replacement deferred) |
+| TP5 | Call-site type-argument consistency | Done |
 | TP6 | Match-arm binding types reflect type params | Open |
