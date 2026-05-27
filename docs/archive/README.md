@@ -125,10 +125,30 @@ The following planning documents have guide counterparts in [../guides/](../guid
 ## Historical Documents
 
 Completed implementation plans and superseded design explorations are in
-[history/](history/). Recent additions:
+[history/](history/). Recent additions (post-v0.12.0 sweep):
+
+- **[notebook-spice-plan.md](history/notebook-spice-plan.md)** -- `tur-notebook` spice; NB0-NB12 complete; see [notebook-guide.md](../guides/notebook-guide.md)
+- **[stats-spice-plan.md](history/stats-spice-plan.md)** -- `tur-stats` spice shipped; see [stats-guide.md](../guides/stats-guide.md)
+- **[plot-spice-plan.md](history/plot-spice-plan.md)** -- `tur-plot` spice shipped; follow-ups in `docs/upcoming/plot-spice-followups-plan.md`
+- **[adt-type-params-plan.md](history/adt-type-params-plan.md)** -- Typed type parameters for `defdata` / `defgadt`; complete
+- **[csv-optional-delimiter-plan.md](history/csv-optional-delimiter-plan.md)** -- Optional delimiter in `stdlib/csv.tur`; complete
+- **[test-recovery-plan.md](history/test-recovery-plan.md)** -- `turi_fixture_tests` / `tur_spice_resolver_tests` fully green
+- **[tuple-type-plan.md](history/tuple-type-plan.md)** -- N-ary tuple types (`Tuple2`..`Tuple5`, TP1) shipped
+- **[direct-anonymous-lambda-application-plan.md](history/direct-anonymous-lambda-application-plan.md)** -- `((fn [...] ...) args)` direct application; landed in `7660a5b8`
+- **[param-type-annotation-plan.md](history/param-type-annotation-plan.md)** -- Spaced `: T` parameter type annotations; landed in `fccb1621`
+- **[typed-slots-generic-substrate-plan.md](history/typed-slots-generic-substrate-plan.md)** -- GS1-GS5 substrate; subsumed by completed TS1-TS6
+- **[typed-slots-gs5-compiler-support-plan.md](history/typed-slots-gs5-compiler-support-plan.md)** -- GS5 compiler support; subsumed by completed TS1-TS6
+
+Earlier additions:
 
 - **[frame-spice-plan.md](history/frame-spice-plan.md)** -- `tur-frame` dataframe spice; FR0-FR10 complete; see [frame-guide.md](../guides/frame-guide.md)
 - **[module-docstrings-plan.md](history/module-docstrings-plan.md)** -- Module-level `;;;` docstring rendering; implemented and documented in CLAUDE.md
 - **[signal-processing-arrows-plan.md](history/signal-processing-arrows-plan.md)** -- Arrow-based DSP tutorial; extracted to `tur-signal` v0.1.0; see [arrows-guide.md](../guides/arrows-guide.md)
 - **[spice-aware-check-plan.md](history/spice-aware-check-plan.md)** -- Per-file `tur check` auto-discovers `build.tur`; implemented and documented in CLAUDE.md
 - **[test-perf-plan.md](history/test-perf-plan.md)** -- Stamp caching + ccache; T1-A/B/C/D and T2-A/C complete
+
+## Design rationale docs
+
+Design-decision rationale and FAQs live in [../design/](../design/):
+
+- **[typed-slots-gs5-representation-rationale.md](../design/typed-slots-gs5-representation-rationale.md)** -- Why GS5 does not require tagged unions

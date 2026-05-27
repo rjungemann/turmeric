@@ -607,7 +607,7 @@ fully-instantiated `Expr->type`.
 
 This is the same family of bug as the CS1 "finish aggregate return
 instantiation" item in
-[archive/typed-slots-gs5-compiler-support-plan.md](archive/typed-slots-gs5-compiler-support-plan.md):
+[archive/history/typed-slots-gs5-compiler-support-plan.md](archive/history/typed-slots-gs5-compiler-support-plan.md):
 the type system already knows the concrete instantiation, but the carrier
 ABI is still picked at the emit boundary.
 
