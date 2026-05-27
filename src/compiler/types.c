@@ -204,6 +204,19 @@ static RegisteredStructApp *g_struct_apps = NULL;
 static uint32_t g_n_struct_apps = 0;
 static uint32_t g_cap_struct_apps = 0;
 
+/* TS4P1: Registered polymorphic ADT application (monomorphised instance).
+ * Mirrors RegisteredStructApp for ADT-headed TY_APP types. */
+typedef struct RegisteredAdtApp {
+    Type         type;     /* the TY_APP type (cloned via clone_struct_app_type) */
+    char        *name;     /* mangled C typedef name, e.g. "tur_adt_Maybe__float" */
+    bool         emitted;
+    bool         emitting;
+} RegisteredAdtApp;
+
+static RegisteredAdtApp *g_adt_apps = NULL;
+static uint32_t g_n_adt_apps = 0;
+static uint32_t g_cap_adt_apps = 0;
+
 static bool type_extract_struct_app(const Type *t, StructDef **out_def,
                                     Type *out_args, uint8_t *out_n) {
     if (!t) return false;
@@ -220,6 +233,30 @@ static bool type_extract_struct_app(const Type *t, StructDef **out_def,
     if (def->n_type_params == 0 || n_raw != def->n_type_params) return false;
     if (out_def) *out_def = def;
     if (out_n) *out_n = n_raw;
+    if (out_args) {
+        for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
+    }
+    return true;
+}
+
+/* TS4P1: Extract an ADT-headed TY_APP chain into (AdtDef*, args[], n_args).
+ * Mirrors type_extract_struct_app but requires the head to be TY_ADT (not TY_STRUCT). */
+static bool type_extract_adt_app(const Type *t, AdtDef **out_def,
+                                  Type *out_args, uint8_t *out_n) {
+    if (!t) return false;
+    Type raw[16];
+    uint8_t n_raw = 0;
+    const Type *cur = t;
+    while (cur && cur->kind == TY_APP && n_raw < 16) {
+        if (!cur->as.app.arg) return false;
+        raw[n_raw++] = *cur->as.app.arg;
+        cur = cur->as.app.fn;
+    }
+    if (!cur || cur->kind != TY_ADT || !cur->as.adt_.def) return false;
+    AdtDef *def = cur->as.adt_.def;
+    if (def->n_type_params == 0 || n_raw != def->n_type_params) return false;
+    if (out_def) *out_def = def;
+    if (out_n)   *out_n = n_raw;
     if (out_args) {
         for (uint8_t i = 0; i < n_raw; i++) out_args[i] = raw[n_raw - 1 - i];
     }
@@ -323,7 +360,18 @@ static void append_type_mangle(Buf *b, Type t) {
                     append_type_mangle(b, args[i]);
                 }
             } else {
-                buf_puts(b, "app");
+                /* TS4P1: Also handle ADT-headed applications (e.g. (Maybe float)). */
+                AdtDef *adef = NULL;
+                uint8_t an_args = 0;
+                if (type_extract_adt_app(&t, &adef, args, &an_args) && adef) {
+                    buf_puts(b, adef->name);
+                    for (uint8_t i = 0; i < an_args; i++) {
+                        buf_puts(b, "__");
+                        append_type_mangle(b, args[i]);
+                    }
+                } else {
+                    buf_puts(b, "app");
+                }
             }
             break;
         }
@@ -451,6 +499,150 @@ static const char *struct_field_c_type(const StructDef *owner, const StructField
     }
 }
 
+/* TS4P1: Helpers for ADT-app monomorphisation. */
+
+static bool adt_type_param_index(const AdtDef *def, const char *name, uint8_t *out_idx) {
+    if (!def || !name) return false;
+    for (uint8_t i = 0; i < def->n_type_params; i++) {
+        if (def->type_params[i] && strcmp(def->type_params[i], name) == 0) {
+            if (out_idx) *out_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static Type substitute_adt_app_type(const Type *t, const AdtDef *def, const Type *args) {
+    if (!t) return type_from_kind(TY_UNKNOWN);
+    switch (t->kind) {
+        case TY_TYVAR: {
+            uint8_t idx = 0;
+            if (t->as.tyvar_.name &&
+                adt_type_param_index(def, t->as.tyvar_.name, &idx)) {
+                return args[idx];
+            }
+            return *t;
+        }
+        case TY_APP: {
+            Type fn  = substitute_adt_app_type(t->as.app.fn,  def, args);
+            Type arg = substitute_adt_app_type(t->as.app.arg, def, args);
+            Type out = {0};
+            out.kind = TY_APP;
+            out.copy_kind = CK_COPY;
+            out.hkt_kind = KIND_STAR;
+            out.as.app.fn  = (Type *)malloc(sizeof(Type));
+            out.as.app.arg = (Type *)malloc(sizeof(Type));
+            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            *out.as.app.fn  = fn;
+            *out.as.app.arg = arg;
+            return out;
+        }
+        default:
+            return *t;
+    }
+}
+
+/* Return the C type string for a CtorField with concrete type args substituted. */
+static const char *adt_field_c_type(const AdtDef *owner, const CtorField *field,
+                                     const Type *args) {
+    if (field->full_type && owner && args) {
+        Type resolved = substitute_adt_app_type(field->full_type, owner, args);
+        return type_c_name(resolved);
+    }
+    switch (field->kind) {
+        case TY_INT:      return "int64_t";
+        case TY_BOOL:     return "bool";
+        case TY_FLOAT:    return "double";
+        case TY_CSTR:     return "const char *";
+        case TY_PTR_VOID: return "void *";
+        case TY_RC:
+        case TY_WEAK:     return "RcControlBlock *";
+        case TY_REF:
+        case TY_LREF:     return "void *";
+        case TY_INT8:     return "int8_t";
+        case TY_INT16:    return "int16_t";
+        case TY_INT32:    return "int32_t";
+        case TY_INT64:    return "int64_t";
+        case TY_UINT8:    return "uint8_t";
+        case TY_UINT16:   return "uint16_t";
+        case TY_UINT32:   return "uint32_t";
+        case TY_UINT64:   return "uint64_t";
+        case TY_FLOAT32:  return "float";
+        case TY_FLOAT64:  return "double";
+        default:          return "int64_t";
+    }
+}
+
+/* Append the mangled type-arg suffix for an ADT app (e.g. "__float" for (Maybe float)). */
+static void append_adt_app_type_suffix(Buf *b, const AdtDef *def,
+                                        const Type *args, uint8_t n_args) {
+    (void)def;
+    for (uint8_t i = 0; i < n_args; i++) {
+        buf_puts(b, "__");
+        append_type_mangle(b, args[i]);
+    }
+}
+
+/* TS4P1: Register a concrete ADT-app type and return its C typedef name
+ * (e.g. "tur_adt_Maybe__float"), or NULL if the type is not a concrete ADT app. */
+const char *type_register_adt_app(Type t) {
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return NULL;
+    if (def->is_gadt) return NULL;
+    /* Require all type args to have concrete codegen layout. */
+    for (uint8_t i = 0; i < n_args; i++) {
+        if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
+    }
+    /* Look for an existing registration. */
+    for (uint32_t i = 0; i < g_n_adt_apps; i++) {
+        if (type_eq(g_adt_apps[i].type, t)) return g_adt_apps[i].name;
+    }
+    /* Grow the registry if needed. */
+    if (g_n_adt_apps >= g_cap_adt_apps) {
+        uint32_t new_cap = g_cap_adt_apps ? g_cap_adt_apps * 2 : 8;
+        RegisteredAdtApp *new_items = (RegisteredAdtApp *)realloc(
+            g_adt_apps, new_cap * sizeof(RegisteredAdtApp));
+        if (!new_items) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_adt_apps = new_items;
+        g_cap_adt_apps = new_cap;
+    }
+    /* Build the C typedef name: tur_adt_<Name>__<arg1>__... */
+    Buf name; buf_init(&name);
+    buf_puts(&name, "tur_adt_");
+    buf_puts(&name, def->name);
+    append_adt_app_type_suffix(&name, def, args, n_args);
+    buf_putc(&name, '\0');
+    g_adt_apps[g_n_adt_apps].type     = clone_struct_app_type(t);
+    g_adt_apps[g_n_adt_apps].name     = tur_strdup(name.data);
+    g_adt_apps[g_n_adt_apps].emitted  = false;
+    g_adt_apps[g_n_adt_apps].emitting = false;
+    buf_free(&name);
+    if (!g_adt_apps[g_n_adt_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return g_adt_apps[g_n_adt_apps++].name;
+}
+
+/* TS4P2: Return a heap-allocated string with the C-name suffix for a concrete
+ * ADT-app type (e.g. "__float" for (Maybe float)), or NULL if not applicable.
+ * Caller must free() the returned string. */
+char *type_adt_app_ctor_suffix(Type t) {
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return NULL;
+    if (def->is_gadt) return NULL;
+    for (uint8_t i = 0; i < n_args; i++) {
+        if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
+    }
+    Buf b; buf_init(&b);
+    append_adt_app_type_suffix(&b, def, args, n_args);
+    buf_putc(&b, '\0');
+    char *result = tur_strdup(b.data);
+    buf_free(&b);
+    return result;
+}
+
 static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
     if (idx >= g_n_struct_apps) return;
     if (g_struct_apps[idx].emitted || g_struct_apps[idx].emitting) return;
@@ -497,6 +689,90 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
     buf_printf(out, "} %s;\n\n", g_struct_apps[idx].name);
     g_struct_apps[idx].emitted = true;
     g_struct_apps[idx].emitting = false;
+}
+
+/* TS4P1: Emit the typedef and per-constructor functions for one registered ADT app. */
+static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
+    if (idx >= g_n_adt_apps) return;
+    if (g_adt_apps[idx].emitted || g_adt_apps[idx].emitting) return;
+    g_adt_apps[idx].emitting = true;
+
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&g_adt_apps[idx].type, &def, args, &n_args) || !def) {
+        g_adt_apps[idx].emitting = false;
+        return;
+    }
+
+    const char *adt_inst_name = g_adt_apps[idx].name;
+
+    /* Emit the typedef for this monomorphised ADT instance. */
+    buf_printf(out, "typedef struct %s {\n", adt_inst_name);
+    buf_printf(out, "    int tag;\n");
+    buf_printf(out, "    union {\n");
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        /* Mangle ctor name: replace non-alnum chars with '_'. */
+        size_t mlen = strlen(ctor->name);
+        char *mctor = (char *)malloc(mlen + 1);
+        if (!mctor) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (size_t mi = 0; mi < mlen; mi++) {
+            char c = ctor->name[mi];
+            mctor[mi] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9') || c == '_') ? c : '_';
+        }
+        mctor[mlen] = '\0';
+        buf_printf(out, "        struct {");
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const char *ctype = adt_field_c_type(def, &ctor->fields[fi], args);
+            buf_printf(out, " %s _%u;", ctype, fi);
+        }
+        buf_printf(out, " } %s;\n", mctor);
+        free(mctor);
+    }
+    buf_printf(out, "    } as;\n");
+    buf_printf(out, "} %s;\n\n", adt_inst_name);
+
+    /* Build the type-arg suffix (e.g. "__float"). */
+    Buf suffix; buf_init(&suffix);
+    append_adt_app_type_suffix(&suffix, def, args, n_args);
+    buf_putc(&suffix, '\0');
+
+    /* Emit per-constructor functions for this monomorphised ADT instance. */
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        size_t mlen = strlen(ctor->name);
+        char *mctor = (char *)malloc(mlen + 1);
+        if (!mctor) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (size_t mi = 0; mi < mlen; mi++) {
+            char c = ctor->name[mi];
+            mctor[mi] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9') || c == '_') ? c : '_';
+        }
+        mctor[mlen] = '\0';
+
+        buf_printf(out, "static int64_t ctor_%s%s(", mctor, suffix.data);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            if (fi > 0) buf_puts(out, ", ");
+            const char *ctype = adt_field_c_type(def, &ctor->fields[fi], args);
+            buf_printf(out, "%s _%u", ctype, fi);
+        }
+        buf_printf(out, ") {\n");
+        buf_printf(out, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                   adt_inst_name, adt_inst_name, adt_inst_name);
+        buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            buf_printf(out, "    __r->as.%s._%u = _%u;\n", mctor, fi, fi);
+        }
+        buf_printf(out, "    return (int64_t)(intptr_t)__r;\n");
+        buf_printf(out, "}\n\n");
+        free(mctor);
+    }
+
+    buf_free(&suffix);
+    g_adt_apps[idx].emitted  = true;
+    g_adt_apps[idx].emitting = false;
 }
 
 const char *type_name(Type t) {
@@ -1801,6 +2077,25 @@ void type_codegen_reset_struct_apps(void) {
 void type_codegen_emit_struct_apps(Buf *out) {
     for (uint32_t i = 0; i < g_n_struct_apps; i++) {
         emit_registered_struct_app_rec(out, i);
+    }
+}
+
+/* TS4P1: Reset the ADT-app registry (called before each compilation unit). */
+void type_codegen_reset_adt_apps(void) {
+    for (uint32_t i = 0; i < g_n_adt_apps; i++) {
+        free_struct_app_type(g_adt_apps[i].type);
+        free(g_adt_apps[i].name);
+    }
+    free(g_adt_apps);
+    g_adt_apps     = NULL;
+    g_n_adt_apps   = 0;
+    g_cap_adt_apps = 0;
+}
+
+/* TS4P1: Emit all registered ADT-app typedefs and constructor functions. */
+void type_codegen_emit_adt_apps(Buf *out) {
+    for (uint32_t i = 0; i < g_n_adt_apps; i++) {
+        emit_registered_adt_app_rec(out, i);
     }
 }
 

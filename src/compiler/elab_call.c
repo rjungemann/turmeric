@@ -786,7 +786,17 @@ Expr *elab_call(Elab *e, Form *call) {
                     const Type *ft = ctor->fields[fi].full_type;
                     if (!ft || ft->kind != TY_TYVAR || !ft->as.tyvar_.name) continue;
                     const char *pname = ft->as.tyvar_.name;
-                    Type concrete = call_expr->as.call_.args[fi]->type;
+                    /* TS4P1: If the argument was wrapped in EX_REINTERPRET (boxing a
+                     * concrete type like float into int64_t for the TY_INT carrier),
+                     * use the source type (before the reinterpret) as the concrete type.
+                     * This ensures we bind e.g. `a -> float` instead of `a -> int`. */
+                    const Expr *arg_expr = call_expr->as.call_.args[fi];
+                    while (arg_expr && arg_expr->kind == EX_REINTERPRET &&
+                           arg_expr->as.reinterpret_.target_kind == TY_INT &&
+                           arg_expr->as.reinterpret_.expr) {
+                        arg_expr = arg_expr->as.reinterpret_.expr;
+                    }
+                    Type concrete = arg_expr ? arg_expr->type : call_expr->as.call_.args[fi]->type;
                     bool found = false;
                     for (uint8_t bi = 0; bi < n_bound; bi++) {
                         if (strcmp(param_bindings[bi].name, pname) == 0) {
@@ -811,6 +821,43 @@ Expr *elab_call(Elab *e, Form *call) {
                         param_bindings[n_bound].name = pname;
                         param_bindings[n_bound].type = concrete;
                         n_bound++;
+                    }
+                }
+
+                /* TS4P1: Build TY_APP result type for per-use-site ADT monomorphisation.
+                 * If all of the ADT's type parameters were bound to concrete types
+                 * by the argument list (TP5 above), upgrade the result type from
+                 * a plain TY_ADT to a TY_APP chain so the codegen can emit the
+                 * correctly-typed monomorphised struct and constructor. */
+                if (n_bound > 0 && ctor->adt->n_type_params > 0 &&
+                    !ctor->adt->is_gadt &&
+                    ctor->adt->n_type_params <= 8) {
+                    bool all_bound = true;
+                    Type adt_base = type_adt(ctor->adt);
+                    adt_base.hkt_kind = kind_for_arity(ctor->adt->n_type_params);
+                    Type app_type = adt_base;
+                    for (uint8_t pi = 0;
+                         pi < ctor->adt->n_type_params && all_bound; pi++) {
+                        const char *pname = ctor->adt->type_params[pi];
+                        bool found = false;
+                        for (uint8_t bi = 0; bi < n_bound; bi++) {
+                            if (param_bindings[bi].name &&
+                                strcmp(param_bindings[bi].name, pname) == 0) {
+                                if (param_bindings[bi].type.kind == TY_TYVAR) {
+                                    all_bound = false;
+                                } else {
+                                    app_type = type_app(e->arena, app_type,
+                                                        param_bindings[bi].type,
+                                                        call->span);
+                                }
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) all_bound = false;
+                    }
+                    if (all_bound) {
+                        call_expr->type = app_type;
                     }
                 }
             }
@@ -1329,6 +1376,20 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_NIL) {
             /* Allow nil as a null pointer for ptr<void> parameters. */
             arg_ok = true;
+        }
+        /* TS4P1: For a polymorphic ADT constructor, the field is stored as TY_INT
+         * but its full_type is TY_TYVAR.  Accept any concrete type for such a field
+         * so that e.g. (Just 1.5) at :float does not produce a type error.
+         * The value will be reinterpret-cast to the concrete field type at codegen. */
+        if (!arg_ok && expected_arg_kind == TY_INT) {
+            uint32_t fn_arg_idx_tv = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx_tv < fn_type.as.fn.arity) {
+                Type *aft2 = fn_type.as.fn.arg_full_types[fn_arg_idx_tv];
+                if (aft2 && aft2->kind == TY_TYVAR) {
+                    arg_ok = true;
+                }
+            }
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_STRUCT) {
             /* Phase HKT H3: Allow passing an HKT container (TY_STRUCT) where int64_t

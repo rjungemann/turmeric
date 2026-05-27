@@ -1403,8 +1403,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */
             if (fn_binding->type.kind == TY_ADT) {
                 char *_mc = mangle_field_name(fn_binding->name->name);
+                /* TS4P2: use per-instance ctor if the call result is a concrete ADT app */
+                char *suffix = (e->type.kind == TY_APP)
+                    ? type_adt_app_ctor_suffix(e->type) : NULL;
                 Buf out; buf_init(&out);
-                buf_printf(&out, "ctor_%s()", _mc);
+                if (suffix) {
+                    buf_printf(&out, "ctor_%s%s()", _mc, suffix);
+                    free(suffix);
+                } else {
+                    buf_printf(&out, "ctor_%s()", _mc);
+                }
                 free(_mc);
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
@@ -1415,18 +1423,36 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase G0: N-arg constructor call — fn has TY_FN w/ result TY_ADT,
              * but the fn name is the constructor name so we emit ctor_Name(args).
              * Phase G3: result_full_type is set for non-constructor ADT-returning
-             * functions (e.g. equal-sym) — those must fall through to regular calls. */
+             * functions (e.g. equal-sym) — those must fall through to regular calls.
+             * TS4P2: use per-instance ctor when the call result is a concrete ADT app. */
             if (fn_binding->type.kind == TY_FN &&
                 fn_binding->type.as.fn.result_kind == TY_ADT &&
                 !fn_binding->type.as.fn.result_full_type) {
+                /* TS4P2: choose per-instance ctor name if the result is a concrete ADT app */
+                char *suffix = (e->type.kind == TY_APP)
+                    ? type_adt_app_ctor_suffix(e->type) : NULL;
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                    const Expr *arg = e->as.call_.args[i];
+                    /* TS4P2: For a monomorphised constructor, unwrap any EX_REINTERPRET
+                     * that was added to box a concrete type (e.g. float) into int64_t.
+                     * The monomorphised ctor accepts the concrete type directly. */
+                    if (suffix && arg && arg->kind == EX_REINTERPRET &&
+                        arg->as.reinterpret_.target_kind == TY_INT &&
+                        arg->as.reinterpret_.expr) {
+                        arg = arg->as.reinterpret_.expr;
+                    }
+                    arg_strs[i] = emit_value(ctx, body, arg);
                 }
                 char *_mc = mangle_field_name(fn_binding->name->name);
                 Buf out; buf_init(&out);
-                buf_printf(&out, "ctor_%s(", _mc);
+                if (suffix) {
+                    buf_printf(&out, "ctor_%s%s(", _mc, suffix);
+                    free(suffix);
+                } else {
+                    buf_printf(&out, "ctor_%s(", _mc);
+                }
                 free(_mc);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     if (i > 0) buf_puts(&out, ", ");
@@ -3183,9 +3209,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             char adt_c_name[256];
             {
-                char *_mn = mangle_field_name(adt->name);
-                snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
-                free(_mn);
+                /* TS4P3: Use the monomorphised struct name when the scrutinee is
+                 * a concrete ADT app (e.g. tur_adt_Maybe__float instead of tur_adt_Maybe). */
+                const char *inst_name = (e->as.match_.scrutinee->type.kind == TY_APP)
+                    ? type_register_adt_app(e->as.match_.scrutinee->type) : NULL;
+                if (inst_name) {
+                    snprintf(adt_c_name, sizeof(adt_c_name), "%s", inst_name);
+                } else {
+                    char *_mn = mangle_field_name(adt->name);
+                    snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
+                    free(_mn);
+                }
             }
 
             bool nil_result = (e->type.kind == TY_NIL);
