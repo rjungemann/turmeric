@@ -201,6 +201,20 @@
       return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
   ```)
 
+;;; __tur-q-is-err? -- ? operator helper; checks if a Result value is an error.
+(defn __tur-q-is-err? [r :ptr<void>] #{} :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
+  return !res || !res->is_ok;
+  ```)
+
+;;; __tur-q-ok-val -- ? operator helper; extracts the ok payload from a Result value.
+(defn __tur-q-ok-val [r :ptr<void>] #{} :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
+  return res ? res->ok_val : 0;
+  ```)
+
 ;;; Eq [Result] -- equality using the ok and err types' Eq instances.
 ;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.

@@ -1,6 +1,6 @@
 # Plan: `?` Operator Return Type Alignment
 
-> **Status:** Draft Plan
+> **Status:** Done
 > **Last Updated:** 2026-05-27
 > **Type:** Compiler / Stdlib
 > **Tracks:** KB-009 (see `docs/known-bugs.md`)

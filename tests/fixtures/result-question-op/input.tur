@@ -45,9 +45,9 @@
   (if b (u-ok 42) (u-err 1)))
 
 (defn use-question [b :bool] :ptr<void>
-  ;; The ? operator lowers to stdlib err?/err/err-val/ok-val, all of which
-  ;; are #{Unsafe} -- so wrap the expression in (unsafe ...).
-  (let [x (unsafe (? (get-value b)))]
+  ;; The ? operator lowers through __tur-q-is-err? / __tur-q-ok-val in
+  ;; stdlib/result.tur, which are #{} safe.  No (unsafe ...) wrapper needed.
+  (let [x (? (get-value b))]
     (u-ok (* x 2))))
 
 (defn main [] :int

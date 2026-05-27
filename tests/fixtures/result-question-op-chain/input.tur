@@ -1,0 +1,44 @@
+;;
+;; Phase R1: Test two ? operators in sequence inside the same function.
+;;
+
+(defn u-ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
+  ```)
+
+(defn u-err [e :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = false; result->ok_val = 0; result->err_val = e; return result;
+  ```)
+
+(defn u-err? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  ```)
+
+(defn u-ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+  ```)
+
+(defn step-a [x :int] :ptr<void>
+  (if (> x 0) (u-ok (* x 10)) (u-err 1)))
+
+(defn step-b [x :int] :ptr<void>
+  (if (< x 1000) (u-ok (+ x 1)) (u-err 2)))
+
+(defn chain [x :int] :ptr<void>
+  (let [a (? (step-a x))]
+    (let [b (? (step-b a))]
+      (u-ok b))))
+
+(defn main [] :int
+  (let [r (chain 5)]
+    (let [v (u-ok-val r)]
+      (println v)
+      0)))
