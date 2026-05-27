@@ -49,6 +49,7 @@ build_stderr.txt
 
 # Generated docs HTML (source markdown stays in docs/guides/ and stdlib/)
 docs/html/
+docs/api/
 
 # Web
 web/node_modules/
