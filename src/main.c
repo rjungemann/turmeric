@@ -446,6 +446,10 @@ static int  usage_run(void);
  * (defined below find_spice_root) but set by parse_no_auto_spice in main(). */
 static bool g_no_auto_spice;
 
+/* Forward decl: set by the tur check handler when --no-auto-stdlib is passed.
+ * Used inside compile_to_c's stdlib auto-load loop (suffix-skip). */
+static bool g_no_auto_stdlib;
+
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
  * (called by the LSP server) and the per-file dispatchers. */
 static int auto_append_spice_includes(const char *input,
@@ -649,7 +653,27 @@ static int compile_to_c(const char *path, Buf *out_c,
     Form **all_stdlib_forms = NULL;
     uint8_t file_id = 1;
 
+    /* Suffix-skip: when --no-auto-stdlib is set, pre-compute the index of the
+     * input file in stdlib_files[].  The auto-load loop then skips that entry
+     * and all subsequent entries.  Files before it still load so the input
+     * file's transitive dependencies are available.  -1 means no skip. */
+    int no_stdlib_skip_from = -1;
+    if (g_no_auto_stdlib) {
+        const char *input_base = basename_of(path);
+        for (int j = 0; stdlib_files[j] != NULL; j++) {
+            if (strcmp(input_base, stdlib_files[j]) == 0) {
+                no_stdlib_skip_from = j;
+                break;
+            }
+        }
+    }
+
     for (int i = 0; stdlib_files[i] != NULL; i++) {
+        /* Suffix-skip: skip this file and all subsequent auto-loads when the
+         * input file IS one of the auto-loaded ones.  Earlier entries still
+         * load so the input's transitive dependencies resolve. */
+        if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from)
+            continue;
         char path_buf[4096];
         tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
         char *stdlib_src = NULL;
@@ -5028,15 +5052,21 @@ static int usage_run(void) {
 static int usage_check(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur check [-I <dir>...] [--no-auto-spice] <file.tur>\n"
+        "  tur check [-I <dir>...] [--no-auto-spice] [--no-auto-stdlib] <file.tur>\n"
         "                                       type-check only, no codegen\n"
         "\n"
         "flags:\n"
-        "  -I <dir>           add an include directory for module resolution\n"
-        "                     (repeat to add multiple)\n"
-        "  --no-auto-spice    don't auto-discover the enclosing spice's src/\n"
-        "                     (default behavior walks up from the file looking\n"
-        "                     for build.tur and adds <spice>/src to the path)\n"
+        "  -I <dir>             add an include directory for module resolution\n"
+        "                       (repeat to add multiple)\n"
+        "  --no-auto-spice      don't auto-discover the enclosing spice's src/\n"
+        "                       (default behavior walks up from the file looking\n"
+        "                       for build.tur and adds <spice>/src to the path)\n"
+        "  --no-auto-stdlib     when the checked file is one of the auto-loaded\n"
+        "                       stdlib files, skip auto-loading it and all\n"
+        "                       subsequent stdlib files; earlier stdlib files\n"
+        "                       still load so the file's own deps resolve.\n"
+        "                       Use when type-checking auto-loaded stdlib files\n"
+        "                       in isolation to avoid duplicate-definition errors.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -5212,6 +5242,13 @@ static bool parse_no_color(int argc, char **argv) {
  * adds the enclosing spice's `src/` to the include path.  Inspected by
  * auto_append_spice_src(). */
 static bool g_no_auto_spice = false;
+
+/* --no-auto-stdlib (tur check only): suffix-skip -- when the file being
+ * checked IS one of the auto-loaded stdlib files, skip auto-loading it
+ * and all subsequent stdlib files.  Earlier entries still load so the
+ * file's transitive dependencies resolve.  This prevents duplicate-
+ * definition errors when type-checking auto-loaded stdlib files in isolation. */
+static bool g_no_auto_stdlib = false;
 
 static bool parse_no_auto_spice(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -5826,6 +5863,11 @@ int main(int argc, char **argv) {
             }
             int c;
             if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (strcmp(argv[i], "--no-auto-spice") == 0) continue;
+            if (strcmp(argv[i], "--no-auto-stdlib") == 0) {
+                g_no_auto_stdlib = true;
+                continue;
+            }
             if (argv[i][0] != '-') {
                 if (input) { free(check_inc); return usage_check(); }
                 input = argv[i];

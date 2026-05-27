@@ -162,6 +162,15 @@ elseif(APPLE OR FREEBSD OR OPENBSD OR NETBSD)
     list(APPEND TUR_CORE_SOURCES async/io_kqueue.c)
 endif()
 
+# ffi_dispatch.c and ffi_dispatch_thunk.c are generated files that cast
+# void* to function pointers -- forbidden by strict ISO C but intentional
+# and safe here.  Suppress -Wpedantic for these two files only.
+set_source_files_properties(
+    runtime/ffi_dispatch.c
+    runtime/ffi_dispatch_thunk.c
+    PROPERTIES COMPILE_OPTIONS "-Wno-pedantic"
+)
+
 # ---------------------------------------------------------------------------
 # tur_core: OBJECT library shared by tur executable and libturi
 # ---------------------------------------------------------------------------
