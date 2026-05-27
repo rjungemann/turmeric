@@ -1,0 +1,11 @@
+;; KB-008: multi-arg `f : (-> int int int)` in spaced annotation should curry correctly.
+
+(defn apply2 [f : (-> int int int) x : int y : int] :int
+  (f x y))
+
+(defn add [x :int y :int] :int
+  (+ x y))
+
+(defn main [] :int
+  (println (apply2 add 10 32))
+  0)

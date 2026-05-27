@@ -167,6 +167,11 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(tur_core OBJECT ${TUR_CORE_SOURCES})
 
+# ffi_dispatch.c is generated and uses void*->function-pointer casts that are
+# valid POSIX/extension but not strictly ISO C; suppress -Wpedantic for it only.
+set_source_files_properties(runtime/ffi_dispatch.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-pedantic")
+
 # Subsystem subdirectories on the include path so bare #include directives
 # (e.g. #include "arena.h") resolve regardless of which subdir the file lives in.
 target_include_directories(tur_core PUBLIC ${TUR_INCLUDE_DIRS})

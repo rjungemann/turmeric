@@ -1,0 +1,11 @@
+;; TA0: fused `f :(-> int int)` annotation should elaborate (lock-in regression test).
+
+(defn apply1 [f :(-> int int) x :int] :int
+  (f x))
+
+(defn inc [x :int] :int
+  (+ x 1))
+
+(defn main [] :int
+  (println (apply1 inc 41))
+  0)

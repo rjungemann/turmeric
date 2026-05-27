@@ -1,0 +1,11 @@
+;; KB-008 extension: spaced annotation with a forall-quantified (-> a a) type.
+;; Ensures the arrow fix handles type-variable arguments inside the annotation.
+
+(defn apply-poly [f : (forall [a] (-> a a)) x : int] :int
+  (f x))
+
+(defn id [x :int] :int x)
+
+(defn main [] :int
+  (println (apply-poly id 42))
+  0)
