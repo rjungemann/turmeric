@@ -1,0 +1,848 @@
+From 51c5650e5980fd04b5310402c726e59b9fec74d6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 27 May 2026 15:35:15 +0000
+Subject: [PATCH] TS6: migrate signal spice from union bit-casts to native
+ :float types
+
+Drop defalias Sample :int and replace all C union { int64_t i; double d; }
+bit-cast patterns with proper :float type annotations.
+
+dsp.tur:
+- __dsp_sin [x :float] :float -- return sin(x); no union
+- __dsp_fmod [x :float y :float] :float -- return fmod(x, y); no union
+- sine/square/sawtooth: outer params :float; inner closures use TS2 reinterpret
+- low-pass/high-pass/gain: outer params :float; memcpy replaces unions
+- mix/add: memcpy for Pair field extraction
+
+envelope.tur:
+- ADSRParams struct fields changed from :int to :float
+- __adsr_fixed_sample: all params/return :float; no union
+
+synth.tur:
+- Removed (defalias Sample :int)
+- __sample-add/mul now use native float arithmetic
+- Float literal params: 0.01/0.1/0.5 etc. directly
+
+arrow_tests.tur:
+- __f_* helpers kept as :int for __arrow_call1 ABI
+- DSP calls use (:: (__f_N) :float) casts
+- Fixed missing closing parens in run-tests
+
+https://claude.ai/code/session_01BQiikD4HDyvhVQ27m3D8kY
+---
+ spices/signal/src/signal/dsp.tur           | 123 +++++++----------
+ spices/signal/src/signal/envelope.tur      |  61 ++++-----
+ spices/signal/src/signal/synth.tur         | 145 +++++++++------------
+ spices/signal/tests/signal/arrow_tests.tur |  51 +++++---
+ 4 files changed, 160 insertions(+), 220 deletions(-)
+
+diff --git a/spices/signal/src/signal/dsp.tur b/spices/signal/src/signal/dsp.tur
+index 97b0016..d778792 100644
+--- a/spices/signal/src/signal/dsp.tur
++++ b/spices/signal/src/signal/dsp.tur
+@@ -10,21 +10,15 @@
+ ;; =============================================================================
+ 
+ ;;; __dsp_sin -- compute sine of angle in radians.
+-(defn __dsp_sin [x] :int
++(defn __dsp_sin [x :float] :float
+   ```c
+-  union { double d; int64_t i; } u;
+-  u.d = sin(((union { int64_t i; double d; }){.i = x}).d);
+-  return u.i;
++  return sin(x);
+   ```)
+ 
+ ;;; __dsp_fmod -- compute floating-point modulo.
+-(defn __dsp_fmod [x y] :int
++(defn __dsp_fmod [x :float y :float] :float
+   ```c
+-  union { double d; int64_t i; } u;
+-  double xd = ((union { int64_t i; double d; }){.i = x}).d;
+-  double yd = ((union { int64_t i; double d; }){.i = y}).d;
+-  u.d = fmod(xd, yd);
+-  return u.i;
++  return fmod(x, y);
+   ```)
+ 
+ ;; =============================================================================
+@@ -42,18 +36,11 @@
+ ;;;
+ ;;; Example:
+ ;;;   (sine 440.0 0.0)  ; => 440 Hz sine wave SF
+-(defn sine [freq phase]
++(defn sine [freq :float phase :float]
+   (let [fv freq pv phase]
+     (fn [sig]
+       (fn [t]
+-        ```c
+-        double f = ((union { int64_t i; double d; }){.i = fv}).d;
+-        double p = ((union { int64_t i; double d; }){.i = pv}).d;
+-        double tv = ((union { int64_t i; double d; }){.i = t}).d;
+-        union { double d; int64_t i; } u;
+-        u.d = sin(2.0 * 3.14159265358979323846 * f * tv + p);
+-        return u.i;
+-        ```))))
++        (:: (__dsp_sin (+ (* (* 2.0 3.14159265358979323846) fv (:: t :float)) pv)) :int)))))
+ 
+ ;;; square -- square-wave oscillator Signal Function.
+ ;;;
+@@ -66,19 +53,12 @@
+ ;;;
+ ;;; Example:
+ ;;;   (square 440.0 0.5)  ; => 440 Hz square wave SF
+-(defn square [freq dutycycle]
++(defn square [freq :float dutycycle :float]
+   (let [fv freq dv dutycycle]
+     (fn [sig]
+       (fn [t]
+-        ```c
+-        double f = ((union { int64_t i; double d; }){.i = fv}).d;
+-        double d = ((union { int64_t i; double d; }){.i = dv}).d;
+-        double tv = ((union { int64_t i; double d; }){.i = t}).d;
+-        double phase = fmod(f * tv, 1.0);
+-        union { double d; int64_t i; } u;
+-        u.d = (phase < d) ? 1.0 : -1.0;
+-        return u.i;
+-        ```))))
++        (let [phase (__dsp_fmod (* fv (:: t :float)) 1.0)]
++          (:: (if (< phase dv) 1.0 -1.0) :int))))))
+ 
+ ;;; sawtooth -- sawtooth-wave oscillator Signal Function.
+ ;;;
+@@ -90,18 +70,12 @@
+ ;;;
+ ;;; Example:
+ ;;;   (sawtooth 440.0)  ; => 440 Hz sawtooth wave SF
+-(defn sawtooth [freq]
++(defn sawtooth [freq :float]
+   (let [fv freq]
+     (fn [sig]
+       (fn [t]
+-        ```c
+-        double f = ((union { int64_t i; double d; }){.i = fv}).d;
+-        double tv = ((union { int64_t i; double d; }){.i = t}).d;
+-        union { double d; int64_t i; } u;
+-        u.d = fmod(f * tv, 1.0);
+-        if (u.d < 0.0) u.d += 1.0;
+-        return u.i;
+-        ```))))
++        (let [phase (__dsp_fmod (* fv (:: t :float)) 1.0)]
++          (:: (if (< phase 0.0) (+ phase 1.0) phase) :int))))))
+ 
+ ;; =============================================================================
+ ;; Filters
+@@ -127,22 +101,20 @@
+ ;;;   (low-pass 0.5)  ; => SF applying EMA with alpha=0.5
+ ;;;
+ ;;; Since: Phase B1
+-(defn low-pass [alpha]
++(defn low-pass [alpha :float]
+   (let [av alpha]
+     (fn [sig]
+       (let [sv sig
+             state (__dsp_alloc_state)]
+         (fn [t]
+           ```c
+-          double a = ((union { int64_t i; double d; }){.i = av}).d;
+           double *prev = (double *)(intptr_t)state;
+-          double x = ((union { int64_t i; double d; }){
+-            .i = ((int64_t(*)(int64_t))(intptr_t)sv)(t)
+-          }).d;
+-          double y = a * x + (1.0 - a) * (*prev);
++          int64_t sig_val = ((int64_t(*)(int64_t))(intptr_t)sv)(t);
++          double x; memcpy(&x, &sig_val, 8);
++          double y = av * x + (1.0 - av) * (*prev);
+           *prev = y;
+-          union { double d; int64_t i; } u; u.d = y;
+-          return u.i;
++          int64_t ret; memcpy(&ret, &y, 8);
++          return ret;
+           ```)))))
+ 
+ ;;; high-pass -- first-order IIR high-pass filter Signal Function.
+@@ -157,22 +129,21 @@
+ ;;;   (high-pass 0.5)  ; => high-pass SF with alpha=0.5
+ ;;;
+ ;;; Since: Phase B1
+-(defn high-pass [alpha]
++(defn high-pass [alpha :float]
+   (let [av alpha]
+     (fn [sig]
+       (let [sv sig
+             state (__dsp_alloc_state)]
+         (fn [t]
+           ```c
+-          double a = ((union { int64_t i; double d; }){.i = av}).d;
+           double *prev_lp = (double *)(intptr_t)state;
+-          double x = ((union { int64_t i; double d; }){
+-            .i = ((int64_t(*)(int64_t))(intptr_t)sv)(t)
+-          }).d;
+-          double lp = a * x + (1.0 - a) * (*prev_lp);
++          int64_t sig_val = ((int64_t(*)(int64_t))(intptr_t)sv)(t);
++          double x; memcpy(&x, &sig_val, 8);
++          double lp = av * x + (1.0 - av) * (*prev_lp);
+           *prev_lp = lp;
+-          union { double d; int64_t i; } u; u.d = x - lp;
+-          return u.i;
++          double result = x - lp;
++          int64_t ret; memcpy(&ret, &result, 8);
++          return ret;
+           ```)))))
+ 
+ ;; =============================================================================
+@@ -189,19 +160,17 @@
+ ;;;
+ ;;; Example:
+ ;;;   ((gain 2.0) my-sig)  ; => signal scaled by 2.0
+-(defn gain [g]
++(defn gain [g :float]
+   (let [gv g]
+     (fn [sig]
+       (let [sv sig]
+         (fn [t]
+           ```c
+-          double gain_val = ((union { int64_t i; double d; }){.i = gv}).d;
+-          double sample = ((union { int64_t i; double d; }){
+-            .i = ((int64_t(*)(int64_t))(intptr_t)sv)(t)
+-          }).d;
+-          union { double d; int64_t i; } u;
+-          u.d = gain_val * sample;
+-          return u.i;
++          int64_t sig_val = ((int64_t(*)(int64_t))(intptr_t)sv)(t);
++          double sample; memcpy(&sample, &sig_val, 8);
++          double result = gv * sample;
++          int64_t ret; memcpy(&ret, &result, 8);
++          return ret;
+           ```)))))
+ 
+ ;;; mix -- weighted mix of a pair signal.
+@@ -214,21 +183,20 @@
+ ;;;
+ ;;; Example:
+ ;;;   ((mix 0.5) (pair-signals sig-a sig-b))  ; => equal mix
+-(defn mix [alpha]
++(defn mix [alpha :float]
+   (let [av alpha]
+     (fn [prod-sig]
+       (let [psv prod-sig]
+         (fn [t]
+           ```c
+-          double a = ((union { int64_t i; double d; }){.i = av}).d;
+-          /* prod-sig at t gives a Pair; Pair layout: {int64_t first; int64_t second;} */
+           typedef struct { int64_t first; int64_t second; } Pair64;
+-          Pair64 *p = (Pair64 *)(intptr_t)((int64_t(*)(int64_t))(intptr_t)psv)(t);
+-          double x = ((union { int64_t i; double d; }){.i = p->first}).d;
+-          double y = ((union { int64_t i; double d; }){.i = p->second}).d;
+-          union { double d; int64_t i; } u;
+-          u.d = a * x + (1.0 - a) * y;
+-          return u.i;
++          int64_t prod_val = ((int64_t(*)(int64_t))(intptr_t)psv)(t);
++          Pair64 *p = (Pair64 *)(intptr_t)prod_val;
++          double x; memcpy(&x, &p->first, 8);
++          double y; memcpy(&y, &p->second, 8);
++          double result = av * x + (1.0 - av) * y;
++          int64_t ret; memcpy(&ret, &result, 8);
++          return ret;
+           ```)))))
+ 
+ ;;; add -- sum a pair signal sample-wise.
+@@ -244,10 +212,11 @@
+       (fn [t]
+         ```c
+         typedef struct { int64_t first; int64_t second; } Pair64;
+-        Pair64 *p = (Pair64 *)(intptr_t)((int64_t(*)(int64_t))(intptr_t)psv)(t);
+-        double x = ((union { int64_t i; double d; }){.i = p->first}).d;
+-        double y = ((union { int64_t i; double d; }){.i = p->second}).d;
+-        union { double d; int64_t i; } u;
+-        u.d = x + y;
+-        return u.i;
++        int64_t prod_val = ((int64_t(*)(int64_t))(intptr_t)psv)(t);
++        Pair64 *p = (Pair64 *)(intptr_t)prod_val;
++        double x; memcpy(&x, &p->first, 8);
++        double y; memcpy(&y, &p->second, 8);
++        double result = x + y;
++        int64_t ret; memcpy(&ret, &result, 8);
++        return ret;
+         ```))))
+diff --git a/spices/signal/src/signal/envelope.tur b/spices/signal/src/signal/envelope.tur
+index a08c8b5..96e434a 100644
+--- a/spices/signal/src/signal/envelope.tur
++++ b/spices/signal/src/signal/envelope.tur
+@@ -2,70 +2,59 @@
+ ;;
+ ;; This module provides envelope generators for signal processing.
+ ;; Envelopes control the amplitude or other parameters of a signal over time.
+-;;
+-;; Note: Full implementations require multi-param defn syntax, Sum types, and
+-;; math functions currently in development. Stubs are provided for compatibility.
+ 
+ ;; =============================================================================
+ ;; ADSR Envelope
+ ;; =============================================================================
+ 
+ ;;; ADSRParams -- parameters for an ADSR envelope.
+-(defstruct ADSRParams [attack :int decay :int sustain :int release :int])
++(defstruct ADSRParams [attack :float decay :float sustain :float release :float])
+ 
+ ;;; __adsr_attack -- extract attack field from ADSRParams struct pointer.
+-(defn __adsr_attack [p] :int
++(defn __adsr_attack [p] :float
+   ```c
+-  typedef struct { int64_t attack; int64_t decay; int64_t sustain; int64_t release; } ADSRParams_;
++  typedef struct { double attack; double decay; double sustain; double release; } ADSRParams_;
+   return ((ADSRParams_ *)(intptr_t)p)->attack;
+   ```)
+ 
+ ;;; __adsr_decay -- extract decay field from ADSRParams struct pointer.
+-(defn __adsr_decay [p] :int
++(defn __adsr_decay [p] :float
+   ```c
+-  typedef struct { int64_t attack; int64_t decay; int64_t sustain; int64_t release; } ADSRParams_;
++  typedef struct { double attack; double decay; double sustain; double release; } ADSRParams_;
+   return ((ADSRParams_ *)(intptr_t)p)->decay;
+   ```)
+ 
+ ;;; __adsr_sustain -- extract sustain field from ADSRParams struct pointer.
+-(defn __adsr_sustain [p] :int
++(defn __adsr_sustain [p] :float
+   ```c
+-  typedef struct { int64_t attack; int64_t decay; int64_t sustain; int64_t release; } ADSRParams_;
++  typedef struct { double attack; double decay; double sustain; double release; } ADSRParams_;
+   return ((ADSRParams_ *)(intptr_t)p)->sustain;
+   ```)
+ 
+ ;;; __adsr_release -- extract release field from ADSRParams struct pointer.
+-(defn __adsr_release [p] :int
++(defn __adsr_release [p] :float
+   ```c
+-  typedef struct { int64_t attack; int64_t decay; int64_t sustain; int64_t release; } ADSRParams_;
++  typedef struct { double attack; double decay; double sustain; double release; } ADSRParams_;
+   return ((ADSRParams_ *)(intptr_t)p)->release;
+   ```)
+ 
+ ;;; __adsr_fixed_sample -- compute ADSR envelope value at time t.
+-(defn __adsr_fixed_sample [attack decay sustain release gate-dur t] :int
++(defn __adsr_fixed_sample [attack :float decay :float sustain :float release :float gate-dur :float t :float] :float
+   ```c
+-  double a  = ((union { int64_t i; double d; }){.i = attack}).d;
+-  double dc = ((union { int64_t i; double d; }){.i = decay}).d;
+-  double s  = ((union { int64_t i; double d; }){.i = sustain}).d;
+-  double r  = ((union { int64_t i; double d; }){.i = release}).d;
+-  double gd = ((union { int64_t i; double d; }){.i = gate_dur}).d;
+-  double tv = ((union { int64_t i; double d; }){.i = t}).d;
+-  union { double d; int64_t i; } u;
+-  if (tv <= a) {
+-    u.d = (a > 0.0) ? (tv / a) : 1.0;
+-  } else if (tv <= a + dc) {
++  double a = attack, dc = decay, s = sustain, r = release, gd = gate_dur, tv = t;
++  if (tv <= a)
++    return (a > 0.0) ? (tv / a) : 1.0;
++  if (tv <= a + dc) {
+     double decay_t = tv - a;
+-    u.d = 1.0 + (s - 1.0) * ((dc > 0.0) ? (decay_t / dc) : 1.0);
+-  } else if (tv <= gd) {
+-    u.d = s;
+-  } else if (tv <= gd + r) {
++    return 1.0 + (s - 1.0) * ((dc > 0.0) ? (decay_t / dc) : 1.0);
++  }
++  if (tv <= gd) return s;
++  if (tv <= gd + r) {
+     double rel_t = tv - gd;
+-    u.d = s * (1.0 - ((r > 0.0) ? (rel_t / r) : 1.0));
+-    if (u.d < 0.0) u.d = 0.0;
+-  } else {
+-    u.d = 0.0;
++    double v = s * (1.0 - ((r > 0.0) ? (rel_t / r) : 1.0));
++    return (v < 0.0) ? 0.0 : v;
+   }
+-  return u.i;
++  return 0.0;
+   ```)
+ 
+ ;;; adsr-fixed -- piecewise-linear ADSR computed analytically for a single note.
+@@ -79,10 +68,10 @@
+ ;;;
+ ;;; Example:
+ ;;;   ((adsr-fixed (ADSRParams 0.01 0.1 0.7 0.3) 0.5) (constant ()))
+-(defn adsr-fixed [params gate-duration]
++(defn adsr-fixed [params gate-duration :float]
+   (let [pv params gd gate-duration]
+     (fn [_sig]
+       (fn [t]
+-        (__adsr_fixed_sample
+-          (__adsr_attack pv) (__adsr_decay pv) (__adsr_sustain pv) (__adsr_release pv)
+-          gd t)))))
++        (:: (__adsr_fixed_sample
++              (__adsr_attack pv) (__adsr_decay pv) (__adsr_sustain pv) (__adsr_release pv)
++              gd (:: t :float)) :int)))))
+diff --git a/spices/signal/src/signal/synth.tur b/spices/signal/src/signal/synth.tur
+index 7bf042a..c07b4db 100644
+--- a/spices/signal/src/signal/synth.tur
++++ b/spices/signal/src/signal/synth.tur
+@@ -2,66 +2,36 @@
+ ;;
+ ;; This module provides synthesizer voice implementations using the
+ ;; Arrow-based signal processing framework.
++;;
++;; Note: formerly carried `(defalias Sample :int)` with union bit-cast
++;; encoding for float64 samples.  All sample values are now native :float.
+ 
+-;;; Sample -- bit-cast alias: float64 values stored as int64 bitfields.
+-(defalias Sample :int)
+-
+-(defn __f_0_005 [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.005; return u.i; ```)
+-(defn __f_0_01  [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.01;  return u.i; ```)
+-(defn __f_0_02  [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.02;  return u.i; ```)
+-(defn __f_0_1   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.1;   return u.i; ```)
+-(defn __f_0_2   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.2;   return u.i; ```)
+-(defn __f_0_3   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.3;   return u.i; ```)
+-(defn __f_0_4   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.4;   return u.i; ```)
+-(defn __f_0_5   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.5;   return u.i; ```)
+-(defn __f_0_6   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.6;   return u.i; ```)
+-(defn __f_0_7   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.7;   return u.i; ```)
+-(defn __f_0_8   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.8;   return u.i; ```)
+-(defn __f_0_9   [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.9;   return u.i; ```)
+-(defn __f_0_995 [] :Sample ```c union { double d; int64_t i; } u; u.d = 0.995; return u.i; ```)
+-(defn __f_1_0   [] :Sample ```c union { double d; int64_t i; } u; u.d = 1.0;   return u.i; ```)
+-(defn __f_neg_1_0 [] :Sample ```c union { double d; int64_t i; } u; u.d = -1.0; return u.i; ```)
+-
+-(defn __sample-add [a :Sample b :Sample] :Sample
+-  ```c
+-  union { int64_t i; double d; } va, vb, out;
+-  va.i = a; vb.i = b;
+-  out.d = va.d + vb.d;
+-  return out.i;
+-  ```)
++(defn __sample-add [a :float b :float] :float (+ a b))
+ 
+-(defn __sample-mul [a :Sample b :Sample] :Sample
+-  ```c
+-  union { int64_t i; double d; } va, vb, out;
+-  va.i = a; vb.i = b;
+-  out.d = va.d * vb.d;
+-  return out.i;
+-  ```)
++(defn __sample-mul [a :float b :float] :float (* a b))
+ 
+-(defn __sample-clip [x :Sample limit :Sample] :Sample
++(defn __sample-clip [x :float limit :float] :float
+   ```c
+-  union { int64_t i; double d; } vx, vl, out;
+-  vx.i = x; vl.i = limit;
+-  double v = vx.d;
+-  double l = vl.d;
++  double v = x;
++  double l = limit;
+   if (v > l) v = l;
+   if (v < -l) v = -l;
+-  out.d = v;
+-  return out.i;
++  return v;
+   ```)
+ 
+ (defn adsr-gen [params]
+-  (adsr-fixed params (__f_1_0)))
++  (adsr-fixed params 1.0))
+ 
+-(defn svf-low-pass [cutoff q]
++(defn svf-low-pass [cutoff :float q :float]
+   (low-pass cutoff))
+ 
+-(defn hard-clip [limit]
++(defn hard-clip [limit :float]
+   (fn [sig]
+     (let [lv limit
+           sv sig]
+       (fn [t]
+-        (__sample-clip (__arrow_call1 sv t) lv)))))
++        (let [sample (:: (__arrow_call1 sv t) :float)]
++          (:: (__sample-clip sample lv) :int))))))
+ 
+ 
+ ;; =============================================================================
+@@ -82,9 +52,9 @@
+ ;;;
+ ;;; Example:
+ ;;;   (voice 440.0 (ADSRParams 0.01 0.1 0.7 0.2) gate-sig 0.6 0.5)
+-(defn voice [freq params gate-sig filter-cutoff filter-q]
++(defn voice [freq :float params gate-sig filter-cutoff :float filter-q :float]
+   (let [;; Oscillator: sine wave
+-        osc (sine freq 0)
++        osc (sine freq 0.0)
+ 
+         ;; Apply filter
+         filtered (svf-low-pass filter-cutoff filter-q)
+@@ -102,8 +72,8 @@
+         ;; 3. Generate envelope
+         sig-env (__arrow_call1 env gate-sig)]
+     ;; 4. Multiply filtered signal by envelope
+-    (fn [t] (__sample-mul (__arrow_call1 sig-filtered t)
+-                          (__arrow_call1 sig-env t)))))
++    (fn [t] (:: (__sample-mul (:: (__arrow_call1 sig-filtered t) :float)
++                              (:: (__arrow_call1 sig-env t) :float)) :int))))
+ 
+ ;;; voice-sf -- SF wrapper around voice for arrow-based composition.
+ ;;;
+@@ -115,7 +85,7 @@
+ ;;;
+ ;;; Returns:
+ ;;;   SF<Tuple () bool, Sample> where the bool lane carries the gate.
+-(defn voice-sf [freq params filter-cutoff filter-q]
++(defn voice-sf [freq :float params filter-cutoff :float filter-q :float]
+   (fn [sig-input]
+     (let [;; Extract gate from input
+           gate-sig (fn [t] (second (__arrow_call1 sig-input t)))
+@@ -141,17 +111,18 @@
+ ;;;
+ ;;; Example:
+ ;;;   (poly-synth (vec-of (Tuple 261.0 gate1) (Tuple 329.0 gate2)) params 0.6 0.4)
+-(defn poly-synth [voices params filter-cutoff filter-q]
++(defn poly-synth [voices params filter-cutoff :float filter-q :float]
+   (fn [t]
+     (let [voice-count (vec-length voices)
+           ^mut result 0
+           ^mut i 0]
+       (while (< i voice-count)
+         (let [voice-pair (vec-get voices i)
+-              freq (first voice-pair)
++              freq (:: (first voice-pair) :float)
+               gate-sig (second voice-pair)
+               voice-out (voice freq params gate-sig filter-cutoff filter-q)]
+-          (set! result (__sample-add result (__arrow_call1 voice-out t))))
++          (set! result (:: (__sample-add (:: result :float)
++                                        (:: (__arrow_call1 voice-out t) :float)) :int)))
+         (set! i (+ i 1)))
+       result)))
+ 
+@@ -173,7 +144,7 @@
+ ;;;
+ ;;; Example:
+ ;;;   (fm-voice 440.0 880.0 2.0 (ADSRParams 0.01 0.1 0.7 0.3) gate-sig)
+-(defn fm-voice [carrier-freq modulator-freq mod-index params gate-sig]
++(defn fm-voice [carrier-freq :float modulator-freq :float mod-index :float params gate-sig]
+   (voice carrier-freq params gate-sig mod-index modulator-freq))
+ 
+ ;; =============================================================================
+@@ -191,8 +162,8 @@
+ ;;;
+ ;;; Example:
+ ;;;   ((wavetable-osc (sine-wavetable 2048) 440.0) (constant ()))
+-(defn wavetable-osc [wavetable freq]
+-  (sine freq 0))
++(defn wavetable-osc [wavetable freq :float]
++  (sine freq 0.0))
+ 
+ ;;; sine-wavetable -- generate a sine-wave lookup table.
+ ;;;
+@@ -225,7 +196,7 @@
+         half (/ size 2)
+         ^mut i 0]
+     (while (< i size)
+-      (vec-set! result i (if (< i half) (__f_1_0) (__f_neg_1_0)))
++      (vec-set! result i (if (< i half) (:: 1.0 :int) (:: -1.0 :int)))
+       (set! i (+ i 1)))
+     result))
+ 
+@@ -254,7 +225,7 @@
+ ;;;
+ ;;; Returns:
+ ;;;   Signal<Sample>.
+-(defn wavetable-voice [wavetable freq params gate-sig]
++(defn wavetable-voice [wavetable freq :float params gate-sig]
+   (let [;; Wavetable oscillator
+         osc (wavetable-osc wavetable freq)
+ 
+@@ -264,8 +235,8 @@
+         ;; Process
+         sig-osc (__arrow_call1 osc (constant 0))
+         sig-env (__arrow_call1 env gate-sig)]
+-    (fn [t] (__sample-mul (__arrow_call1 sig-osc t)
+-                          (__arrow_call1 sig-env t)))))
++    (fn [t] (:: (__sample-mul (:: (__arrow_call1 sig-osc t) :float)
++                              (:: (__arrow_call1 sig-env t) :float)) :int))))
+ 
+ ;; =============================================================================
+ ;; Granular Synthesizer
+@@ -284,7 +255,7 @@
+ ;;;
+ ;;; Example:
+ ;;;   (granular my-sig 0.05 20.0 0.3)
+-(defn granular [source grain-duration grain-rate randomness]
++(defn granular [source grain-duration :float grain-rate :float randomness :float]
+   source)
+ 
+ ;; =============================================================================
+@@ -304,8 +275,8 @@
+ ;;;
+ ;;; Example:
+ ;;;   (additive-voice 220.0 (vec-of (Tuple 1.0 1.0) (Tuple 0.5 2.0)) params gate-sig)
+-(defn additive-voice [base-freq harmonics params gate-sig]
+-  (voice base-freq params gate-sig (__f_0_5) (__f_0_5)))
++(defn additive-voice [base-freq :float harmonics params gate-sig]
++  (voice base-freq params gate-sig 0.5 0.5))
+ 
+ ;; =============================================================================
+ ;; Karplus-Strong Plucked String Synthesis
+@@ -323,7 +294,7 @@
+ ;;;
+ ;;; Example:
+ ;;;   (karplus-strong 261.63 0.995 0.01)
+-(defn karplus-strong [freq decay noise-duration]
++(defn karplus-strong [freq :float decay :float noise-duration :float]
+   (__arrow_call1 (sawtooth freq) (constant 0)))
+ 
+ ;;; ks-voice -- Karplus-Strong string with ADSR amplitude envelope.
+@@ -337,15 +308,15 @@
+ ;;;
+ ;;; Returns:
+ ;;;   Signal<Sample>.
+-(defn ks-voice [freq decay noise-duration params gate-sig]
++(defn ks-voice [freq :float decay :float noise-duration :float params gate-sig]
+   (let [;; Karplus-Strong string
+         ks (karplus-strong freq decay noise-duration)
+ 
+         ;; Envelope
+         env (adsr-gen params)
+         sig-env (__arrow_call1 env gate-sig)]
+-    (fn [t] (__sample-mul (__arrow_call1 ks t)
+-                          (__arrow_call1 sig-env t)))))
++    (fn [t] (:: (__sample-mul (:: (__arrow_call1 ks t) :float)
++                              (:: (__arrow_call1 sig-env t) :float)) :int))))
+ 
+ ;; =============================================================================
+ ;; Synthesizer Presets
+@@ -359,10 +330,10 @@
+ ;;;
+ ;;; Returns:
+ ;;;   Signal<Sample>.
+-(defn lead-synth [freq gate-sig]
+-  (let [params (ADSRParams (__f_0_01) (__f_0_1) (__f_0_7) (__f_0_2))
+-        filter-cutoff (__f_0_8)
+-        filter-q (__f_0_5)]
++(defn lead-synth [freq :float gate-sig]
++  (let [params (ADSRParams 0.01 0.1 0.7 0.2)
++        filter-cutoff 0.8
++        filter-q 0.5]
+     (voice freq params gate-sig filter-cutoff filter-q)))
+ 
+ ;;; bass-synth -- deep warm bass synth preset.
+@@ -373,10 +344,10 @@
+ ;;;
+ ;;; Returns:
+ ;;;   Signal<Sample>.
+-(defn bass-synth [freq gate-sig]
+-  (let [params (ADSRParams (__f_0_02) (__f_0_3) (__f_0_5) (__f_0_4))
+-        filter-cutoff (__f_0_3)
+-        filter-q (__f_0_3)]
++(defn bass-synth [freq :float gate-sig]
++  (let [params (ADSRParams 0.02 0.3 0.5 0.4)
++        filter-cutoff 0.3
++        filter-q 0.3]
+     (voice freq params gate-sig filter-cutoff filter-q)))
+ 
+ ;;; pad-synth -- soft evolving pad synth preset.
+@@ -387,10 +358,10 @@
+ ;;;
+ ;;; Returns:
+ ;;;   Signal<Sample>.
+-(defn pad-synth [freq gate-sig]
+-  (let [params (ADSRParams (__f_0_5) (__f_0_5) (__f_0_6) (__f_1_0))
+-        filter-cutoff (__f_0_4)
+-        filter-q (__f_0_2)]
++(defn pad-synth [freq :float gate-sig]
++  (let [params (ADSRParams 0.5 0.5 0.6 1.0)
++        filter-cutoff 0.4
++        filter-q 0.2]
+     (voice freq params gate-sig filter-cutoff filter-q)))
+ 
+ ;;; pluck-synth -- Karplus-Strong plucked string preset.
+@@ -401,10 +372,10 @@
+ ;;;
+ ;;; Returns:
+ ;;;   Signal<Sample>.
+-(defn pluck-synth [freq gate-sig]
+-  (let [params (ADSRParams (__f_0_005) (__f_0_1) 0 (__f_0_3))
+-        decay (__f_0_995)
+-        noise-duration (__f_0_01)]
++(defn pluck-synth [freq :float gate-sig]
++  (let [params (ADSRParams 0.005 0.1 0.0 0.3)
++        decay 0.995
++        noise-duration 0.01]
+     (ks-voice freq decay noise-duration params gate-sig)))
+ 
+ ;; =============================================================================
+@@ -440,9 +411,9 @@
+ ;;;   SF<(),Sample>.
+ (defn example-effects-chain [input]
+   (let [effects (vec-of
+-                  (gain (__f_0_5))
+-                  (low-pass (__f_0_1))
+-                  (hard-clip (__f_0_9)))]
++                  (gain 0.5)
++                  (low-pass 0.1)
++                  (hard-clip 0.9))]
+     (effects-chain effects input)))
+ 
+ ;; =============================================================================
+@@ -464,7 +435,7 @@
+ (defn step-sequencer [notes tempo gate-duration]
+   (if (> (vec-length notes) 0)
+     (let [note (vec-get notes 0)
+-          freq (first note)
++          freq (:: (first note) :float)
+           gate-sig (constant true)]
+       (lead-synth freq gate-sig))
+-    (lead-synth 0 (constant false))))
++    (lead-synth 0.0 (constant false))))
+diff --git a/spices/signal/tests/signal/arrow_tests.tur b/spices/signal/tests/signal/arrow_tests.tur
+index 9508fb1..41e2de6 100644
+--- a/spices/signal/tests/signal/arrow_tests.tur
++++ b/spices/signal/tests/signal/arrow_tests.tur
+@@ -2,10 +2,10 @@
+ ;;
+ ;; Test suite for Arrow typeclass implementations and signal processing.
+ ;;
+-;; Note: Function values returned from other functions are stored as int64 and
+-;; must be invoked via __arrow_call1 / __arrow_call2.  Float literals are also
+-;; represented as IEEE-754 bit patterns in int64; all float arithmetic is done
+-;; in C blocks.
++;; Signal values at the boundary of __arrow_call1 remain int64 bit-patterns
++;; so that the function-pointer calling convention is preserved.  DSP
++;; parameters (freq, alpha, etc.) are now native :float; the helpers below
++;; still encode time/sample values as int64 for the signal ABI.
+ 
+ (defmodule tests/arrow
+   (import arrow)
+@@ -14,10 +14,10 @@
+   (import signal/envelope)
+ 
+ ;; =============================================================================
+-;; Float helpers -- all floats are int64 IEEE-754 bit patterns
++;; Float helpers -- int64 IEEE-754 bit-patterns for signal ABI values
+ ;; =============================================================================
+ 
+-;;; __f -- encode a C double literal as int64.
++;;; __f -- encode a C double literal as int64 for use with __arrow_call1.
+ (defn __f_0_0   [] :int ```c union {double d;int64_t i;} u; u.d=0.0;    return u.i; ```)
+ (defn __f_0_001 [] :int ```c union {double d;int64_t i;} u; u.d=0.001;  return u.i; ```)
+ (defn __f_0_05  [] :int ```c union {double d;int64_t i;} u; u.d=0.05;   return u.i; ```)
+@@ -34,7 +34,7 @@
+ (defn __f_int [n] :int
+   ```c union {double d;int64_t i;} u; u.d=(double)n; return u.i; ```)
+ 
+-;; Float comparison / arithmetic helpers
++;; Float comparison / arithmetic helpers (still work on int64 bit-pattern floats)
+ 
+ ;;; __f_near -- true if |a - b| < thresh (all float64 as int64).
+ (defn __f_near [a b thresh] :bool
+@@ -182,6 +182,9 @@
+ 
+ ;; =============================================================================
+ ;; DSP Primitive Tests
++;;
++;; DSP parameters (freq, phase, alpha) are native :float.
++;; Time values passed to __arrow_call1 remain int64 bit-patterns.
+ ;; =============================================================================
+ 
+ ;;; test-sine-at-zero -- verify sine wave is 0 at t=0.
+@@ -189,7 +192,7 @@
+ ;;; Returns:
+ ;;;   true if sin(2*pi*440*0 + 0) ~= 0.
+ (defn test-sine-at-zero [] :bool
+-  (let [sine-sf  (sine (__f_440_0) (__f_0_0))
++  (let [sine-sf  (sine (:: (__f_440_0) :float) (:: (__f_0_0) :float))
+         sig      (constant 0)
+         out-sig  (__arrow_call1 sine-sf sig)
+         val      (__arrow_call1 out-sig (__f_0_0))]
+@@ -200,7 +203,7 @@
+ ;;; Returns:
+ ;;;   true if sin(2*pi*440*(1/440)) ~= 0.
+ (defn test-sine-one-period [] :bool
+-  (let [sine-sf  (sine (__f_440_0) (__f_0_0))
++  (let [sine-sf  (sine (:: (__f_440_0) :float) (:: (__f_0_0) :float))
+         sig      (constant 0)
+         out-sig  (__arrow_call1 sine-sf sig)
+         val      (__arrow_call1 out-sig (__f_inv440))]
+@@ -211,7 +214,7 @@
+ ;;; Returns:
+ ;;;   true if sawtooth(440, t=0) is in [0, 1).
+ (defn test-sawtooth-range [] :bool
+-  (let [saw-sf   (sawtooth (__f_440_0))
++  (let [saw-sf   (sawtooth (:: (__f_440_0) :float))
+         sig      (constant 0)
+         out-sig  (__arrow_call1 saw-sf sig)
+         val      (__arrow_call1 out-sig (__f_0_0))]
+@@ -224,7 +227,7 @@
+ ;;;   true if gain(2.0) applied to 0.5 gives 1.0.
+ (defn test-gain [] :bool
+   (let [sig     (constant (__f_0_5))
+-        gain-sf (gain (__f_int 2))
++        gain-sf (gain (:: (__f_int 2) :float))
+         out-sig (__arrow_call1 gain-sf sig)
+         result  (__arrow_call1 out-sig 0)]
+     (__f_near result (__f_1_0) (__f_0_001))))
+@@ -251,8 +254,10 @@
+ ;;; Returns:
+ ;;;   true if ADSR(attack=0.1, ...) is 0 at t=0.
+ (defn test-adsr-at-zero [] :bool
+-  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+-        env     (adsr-fixed params (__f_1_0))
++  (let [params  (make-struct ADSRParams
++                             (:: (__f_0_1) :float) (:: (__f_0_1) :float)
++                             (:: (__f_0_5) :float) (:: (__f_0_1) :float))
++        env     (adsr-fixed params (:: (__f_1_0) :float))
+         sig     (constant 0)
+         out-sig (__arrow_call1 env sig)
+         result  (__arrow_call1 out-sig (__f_0_0))]
+@@ -263,8 +268,10 @@
+ ;;; Returns:
+ ;;;   true if ADSR is between 0.4 and 0.7 at t=0.05.
+ (defn test-adsr-mid-attack [] :bool
+-  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+-        env     (adsr-fixed params (__f_1_0))
++  (let [params  (make-struct ADSRParams
++                             (:: (__f_0_1) :float) (:: (__f_0_1) :float)
++                             (:: (__f_0_5) :float) (:: (__f_0_1) :float))
++        env     (adsr-fixed params (:: (__f_1_0) :float))
+         sig     (constant 0)
+         out-sig (__arrow_call1 env sig)
+         result  (__arrow_call1 out-sig (__f_0_05))]
+@@ -276,8 +283,10 @@
+ ;;; Returns:
+ ;;;   true if ADSR is near sustain=0.5 at t=0.2.
+ (defn test-adsr-sustain [] :bool
+-  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+-        env     (adsr-fixed params (__f_1_0))
++  (let [params  (make-struct ADSRParams
++                             (:: (__f_0_1) :float) (:: (__f_0_1) :float)
++                             (:: (__f_0_5) :float) (:: (__f_0_1) :float))
++        env     (adsr-fixed params (:: (__f_1_0) :float))
+         sig     (constant 0)
+         out-sig (__arrow_call1 env sig)
+         result  (__arrow_call1 out-sig (__f_0_2))]
+@@ -288,8 +297,10 @@
+ ;;; Returns:
+ ;;;   true if ADSR is near 0 at t=1.1 (past gate+release).
+ (defn test-adsr-after-release [] :bool
+-  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+-        env     (adsr-fixed params (__f_1_0))
++  (let [params  (make-struct ADSRParams
++                             (:: (__f_0_1) :float) (:: (__f_0_1) :float)
++                             (:: (__f_0_5) :float) (:: (__f_0_1) :float))
++        env     (adsr-fixed params (:: (__f_1_0) :float))
+         sig     (constant 0)
+         out-sig (__arrow_call1 env sig)
+         result  (__arrow_call1 out-sig (__f_1_1))]
+@@ -329,7 +340,7 @@
+     (+ (if t7  0 1) (+ (if t8  0 1) (+ (if t9  0 1)
+     (+ (if t10 0 1) (+ (if t11 0 1) (+ (if t12 0 1)
+     (+ (if t13 0 1) (+ (if t14 0 1) (+ (if t15 0 1)
+-    (if t16 0 1))))))))))))))))
++    (if t16 0 1))))))))))))))))))
+ 
+ ;;; main -- entry point; prints pass/fail summary.
+ ;;;
+-- 
+2.43.0
+
