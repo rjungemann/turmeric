@@ -567,23 +567,22 @@
 ;; ---- AW-006: Future combinators ----
 
 ;; Join two futures: await both and return a tuple (pair) of their values.
-;; Returns a FutureCell* with a struct { int64_t first; int64_t second; } * as the value.
+;; Returns a FutureCell* with a Tuple2* (from stdlib/tuple.tur) as the value.
 ;; If either future rejects, the result is rejected with that error.
-;;; future-join -- await both futures and produce a new future holding a TurTuple2 of their values.
+;;; future-join -- await both futures and produce a new future holding a Tuple2 of their values.
 ;;;
 ;;; Parameters:
 ;;;   fa -- first Future pointer
 ;;;   fb -- second Future pointer
 ;;;
 ;;; Returns:
-;;;   A new pre-settled Future whose ok value is a pointer to TurTuple2 { first, second };
+;;;   A new pre-settled Future whose ok value is a pointer to Tuple2 { e1, e2 };
 ;;;   rejected with the first error if either future fails.
 ;;;
 ;;; Since: Phase T20-C
 (defn future-join [fa :ptr<void> fb :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
-  typedef struct { int64_t first; int64_t second; } TurTuple2;
   FutureCell *a = (FutureCell *)fa;
   FutureCell *b = (FutureCell *)fb;
   pthread_mutex_lock(&a->lock);
@@ -601,19 +600,19 @@
   if (!ok_a) { out->is_ok = false; out->value = 0; out->exn = exn_a; }
   else if (!ok_b) { out->is_ok = false; out->value = 0; out->exn = exn_b; }
   else {
-      TurTuple2 *tup = (TurTuple2 *)malloc(sizeof(TurTuple2));
+      Tuple2 *tup = (Tuple2 *)malloc(sizeof(Tuple2));
       if (!tup) { free(out); fprintf(stderr, "future-join: oom\n"); abort(); }
-      tup->first = val_a; tup->second = val_b;
+      tup->e1 = val_a; tup->e2 = val_b;
       out->is_ok = true; out->value = (int64_t)(intptr_t)tup; out->exn = 0;
   }
   return (void *)out;
   ```)
 
 ;; Accessors for the tuple returned by future-join
-;;; tuple-first -- read the first element of a TurTuple2 returned by future-join.
+;;; tuple-first -- read the first element of a Tuple2 returned by future-join.
 ;;;
 ;;; Parameters:
-;;;   tup -- TurTuple2 pointer from the ok value of a future-join result
+;;;   tup -- Tuple2 pointer from the ok value of a future-join result
 ;;;
 ;;; Returns:
 ;;;   The int64 first element.
@@ -621,14 +620,13 @@
 ;;; Since: Phase T20-C
 (defn tuple-first [tup :ptr<void>] :int
   ```c
-  typedef struct { int64_t first; int64_t second; } TurTuple2;
-  return ((TurTuple2 *)tup)->first;
+  return ((Tuple2 *)tup)->e1;
   ```)
 
-;;; tuple-second -- read the second element of a TurTuple2 returned by future-join.
+;;; tuple-second -- read the second element of a Tuple2 returned by future-join.
 ;;;
 ;;; Parameters:
-;;;   tup -- TurTuple2 pointer from the ok value of a future-join result
+;;;   tup -- Tuple2 pointer from the ok value of a future-join result
 ;;;
 ;;; Returns:
 ;;;   The int64 second element.
@@ -636,15 +634,14 @@
 ;;; Since: Phase T20-C
 (defn tuple-second [tup :ptr<void>] :int
   ```c
-  typedef struct { int64_t first; int64_t second; } TurTuple2;
-  return ((TurTuple2 *)tup)->second;
+  return ((Tuple2 *)tup)->e2;
   ```)
 
 ;; Free a tuple allocated by future-join
-;;; tuple-free -- free a TurTuple2 allocated by future-join.
+;;; tuple-free -- free a Tuple2 allocated by future-join.
 ;;;
 ;;; Parameters:
-;;;   tup -- TurTuple2 pointer to free
+;;;   tup -- Tuple2 pointer to free
 ;;;
 ;;; Since: Phase T20-C
 (defn tuple-free [tup :ptr<void>] :nil
