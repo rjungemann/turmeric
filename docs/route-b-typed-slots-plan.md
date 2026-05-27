@@ -118,6 +118,17 @@ still the remaining part of TS3, and the missing compiler work is broken
 out in
 [`typed-slots-gs5-compiler-support-plan.md`](typed-slots-gs5-compiler-support-plan.md).
 
+**Worktree update (2026-05-26, TS3.1 slice):** typed accessor helpers
+(`thead`, `unwrap`, `pair-fst`/`pair-snd`, `ok-val`/`err-val`) and the
+typed constructor `tpair` are already in place from earlier GS5 work.
+This slice adds `tcons-of [A] [h :A t :int] :(Cons A)` (`stdlib/list.tur`)
+as the first typed `Cons[A]` constructor that lowers through `make-struct`
+to the concrete `Cons__A` layout with no inline-C bit-cast, and the
+focused fixture `tests/fixtures/typed-slots/tcons-of/`. Typed
+`some`/`none`/`ok`/`err` constructors are intentionally deferred until
+the inactive-payload representation question is resolved (see "Open
+design choices" in the archived GS5 compiler support plan).
+
 ## Progress checklist
 
 - [x] TS1 — Typed thunk ABI
@@ -340,29 +351,45 @@ per-instance flag if necessary.
 
 ---
 
-## Open questions
+## Resolved design decisions
 
-- **Per-compilation-unit thunk typedef collisions.** If two source
-  files independently emit `tur_thunk_double_double_t`, do we collide
-  at link time?  Plan: name typedefs after a stable hash of the
-  signature and emit them `static` per translation unit (single C
-  file per spice today, so collision is moot, but worth a
-  forward-looking decision).
-- **`tur_poly_fn_t` future.** Should it be retired in favour of a
-  generated `tur_thunk_<sig>_t` family + an opaque `tur_poly_fn_t`
-  alias for the untyped case?  TS1 leaves it untouched.
-- **`Cons<:int>` migration.** The existing `(defstruct Cons [value :int
-  next :int])` in `stdlib/list.tur` is referenced from compiled
-  spices' C output.  TS3 must either keep the type-erased form
-  available under an explicit `(Cons :int)` alias for backward
-  compat, or coordinate a recompile of all dependents.
-- **Reinterpret legality.** TS2 limits `EX_REINTERPRET` to
-  same-size scalars.  Should it accept `int32 ↔ float32` too?
-  Probably yes; left for TS2 implementation.
-- **Vec<:float>.** `stdlib/vec.tur` stores its `data` as
-  `int64_t *`.  TS3 specialisation would emit `double *` for
-  `Vec<:float>`.  This changes the growth/realloc paths; flag it
-  during TS3.
+*(Resolved 2026-05-26 — see commit log for discussion.)*
+
+- **Per-compilation-unit thunk typedef collisions — resolved: hash-named, file-scope typedefs.**
+  Name typedefs after a stable structural hash of the signature
+  (`tur_thunk_<hash>_t`).  Emit at file scope, not `static` (C typedefs
+  can't be `static`-qualified).  Under C11, redeclaring the same typedef
+  in another TU is harmless as long as it names the same type — the hash
+  guarantees that.  If two TUs disagree on the type behind the same hash,
+  that is a real bug worth surfacing as a link-time error.
+- **`tur_poly_fn_t` future — resolved: keep indefinitely.**
+  It is the canonical "I don't know the signature" carrier shape; HKT,
+  existentials, and polymorphic captures need it.  The
+  `tur_thunk_<hash>_t` family is purely an *additional* set of concrete
+  specialisations layered on top.  No retirement planned.
+- **`Cons<:int>` migration — resolved: option (b), replace with
+  parameterised form + one-release compat typedef.**
+  Replace the legacy `(defstruct Cons [value :int next :int])` with the
+  parameterised `Cons<A>` and have bare `Cons` (no args) desugar to
+  `Cons<:int>` for source-compat.  The emitted C name for `Cons<:int>` is
+  deterministically `Cons__int`; additionally emit
+  `typedef Cons__int Cons;` for one release as an ABI compat shim, then
+  remove.  Avoids the parallel-family trap of option (a).
+- **`int32 ↔ float32` reinterpret — resolved: allow same-size scalar
+  pairs across the int/float kind boundary.**
+  TS2's size check looks at C-ABI size, not Turmeric kind, so `:f32 ↔ :i32`
+  and `:f64 ↔ :i64` are both legal.  Cross-size pairs
+  (e.g. `:f32 ↔ :i64`) remain rejected.  Codegen is identical to the
+  same-kind case (size-equal union trick).
+- **`Vec<:float>` realloc — resolved: gate Vec specialisation behind its
+  own sub-phase TS3b.**
+  Audit of `stdlib/vec.tur` (2026-05-26) shows *all eight* functions touch
+  raw `int64_t` indexing or `sizeof(int64_t)` sizing — every load/store
+  site, plus the realloc growth path in `vec-push!` and the comparator
+  cast in `vec-eq?`.  Rewriting these to use `sizeof(A)` and `A*` indexing
+  is mechanical but pervasive enough that bundling it with the
+  Cons/Option/Pair/Result migration risks blocking the smaller wins.  Land
+  TS3a (Cons/Option/Pair/Result) first; tackle Vec in TS3b.
 
 ---
 
@@ -374,7 +401,7 @@ per-instance flag if necessary.
 - [x] TS1.4 — `float-closure.tur` fixture + emitted-C assertion
 - [x] TS2.1 — Add `EX_REINTERPRET` IR node + codegen
 - [x] TS2.2 — Compiler unit test for synthetic reinterpret
-- [ ] TS3.1 — Parameterise stdlib containers over `[A]`
+- [x] TS3.1 — Parameterise stdlib containers over `[A]` (Cons/Option/Pair/Result; Vec deferred to TS3b; carrier constructors `some`/`none`/`ok`/`err` deferred pending inactive-payload representation)
 - [ ] TS3.2 — Monomorphised struct field layout per `A`
 - [ ] TS3.3 — Insert TS2 reinterprets at container boundaries
 - [ ] TS3.4 — Container fixtures (`cons-float`, `option-float`, …)

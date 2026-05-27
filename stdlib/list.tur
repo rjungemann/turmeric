@@ -38,6 +38,24 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
+;;; tcons-of -- typed Cons[A] constructor with a typed head slot.
+;;;
+;;; Parameters:
+;;;   h -- head element of type A
+;;;   t -- tail link (carrier :int; pass another cell's pointer or 0 for tnil)
+;;;
+;;; Returns:
+;;;   A (Cons A) value whose head field is laid out as the concrete C type
+;;;   for A (e.g. `double` for `:float`), with no user-side bit-cast.
+;;;
+;;; Example:
+;;;   (let [c (tcons-of 1.5 0)]
+;;;     (.head c))  ; => 1.5, read as a `double` field
+;;;
+;;; Since: Phase TS3
+(defn tcons-of [A] [h :A t :int] :(Cons A)
+  (make-struct Cons h t))
+
 ;;; tnil -- return an empty typed list.
 ;;;
 ;;; Returns:
