@@ -1,0 +1,8 @@
+;; Phase TP2: tuple2-eq? macro -- working call-site element-wise equality.
+;; Mirrors stdlib/pair.tur's pair-eq? macro on the new Tuple2 type.
+
+(let [t1 (tuple2 10 20)
+      t2 (tuple2 10 20)
+      t3 (tuple2 10 99)]
+  (println (tuple2-eq? t1 t2 (fn [a b] (= a b)) (fn [a b] (= a b))))
+  (println (tuple2-eq? t1 t3 (fn [a b] (= a b)) (fn [a b] (= a b)))))
