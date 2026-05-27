@@ -191,25 +191,28 @@ the behaviour of the `:` shorthand syntax.  See
 
 ## KB-009 — `result-question-op`: `?` operator lowering returns `:int` where `:bool` expected
 
-**Status:** Open — compiler/stdlib bug; tracked in
-[docs/result-question-bool-plan.md](result-question-bool-plan.md).
+**Status:** Fixed -- `__tur-q-is-err?` and `__tur-q-ok-val` helpers added to
+`stdlib/result.tur`; `?` no longer requires an `(unsafe ...)` wrapper at call
+sites.  See [docs/result-question-bool-plan.md](result-question-bool-plan.md).
 
-### Symptom
+### Symptom (resolved)
 
 ```
 error: if condition must be bool, got int
 ```
 
-inside `(unsafe (? (get-value b)))` — the `?` operator is lowered to a call
-that returns `:int` (via `err?`), but the surrounding `if` expects `:bool`.
+inside `(? (get-value b))` -- the `?` operator lowered to helpers that did not
+exist yet, so the elaborator resolved the condition to an `:int` default.
 
-### Fix needed
+### Fix applied
 
-The `?` macro expansion (or the `err?` stdlib function) should return `:bool`.
-Check whether `err?` is declared `:bool` in `stdlib/result.tur` and whether the
-lowering pass is picking up the correct overload.  See
-[docs/result-question-bool-plan.md](result-question-bool-plan.md) for the
-phased fix.
+Added `__tur-q-is-err? [r :ptr<void>] #{} :bool` and
+`__tur-q-ok-val [r :ptr<void>] #{} :int` to `stdlib/result.tur`.  The `?`
+lowering in `src/compiler/elab_forms.c` calls these two helpers by name; both
+are `#{}` (safe), so no per-call-site `(unsafe ...)` is needed.  Applying `?`
+to a non-Result expression now produces the informative diagnostic
+"function `__tur-q-is-err?` arg 1: expected ptr<void>, got int" instead of
+the opaque type-mismatch above.
 
 ---
 
