@@ -180,10 +180,32 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
 /* ------------------------------------------------------------------ */
 
 TuriValue tur_ffi_reload_spice(TuriEnv *env) {
-    if (!env || !env->spice_image) {
-        printf("(reload) no spice loaded; nothing to reload\n");
+    if (!env) return turi_error("(reload) no env");
+
+    /* RP7: self-heal path -- when the initial REPL load failed
+     * (compile error in user code, missing build.tur, etc.), the
+     * user can fix the source and retry without restarting. We try
+     * a fresh discover from cwd. If there's no project at all, the
+     * loader returns 1 and we surface a clean "nothing to reload". */
+    if (!env->spice_image) {
+        TurSpiceImage *fresh0 = NULL;
+        int rc0 = tur_spice_image_load(".", getenv("TUR_BIN"), &fresh0);
+        if (rc0 == 1) {
+            printf("(reload) no spice project here; nothing to reload\n");
+            fflush(stdout);
+            return turi_error("(reload) no spice loaded");
+        }
+        if (rc0 != 0 || !fresh0) {
+            /* Loader already printed a diagnostic. */
+            return turi_error("(reload) failed");
+        }
+        env->spice_image = fresh0;
+        uint32_t n0 = tur_spice_image_count(fresh0);
+        (void)tur_ffi_install_spice_bindings(env, fresh0);
+        printf("(reload) loaded %u export%s from %s\n",
+               n0, n0 == 1 ? "" : "s", tur_spice_image_root(fresh0));
         fflush(stdout);
-        return turi_error("(reload) no spice loaded");
+        return turi_nil();
     }
     if (tur_spice_image_is_fresh(env->spice_image)) {
         printf("(reload) no changes\n");

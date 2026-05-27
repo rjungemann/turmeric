@@ -95,6 +95,14 @@ add_test(
   COMMAND bash tests/turi/repl-spice-watch.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RP7: regression guards for the polished error surfaces -- stale
+# manifest, build failure (with self-heal via reload), no-dispatcher
+# hint format, and the "no spice project here" reload outcome.
+add_test(
+  NAME tur_repl_spice_errors
+  COMMAND bash tests/turi/repl-spice-errors.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture
 # imports them. See docs/stdlib-check-allowlist-plan.md.

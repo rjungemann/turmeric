@@ -268,6 +268,12 @@ static int run_build(const char *tur_bin, const char *root,
              "%s build --shared %s -o %s --manifest %s",
              q_bin, q_root, q_lib, q_mf);
     (void)system(cmd);
+    /* RP7: tell the user what to do next. (reload) re-runs the same
+     * build subprocess after they've fixed the source, so they don't
+     * have to restart the REPL on every compile error. */
+    fprintf(stderr,
+            "tur repl: fix the error above, then type (reload) at the "
+            "prompt to retry.\n");
     return -1;
 }
 
@@ -340,8 +346,13 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
 
 /* Parse `<mod>/<name> -> <mangled> :: (<tags>) -> <ret>` into one
  * export row and dlsym the symbol. Mutates the line buffer in place.
- * Returns 0 on success, -1 on hard parse failure (caller continues
- * with the next line and prints a warning). */
+ * Return codes:
+ *    0 -- success.
+ *   -1 -- malformed line; caller prints the original (pre-mutation)
+ *         line so the user sees what was wrong.
+ *   -2 -- line parsed cleanly but dlsym failed. This path already
+ *         printed the detailed "stale exports.manifest" diagnostic;
+ *         caller should propagate without adding noise. */
 static int parse_manifest_line(TurSpiceImage *img, char *line) {
     char *p = skip_ws(line);
     if (*p == '\0' || *p == '#') return 0;     /* blank / comment */
@@ -409,17 +420,25 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
            && *ret_end != '\n' && *ret_end != '\r') ret_end++;
     *ret_end = '\0';
     char ret_class = class_for_tag(p, /*is_return=*/true);
-    /* dlsym -- if not found, treat as hard error: the manifest must
-     * agree with the library or the symbol map is corrupt. */
+    /* dlsym -- if not found, treat as hard error: the manifest and
+     * the library have drifted out of sync. RP7: the message names
+     * the .so so the user knows which artifact to discard, and
+     * points at the two fixes (one keeps the session alive, the
+     * other forces a full clean rebuild). */
     dlerror();
     void *fn_ptr = dlsym(img->handle, mangled);
     const char *derr = dlerror();
     if (!fn_ptr || derr) {
         fprintf(stderr,
-                "tur repl: manifest lists %s but dlsym failed: %s\n",
-                mangled, derr ? derr : "(symbol not present)");
+                "tur repl: stale exports.manifest -- it lists symbol '%s'\n"
+                "          but it is not present in %s\n"
+                "          (dlsym: %s)\n"
+                "          Fix: type (reload) at the prompt, or run\n"
+                "               `rm -rf .tur-repl-cache` and restart the REPL.\n",
+                mangled, img->lib_path,
+                derr ? derr : "symbol not found");
         free(module); free(name); free(mangled);
-        return -1;
+        return -2;  /* RP7: caller skips the generic "malformed" message */
     }
     return append_export(img, module, name, mangled, ret_class,
                           arg_classes, n_args, is_variadic, fn_ptr);
@@ -433,6 +452,7 @@ static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
         return -1;
     }
     char line[4096];
+    char snapshot[4096];
     int rc = 0;
     while (fgets(line, sizeof(line), f)) {
         /* strip trailing newline */
@@ -440,8 +460,20 @@ static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
         while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r')) {
             line[--ll] = '\0';
         }
-        if (parse_manifest_line(img, line) != 0) {
-            fprintf(stderr, "tur repl: malformed manifest line: %s\n", line);
+        /* RP7: parse_manifest_line mutates `line` in place via *p='\0'
+         * trimmers, so we snapshot the original for diagnostic display
+         * before parsing. */
+        snprintf(snapshot, sizeof(snapshot), "%s", line);
+        int prc = parse_manifest_line(img, line);
+        if (prc == -1) {
+            fprintf(stderr, "tur repl: malformed manifest line: %s\n",
+                    snapshot);
+            rc = -1;
+            break;
+        }
+        if (prc == -2) {
+            /* dlsym failure: parse_manifest_line already printed the
+             * detailed "stale exports.manifest" diagnostic. */
             rc = -1;
             break;
         }
