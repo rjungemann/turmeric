@@ -1,0 +1,14 @@
+;; CY4: partial application retains the effect row of the original function,
+;; so the handler installed around the closure call still sees the effect.
+(defeffect Log [msg :cstr] :nil)
+
+(defn log-add [a :int b :int] #{Log} :int
+  (perform (Log "step"))
+  (+ a b))
+
+(defn main [] :int
+  (println
+    (handle
+      (let [add10 (log-add 10)]
+        (add10 32))
+      (Log [msg] k) (do (println msg) (resume k nil)))))

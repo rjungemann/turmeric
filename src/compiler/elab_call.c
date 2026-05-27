@@ -393,12 +393,24 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     while (source_expr && source_expr->kind == EX_ASCRIBE) {
         source_expr = source_expr->as.ascribe_.inner;
     }
-    tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+    /* closure_fn_binding describes the underlying thunk signature of a closure
+     * VALUE (ptr<void>). When the head is itself a function reference (TY_FN),
+     * its own TY_FN type already encodes the signature, and conflating it with
+     * returns_closure_fn_binding would make `((curry f) x)` dispatch to the
+     * inner fn instead of calling f directly. */
+    if (head_kind == TY_PTR_VOID) {
+        tmp_b->closure_fn_binding = expr_closure_fn_binding(source_expr);
+    }
     if (source_expr && source_expr->kind == EX_VAR && source_expr->as.var.binding) {
         Binding *source_b = source_expr->as.var.binding;
         if (source_b->is_poly_fn) {
             tmp_b->is_poly_fn = true;
             tmp_b->poly_type = source_b->poly_type;
+        }
+        /* Propagate "returns a closure" so that chained calls through a let
+         * binding (let [g ((curry f) x)] (g y)) see g as callable. */
+        if (source_b->returns_closure_fn_binding) {
+            tmp_b->returns_closure_fn_binding = source_b->returns_closure_fn_binding;
         }
     }
 
@@ -1018,6 +1030,12 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     uint32_t n_remaining = full_arity - n_provided;
     TypeKind result_kind = fn_type.as.fn.result_kind;
 
+    /* CY4: helper -- return the full type for original-arg user-slot `idx`
+     * (0-based, env-stripped). NULL if the slot is monomorphic. */
+    Type *const *src_full_types = fn_type.as.fn.arg_full_types;
+    #define PAP_SLOT_FULL(idx) \
+        (src_full_types ? src_full_types[fn_is_closure ? ((idx) + 1) : (idx)] : NULL)
+
     /* Build capture bindings for provided args */
     Binding **cap_bindings = (Binding **)arena_alloc(e->arena, n_provided * sizeof(Binding *));
     for (uint32_t i = 0; i < n_provided; i++) {
@@ -1028,6 +1046,13 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         TypeKind cap_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (i + 1) : i];
         Type cap_type = type_from_kind(cap_kind);
         Binding *cap_b = binding_new(e, cap_sym, cap_type, false, false, call->span);
+        /* CY4: rank-2 captured arg -- carry forall info onto the binding so
+         * the closure env field is emitted as tur_poly_fn_t. */
+        Type *cap_full = PAP_SLOT_FULL(i);
+        if (cap_full && cap_full->kind == TY_FORALL) {
+            cap_b->is_poly_fn = true;
+            cap_b->poly_type = cap_full;
+        }
         cap_bindings[i] = cap_b;
     }
 
@@ -1041,6 +1066,13 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         TypeKind rem_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (n_provided + 1 + i) : (n_provided + i)];
         Type rem_type = type_from_kind(rem_kind);
         Binding *rem_b = binding_new(e, rem_sym, rem_type, false, false, call->span);
+        /* CY4: rank-2 remaining param -- mark so the thunk's C signature uses
+         * tur_poly_fn_t for that slot. */
+        Type *rem_full = PAP_SLOT_FULL(n_provided + i);
+        if (rem_full && rem_full->kind == TY_FORALL) {
+            rem_b->is_poly_fn = true;
+            rem_b->poly_type = rem_full;
+        }
         rem_params[i] = rem_b;
         rem_kinds[i] = rem_kind;
     }
@@ -1052,12 +1084,30 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     for (uint32_t i = 0; i < n_provided; i++) {
         Expr *var = expr_new(e->arena, EX_VAR, cap_bindings[i]->type, call->span);
         var->as.var.binding = cap_bindings[i];
-        call_args[i] = var;
+        /* CY4: rank-2 capture is already stored as tur_poly_fn_t; pass through. */
+        if (cap_bindings[i]->is_poly_fn) {
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, call->span);
+            wrap->as.poly_wrap_.inner = var;
+            wrap->as.poly_wrap_.wrapper_binding = NULL;
+            wrap->as.poly_wrap_.is_closure = false;
+            call_args[i] = wrap;
+        } else {
+            call_args[i] = var;
+        }
     }
     for (uint32_t i = 0; i < n_remaining; i++) {
         Expr *var = expr_new(e->arena, EX_VAR, rem_params[i]->type, call->span);
         var->as.var.binding = rem_params[i];
-        call_args[n_provided + i] = var;
+        /* CY4: rank-2 remaining param arrives wrapped as tur_poly_fn_t; pass through. */
+        if (rem_params[i]->is_poly_fn) {
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, call->span);
+            wrap->as.poly_wrap_.inner = var;
+            wrap->as.poly_wrap_.wrapper_binding = NULL;
+            wrap->as.poly_wrap_.is_closure = false;
+            call_args[n_provided + i] = wrap;
+        } else {
+            call_args[n_provided + i] = var;
+        }
     }
 
     Type body_result_type = type_from_kind(result_kind);
@@ -1096,6 +1146,29 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
         thunk_arg_kinds[1 + i] = rem_kinds[i];
     }
     Type thunk_type = type_fn(thunk_arg_kinds, thunk_n_params, result_kind);
+
+    /* CY4: Propagate effect_row from the original function. A partial
+     * application of an effectful function must retain the same effect row so
+     * the effect-check pass and any later call sites see the effects when the
+     * resulting closure is invoked. */
+    thunk_type.as.fn.effect_row = fn_type.as.fn.effect_row;
+
+    /* CY4: Propagate arg_full_types and result_full_type for the remaining
+     * parameters. This preserves rank-2 polymorphic parameter types and any
+     * non-scalar full type info so the resulting closure can still accept
+     * forall-typed arguments. */
+    if (fn_type.as.fn.arg_full_types) {
+        Type **rem_full = (Type **)arena_alloc(e->arena, thunk_n_params * sizeof(Type *));
+        rem_full[0] = NULL; /* env */
+        for (uint32_t i = 0; i < n_remaining; i++) {
+            uint32_t src_idx = fn_is_closure ? (n_provided + 1 + i) : (n_provided + i);
+            rem_full[1 + i] = fn_type.as.fn.arg_full_types[src_idx];
+        }
+        thunk_type.as.fn.arg_full_types = rem_full;
+    }
+    if (fn_type.as.fn.result_full_type) {
+        thunk_type.as.fn.result_full_type = fn_type.as.fn.result_full_type;
+    }
 
     /* Thunk binding (global) */
     char pap_name[32];
@@ -1160,7 +1233,33 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     for (uint32_t i = 0; i < n_provided; i++) {
         let_bs[i].binding = cap_bindings[i];
         let_bs[i].init = elab_args[i];
+        /* CY4: When the captured slot is rank-2, wrap the user's argument so
+         * the value stored in the env is a tur_poly_fn_t. Pass-through if the
+         * argument is itself already a poly fn binding. */
+        if (cap_bindings[i]->is_poly_fn) {
+            Binding *inner_fn_b = poly_arg_fn_binding(elab_args[i]);
+            if (!inner_fn_b) {
+                diag_emit(DIAG_ERROR, elab_args[i]->span,
+                          "rank-2 argument must be a named function (capturing closures not yet supported)");
+                return NULL;
+            }
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, elab_args[i]->span);
+            wrap->as.poly_wrap_.inner = elab_args[i];
+            wrap->as.poly_wrap_.is_closure = false;
+            if (inner_fn_b->is_poly_fn) {
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+            } else {
+                uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                    ? inner_fn_b->type.as.fn.arity : 1;
+                if (inner_fn_b->closure_fn_binding) inner_arity--;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, elab_args[i]->span);
+                if (!wrapper_b) return NULL;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
+            let_bs[i].init = wrap;
+        }
     }
+    #undef PAP_SLOT_FULL
 
     Expr *let_expr = expr_new(e->arena, EX_LET, TYPE_PTR_VOID, call->span);
     let_expr->as.let_.bindings = let_bs;
