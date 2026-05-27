@@ -173,6 +173,43 @@
 (definstance Eq [Cons] [(Eq A)]
   (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
 
+;;; __cons-fmap -- apply a typed thunk to every head element of a Cons list.
+;;;
+;;; Walks the cons chain, allocates a new cell for each node, and writes
+;;; f.fn(f.env, head) into the new cell's head slot.  The tail of each new
+;;; cell points to the next new cell, maintaining list structure.  An empty
+;;; list (pointer == 0) returns 0 immediately.
+;;;
+;;; Parameters:
+;;;   cell -- raw Cons list pointer (0 for nil)
+;;;   f    -- typed fat-closure applied to each head element
+;;;
+;;; Returns:
+;;;   A new Cons list with f applied to every head, or 0 for empty input.
+;;;
+;;; Since: Phase TS5
+(defn __cons-fmap [cell :int f :fn] #{Unsafe} :int
+  ```c
+  struct __tur_cons_t { int64_t head; int64_t tail; };
+  struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
+  if (!c) return 0;
+  int64_t *_fat = (int64_t*)(intptr_t)f;
+  tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
+  struct __tur_cons_t *head_node = NULL;
+  struct __tur_cons_t *prev = NULL;
+  while (c) {
+    struct __tur_cons_t *r = malloc(sizeof(*r));
+    r->head = _f.fn(_f.env, c->head);
+    r->tail = 0;
+    if (!head_node) head_node = r;
+    if (prev) prev->tail = (int64_t)(intptr_t)r;
+    prev = r;
+    c = (struct __tur_cons_t *)(intptr_t)c->tail;
+  }
+  return (int64_t)(intptr_t)head_node;
+  ```)
+
+
 ;;; list -- construct a list from N values via nested tcons.
 ;;;
 ;;; Parameters:

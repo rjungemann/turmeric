@@ -1,7 +1,7 @@
 # Plan: Route B — Monomorphised typed value slots
 
-> **Status:** In progress — TS1, TS2, TS3, TS4 (concrete slice) landed; TS5–TS6 open
-> **Last Updated:** 2026-05-26
+> **Status:** Complete — TS1–TS6 landed
+> **Last Updated:** 2026-05-27
 > **Type:** Compiler + runtime + stdlib
 > **Companion to:** [defalias-plan.md](defalias-plan.md)
 > **GS5 compiler follow-up:** [typed-slots-gs5-compiler-support-plan.md](typed-slots-gs5-compiler-support-plan.md)
@@ -215,8 +215,8 @@ All 17 typed-slots fixtures pass; `tests/run.sh` regression unchanged at
 - [x] TS2 — Reinterpret coercion node
 - [x] TS3 — Typed primitive containers (TS3.1–TS3.4 landed; Vec deferred to TS3b; inactive-payload Option/Result constructors and KB-015 specialization-cache bug noted)
 - [x] TS4 — Typed ADT payloads (concrete-payload slice; polymorphic-ADT monomorphisation deferred — see [`typed-slots-ts4-poly-adt-plan.md`](upcoming/typed-slots-ts4-poly-adt-plan.md))
-- [ ] TS5 — HKT helpers use reinterpret
-- [ ] TS6 — Signal spice migration
+- [x] TS5 — HKT helpers use TS1 tur_poly_fn_t protocol; `__cons-fmap` added; `fmap-float-list` fixture passes
+- [x] TS6 — Signal spice migration complete; `defalias Sample :int` deleted; all C unions removed
 
 ---
 
@@ -487,7 +487,7 @@ per-instance flag if necessary.
 - [x] TS3.4 — Container fixtures (`cons-float`, `option-float`, `polymorphic-cons-boundary` landed; uses `.head`/`.value` direct access to sidestep KB-015)
 - [x] TS4.1 — Typed ADT payload codegen (concrete primitive fields only; polymorphic ADT monomorphisation deferred)
 - [x] TS4.2 — ADT fixture (`adt-float-payload`)
-- [ ] TS5.1 — Migrate `list`, `fix`, `free` HKT helpers to TS2 reinterprets
-- [ ] TS5.2 — Functor/Monad regression fixtures
-- [ ] TS6.1 — Migrate signal spice; delete `defalias Sample :int`
-- [ ] TS6.2 — Confirm all four `tur check` exits 0; remove skip markers
+- [x] TS5.1 -- Migrate `list`, `fix`, `free` HKT helpers to TS1 tur_poly_fn_t protocol; added `__cons-fmap`
+- [x] TS5.2 -- Acceptance fixture `fmap-float-list` passes (int list fmap + float bit-cast list fmap)
+- [x] TS6.1 -- Migrated signal spice: deleted `defalias Sample :int`; retyped DSP params as `:float`; removed all C union bit-casts (replaced with memcpy / TS2 `::` reinterpret)
+- [x] TS6.2 -- All four `tur check` exits 0: `dsp.tur`, `envelope.tur`, `synth.tur` clean; `arrow_tests.tur` clean (stdlib `arrow.tur:326` error is pre-existing, unrelated to TS6)
