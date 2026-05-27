@@ -45,6 +45,14 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
+# The script builds tests/fixtures/build-shared-smoke as a .so and runs a
+# hand-written C harness that dlsyms the exported defn and calls it.
+add_test(
+  NAME tur_build_shared
+  COMMAND bash tests/run-build-shared.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture
 # imports them. See docs/stdlib-check-allowlist-plan.md.

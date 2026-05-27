@@ -1,0 +1,3 @@
+Owned by tests/run-build-shared.sh (RP0 smoke test for `tur build --shared`).
+The fixture has no input.tur; the .so + harness pair is built and dlopen-tested
+by the dedicated ctest target tur_build_shared.

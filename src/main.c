@@ -2234,7 +2234,10 @@ static int cmd_test(const char *dir) {
 
 /* Build a project from multiple .tur files. Generates .h and .c for each,
  * plus a _main.c that includes all headers. */
-static int cmd_build_multi(const char *dir, const char *out_path) {
+/* RP0: `shared` selects shared-library build (skip _main.c, link with
+ * -fPIC -shared, default output `lib<dir>.so`). The host can then
+ * dlopen the result and dlsym exported defns. */
+static int cmd_build_multi(const char *dir, const char *out_path, bool shared) {
     int n_files;
     char **tur_files = collect_tur_files(dir, &n_files);
     if (!tur_files || n_files == 0) {
@@ -2245,7 +2248,13 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
 
     char chosen_out[1024];
     if (!out_path) {
-        default_output_name(dir, chosen_out, sizeof(chosen_out));
+        if (shared) {
+            char base[1024];
+            default_output_name(dir, base, sizeof(base));
+            snprintf(chosen_out, sizeof(chosen_out), "lib%s.so", base);
+        } else {
+            default_output_name(dir, chosen_out, sizeof(chosen_out));
+        }
         out_path = chosen_out;
     }
 
@@ -2323,26 +2332,29 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
         free_reader_macro_paths(rm_p, rm_n);
     }
 
-    /* Generate _main.c */
-    Buf main_c;
-    buf_init(&main_c);
-    if (generate_main_c(&main_c, (const char **)h_files, n_files, out_path) != 0) {
-        fprintf(stderr, "tur: failed to generate _main.c\n");
+    /* Generate _main.c (skipped in shared-library mode: the .so has no
+     * entry point; the host invokes exported defns directly via dlsym). */
+    if (!shared) {
+        Buf main_c;
+        buf_init(&main_c);
+        if (generate_main_c(&main_c, (const char **)h_files, n_files, out_path) != 0) {
+            fprintf(stderr, "tur: failed to generate _main.c\n");
+            buf_free(&main_c);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
+            free(h_files); free(c_files);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
+        if (buf_to_path(&main_c, "_main.c") != 0) {
+            fprintf(stderr, "tur: failed to write _main.c\n");
+            buf_free(&main_c);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
+            free(h_files); free(c_files);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
         buf_free(&main_c);
-        for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
-        free(h_files); free(c_files);
-        free_tur_files(tur_files, n_files);
-        return 1;
     }
-    if (buf_to_path(&main_c, "_main.c") != 0) {
-        fprintf(stderr, "tur: failed to write _main.c\n");
-        buf_free(&main_c);
-        for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
-        free(h_files); free(c_files);
-        free_tur_files(tur_files, n_files);
-        return 1;
-    }
-    buf_free(&main_c);
 
     /* Compile everything together with cc */
     const char *cc = getenv("CC");
@@ -2372,9 +2384,15 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
 
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s %s -o %s", cc, cc_flags, out_path);
-    /* Add _main.c first */
-    buf_printf(&cmd, " _main.c");
+    buf_printf(&cmd, "%s %s", cc, cc_flags);
+    /* RP0: shared-library link gets -fPIC -shared and skips _main.c.
+     * Position-independent code is required on Linux/macOS for symbols
+     * loaded via dlopen; -shared tells the driver to emit a .so/.dylib
+     * instead of an executable. */
+    if (shared) buf_puts(&cmd, " -fPIC -shared");
+    buf_printf(&cmd, " -o %s", out_path);
+    /* Add _main.c first (executable mode only) */
+    if (!shared) buf_puts(&cmd, " _main.c");
     /* Add all .c files */
     for (int i = 0; i < n_files; i++) {
         buf_printf(&cmd, " %s", c_files[i]);
@@ -2391,7 +2409,7 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
     for (int i = 0; i < n_files; i++) { free(h_files[i]); free(c_files[i]); }
     free(h_files); free(c_files);
     free_tur_files(tur_files, n_files);
-    unlink("_main.c");
+    if (!shared) unlink("_main.c");
 
     if (sys_rc != 0) {
         fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
@@ -4816,6 +4834,7 @@ static int usage_build(void) {
         "usage:\n"
         "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
+        "  tur build --shared <dir> [-o <out>]              build a shared library (.so)\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
         "  tur emit-c [-I <dir>...] --output-dir <dir> <files...>  emit per-module .h/.c\n"
         "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
@@ -4825,6 +4844,9 @@ static int usage_build(void) {
         "  -I <dir>          add include directory for module resolution\n"
         "                    (repeat to add multiple; intra-spice imports usually\n"
         "                    want `-I src` from the spice root)\n"
+        "  --shared          build a shared library (`-fPIC -shared`, no main);\n"
+        "                    requires a directory argument. Exported defns are\n"
+        "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
         "  --target wasm     compile to WebAssembly via emcc (requires Emscripten)\n"
         "\n"
         "Try 'tur --help' for global options.\n");
@@ -5688,6 +5710,7 @@ int main(int argc, char **argv) {
         const char *input = NULL;
         const char *out = NULL;
         const char *build_target = NULL;
+        bool        shared = false;  /* RP0: --shared selects shared-library build */
         /* SC1: collect -I flags once via the shared helper, then walk argv
          * a second time for the build-specific flags (`-o`, `--target`)
          * and the positional input. */
@@ -5701,6 +5724,8 @@ int main(int argc, char **argv) {
                 free(build_inc); return usage_build();
             } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
                 out = argv[++i];
+            } else if (strcmp(argv[i], "--shared") == 0) {
+                shared = true;
             } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
                 build_target = argv[++i];
                 if (strcmp(build_target, "wasm") != 0) {
@@ -5715,10 +5740,24 @@ int main(int argc, char **argv) {
             }
         }
         if (!input) { free(build_inc); return usage_build(); }
+        /* RP0: --shared only supports directory input -- the single-file
+         * build path emits a `static`-by-default function and a main(), so
+         * dlsym wouldn't find anything useful. Directory mode runs through
+         * compile_to_implementation in separate-compilation mode, which
+         * gives exported defns extern linkage. */
+        if (shared && !is_directory(input)) {
+            fprintf(stderr, "tur build: --shared requires a directory argument "
+                            "(single-file builds emit static symbols)\n");
+            free(build_inc); return 1;
+        }
+        if (shared && build_target) {
+            fprintf(stderr, "tur build: --shared and --target are mutually exclusive\n");
+            free(build_inc); return 1;
+        }
         /* Check if input is a directory - use multi-file build */
         int rc;
         if (is_directory(input)) {
-            rc = cmd_build_multi(input, out);
+            rc = cmd_build_multi(input, out, shared);
         } else {
             /* RM4: auto-discover the spice manifest containing `input` so
              * `:reader-macros [...]` entries apply when building a single

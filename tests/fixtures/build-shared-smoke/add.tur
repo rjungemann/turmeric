@@ -1,0 +1,3 @@
+(defmodule smokelib
+  (export add42)
+  (defn add42 [x :int] :int (+ x 42)))
