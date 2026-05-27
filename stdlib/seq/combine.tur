@@ -12,21 +12,21 @@
 ;; Pair allocation helper (combine.tur-local)
 ;; -------------------------------------------------------------------
 
-;;; seq-make-pair -- allocate a heap pair { first, second }.
+;;; seq-make-pair -- allocate a heap Tuple2 { e1, e2 } (legacy name kept
+;;; for backward compatibility with existing seq combinators).
 ;;;
 ;;; Parameters:
 ;;;   a -- first element (int64_t)
 ;;;   b -- second element (int64_t)
 ;;;
 ;;; Returns:
-;;;   int64_t pointer to a heap { int64_t first; int64_t second; } struct.
+;;;   int64_t pointer to a heap Tuple2 { int64_t e1; int64_t e2; } struct.
 ;;;
 ;;; Since: LZ3
 (defn seq-make-pair [a :int b :int] :int
   ```c
-  struct { int64_t first; int64_t second; } *p =
-    (struct { int64_t first; int64_t second; } *)malloc(sizeof(*p));
-  p->first = a; p->second = b;
+  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  p->e1 = a; p->e2 = b;
   return (int64_t)(intptr_t)p;
   ```)
 

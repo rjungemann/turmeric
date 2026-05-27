@@ -216,3 +216,53 @@
 ;;; Since: Phase TP2
 (defn tuple5-5th [A B C D E] [t :(Tuple5 A B C D E)] :E
   (.e5 t))
+
+;; ── Equality ───────────────────────────────────────────────────────────────
+
+;;; tuple2-eq? -- compare two Tuple2 values element-wise using supplied
+;;; comparators.  Mirrors stdlib/pair.tur's pair-eq? macro.
+;;;
+;;; Parameters:
+;;;   t1     -- first Tuple2[A B]
+;;;   t2     -- second Tuple2[A B]
+;;;   e1-cmp -- comparator for the first element  (fn [a b] :bool)
+;;;   e2-cmp -- comparator for the second element (fn [a b] :bool)
+;;;
+;;; Returns:
+;;;   true if both elements are equal under their comparators.
+;;;
+;;; Example:
+;;;   (tuple2-eq? (tuple2 1 2) (tuple2 1 2)
+;;;               (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase TP2
+(defmacro tuple2-eq? [t1 t2 e1-cmp e2-cmp]
+  `(if (~e1-cmp (.e1 ~t1) (.e1 ~t2))
+     (~e2-cmp (.e2 ~t1) (.e2 ~t2))
+     false))
+
+;;; tuple2-eq-carrier? -- legacy carrier-ABI helper used inside Tuple2's Eq
+;;; instance.  Mirrors stdlib/pair.tur's pair-eq-carrier?; subject to the
+;;; same pre-existing typeclass-dispatch-on-parametric-struct issue that
+;;; affects Eq [Pair] and Eq [Option].  Prefer the tuple2-eq? macro above
+;;; for direct comparisons.
+;;;
+;;; Since: Phase TP2
+(defn tuple2-eq-carrier? [t1 :int t2 :int e1-cmp e2-cmp] #{} :bool
+  ```c
+  struct { int64_t e1; int64_t e2; } *a = (void*)(intptr_t)t1;
+  struct { int64_t e1; int64_t e2; } *b = (void*)(intptr_t)t2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  bool e1_eq = ((bool(*)(int64_t, int64_t))(intptr_t)e1_cmp)(a->e1, b->e1);
+  bool e2_eq = ((bool(*)(int64_t, int64_t))(intptr_t)e2_cmp)(a->e2, b->e2);
+  return e1_eq && e2_eq;
+  ```)
+
+;;; Eq [Tuple2] -- element-wise equality.  At parity with Eq [Pair]: shares
+;;; the pre-existing typeclass-dispatch-on-parametric-struct issue, so
+;;; reach for tuple2-eq? above for working call-site equality.
+;;;
+;;; Since: Phase TP2
+(definstance Eq [Tuple2] [(Eq A) (Eq B)]
+  (eq? [x y] (tuple2-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

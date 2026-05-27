@@ -124,20 +124,20 @@
     (let [fv f]
       (fn [p]
         ```c
-        struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
-        struct { int64_t first; int64_t second; } *result = malloc(sizeof(*result));
-        result->first  = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->first);
-        result->second = pair->second;
+        Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+        Tuple2 *result = (Tuple2 *)malloc(sizeof(Tuple2));
+        result->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->e1);
+        result->e2 = pair->e2;
         return (int64_t)(intptr_t)result;
         ```)))
   (second [f]
     (let [fv f]
       (fn [p]
         ```c
-        struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
-        struct { int64_t first; int64_t second; } *result = malloc(sizeof(*result));
-        result->first  = pair->first;
-        result->second = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->second);
+        Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+        Tuple2 *result = (Tuple2 *)malloc(sizeof(Tuple2));
+        result->e1 = pair->e1;
+        result->e2 = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->e2);
         return (int64_t)(intptr_t)result;
         ```))))
 
@@ -187,7 +187,7 @@
     (let [fv f
           c-ref (ref 0)]
       (fn [a]
-        (let [pair (__arrow_call1 fv (Pair a @c-ref))]
+        (let [pair (__arrow_call1 fv (tuple2 a @c-ref))]
           ```c
           /* Stub: feedback not fully implemented without Tuple support */
           return 0;
@@ -233,35 +233,83 @@
   (let [fv f gv g]
     (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
 
-;;; arrow-first -- apply a function to the first component of a Pair.
+;;; __arrow_pair_first -- inline-C: apply fv to e1 of a heap Tuple2 *p,
+;;; return a new heap Tuple2 *.  Used by arrow-first.
+(defn __arrow_pair_first [fv p] :int
+  ```c
+  Tuple2 *src = (Tuple2 *)(intptr_t)p;
+  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+  r->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(src->e1);
+  r->e2 = src->e2;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; __arrow_pair_second -- inline-C: apply fv to e2 of a heap Tuple2 *p,
+;;; return a new heap Tuple2 *.  Used by arrow-second.
+(defn __arrow_pair_second [fv p] :int
+  ```c
+  Tuple2 *src = (Tuple2 *)(intptr_t)p;
+  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+  r->e1 = src->e1;
+  r->e2 = ((int64_t(*)(int64_t))(intptr_t)fv)(src->e2);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; __arrow_pair_par -- inline-C: apply fv to e1 and gv to e2 of *p.
+(defn __arrow_pair_par [fv gv p] :int
+  ```c
+  Tuple2 *src = (Tuple2 *)(intptr_t)p;
+  Tuple2 *r   = (Tuple2 *)malloc(sizeof(Tuple2));
+  r->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(src->e1);
+  r->e2 = ((int64_t(*)(int64_t))(intptr_t)gv)(src->e2);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; __arrow_pair_split -- inline-C: produce a heap Tuple2 from (fv x, gv x).
+(defn __arrow_pair_split [fv gv x] :int
+  ```c
+  Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
+  r->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(x);
+  r->e2 = ((int64_t(*)(int64_t))(intptr_t)gv)(x);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; __arrow_pair_dup -- inline-C: produce a heap Tuple2 with both fields = x.
+(defn __arrow_pair_dup [x] :int
+  ```c
+  Tuple2 *r = (Tuple2 *)malloc(sizeof(Tuple2));
+  r->e1 = x;
+  r->e2 = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; arrow-first -- apply a function to the first component of a Tuple2.
 ;;;
 ;;; Parameters:
 ;;;   f -- function to apply
 ;;;
 ;;; Returns:
-;;;   A function on Pair that applies f to the first field.
+;;;   A function on Tuple2 that applies f to the first field.
 ;;;
 ;;; Example:
-;;;   ((arrow-first (fn [x] (+ x 1))) (Pair 5 10))  ; => Pair(6, 10)
+;;;   ((arrow-first (fn [x] (+ x 1))) <heap Tuple2 (5, 10)>)  ; => Tuple2(6, 10)
 (defn arrow-first [f]
   (let [fv f]
-    (fn [p]
-      (Pair (__arrow_call1 fv (first p)) (second p)))))
+    (fn [p] (__arrow_pair_first fv p))))
 
-;;; arrow-second -- apply a function to the second component of a Pair.
+;;; arrow-second -- apply a function to the second component of a Tuple2.
 ;;;
 ;;; Parameters:
 ;;;   f -- function to apply
 ;;;
 ;;; Returns:
-;;;   A function on Pair that applies f to the second field.
+;;;   A function on Tuple2 that applies f to the second field.
 ;;;
 ;;; Example:
-;;;   ((arrow-second (fn [x] (+ x 1))) (Pair 5 10))  ; => Pair(5, 11)
+;;;   ((arrow-second (fn [x] (+ x 1))) <heap Tuple2 (5, 10)>)  ; => Tuple2(5, 11)
 (defn arrow-second [f]
   (let [fv f]
-    (fn [p]
-      (Pair (first p) (__arrow_call1 fv (second p))))))
+    (fn [p] (__arrow_pair_second fv p))))
 
 ;;; arrow-id -- identity arrow for any Arrow instance.
 ;;;
@@ -292,37 +340,36 @@
 (defn arrow-comp [^arr a b c f g]
   (>>> f g))
 
-;;; par-comp -- parallel composition of two functions on Pair types.
+;;; par-comp -- parallel composition of two functions on Tuple2 types.
 ;;;
 ;;; Parameters:
 ;;;   f -- function a -> b
 ;;;   g -- function c -> d
 ;;;
 ;;; Returns:
-;;;   A function on Pair a c -> Pair b d: (par-comp f g)(Pair x y) = Pair(f x, g y).
+;;;   A function on Tuple2 a c -> Tuple2 b d:
+;;;   (par-comp f g)(tuple2 x y) = tuple2(f x, g y).
 ;;;
 ;;; Example:
-;;;   ((par-comp inc double) (Pair 1 2))  ; => Pair(2, 4)
+;;;   ((par-comp inc double) (tuple2 1 2))  ; => Tuple2(2, 4)
 (defn par-comp [a b c d f g]
   (let [fv f gv g]
-    (fn [p]
-      (Pair (__arrow_call1 fv (first p)) (__arrow_call1 gv (second p))))))
+    (fn [p] (__arrow_pair_par fv gv p))))
 
-;;; arrow-split -- duplicate input and apply two functions, returning a Pair.
+;;; arrow-split -- duplicate input and apply two functions, returning a Tuple2.
 ;;;
 ;;; Parameters:
 ;;;   f -- function a -> b
 ;;;   g -- function a -> c
 ;;;
 ;;; Returns:
-;;;   A function a -> Pair b c: (arrow-split f g)(x) = Pair(f x, g x).
+;;;   A function a -> Tuple2 b c: (arrow-split f g)(x) = tuple2(f x, g x).
 ;;;
 ;;; Example:
-;;;   ((arrow-split inc double) 3)  ; => Pair(4, 6)
+;;;   ((arrow-split inc double) 3)  ; => Tuple2(4, 6)
 (defn arrow-split [a b c f g]
   (let [fv f gv g]
-    (fn [x]
-      (Pair (__arrow_call1 fv x) (__arrow_call1 gv x)))))
+    (fn [x] (__arrow_pair_split fv gv x))))
 
 ;;; <<< -- compose two function arrows in reverse order.
 ;;;
@@ -358,17 +405,17 @@
   (let [cv v]
     (fn [_] cv)))
 
-;;; arrow-dup -- arrow that duplicates its input into a Pair.
+;;; arrow-dup -- arrow that duplicates its input into a Tuple2.
 ;;;
 ;;; Parameters:
 ;;;   x -- the value to duplicate
 ;;;
 ;;; Returns:
-;;;   A Pair of x with itself: Pair(x, x).
+;;;   A Tuple2 of x with itself: Tuple2(x, x).
 ;;;
 ;;; Example:
-;;;   (first (arrow-dup 7))  ; => 7
+;;;   (tuple2-1st (arrow-dup 7))  ; => 7
 ;;;
 ;;; Since: Phase B2
 (defn arrow-dup [x] :int
-  (Pair x x))
+  (__arrow_pair_dup x))
