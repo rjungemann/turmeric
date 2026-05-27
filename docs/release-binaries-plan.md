@@ -62,12 +62,15 @@ A secondary issue showing up in the same run logs:
 
 Two changes to `.github/workflows/release.yml`, plus a verification step.
 
-### 1. Replace the `macos-13` leg with a universal2 build on `macos-latest`
+### 1. Replace the `macos-13` leg with native arm64 on `macos-latest`
 
-`macos-latest` is an Apple-silicon runner. CMake can produce a fat
-binary that runs natively on both arm64 and x86_64 Macs by setting
-`CMAKE_OSX_ARCHITECTURES="arm64;x86_64"`. That collapses the two macOS
-legs into one and removes the dependency on the retired runner image.
+`macos-latest` is an Apple-silicon runner. Build natively for arm64,
+ship one macOS tarball, and drop Intel-Mac support from precompiled
+releases. (Originally this section proposed a universal2 build; the
+attempt failed -- see "Discovered during execution: universal2 won't
+work" below.) Intel-Mac users today fall back to
+`brew install --HEAD turmeric` (now that the formula installs stdlib
+correctly) or build from source.
 
 Matrix shape after the change:
 
@@ -78,23 +81,9 @@ matrix:
       os: ubuntu-latest
     - target: linux-aarch64
       os: ubuntu-24.04-arm
-    - target: macos-universal
+    - target: macos-arm64
       os: macos-latest
-      cmake_extra: -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64
 ```
-
-Trade-off considered: keep two separate macOS legs and just swap
-`macos-13` for cross-compile on `macos-latest` (`-DCMAKE_OSX_ARCHITECTURES=x86_64`).
-That keeps per-arch tarball names stable but doubles the build cost and
-still emits two artifacts that users have to pick between. The universal2
-binary is the standard distribution shape for a CLI of this size; pick
-that unless there is a known consumer that requires a thin x86_64 binary.
-
-**Asset-naming consequence:** users who scripted downloads of
-`turmeric-<tag>-macos-arm64.tar.gz` or `turmeric-<tag>-macos-x86_64.tar.gz`
-will need to switch to `turmeric-<tag>-macos-universal.tar.gz`. Given
-there has never been a successful release, no such script exists in
-practice -- safe to break.
 
 ### 2. Decouple `release` from individual matrix-leg failures
 
@@ -147,9 +136,8 @@ numbers?
    only the workflow. Confirm the run finishes in ~5 minutes with all
    three legs green and a release page appears with three tarballs +
    `sha256sums.txt`.
-2. Download `turmeric-v0.0.0-test1-macos-universal.tar.gz` on an
-   Apple-silicon Mac and on an Intel Mac (or via Rosetta on AS to
-   exercise the x86_64 slice), extract, run `./tur --version`.
+2. Download `turmeric-v0.0.0-test1-macos-arm64.tar.gz` on an
+   Apple-silicon Mac, extract, run `./tur --version`.
 3. Repeat on Linux x86_64 and aarch64 (Docker `--platform=linux/arm64`
    on an AS Mac is fine for the latter).
 4. Delete the test tag and release: `gh release delete v0.0.0-test1
@@ -183,6 +171,53 @@ otherwise a regression in stdlib installation passes silently. Use
 `tur run` does not depend on stdlib and would not catch the bug. The
 interpreter path is chosen over `tur run` deliberately -- see the
 runtime-source caveat below.
+
+## Discovered during execution: universal2 won't work
+
+The first test tag (`v0.0.0-test1`) failed the macOS leg at the
+Configure step because `;` in `-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64`
+was parsed by `bash` as a command separator after
+`${{ matrix.cmake_extra }}` was substituted into the run line.
+Shell-quoting the value fixed Configure (`v0.0.0-test2`), but the
+Build step then failed with:
+
+```
+src/async/fiber_ctx_arm64.S:18:19: error: brackets expression not
+supported on this target
+    stp x29, x30, [x0, #80]
+```
+
+The project has hand-written assembly for each architecture
+(`src/async/fiber_ctx_arm64.S` and `src/async/fiber_ctx_x64.S`) and
+`src/CMakeLists.txt:135` selects between them with:
+
+```cmake
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_arm64.S)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_x64.S)
+```
+
+A universal2 build on an arm64 runner adds only the arm64 `.S`, then
+the compile-driver tries to assemble that file *twice* -- once per
+architecture slice -- and fails for x86_64. Even passing
+`-DCMAKE_SYSTEM_PROCESSOR=x86_64` explicitly doesn't help: `project()`
+on line 2 of the top-level `CMakeLists.txt` re-detects the host
+processor and overrides the CLI value.
+
+Two ways to make universal2 actually work, both deferred:
+
+- Edit the conditional to prefer `CMAKE_OSX_ARCHITECTURES` over
+  `CMAKE_SYSTEM_PROCESSOR` on Apple, *and* set per-source
+  `OSX_ARCHITECTURES` properties so each `.S` file is excluded from
+  the architecture slice it doesn't support.
+- Build two thin static libraries (one per arch) and stitch them
+  together with `lipo`.
+
+Both expand scope beyond "make tagged releases work" and require
+non-trivial CMake changes; arm64-only macOS is the simplest path
+that ships a working binary today. Intel-Mac coverage can return
+later if there's demand.
 
 ## Discovered during execution: runtime sources also missing
 
@@ -238,6 +273,10 @@ Resolution sketch (for a follow-on plan):
   and a notary workflow. Users today can `xattr -d com.apple.quarantine
   ./tur` after download; that is acceptable for a pre-1.0 CLI. Revisit
   once there is demand or a 1.0 target.
+- **macOS x86_64 / universal2.** See "Discovered during execution:
+  universal2 won't work" above. Intel-Mac users use
+  `brew install --HEAD turmeric` (source build) until per-arch
+  asm-source selection lands in CMake.
 - **Stable Homebrew URL.** `Formula/turmeric.rb` is currently HEAD-only
   (no `url`/`sha256`, just `head`). Once the first tagged release
   actually publishes, a follow-on PR can add a stable `url`/`sha256`
@@ -254,8 +293,7 @@ Resolution sketch (for a follow-on plan):
 
 - [ ] Pushing a `v*` tag produces a GitHub Release within ~10 minutes.
 - [ ] Release contains tarballs for `linux-x86_64`, `linux-aarch64`,
-      and `macos-universal` (or whichever targets the final matrix
-      lands on), plus `sha256sums.txt`.
+      and `macos-arm64`, plus `sha256sums.txt`.
 - [ ] Each tarball extracts to `tur` + `stdlib/` + `include/` as
       siblings, and `./tur --version` exits 0.
 - [ ] From the extracted tarball, `./tur --interpret` of a file

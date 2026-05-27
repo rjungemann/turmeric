@@ -19,12 +19,9 @@ jobs:
           - target: linux-aarch64
             os: ubuntu-24.04-arm
             cmake_extra: ""
-          - target: macos-universal
+          - target: macos-arm64
             os: macos-latest
-            # Shell-quote the value: the `;` would otherwise be interpreted
-            # as a command separator after ${{ matrix.cmake_extra }} is
-            # substituted into the run line.
-            cmake_extra: '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"'
+            cmake_extra: ""
 
     steps:
       - uses: actions/checkout@v5
