@@ -1,0 +1,13 @@
+;; TS3.4: typed Option[float] round-trips a float through a typed payload
+;; slot.  The `value` field is read as a `double` from the Option__float
+;; layout -- no user-side bit-cast.
+
+(defn main [] :int
+  (let [o (:: (make-struct Option true 2.5) (Option float))]
+    (println (.is-some o))
+    (println (.value o))
+    (println (unwrap o)))
+  ;; A none-shaped Option[float] still carries a typed (but unused) payload.
+  (let [n (:: (make-struct Option false 0.0) (Option float))]
+    (println (.is-some n)))
+  0)

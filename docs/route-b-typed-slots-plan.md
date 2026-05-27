@@ -1,7 +1,7 @@
 # Plan: Route B — Monomorphised typed value slots
 
-> **Status:** In progress — TS1 landed, TS2 landed, TS3 substrate through GS4 landed, TS3-GS5 started, TS4-TS6 open
-> **Last Updated:** 2026-05-25
+> **Status:** In progress — TS1, TS2, TS3, TS4 (concrete slice) landed; TS5–TS6 open
+> **Last Updated:** 2026-05-26
 > **Type:** Compiler + runtime + stdlib
 > **Companion to:** [defalias-plan.md](defalias-plan.md)
 > **GS5 compiler follow-up:** [typed-slots-gs5-compiler-support-plan.md](typed-slots-gs5-compiler-support-plan.md)
@@ -129,12 +129,92 @@ focused fixture `tests/fixtures/typed-slots/tcons-of/`. Typed
 the inactive-payload representation question is resolved (see "Open
 design choices" in the archived GS5 compiler support plan).
 
+**Worktree update (2026-05-26, TS3.2 slice):** the TS3.2 audit confirmed
+that nested concrete struct-app monomorphisation, mangled typedef names
+(`Cons__float`, `Pair__int__float`, etc.), and field-layout codegen are
+already correct end-to-end -- including for nested struct-apps such as
+`Wrap[Box[float]]` emitting `Wrap__Box__float { Box__float inner; }`.
+The remaining TS3.2 gap was sized-numeric type arguments collapsing to
+the generic int/float kind during struct-app instantiation (KB-013).
+Root cause was the short-form sized type names (`i32`, `f32`, `i16`,
+`u32`, ...) not being recognised by `typekind_from_symbol` /
+`typekind_from_name`; the mangler and field codegen were correct as
+soon as the type resolves.  Fixed by adding `i8`/`i16`/`i32`/`i64`/
+`u8`/`u16`/`u32`/`u64`/`f32`/`f64` short forms to both kind tables.
+`(Box i32)` now emits `Box__int32 { int32_t x; }` and the let-binding
+also lands as the concrete typed local (resolves KB-014 as a downstream
+effect of the same fix).  Fixture:
+`tests/fixtures/typed-slots/sized-numeric-struct-app/`.  Literal
+inference inside `make-struct` does **not** yet propagate the expected
+struct-app argument type into the value-side literal (`(make-struct Box
+1)` infers `int` regardless of declared `(Box i32)` return), which is a
+bidirectional-checking concern outside TS3.2 scope; ascribe the literal
+explicitly: `(make-struct Box (:: 1 i32))`.
+
+**Worktree update (2026-05-26, TS3.4 slice):** added the three named
+acceptance fixtures the plan called out:
+`tests/fixtures/typed-slots/cons-float/` (`.head`/`.tail` direct read
+of a `Cons__float` layout), `option-float/` (Option[float] payload
+round-trip via `.value` and `unwrap`, plus `.is-some` on a none-shaped
+cell), and `polymorphic-cons-boundary/` (a `Cons[float]` flowing
+through an `[A] [c :(Cons A)] :(Cons A)` identity fn and back, with
+both ends reading `.head` as `double`).  The cons-float fixture
+exercises `.head` rather than `thead`/`thead` repeated, because a
+pre-existing specialization-cache bug (KB-015) emits a spurious
+`int64<->double` reinterpret around the second call to a generic
+typed accessor.  All 17 typed-slots fixtures pass; full
+`tests/run.sh` regression unchanged at 884 passed / 110 failed
+(110 are pre-existing per KB-006).
+
+**Worktree update (2026-05-26, TS3.3 slice):** the TS3.3 boundary probe
+confirmed that polymorphic round-trips of typed aggregate containers
+(`(defn id-cons [A] [c :(Cons A)] :(Cons A) c)` called with
+`(Cons float)`) already work end-to-end via the GS5 substrate.  The
+real remaining gap was at *scalar* boundaries: `(:: f int)` for
+`f :float` was emitting an implicit C value cast that truncated `1.5`
+to `1`, instead of the bit-reinterpret that the TS2 EX_REINTERPRET
+codegen was designed to emit.  Fix lives in `elab_ascribe`
+(`src/compiler/elab_types.c`): when the source and target kinds are
+distinct same-size scalars (any `:int`/`:float`/`:i32`/`:f32`/...
+cross-kind pair where `type_size_bytes` matches), produce an
+`EX_REINTERPRET` node rather than the carrier-erasing `EX_ASCRIBE`
+node.  Otherwise behaviour is unchanged.  Fixture:
+`tests/fixtures/typed-slots/ascribe-reinterpret/` -- exercises
+`float`↔`int`, `bool`↔`int`, and `i32`↔`f32` round trips.  Container
+boundary reinterprets are not needed in addition because aggregate
+struct-apps already preserve their concrete type across polymorphic
+boundaries via the GS5 instantiation work; the previous concern
+about "16-byte struct in 8-byte int64 slot" was a user-pattern issue
+(chained Cons cells need a heap-pointer constructor, not a value
+cast), separate from TS3.3.
+
+**Worktree update (2026-05-26, TS4 slice):** the concrete-payload slice of
+TS4 is now locked down via the `adt-float-payload` fixture
+(`tests/fixtures/typed-slots/adt-float-payload/`).  Investigation
+confirmed that `defdata` with concrete primitive field types (e.g.
+`(defdata MaybeF (JustF :float) (NothingF))`) already monomorphises
+correctly today through `emit_module.c:658-740`: the `tur_adt_MaybeF`
+typedef emits `struct { double _0; } JustF`, `ctor_JustF` takes a
+`double` arg directly, and the `match` destructure binds `double x`
+without any user-side bit-cast.  Polymorphic ADTs declared as
+`(defdata Maybe [a] (Just a) ...)` still carry `a` on the legacy
+`int64_t` carrier (see `elab_structs.c:1184` -- the TY_TYVAR field
+explicitly resolves to `TY_INT` at the runtime layer), so a `:float`
+payload through a polymorphic position still needs the TS3.3 ascribe
+reinterpret pattern at the user-visible boundary.  Per-instance ADT
+monomorphisation (`tur_adt_Maybe__float`, `ctor_Just__float`, match
+specialization) mirrors the GS5 struct-app work in scope and is broken
+out as a follow-up:
+[`upcoming/typed-slots-ts4-poly-adt-plan.md`](upcoming/typed-slots-ts4-poly-adt-plan.md).
+All 17 typed-slots fixtures pass; `tests/run.sh` regression unchanged at
+884 passed / 110 failed (110 pre-existing per KB-006).
+
 ## Progress checklist
 
 - [x] TS1 — Typed thunk ABI
 - [x] TS2 — Reinterpret coercion node
-- [ ] TS3 — Typed primitive containers
-- [ ] TS4 — Typed ADT payloads
+- [x] TS3 — Typed primitive containers (TS3.1–TS3.4 landed; Vec deferred to TS3b; inactive-payload Option/Result constructors and KB-015 specialization-cache bug noted)
+- [x] TS4 — Typed ADT payloads (concrete-payload slice; polymorphic-ADT monomorphisation deferred — see [`typed-slots-ts4-poly-adt-plan.md`](upcoming/typed-slots-ts4-poly-adt-plan.md))
 - [ ] TS5 — HKT helpers use reinterpret
 - [ ] TS6 — Signal spice migration
 
@@ -402,11 +482,11 @@ per-instance flag if necessary.
 - [x] TS2.1 — Add `EX_REINTERPRET` IR node + codegen
 - [x] TS2.2 — Compiler unit test for synthetic reinterpret
 - [x] TS3.1 — Parameterise stdlib containers over `[A]` (Cons/Option/Pair/Result; Vec deferred to TS3b; carrier constructors `some`/`none`/`ok`/`err` deferred pending inactive-payload representation)
-- [ ] TS3.2 — Monomorphised struct field layout per `A`
-- [ ] TS3.3 — Insert TS2 reinterprets at container boundaries
-- [ ] TS3.4 — Container fixtures (`cons-float`, `option-float`, …)
-- [ ] TS4.1 — Typed ADT payload codegen
-- [ ] TS4.2 — ADT fixture
+- [x] TS3.2 — Monomorphised struct field layout per `A` (nested concrete struct-app layouts already correct; sized-numeric short-form aliases fixed; bidirectional literal inference still open)
+- [x] TS3.3 — Insert TS2 reinterprets at container boundaries (`::` now emits EX_REINTERPRET for distinct same-size scalar kinds; aggregate boundaries already preserved by GS5 instantiation)
+- [x] TS3.4 — Container fixtures (`cons-float`, `option-float`, `polymorphic-cons-boundary` landed; uses `.head`/`.value` direct access to sidestep KB-015)
+- [x] TS4.1 — Typed ADT payload codegen (concrete primitive fields only; polymorphic ADT monomorphisation deferred)
+- [x] TS4.2 — ADT fixture (`adt-float-payload`)
 - [ ] TS5.1 — Migrate `list`, `fix`, `free` HKT helpers to TS2 reinterprets
 - [ ] TS5.2 — Functor/Monad regression fixtures
 - [ ] TS6.1 — Migrate signal spice; delete `defalias Sample :int`

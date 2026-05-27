@@ -1,0 +1,14 @@
+;; TS3.4: a typed Cons[float] passes through a Cons[A]-typed identity fn
+;; and back, preserving the concrete payload layout.  This is the
+;; aggregate-container side of the typed<->generic boundary.
+
+(defn id-cons [A] [c :(Cons A)] :(Cons A)
+  c)
+
+(defn main [] :int
+  (let [orig (:: (make-struct Cons 1.5 0) (Cons float))
+        thru (id-cons orig)]
+    ;; Both ends read the head as a direct `double` from Cons__float.
+    (println (.head orig))
+    (println (.head thru))
+    0))

@@ -1,0 +1,12 @@
+;; TS3.4: typed Cons[float] with direct double field access.
+;; The .head field is read as a `double` from the Cons__float layout
+;; -- no user-side bit-cast, no inline-C carrier read.
+
+(defn main [] :int
+  (let [xs (tcons-of 1.5 0)]
+    (println (.head xs))
+    (println (.tail xs)))
+  (let [ys (tcons-of 2.5 0)]
+    (println (.head ys))
+    (println (.tail ys)))
+  0)

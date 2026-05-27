@@ -1957,6 +1957,17 @@ TypeKind typekind_from_name(const char *name) {
     if (strcmp(name, "uint64") == 0) return TY_UINT64;
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
+    /* Short-form sized aliases */
+    if (strcmp(name, "i8")  == 0) return TY_INT8;
+    if (strcmp(name, "i16") == 0) return TY_INT16;
+    if (strcmp(name, "i32") == 0) return TY_INT32;
+    if (strcmp(name, "i64") == 0) return TY_INT64;
+    if (strcmp(name, "u8")  == 0) return TY_UINT8;
+    if (strcmp(name, "u16") == 0) return TY_UINT16;
+    if (strcmp(name, "u32") == 0) return TY_UINT32;
+    if (strcmp(name, "u64") == 0) return TY_UINT64;
+    if (strcmp(name, "f32") == 0) return TY_FLOAT32;
+    if (strcmp(name, "f64") == 0) return TY_FLOAT64;
     if (strcmp(name, "set") == 0) return TY_SET;
     if (strcmp(name, "handler") == 0) return TY_HANDLER;
     /* SS0a: Session protocol types */

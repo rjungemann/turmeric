@@ -1,0 +1,14 @@
+(defstruct Box [A] (x A))
+
+(defn make-i32-box [] :(Box i32)
+  (make-struct Box (:: 1 i32)))
+
+(defn make-f32-box [] :(Box f32)
+  (make-struct Box (:: 1.5 f32)))
+
+(defn main [] :int
+  (let [b32 (make-i32-box)
+        bf32 (make-f32-box)]
+    (println (.x b32))
+    (println (.x bf32))
+    0))

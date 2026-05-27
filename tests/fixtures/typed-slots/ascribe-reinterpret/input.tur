@@ -1,0 +1,23 @@
+;; TS3.3: (:: expr type) across same-size scalar kinds inserts a bit-reinterpret
+;; rather than a value cast.  This is the boundary used when a typed scalar
+;; flows through the legacy int64 carrier and back.
+
+(defn carrier-id [x :int] :int x)
+
+(defn main [] :int
+  ;; float -> carrier -> float round-trip preserves the bit pattern
+  (let [f 1.5
+        thru (carrier-id (:: f int))
+        back (:: thru float)]
+    (println back))
+  ;; bool -> carrier -> bool
+  (let [b true
+        thru (carrier-id (:: b int))
+        back (:: thru bool)]
+    (println back))
+  ;; i32 <-> f32 round-trip (same 4-byte width)
+  (let [n (:: 42 i32)
+        as-f (:: n f32)
+        back (:: as-f i32)]
+    (println back))
+  0)

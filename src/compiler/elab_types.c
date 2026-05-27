@@ -1636,7 +1636,13 @@ Expr *elab_type_app(Elab *e, const Form *call) {
 
 /* Phase HRT1: (:: expr type) — type ascription.
  * The ascribed type is checked for well-formedness but erased at codegen.
- * Syntax: (:: expr type-form) */
+ * Syntax: (:: expr type-form)
+ *
+ * TS3.3: when the source and target types are distinct same-size scalar
+ * kinds (e.g. `:float` → `:int`, `:i32` → `:f32`), emit an EX_REINTERPRET
+ * node so the bit pattern survives the carrier crossing intact.  Without
+ * this, downstream codegen would emit an implicit C value cast that
+ * truncates floats and rounds integers. */
 Expr *elab_ascribe(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1653,6 +1659,22 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     /* Elaborate the expression */
     Expr *inner = elab_form(e, expr_form);
     if (!inner) return NULL;
+
+    /* TS3.3: if both source and target are scalar same-size kinds and they
+     * differ, insert an EX_REINTERPRET. */
+    TypeKind src_kind = inner->type.kind;
+    TypeKind dst_kind = ascribed->kind;
+    if (src_kind != dst_kind) {
+        int src_size = type_size_bytes(src_kind);
+        int dst_size = type_size_bytes(dst_kind);
+        if (src_size > 0 && dst_size > 0 && src_size == dst_size) {
+            Expr *r = expr_new(e->arena, EX_REINTERPRET, *ascribed, call->span);
+            r->as.reinterpret_.expr = inner;
+            r->as.reinterpret_.source_kind = src_kind;
+            r->as.reinterpret_.target_kind = dst_kind;
+            return r;
+        }
+    }
 
     /* Build ascription node — the expression's type is overridden by the ascribed type
      * for downstream type-checking purposes. Type is erased at codegen. */

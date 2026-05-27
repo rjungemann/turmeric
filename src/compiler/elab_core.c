@@ -46,6 +46,17 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "uint64") == 0) return TY_UINT64;
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
+    /* Short-form sized aliases */
+    if (strcmp(name, "i8")  == 0) return TY_INT8;
+    if (strcmp(name, "i16") == 0) return TY_INT16;
+    if (strcmp(name, "i32") == 0) return TY_INT32;
+    if (strcmp(name, "i64") == 0) return TY_INT64;
+    if (strcmp(name, "u8")  == 0) return TY_UINT8;
+    if (strcmp(name, "u16") == 0) return TY_UINT16;
+    if (strcmp(name, "u32") == 0) return TY_UINT32;
+    if (strcmp(name, "u64") == 0) return TY_UINT64;
+    if (strcmp(name, "f32") == 0) return TY_FLOAT32;
+    if (strcmp(name, "f64") == 0) return TY_FLOAT64;
     /* IT4: Top type — available with -Xunion-types or -Xintersection-types */
     if (strcmp(name, "any") == 0) return TY_ANY;
     return TY_UNKNOWN;

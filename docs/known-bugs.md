@@ -513,3 +513,222 @@ fully-resolved `Tuple2[int int]` for `x` or some unresolved
 time, field offsets will be wrong even after the calling
 convention is fixed.
 
+---
+
+## KB-013 -- Sized numeric type arguments collapse to generic kind in struct-app mangling
+
+**Discovered:** 2026-05-26 (TS3.2 audit)
+**Status:** Fixed 2026-05-26 -- root cause was unrecognised short-form sized
+type names (`i32`, `f32`, ...).  Mangling, layout, and the let-binding carrier
+(KB-014) all flow correctly once the type resolves.
+
+### Symptom (before fix)
+
+A parameterised struct instantiated at a *sized* numeric type lost precision
+in both the mangled C name and the emitted field type.  `(Box i32)` produced
+`Box__int { int64_t x; }` instead of `Box__int32 { int32_t x; }`.
+
+### Root cause
+
+`typekind_from_symbol` (`src/compiler/elab_core.c:23`) and `typekind_from_name`
+(`src/compiler/types.c:1917`) recognised the long forms `int32` / `float32` /
+etc. but not the short forms `i32` / `f32` / `i16` / `u32` / ...  An unknown
+sized-type short form fell through to the opaque-struct fallback in
+`type_expr_from_form`, and downstream literal inference then re-injected the
+generic `TY_INT` / `TY_FLOAT` kind from the value-side, producing the
+`Box__int` / `Box__float` mangling.
+
+The mangler in `src/compiler/types.c:285` (`append_type_mangle`) already had
+correct cases for `TY_INT32`, `TY_FLOAT32`, etc., so once the type resolves,
+the rest of codegen is fine.
+
+### Fix
+
+Added `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64` to
+both `typekind_from_symbol` (`src/compiler/elab_core.c`) and
+`typekind_from_name` (`src/compiler/types.c`).  Each maps to its corresponding
+`TY_INT*` / `TY_UINT*` / `TY_FLOAT*` kind.
+
+### Verification
+
+`tests/fixtures/typed-slots/sized-numeric-struct-app/` -- asserts that
+`(Box i32)` emits `Box__int32 { int32_t x; }` and `(Box f32)` emits
+`Box__float32 { float x; }`, with the function return type, local-variable
+declaration, and field type all using the concrete sized C type.
+
+### Remaining limitation
+
+Literal inference still does not propagate the expected struct-app argument
+type into the value-side literal.  This means `(make-struct Box 1)` inside a
+function declared `:(Box i32)` infers `1` as `int64_t` and produces a C-level
+type mismatch (`Box__int` vs. `Box__int32` return).  The workaround is to
+ascribe the literal explicitly: `(make-struct Box (:: 1 i32))`.  This is a
+bidirectional-checking concern, separate from TS3.2.
+
+---
+
+## KB-014 -- Aggregate struct-app let-bindings use `int64_t` carrier
+
+**Discovered:** 2026-05-26 (TS3.2 audit)
+**Status:** Fixed 2026-05-26 -- this turned out to be a downstream effect of
+KB-013.  Once the struct-app type resolves correctly, the let-binding picks
+up the concrete C type (`Box__int32 b_603 = make_i32_box();`).  The
+"int64_t carrier" only appeared when the type-application's argument was
+itself unresolved (short-form `i32`/`f32` fell through to opaque struct).
+
+### Symptom
+
+A `let` binding initialised from `make-struct` of a parameterised struct
+emits an `int64_t` carrier variable holding the aggregate as a compound
+literal:
+
+```c
+int64_t b32_606  = (Box__int){.x = INT64_C(1)};
+int64_t bf32_607 = (Box__float){.x = 1.5};
+(void)(ret_i32(b32_606));
+(void)(ret_f32(bf32_607));
+```
+
+The compound literal is the correct *concrete* layout (`Box__int`,
+`Box__float`), but the receiving variable is `int64_t`.  This works today
+by accident: C silently truncates / sign-extends, and the codepath does
+not actually access the struct's fields through the `int64_t` view.  As
+soon as a downstream consumer expects the typed C struct (a typed thunk,
+a specialised helper, or a typed field access), the mismatch surfaces as
+either a C-level type error or wrong-width memory reads.
+
+### Root cause
+
+Local variable types for aggregates produced by `make-struct` are still
+emitted via the legacy carrier ABI, even when the elaborated `Expr` carries
+a fully concrete `TY_APP` (e.g. `Box__int`).  The let-codegen path picks
+`type_c_name()` against an erased shell rather than against the
+fully-instantiated `Expr->type`.
+
+This is the same family of bug as the CS1 "finish aggregate return
+instantiation" item in
+[archive/typed-slots-gs5-compiler-support-plan.md](archive/typed-slots-gs5-compiler-support-plan.md):
+the type system already knows the concrete instantiation, but the carrier
+ABI is still picked at the emit boundary.
+
+### Reproducer
+
+`./build/tur emit-c tests/fixtures/typed-slots/tcons-of/input.tur` -- look
+for the `main()` body and any `let` binding holding a `(Cons A)` /
+`(Option A)` / etc.  The local will be `int64_t`, while the initialiser
+will be `(Cons__A){...}`.
+
+### Impact
+
+- Direct typed field access through a let-bound local works today only
+  because the carrier ABI happens to round-trip 8-byte payloads.
+- Larger payloads (e.g. `Pair__int__float` is 16 bytes) silently truncate
+  when funneled through an `int64_t` local.
+- Blocks CS3-style specialised helpers from accepting aggregate values
+  by-value -- the caller's local is the wrong width.
+
+### Workaround
+
+Avoid let-binding intermediate aggregate values; either chain field
+accesses on the `make-struct` expression directly, or annotate the
+binding with `(:: ... (Ctor A B))` *and* avoid passing it through a
+specialised helper.
+
+### Fix needed
+
+Emit local-variable declarations using the let-RHS's fully-instantiated
+`Expr->type` (via `type_c_name(expr->type)`) instead of falling back to
+the carrier shell.  Concretely: audit the let-codegen path in
+`src/compiler/emit_stmt.c` / `src/compiler/emit_expr.c` for sites that
+hardcode `int64_t` for aggregate locals.
+
+
+---
+
+## KB-015 -- Repeated calls to a specialized typed accessor emit a spurious reinterpret
+
+**Discovered:** 2026-05-26 (TS3.4 audit)
+**Status:** Open -- pre-existing bug exposed by typed accessor composition,
+not a TS3.3 regression (confirmed by stashing the TS3.3 fix and reproducing).
+
+### Symptom
+
+Calling a generic-but-specializable typed accessor like `thead`
+(`[A] [l :(Cons A)] :A`) twice in the same function, on different bindings
+of the same instantiated type, emits a spurious bit-reinterpret around
+the *second* call -- producing garbage:
+
+```turmeric
+(defn main [] :int
+  (let [xs (tcons-of 1.5 0)
+        ys (tcons-of 2.5 0)]
+    (println (thead xs))   ; => 1.5  (correct)
+    (println (thead ys))   ; => 9.88131e-324  (denormal garbage)
+    0))
+```
+
+The first call emits a clean specialized call:
+
+```c
+printf("%g\n", (double)(thead__spec__double_Cons__float(xs_601)));
+```
+
+The second call inexplicably wraps the same specialized call in a
+`int64_t <-> double` union reinterpret, which truncates the returned
+`double` through an `int64_t` slot before reading it back as `double`:
+
+```c
+printf("%g\n",
+       (double)(((union { int64_t s; double d; })
+                 {.s = thead__spec__double_Cons__float(ys_602)}).d));
+```
+
+`thead__spec__double_Cons__float` already returns `double`, so the
+extra reinterpret is wrong.
+
+### Reproducer
+
+`/tmp/test-thead2.tur` (also reproducible in the original first cut of
+`tests/fixtures/typed-slots/cons-float/`):
+
+```turmeric
+(defn main [] :int
+  (let [xs (tcons-of 1.5 0)
+        ys (tcons-of 2.5 0)]
+    (println (thead xs))
+    (println (thead ys))
+    0))
+```
+
+Calling `.head` directly avoids the bug; the bug is specifically about
+the generic-helper specialization path.
+
+### Likely cause
+
+Specialization cache state in `elab_call.c` / the
+`call_wrap_reinterpret` family appears to be sticky across repeated
+calls to the same specialized helper.  The first call gets a clean
+result type; the second call sees the result type already-converted
+state and re-wraps as if the source were the carrier `int64_t`.
+
+This pre-dates the TS3.3 work (`elab_ascribe` -> `EX_REINTERPRET`):
+stashing the TS3.3 change still reproduces the same wrong codegen for
+the second call.
+
+### Workaround
+
+Use direct field access (`(.head xs)`) instead of the helper, or call
+the helper only once per scope.  The current TS3.4 fixtures
+(`cons-float`, `option-float`) use `.head` / `.value` directly to
+sidestep the bug.
+
+### Fix sketch
+
+1. Audit the specialization-call cache and result-type threading in
+   `src/compiler/elab_call.c` -- specifically the post-call
+   `call_wrap_reinterpret(...)` site (around line 1687).  Is the
+   `result_type.kind` derived from the *binding* type (still showing
+   the carrier `int64_t`) instead of the *instantiated* type
+   (`double`)?
+2. Add a focused regression that calls a typed `[A]` helper twice on
+   two bindings of the same instantiation and asserts both results.
