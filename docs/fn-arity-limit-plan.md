@@ -1,7 +1,7 @@
 # Plan: Address the 8-parameter limit on `defn` / `fn`
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-25
+> **Status:** Phase 1 + Phase 3 + Phase 2 complete
+> **Last Updated:** 2026-05-27
 > **Type:** Compiler / Language
 > **Depends on:** [Haskell-style currying (CY0–CY4)](upcoming/currying-plan.md)
 > -- this plan assumes CY1+ has landed (partial application at
@@ -386,18 +386,18 @@ work).
 
 ### Phase 1 -- raise the cap (1 hour, no currying dependency)
 
-- [ ] **AR0** -- Change `MAX_FN_ARITY` from `8` to `16` in
+- [x] **AR0** -- Change `MAX_FN_ARITY` from `8` to `16` in
   `src/compiler/types.h:333`. Rebuild. Run the full test suite plus
   `turmeric-spices/spices/frame/tests/frame/`. Confirm no fixture
   regressions.
-- [ ] **AR1** -- Audit the error-message sites
+- [x] **AR1** -- Audit the error-message sites
   (`elab_fns.c:553`, `:1324`, `:1537`, `:1691`, `elab_types.c:759`)
   to make sure they still print `MAX_FN_ARITY` correctly (they all
   use `%d` already, but verify).
 - [ ] **AR2** -- Revisit the five pain sites in `tur-frame` and
   un-do the workarounds where the readability win is worth it
   (e.g., `__j-assemble` no longer needs to derive `lsch` inside the
-  body).
+  body). *Blocked: requires `../turmeric-spices` checkout.*
 
 Stopping point if scope creeps: this phase alone resolves every
 documented pain case in the repo, regardless of whether currying or
@@ -405,8 +405,8 @@ Phase 2/3 ever lands.
 
 ### Phase 3 -- options-struct ergonomics (~3 days, depends on CY1+)
 
-- [ ] **AR3** -- Style guide section in `CLAUDE.md` and the upcoming
-  `docs/style-guide.md` (if it exists) documenting:
+- [x] **AR3** -- Style guide section in `CLAUDE.md` and
+  `docs/style-guide.md` documenting:
   - >5 params is a smell; reach for `defstruct`.
   - "Options struct" idiom: pass a single struct holding the named
     args, with a `default-foo-opts` constructor for defaults.
@@ -414,9 +414,7 @@ Phase 2/3 ever lands.
     `(def read-csv-fast (read-csv default-opts))` -- partial
     application locks in the defaults, the resulting function takes
     only the variable args.
-  - Pattern shown by example using the (currently parallel-list)
-    APIs in `tur-frame`'s `arrange`, `agg`, `join` -- which all
-    benefit from a future migration to options structs.
+  - Quick decision guide for choosing between options struct and `& rest`.
 - [ ] **AR4** -- (Optional, gated on adoption) Call-site keyword
   sugar `(read-csv :delim 44 :has-header 1)` elaborates into
   `(read-csv (CsvOpts :delim 44 :has-header 1 :quote 34 ...))`
@@ -433,34 +431,39 @@ subsection assume the answer is "no auto-currying for variadic
 functions"; if the answer turns out to be "yes auto-curry
 everything," some of those rules need a rewrite.
 
-- [ ] **AR5** -- Parser: accept `&` in `defn` / `fn` arg lists.
+- [x] **AR5** -- Parser: accept `&` in `defn` / `fn` arg lists.
   Grammar: `(defn name [param :type ... & rest :type] :ret body)`.
   Reject more than one `&`. Type annotation on rest is required.
-- [ ] **AR6** -- Type system: add `TY_VARIADIC` (or extend the
-  function type with a `bool is_variadic` + `Type *rest_type`).
+- [x] **AR6** -- Type system: extend the function type with
+  `bool is_variadic` + `TypeKind rest_kind` in `Type.as.fn`.
   Variadic functions match call sites with `>= n_required` args.
-- [ ] **AR7** -- Elaborator: variadic functions opt out of
-  partial-application synthesis (the currying mechanism from CY1).
-  Calls with fewer than the required args still produce a partial-
-  application closure -- but that closure is itself variadic. Calls
-  with `>= n_required` args go straight to variadic dispatch.
-- [ ] **AR8** -- Call-site codegen: when the callee is variadic and
-  the call has `n_required + k` args, emit code that:
-  - Walks the surplus args building a cons list (using the existing
-    `__cons` runtime helper that every spice imports).
-  - Passes the cons handle as the final positional arg.
-- [ ] **AR9** -- Inline-C interop: variadic Turmeric -> inline-C is
-  out of scope for v0 (inline-C blocks declare fixed C signatures).
-  Document; emit a clear error if a variadic body contains inline-C.
-- [ ] **AR10** -- Tests:
-  - Variadic with zero rest args (cons list is nil).
-  - Variadic with mixed-type rest -- error.
-  - Variadic combined with `(apply ...)` (which doesn't exist yet --
-    might need to add a sister primitive).
-  - Tail-recursive variadic (recursion through the rest list).
-  - **Variadic + currying**: under-saturation up to `n_required`
-    returns a variadic-valued closure; under-saturation past
-    `n_required` is rejected with a clear error.
+- [x] **AR7** -- Elaborator: variadic functions opt out of
+  partial-application synthesis when the call has `>= n_required`
+  args; under-saturated calls still go to partial-application.
+- [x] **AR8** -- Call-site codegen: when the callee is variadic and
+  the call has `n_required + k` args, build a right-folded cons list
+  (`EX_CONS_LIST` expression kind) from the surplus args and pass
+  it as the final argument. Rest args are type-checked against
+  the declared rest element kind. `g_has_variadics` gates the
+  `__tur_cons_of` helper in the C preamble (only emitted when needed).
+- [x] **AR9** -- Inline-C interop: emit a clear compile error when a
+  variadic body contains inline-C directly.
+- [x] **AR10** -- Tests:
+  - `tests/fixtures/variadic-defn-basic/` -- zero rest args (nil) and
+    multiple rest args; verifies cons-list shape.
+  - `tests/fixtures/errors/variadic-typed-rest/` -- compile error on
+    type-mismatched rest arg.
+  - `tests/fixtures/errors/variadic-inline-c-error/` -- compile error
+    on inline-C in a variadic body.
+  - `tests/fixtures/variadic-passthrough/` -- variadic that forwards
+    the rest list to a helper for inspection.
+  - `tests/fixtures/variadic-tail-recursion/` -- tail-recursive walk
+    of the rest list.
+  - `tests/fixtures/variadic-arity-16/` -- 15 fixed params + `& rest`
+    (total 16 = MAX_FN_ARITY); confirms raised cap and variadic work
+    together.
+  - *Deferred*: variadic + `(apply ...)` (apply primitive not yet
+    implemented); variadic + currying under-saturation boundary test.
 
 ---
 

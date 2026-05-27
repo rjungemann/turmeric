@@ -27,6 +27,8 @@ extern bool g_lint_panic;
 extern bool g_panic_trace;
 /* Phase P3: HAMT lowering - track if HAMT is needed */
 extern bool g_needs_hamt;
+/* AR8: Variadic rest parameters - track if any variadic defn is compiled */
+extern bool g_has_variadics;
 /* SS0a: Session types enabled (-Xsessions) */
 extern bool g_sessions_enabled;
 

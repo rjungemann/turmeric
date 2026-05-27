@@ -3448,6 +3448,27 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             emit_stmt(ctx, body, e);
             return atom_nil();
         }
+        /* AR8: Build a right-folded cons list for a variadic rest parameter.
+         * (f a b c d) where f takes [x y & rest :int] emits:
+         *   __tur_cons_of(c, __tur_cons_of(d, 0LL))
+         * as the last argument. Empty rest list emits 0LL (nil). */
+        case EX_CONS_LIST: {
+            uint32_t n = e->as.cons_list_.n;
+            if (n == 0) return strdup("0LL");
+            /* Right-fold: start from the rightmost element and build leftward */
+            char *tail = strdup("0LL");  /* nil sentinel */
+            for (int32_t i = (int32_t)n - 1; i >= 0; i--) {
+                char *head = emit_value(ctx, body, e->as.cons_list_.items[i]);
+                Buf cell; buf_init(&cell);
+                buf_printf(&cell, "__tur_cons_of(%s, %s)", head, tail);
+                buf_putc(&cell, '\0');
+                free(head);
+                free(tail);
+                tail = strdup(cell.data);
+                buf_free(&cell);
+            }
+            return tail;
+        }
     }
     return atom_nil();
 }

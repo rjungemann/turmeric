@@ -259,6 +259,8 @@ typedef enum ExprKind {
     EX_YIELD,            /* (yield expr)  -- yield a value inside gen body; type TY_NIL */
     EX_GEN_NEXT,         /* (gen-next g)  -- advance generator; returns ptr<void> (option) */
     EX_GEN_DONE,         /* (gen-done? g) -- check if generator is exhausted; returns bool */
+    /* AR8: Variadic rest-list construction at call sites */
+    EX_CONS_LIST,        /* build a right-folded cons list from N items for & rest param */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -740,6 +742,12 @@ struct Expr {
         struct {
             struct Expr        *gen_expr;   /* the generator value */
         } gen_done_;
+        /* AR8: variadic rest-list construction */
+        struct {
+            struct Expr **items;   /* the surplus args to pack into a cons list */
+            uint32_t     n;        /* number of items */
+            TypeKind     item_kind; /* element type (determines cast in emitter) */
+        } cons_list_;
     } as;
 };
 

@@ -90,6 +90,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:
+        case EX_CONS_LIST:    /* AR8: cons-list expr -- allocation side-effects handled in emit_value */
         case EX_PANIC_PAYLOAD_VALUE:
         case EX_PANIC_PAYLOAD_FILE:
         case EX_PANIC_PAYLOAD_LINE:

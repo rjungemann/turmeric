@@ -1325,7 +1325,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint8_t expected_arity = 0;
     if (fn_type.kind == TY_FN) {
         expected_arity = fn_type.as.fn.arity;
-        
+
         /* For closure bindings, the thunk function has an extra env parameter */
         if (fn_binding->closure_fn_binding) {
             expected_arity--;  /* Subtract the hidden env parameter */
@@ -1334,8 +1334,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* Continuations are callable with exactly 1 argument (the resume value) */
         expected_arity = 1;
     }
-    
-    if (n_args < expected_arity && fn_type.kind == TY_FN) {
+
+    /* AR7: For variadic functions the rest param counts as one fixed slot;
+     * partial application is allowed up to n_required (= arity - 1) args,
+     * and any call with n_args >= n_required dispatches variadically. */
+    bool fn_is_variadic = (fn_type.kind == TY_FN && fn_type.as.fn.is_variadic);
+    uint8_t n_required = (fn_is_variadic && expected_arity > 0)
+                         ? (uint8_t)(expected_arity - 1)
+                         : expected_arity;
+
+    if (n_args < n_required && fn_type.kind == TY_FN) {
         /* CY1: Partial application */
         Expr **pap_elab_args = (n_args > 0)
             ? (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *))
@@ -1345,6 +1353,69 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (!pap_elab_args[i]) return NULL;
         }
         return elab_partial_apply(e, call, fn_binding, fn_type, pap_elab_args, n_args);
+    }
+    /* AR8: Variadic dispatch -- build a cons list for surplus args */
+    if (fn_is_variadic && (uint32_t)n_args >= (uint32_t)n_required) {
+        uint32_t n_rest = n_args - n_required;
+        uint32_t n_call_args = n_required + 1;  /* fixed args + the cons-list arg */
+        Expr **call_args = (Expr **)arena_alloc(e->arena,
+                            (n_call_args ? n_call_args : 1) * sizeof(Expr *));
+        /* Elaborate fixed args */
+        for (uint32_t i = 0; i < n_required; i++) {
+            call_args[i] = elab_form(e, call->as.list.items[1 + i]);
+            if (!call_args[i]) return NULL;
+        }
+        /* Build cons-list expression for rest args */
+        Expr *rest_expr;
+        if (n_rest == 0) {
+            rest_expr = expr_new(e->arena, EX_INT_LIT, TYPE_INT, call->span);
+            rest_expr->as.i = 0;  /* nil = 0 */
+        } else {
+            Expr **rest_items = (Expr **)arena_alloc(e->arena, n_rest * sizeof(Expr *));
+            TypeKind rk = fn_type.as.fn.rest_kind;
+            for (uint32_t i = 0; i < n_rest; i++) {
+                rest_items[i] = elab_form(e, call->as.list.items[1 + n_required + i]);
+                if (!rest_items[i]) return NULL;
+                /* AR10: type-check each rest arg against the declared rest element kind */
+                TypeKind ak = rest_items[i]->type.kind;
+                bool rest_ok = (ak == rk);
+                /* Accept any type for TY_TYVAR / polymorphic rest element kinds */
+                if (!rest_ok && rk == TY_TYVAR) rest_ok = true;
+                /* `:int` rest accepts ADT/APP/STRUCT values (all int64_t at runtime) */
+                if (!rest_ok && rk == TY_INT &&
+                    (ak == TY_STRUCT || ak == TY_ADT || ak == TY_APP)) rest_ok = true;
+                if (!rest_ok) {
+                    const char *fn_name = (fn_binding && fn_binding->name) ? fn_binding->name->name : "?";
+                    diag_emit(DIAG_ERROR,
+                              call->as.list.items[1 + n_required + i]->span,
+                              "variadic call to '%s': rest arg %u has wrong type "
+                              "(expected %s, got %s)",
+                              fn_name, i,
+                              typekind_to_string(rk), typekind_to_string(ak));
+                    return NULL;
+                }
+            }
+            rest_expr = expr_new(e->arena, EX_CONS_LIST, TYPE_INT, call->span);
+            rest_expr->as.cons_list_.items = rest_items;
+            rest_expr->as.cons_list_.n = n_rest;
+            rest_expr->as.cons_list_.item_kind = fn_type.as.fn.rest_kind;
+        }
+        call_args[n_required] = rest_expr;
+        /* Determine result type */
+        Type result_type = fn_type.as.fn.result_full_type
+                           ? *fn_type.as.fn.result_full_type
+                           : type_from_kind(fn_type.as.fn.result_kind);
+        Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
+        out->as.call_.fn_binding = fn_binding;
+        out->as.call_.args = call_args;
+        out->as.call_.n_args = n_call_args;
+        out->as.call_.fn_expr = NULL;
+        out->as.call_.dict_arg = NULL;
+        out->as.call_.is_poly_call = false;
+        out->as.call_.poly_arg_mask = 0;
+        out->as.call_.abi_bindings = NULL;
+        out->as.call_.n_abi_bindings = 0;
+        return out;
     }
     if (n_args > expected_arity && fn_type.kind == TY_FN) {
         /* CY2: Over-application */

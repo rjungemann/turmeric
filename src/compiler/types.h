@@ -388,6 +388,9 @@ typedef struct Type {
             bool arg_unique_mut[MAX_FN_ARITY]; /* UT2: true if the i-th param is ^unique ^mut */
             bool arg_affine[MAX_FN_ARITY];     /* ST0: true if the i-th param is ^affine */
             bool arg_relevant[MAX_FN_ARITY];   /* ST0: true if the i-th param is ^relevant */
+            /* AR6: variadic rest-param support (& rest :type) */
+            bool is_variadic;                  /* true if this fn has a & rest parameter */
+            TypeKind rest_kind;                /* type of the rest cons-list elements */
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -852,6 +855,8 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique_mut[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_affine[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
+    t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
+    t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
     return t;
 }
 

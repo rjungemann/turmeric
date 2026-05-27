@@ -1,0 +1,36 @@
+;; AR10: variadic-arity-16 -- 15 fixed params + & rest confirms raised cap and variadic work together.
+;;
+;; Checks:
+;;   (1) A function with 15 fixed params + 1 rest (= 16 total) is accepted.
+;;   (2) Extra rest args beyond the 15 fixed are collected into the cons list.
+;;   (3) The combined result is computed correctly.
+
+;; Walk a cons-list and sum all heads.
+(defn cons-list-sum [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t acc = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  while (p) { acc += p->head; p = (__tur_cons_cell *)(intptr_t)p->tail; }
+  return acc;
+  ```)
+
+;; 15 fixed params + & rest -- total declared arity = 16 = MAX_FN_ARITY.
+(defn sum16 [a :int b :int c :int d :int e :int
+             f :int g :int h :int i :int j :int
+             k :int l :int m :int n :int o :int
+             & rest :int] #{Unsafe} :int
+  (+ (+ a (+ b (+ c (+ d (+ e (+ f (+ g (+ h (+ i (+ j (+ k (+ l (+ m (+ n o))))))))))))))
+     (cons-list-sum rest)))
+
+(defn main [] :int
+  (unsafe
+    (let [;; Call with exactly 15 fixed args, rest = nil -> sum = 1..15 = 120
+          r0 (sum16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)
+          ;; Call with 15 fixed + 3 rest [16,17,18] -> 120 + 51 = 171
+          r3 (sum16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18)]
+      (if (= r0 120)
+        (if (= r3 171)
+          0
+          1)
+        2))))

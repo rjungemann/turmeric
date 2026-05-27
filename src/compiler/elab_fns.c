@@ -368,9 +368,59 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* ST0: ^affine / ^relevant annotations apply to the next parameter */
     bool next_param_affine    = false;
     bool next_param_relevant  = false;
+    /* AR5: variadic rest parameter state */
+    bool is_variadic = false;
+    TypeKind rest_kind = TY_INT;  /* default rest element type */
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
+
+        /* AR5: & rest-name :type -- variadic rest parameter */
+        if (p->tag == F_SYM && p->as.sym == e->sym_borrow) {
+            if (is_variadic) {
+                diag_emit(DIAG_ERROR, p->span, "defn: multiple '&' in parameter list");
+                return NULL;
+            }
+            if (i + 1 >= params_f->as.list.len) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defn: '&' must be followed by a rest parameter name");
+                return NULL;
+            }
+            Form *rest_p = params_f->as.list.items[i + 1];
+            if (rest_p->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, rest_p->span,
+                          "defn: rest parameter name must be a symbol");
+                return NULL;
+            }
+            /* Parse optional type annotation: & rest :type */
+            rest_kind = TY_INT;
+            if (i + 2 < params_f->as.list.len) {
+                Form *type_p = params_f->as.list.items[i + 2];
+                if (type_p->tag == F_KEYWORD) {
+                    TypeKind rk = typekind_from_symbol(type_p->as.sym->name);
+                    rest_kind = (rk != TY_UNKNOWN) ? rk : TY_INT;
+                    if (i + 3 < params_f->as.list.len) {
+                        diag_emit(DIAG_ERROR, params_f->as.list.items[i + 3]->span,
+                                  "defn: no parameters allowed after '& rest :type'");
+                        return NULL;
+                    }
+                } else {
+                    diag_emit(DIAG_ERROR, type_p->span,
+                              "defn: '& rest' must be followed by a type annotation (e.g. :int)");
+                    return NULL;
+                }
+            }
+            is_variadic = true;
+            /* Add rest param as a regular int binding (cons-list pointer at runtime) */
+            if (n_params == 0) {
+                params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+            }
+            param_kinds[n_params] = TY_INT;
+            Binding *rest_b = binding_new(e, rest_p->as.sym, TYPE_INT, false, false, rest_p->span);
+            rest_b->is_param = true;
+            params[n_params++] = rest_b;
+            break; /* & must be the last; done parsing params */
+        }
 
         /* Phase G3: Handle equality constraint (: a T) in params.
          * Syntax: (: a int) means "type variable a equals int".
@@ -780,7 +830,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
         if (n_params >= MAX_FN_ARITY) {
             diag_emit(DIAG_ERROR, p->span,
-                      "defn: too many parameters (max %d)", MAX_FN_ARITY);
+                      "defn: too many fixed parameters (max %d); use '& rest :type' for a rest list",
+                      MAX_FN_ARITY);
             /* params is arena-allocated, no need to free */
             return NULL;
         }
@@ -1065,6 +1116,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
         for (uint8_t _ei = 0; _ei < n_params; _ei++) {
             existing->type.as.fn.arg_kinds[_ei] = param_kinds[_ei];
         }
+        /* AR6: propagate variadic flag early so call sites in the same body
+         * see is_variadic=true even if body elaboration fails before b->type=fn_type. */
+        existing->type.as.fn.is_variadic = is_variadic;
+        existing->type.as.fn.rest_kind   = rest_kind;
         bool _any_poly = false;
         for (uint8_t _ei = 0; _ei < n_params; _ei++) {
             if (param_poly_types[_ei]) { _any_poly = true; break; }
@@ -1365,6 +1420,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+    /* AR6: mark variadic functions in their type */
+    fn_type.as.fn.is_variadic = is_variadic;
+    fn_type.as.fn.rest_kind   = rest_kind;
 
     /* Phase G3: attach full ADT return type if declared (for proper def propagation) */
     if (return_adt_def) {
@@ -1518,7 +1576,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;
-    fd->is_variadic = false;
+    fd->is_variadic = is_variadic;  /* AR5: propagate variadic flag */
+    if (is_variadic) {
+        extern bool g_has_variadics;
+        g_has_variadics = true;  /* AR8: tell emit_module to include __tur_cons_of */
+    }
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
@@ -1546,6 +1608,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
     fd->constraints.cap_constraints = n_constraints;
+
+    /* AR9: variadic defn may not have an inline-C body (fixed C signatures only) */
+    if (is_variadic && body && body->kind == EX_INLINE_C) {
+        diag_emit(DIAG_ERROR, body->span,
+                  "defn '%s': variadic body contains inline-C; "
+                  "inline-C blocks need a fixed arity signature",
+                  name_f->as.sym->name);
+        return NULL;
+    }
 
     Expr *out = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
     out->as.fn_def_.fn = fd;
@@ -1623,12 +1694,59 @@ Expr *elab_fn(Elab *e, const Form *call) {
     TypeKind param_kinds[MAX_FN_ARITY];
     Type *param_full_types[MAX_FN_ARITY];
     for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_full_types[_i] = NULL;
+    /* AR5: variadic rest parameter state for fn */
+    bool fn_is_variadic = false;
+    TypeKind fn_rest_kind = TY_INT;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
         if (i < n_implicit_fn_type_params && p->tag == F_SYM &&
             fn_type_params[i] == p->as.sym) {
             continue;
+        }
+        /* AR5: & rest-name :type -- variadic rest parameter for fn */
+        if (p->tag == F_SYM && p->as.sym == e->sym_borrow) {
+            if (fn_is_variadic) {
+                diag_emit(DIAG_ERROR, p->span, "fn: multiple '&' in parameter list");
+                return NULL;
+            }
+            if (i + 1 >= params_f->as.list.len) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "fn: '&' must be followed by a rest parameter name");
+                return NULL;
+            }
+            Form *rest_p = params_f->as.list.items[i + 1];
+            if (rest_p->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, rest_p->span,
+                          "fn: rest parameter name must be a symbol");
+                return NULL;
+            }
+            fn_rest_kind = TY_INT;
+            if (i + 2 < params_f->as.list.len) {
+                Form *type_p = params_f->as.list.items[i + 2];
+                if (type_p->tag == F_KEYWORD) {
+                    TypeKind rk = typekind_from_symbol(type_p->as.sym->name);
+                    fn_rest_kind = (rk != TY_UNKNOWN) ? rk : TY_INT;
+                    if (i + 3 < params_f->as.list.len) {
+                        diag_emit(DIAG_ERROR, params_f->as.list.items[i + 3]->span,
+                                  "fn: no parameters allowed after '& rest :type'");
+                        return NULL;
+                    }
+                } else {
+                    diag_emit(DIAG_ERROR, type_p->span,
+                              "fn: '& rest' must be followed by a type annotation (e.g. :int)");
+                    return NULL;
+                }
+            }
+            fn_is_variadic = true;
+            if (n_params == 0) {
+                params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+            }
+            param_kinds[n_params] = TY_INT;
+            Binding *rest_b = binding_new(e, rest_p->as.sym, TYPE_INT, false, false, rest_p->span);
+            rest_b->is_param = true;
+            params[n_params++] = rest_b;
+            break;
         }
         if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN || p->tag == F_LIST || p->tag == F_VEC) {
             if (n_params == 0) {
@@ -1828,6 +1946,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
         arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+    /* AR6: mark variadic functions in their type */
+    fn_type.as.fn.is_variadic = fn_is_variadic;
+    fn_type.as.fn.rest_kind   = fn_rest_kind;
     {
         bool any_full = false;
         for (uint8_t i = 0; i < n_params; i++) {
@@ -1866,7 +1987,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
     fd->params = params;
     fd->n_params = n_params;
     fd->body = body;
-    fd->is_variadic = false;
+    fd->is_variadic = fn_is_variadic;  /* AR5: propagate variadic flag */
+    if (fn_is_variadic) {
+        extern bool g_has_variadics;
+        g_has_variadics = true;  /* AR8: tell emit_module to include __tur_cons_of */
+    }
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
