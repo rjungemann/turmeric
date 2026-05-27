@@ -73,37 +73,21 @@ catches the regression before it spreads.  Mark it `requires.compiled`
 behaviour); start with `expected.stderr` matching the current error,
 then flip to `expected.stdout` once the file loads cleanly.
 
-### Phase 2 -- Pick a fix shape
-
-Decide between:
-
-**Option A: Drop the broken helpers.**
+### Phase 2 -- Drop the broken helpers (Option A)
 
 Remove `arrow-id` and `arrow-comp` from `stdlib/arrow.tur`.  Callers
 that want an identity arrow write `(.arr arr-instance (fn [x] x))`
-directly with their own Arrow-typed receiver in scope.  Cleanest --
-no new machinery -- but loses a small bit of expressiveness.
+directly with their own Arrow-typed receiver in scope.
 
-**Option B: Route through the inline-C `__arrow_call*` helpers.**
+Rationale: the helpers are tiny, the inline form at the call site is
+clearer once you accept that typeclass dispatch needs a receiver, and
+the rejected alternatives (routing through `__arrow_call*` inline-C
+helpers, or renaming the typeclass methods) both add ABI surface that
+we'd then need to maintain forever for marginal expressiveness gain.
 
-Rewrite `arrow-id` / `arrow-comp` to call the existing
-`__arrow_call_arr` / `__arrow_call_compose` inline-C helpers
-(which the `Arrow [->]` instance already uses).  Preserves the
-helper names but bypasses typeclass dispatch entirely.  Only
-works for `Arrow [->]`; other Arrow instances would need their
-own helper specialisations.
-
-**Option C: Rename the typeclass methods.**
-
-Rename `Arrow.arr -> Arrow.lift`, `Arrow.>>> -> Arrow.then`.
-The free-function helpers `arr` / `>>>` then resolve to plain
-defns that the user can write directly.  Largest surface-area
-change; least clear win.
-
-**Recommendation:** Option A.  The helpers are tiny, the inline
-form at the call site is clearer once you accept that typeclass
-dispatch needs a receiver, and Options B and C both add ABI surface
-that we'd then need to maintain forever.
+Before deleting, grep `../turmeric-spices/` and any vendored spices
+for `arrow-id` / `arrow-comp` to confirm zero external callers (see
+Risks below).
 
 ### Phase 3 -- Add a load-time regression
 
