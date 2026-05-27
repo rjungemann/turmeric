@@ -1,0 +1,255 @@
+---
+title: Releases and Installation
+category: Getting Started
+description: How to install Turmeric from a prebuilt release or Homebrew, what's in the tarball, and how a maintainer cuts a new release.
+---
+
+# Releases and Installation
+
+This guide covers two audiences:
+
+- **End users** who want to install `tur` from a tagged release or via
+  Homebrew, and need to know what's in the tarball and which subcommands
+  work outside the source repo.
+- **Maintainers** who want to cut a new tagged release (or change how
+  releases are built).
+
+---
+
+## Installing Turmeric
+
+There are three supported paths today.
+
+### Option 1: Prebuilt binary from GitHub Releases
+
+For every tag matching `v*` pushed to the repository, a
+[GitHub Release](https://github.com/rjungemann/turmeric/releases) is
+published with three tarballs and a `sha256sums.txt`:
+
+```
+turmeric-vX.Y.Z-linux-x86_64.tar.gz
+turmeric-vX.Y.Z-linux-aarch64.tar.gz
+turmeric-vX.Y.Z-macos-arm64.tar.gz
+sha256sums.txt
+```
+
+Pick the tarball for your platform, verify, and extract:
+
+```sh
+# Apple Silicon macOS example. Adjust the URL for your platform/version.
+TAG=v0.13.0
+ARCH=macos-arm64
+curl -fLO "https://github.com/rjungemann/turmeric/releases/download/${TAG}/turmeric-${TAG}-${ARCH}.tar.gz"
+curl -fLO "https://github.com/rjungemann/turmeric/releases/download/${TAG}/sha256sums.txt"
+
+# Verify just the file you downloaded:
+shasum -a 256 -c <(grep "${ARCH}" sha256sums.txt)
+
+# Extract somewhere stable:
+mkdir -p ~/.local/turmeric
+tar -xzf "turmeric-${TAG}-${ARCH}.tar.gz" -C ~/.local/turmeric
+
+# Make `tur` runnable:
+ln -s ~/.local/turmeric/tur ~/.local/bin/tur     # ensure ~/.local/bin is on PATH
+```
+
+The macOS binary is unsigned. On first run macOS will quarantine it:
+
+```sh
+xattr -d com.apple.quarantine ~/.local/turmeric/tur
+```
+
+There is no precompiled Intel-Mac (`macos-x86_64`) tarball. Intel-Mac
+users should use Option 2 or Option 3.
+
+### Option 2: Homebrew (source build)
+
+```sh
+brew install --HEAD rjungemann/turmeric
+# (if a tap isn't published yet:)
+brew install --HEAD https://raw.githubusercontent.com/rjungemann/turmeric/main/Formula/turmeric.rb
+```
+
+The formula builds from the latest commit on `main` (CMake source build,
+~10s on modern hardware). It installs:
+
+- `tur` at `<prefix>/bin/tur`
+- The standard library at `<prefix>/share/turmeric/stdlib/`
+
+On Apple Silicon, `<prefix>` is `/opt/homebrew`; on Intel macOS and
+Linuxbrew it's `/usr/local` or `/home/linuxbrew/.linuxbrew`.
+
+There is currently no stable (versioned) Homebrew formula -- only
+`--HEAD`. A pinned `url`/`sha256` stanza will be added once a stable
+release line is established.
+
+### Option 3: Building from source
+
+```sh
+git clone https://github.com/rjungemann/turmeric.git
+cd turmeric
+just build       # debug build
+just release     # optimized build, drops `tur` in build/
+```
+
+You'll need CMake 3.20+, a C99 compiler, and `libedit` (for the REPL).
+See [`devcontainer-guide.md`](devcontainer-guide.md) for a fully-scripted
+Linux dev environment.
+
+---
+
+## What's in the tarball
+
+After extracting, the tarball lays out like:
+
+```
+.
+|-- tur                       # the CLI
+|-- libturi.a                 # static library for C embedding
+|-- include/turi/             # public headers (eval.h, env.h, value.h, fiber.h)
+`-- stdlib/                   # the standard library (86 .tur files)
+```
+
+`tur` finds `stdlib/` via a probe defined in `src/main.c:188`
+(`resolve_stdlib_root`), in this order:
+
+1. The `TUR_STDLIB_DIR` environment variable, if set.
+2. Walk up from `tur`'s directory looking for `stdlib/macros.tur`
+   (matches when `stdlib/` sits next to the binary -- the tarball layout).
+3. `<exe_dir>/../share/turmeric/stdlib/macros.tur` (the Homebrew layout).
+
+If you move `tur` somewhere without an adjacent `stdlib/`, set
+`TUR_STDLIB_DIR` to the directory containing the stdlib `.tur` files.
+
+---
+
+## What works (and what doesn't) outside the source repo
+
+### Works
+
+- `tur --version`
+- `tur --interpret <file.tur>` -- tree-walking interpreter; no C compile
+- `tur repl` -- interactive REPL
+- `tur check <file.tur>` -- type checking only
+- `tur doc <symbol>` -- documentation lookup
+- `tur explain <code>` -- diagnostic-code lookup
+- `tur format` -- source formatter
+- Library embedding via `libturi.a` + `include/turi/`
+
+### Does *not* yet work outside the repo tree
+
+- `tur run <file.tur>` and `tur build <file.tur>`
+
+These go through the C-codegen path and link against runtime sources
+referenced by autolink markers in stdlib (e.g. `stdlib/hamt.tur` contains
+`/* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */`). The path
+is interpreted relative to the current working directory, so a `tur run`
+from outside a Turmeric source checkout fails with:
+
+```
+clang: error: no such file or directory: 'src/runtime/hamt.c'
+tur: cc invocation failed (status 256)
+```
+
+This is a known limitation, tracked in
+[`docs/release-binaries-plan.md`](../release-binaries-plan.md) under
+"Discovered during execution: runtime sources also missing". Until it's
+resolved, the `--interpret` and library-embedding paths are the
+fully-supported uses of a downloaded release.
+
+---
+
+## Cutting a release (maintainers)
+
+The release pipeline lives at `.github/workflows/release.yml` and is
+triggered automatically on `git push` of any tag matching `v*`.
+
+### Steps
+
+1. Bump the version in `VERSION` (the single source of truth -- read by
+   CMake, baked into `tur --version`, and reused by `web/` and other
+   build outputs). The version string is plain `MAJOR.MINOR.PATCH`,
+   no leading `v`.
+2. Commit the bump.
+3. Tag the bump commit:
+   ```sh
+   git tag v0.13.0    # match the new VERSION
+   git push origin main
+   git push origin v0.13.0
+   ```
+4. The workflow runs (~1-2 minutes per matrix leg, ~3 minutes total),
+   builds three binaries, and publishes a GitHub Release.
+5. Verify the release page lists three tarballs plus `sha256sums.txt`.
+
+### What the workflow does
+
+For each matrix leg (`linux-x86_64`, `linux-aarch64`, `macos-arm64`):
+
+1. Checks out the tagged commit.
+2. Installs `libedit` (Apple/Linux differ on package manager).
+3. Configures and builds with CMake in Release mode.
+4. Runs `tur --version` as a smoke test.
+5. Packages `tur` + `libturi.a` + `include/turi/*.h` + `stdlib/` into
+   a `tar.gz`.
+6. Uploads the artifact.
+
+A final job downloads all artifacts, generates `sha256sums.txt`, and
+publishes the release with auto-generated notes.
+
+The `release` job has `if: always() && needs.build.result != 'cancelled'`,
+so if one matrix leg fails (e.g. a future runner image breaks Linux
+aarch64), the other binaries still ship -- you'll get a partial release
+that you can re-run or supplement.
+
+### Iterating on the workflow itself
+
+To test changes to `release.yml` without burning real version numbers,
+use a throwaway tag like `v0.0.0-test1`:
+
+```sh
+git tag v0.0.0-test1
+git push origin v0.0.0-test1
+
+# Watch the run:
+gh run list --workflow=release.yml --limit 1
+gh run watch <run-id>
+
+# Clean up afterwards:
+gh release delete v0.0.0-test1 --cleanup-tag --yes
+git tag -d v0.0.0-test1
+```
+
+Increment the suffix (`-test2`, `-test3`, ...) per iteration so each
+failed attempt's history is preserved.
+
+### Troubleshooting
+
+- **Job stuck "awaiting a runner" for hours.** The runner image the leg
+  pins to is no longer scheduled. Update `matrix.<leg>.os` to a current
+  GitHub-hosted runner.
+- **macOS configure fails with `command not found`.** A semicolon in a
+  CMake flag is being interpreted by the shell. Wrap the value with
+  literal double-quotes in the matrix value
+  (`cmake_extra: '"-Dfoo=a;b"'`) so the shell treats it as one argument
+  after `${{ matrix.cmake_extra }}` substitution.
+- **`actions/checkout` or `actions/upload-artifact` Node-20 warning.**
+  Informational until June 2026. Bump the action to the latest major
+  when an upstream Node-24 release ships, or opt in early with the
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` env var on the job.
+- **`brew test turmeric` fails with `unbound variable: when`.** The
+  formula did not install `stdlib/` under `<prefix>/share/turmeric/`.
+  Confirm the formula's `install` block contains
+  `(share/"turmeric").install "stdlib"`.
+
+---
+
+## See also
+
+- [`docs/release-binaries-plan.md`](../release-binaries-plan.md) --
+  the original plan; documents the trade-offs (why arm64-only on macOS,
+  why sibling-stdlib over embedded, what's still out of scope).
+- `Formula/turmeric.rb` -- the Homebrew formula.
+- `.github/workflows/release.yml` -- the release pipeline.
+- `src/main.c:188` (`resolve_stdlib_root`) -- the stdlib-discovery logic
+  that makes both the tarball and Homebrew layouts work without code
+  changes.

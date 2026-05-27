@@ -347,13 +347,13 @@ library reuse can come later when there's a real consumer asking for it.
 
 ### M1 -- Foundations (no UX yet)
 
-- [ ] `~/.local/share/turmeric/` layout created on first use (`spices/`,
+- [x] `~/.local/share/turmeric/` layout created on first use (`spices/`,
       `cache/`, `state.tur`).
-- [ ] `~/.local/bin/` created if missing.
-- [ ] `XDG_DATA_HOME` and `TUR_HOME` env overrides respected everywhere.
-- [ ] `:bin` field parses in `build.tur` and round-trips through
+- [x] `~/.local/bin/` created if missing.
+- [x] `XDG_DATA_HOME` and `TUR_HOME` env overrides respected everywhere.
+- [x] `:bin` field parses in `build.tur` and round-trips through
       `tur format`. Validator rejects names without a `tur-` prefix.
-- [ ] `state.tur` reader / writer.
+- [x] `state.tur` reader / writer.
 
 ### M2 -- `tur install` + subcommand fallthrough (the v1 UX)
 
@@ -361,33 +361,33 @@ This milestone ships the user-visible loop together so a fresh `tur`
 installation can run `tur install tur-notebook && tur nb new foo.tur.md`
 end to end.
 
-- [ ] `tur install <url> [--ref] [--subdir] [--name]` fetches, builds,
+- [x] `tur install <url> [--ref] [--subdir] [--name]` fetches, builds,
       and symlinks one binary spice.
-- [ ] `tur install <path> --path` for local-checkout dev installs.
-- [ ] `tur uninstall <name>` reverses everything `install` did.
-- [ ] Conflict detection: two spices owning the same `:bin` name, or a
+- [x] `tur install <path> --path` for local-checkout dev installs.
+- [x] `tur uninstall <name>` reverses everything `install` did.
+- [x] Conflict detection: two spices owning the same `:bin` name, or a
       pre-existing non-Turmeric file at `~/.local/bin/<name>`, fails
       with a diagnostic. `--force` overrides.
-- [ ] First-install PATH check: if `~/.local/bin/` is not on `$PATH`,
+- [x] First-install PATH check: if `~/.local/bin/` is not on `$PATH`,
       print bash/zsh/fish snippets. Otherwise stay quiet.
-- [ ] `try_external_subcommand` in `src/main.c`: unknown `tur <foo>`
+- [x] `try_external_subcommand` in `src/main.c`: unknown `tur <foo>`
       execs `tur-foo` from `$PATH`. Built-ins always win.
-- [ ] `tur --help` lists installed external subcommands separately from
+- [x] `tur --help` lists installed external subcommands separately from
       built-ins ("External commands:" section), discovered by globbing
       `tur-*` on `$PATH`.
 
 ### M3 -- `tur list`
 
-- [ ] Default shallow-tree output.
-- [ ] `--verbose` expands export listings.
-- [ ] `--json` emits structured output for tooling.
-- [ ] PATH-health line (active vs. NOT on PATH).
+- [x] Default shallow-tree output.
+- [x] `--verbose` expands export listings.
+- [x] `--json` emits structured output for tooling.
+- [x] PATH-health line (active vs. NOT on PATH).
 
 ### M4 -- `tur upgrade`
 
-- [ ] `tur upgrade <name>` re-runs install with prior flags.
-- [ ] `tur upgrade --all` iterates `state.tur`.
-- [ ] `tur upgrade --dry-run` reports what would change without
+- [x] `tur upgrade <name>` re-runs install with prior flags.
+- [x] `tur upgrade --all` iterates `state.tur`.
+- [x] `tur upgrade --dry-run` reports what would change without
       modifying anything.
 
 ### M5 -- Polish

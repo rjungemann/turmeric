@@ -4821,6 +4821,101 @@ static int cmd_worker(void) {
     return 0;
 }
 
+/* GS-M2: scan $PATH for `tur-*` executables and print them as an
+ * "External commands:" block beneath the built-in usage. Built-in
+ * subcommands always win at dispatch time, so we filter any `tur-<name>`
+ * that shadows a built-in to avoid misleading the user. Within $PATH,
+ * the first hit for each name wins (matching exec() resolution). */
+static void list_external_subcommands(void) {
+    const char *path_env = getenv("PATH");
+    if (!path_env || !*path_env) return;
+
+    static const char *const builtins[] = {
+        "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
+        "eval", "doc", "explain", "test", "check", "format",
+        "init", "add", "add-cmake", "fetch",
+        "install", "uninstall", "list", "upgrade",
+        NULL,
+    };
+
+    char **names = NULL;
+    int n_names = 0, cap_names = 0;
+
+    const char *p = path_env;
+    while (*p) {
+        const char *colon = strchr(p, ':');
+        size_t seg = colon ? (size_t)(colon - p) : strlen(p);
+        if (seg > 0 && seg < 3500) {
+            char dir[4096];
+            snprintf(dir, sizeof(dir), "%.*s", (int)seg, p);
+            DIR *d = opendir(dir);
+            if (d) {
+                struct dirent *de;
+                while ((de = readdir(d)) != NULL) {
+                    if (strncmp(de->d_name, "tur-", 4) != 0) continue;
+                    const char *cmd = de->d_name + 4;
+                    if (!*cmd) continue;
+                    for (const char *q = cmd; *q; q++) {
+                        if (!(isalnum((unsigned char)*q) || *q == '-' || *q == '_'))
+                            goto skip;
+                    }
+                    {
+                        bool shadowed = false;
+                        for (int i = 0; builtins[i]; i++) {
+                            if (strcmp(cmd, builtins[i]) == 0) { shadowed = true; break; }
+                        }
+                        if (shadowed) continue;
+                    }
+                    {
+                        char full[8192];
+                        snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
+                        if (access(full, X_OK) != 0) continue;
+                    }
+                    {
+                        bool dup = false;
+                        for (int i = 0; i < n_names; i++) {
+                            if (strcmp(names[i], cmd) == 0) { dup = true; break; }
+                        }
+                        if (dup) continue;
+                    }
+                    if (n_names == cap_names) {
+                        int nc = cap_names ? cap_names * 2 : 8;
+                        char **nn = (char **)realloc(names, (size_t)nc * sizeof(char *));
+                        if (!nn) { closedir(d); goto cleanup; }
+                        names = nn;
+                        cap_names = nc;
+                    }
+                    names[n_names++] = strdup(cmd);
+                  skip: ;
+                }
+                closedir(d);
+            }
+        }
+        if (!colon) break;
+        p = colon + 1;
+    }
+
+    if (n_names == 0) goto cleanup;
+
+    for (int i = 1; i < n_names; i++) {
+        char *cur = names[i];
+        int j = i;
+        while (j > 0 && strcmp(names[j - 1], cur) > 0) {
+            names[j] = names[j - 1];
+            j--;
+        }
+        names[j] = cur;
+    }
+
+    fprintf(stderr, "\nexternal commands (tur-* on $PATH):\n");
+    for (int i = 0; i < n_names; i++)
+        fprintf(stderr, "  tur %s\n", names[i]);
+
+cleanup:
+    for (int i = 0; i < n_names; i++) free(names[i]);
+    free(names);
+}
+
 static int usage(void) {
     fprintf(stderr,
         "tur: the Turmeric compiler (phase 8)\n"
@@ -4880,6 +4975,7 @@ static int usage(void) {
         "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
         "  --keep-contracts                 retain contract checks in release builds (CT3)\n"
         "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n");
+    list_external_subcommands();
     return 64;
 }
 
