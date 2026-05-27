@@ -45,8 +45,12 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
         form->as.list.items[0]->tag == F_SYM) {
         const Symbol *head = form->as.list.items[0]->as.sym;
+        /* KB-008: (-> T1 T2) and (fn [...] :ret) are type-constructor forms,
+         * not generic type applications -- route them through the same path
+         * that type_expr_from_form uses so the arrow kind check is correct. */
         if (head == e->sym_forall || head == e->sym_exists ||
-            head == e->sym_forall_u || head == e->sym_exists_u) {
+            head == e->sym_forall_u || head == e->sym_exists_u ||
+            head == e->sym_arrow || head == e->sym_fn) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         bool has_pipe = false, has_amp = false;

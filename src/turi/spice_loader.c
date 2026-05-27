@@ -267,7 +267,7 @@ static int run_build(const char *tur_bin, const char *root,
     snprintf(cmd, sizeof(cmd),
              "%s build --shared %s -o %s --manifest %s",
              q_bin, q_root, q_lib, q_mf);
-    (void)system(cmd);
+    int _sys_ret = system(cmd); (void)_sys_ret;
     /* RP7: tell the user what to do next. (reload) re-runs the same
      * build subprocess after they've fixed the source, so they don't
      * have to restart the REPL on every compile error. */
