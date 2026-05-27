@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# tests/turi/repl-spice-call.sh -- RP4 integration test.
+#
+# Drives `tur repl` inside a fixture spice project and asserts that
+# every export installed by the binding layer (RP3 + RP4) is callable
+# from the prompt with correct results, qualified-name routing, and
+# typed-error feedback for mismatches.
+
+set -uo pipefail
+cd "$(dirname "$0")/../.."
+
+TUR="${TUR:-./build/tur}"
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+export TUR_BIN
+case "$TUR" in
+    /*) TUR_BIN="$TUR" ;;
+    *)  TUR_BIN="$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")" ;;
+esac
+
+WORK="$(mktemp -d -t tur-rp4.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+
+PROJ="$WORK/proj"
+mkdir -p "$PROJ/src"
+cat > "$PROJ/build.tur" <<'EOF'
+(defpackage rp4-call-fixture)
+EOF
+cat > "$PROJ/src/lib.tur" <<'EOF'
+(defmodule sh
+  (export add42 mul scale answer noisy)
+  (defn add42 [x :int] :int (+ x 42))
+  (defn mul [a :int b :int] :int (* a b))
+  (defn scale [x :float y :float] :float (* x y))
+  (defn answer [] :int 42)
+  (defn noisy [x :int] :void (println x)))
+EOF
+
+PASS=0
+FAIL=0
+pass() { PASS=$((PASS + 1)); echo "PASS $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
+
+run() {
+    # Echoes one or more REPL lines into `tur repl`, capturing stdout
+    # plus stderr. Stdin's final line is :quit so editline doesn't hang
+    # waiting on input.
+    local prog="$1"
+    (cd "$PROJ" && printf '%s\n:quit\n' "$prog" | "$TUR_BIN" repl 2>&1)
+}
+
+# --- happy paths ---------------------------------------------------------
+
+out=$(run '(add42 100)')
+if echo "$out" | grep -qx '=> 142'; then pass "rp4-call-int->int"
+else fail "rp4-call-int->int" "$out"; fi
+
+# Qualified name resolves to the same shim.
+out=$(run '(sh/add42 99)')
+if echo "$out" | grep -qx '=> 141'; then pass "rp4-call-qualified-name"
+else fail "rp4-call-qualified-name" "$out"; fi
+
+out=$(run '(mul 6 7)')
+if echo "$out" | grep -qx '=> 42'; then pass "rp4-call-int-int->int"
+else fail "rp4-call-int-int->int" "$out"; fi
+
+out=$(run '(scale 2.5 4.0)')
+if echo "$out" | grep -qx '=> 10'; then pass "rp4-call-float-float->float"
+else fail "rp4-call-float-float->float" "$out"; fi
+
+out=$(run '(scale 1.5 3.0)')
+if echo "$out" | grep -qx '=> 4.5'; then pass "rp4-call-float-non-integer-result"
+else fail "rp4-call-float-non-integer-result" "$out"; fi
+
+out=$(run '(answer)')
+if echo "$out" | grep -qx '=> 42'; then pass "rp4-call-zero-arg"
+else fail "rp4-call-zero-arg" "$out"; fi
+
+# Side-effect call returning :void: must print the arg AND yield => nil.
+out=$(run '(noisy 99)')
+if echo "$out" | grep -qx '99' && echo "$out" | grep -qx '=> nil'; then
+    pass "rp4-call-void-return"
+else
+    fail "rp4-call-void-return" "$out"
+fi
+
+# --- error surface -------------------------------------------------------
+
+out=$(run '(add42)')
+if echo "$out" | grep -q "expects 1 arg, got 0"; then
+    pass "rp4-call-arity-too-few"
+else
+    fail "rp4-call-arity-too-few" "$out"
+fi
+
+out=$(run '(add42 1 2)')
+if echo "$out" | grep -q "expects 1 arg, got 2"; then
+    pass "rp4-call-arity-too-many"
+else
+    fail "rp4-call-arity-too-many" "$out"
+fi
+
+# Float passed where :int-class is required: must reject.
+out=$(run '(add42 1.5)')
+if echo "$out" | grep -q "expected :int-class, got float"; then
+    pass "rp4-call-type-mismatch"
+else
+    fail "rp4-call-type-mismatch" "$out"
+fi
+
+# --- after a call, the env is still usable ----------------------------
+
+out=$(run '(add42 1)
+(+ 1 2)')
+# After the FFI call we should still get the => 3 from the second expr.
+if echo "$out" | grep -qx '=> 43' && echo "$out" | grep -qx '=> 3'; then
+    pass "rp4-call-env-unaffected"
+else
+    fail "rp4-call-env-unaffected" "$out"
+fi
+
+echo
+echo "repl-spice-call: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]

@@ -1,0 +1,218 @@
+/* ffi_thunk.c -- see ffi_thunk.h.
+ *
+ * The per-call hot path is:
+ *
+ *     TuriValue args[]  --(marshal_i/f)-->  int64_t i_vals[] / double f_vals[]
+ *                                    \
+ *                                     ----> tur_ffi_thunk_call (giant switch)
+ *                                                   |
+ *                                                   v
+ *                                          typed tur_ffi_call_<ret>_<args>
+ *                                                   |
+ *                                                   v
+ *                                          dlsym'd spice export
+ *                                                   |
+ *                                                   v
+ *                                          int64_t / double / void
+ *                                                   |
+ *                                                   v
+ *                                          TuriValue (turi_int / turi_float / turi_nil)
+ *
+ * Errors at any step short-circuit to a TuriValue error (turi_errorf),
+ * which the eval loop surfaces to the user with the prompt-local span.
+ */
+
+#include "ffi_thunk.h"
+#include "eval.h"                  /* turi_env_register_native */
+#include "ffi_dispatch_thunk.h"    /* tur_ffi_thunk_call */
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* TuriValue -> scalar marshaling                                      */
+/* ------------------------------------------------------------------ */
+
+/* int-class: int / bool / cstr / nil / struct-as-int all flatten to
+ * an int64_t register. Float values are NOT auto-converted because
+ * the call site expects a register class match -- silently widening
+ * would corrupt the dispatcher's ABI. */
+static int marshal_arg_i(const TuriValue *v, int64_t *out) {
+    switch (v->tag) {
+        case TURI_INT:   *out = v->as_int; return 0;
+        case TURI_BOOL:  *out = v->as_bool ? 1 : 0; return 0;
+        case TURI_CSTR:  *out = (int64_t)(intptr_t)v->as_cstr; return 0;
+        case TURI_NIL:   *out = 0; return 0;
+        default:         return -1;
+    }
+}
+
+/* float-class: accept floats verbatim and ints widened to double. The
+ * reverse (float -> int) would lose precision and isn't allowed; users
+ * cast explicitly. */
+static int marshal_arg_f(const TuriValue *v, double *out) {
+    switch (v->tag) {
+        case TURI_FLOAT: *out = v->as_float; return 0;
+        case TURI_INT:   *out = (double)v->as_int; return 0;
+        default:         return -1;
+    }
+}
+
+static const char *tag_name(TuriTag t) {
+    switch (t) {
+        case TURI_NIL:    return "nil";
+        case TURI_BOOL:   return "bool";
+        case TURI_INT:    return "int";
+        case TURI_FLOAT:  return "float";
+        case TURI_CSTR:   return "cstr";
+        default:          return "value";
+    }
+}
+
+static const char *class_name(char c) {
+    switch (c) {
+        case 'i': return ":int-class";
+        case 'f': return ":float-class";
+        case 'v': return ":void";
+        default:  return "<unknown>";
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* TuriNativeFn shim                                                   */
+/* ------------------------------------------------------------------ */
+
+/* The user-data pointer carried by each installed binding. The shim
+ * looks up the typed dispatcher via tur_ffi_thunk_call using these
+ * fields, then marshals args/results. We allocate one of these per
+ * (binding-name, export) pair and leak them at REPL teardown -- the
+ * image owns the underlying TurSpiceExport storage, and the shims
+ * are themselves tiny (~64 bytes) so per-session leakage is bounded
+ * by the export count. */
+typedef struct FfiBindingUd {
+    const TurSpiceExport *export_;
+} FfiBindingUd;
+
+static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
+                                  void *ud) {
+    (void)env;
+    const FfiBindingUd *bud = (const FfiBindingUd *)ud;
+    const TurSpiceExport *e = bud->export_;
+
+    /* RP4 v1 limits: reject variadic exports and unsupported classes
+     * with messages that point at the most useful next step. */
+    if (e->is_variadic) {
+        return turi_errorf(
+            "ffi: variadic spice export '%s/%s' is not callable from the "
+            "REPL yet (cons-list marshaling lands in a later RP)",
+            e->module, e->name);
+    }
+    if (e->ret_class == '?') {
+        return turi_errorf(
+            "ffi: spice export '%s/%s' returns a type the FFI layer "
+            "can't represent yet -- only :int / :float / :void / "
+            "primitives are supported in v1",
+            e->module, e->name);
+    }
+    if (n != e->n_args) {
+        return turi_errorf(
+            "ffi: '%s/%s' expects %u arg%s, got %u",
+            e->module, e->name,
+            (unsigned)e->n_args, e->n_args == 1 ? "" : "s",
+            (unsigned)n);
+    }
+
+    /* Marshal args -- abort on the first mismatch with a per-arg
+     * diagnostic so the user knows exactly which value was wrong. */
+    int64_t i_vals[TUR_SPICE_MAX_ARITY];
+    double  f_vals[TUR_SPICE_MAX_ARITY];
+    for (uint32_t k = 0; k < n; k++) {
+        char cls = e->arg_classes[k];
+        if (cls == 'i') {
+            if (marshal_arg_i(&args[k], &i_vals[k]) != 0) {
+                return turi_errorf(
+                    "ffi: '%s/%s' arg %u: expected %s, got %s",
+                    e->module, e->name, k,
+                    class_name(cls), tag_name(args[k].tag));
+            }
+        } else if (cls == 'f') {
+            if (marshal_arg_f(&args[k], &f_vals[k]) != 0) {
+                return turi_errorf(
+                    "ffi: '%s/%s' arg %u: expected %s, got %s",
+                    e->module, e->name, k,
+                    class_name(cls), tag_name(args[k].tag));
+            }
+        } else {
+            return turi_errorf(
+                "ffi: '%s/%s' arg %u has unsupported class '%c'",
+                e->module, e->name, k, cls);
+        }
+    }
+
+    int64_t out_i = 0;
+    double  out_f = 0.0;
+    int rc = tur_ffi_thunk_call(e->ret_class,
+                                e->arg_classes, e->n_args,
+                                e->fn_ptr, i_vals, f_vals,
+                                &out_i, &out_f);
+    if (rc != 0) {
+        /* The generator covers every shape up to its --max-arity (6 by
+         * default). Hitting this path means a spice grew an 8-arg defn
+         * and the dispatcher table is stale. */
+        return turi_errorf(
+            "ffi: '%s/%s' has no registered dispatcher for shape "
+            "(arity %u). Regenerate src/runtime/ffi_dispatch_thunk.c "
+            "with `python3 tools/gen_ffi_dispatch.py --max-arity N`.",
+            e->module, e->name, (unsigned)e->n_args);
+    }
+    switch (e->ret_class) {
+        case 'i': return turi_int(out_i);
+        case 'f': return turi_float(out_f);
+        case 'v': return turi_nil();
+        default:  return turi_error("ffi: internal: bad ret class");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Binding installer                                                   */
+/* ------------------------------------------------------------------ */
+
+uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img) {
+    if (!env || !img) return 0;
+    uint32_t count = tur_spice_image_count(img);
+    for (uint32_t i = 0; i < count; i++) {
+        const TurSpiceExport *e = tur_spice_image_at(img, i);
+        if (!e) continue;
+
+        /* One FfiBindingUd per binding; both bindings (bare + qualified)
+         * share it. Leaked at process exit -- see comment on the struct. */
+        FfiBindingUd *ud = (FfiBindingUd *)calloc(1, sizeof(*ud));
+        if (!ud) {
+            fprintf(stderr,
+                    "tur repl: ffi binding install for '%s/%s' failed (oom)\n",
+                    e->module, e->name);
+            continue;
+        }
+        ud->export_ = e;
+
+        /* Bare name: collisions go last-write-wins, matching how the
+         * env already handles `(def foo ...)` redefinition. */
+        turi_env_register_native(env, e->name, ffi_native_shim, ud);
+
+        /* Qualified `<module>/<defn>` form. We have to build the
+         * string ourselves because turi_env_register_native expects a
+         * NUL-terminated key it can borrow long-term; passing a local
+         * stack buffer would dangle. */
+        size_t qlen = strlen(e->module) + 1 + strlen(e->name) + 1;
+        char  *qkey = (char *)malloc(qlen);
+        if (qkey) {
+            snprintf(qkey, qlen, "%s/%s", e->module, e->name);
+            turi_env_register_native(env, qkey, ffi_native_shim, ud);
+            /* qkey is referenced by the env binding's name field; do
+             * not free here. */
+        }
+    }
+    return count;
+}

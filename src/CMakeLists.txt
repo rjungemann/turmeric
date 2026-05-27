@@ -32,6 +32,9 @@ set(TURI_EVAL_SOURCES
     # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
     # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.
     turi/spice_loader.c
+    # RP4: TuriValue<->scalar marshaling layer that installs each
+    # spice export as a TuriNativeFn binding the eval loop can call.
+    turi/ffi_thunk.c
 )
 
 # ---------------------------------------------------------------------------
@@ -111,6 +114,9 @@ set(TUR_CORE_SOURCES
     # tools/gen_ffi_dispatch.py -- see that script's header for the
     # naming convention and regeneration steps.
     runtime/ffi_dispatch.c
+    # RP4: generated shape-switch that bridges the interpreter's
+    # marshaling layer to the typed trampolines above.
+    runtime/ffi_dispatch_thunk.c
     runtime/gc.c
     runtime/globals.c
     runtime/hamt.c

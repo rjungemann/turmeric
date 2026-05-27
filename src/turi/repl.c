@@ -25,6 +25,7 @@
 #include "repl.h"
 #include "eval.h"
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
+#include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 
 #include <errno.h>
 #include <stdio.h>
@@ -742,10 +743,17 @@ int turi_repl_run(void) {
         int srv = tur_spice_image_load(".", getenv("TUR_BIN"), &img);
         if (srv == 0 && img) {
             env->spice_image = img;
+            /* RP4: register a TuriNativeFn per export so the user can
+             * call spice defns directly at the prompt (both bare and
+             * `<module>/<defn>` qualified names). The TuriEnv now owns
+             * both the image and the binding shims. */
+            uint32_t n_exports = tur_spice_image_count(img);
+            uint32_t n_bound = tur_ffi_install_spice_bindings(env, img);
+            (void)n_bound;
             printf("Loaded spice from %s (%u export%s)\n",
                    tur_spice_image_root(img),
-                   tur_spice_image_count(img),
-                   tur_spice_image_count(img) == 1 ? "" : "s");
+                   n_exports,
+                   n_exports == 1 ? "" : "s");
             fflush(stdout);
         }
         /* srv == 1 (no project) and srv == -1 (hard error, already
