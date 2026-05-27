@@ -3,7 +3,7 @@
 > **Status:** Draft Plan
 > **Last Updated:** 2026-05-25
 > **Type:** Compiler / Call elaboration / Codegen
-> **Related:** [Fix spaced `: T` parameter type annotations](archive/param-type-annotation-plan.md),
+> **Related:** [Fix spaced `: T` parameter type annotations](param-type-annotation-plan.md),
 > [Haskell-Style Currying](upcoming/currying-plan.md)
 
 ---
@@ -24,7 +24,7 @@ error: call head must be a symbol or closure expression
 ```
 
 This is a separate existing limitation from the `fn` parameter-annotation
-gap tracked in `archive/param-type-annotation-plan.md`. Even after typed lambda
+gap tracked in `param-type-annotation-plan.md`. Even after typed lambda
 parameters are fixed, direct application still fails for a narrower reason:
 the call elaborator only accepts non-symbol heads when they elaborate to a
 fat closure (`TY_PTR_VOID`), while a captureless `fn` elaborates to a plain
@@ -93,7 +93,7 @@ This is why the right fix is a proper callable-expression path, not
 ## Non-goals
 
 - **`fn` parameter annotations.** That remains tracked by
-  `archive/param-type-annotation-plan.md` TA2. This plan assumes `fn` syntax itself is
+  `param-type-annotation-plan.md` TA2. This plan assumes `fn` syntax itself is
   valid; it does not solve the typed-params parser/elaborator gap.
 - **New lambda syntax.** No shorthand syntax, no special "immediately invoked"
   form, no extra reader features.
@@ -225,7 +225,7 @@ That is more actionable than the current
 
 ## Interaction with existing plans
 
-### `archive/param-type-annotation-plan.md`
+### `param-type-annotation-plan.md`
 
 That plan should keep treating direct anonymous-lambda application as
 separate from typed lambda parameters.
@@ -311,7 +311,7 @@ Acceptance:
 ### LA4 -- Docs and cross-links
 
 - add a short note to user-facing docs if anonymous lambda examples are shown
-- update `archive/param-type-annotation-plan.md` to link here from the "separate
+- update `param-type-annotation-plan.md` to link here from the "separate
   existing limitation" note
 
 ---
