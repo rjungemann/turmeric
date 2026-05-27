@@ -85,54 +85,50 @@
   (duplicate [wa]    (__identity_duplicate wa)))
 
 ;; -- Pair (Product) comonad ──────────────────────────────────────────────────
-;; Pair e a = (e, a)   — carries a fixed environment e alongside a value a.
-;; Represented as { int64_t env; int64_t val; }.
+;; Pair e a = (e, a)   -- carries a fixed environment e alongside a value a.
+;; Represented as a Tuple2: e1 = env, e2 = val (backed by stdlib/tuple.tur).
 ;; extract (e, a) = a
 ;; extend f (e, a) = (e, f (e, a))
 
 ;;; __pair_new -- allocate a new Pair comonad cell with environment and value.
 (defn __pair_new [env val] :int
   ```c
-  struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
-  p->env = env;
-  p->val = val;
+  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  p->e1 = env;
+  p->e2 = val;
   return (int64_t)(intptr_t)p;
   ```)
 
 ;;; __pair_env -- read the environment component of a Pair comonad cell.
 (defn __pair_env [wa] :int
   ```c
-  struct { int64_t env; int64_t val; } *p =
-      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
-  return p->env;
+  Tuple2 *p = (Tuple2 *)(intptr_t)wa;
+  return p->e1;
   ```)
 
 ;;; __pair_val -- read the value component of a Pair comonad cell.
 (defn __pair_val [wa] :int
   ```c
-  struct { int64_t env; int64_t val; } *p =
-      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
-  return p->val;
+  Tuple2 *p = (Tuple2 *)(intptr_t)wa;
+  return p->e2;
   ```)
 
 ;;; __pair_extract -- extract the value from a Pair comonad cell.
 (defn __pair_extract [wa] :int
   ```c
-  struct { int64_t env; int64_t val; } *p =
-      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
-  return p->val;
+  Tuple2 *p = (Tuple2 *)(intptr_t)wa;
+  return p->e2;
   ```)
 
 ;;; __pair_extend -- extend over a Pair cell: (e, a) -> (e, f (e, a)).
 (defn __pair_extend [wa fn] :int
   ```c
   /* extend f (e, a) = (e, f (e, a)) */
-  struct { int64_t env; int64_t val; } *src =
-      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
+  Tuple2 *src = (Tuple2 *)(intptr_t)wa;
   int64_t new_val = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
-  struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
-  p->env = src->env;
-  p->val = new_val;
+  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  p->e1 = src->e1;
+  p->e2 = new_val;
   return (int64_t)(intptr_t)p;
   ```)
 
@@ -140,11 +136,10 @@
 (defn __pair_duplicate [wa] :int
   ```c
   /* duplicate (e, a) = (e, (e, a)) */
-  struct { int64_t env; int64_t val; } *src =
-      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
-  struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
-  p->env = src->env;
-  p->val = wa;
+  Tuple2 *src = (Tuple2 *)(intptr_t)wa;
+  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  p->e1 = src->e1;
+  p->e2 = wa;
   return (int64_t)(intptr_t)p;
   ```)
 

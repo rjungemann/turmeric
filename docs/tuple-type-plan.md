@@ -198,6 +198,12 @@ in the interim.
 5. **Migrate `Pair` callers opportunistically**. Don't rip out `Pair`;
    it stays for typeclass instance reasons. But new code in stdlib
    should prefer `Tuple2` to reduce the two-tuple-types problem.
+   **Status (Phase TP2): partially completed.** All stdlib internal
+   ad-hoc inline-C "Pair" structs (parsec, seq, comonad, arrow) have
+   been routed through the canonical `Tuple2` layout; `Eq [Tuple2]`
+   ships alongside `Eq [Pair]`.  The typed `Pair[A B]` API stays
+   intact for backward compatibility; new stdlib/spice code should
+   prefer `Tuple2`.
 6. **Fixtures**. `tests/fixtures/typed/tuple-basic/`, `tuple-destructure/`,
    `tuple-mismatch/`, `tuple-return/`. Include both the typed
    construction and destructuring paths.

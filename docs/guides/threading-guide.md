@@ -322,7 +322,7 @@ def f3 future-then(f fn [v] future-of({v + 1}))
 | `future-race [fa fb]` | First to settle wins |
 | `future-all2 [fa fb]` | Both must succeed; result carries `fa`'s value |
 | `future-any2 [fa fb]` | First to fulfill wins; both rejecting yields `fb`'s error |
-| `future-join [fa fb]` | Both must succeed; result is a `TurTuple2` pair |
+| `future-join [fa fb]` | Both must succeed; result is a `Tuple2` pair |
 | `future-race-n [futures n]` | Variadic race over a pointer array |
 | `future-all-n [futures n]` | All must succeed |
 | `future-any-n [futures n]` | First fulfillment wins |

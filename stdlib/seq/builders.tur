@@ -52,19 +52,19 @@
   return opt->value;
   ```)
 
-;; Pair helpers for seq/unfold (matching pair.tur layout)
-;;; seq-pair-first -- return the first element of a Pair.
-;;; seq-pair-second -- return the second element of a Pair.
+;; Pair helpers for seq/unfold -- backed by stdlib/tuple.tur's Tuple2 layout.
+;;; seq-pair-first -- return the first element of a Tuple2 (legacy name).
+;;; seq-pair-second -- return the second element of a Tuple2 (legacy name).
 (defn seq-pair-first [p :int] :int
   ```c
-  struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
-  return pair->first;
+  Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+  return pair->e1;
   ```)
 
 (defn seq-pair-second [p :int] :int
   ```c
-  struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
-  return pair->second;
+  Tuple2 *pair = (Tuple2 *)(intptr_t)p;
+  return pair->e2;
   ```)
 
 ;; -------------------------------------------------------------------

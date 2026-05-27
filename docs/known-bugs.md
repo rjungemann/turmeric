@@ -358,3 +358,158 @@ emitter needs to know `Vec` fields are struct-typed, not handle-typed.
 Investigate whether the code path that monomorphises `Vec[A]` fields is
 emitting the right C struct name vs. treating Vec as an opaque handle.
 
+---
+
+## KB-011 -- `stdlib/arrow.tur` does not load: typeclass methods called as free functions
+
+**Discovered:** 2026-05-27
+**Status:** Open -- stdlib bug.
+
+### Symptom
+
+```
+$ ./build/tur check stdlib/arrow.tur
+stdlib/arrow.tur:325:3: error: 'arr' is not a function or continuation
+323 | ;;; Example:
+324 | ;;;   (arrow-id)  ; => arr (fn [x] x)
+325 | (defn arrow-id [^arr a]
+326 |   (arr (fn [x] x)))
+    |   ^^^^^^^^^^^^^^^^
+```
+
+The file fails on load.  No test exercises `arrow.tur` directly (the
+`stdlib-arrow` fixture inlines its own helpers), so the breakage has
+gone unnoticed.
+
+### Root cause
+
+`Arrow` is declared as a typeclass with method names `arr`, `>>>`,
+`first`, `second` (`stdlib/arrow.tur:33`).  Two helpers later in the
+same file call those names as if they were free functions:
+
+```turmeric
+(defn arrow-id [^arr a]
+  (arr (fn [x] x)))            ; arr is an Arrow method
+
+(defn arrow-comp [^arr a b c f g]
+  (>>> f g))                   ; >>> is an Arrow method
+```
+
+These calls bypass typeclass dispatch.  The elaborator looks up `arr`
+in the value scope, finds only the typeclass method (not a free
+function), and rejects the call with "is not a function or
+continuation".
+
+A separate issue in the same file -- `(Pair a b)` being called as a
+constructor function -- was fixed by the Pair -> Tuple2 sweep in
+Phase TP2; the `arr` / `>>>` problem is the remaining blocker.
+
+### Workaround
+
+`stdlib/arrow.tur` is not auto-loaded by `src/main.c`, so this bug
+doesn't break compiled programs unless they explicitly
+`(load "stdlib/arrow.tur")`.  Tests that need Arrow combinators
+inline the implementations directly -- see
+`tests/fixtures/stdlib-arrow/input.tur` as the canonical pattern.
+
+### Fix needed
+
+Either:
+
+- Invoke the methods via explicit dispatch (`(.arr arr (fn [x] x))`,
+  `(.>>> arr f g)`) -- requires an Arrow-typed receiver in scope,
+  which `arrow-id`/`arrow-comp` don't have, or
+- Remove the typeclass-method calls from the free-function helpers
+  and route them through the inline-C `__arrow_call*` helpers
+  already in the file (the Arrow [->] instance methods already do
+  this internally), or
+- Rename the typeclass methods (`Arrow.arr` -> `Arrow.lift`,
+  `Arrow.>>>` -> `Arrow.then`) so the free-function helpers
+  don't shadow them.
+
+---
+
+## KB-012 -- `Eq` instance on parametric `defstruct` segfaults on call
+
+**Discovered:** 2026-05-27
+**Status:** Open -- compiler bug.
+
+### Symptom
+
+Calling `.eq?` on two values of a parametric `defstruct` (e.g.
+`Pair[int int]`, `Tuple2[int int]`, `Option[int]`) crashes:
+
+```turmeric
+(let [t1 (tuple2 10 20)
+      t2 (tuple2 10 20)]
+  (.eq? t1 t2))            ; => Segmentation fault
+```
+
+A trivial instance body works:
+
+```turmeric
+(definstance Eq [Foo] [(Eq A)]
+  (eq? [x y] true))        ; ok
+```
+
+A body that touches `x` or `y` does not:
+
+```turmeric
+(definstance Eq [Foo] [(Eq A)]
+  (eq? [x y] (= (.e1 x) (.e1 y))))    ; SEGV
+```
+
+Affects all stdlib instances that follow this pattern: `Eq [Pair]`
+(`stdlib/pair.tur:113`), `Eq [Option]` (`stdlib/option.tur:173`),
+and `Eq [Tuple2]` (`stdlib/tuple.tur`, added Phase TP2 at parity
+with the existing broken instances).
+
+### Root cause
+
+Unverified.  Likely candidates:
+
+- The instance specialisation passes `x` / `y` with the wrong
+  calling convention (by-value struct vs. int64 carrier), and the
+  body dereferences a value that isn't a pointer.
+- The `.e1 x` field-access lowering inside an instance body doesn't
+  see the correct struct type for `x` -- the parameter binding
+  type may be unresolved (`TY_UNKNOWN` / `TY_TYVAR`) at codegen
+  time, producing a wrong field-offset calculation.
+
+The existing stdlib helpers (`pair-eq-carrier?`,
+`tuple2-eq-carrier?`, `option-eq?`) all use an inline-C
+"cast int64_t to struct*" carrier ABI to sidestep field access
+inside the body, but they then crash for the *opposite* reason:
+called with a by-value struct rather than the heap pointer they
+expect to dereference.
+
+### Workaround
+
+Use a call-site macro that expands to direct field access at the
+caller's lexical scope, where `x` / `y` have known concrete types:
+
+- `pair-eq?` (`stdlib/pair.tur:93`)
+- `tuple2-eq?` (`stdlib/tuple.tur`, Phase TP2)
+
+```turmeric
+;; Works:
+(tuple2-eq? t1 t2 (fn [a b] (= a b)) (fn [a b] (= a b)))
+
+;; Crashes:
+(.eq? t1 t2)
+```
+
+### Fix needed
+
+Decide on one calling convention for typeclass instance bodies on
+parametric defstructs (by-value or pointer-carrier), make the
+codegen consistent, and audit the existing stdlib instances
+(`Eq [Pair]`, `Eq [Option]`, `Eq [Tuple2]`) against the chosen
+convention.
+
+Also worth confirming whether `.e1 x` inside the body sees a
+fully-resolved `Tuple2[int int]` for `x` or some unresolved
+`Tuple2[A B]` -- if the binding type is unresolved at codegen
+time, field offsets will be wrong even after the calling
+convention is fixed.
+

@@ -24,6 +24,14 @@ all of the following are true:
    plan has either completed, or has been declared not worth doing.
    Either outcome is fine; the point is to avoid landing a third
    tuple representation while two are still co-existing.
+   **Resolution:** partial sweep completed in Phase TP2. All stdlib
+   internal ad-hoc inline-C "Pair" structs (`stdlib/parsec.tur`,
+   `stdlib/seq/*`, `stdlib/comonad.tur`, `stdlib/arrow.tur`) now
+   route through the canonical Tuple2 layout, and `Eq [Tuple2]` is
+   shipped alongside `Eq [Pair]`.  The typed `Pair[A B]` defstruct
+   and its public API (`tpair`, `pair-fst`, `pair-snd`, `pair-eq?`,
+   `Eq [Pair]`) are kept as-is for backward compatibility -- the
+   original Option A plan explicitly recommended against rip-out.
 
 If none of these fire within ~6 months of Option A shipping, the
 correct answer is to close this plan unbuilt. `defstruct` plus
