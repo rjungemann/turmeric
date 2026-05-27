@@ -1,6 +1,8 @@
 #ifndef TURI_REPL_H
 #define TURI_REPL_H
 
+#include <stdbool.h>
+
 /* Phase S1: REPL — interactive read-eval-print loop for `tur repl`.
  *
  * Features:
@@ -10,8 +12,13 @@
  *  - Colour diagnostics when stdout/stderr are a terminal
  */
 
-/* Launch the interactive REPL.  Returns 0 on clean exit, 1 on fatal error. */
-int turi_repl_run(void);
+/* Launch the interactive REPL.  Returns 0 on clean exit, 1 on fatal error.
+ *
+ * RP6: when `watch_mode` is true the REPL polls the loaded spice's
+ * source mtimes between prompts and auto-(reload)s when anything
+ * changed. Synchronous check -- no background thread. Pass false for
+ * the default behaviour (manual `(reload)` only). */
+int turi_repl_run(bool watch_mode);
 
 /* Look up a short doc string for a builtin operator or special form.
  * Returns the doc string, or NULL if sym is not a known builtin. */

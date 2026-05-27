@@ -2761,8 +2761,8 @@ static int cmd_eval_expr(const char *expr, bool use_color) {
     return rc;
 }
 
-static int cmd_repl(void) {
-    return turi_repl_run();
+static int cmd_repl(bool watch_mode) {
+    return turi_repl_run(watch_mode);
 }
 
 /* ---------------------------------------------------------------------------
@@ -5161,7 +5161,12 @@ static int usage_test(void) {
 static int usage_repl(void) {
     fprintf(stderr,
         "usage:\n"
-        "  tur repl   start the interactive REPL\n"
+        "  tur repl [--watch]   start the interactive REPL\n"
+        "\n"
+        "flags:\n"
+        "  --watch         auto-reload the enclosing spice between prompts\n"
+        "                  when any source .tur file's mtime advances\n"
+        "                  (RP6; equivalent to typing (reload) each turn)\n"
         "\n"
         "REPL commands:\n"
         "  :help           print help\n"
@@ -5171,6 +5176,9 @@ static int usage_repl(void) {
         "  :reload <file>  reload a source file\n"
         "  :reset          clear session and start fresh\n"
         "  :tutorial       start the interactive tutorial\n"
+        "\n"
+        "REPL forms:\n"
+        "  (reload)        rebuild the loaded spice and refresh bindings\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -5952,10 +5960,23 @@ int main(int argc, char **argv) {
         return cmd_run(argc, argv);
     }
     if (strcmp(cmd, "repl") == 0) {
-        /* Phase S0: interactive REPL */
-        if (argc >= 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
+        /* Phase S0: interactive REPL.
+         * RP6: --watch enables auto-reload between prompts when a
+         * spice source file changes mtime. No background thread --
+         * the freshness check runs synchronously each turn. */
+        bool watch_mode = false;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                return usage_repl();
+            }
+            if (strcmp(argv[i], "--watch") == 0) {
+                watch_mode = true;
+                continue;
+            }
+            fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
             return usage_repl();
-        return cmd_repl();
+        }
+        return cmd_repl(watch_mode);
     }
     /* Tier 3: persistent fixture worker for the test suite. */
     if (strcmp(cmd, "worker") == 0) {

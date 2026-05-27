@@ -693,7 +693,7 @@ static bool check_tutorial_step(TuriEnv *env, const char *input) {
     return false;
 }
 
-int turi_repl_run(void) {
+int turi_repl_run(bool watch_mode) {
     bool use_color = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
     turi_init(use_color);
@@ -995,6 +995,18 @@ int turi_repl_run(void) {
 
             if (line) buf_putc(&multi, '\0'); /* already NUL-terminated when line==NULL */
             repl_do_eval:;
+
+            /* RP6: --watch -- check freshness right before eval so the
+             * source mutation (which typically happens while readline
+             * is blocked on the previous prompt) is picked up against
+             * the input the user just submitted, not against the next
+             * one. The reload helper prints its own "(reload) rebuilt
+             * N exports" summary, satisfying the plan's "one-line
+             * summary before the next prompt" requirement. */
+            if (watch_mode && env->spice_image
+                && !tur_spice_image_is_fresh(env->spice_image)) {
+                tur_ffi_reload_spice(env);
+            }
 
             /* Check if we're in tutorial mode and this input matches the current step */
             if (g_tutorial_state && g_tutorial_state->in_tutorial) {

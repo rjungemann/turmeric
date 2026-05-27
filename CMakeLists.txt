@@ -86,6 +86,15 @@ add_test(
   COMMAND bash tests/turi/repl-spice-reload.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RP6: integration test for `tur repl --watch`. Mutates source mid-
+# session and asserts the next call sees the new code (with --watch)
+# vs the old one (without). Also covers the no-changes silent path
+# and CLI argument parsing.
+add_test(
+  NAME tur_repl_spice_watch
+  COMMAND bash tests/turi/repl-spice-watch.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture
 # imports them. See docs/stdlib-check-allowlist-plan.md.
