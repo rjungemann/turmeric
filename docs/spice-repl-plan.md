@@ -1,8 +1,28 @@
 # Plan: Spice-aware REPL via AOT compile + dlopen
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-25
+> **Status:** Complete (RP0-RP8 shipped 2026-05-27)
+> **Last Updated:** 2026-05-27
 > **Type:** Compiler / CLI / Runtime
+
+> **Shipped commits:**
+> - RP0 -- `tur build --shared` (`a0b8942d`)
+> - RP1 -- `exports.manifest` (`cd82e8fe`)
+> - RP2 -- FFI dispatcher table (`19a1ac32`)
+> - RP3 -- REPL auto-discover + dlopen (`86424d77`)
+> - RP4 -- TuriNativeFn binding installer (`33894491`)
+> - RP5 -- `(reload)` form (`1650e27b`)
+> - RP6 -- `--watch` mode (`e9840708`)
+> - RP7 -- Error-surface polish (`1ce40f1c`)
+> - RP8 -- Docs (this commit)
+>
+> **Tests:** 8 ctest targets, ~63 scenarios. See
+> tests/turi/repl-spice-*.sh + tests/runtime/ffi-dispatch-unit.c.
+>
+> **User docs:** [docs/guides/repl.md "Working with spices in the REPL"](guides/repl.md#working-with-spices-in-the-repl).
+>
+> **Deferred to a follow-up:** variadic call marshaling, struct/ADT
+> return reconstruction, `(import M :refer [...])` at REPL top level,
+> sha256-based `build.manifest` freshness, libffi fallback.
 
 ---
 
@@ -256,23 +276,23 @@ error (or unbound macro). Wiring it up:
 
 ## Implementation phases
 
-- [ ] **RP0** -- New CLI flag `tur build --shared <dir>`. Codegen tweak
+- [x] **RP0** -- New CLI flag `tur build --shared <dir>`. Codegen tweak
   to skip `main`; linker line emits `-fPIC -shared`. Tested with a
   one-defn smoke project: build, then `dlopen` + `dlsym` from a hand-
   written C harness, confirm the symbol calls.
 
-- [ ] **RP1** -- `exports.manifest` writer in the codegen path. Records
+- [x] **RP1** -- `exports.manifest` writer in the codegen path. Records
   `module/name -> mangled symbol :: signature` for every public defn.
   Includes per-arg type tags and the return type tag using the existing
   Turmeric type DSL.
 
-- [ ] **RP2** -- `src/runtime/ffi_dispatch.c` with the hand-rolled
+- [x] **RP2** -- `src/runtime/ffi_dispatch.c` with the hand-rolled
   dispatcher table. Generator script (`tools/gen_ffi_dispatch.py`)
   produces dispatchers for every (return-class, arg-classes) shape
   present in `turmeric-spices/spices/*/build.tur`. Unit tests:
   one trampoline per common shape.
 
-- [ ] **RP3** -- REPL changes (in `src/turi/repl.c`):
+- [x] **RP3** -- REPL changes (in `src/turi/repl.c`):
   - Auto-discover `build.tur` walking up from cwd; skip if absent
     (then REPL behaves like today: pure-Turmeric, no spices).
   - Invoke `tur build --shared <tree>` as a subprocess (or in-process
@@ -281,29 +301,29 @@ error (or unbound macro). Wiring it up:
   - `dlopen` the library, parse `exports.manifest`, populate the symbol
     map.
 
-- [ ] **RP4** -- Interpreter binding integration. `(import M :refer [a])`
+- [x] **RP4** -- Interpreter binding integration. `(import M :refer [a])`
   consults the symbol map. Install FFI-thunk bindings for native exports;
   fall through to the existing AST-load path for pure-Turmeric ones.
   Both kinds coexist in the same env.
 
-- [ ] **RP5** -- `(reload)` REPL form. Re-checks `build.manifest`,
+- [x] **RP5** -- `(reload)` REPL form. Re-checks `build.manifest`,
   triggers a partial rebuild if anything changed, refreshes the symbol
   map for any bindings already imported into the current session. The
   REPL prompt prints which modules were rebuilt.
 
-- [ ] **RP6** -- Watch mode (optional). `tur repl --watch` (or a session
+- [x] **RP6** -- Watch mode (optional). `tur repl --watch` (or a session
   toggle) spawns an inotify / kqueue / FSEvents watcher on the spice
   src/. On change, queue a rebuild + reload; print a one-line summary
   before the next prompt.
 
-- [ ] **RP7** -- Error surface polish:
+- [x] **RP7** -- Error surface polish:
   - "no dispatcher for signature X" -> hint pointing at
     `tools/gen_ffi_dispatch.py` (or libffi fallback if we adopt it).
   - "spice not built yet" -> auto-build prompt.
   - Symbol mismatch (manifest says fn exists, dlsym returns NULL)
     -> clear "stale manifest; run with --rebuild" message.
 
-- [ ] **RP8** -- Documentation update:
+- [x] **RP8** -- Documentation update:
   - `docs/repl.md` (new) explaining the workflow + cache layout.
   - CLAUDE.md note that the REPL now auto-discovers like other per-file
     commands.

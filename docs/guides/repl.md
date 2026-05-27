@@ -9,7 +9,9 @@ description: Reference guide for the `tur repl` interactive read-eval-print loop
 `tur repl` launches an interactive Turmeric read-eval-print loop.
 
 ```sh
-tur repl
+tur repl              # interactive Turmeric prompt
+tur repl --watch      # also auto-reload spice exports when source changes
+                      # (see "Working with spices in the REPL" below)
 ```
 
 ---
@@ -132,6 +134,12 @@ reloaded src/utils.tur
 If the file cannot be opened or contains an error, a diagnostic is printed and
 the session continues.
 
+> **Not to be confused with `(reload)`.**
+> `(reload)` (a Turmeric form, no leading colon) rebuilds the *enclosing
+> spice* and refreshes its FFI bindings -- a different mechanism from
+> `:reload <file>` for loading a one-off `.tur` script.
+> See [Working with spices in the REPL](#working-with-spices-in-the-repl).
+
 ---
 
 ## Output format
@@ -174,6 +182,194 @@ most Linux distributions), the REPL provides:
 - **Completion** -- `Tab` completes known symbol names (when implemented).
 
 Without editline, raw `fgets` input is used with no history or editing.
+
+---
+
+## Working with spices in the REPL
+
+When you launch `tur repl` from inside a spice project (any directory
+whose ancestor contains a `build.tur`), the REPL auto-discovers and
+compiles the project into a shared library, then makes every exported
+defn callable from the prompt:
+
+```
+$ cd ~/projects/my-spice
+$ tur repl
+Loaded spice from /home/me/projects/my-spice (5 exports)
+turmeric> (add42 100)
+=> 142
+turmeric> (sh/mul 6 7)
+=> 42
+```
+
+Each export is bound under **two** names so you can call it either way:
+
+- **Bare** -- `(add42 100)`
+- **Qualified** -- `(<module>/<defn> ...)`, e.g. `(sh/add42 100)`
+
+The qualified form avoids collisions when two modules in the same
+project export the same name.
+
+### Cache layout
+
+The compiled library and its symbol manifest live under
+`.tur-repl-cache/` next to your `build.tur`:
+
+```
+my-spice/
+├── build.tur
+├── src/
+│   └── lib.tur
+└── .tur-repl-cache/        <- auto-generated, gitignored
+    ├── lib-0.so            <- shared library (one per process generation)
+    └── exports.manifest    <- module/defn -> mangled C symbol :: signature
+```
+
+The first time the cache directory is created, `.tur-repl-cache/` is
+appended to your project's existing `.gitignore` (idempotently; no
+`.gitignore` is created if one didn't already exist).
+
+The `lib-<N>.so` filenames are generation-tagged so re-loads always
+see a fresh `dlopen` handle. The cache is fully reproducible from
+source -- deleting it just costs one rebuild on the next REPL start.
+
+### Skipping the auto-build
+
+If sources haven't changed since the last REPL invocation, the loader
+sees the cached `.so` is newer than every `.tur` under `src/` and
+skips the rebuild entirely:
+
+```
+$ tur repl                    # rebuild + load (~1s)
+$ tur repl                    # nothing changed -- instant load
+```
+
+### (reload) -- pick up edits without restarting
+
+The REPL exposes a `(reload)` form that re-runs the build for the
+current spice, swaps in the fresh library, and refreshes the symbol
+bindings against the new function pointers:
+
+```
+turmeric> (add42 0)
+=> 42
+[...you edit src/lib.tur to change the body of add42...]
+turmeric> (reload)
+(reload) rebuilt 1 export
+=> nil
+turmeric> (add42 0)
+=> 100
+```
+
+`(reload)` is well-behaved in every scenario:
+
+| Situation | Output |
+|---|---|
+| No spice loaded, no project here | `(reload) no spice project here; nothing to reload` |
+| No spice loaded, build.tur found | `(reload) loaded N exports from /path` (self-heal) |
+| Spice loaded, no source changes | `(reload) no changes` |
+| Spice loaded, source changed | `(reload) rebuilt N exports` |
+| Build failed (e.g. compile error) | `(reload) failed; previous spice image left in place` |
+
+The self-heal case matters most when your startup build failed (e.g.
+a compile error in your spice): instead of restarting the REPL after
+fixing the source, just type `(reload)`.
+
+### --watch -- auto-reload on edit
+
+`tur repl --watch` checks source freshness between every prompt and
+fires `(reload)` automatically when any `.tur` file's mtime advances:
+
+```
+$ tur repl --watch
+turmeric> (add42 0)
+=> 42
+[...you edit src/lib.tur...]
+turmeric> (add42 0)
+(reload) rebuilt 1 export
+=> 100
+```
+
+The check is synchronous and runs right before each eval (one `stat`
+call per `.tur` file in the build dir). There's no background thread
+and no platform-specific filesystem watcher; polling at the prompt
+cadence is sufficient because the user has to type *something* to
+advance the loop anyway.
+
+### Environment knobs
+
+| Variable | Effect |
+|---|---|
+| `TUR_NO_AUTO_SPICE=1` | Skip discovery entirely. Useful for a pure-Turmeric REPL inside a project directory. |
+| `TUR_BIN=<path>` | Override the executable used for the rebuild subprocess. Defaults to `tur` (PATH lookup). Helpful when running an in-tree dev build. |
+
+### Calling spice defns: type marshaling
+
+Arguments are marshaled per the defn's signature recorded in
+`exports.manifest`. Each parameter falls into one of two **classes**:
+
+- **`:int` class** -- `:int`, `:bool`, `:cstr`, `:ptr`, sized integer
+  types (`:int8`, `:uint32`, ...). All passed in a 64-bit integer
+  register.
+- **`:float` class** -- `:float`, `:float32`, `:float64`. Passed in a
+  vector register.
+
+The marshaler accepts compatible Turmeric values:
+
+```
+turmeric> (sh/add42 100)         ; :int -> :int            ✓
+=> 142
+turmeric> (sh/scale 2.5 4.0)     ; :float :float -> :float ✓
+=> 10
+turmeric> (sh/add42 1.5)         ; :float into :int slot   ✗ rejected
+error: ffi: 'sh/add42' arg 0: expected :int-class, got float
+```
+
+Auto-widening from `:int` to `:float` is allowed; the reverse is not
+(it would lose precision). Arity mismatches surface as:
+
+```
+turmeric> (sh/add42)
+error: ffi: 'sh/add42' expects 1 arg, got 0
+```
+
+### Current limits (v1)
+
+- **Variadic exports** (`& rest :type`) are recognised but not
+  callable from the REPL. The error message is explicit; the marshaling
+  code for cons-list rest args lives in a later phase.
+- **Struct / ADT returns** can't yet be reconstructed on the
+  interpreter side. The error suggests sticking to primitive
+  (`:int` / `:float` / `:cstr` / etc.) returns for now.
+- **(import M :refer [...])** at REPL top level still hits the
+  elaborator's "import is only allowed inside defmodule" restriction.
+  Since spice exports are pre-bound at load time, you don't need to
+  import them -- call them directly.
+
+### Troubleshooting
+
+**`stale exports.manifest`** -- the loader found a symbol in
+`exports.manifest` that isn't in `lib-N.so`. Either type `(reload)`
+to rebuild against the current source, or delete the cache and
+restart:
+
+```sh
+rm -rf .tur-repl-cache
+tur repl
+```
+
+**`spice rebuild failed`** -- the underlying `tur build --shared`
+subprocess reported a compile error. The full output is replayed.
+Fix the source and type `(reload)` (no need to restart the REPL).
+
+**`no dispatcher for shape`** -- a defn's arity exceeds the FFI
+dispatcher table's coverage (default: arity 0..6). Regenerate with a
+larger bound:
+
+```sh
+python3 tools/gen_ffi_dispatch.py --max-arity 8
+# rebuild the tur binary
+```
 
 ---
 

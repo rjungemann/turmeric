@@ -58,6 +58,24 @@ in your editor, LSP, or format-on-save hook.
 See [docs/guides/developing-spices-guide.md](docs/guides/developing-spices-guide.md#per-file-commands-inside-a-spice)
 for the full rules.
 
+## REPL Auto-Discovery (spice-repl-plan)
+
+`tur repl` also walks up from cwd looking for `build.tur`. When it
+finds one, the spice tree is AOT-compiled into a shared library
+under `<root>/.tur-repl-cache/`, dlopened, and every exported defn is
+bound as a callable native at the prompt (both bare `add42` and
+qualified `mod/add42`). Source edits propagate via the `(reload)`
+form, or automatically with `tur repl --watch`.
+
+- `TUR_NO_AUTO_SPICE=1` opts out (the REPL behaves as before).
+- `TUR_BIN=<path>` overrides the subprocess executable; tests set
+  this to point at the in-tree build.
+- `.tur-repl-cache/` is appended to `.gitignore` on first creation
+  (if a `.gitignore` already exists).
+
+See [docs/guides/repl.md](docs/guides/repl.md#working-with-spices-in-the-repl)
+for the full workflow + cache layout + troubleshooting guide.
+
 ## Docstring Standard (`;;;`)
 
 Use `;;;` (triple-semicolon) as the doc-comment marker. A docstring block
