@@ -66,12 +66,12 @@ else
     fail "repl-spice-load-initial" "missing/wrong status line: $out"
 fi
 
-if [ -f "$PROJ/.tur-repl-cache/lib.so" ] \
+if [ -f "$PROJ/.tur-repl-cache/lib-0.so" ] \
     && [ -f "$PROJ/.tur-repl-cache/exports.manifest" ]; then
     pass "repl-spice-load-cache-populated"
 else
     fail "repl-spice-load-cache-populated" \
-         "lib.so or exports.manifest missing under .tur-repl-cache"
+         "lib-0.so or exports.manifest missing under .tur-repl-cache"
 fi
 
 EXPECTED='smokelib/add42 -> smokelib__add42 :: (:int) -> :int'
@@ -83,29 +83,29 @@ else
 fi
 
 # --- scenario 3: rerun is a no-op (mtime unchanged) -----------------------
-MT_BEFORE=$(stat -f %m "$PROJ/.tur-repl-cache/lib.so" 2>/dev/null \
-            || stat -c %Y "$PROJ/.tur-repl-cache/lib.so")
+MT_BEFORE=$(stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
+            || stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so")
 sleep 1
 (cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
-MT_AFTER=$(stat -f %m "$PROJ/.tur-repl-cache/lib.so" 2>/dev/null \
-           || stat -c %Y "$PROJ/.tur-repl-cache/lib.so")
+MT_AFTER=$(stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
+           || stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so")
 if [ "$MT_BEFORE" = "$MT_AFTER" ]; then
     pass "repl-spice-load-rerun-skips-rebuild"
 else
     fail "repl-spice-load-rerun-skips-rebuild" \
-         "lib.so was rebuilt unnecessarily ($MT_BEFORE -> $MT_AFTER)"
+         "lib-0.so was rebuilt unnecessarily ($MT_BEFORE -> $MT_AFTER)"
 fi
 
 # --- scenario 4: touching a source rebuilds -------------------------------
 touch "$PROJ/src/smoke.tur"
 (cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
-MT_REBUILT=$(stat -f %m "$PROJ/.tur-repl-cache/lib.so" 2>/dev/null \
-             || stat -c %Y "$PROJ/.tur-repl-cache/lib.so")
+MT_REBUILT=$(stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
+             || stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so")
 if [ "$MT_REBUILT" != "$MT_AFTER" ]; then
     pass "repl-spice-load-rebuild-on-change"
 else
     fail "repl-spice-load-rebuild-on-change" \
-         "lib.so mtime did not change after touching source"
+         "lib-0.so mtime did not change after touching source"
 fi
 
 # --- scenario 5: TUR_NO_AUTO_SPICE=1 opts out -----------------------------

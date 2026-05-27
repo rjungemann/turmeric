@@ -78,6 +78,12 @@ const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
                                             const char *module,
                                             const char *name);
 
+/* RP5: true when every .tur file under the image's build directory has
+ * mtime <= the cached library's. False (rebuild needed) when any source
+ * is newer, the library is missing, or img is NULL. Used by (reload) to
+ * short-circuit when nothing changed. */
+bool tur_spice_image_is_fresh(const TurSpiceImage *img);
+
 #ifdef __cplusplus
 }
 #endif

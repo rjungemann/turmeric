@@ -52,6 +52,16 @@ typedef struct TuriFuture   TuriFuture;
 typedef struct TuriTimer    TuriTimer;
 typedef struct TuriIoPending TuriIoPending;
 
+/* RP5: list node for env-retained spice images. The full layout
+ * lives here so both env.c (teardown) and ffi_thunk.c (push) can
+ * traverse it without an extra header dependency. The TurSpiceImage
+ * struct itself is still opaque (declared via the forward decl on
+ * the field below). */
+struct TurSpiceImageNode {
+    struct TurSpiceImage      *image;
+    struct TurSpiceImageNode  *next;
+};
+
 /* A per-eval-call arena node, kept alive until TuriEnv is freed.
  * Closures may hold Expr* pointers into these arenas. */
 typedef struct ArenaNode {
@@ -158,6 +168,12 @@ typedef struct TuriEnv {
      * include spice_loader.h; the REPL's binding layer (RP4) walks it
      * to resolve `(import M :refer [...])`. */
     struct TurSpiceImage *spice_image;
+    /* RP5: retired spice images held alive for the env's lifetime.
+     * When (reload) swaps in a fresh image, the previous one stays
+     * pinned because old TuriNativeFn bindings still reference its
+     * strdup'd module/defn name strings via the globals hash table.
+     * Freed in turi_env_free in reverse order. Opaque list node. */
+    struct TurSpiceImageNode *retired_spice_images;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

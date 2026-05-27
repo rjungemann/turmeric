@@ -118,6 +118,20 @@ void turi_env_free(TuriEnv *env) {
         tur_spice_image_free(env->spice_image);
         env->spice_image = NULL;
     }
+    /* RP5: drop any retired images that (reload) accumulated. They
+     * outlived the current image so previously-installed FFI binding
+     * shims could still see their name strings. Free in LIFO order
+     * (most-recent first) for symmetry with how they were pushed. */
+    {
+        struct TurSpiceImageNode *n = env->retired_spice_images;
+        while (n) {
+            struct TurSpiceImageNode *next = n->next;
+            if (n->image) tur_spice_image_free(n->image);
+            free(n);
+            n = next;
+        }
+        env->retired_spice_images = NULL;
+    }
 
     /* Phase S7: free async scheduler state */
     turi_sched_free(env);

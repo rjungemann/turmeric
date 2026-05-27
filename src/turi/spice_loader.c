@@ -33,6 +33,7 @@
 
 struct TurSpiceImage {
     char           *root;       /* absolute path to dir containing build.tur */
+    char           *build_dir;  /* `<root>/src` if present, else == root */
     char           *lib_path;   /* path to the loaded .so (under .tur-repl-cache) */
     void           *handle;     /* dlopen result */
     TurSpiceExport *exports;
@@ -54,6 +55,7 @@ void tur_spice_image_free(TurSpiceImage *img) {
     free(img->exports);
     if (img->handle) dlclose(img->handle);
     free(img->lib_path);
+    free(img->build_dir);
     free(img->root);
     free(img);
 }
@@ -83,6 +85,14 @@ const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
         }
     }
     return NULL;
+}
+
+/* Forward decl: defined below alongside needs_rebuild. */
+static bool needs_rebuild(const char *root, const char *lib_path);
+
+bool tur_spice_image_is_fresh(const TurSpiceImage *img) {
+    if (!img) return false;
+    return !needs_rebuild(img->build_dir, img->lib_path);
 }
 
 /* ------------------------------------------------------------------ */
@@ -458,8 +468,17 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
         free(root);
         return -1;
     }
+    /* RP5: bump a process-monotonic generation each load so the .so
+     * sits at a unique path every time. Critical on macOS, where
+     * dlopen reuses the existing handle when re-opened by the same
+     * absolute path -- which would silently keep the previous version
+     * of every spice export resident and make (reload) a no-op even
+     * after a successful rebuild. Linux has the same issue once
+     * RTLD_NOLOAD is involved; unique paths sidestep both. */
+    static unsigned int generation_counter = 0;
+    unsigned int gen = generation_counter++;
     char lib_path[4400], manifest_path[4400];
-    snprintf(lib_path, sizeof(lib_path), "%s/lib.so", cache_dir);
+    snprintf(lib_path, sizeof(lib_path), "%s/lib-%u.so", cache_dir, gen);
     snprintf(manifest_path, sizeof(manifest_path),
              "%s/exports.manifest", cache_dir);
 
@@ -494,9 +513,10 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
     if (!img) {
         dlclose(handle); free(root); return -1;
     }
-    img->root     = root;
-    img->lib_path = strdup(lib_path);
-    img->handle   = handle;
+    img->root      = root;
+    img->build_dir = strdup(build_dir);
+    img->lib_path  = strdup(lib_path);
+    img->handle    = handle;
 
     if (load_manifest(img, manifest_path) != 0) {
         tur_spice_image_free(img);

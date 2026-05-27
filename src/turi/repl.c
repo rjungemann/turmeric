@@ -729,6 +729,12 @@ int turi_repl_run(void) {
         return 1;
     }
 
+    /* RP5: register `(reload)` unconditionally so users always have
+     * a callable handle, even outside a spice project (the native
+     * surfaces a "no spice loaded" message in that case rather than
+     * an unbound-variable error). */
+    tur_ffi_register_reload_native(env);
+
     /* RP3: auto-discover an enclosing spice project and load its
      * shared library. Skipped silently when:
      *   - the user sets TUR_NO_AUTO_SPICE=1, or

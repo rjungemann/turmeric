@@ -176,6 +176,73 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
 }
 
 /* ------------------------------------------------------------------ */
+/* (reload) native                                                     */
+/* ------------------------------------------------------------------ */
+
+TuriValue tur_ffi_reload_spice(TuriEnv *env) {
+    if (!env || !env->spice_image) {
+        printf("(reload) no spice loaded; nothing to reload\n");
+        fflush(stdout);
+        return turi_error("(reload) no spice loaded");
+    }
+    if (tur_spice_image_is_fresh(env->spice_image)) {
+        printf("(reload) no changes\n");
+        fflush(stdout);
+        return turi_nil();
+    }
+
+    /* Take a snapshot of where we are so we can reload the *same*
+     * project even if the cwd has since drifted (the user may have
+     * changed directories via shell escapes, or a spice may have
+     * chdir'd). */
+    const char *root = tur_spice_image_root(env->spice_image);
+    TurSpiceImage *fresh = NULL;
+    int rc = tur_spice_image_load(root, getenv("TUR_BIN"), &fresh);
+    if (rc != 0 || !fresh) {
+        printf("(reload) failed; previous spice image left in place\n");
+        fflush(stdout);
+        return turi_error("(reload) failed");
+    }
+
+    /* Push the old image onto the retired list so existing FFI
+     * bindings keep their borrowed name strings valid. */
+    struct TurSpiceImageNode *node =
+        (struct TurSpiceImageNode *)calloc(1, sizeof(*node));
+    if (!node) {
+        /* Out of memory mid-swap: leak the new image and abort the
+         * reload to preserve the old one (any other choice trades a
+         * small leak for use-after-free risk in installed bindings). */
+        tur_spice_image_free(fresh);
+        return turi_error("(reload) oom");
+    }
+    node->image = env->spice_image;
+    node->next  = env->retired_spice_images;
+    env->retired_spice_images = node;
+
+    env->spice_image = fresh;
+    uint32_t n_exports = tur_spice_image_count(fresh);
+    (void)tur_ffi_install_spice_bindings(env, fresh);
+    printf("(reload) rebuilt %u export%s\n",
+           n_exports, n_exports == 1 ? "" : "s");
+    fflush(stdout);
+    return turi_nil();
+}
+
+static TuriValue native_reload(TuriEnv *env, TuriValue *args, uint32_t n,
+                                void *ud) {
+    (void)args; (void)ud;
+    if (n != 0) {
+        return turi_errorf("(reload) takes no arguments, got %u", n);
+    }
+    return tur_ffi_reload_spice(env);
+}
+
+void tur_ffi_register_reload_native(TuriEnv *env) {
+    if (!env) return;
+    turi_env_register_native(env, "reload", native_reload, NULL);
+}
+
+/* ------------------------------------------------------------------ */
 /* Binding installer                                                   */
 /* ------------------------------------------------------------------ */
 

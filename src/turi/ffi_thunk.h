@@ -38,6 +38,23 @@ extern "C" {
  * with NULL img -- returns 0. */
 uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img);
 
+/* RP5: register the `reload` native so the user can type `(reload)`
+ * at the prompt. Available even when no spice is currently loaded
+ * (the call surfaces a clean "no spice loaded" error in that case).
+ * Called once during REPL start, before the first eval. */
+void tur_ffi_register_reload_native(TuriEnv *env);
+
+/* RP5: re-discover + rebuild + reinstall bindings for the spice in
+ * env->spice_image. The current image is pushed onto
+ * env->retired_spice_images so any in-flight bindings keep their
+ * borrowed name strings valid. Returns:
+ *   :nil    -- success (a TuriValue tagged TURI_NIL)
+ *   :error  -- failure (env->spice_image left unchanged; a status
+ *              message has been printed)
+ * The function prints one line summarising the outcome ("no changes",
+ * "rebuilt N exports", or an error explanation). */
+TuriValue tur_ffi_reload_spice(TuriEnv *env);
+
 #ifdef __cplusplus
 }
 #endif
