@@ -407,6 +407,42 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
+        } else if (strcmp(kw, "bin") == 0) {
+            /* GS-M1: :bin #{ "tur-foo" "src/main.tur" ... } */
+            if (!vf) continue;
+            if (vf->tag != F_MAP) {
+                report_non_map(vf, ":bin");
+                continue;
+            }
+            const FormList *bfl = &vf->as.list;
+            int cap = (int)(bfl->len / 2 + 1);
+            out->bin_names = (char **)malloc(cap * sizeof(char *));
+            out->bin_paths = (char **)malloc(cap * sizeof(char *));
+            if (!out->bin_names || !out->bin_paths) continue;
+            for (uint32_t bi = 0; bi + 1 < bfl->len; bi += 2) {
+                const Form *bk = bfl->items[bi];
+                const Form *bv = bfl->items[bi + 1];
+                if (bk->tag != F_STR) continue;
+                if (!bv || bv->tag != F_STR) {
+                    diag_emit(DIAG_ERROR, bv ? bv->span : bk->span,
+                              "build.tur: :bin entry value must be a "
+                              "string entrypoint path");
+                    continue;
+                }
+                char *bname = ss_dup(bk->as.s);
+                char *bpath = ss_dup(bv->as.s);
+                if (!bname || !bpath) { free(bname); free(bpath); continue; }
+                if (strncmp(bname, "tur-", 4) != 0 || bname[4] == '\0') {
+                    diag_emit(DIAG_ERROR, bk->span,
+                              "build.tur: :bin name '%s' must start with "
+                              "'tur-' (e.g. tur-nb)", bname);
+                    free(bname); free(bpath);
+                    continue;
+                }
+                out->bin_names[out->n_bins] = bname;
+                out->bin_paths[out->n_bins] = bpath;
+                out->n_bins++;
+            }
         } else if (strcmp(kw, "build-opts") == 0) {
             if (vf && vf->tag == F_MAP) {
                 const Form *cf = map_get_kw(vf, "c-flags");
@@ -548,6 +584,15 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "]\n");
     }
 
+    if (m->n_bins > 0) {
+        fprintf(f, "\n  :bin #{\n");
+        for (int i = 0; i < m->n_bins; i++) {
+            fprintf(f, "    \"%s\" \"%s\"\n",
+                    m->bin_names[i], m->bin_paths[i]);
+        }
+        fprintf(f, "  }\n");
+    }
+
     fprintf(f, ")\n");
     fclose(f);
     return true;
@@ -598,6 +643,12 @@ void pkg_manifest_free(PkgManifest *m) {
     free(m->link_libs);
     for (int i = 0; i < m->n_reader_macros; i++) free(m->reader_macros[i]);
     free(m->reader_macros);
+    for (int i = 0; i < m->n_bins; i++) {
+        free(m->bin_names[i]);
+        free(m->bin_paths[i]);
+    }
+    free(m->bin_names);
+    free(m->bin_paths);
     memset(m, 0, sizeof(*m));
 }
 

@@ -59,9 +59,17 @@ No spice, no test, no example depends on this file loading -- it's
 dead library code -- but the error message is bad and the inconsistency
 between `defn` and `defmacro` is real.
 
-## Design options
+## Decision
 
-### Option A -- fix the one site; improve the diagnostic
+**Settled: Option A.** Keep the strict parser, fix the one offending
+site in `stdlib/future.tur`, and improve the diagnostic to point users
+at the right fix. The other options (silently discard the annotation,
+or grow a Form-tag check pass) are documented below for posterity but
+are not pursued by this plan.
+
+## Design options (considered, not adopted except A)
+
+### Option A -- fix the one site; improve the diagnostic (CHOSEN)
 
 Keep the strict parser. Update the error to point users at the right
 fix:
@@ -125,9 +133,7 @@ Cons:
   the current papercut. Worth a plan of its own if real demand
   shows up.
 
-## Recommendation
-
-**Option A.**
+## Why Option A (rationale recap)
 
 The papercut is a one-line stdlib fix and a slightly nicer error
 message. The codebase has exactly one offending site and zero tests
@@ -143,25 +149,68 @@ Option B.
 
 ## Implementation steps (Option A)
 
+### Prerequisites -- unblock `stdlib/future.tur`
+
+The whole file currently fails to load on the `promise-pair`
+defmacro. These steps land first, on their own, so the rest of the
+plan can land behind a green tree.
+
+P1. **Confirm the failure surface.** Run
+    `./build/tur check stdlib/future.tur` and capture the error.
+    Expected: a single `defmacro: parameter must be a symbol, got
+    keyword` error at `stdlib/future.tur:132`. If any *other* errors
+    appear, stop and triage -- they are pre-existing rot per the
+    Risks section and need their own treatment before this plan can
+    claim "future.tur loads."
+
+P2. **Strip the annotation from `promise-pair`.** Edit
+    `stdlib/future.tur:132` from
+    `(defmacro promise-pair [cell :ptr<void>]`
+    to
+    `(defmacro promise-pair [cell]`.
+    The body (`(list (promise-of-cell cell) (future-of-cell cell))`)
+    is unchanged: it already forwards `cell` to two `defn`s typed as
+    `:ptr<void>`, so the runtime contract still holds at expansion
+    sites.
+
+P3. **Audit the surrounding docstring (lines 126--131) and the API
+    block-comment (line 29).** Neither currently asserts a typed
+    parameter contract -- both describe `cell` as "FutureCell
+    pointer from `promise-new`", which is a description of the
+    *expected runtime value at the call site*, not a macro-param
+    type. Leave them as-is. (Listed here so a future reader doesn't
+    re-open the question.)
+
+P4. **Sanity-load `stdlib/future.tur`.** Run
+    `./build/tur check stdlib/future.tur` again and confirm it
+    parses cleanly. If new errors appear that were masked by the
+    earlier parse failure, log them as out-of-scope follow-ups (per
+    the Risks section) -- do not expand this plan to chase them.
+
+P5. **Grep for `defmacro` + keyword param across the tree** to
+    confirm `promise-pair` really is the only site:
+    `rg -n 'defmacro\s+\S+\s+\[[^]]*:' stdlib/ tests/ examples/`.
+    Expected: zero matches after P2. If matches show up, fix them
+    the same way (drop the annotation) before moving on -- the
+    diagnostic change in step 1 below will start hard-erroring on
+    them as soon as it lands.
+
+### Main work (after prerequisites are green)
+
 1. **Improve the diagnostic in `elab_defmacro`** at
    `src/compiler/elab_macros.c:1014`. When the offending form is an
    `F_KEYWORD`, mention the `defn`-vs-`defmacro` distinction and
    show the corrected param list verbatim. For other tags
-   (`F_NUM`, `F_STR`, etc.) keep the generic message.
-2. **Fix `stdlib/future.tur:132`**: change
-   `(defmacro promise-pair [cell :ptr<void>] ...)`
-   to
-   `(defmacro promise-pair [cell] ...)`.
-   Update the surrounding docstring if it claims a type contract that
-   never existed.
-3. **Add a negative fixture**
+   (`F_NUM`, `F_STR`, etc.) keep the generic message. Keep the
+   leading `"defmacro: parameter"` substring so any existing
+   fixture matching on it continues to match.
+2. **Add a negative fixture**
    `tests/fixtures/errors/defmacro-typed-param/` that asserts the
-   improved diagnostic substring.
-4. **Sanity-load** `stdlib/future.tur` once after the fix
-   (`./build/tur check stdlib/future.tur`) and confirm it parses --
-   the file has been broken-on-load since before this plan started,
-   and Option A removes that block. Any further `tur check` errors
-   are pre-existing and out of scope for this plan.
+   improved diagnostic substring (something stable like
+   `"macro parameters bind Forms"`).
+3. **Run the full test suite** (`just test`) to confirm no other
+   fixture's expected-error substring regressed on the message
+   change.
 
 ## Risks and open questions
 
@@ -181,11 +230,22 @@ Option B.
 
 ## Success criteria
 
+Prerequisite gate (must be true before the main work lands):
+
+- `./build/tur check stdlib/future.tur` no longer fails on
+  `promise-pair` (any remaining errors are pre-existing and
+  documented as out-of-scope follow-ups).
+- The P5 grep returns zero hits -- no other `defmacro` in `stdlib/`,
+  `tests/`, or `examples/` uses a typed parameter.
+
+Main work:
+
 - `(defmacro foo [x :int] ...)` emits an error that names the
   problem and points the reader at the fix (`defn` vs no
-  annotation).
-- `./build/tur check stdlib/future.tur` no longer fails on
-  `promise-pair`.
+  annotation), while keeping the `"defmacro: parameter"` lead-in
+  for fixture compatibility.
 - `tests/fixtures/errors/defmacro-typed-param/` passes.
+- `just test` is green; no pre-existing fixture's expected-error
+  substring regressed on the new wording.
 - Every other `defmacro` in `stdlib/` continues to compile
   unchanged.

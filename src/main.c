@@ -16,6 +16,7 @@
 #  endif
 #endif
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -70,8 +71,10 @@
 #endif
 
 /* E14: structured JSON output global — set by --json flag.
- * When true: tur doc prints JSON; tur test prints JSON; tur check uses JSON diag. */
-static bool use_json_output = false;
+ * When true: tur doc prints JSON; tur test prints JSON; tur check uses JSON diag.
+ * The storage lives in install.c so libturi (which omits main.c but pulls in
+ * tur_core) resolves it cleanly. */
+extern bool use_json_output;
 
 /* Escape a string for JSON output (handles backslash, double-quote, newline). */
 static void json_escape(const char *s, char *out, size_t cap) {
@@ -5163,6 +5166,53 @@ static int cmd_explain(const char *code) {
 /* Phase 8: Handle --json-diagnostics flag */
 static bool use_json_diagnostics = false;
 
+/* GS-M2: subcommand fallthrough. When `tur <cmd>` doesn't match a built-in,
+ * search $PATH for `tur-<cmd>` and exec it with the remaining argv. Modeled
+ * after git-foo / git foo. On success this does not return. On failure
+ * prints a diagnostic and returns 1. */
+static int try_external_subcommand(int argc, char **argv) {
+    if (argc < 2) return usage();
+    const char *cmd = argv[1];
+    if (!cmd || !*cmd || cmd[0] == '-') return usage();
+    /* Reject anything that's clearly a path or contains shell-unsafe bits. */
+    for (const char *p = cmd; *p; p++) {
+        if (!(isalnum((unsigned char)*p) || *p == '-' || *p == '_')) return usage();
+    }
+    char ext_name[256];
+    snprintf(ext_name, sizeof(ext_name), "tur-%s", cmd);
+
+    const char *path_env = getenv("PATH");
+    if (path_env) {
+        const char *p = path_env;
+        while (*p) {
+            const char *colon = strchr(p, ':');
+            size_t seg = colon ? (size_t)(colon - p) : strlen(p);
+            if (seg > 0 && seg < 3500) {
+                char candidate[4096];
+                snprintf(candidate, sizeof(candidate), "%.*s/%s",
+                         (int)seg, p, ext_name);
+                if (access(candidate, X_OK) == 0) {
+                    char **nv = (char **)calloc((size_t)argc, sizeof(char *));
+                    if (!nv) return 1;
+                    nv[0] = (char *)ext_name;
+                    for (int i = 2; i < argc; i++) nv[i - 1] = argv[i];
+                    nv[argc - 1] = NULL;
+                    execv(candidate, nv);
+                    fprintf(stderr, "tur: failed to exec '%s': %s\n",
+                            candidate, strerror(errno));
+                    free(nv);
+                    return 1;
+                }
+            }
+            if (!colon) break;
+            p = colon + 1;
+        }
+    }
+    fprintf(stderr,
+        "tur: '%s' is not a tur command. See 'tur --help'.\n", cmd);
+    return 1;
+}
+
 
 int main(int argc, char **argv) {
     /* SN1: stash argv[0] for exe-path fallback in resolve_stdlib_root().
@@ -5792,5 +5842,19 @@ int main(int argc, char **argv) {
         return cmd_pkg_fetch(argc, argv);
     if (strcmp(cmd, "emit-cmake") == 0)
         return cmd_pkg_emit_cmake(argc, argv);
-    return usage();
+    /* GS-M2: global spice install commands */
+    if (strcmp(cmd, "install") == 0)
+        return cmd_pkg_install(argc, argv);
+    if (strcmp(cmd, "uninstall") == 0)
+        return cmd_pkg_uninstall(argc, argv);
+    /* GS-M3 / GS-M4 */
+    if (strcmp(cmd, "list") == 0)
+        return cmd_pkg_list(argc, argv);
+    if (strcmp(cmd, "upgrade") == 0)
+        return cmd_pkg_upgrade(argc, argv);
+
+    /* GS-M2: subcommand fallthrough — `tur foo bar` execs `tur-foo bar`
+     * from $PATH when "foo" isn't a built-in. Built-ins always win.
+     * If exec succeeds, this does not return. */
+    return try_external_subcommand(argc, argv);
 }

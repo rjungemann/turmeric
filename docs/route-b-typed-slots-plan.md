@@ -120,7 +120,7 @@ out in
 
 **Worktree update (2026-05-26, TS3.1 slice):** typed accessor helpers
 (`thead`, `unwrap`, `pair-fst`/`pair-snd`, `ok-val`/`err-val`) and the
-typed constructor `tpair` are already in place from earlier GS5 work.
+typed constructor `pair` are already in place from earlier GS5 work.
 This slice adds `tcons-of [A] [h :A t :int] :(Cons A)` (`stdlib/list.tur`)
 as the first typed `Cons[A]` constructor that lowers through `make-struct`
 to the concrete `Cons__A` layout with no inline-C bit-cast, and the

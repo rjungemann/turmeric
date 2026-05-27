@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+# tests/run-install.sh -- exercise `tur install` / `tur uninstall` /
+# subcommand fallthrough end to end, isolated under a temporary TUR_HOME.
+
+set -u
+cd "$(dirname "$0")/.."
+
+TUR="./build/tur"
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+
+PASS=0
+FAIL=0
+FAILED=()
+
+note() { printf "  %s\n" "$*"; }
+ok()   { PASS=$((PASS+1)); echo "PASS $1"; }
+bad()  { FAIL=$((FAIL+1)); FAILED+=("$1"); echo "FAIL $1"; [ -n "${2:-}" ] && note "$2"; }
+
+WORK="$(mktemp -d -t tur-install-tests-XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+
+export TUR_HOME="$WORK/tur-home"
+
+# ------------------------------------------------------------------ #
+# Fixture: a minimal binary spice with a single :bin entry.
+# ------------------------------------------------------------------ #
+SPICE="$WORK/sample-spice"
+mkdir -p "$SPICE/src"
+cat > "$SPICE/build.tur" <<'EOF'
+;;; build.tur -- sample binary spice for installer tests.
+(defpackage sample
+  :name    "sample"
+  :version "0.1.0"
+  :bin #{
+    "tur-sample" "src/main.tur"
+  })
+EOF
+cat > "$SPICE/src/main.tur" <<'EOF'
+;;; sample binary entrypoint.
+(defn main [] :int
+  (println "hello from sample")
+  0)
+EOF
+
+# ------------------------------------------------------------------ #
+# 1. Install from --path                                              #
+# ------------------------------------------------------------------ #
+out="$("$TUR" install "$SPICE" --path 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    bad "install --path" "$out"
+else
+    ok "install --path"
+fi
+
+# 2. state.tur was written and lists the entry.
+if grep -q '"sample"' "$TUR_HOME/state.tur" 2>/dev/null; then
+    ok "state.tur written"
+else
+    bad "state.tur written" "missing or empty"
+fi
+
+# 3. bin symlink exists and is executable.
+if [ -x "$TUR_HOME/bin/tur-sample" ]; then
+    ok "bin/tur-sample exists"
+else
+    bad "bin/tur-sample exists"
+fi
+
+# 4. Binary runs and prints the expected line.
+out="$("$TUR_HOME/bin/tur-sample" 2>&1)"
+if [ "$out" = "hello from sample" ]; then
+    ok "bin runs"
+else
+    bad "bin runs" "got: $out"
+fi
+
+# 5. Subcommand fallthrough: `tur sample` should exec tur-sample.
+out="$(PATH="$TUR_HOME/bin:$PATH" "$TUR" sample 2>&1)"
+if [ "$out" = "hello from sample" ]; then
+    ok "subcommand fallthrough"
+else
+    bad "subcommand fallthrough" "got: $out"
+fi
+
+# 6. Unknown subcommand: exits nonzero with a clean diagnostic.
+out="$(PATH="$TUR_HOME/bin:$PATH" "$TUR" nonexistent-zzz 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "is not a tur command"; then
+    ok "unknown subcommand diagnostic"
+else
+    bad "unknown subcommand diagnostic" "rc=$rc out: $out"
+fi
+
+# 7. Reinstalling our own spice replaces the symlink without --force.
+out="$("$TUR" install "$SPICE" --path 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "reinstall replaces own symlink"
+else
+    bad "reinstall replaces own symlink" "$out"
+fi
+
+# 8. Conflict: a foreign file at the same bin path is refused without --force.
+echo "#!/bin/sh" > "$TUR_HOME/bin/tur-conflict"
+chmod +x "$TUR_HOME/bin/tur-conflict"
+# Create a second spice with the same bin name.
+SPICE2="$WORK/conflict-spice"
+mkdir -p "$SPICE2/src"
+cat > "$SPICE2/build.tur" <<'EOF'
+(defpackage conflict
+  :name    "conflict"
+  :version "0.1.0"
+  :bin #{ "tur-conflict" "src/main.tur" })
+EOF
+cat > "$SPICE2/src/main.tur" <<'EOF'
+(defn main [] :int (println "conflict bin") 0)
+EOF
+out="$("$TUR" install "$SPICE2" --path 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "refusing to overwrite"; then
+    ok "conflict refused without --force"
+else
+    bad "conflict refused without --force" "rc=$rc out: $out"
+fi
+
+# 9. --force overrides the conflict.
+out="$("$TUR" install "$SPICE2" --path --force 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "conflict accepted with --force"
+else
+    bad "conflict accepted with --force" "$out"
+fi
+
+# 10. Uninstall round-trips: removes symlink and clears state entry.
+out="$("$TUR" uninstall sample 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$TUR_HOME/bin/tur-sample" ] && \
+   ! grep -q '"sample"' "$TUR_HOME/state.tur"; then
+    ok "uninstall round-trip"
+else
+    bad "uninstall round-trip" "rc=$rc out: $out"
+fi
+
+# 11. :bin name validation -- a manifest with a non-tur- prefix should be rejected.
+BAD="$WORK/bad-bin-spice"
+mkdir -p "$BAD/src"
+cat > "$BAD/build.tur" <<'EOF'
+(defpackage bad
+  :name    "bad"
+  :version "0.1.0"
+  :bin #{ "noprefix" "src/main.tur" })
+EOF
+cat > "$BAD/src/main.tur" <<'EOF'
+(defn main [] :int 0)
+EOF
+out="$("$TUR" install "$BAD" --path 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "must start with 'tur-'"; then
+    ok ":bin prefix validation"
+else
+    bad ":bin prefix validation" "rc=$rc out: $out"
+fi
+
+# 12. TUR_HOME / XDG_DATA_HOME override -- swap TUR_HOME and confirm install
+#     goes there.
+ALT_HOME="$WORK/alt-home"
+( TUR_HOME="$ALT_HOME" "$TUR" install "$SPICE" --path >/dev/null 2>&1 )
+if [ -x "$ALT_HOME/bin/tur-sample" ] && [ -f "$ALT_HOME/state.tur" ]; then
+    ok "TUR_HOME override"
+else
+    bad "TUR_HOME override"
+fi
+
+# ------------------------------------------------------------------ #
+# M3: tur list                                                        #
+# ------------------------------------------------------------------ #
+
+# Reinstall sample (it was uninstalled above) so list has content.
+"$TUR" install "$SPICE" --path >/dev/null 2>&1
+
+# 13. Default tree output: contains the name, [path] tag, binary line, footer.
+out="$("$TUR" list 2>&1)"
+if echo "$out" | grep -q "sample" && \
+   echo "$out" | grep -q "\[path\]" && \
+   echo "$out" | grep -q "tur-sample" && \
+   echo "$out" | grep -qE "spice(s)? installed"; then
+    ok "list default tree"
+else
+    bad "list default tree" "$out"
+fi
+
+# 14. PATH-health line: NOT on path when bin_dir absent from $PATH.
+if echo "$out" | grep -q "PATH entry:" && echo "$out" | grep -q "NOT on PATH"; then
+    ok "list PATH-health line (not on path)"
+else
+    bad "list PATH-health line (not on path)" "$out"
+fi
+
+# 15. PATH-health line: active when bin_dir on $PATH.
+out="$(PATH="$TUR_HOME/bin:$PATH" "$TUR" list 2>&1)"
+if echo "$out" | grep -q "PATH entry:.*active"; then
+    ok "list PATH-health line (active)"
+else
+    bad "list PATH-health line (active)" "$out"
+fi
+
+# 16. --json output contains expected keys and the entry.
+out="$("$TUR" --json list 2>&1)"
+if echo "$out" | grep -q '"installed":' && \
+   echo "$out" | grep -q '"name": "sample"' && \
+   echo "$out" | grep -q '"bin": \["tur-sample"\]'; then
+    ok "list --json structure"
+else
+    bad "list --json structure" "$out"
+fi
+
+# 17. --json is valid JSON (best-effort with python3 if available).
+if command -v python3 >/dev/null 2>&1; then
+    if echo "$out" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
+        ok "list --json parses as JSON"
+    else
+        bad "list --json parses as JSON"
+    fi
+fi
+
+# 18. --verbose succeeds and still names the spice.
+out="$("$TUR" list --verbose 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "sample"; then
+    ok "list --verbose runs"
+else
+    bad "list --verbose runs" "rc=$rc out: $out"
+fi
+
+# 19. --verbose with --json is rejected.
+out="$("$TUR" --json list --verbose 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "mutually exclusive"; then
+    ok "list --verbose + --json rejected"
+else
+    bad "list --verbose + --json rejected" "rc=$rc out: $out"
+fi
+
+# ------------------------------------------------------------------ #
+# M4: tur upgrade                                                     #
+# ------------------------------------------------------------------ #
+
+# 20. --dry-run reports what would happen without mutating state.tur.
+state_before="$(cat "$TUR_HOME/state.tur")"
+out="$("$TUR" upgrade --dry-run sample 2>&1)"
+state_after="$(cat "$TUR_HOME/state.tur")"
+if echo "$out" | grep -q "would rebuild 'sample'" && \
+   [ "$state_before" = "$state_after" ]; then
+    ok "upgrade --dry-run is read-only"
+else
+    bad "upgrade --dry-run is read-only" "$out"
+fi
+
+# 21. upgrade <name> rebuilds and re-symlinks.
+out="$("$TUR" upgrade sample 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "upgraded 'sample'" && \
+   [ -x "$TUR_HOME/bin/tur-sample" ]; then
+    ok "upgrade <name> rebuilds"
+else
+    bad "upgrade <name> rebuilds" "rc=$rc out: $out"
+fi
+
+# Install a second spice so --all has more than one target.
+SPICE3="$WORK/another-spice"
+mkdir -p "$SPICE3/src"
+cat > "$SPICE3/build.tur" <<'EOF'
+(defpackage another
+  :name    "another"
+  :version "0.2.0"
+  :bin #{ "tur-another" "src/main.tur" })
+EOF
+cat > "$SPICE3/src/main.tur" <<'EOF'
+(defn main [] :int (println "another") 0)
+EOF
+"$TUR" install "$SPICE3" --path >/dev/null 2>&1
+
+# 22. upgrade --all walks every entry in state.tur.
+out="$("$TUR" upgrade --all 2>&1)"
+rc=$?
+ok_count=$(echo "$out" | grep -c "upgraded '")
+if [ "$rc" -eq 0 ] && [ "$ok_count" -ge 2 ]; then
+    ok "upgrade --all iterates"
+else
+    bad "upgrade --all iterates" "rc=$rc count=$ok_count out: $out"
+fi
+
+# 23. upgrade --all with an explicit name is rejected.
+out="$("$TUR" upgrade --all sample 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "mutually exclusive"; then
+    ok "upgrade --all + name rejected"
+else
+    bad "upgrade --all + name rejected" "rc=$rc out: $out"
+fi
+
+# 24. upgrade for an unknown name fails cleanly.
+out="$("$TUR" upgrade nonexistent-zzz 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "is not installed"; then
+    ok "upgrade unknown name rejected"
+else
+    bad "upgrade unknown name rejected" "rc=$rc out: $out"
+fi
+
+# ------------------------------------------------------------------ #
+# M5: polish flags                                                    #
+# ------------------------------------------------------------------ #
+
+# 25. --print-path-snippet emits both shell snippets and never installs.
+out="$("$TUR" install --print-path-snippet 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && \
+   echo "$out" | grep -q "export PATH=\"$TUR_HOME/bin:\$PATH\"" && \
+   echo "$out" | grep -q "set -gx PATH $TUR_HOME/bin \$PATH"; then
+    ok "install --print-path-snippet"
+else
+    bad "install --print-path-snippet" "rc=$rc out: $out"
+fi
+
+# 26. --print-path-snippet works even with no state.tur / empty install.
+empty="$WORK/empty-home"
+out="$(TUR_HOME="$empty" "$TUR" install --print-path-snippet 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "$empty/bin"; then
+    ok "install --print-path-snippet (empty home)"
+else
+    bad "install --print-path-snippet (empty home)" "rc=$rc out: $out"
+fi
+
+# 27. list --outdated on a --path-only install reports "up to date"
+#     (no remote to query) and exits 0.
+out="$("$TUR" list --outdated 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "up to date"; then
+    ok "list --outdated (path installs only)"
+else
+    bad "list --outdated (path installs only)" "rc=$rc out: $out"
+fi
+
+# 28. list --outdated --json emits a valid JSON envelope with checked/skipped.
+out="$("$TUR" --json list --outdated 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] && \
+   echo "$out" | grep -q '"outdated":' && \
+   echo "$out" | grep -q '"checked":' && \
+   echo "$out" | grep -q '"skipped":'; then
+    ok "list --outdated --json"
+else
+    bad "list --outdated --json" "rc=$rc out: $out"
+fi
+
+# 29. list --outdated + --verbose is rejected.
+out="$("$TUR" list --outdated --verbose 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "mutually exclusive"; then
+    ok "list --outdated + --verbose rejected"
+else
+    bad "list --outdated + --verbose rejected" "rc=$rc out: $out"
+fi
+
+echo
+echo "install summary: $PASS passed, $FAIL failed"
+if [ "$FAIL" -ne 0 ]; then
+    for f in "${FAILED[@]}"; do echo "  FAILED: $f"; done
+    exit 1
+fi
+exit 0

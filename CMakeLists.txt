@@ -45,6 +45,12 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# GS-M2: global spice install / uninstall / subcommand fallthrough.
+add_test(
+  NAME tur_install_tests
+  COMMAND bash tests/run-install.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME turi_fixture_tests
   COMMAND bash tests/run-turi.sh
@@ -154,6 +160,7 @@ add_test(
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+                     tur_install_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
                      tur_eval_sandbox tur_codegen_reinterpret
@@ -171,6 +178,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
 # errors (use-after-free, out-of-bounds) without flagging that design choice.
 # tur_eval_import sets ASAN_OPTIONS via its own ENVIRONMENT above.
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+                     tur_install_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_basic
                      tur_eval_sandbox tur_codegen_reinterpret

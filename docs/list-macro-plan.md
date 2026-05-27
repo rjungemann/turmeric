@@ -112,7 +112,7 @@ typechecking at the let/return that consumes the value, the same way
 the equivalent cons chain fails today. Document this in the docstring
 so users reach for `tuple` (when it lands) for heterogeneous needs.
 
-### `list*` (companion, optional)
+### `list*` (companion, optional) -- [ ] not landed
 
 ```turmeric
 (list* a b c rest)
@@ -126,7 +126,7 @@ you want to extend at the head. Tiny macro, ~10 lines.
 Include only if a real call site wants it within the same week; don't
 ship speculative helpers.
 
-### `concat` (companion, optional)
+### `concat` (companion, optional) -- [ ] not landed (only `str-concat`, `bytes-concat`, `seq/concat` exist)
 
 Already exists? Check `stdlib/list.tur` before writing. If absent and
 the `list-quasiquote-plan.md` work is being considered, `concat` is a
@@ -135,23 +135,100 @@ land it here than there.
 
 ## Implementation steps
 
-1. **Locate a home.** `stdlib/list.tur` (next to `cons`/`nil-value`)
+1. [x] **Locate a home.** `stdlib/list.tur` (next to `cons`/`nil-value`)
    is the natural place; `stdlib/macros.tur` is the alternative. Pick
    list.tur -- keeps related stuff colocated.
-2. **Write the macro.** Pattern: variadic `& xs`, recursive expansion
+2. [x] **Write the macro.** Pattern: variadic `& xs`, recursive expansion
    into nested `cons`. Reference `cond` in `stdlib/macros.tur:35` for
-   the rest-args pattern.
-3. **Docstring.** Full `;;;` block per CLAUDE.md standard. Example
+   the rest-args pattern. (Landed at `stdlib/list.tur:193` as nested
+   `tcons`/`tnil`, not `cons`/`nil-value` -- see "Carrier type and the
+   typed `(Cons A)` boundary" below for why.)
+3. [x] **Docstring.** Full `;;;` block per CLAUDE.md standard. Example
    must use `; =>` to show expansion or evaluated result. Call out the
-   "elements must unify to one type" gotcha.
-4. **Fixture.** `tests/fixtures/typed/list-macro/` covering: empty
+   "elements must unify to one type" gotcha. (`stdlib/list.tur:176-192`.
+   The "unify to one type" gotcha is not explicitly called out -- minor
+   follow-up.)
+4. [~] **Fixture.** `tests/fixtures/typed/list-macro/` covering: empty
    list, single element, several elements of one type, a type-error
    case for mixed types. Pattern mirrors existing typed fixtures.
-5. **Re-run `just docs`.** The macro must show up in the generated
+   (Empty / single / many-length / handwritten-equivalence cases are
+   present; the **type-error case for mixed types is still missing**.)
+5. [x] **Re-run `just docs`.** The macro must show up in the generated
    HTML reference. Also rebuild `stdlib/docstrings.tur` if the doc
-   lookup table is part of the change set.
-6. **Spot-check stdlib for migration candidates.** Cheap wins only --
+   lookup table is part of the change set. (`stdlib/docstrings.tur:436`.)
+6. [ ] **Spot-check stdlib for migration candidates.** Cheap wins only --
    don't churn working `(cons ...)` chains for stylistic reasons.
+7. [ ] **Add unify-or-fail callout to the `list` docstring.** The
+   docstring at `stdlib/list.tur:176-192` does not explicitly mention
+   the "elements must unify to one type" gotcha. Add a short note (and
+   ideally a `; =>` example showing the failure shape) so users reach
+   for `tuple` for heterogeneous needs instead of fighting the
+   typechecker.
+8. [ ] **Land `list*` (cons-onto-tail).** Variadic macro with the
+   Lisp/Clojure semantics: last arg is the existing tail, prior args
+   are prepended. Expansion mirrors `list` -- right-fold over the
+   leading args terminating in the tail expression rather than
+   `(tnil)`. Same carrier as `list` (`:int`); same docstring contract
+   re: element-type unification (and now also tail-type unification
+   with the element type). Gate on a real call site per "Surface
+   design" -- don't ship speculative.
+   - Home: `stdlib/list.tur`, immediately after `list`.
+   - Docstring: full `;;;` block; `; =>` example showing both
+     `(list* 1 2 (tnil))` and `(list* 1 (list 2 3))` shapes.
+   - Fixture: extend `tests/fixtures/typed/list-macro/` with a
+     `list*` round-trip (`(list-eq? (list* 1 2 (list 3 4))
+     (list 1 2 3 4) ...)`) and an empty-prefix case
+     (`(list* (tnil))` -> `(tnil)`).
+   - Regenerate `stdlib/docstrings.tur` via `just docs`.
+9. [ ] **Land list-level `concat`.** Two-list (or variadic) `concat`
+   over the `:int` carrier; right-fold the first list onto the
+   second. Name collision check: `str-concat`, `bytes-concat`, and
+   `seq/concat` already exist -- use bare `concat` only if it doesn't
+   shadow anything in scope after import; otherwise prefer
+   `list-concat`. Audit before committing.
+   - Home: `stdlib/list.tur`, near `list-length` / `list-eq?`.
+   - Shape: `defn` (not macro) -- it's a runtime traversal, not a
+     syntactic fold. Recursive over the first arg; terminates by
+     returning the second.
+   - Docstring: full `;;;` block; `; =>` example covering empty-LHS,
+     empty-RHS, and both-non-empty.
+   - Fixture: new `tests/fixtures/typed/list-concat/` (separate from
+     `list-macro/` so the failures triangulate cleanly).
+   - Note for `list-quasiquote-plan.md`: unquote-splicing semantics
+     should call into this same `concat`, so the signature it picks
+     here is load-bearing for that plan. Pick a shape that handles
+     N-ary splicing without re-folding at the macro level.
+   - Regenerate `stdlib/docstrings.tur` via `just docs`.
+10. [ ] **Add a "use `tupleN`" diagnostic for heterogeneous `(list ...)`.**
+    When a `tcons`/`tnil` chain fails to unify across element types,
+    emit a hint suggesting the matching `tupleN` constructor. Tuples
+    have shipped, so this is no longer speculative.
+    - Hook site: the elaborator's unify-failure path for `tcons`
+      argument positions. The diagnostic should fire on the
+      second-or-later element whose type fails to unify with the
+      first element's, not on the surface `list` form (the macro is
+      already gone by the time elab runs).
+    - Hint shape: if the chain has N elements with N in {2, 3, 4, 5},
+      suggest `(tupleN <args>)` literally. For N > 5, suggest
+      "consider grouping into nested tuples or a record".
+    - Carrier-vs-typed: the hint should not steer users toward
+      `make-struct Cons` for the homogeneous case -- that's the
+      escape hatch documented above, not the recommended response
+      to a unify error. Heterogeneous -> tuple; homogeneous-but-
+      wanting-`(Cons A)` -> the docstring's escape hatch.
+    - Fixture: `tests/fixtures/typed/list-macro-tuple-hint/` with a
+      failing `(list 1 "x" 3.14)`-shaped input and an `expected.stderr`
+      asserting the hint text. Mark as a compile-fail fixture per
+      the existing typed-fixture conventions.
+    - Provenance gating: **decided -- option (b), no gating.** The
+      hint fires for any `tcons` arg whose type fails to unify with
+      the first element's, regardless of whether the call came from
+      a `list` macro expansion or hand-written `tcons`. Rationale:
+      the suggestion is genuinely useful in both cases (mixed-type
+      `tcons` is almost always a "wanted a tuple" mistake), and it
+      avoids threading expansion-provenance markers through the
+      macro->elab boundary just to scope a hint. Revisit only if a
+      real call site shows the hint firing where it shouldn't.
 
 ## Risks and open questions
 
@@ -169,22 +246,104 @@ land it here than there.
   with unquote-splicing, the splice form needs to construct via the
   same primitive `cons`/`nil-value` -- which `list` already does. No
   conflict.
-- **Interaction with `tuple-type-plan.md`.** Users may reach for
-  `(list 1 "x" 3.14)` for heterogeneous grouping, hit the unify error,
-  and feel the language failed them. Mitigate via the docstring
-  example and, once tuples land, a diagnostic that suggests `tuple`
-  for mixed-type element lists. Tracking only -- diagnostic is a
-  follow-up.
+- **Interaction with `tuple-type-plan.md`.** Tuples have landed
+  (`tuple3` / `tuple4` / `tuple5` constructors and positional
+  accessors -- see `tests/fixtures/tuple-345-basic/`). Users who
+  reach for `(list 1 "x" 3.14)` and hit the unify error should be
+  pointed at the right tool, not left to puzzle out the message.
+  Tracked as Implementation step 10 below: an elab-level diagnostic
+  that, when a `tcons`/`tnil` chain fails to unify across element
+  types, appends a hint suggesting the matching `tupleN` constructor.
+
+## Carrier type and the typed `(Cons A)` boundary
+
+`(list 1 2 3)` expands to `(tcons 1 (tcons 2 (tcons 3 (tnil))))` and
+yields the `:int` carrier, **not** a `(Cons int)` struct cell. This
+is a deliberate design point, not a TODO, and the asymmetry is worth
+documenting explicitly so future readers don't try to "fix" it via
+the wrong mechanism.
+
+### Why `:int` and not `(Cons A)`
+
+- `Cons` is a `defstruct [A]` (`stdlib/list.tur:16`). Building a typed
+  `(Cons A)` value requires `make-struct Cons` plus an
+  `(:: ... (Cons A))` ascription so the elaborator can resolve `A`.
+- `tcons` / `tnil` (`stdlib/list.tur:33`, `:68`) are deliberately
+  type-erased `defn`s with signature `:int :int -> :int`. They are
+  the carrier-level path; the whole `:int`-taking list API
+  (`list-length`, `list-eq?`, etc.) is built against them.
+- A macro can't synthesise the `(:: ... (Cons A))` ascription on its
+  own -- it has no access to the surrounding expected type. So
+  expanding into `make-struct Cons` would work only when the result
+  is used in an explicitly ascribed position; everywhere else it
+  would fail to infer `A` and force the user to add the ascription
+  anyway. The carrier-level expansion is the form that "just works"
+  without context.
+
+### Why TS4 poly-ADT monomorphisation does not change this
+
+It's tempting to assume the polymorphic-ADT monomorphisation plan
+([`typed-slots-ts4-poly-adt-plan.md`](typed-slots-ts4-poly-adt-plan.md))
+would eventually let `(list 1 2 3)` pick up `(Cons int)` codegen
+"for free". It will not, because:
+
+- TS4 mirrors the GS5 struct-app instantiation work for **ADT
+  constructors** (`defdata` ctors like `Just`/`Nothing`). `Cons` is
+  a `defstruct`, so TS4's machinery doesn't apply to it; struct-app
+  monomorphisation is already handled by GS5.
+- The macro's expansion goes through `tcons` / `tnil`, which are
+  plain `defn`s. No ADT codegen path runs through them; they are
+  typed `:int :int -> :int` at the source level and would remain so
+  under any monomorphisation scheme that operates on constructors.
+- The `tcons-of [A]` typed companion (`stdlib/list.tur:56`) already
+  returns `:(Cons A)` today. The question of how to get there from
+  `(list ...)` is an **elab/inference** problem (threading the
+  expected type into a macro-expansion result so `A` resolves), not
+  a codegen one. TS4 doesn't move that needle.
+
+### The escape hatch (current accepted state)
+
+When a call site genuinely needs a typed `(Cons A)`, write the
+explicit struct form. The docstring at `stdlib/list.tur:176` already
+points to this; the design contract is:
+
+```turmeric
+;; carrier-level (what (list ...) gives you)
+(let [xs (list 1 2 3)]
+  (list-length xs))            ; => 3
+
+;; typed (Cons int) cell
+(let [xs (:: (make-struct Cons 1 (tnil)) (Cons int))]
+  (thead xs))                  ; => 1
+```
+
+### When to revisit
+
+The right trigger for a typed-list macro is **not** "TS4 landed" --
+it's a real call site where the carrier-level expansion forces an
+awkward ascription that the macro could have inserted. Until that
+shows up, the carrier-level expansion is the right default and the
+explicit `make-struct Cons` form is the documented escape hatch.
+
+A future "typed list macro" follow-up plan, if it ever lands, would
+sit alongside this one and depend on macro-level access to the
+expected type (an elab feature), not on TS4.
 
 ## Success criteria
 
-- `(list 1 2 3)` typechecks as `(Cons int)` and prints the same as
-  the explicit cons chain.
-- `(list)` is `(nil-value)` and typechecks in any position that
-  accepts an empty list.
-- A type-mismatch fixture demonstrates the unify-or-fail behaviour.
-- The generated docs render `list`'s `;;;` block with a usable
-  example.
+- [x] `(list 1 2 3)` typechecks and prints the same as the explicit
+  cons chain. (Verified via `test-eq-handwritten` in the fixture.
+  **Note:** the carrier type is `:int` per the tcons/tnil chain, not
+  the typed `(Cons A)` constructor. The original wording of this
+  criterion ("typechecks as `(Cons int)`") was aspirational; see
+  "Carrier type and the typed `(Cons A)` boundary" above for why
+  that's a separate, deferred concern rather than a defect.)
+- [x] `(list)` is `(tnil)` and typechecks in any position that
+  accepts an empty list. (Fixture's `test-empty` confirms `tnil?`.)
+- [ ] A type-mismatch fixture demonstrates the unify-or-fail
+  behaviour.
+- [x] The generated docs render `list`'s `;;;` block with a usable
+  example. (`stdlib/docstrings.tur:436`.)
 
 ## When to do this
 

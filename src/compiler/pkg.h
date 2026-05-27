@@ -109,6 +109,12 @@ typedef struct PkgManifest {
      * the manifest directory unless absolute). */
     char       **reader_macros;
     int          n_reader_macros;
+    /* GS-M1: declared binaries. Parallel arrays: bin_names[i] is the
+     * binary name (must start with "tur-"); bin_paths[i] is the
+     * entrypoint module path relative to the manifest dir. */
+    char       **bin_names;
+    char       **bin_paths;
+    int          n_bins;
 } PkgManifest;
 
 /* ------------------------------------------------------------------ */
@@ -252,5 +258,9 @@ int cmd_pkg_add(int argc, char **argv);       /* tur add  */
 int cmd_pkg_add_cmake(int argc, char **argv); /* tur add-cmake */
 int cmd_pkg_fetch(int argc, char **argv);     /* tur fetch */
 int cmd_pkg_emit_cmake(int argc, char **argv); /* tur emit-cmake */
+int cmd_pkg_install(int argc, char **argv);   /* tur install */
+int cmd_pkg_uninstall(int argc, char **argv); /* tur uninstall */
+int cmd_pkg_list(int argc, char **argv);      /* tur list */
+int cmd_pkg_upgrade(int argc, char **argv);   /* tur upgrade */
 
 #endif /* TUR_PKG_H */

@@ -83,6 +83,8 @@ set(TUR_CORE_SOURCES
     compiler/fmt.c
     compiler/forms.c
     compiler/pkg.c
+    compiler/global.c
+    compiler/install.c
     compiler/reader.c
     compiler/reader_macros.c
     compiler/symbols.c

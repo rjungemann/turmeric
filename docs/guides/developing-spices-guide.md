@@ -606,6 +606,37 @@ To make your spice Emscripten-compatible:
 
 ---
 
+## Global Spices as Libraries (v2)
+
+A spice installed globally with `tur install` is currently usable as a
+**command-line tool only**: its `:bin` entries are symlinked into
+`~/.local/bin/` and become available as `tur-<cmd>` (or via the
+`tur <cmd>` fallthrough). The same install is **not** automatically
+visible as a library to other projects -- the global `spices/` root is
+left out of the default module-resolution path to preserve build
+reproducibility.
+
+A future v2 will let a project opt in to consuming a globally-installed
+spice as a library by naming it in its `build.tur`:
+
+```turmeric
+:spices {
+  "notebook" {:global true}
+}
+```
+
+`tur fetch` would then validate the global install exists at a matching
+version and record its resolved SHA in `tur.lock`. A project-level
+`:global-policy` knob would decide whether a missing global install gets
+auto-installed or errors out.
+
+This is **deferred**; until it ships, a spice that wants to be reused as
+a library should be added the normal way with `tur add`. See the
+[global-spice-install plan](../global-spice-install-plan.md#imports-from-global-spices)
+for the full design sketch.
+
+---
+
 ## Release Checklist
 
 - [ ] `tur build --release` passes with no warnings

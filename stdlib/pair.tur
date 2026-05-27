@@ -15,7 +15,7 @@
   (fst A)
   (snd B))
 
-;;; tpair -- construct a Pair[A B].
+;;; pair -- construct a Pair[A B].
 ;;;
 ;;; Parameters:
 ;;;   a -- first element (type A)
@@ -25,10 +25,10 @@
 ;;;   A Pair[A B] value.
 ;;;
 ;;; Example:
-;;;   (tpair 1 2)  ; => (1, 2)
+;;;   (pair 1 2)  ; => (1, 2)
 ;;;
 ;;; Since: Phase TC1
-(defn tpair [A B] [a :A b :B] :(Pair A B)
+(defn pair [A B] [a :A b :B] :(Pair A B)
   (make-struct Pair a b))
 
 ;;; pair-fst -- return the first element of a Pair[A B].
@@ -40,7 +40,7 @@
 ;;;   The first element of type A.
 ;;;
 ;;; Example:
-;;;   (pair-fst (tpair 10 20))  ; => 10
+;;;   (pair-fst (pair 10 20))  ; => 10
 ;;;
 ;;; Since: Phase TC1
 (defn pair-fst [A B] [p :(Pair A B)] :A
@@ -55,7 +55,7 @@
 ;;;   The second element of type B.
 ;;;
 ;;; Example:
-;;;   (pair-snd (tpair 10 20))  ; => 20
+;;;   (pair-snd (pair 10 20))  ; => 20
 ;;;
 ;;; Since: Phase TC1
 (defn pair-snd [A B] [p :(Pair A B)] :B
@@ -87,7 +87,7 @@
 ;;;   true if both first and second elements are equal under their comparators.
 ;;;
 ;;; Example:
-;;;   (pair-eq? (tpair 1 2) (tpair 1 2) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
+;;;   (pair-eq? (pair 1 2) (pair 1 2) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
 (defmacro pair-eq? [p1 p2 fst-cmp snd-cmp]

@@ -1,12 +1,12 @@
 ;;; tur/typeclass-eq -- minimal Eq typeclass stub for typed-collection definstances.
 ;;;
-;;; Auto-loaded so tvec, tlist, tset, tmap, toption, tresult, and tpair
+;;; Auto-loaded so vec, list, set, map, option, result, and pair
 ;;; can declare (definstance Eq [...] ...) without importing typeclass.tur.
 ;;;
 ;;; Since: Phase PTC4
 ;; Phase PTC4: Minimal Eq class stub for typed-collection definstances.
-;; Auto-loaded so that tvec.tur, tlist.tur, tset.tur, tmap.tur, toption.tur,
-;; tresult.tur, and tpair.tur can declare (definstance Eq [...] ...) without
+;; Auto-loaded so that vec.tur, list.tur, set.tur, map.tur, option.tur,
+;; result.tur, and pair.tur can declare (definstance Eq [...] ...) without
 ;; requiring the user to import stdlib/typeclass.tur.
 ;; The full typeclass.tur (Eq + Ord + Show + Num + primitive instances) is
 ;; still available on demand via (load "stdlib/typeclass.tur").

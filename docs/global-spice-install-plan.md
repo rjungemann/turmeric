@@ -392,13 +392,21 @@ end to end.
 
 ### M5 -- Polish
 
-- [ ] `tur install --print-path-snippet` prints just the shell snippet,
+- [x] `tur install --print-path-snippet` prints just the shell snippet,
       for users who dismissed the first-run message.
-- [ ] `tur list --outdated` flags installs whose ref points at a tag
-      newer than the resolved SHA on disk.
-- [ ] Telemetry: `tur install` emits a hashed `install <spice> <version>`
-      event to the same opt-in metrics pipeline used elsewhere.
-- [ ] Document the global-spice-as-library opt-in path (deferred to v2).
+- [x] `tur list --outdated` flags installs whose ref points at a tag
+      newer than the resolved SHA on disk. Walks every non-path entry,
+      runs `git ls-remote`, and reports `resolved -> remote` for each
+      stale entry; supports `--json`.
+- [ ] **Deferred.** Telemetry: `tur install` was originally slated to
+      emit a hashed `install <spice> <version>` event to "the same
+      opt-in metrics pipeline used elsewhere," but no such pipeline
+      exists in the repo yet. Picking it up requires designing the
+      transport, opt-in surface, and key-hashing scheme as its own
+      plan; that work is out of scope for the global-spice rollout.
+- [x] Document the global-spice-as-library opt-in path (deferred to v2)
+      -- short pointer added at the bottom of
+      [developing-spices-guide.md](../guides/developing-spices-guide.md#global-spices-as-libraries-v2).
 
 ---
 
