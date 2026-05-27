@@ -151,6 +151,41 @@
   free(vec);
   ```)
 
+;;; vec-push-each__ -- internal helper for the vec-of macro.
+;;;
+;;; Expands a sequence of pushes onto `v` followed by `v` itself as the
+;;; final value. Recursive: each step emits `(do (vec-push! v x) ...)`.
+(defmacro vec-push-each__ [v & xs]
+  (if (empty? xs)
+    v
+    (list do
+      (list vec-push! v (first xs))
+      (list vec-push-each__ v ~@(rest xs)))))
+
+;;; vec-of -- variadic Vec[A] literal.
+;;;
+;;; Parameters:
+;;;   & xs -- zero or more elements, all of type A.
+;;;
+;;; Returns:
+;;;   A fresh Vec[A] populated with xs in order. Carrier type is :int
+;;;   (the same handle returned by vec-new), so it composes with all of
+;;;   vec-len, vec-get, vec-push!, vec-eq?, etc.
+;;;
+;;; Note: all elements must unify to a single type. Mixing types -- e.g.
+;;;   (vec-of 1 "x" 3.14) -- is a type error (TUR-E0001 on the offending
+;;;   element). For heterogeneous fixed-arity collections, use tupleN.
+;;;
+;;; Example:
+;;;   (vec-of)        ; => empty Vec
+;;;   (vec-of 1 2 3)  ; => Vec containing 1, 2, 3
+;;;
+;;; Since: Phase 2 cons-in-docs cleanup
+(defmacro vec-of [& xs]
+  (if (empty? xs)
+    (list vec-new)
+    (list let `[__v (vec-new)] (list vec-push-each__ __v ~@xs))))
+
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:

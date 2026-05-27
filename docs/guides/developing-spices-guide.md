@@ -388,9 +388,8 @@ Pair-cons (`(cons key value)` with no trailing `0`) is fine -- a two-element
 pair is a clear, idiomatic data shape. The footgun is the nil-terminated chain.
 
 If your spice API can take a `Vec` instead of a cons list, prefer that and
-document it with `vec`. The end goal is for `cons` to disappear from
-quick-start surfaces entirely; see `docs/cons-in-docs-cleanup-plan.md` for the
-ongoing migration.
+document it with `(vec-of ...)`. The end goal is for `cons` to disappear from
+quick-start surfaces entirely.
 
 ---
 

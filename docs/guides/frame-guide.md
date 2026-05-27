@@ -124,14 +124,14 @@ let [names column-utf8(list("Alice" "Bob" "Carol") 0 0)
 
 ```turmeric
 (let [df (frame-from-cols
-           (list (cons "name" (column-utf8  (list "Alice" "Bob") 0 0))
-                 (cons "age"  (column-int64 (list 30 25) 0 0))))]
+           (vec-of (cons "name" (column-utf8  (list "Alice" "Bob") 0 0))
+                   (cons "age"  (column-int64 (list 30 25) 0 0))))]
   (print-frame df))
 ```
 
 ```sweet-exp
-let [df frame-from-cols(list(cons("name" column-utf8(list("Alice" "Bob") 0 0))
-                             cons("age"  column-int64(list(30 25) 0 0))))]
+let [df frame-from-cols(vec-of(cons("name" column-utf8(list("Alice" "Bob") 0 0))
+                               cons("age"  column-int64(list(30 25) 0 0))))]
   print-frame(df)
 ```
 
@@ -381,7 +381,7 @@ output column names, input column names, and aggregation tags.
 
 ```turmeric
 ;; Sum and count scores, grouped by grade
-(let [grouped (group-by df (list "grade"))
+(let [grouped (group-by df (vec-of "grade"))
       summary (agg grouped
                 (list "total_score" "count")
                 (list "score"       "name")
@@ -392,7 +392,7 @@ output column names, input column names, and aggregation tags.
 ```
 
 ```sweet-exp
-let [grouped group-by(df list("grade"))
+let [grouped group-by(df vec-of("grade"))
      summary agg(grouped
                  list("total_score" "count")
                  list("score"       "name")
