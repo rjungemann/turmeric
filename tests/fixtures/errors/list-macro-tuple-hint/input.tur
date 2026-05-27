@@ -1,0 +1,5 @@
+;; list-macro-tuple-hint: mixing types in (list ...) should produce
+;; TUR-E0001 plus a help hint suggesting tupleN for heterogeneous needs.
+(defn main [] :int
+  (let [_ (list 1 "x" 3.14)]
+    0))
