@@ -1,0 +1,23 @@
+;;
+;; list-literal macro: (list ...) should expand to nested tcons chains
+;; and produce values indistinguishable from hand-written tcons code.
+
+(defn test-empty [] :bool
+  (tnil? (list)))
+
+(defn test-single [] :int
+  (list-length (list 42)))
+
+(defn test-many-length [] :int
+  (list-length (list 1 2 3 4 5)))
+
+(defn test-eq-handwritten [] :bool
+  (list-eq?
+    (list 1 2 3)
+    (tcons 1 (tcons 2 (tcons 3 (tnil))))
+    (fn [a b] (= a b))))
+
+(println (test-empty))
+(println (test-single))
+(println (test-many-length))
+(println (test-eq-handwritten))

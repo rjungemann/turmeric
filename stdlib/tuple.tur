@@ -1,0 +1,71 @@
+;;; tur/tuple -- typed N-ary tuples (Tuple2 only in TP1).
+;;;
+;;; Fixed-arity heterogeneous tuples with statically typed elements.
+;;; Spike for the N-ary Tuple Type Plan (Option A).
+;;;
+;;; Status: only Tuple2 is shipped in TP1.  Tuple3..Tuple5 are blocked
+;;; on a kind-system extension: the current kind checker
+;;; (src/passes/kind_check.c, KIND_ARROW2) only supports type
+;;; constructors of arity 1 or 2, so a `(defstruct Tuple3 [A B C] ...)`
+;;; fails with TUR-E0012 the first time it's referenced.  Extending the
+;;; kind ladder to KIND_ARROW3..KIND_ARROW5 is a prerequisite for the
+;;; rest of the family; it is tracked as a follow-up to TP1.
+;;;
+;;; Tuple2 is intentionally distinct from Pair[A B]; see the
+;;; "two-tuple-types problem" decision in docs/tuple-type-plan.md.
+;;;
+;;; Since: Phase TP1
+;; tuple.tur -- Tuple2 struct, constructor and accessors.
+
+;;; Tuple2 -- two-element tuple with element types A, B.
+;;;
+;;; Since: Phase TP1
+(defstruct Tuple2 [A B]
+  (e1 A)
+  (e2 B))
+
+;;; tuple2 -- construct a Tuple2[A B].
+;;;
+;;; Parameters:
+;;;   a -- first element (type A)
+;;;   b -- second element (type B)
+;;;
+;;; Returns:
+;;;   A Tuple2[A B] value.
+;;;
+;;; Example:
+;;;   (tuple2 1 "hi")  ; => Tuple2(1, "hi")
+;;;
+;;; Since: Phase TP1
+(defn tuple2 [A B] [a :A b :B] :(Tuple2 A B)
+  (make-struct Tuple2 a b))
+
+;;; tuple2-1st -- first element of a Tuple2[A B].
+;;;
+;;; Parameters:
+;;;   t -- Tuple2[A B]
+;;;
+;;; Returns:
+;;;   The first element of type A.
+;;;
+;;; Example:
+;;;   (tuple2-1st (tuple2 10 20))  ; => 10
+;;;
+;;; Since: Phase TP1
+(defn tuple2-1st [A B] [t :(Tuple2 A B)] :A
+  (.e1 t))
+
+;;; tuple2-2nd -- second element of a Tuple2[A B].
+;;;
+;;; Parameters:
+;;;   t -- Tuple2[A B]
+;;;
+;;; Returns:
+;;;   The second element of type B.
+;;;
+;;; Example:
+;;;   (tuple2-2nd (tuple2 10 20))  ; => 20
+;;;
+;;; Since: Phase TP1
+(defn tuple2-2nd [A B] [t :(Tuple2 A B)] :B
+  (.e2 t))

@@ -168,6 +168,7 @@ ref-basic
 result-basic
 typed/grid-basic
 typed/list-basic
+typed/list-macro
 typed/map-basic
 typed/map-collision
 typed/map-eq

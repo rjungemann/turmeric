@@ -154,3 +154,25 @@
 ;; Note: element comparison uses integer equality; correct for all primitive A.
 (definstance Eq [Cons] [(Eq A)]
   (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
+
+;;; list -- construct a list from N values via nested tcons.
+;;;
+;;; Parameters:
+;;;   & xs -- zero or more values
+;;;
+;;; Returns:
+;;;   The right-folded (tcons ... (tnil)) chain, typed as :int (the raw
+;;;   carrier that tcons/tnil produce). Suitable as input to list-length,
+;;;   list-eq?, and the rest of the :int-taking list API. For typed
+;;;   (Cons A) cells (consumable by thead/ttail), build via make-struct
+;;;   Cons with an explicit (:: ... (Cons A)) annotation.
+;;;
+;;; Example:
+;;;   (list)        ; => (tnil)
+;;;   (list 1 2 3)  ; => (tcons 1 (tcons 2 (tcons 3 (tnil))))
+;;;
+;;; Since: List literal macro
+(defmacro list [& xs]
+  (if (empty? xs)
+    (list tnil)
+    (list tcons (first xs) (list list ~@(rest xs)))))

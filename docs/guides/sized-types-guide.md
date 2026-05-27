@@ -236,17 +236,17 @@ let [v1 sized-vec-of-1(42)           ; size inferred as 1
   println(sized-vec-len(v3))         ; => 3
 ```
 
-When the size is determined at runtime (e.g. from a cons list), use
+When the size is determined at runtime (e.g. from a list value), use
 `sized-vec-from-list`:
 
 ```turmeric
-(let [lst (cons 10 (cons 20 (cons 30 (nil-value))))]
+(let [lst (list 10 20 30)]
   (let [v (unsafe (sized-vec-from-list lst))]
     (println (sized-vec-len v))))   ; => 3
 ```
 
 ```sweet-exp
-let [lst cons(10 cons(20 cons(30 nil-value())))]
+let [lst list(10 20 30)]
   let [v unsafe(sized-vec-from-list(lst))]
     println(sized-vec-len(v))   ; => 3
 ```

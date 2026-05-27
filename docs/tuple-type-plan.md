@@ -252,11 +252,3 @@ in the interim.
   `stdlib/future.tur`.
 - Type errors involving tuples say `Tuple3[int cstr float]`, not
   `Pair[int (Pair cstr float)]`.
-
-## When to do this
-
-Only when at least two of the use cases above show up in real code
-(stdlib or a spice) within the same week of work. If they don't,
-shelve the plan — `defstruct` is sufficient and adding tuples just to
-have tuples is exactly the kind of premature abstraction the project's
-guidelines warn against.

@@ -84,16 +84,16 @@ import frame/print  :refer [print-frame frame-describe]
 ### From parallel columns
 
 ```turmeric
-;; Build columns from cons lists.  Pass 0 (nil) for validity to mean "all valid".
-(let [names (column-utf8  (cons "Alice" (cons "Bob" (cons "Carol" 0))) 0 0)
-      ages  (column-int64 (cons 30      (cons 25    (cons 35      0))) 0 0)
-      score (column-float64 (cons 8.5  (cons 7.0   (cons 9.1     0))) 0 0)
+;; Build columns from value lists.  Pass 0 (nil) for validity to mean "all valid".
+(let [names (column-utf8    (list "Alice" "Bob" "Carol") 0 0)
+      ages  (column-int64   (list 30 25 35) 0 0)
+      score (column-float64 (list 8.5 7.0 9.1) 0 0)
 
-      s (schema (cons (field "name"  (type-utf8)    0)
-                 (cons (field "age"  (type-int64)   0)
-                 (cons (field "score" (type-float64) 0) 0))))
+      s (schema (list (field "name"  (type-utf8)    0)
+                      (field "age"   (type-int64)   0)
+                      (field "score" (type-float64) 0)))
 
-      df (frame s (cons names (cons ages (cons score 0))))]
+      df (frame s (list names ages score))]
 
   ;; quick sanity check
   (print-frame df)
@@ -105,15 +105,15 @@ import frame/print  :refer [print-frame frame-describe]
 ```
 
 ```sweet-exp
-let [names column-utf8(cons("Alice" cons("Bob" cons("Carol" 0))) 0 0)
-     ages  column-int64(cons(30 cons(25 cons(35 0))) 0 0)
-     score column-float64(cons(8.5 cons(7.0 cons(9.1 0))) 0 0)
+let [names column-utf8(list("Alice" "Bob" "Carol") 0 0)
+     ages  column-int64(list(30 25 35) 0 0)
+     score column-float64(list(8.5 7.0 9.1) 0 0)
 
-     s schema $ cons field("name"  type-utf8()    0)
-               $ cons field("age"  type-int64()   0)
-               $ cons field("score" type-float64() 0) 0
+     s schema(list(field("name"  type-utf8()    0)
+                   field("age"   type-int64()   0)
+                   field("score" type-float64() 0)))
 
-     df frame(s cons(names cons(ages cons(score 0))))]
+     df frame(s list(names ages score))]
 
   print-frame(df)
 ```
@@ -124,39 +124,37 @@ let [names column-utf8(cons("Alice" cons("Bob" cons("Carol" 0))) 0 0)
 
 ```turmeric
 (let [df (frame-from-cols
-           (cons (cons "name"  (column-utf8  (cons "Alice" (cons "Bob" 0)) 0 0))
-           (cons (cons "age"   (column-int64 (cons 30      (cons 25    0)) 0 0))
-           0)))]
+           (list (cons "name" (column-utf8  (list "Alice" "Bob") 0 0))
+                 (cons "age"  (column-int64 (list 30 25) 0 0))))]
   (print-frame df))
 ```
 
 ```sweet-exp
-let [df frame-from-cols $ cons cons("name" column-utf8(cons("Alice" cons("Bob" 0)) 0 0))
-                          $ cons cons("age" column-int64(cons(30 cons(25 0)) 0 0))
-                          0]
+let [df frame-from-cols(list(cons("name" column-utf8(list("Alice" "Bob") 0 0))
+                             cons("age"  column-int64(list(30 25) 0 0))))]
   print-frame(df)
 ```
 
 ### From rows
 
-`frame-from-rows` accepts a schema and a cons list of rows. Each row is a cons
-list of values in schema order. This is slower than column-wise construction and
+`frame-from-rows` accepts a schema and a list of rows. Each row is a list
+of values in schema order. This is slower than column-wise construction and
 is intended for small literals and tests:
 
 ```turmeric
-(let [s  (schema (cons (field "x" (type-int64) 0)
-                 (cons (field "y" (type-float64) 0) 0)))
+(let [s  (schema (list (field "x" (type-int64)   0)
+                       (field "y" (type-float64) 0)))
       df (frame-from-rows s
-           (cons (cons 1 (cons 1.5 0))
-           (cons (cons 2 (cons 2.5 0)) 0)))]
+           (list (list 1 1.5)
+                 (list 2 2.5)))]
   (print-frame df))
 ```
 
 ```sweet-exp
-let [s  schema $ cons field("x" type-int64() 0)
-               $ cons field("y" type-float64() 0) 0
-     df frame-from-rows s $ cons cons(1 cons(1.5 0))
-                          $ cons cons(2 cons(2.5 0)) 0]
+let [s  schema(list(field("x" type-int64()   0)
+                    field("y" type-float64() 0)))
+     df frame-from-rows(s list(list(1 1.5)
+                               list(2 2.5)))]
   print-frame(df)
 ```
 
@@ -182,17 +180,17 @@ The type inference order is int64 → float64 → date32 → timestamp → bool 
 Use `read-csv-typed` to supply an explicit schema and skip inference:
 
 ```turmeric
-(let [s (schema (cons (field "id"    (type-int64)   0)
-               (cons (field "name"  (type-utf8)    0)
-               (cons (field "price" (type-float64) 0) 0))))
+(let [s (schema (list (field "id"    (type-int64)   0)
+                      (field "name"  (type-utf8)    0)
+                      (field "price" (type-float64) 0)))
       df (read-csv-typed "products.csv" s (default-csv-opts))]
   ...)
 ```
 
 ```sweet-exp
-let [s schema $ cons field("id"    type-int64()   0)
-              $ cons field("name"  type-utf8()    0)
-              $ cons field("price" type-float64() 0) 0
+let [s schema(list(field("id"    type-int64()   0)
+                   field("name"  type-utf8()    0)
+                   field("price" type-float64() 0)))
      df read-csv-typed("products.csv" s default-csv-opts())]
   ...
 ```
@@ -218,19 +216,19 @@ unchanged columns are shared with the original (no copying).
 
 ```turmeric
 ;; Keep only named columns
-(let [small (select-cols df (cons "name" (cons "score" 0)))]
+(let [small (select-cols df (list "name" "score"))]
   (print-frame small))
 
 ;; Drop named columns
-(let [no-age (drop-cols df (cons "age" 0))]
+(let [no-age (drop-cols df (list "age"))]
   (print-frame no-age))
 ```
 
 ```sweet-exp
-let [small select-cols(df cons("name" cons("score" 0)))]
+let [small select-cols(df list("name" "score"))]
   print-frame(small)
 
-let [no-age drop-cols(df cons("age" 0))]
+let [no-age drop-cols(df list("age"))]
   print-frame(no-age)
 ```
 
@@ -242,7 +240,7 @@ let [no-age drop-cols(df cons("age" 0))]
   (print-frame df2))
 
 ;; Add or replace a column (length must match nrows)
-(let [bonus (column-float64 (cons 100.0 (cons 80.0 (cons 120.0 0))) 0 0)
+(let [bonus (column-float64 (list 100.0 80.0 120.0) 0 0)
       df2   (with-col df "bonus" bonus)]
   (print-frame df2))
 ```
@@ -251,7 +249,7 @@ let [no-age drop-cols(df cons("age" 0))]
 let [df2 rename(df "score" "rating")]
   print-frame(df2)
 
-let [bonus column-float64(cons(100.0 cons(80.0 cons(120.0 0))) 0 0)
+let [bonus column-float64(list(100.0 80.0 120.0) 0 0)
      df2   with-col(df "bonus" bonus)]
   print-frame(df2)
 ```
@@ -279,19 +277,19 @@ let [seniors filter(df fn([f i]
 
 ```turmeric
 ;; Drop rows with any null in the named columns; pass 0 for all columns
-(let [clean (drop-nulls df (cons "score" 0))]
+(let [clean (drop-nulls df (list "score"))]
   ...)
 
 ;; De-duplicate by named columns; 0 = all columns
-(let [uniq (distinct df (cons "name" 0))]
+(let [uniq (distinct df (list "name"))]
   ...)
 ```
 
 ```sweet-exp
-let [clean drop-nulls(df cons("score" 0))]
+let [clean drop-nulls(df list("score"))]
   ...
 
-let [uniq distinct(df cons("name" 0))]
+let [uniq distinct(df list("name"))]
   ...
 ```
 
@@ -322,21 +320,21 @@ let [df2 mutate(df "grade" type-utf8()
 
 ## 3. Sorting and De-duplicating
 
-`arrange` sorts by one or more columns. The `keys` argument is two parallel cons
+`arrange` sorts by one or more columns. The `keys` argument is two parallel
 lists: column names and sort directions (0 = ascending, 1 = descending):
 
 ```turmeric
 ;; Sort by score descending, then by name ascending
 (let [sorted (arrange df
-               (cons "score" (cons "name" 0))
-               (cons 1       (cons 0      0)))]
+               (list "score" "name")
+               (list 1       0))]
   (print-frame sorted))
 ```
 
 ```sweet-exp
 let [sorted arrange(df
-              cons("score" cons("name" 0))
-              cons(1       cons(0      0)))]
+              list("score" "name")
+              list(1       0))]
   print-frame(sorted)
 ```
 
@@ -344,14 +342,14 @@ let [sorted arrange(df
 the same ordering to multiple frames with `reorder`:
 
 ```turmeric
-(let [idx     (arrange-indices df (cons "score" 0) (cons 1 0))
+(let [idx     (arrange-indices df (list "score") (list 1))
       sorted1 (reorder df   idx)
       sorted2 (reorder df2  idx)]
   ...)
 ```
 
 ```sweet-exp
-let [idx     arrange-indices(df cons("score" 0) cons(1 0))
+let [idx     arrange-indices(df list("score") list(1))
      sorted1 reorder(df  idx)
      sorted2 reorder(df2 idx)]
   ...
@@ -362,14 +360,14 @@ you pass `0`). Combined with `arrange`, this is the typical "keep first
 occurrence" pattern:
 
 ```turmeric
-(let [top-per-name (distinct (arrange df (cons "score" 0) (cons 1 0))
-                             (cons "name" 0))]
+(let [top-per-name (distinct (arrange df (list "score") (list 1))
+                             (list "name"))]
   (print-frame top-per-name))
 ```
 
 ```sweet-exp
-let [top-per-name distinct(arrange(df cons("score" 0) cons(1 0))
-                           cons("name" 0))]
+let [top-per-name distinct(arrange(df list("score") list(1))
+                           list("name"))]
   print-frame(top-per-name)
 ```
 
@@ -378,27 +376,27 @@ let [top-per-name distinct(arrange(df cons("score" 0) cons(1 0))
 ## 4. Group-By and Aggregation
 
 `group-by` returns an opaque *grouped-frame*. Call `agg` on it to produce one
-summary row per group. The `agg` argument is three parallel cons lists:
+summary row per group. The `agg` argument is three parallel lists:
 output column names, input column names, and aggregation tags.
 
 ```turmeric
 ;; Sum and count scores, grouped by grade
-(let [grouped (group-by df (cons "grade" 0))
+(let [grouped (group-by df (list "grade"))
       summary (agg grouped
-                (cons "total_score" (cons "count" 0))
-                (cons "score"       (cons "name"  0))
-                (cons (agg-sum)     (cons (agg-count) 0)))]
+                (list "total_score" "count")
+                (list "score"       "name")
+                (list (agg-sum)     (agg-count)))]
   (match summary
     [(ok f)  (print-frame f)]
     [(err e) (println "agg error:" e)]))
 ```
 
 ```sweet-exp
-let [grouped group-by(df cons("grade" 0))
+let [grouped group-by(df list("grade"))
      summary agg(grouped
-               cons("total_score" cons("count" 0))
-               cons("score"       cons("name"  0))
-               cons agg-sum() cons(agg-count() 0))]
+                 list("total_score" "count")
+                 list("score"       "name")
+                 list(agg-sum() agg-count()))]
   match summary
     [ok(f)  print-frame(f)]
     [err(e) println("agg error:" e)]
@@ -422,9 +420,9 @@ summary statistics:
 ```turmeric
 ;; Overall mean and max score
 (let [stats (summarize df
-              (cons "mean_score" (cons "max_score" 0))
-              (cons "score"      (cons "score"     0))
-              (cons (agg-mean)   (cons (agg-max)   0)))]
+              (list "mean_score" "max_score")
+              (list "score"      "score")
+              (list (agg-mean)   (agg-max)))]
   (match stats
     [(ok f) (print-frame f)]
     [_ 0]))
@@ -432,9 +430,9 @@ summary statistics:
 
 ```sweet-exp
 let [stats summarize(df
-              cons("mean_score" cons("max_score" 0))
-              cons("score"      cons("score"     0))
-              cons agg-mean() cons(agg-max() 0))]
+                     list("mean_score" "max_score")
+                     list("score"      "score")
+                     list(agg-mean() agg-max()))]
   match stats
     [ok(f) print-frame(f)]
     [_ 0]
@@ -455,7 +453,7 @@ print-frame frame-describe(df)
 
 ## 5. Joining Two Frames
 
-All joins return `result<frame>`. The `keys` argument is two parallel cons lists
+All joins return `result<frame>`. The `keys` argument is two parallel lists
 of column names -- left-side key names and right-side key names.
 
 ```turmeric
@@ -465,8 +463,8 @@ of column names -- left-side key names and right-side key names.
     [(cons (ok o) (ok p))
      ;; inner join on orders.product_id = products.id
      (let [result (inner-join o p
-                    (cons "product_id" 0)
-                    (cons "id"         0))]
+                    (list "product_id")
+                    (list "id"))]
        (match result
          [(ok df) (print-frame df)]
          [(err e) (println "join error:" e)]))]
@@ -479,8 +477,8 @@ let [orders   read-csv("orders.csv"   default-csv-opts())
   match cons(orders products)
     [cons(ok(o) ok(p))
      let [result inner-join(o p
-                   cons("product_id" 0)
-                   cons("id"         0))]
+                   list("product_id")
+                   list("id"))]
        match result
          [ok(df) print-frame(df)]
          [err(e) println("join error:" e)]]
@@ -492,11 +490,11 @@ when the key column has the same name on both sides):
 
 ```turmeric
 ;; Left join on the shared "category" column
-(join orders products "left" (cons "category" 0))
+(join orders products "left" (list "category"))
 ```
 
 ```sweet-exp
-join(orders products "left" cons("category" 0))
+join(orders products "left" list("category"))
 ```
 
 Available join kinds: `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`,
@@ -504,14 +502,14 @@ Available join kinds: `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`,
 
 ```turmeric
 ;; Semi-join: keep left rows that have a match in right
-(semi-join orders products (cons "product_id" 0) (cons "id" 0))
+(semi-join orders products (list "product_id") (list "id"))
 
 ;; Cross join: Cartesian product
 (cross-join sizes colors)
 ```
 
 ```sweet-exp
-semi-join(orders products cons("product_id" 0) cons("id" 0))
+semi-join(orders products list("product_id") list("id"))
 
 cross-join(sizes colors)
 ```
@@ -541,7 +539,7 @@ their value in `value-name`:
 
 (let [df    (read-csv "quarterly.csv" (default-csv-opts))
       long  (melt df
-              (cons "name" 0)    ; identity columns
+              (list "name")      ; identity columns
               "quarter"          ; variable column name
               "sales")]          ; value column name
   (match (cons df long)
@@ -553,7 +551,7 @@ their value in `value-name`:
 ```sweet-exp
 let [df   read-csv("quarterly.csv" default-csv-opts())
      long melt $ match df [ok(f) f] [_ 0]
-               cons("name" 0)
+               list("name")
                "quarter"
                "sales"]
   when long

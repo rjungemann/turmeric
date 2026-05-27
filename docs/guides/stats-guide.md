@@ -193,8 +193,8 @@ to display results in R-style.
   (test-result-p-value r))
 
 ;; One-way ANOVA
-;; cols = cons list of group columns
-(anova-oneway (cons g1 (cons g2 (cons g3 0))))
+;; cols = list of group columns
+(anova-oneway (list g1 g2 g3))
 
 ;; Chi-squared goodness-of-fit
 (chi2-gof observed-col expected-col)
@@ -227,8 +227,8 @@ OLS via normal equations solved by Cholesky factorization.
 (import stats/regress :refer [ols ols-frame predict predict-frame diagnostics])
 (import stats/fmt     :refer [print-fit fit-coefs-frame])
 
-;; xs = cons list of predictor columns.
-;; names = cons list of :cstr labels.
+;; xs = list of predictor columns.
+;; names = list of :cstr labels.
 (let [result (ols y-col xs names 1)]  ; 1 = include intercept
   (if (ok? result)
     (let [fit (ok-val result)]
@@ -237,11 +237,11 @@ OLS via normal equations solved by Cholesky factorization.
     (println (err-val result))))
 
 ;; Frame-based interface.
-(let [result (ols-frame my-frame "y" (cons "x1" (cons "x2" 0)) 1)]
+(let [result (ols-frame my-frame "y" (list "x1" "x2") 1)]
   ...)
 
 ;; Predictions.
-(predict fit (cons new-x1 (cons new-x2 0)))    ; => column
+(predict fit (list new-x1 new-x2))    ; => column
 (predict-frame fit new-frame)                   ; => result<column>
 
 ;; Diagnostics frame: fitted, residual, std-residual, leverage, cooks-d.

@@ -364,6 +364,34 @@ or `defopaque`. Place a contiguous `;;;` block followed by a `;;` comment line
 Without a module docstring the page renders with no description block -- the
 per-symbol cards still appear normally.
 
+### Style: avoid `cons ... 0` chains in examples
+
+In README quick-starts and docstring examples, do not show runtime list values
+as `(cons x (cons y 0))` chains. The trailing `0` is the nil-of-list footgun --
+new readers have no way to tell that `0` means "end of list," and the chain
+itself reads in reversed nesting order.
+
+Use the `list` macro instead. It expands to the same `tcons`/`tnil` cells, so
+it's a drop-in for any API that today takes a `:int` cons list:
+
+```turmeric
+;; Avoid
+(group-by f (cons "g" 0))
+(plot (cons (axes) (cons (function f) 0)))
+
+;; Prefer
+(group-by f (list "g"))
+(plot (list (axes) (function f)))
+```
+
+Pair-cons (`(cons key value)` with no trailing `0`) is fine -- a two-element
+pair is a clear, idiomatic data shape. The footgun is the nil-terminated chain.
+
+If your spice API can take a `Vec` instead of a cons list, prefer that and
+document it with `vec`. The end goal is for `cons` to disappear from
+quick-start surfaces entirely; see `docs/cons-in-docs-cleanup-plan.md` for the
+ongoing migration.
+
 ---
 
 ## Testing Your Spice
