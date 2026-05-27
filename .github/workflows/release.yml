@@ -21,7 +21,10 @@ jobs:
             cmake_extra: ""
           - target: macos-universal
             os: macos-latest
-            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+            # Shell-quote the value: the `;` would otherwise be interpreted
+            # as a command separator after ${{ matrix.cmake_extra }} is
+            # substituted into the run line.
+            cmake_extra: '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"'
 
     steps:
       - uses: actions/checkout@v5
