@@ -29,6 +29,9 @@ set(TURI_EVAL_SOURCES
     turi/fiber.c
     turi/eval.c
     turi/repl.c
+    # RP3: REPL spice-image loader. Walks up to build.tur, dlopens
+    # .tur-repl-cache/lib.so, primes a symbol map from exports.manifest.
+    turi/spice_loader.c
 )
 
 # ---------------------------------------------------------------------------
@@ -214,6 +217,10 @@ target_compile_options(tur PRIVATE
 target_compile_options(tur PRIVATE -pthread)
 target_link_options(tur PRIVATE -pthread)
 target_link_libraries(tur PRIVATE m)
+# RP3: turi/spice_loader.c uses dlopen/dlsym; on Linux those live in
+# libdl (libSystem on macOS already exports them, but linking -ldl
+# there is a harmless no-op).
+target_link_libraries(tur PRIVATE ${CMAKE_DL_LIBS})
 
 target_link_options(tur PRIVATE
     $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
@@ -242,6 +249,9 @@ add_library(libturi STATIC $<TARGET_OBJECTS:tur_core>)
 set_target_properties(libturi PROPERTIES OUTPUT_NAME "turi")
 target_include_directories(libturi PUBLIC ${TUR_INCLUDE_DIRS})
 target_link_options(libturi INTERFACE -pthread)
+# RP3: propagate libdl to anyone linking libturi (the REPL helpers
+# transitively call dlopen via turi/spice_loader.c).
+target_link_libraries(libturi INTERFACE ${CMAKE_DL_LIBS})
 if(HAVE_EDITLINE)
     target_link_libraries(libturi INTERFACE ${LIBEDIT_LIB})
 endif()

@@ -152,6 +152,12 @@ typedef struct TuriEnv {
      * point into eval_arenas (kept alive by TuriEnv until free). Opaque
      * to callers that don't include reader_macros.h. */
     struct ReaderMacroRegistry *reader_macros;
+    /* RP3: loaded spice image (auto-discovered from cwd at REPL start).
+     * NULL outside a project, or when --no-auto-spice was passed. Owned
+     * by TuriEnv: freed by turi_env_free. Opaque to callers that don't
+     * include spice_loader.h; the REPL's binding layer (RP4) walks it
+     * to resolve `(import M :refer [...])`. */
+    struct TurSpiceImage *spice_image;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

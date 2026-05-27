@@ -1,0 +1,507 @@
+/* spice_loader.c -- see spice_loader.h.
+ *
+ * Responsibilities:
+ *   1. Walk up from cwd to find an enclosing `build.tur`.
+ *   2. Compare every .tur file's mtime to the cached library's mtime,
+ *      and rebuild via `tur build --shared` if any source is newer.
+ *      (sha256-based `build.manifest` from the plan is deferred; mtime
+ *      is sufficient for the REPL's "did anything change?" question
+ *      and avoids touching every byte on cold starts.)
+ *   3. dlopen the library and dlsym each export listed in
+ *      exports.manifest, materialising a TurSpiceExport row per defn.
+ *
+ * The dispatcher class encoding (`i`/`f`/`v`) is shared with
+ * src/runtime/ffi_dispatch.h; the binding layer in RP4 picks the
+ * matching `tur_ffi_call_<ret>_<args>` trampoline based on it.
+ */
+
+#include "spice_loader.h"
+
+#include <dirent.h>
+#include <dlfcn.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+/* ------------------------------------------------------------------ */
+/* Image                                                              */
+/* ------------------------------------------------------------------ */
+
+struct TurSpiceImage {
+    char           *root;       /* absolute path to dir containing build.tur */
+    char           *lib_path;   /* path to the loaded .so (under .tur-repl-cache) */
+    void           *handle;     /* dlopen result */
+    TurSpiceExport *exports;
+    uint32_t        n_exports;
+    uint32_t        cap_exports;
+};
+
+static void spice_export_free(TurSpiceExport *e) {
+    free(e->module);
+    free(e->name);
+    free(e->mangled);
+}
+
+void tur_spice_image_free(TurSpiceImage *img) {
+    if (!img) return;
+    for (uint32_t i = 0; i < img->n_exports; i++) {
+        spice_export_free(&img->exports[i]);
+    }
+    free(img->exports);
+    if (img->handle) dlclose(img->handle);
+    free(img->lib_path);
+    free(img->root);
+    free(img);
+}
+
+const char *tur_spice_image_root(const TurSpiceImage *img) {
+    return img ? img->root : NULL;
+}
+const char *tur_spice_image_lib(const TurSpiceImage *img) {
+    return img ? img->lib_path : NULL;
+}
+uint32_t tur_spice_image_count(const TurSpiceImage *img) {
+    return img ? img->n_exports : 0;
+}
+const TurSpiceExport *tur_spice_image_at(const TurSpiceImage *img,
+                                          uint32_t i) {
+    if (!img || i >= img->n_exports) return NULL;
+    return &img->exports[i];
+}
+const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
+                                            const char *module,
+                                            const char *name) {
+    if (!img || !module || !name) return NULL;
+    for (uint32_t i = 0; i < img->n_exports; i++) {
+        const TurSpiceExport *e = &img->exports[i];
+        if (strcmp(e->module, module) == 0 && strcmp(e->name, name) == 0) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Discovery: walk up to build.tur                                    */
+/* ------------------------------------------------------------------ */
+
+/* Same upper bound as the compiler's find_spice_root: bounded walk
+ * keeps stat() noise contained on filesystems with no build.tur all
+ * the way to /. */
+#define SPICE_WALK_MAX 16
+
+static char *find_build_tur_root(const char *start) {
+    char dir[4096];
+    if (!start || !*start) start = ".";
+    if (!realpath(start, dir)) {
+        /* Fall back to start as-is; realpath fails when the path
+         * contains a non-existent component. */
+        snprintf(dir, sizeof(dir), "%s", start);
+    }
+    for (int i = 0; i < SPICE_WALK_MAX; i++) {
+        char candidate[4200];
+        snprintf(candidate, sizeof(candidate), "%s/build.tur", dir);
+        struct stat st;
+        if (stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
+            char *out = strdup(dir);
+            return out;
+        }
+        char *slash = strrchr(dir, '/');
+        if (!slash || slash == dir) break;
+        *slash = '\0';
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Freshness: any .tur newer than the .so?                            */
+/* ------------------------------------------------------------------ */
+
+static time_t newest_tur_mtime(const char *dir, time_t acc) {
+    DIR *d = opendir(dir);
+    if (!d) return acc;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;       /* skip dotfiles + . / .. */
+        char path[4200];
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            acc = newest_tur_mtime(path, acc);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) continue;
+        size_t nl = strlen(e->d_name);
+        if (nl < 5 || strcmp(e->d_name + nl - 4, ".tur") != 0) continue;
+        if (st.st_mtime > acc) acc = st.st_mtime;
+    }
+    closedir(d);
+    return acc;
+}
+
+/* Returns true if `lib_path` is missing OR any .tur under `root` is
+ * newer than the library. Conservative: treats unreadable libs and
+ * stat() failures as "rebuild needed" so the next invocation tries
+ * again rather than serving stale code. */
+static bool needs_rebuild(const char *root, const char *lib_path) {
+    struct stat lib_st;
+    if (stat(lib_path, &lib_st) != 0) return true;
+    time_t lib_mtime = lib_st.st_mtime;
+    time_t newest = newest_tur_mtime(root, 0);
+    return newest > lib_mtime;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cache layout + .gitignore handshake                                */
+/* ------------------------------------------------------------------ */
+
+static int ensure_cache_dir(const char *root, char *out, size_t cap) {
+    snprintf(out, cap, "%s/.tur-repl-cache", root);
+    struct stat st;
+    if (stat(out, &st) == 0 && S_ISDIR(st.st_mode)) return 0;
+    if (mkdir(out, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "tur repl: cannot create %s: %s\n",
+                out, strerror(errno));
+        return -1;
+    }
+    /* Best-effort .gitignore handshake: if the project already has a
+     * .gitignore, append `.tur-repl-cache/` when not already listed.
+     * Don't *create* a .gitignore when one is absent -- that would be
+     * surprising in non-git projects. */
+    char gi[4200];
+    snprintf(gi, sizeof(gi), "%s/.gitignore", root);
+    FILE *gf = fopen(gi, "r");
+    if (!gf) return 0;
+    bool seen = false;
+    char line[256];
+    while (fgets(line, sizeof(line), gf)) {
+        /* trim trailing whitespace */
+        size_t ll = strlen(line);
+        while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'
+                          || line[ll-1] == ' ' || line[ll-1] == '\t')) {
+            line[--ll] = '\0';
+        }
+        if (strcmp(line, ".tur-repl-cache") == 0
+            || strcmp(line, ".tur-repl-cache/") == 0
+            || strcmp(line, "/.tur-repl-cache") == 0
+            || strcmp(line, "/.tur-repl-cache/") == 0) {
+            seen = true;
+            break;
+        }
+    }
+    fclose(gf);
+    if (!seen) {
+        FILE *af = fopen(gi, "a");
+        if (af) {
+            fputs("\n# Added by `tur repl` (RP3): cached spice .so + manifest.\n"
+                  ".tur-repl-cache/\n", af);
+            fclose(af);
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Subprocess invocation: tur build --shared                          */
+/* ------------------------------------------------------------------ */
+
+static int shell_quote(const char *in, char *out, size_t cap) {
+    /* Single-quote the argument and escape any embedded single quotes
+     * with the '\'' sequence. Output cap includes terminating NUL. */
+    size_t o = 0;
+    if (o + 1 >= cap) return -1;
+    out[o++] = '\'';
+    for (const char *p = in; *p; p++) {
+        if (*p == '\'') {
+            if (o + 4 >= cap) return -1;
+            out[o++] = '\'';
+            out[o++] = '\\';
+            out[o++] = '\'';
+            out[o++] = '\'';
+        } else {
+            if (o + 1 >= cap) return -1;
+            out[o++] = *p;
+        }
+    }
+    if (o + 2 >= cap) return -1;
+    out[o++] = '\'';
+    out[o] = '\0';
+    return 0;
+}
+
+static int run_build(const char *tur_bin, const char *root,
+                     const char *lib_path, const char *manifest_path) {
+    char q_bin[1024], q_root[4400], q_lib[4400], q_mf[4400];
+    if (shell_quote(tur_bin,       q_bin,  sizeof(q_bin))  != 0
+     || shell_quote(root,          q_root, sizeof(q_root)) != 0
+     || shell_quote(lib_path,      q_lib,  sizeof(q_lib))  != 0
+     || shell_quote(manifest_path, q_mf,   sizeof(q_mf))   != 0) {
+        fprintf(stderr, "tur repl: build command too long to quote\n");
+        return -1;
+    }
+    /* First attempt: silent. If it fails, retry with output visible so
+     * the user sees the actual diagnostic from the compiler. */
+    char cmd[20000];
+    snprintf(cmd, sizeof(cmd),
+             "%s build --shared %s -o %s --manifest %s >/dev/null 2>&1",
+             q_bin, q_root, q_lib, q_mf);
+    int rc = system(cmd);
+    if (rc == 0) return 0;
+    fprintf(stderr,
+            "tur repl: spice rebuild failed; replaying with full output:\n");
+    snprintf(cmd, sizeof(cmd),
+             "%s build --shared %s -o %s --manifest %s",
+             q_bin, q_root, q_lib, q_mf);
+    (void)system(cmd);
+    return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Manifest parsing                                                   */
+/* ------------------------------------------------------------------ */
+
+static char class_for_tag(const char *tag, bool is_return) {
+    if (strcmp(tag, ":int")    == 0
+     || strcmp(tag, ":bool")   == 0
+     || strcmp(tag, ":cstr")   == 0
+     || strcmp(tag, ":ptr")    == 0
+     || strcmp(tag, ":int8")   == 0
+     || strcmp(tag, ":int16")  == 0
+     || strcmp(tag, ":int32")  == 0
+     || strcmp(tag, ":int64")  == 0
+     || strcmp(tag, ":uint8")  == 0
+     || strcmp(tag, ":uint16") == 0
+     || strcmp(tag, ":uint32") == 0
+     || strcmp(tag, ":uint64") == 0
+     || strcmp(tag, ":any")    == 0
+     || strcmp(tag, ":never")  == 0) {
+        return 'i';
+    }
+    if (strcmp(tag, ":float")   == 0
+     || strcmp(tag, ":float32") == 0
+     || strcmp(tag, ":float64") == 0) {
+        return 'f';
+    }
+    if (is_return && strcmp(tag, ":void") == 0) return 'v';
+    return '?';
+}
+
+/* Skip whitespace; return pointer to first non-space char (or end). */
+static char *skip_ws(char *p) {
+    while (*p == ' ' || *p == '\t') p++;
+    return p;
+}
+
+/* Append an export row; resizes the array as needed. Takes ownership of
+ * the three char* fields (frees them on failure). */
+static int append_export(TurSpiceImage *img, char *module, char *name,
+                         char *mangled, char ret_class,
+                         const char *arg_classes, uint8_t n_args,
+                         bool is_variadic, void *fn_ptr) {
+    if (img->n_exports == img->cap_exports) {
+        uint32_t nc = img->cap_exports ? img->cap_exports * 2 : 8;
+        TurSpiceExport *na = realloc(img->exports, nc * sizeof(*na));
+        if (!na) {
+            free(module); free(name); free(mangled);
+            return -1;
+        }
+        img->exports = na;
+        img->cap_exports = nc;
+    }
+    TurSpiceExport *e = &img->exports[img->n_exports++];
+    e->module = module;
+    e->name = name;
+    e->mangled = mangled;
+    e->ret_class = ret_class;
+    e->n_args = n_args;
+    e->is_variadic = is_variadic;
+    e->fn_ptr = fn_ptr;
+    memset(e->arg_classes, 0, sizeof(e->arg_classes));
+    if (arg_classes && n_args > 0) {
+        memcpy(e->arg_classes, arg_classes, n_args);
+    }
+    return 0;
+}
+
+/* Parse `<mod>/<name> -> <mangled> :: (<tags>) -> <ret>` into one
+ * export row and dlsym the symbol. Mutates the line buffer in place.
+ * Returns 0 on success, -1 on hard parse failure (caller continues
+ * with the next line and prints a warning). */
+static int parse_manifest_line(TurSpiceImage *img, char *line) {
+    char *p = skip_ws(line);
+    if (*p == '\0' || *p == '#') return 0;     /* blank / comment */
+    /* module */
+    char *slash = strchr(p, '/');
+    if (!slash) return -1;
+    *slash = '\0';
+    char *module = strdup(p);
+    p = skip_ws(slash + 1);
+    /* name (up to ` -> `) */
+    char *arrow = strstr(p, " -> ");
+    if (!arrow) { free(module); return -1; }
+    *arrow = '\0';
+    /* defn name may have trailing whitespace */
+    char *end = arrow;
+    while (end > p && (*(end - 1) == ' ' || *(end - 1) == '\t')) end--;
+    *end = '\0';
+    char *name = strdup(p);
+    p = skip_ws(arrow + 4);
+    /* mangled symbol (up to ` :: `) */
+    char *colons = strstr(p, " :: ");
+    if (!colons) { free(module); free(name); return -1; }
+    *colons = '\0';
+    end = colons;
+    while (end > p && (*(end - 1) == ' ' || *(end - 1) == '\t')) end--;
+    *end = '\0';
+    char *mangled = strdup(p);
+    p = skip_ws(colons + 4);
+    /* `(<tags>) -> <ret>` */
+    if (*p != '(') { free(module); free(name); free(mangled); return -1; }
+    p++;
+    char *close = strchr(p, ')');
+    if (!close) { free(module); free(name); free(mangled); return -1; }
+    *close = '\0';
+    char arg_classes[TUR_SPICE_MAX_ARITY];
+    uint8_t n_args = 0;
+    bool is_variadic = false;
+    char *tok = strtok(p, " \t");
+    while (tok) {
+        if (strcmp(tok, "&") == 0) {
+            is_variadic = true;
+            /* The next token is the rest-arg's element tag. The
+             * dispatcher receives a single cons-list pointer (int64_t)
+             * regardless, so we still add one ':int'-class slot. */
+            (void)strtok(NULL, " \t");
+            if (n_args >= TUR_SPICE_MAX_ARITY) break;
+            arg_classes[n_args++] = 'i';
+            break;
+        }
+        if (n_args >= TUR_SPICE_MAX_ARITY) {
+            free(module); free(name); free(mangled);
+            return -1;
+        }
+        arg_classes[n_args++] = class_for_tag(tok, /*is_return=*/false);
+        tok = strtok(NULL, " \t");
+    }
+    p = skip_ws(close + 1);
+    if (strncmp(p, "->", 2) != 0) {
+        free(module); free(name); free(mangled); return -1;
+    }
+    p = skip_ws(p + 2);
+    /* The ret tag runs to whitespace or end. */
+    char *ret_end = p;
+    while (*ret_end && *ret_end != ' ' && *ret_end != '\t'
+           && *ret_end != '\n' && *ret_end != '\r') ret_end++;
+    *ret_end = '\0';
+    char ret_class = class_for_tag(p, /*is_return=*/true);
+    /* dlsym -- if not found, treat as hard error: the manifest must
+     * agree with the library or the symbol map is corrupt. */
+    dlerror();
+    void *fn_ptr = dlsym(img->handle, mangled);
+    const char *derr = dlerror();
+    if (!fn_ptr || derr) {
+        fprintf(stderr,
+                "tur repl: manifest lists %s but dlsym failed: %s\n",
+                mangled, derr ? derr : "(symbol not present)");
+        free(module); free(name); free(mangled);
+        return -1;
+    }
+    return append_export(img, module, name, mangled, ret_class,
+                          arg_classes, n_args, is_variadic, fn_ptr);
+}
+
+static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
+    FILE *f = fopen(manifest_path, "r");
+    if (!f) {
+        fprintf(stderr, "tur repl: cannot open %s: %s\n",
+                manifest_path, strerror(errno));
+        return -1;
+    }
+    char line[4096];
+    int rc = 0;
+    while (fgets(line, sizeof(line), f)) {
+        /* strip trailing newline */
+        size_t ll = strlen(line);
+        while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r')) {
+            line[--ll] = '\0';
+        }
+        if (parse_manifest_line(img, line) != 0) {
+            fprintf(stderr, "tur repl: malformed manifest line: %s\n", line);
+            rc = -1;
+            break;
+        }
+    }
+    fclose(f);
+    return rc;
+}
+
+/* ------------------------------------------------------------------ */
+/* Entry point                                                        */
+/* ------------------------------------------------------------------ */
+
+int tur_spice_image_load(const char *start_dir, const char *tur_bin,
+                         TurSpiceImage **out_image) {
+    if (out_image) *out_image = NULL;
+    if (!start_dir) start_dir = ".";
+    if (!tur_bin || !*tur_bin) tur_bin = "tur";
+
+    char *root = find_build_tur_root(start_dir);
+    if (!root) return 1;  /* no project here */
+
+    char cache_dir[4200];
+    if (ensure_cache_dir(root, cache_dir, sizeof(cache_dir)) != 0) {
+        free(root);
+        return -1;
+    }
+    char lib_path[4400], manifest_path[4400];
+    snprintf(lib_path, sizeof(lib_path), "%s/lib.so", cache_dir);
+    snprintf(manifest_path, sizeof(manifest_path),
+             "%s/exports.manifest", cache_dir);
+
+    /* Sources live under `<root>/src/` by spice convention. Fall back to
+     * `<root>` itself for the flat-layout fixtures used by some tests.
+     * The freshness check also watches the chosen source dir so we
+     * don't scan build.tur, the cache, or sibling docs/tests dirs. */
+    char src_dir[4300];
+    snprintf(src_dir, sizeof(src_dir), "%s/src", root);
+    struct stat src_st;
+    const char *build_dir = root;
+    if (stat(src_dir, &src_st) == 0 && S_ISDIR(src_st.st_mode)) {
+        build_dir = src_dir;
+    }
+
+    if (needs_rebuild(build_dir, lib_path)) {
+        if (run_build(tur_bin, build_dir, lib_path, manifest_path) != 0) {
+            free(root);
+            return -1;
+        }
+    }
+
+    void *handle = dlopen(lib_path, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        fprintf(stderr, "tur repl: dlopen(%s) failed: %s\n",
+                lib_path, dlerror());
+        free(root);
+        return -1;
+    }
+
+    TurSpiceImage *img = calloc(1, sizeof(*img));
+    if (!img) {
+        dlclose(handle); free(root); return -1;
+    }
+    img->root     = root;
+    img->lib_path = strdup(lib_path);
+    img->handle   = handle;
+
+    if (load_manifest(img, manifest_path) != 0) {
+        tur_spice_image_free(img);
+        return -1;
+    }
+    *out_image = img;
+    return 0;
+}

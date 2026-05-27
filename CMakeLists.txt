@@ -61,6 +61,15 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_ffi_dispatch_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RP3: integration test for the REPL's auto spice-image loader. Runs
+# `tur repl` inside fixture projects and asserts the discover/build/
+# dlopen/manifest pipeline behaves correctly (initial load, freshness
+# skip, rebuild-on-change, opt-out, .gitignore handshake).
+add_test(
+  NAME tur_repl_spice_load
+  COMMAND bash tests/turi/repl-spice-load.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture
 # imports them. See docs/stdlib-check-allowlist-plan.md.

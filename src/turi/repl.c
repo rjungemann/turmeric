@@ -24,6 +24,7 @@
 
 #include "repl.h"
 #include "eval.h"
+#include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 
 #include <errno.h>
 #include <stdio.h>
@@ -725,6 +726,31 @@ int turi_repl_run(void) {
     if (!env) {
         fprintf(stderr, "tur repl: failed to create eval environment\n");
         return 1;
+    }
+
+    /* RP3: auto-discover an enclosing spice project and load its
+     * shared library. Skipped silently when:
+     *   - the user sets TUR_NO_AUTO_SPICE=1, or
+     *   - no build.tur exists walking up from cwd.
+     * On hard error (failed build, dlopen, manifest parse) the loader
+     * prints the diagnostic itself; we still continue to a usable
+     * pure-Turmeric REPL so the user can debug. The subprocess invokes
+     * the `tur` binary on PATH; override via TUR_BIN. */
+    const char *no_auto = getenv("TUR_NO_AUTO_SPICE");
+    if (!no_auto || strcmp(no_auto, "1") != 0) {
+        TurSpiceImage *img = NULL;
+        int srv = tur_spice_image_load(".", getenv("TUR_BIN"), &img);
+        if (srv == 0 && img) {
+            env->spice_image = img;
+            printf("Loaded spice from %s (%u export%s)\n",
+                   tur_spice_image_root(img),
+                   tur_spice_image_count(img),
+                   tur_spice_image_count(img) == 1 ? "" : "s");
+            fflush(stdout);
+        }
+        /* srv == 1 (no project) and srv == -1 (hard error, already
+         * surfaced) both leave env->spice_image NULL: the REPL behaves
+         * like a pure-Turmeric session. */
     }
 
     /* Load history */

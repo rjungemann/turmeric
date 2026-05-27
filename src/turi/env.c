@@ -2,6 +2,7 @@
 #include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL, TURI_DEFAULT_SANDBOX_DEPTH */
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
+#include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 
 #include <stdlib.h>
 #include <string.h>
@@ -108,6 +109,15 @@ TuriEnv *turi_env_new_sandboxed(void) {
 
 void turi_env_free(TuriEnv *env) {
     if (!env) return;
+
+    /* RP3: drop the spice image first. dlclose runs C-side destructors
+     * (atexit handlers, etc.) so it should happen before the async
+     * scheduler tears down its state -- otherwise spice destructors
+     * that touch the runtime would see a half-freed env. */
+    if (env->spice_image) {
+        tur_spice_image_free(env->spice_image);
+        env->spice_image = NULL;
+    }
 
     /* Phase S7: free async scheduler state */
     turi_sched_free(env);

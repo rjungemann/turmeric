@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# tests/turi/repl-spice-load.sh -- RP3 integration test.
+#
+# Scenarios:
+#   1. REPL outside any project: silent (no "Loaded spice" line, no cache).
+#   2. REPL inside a project: discovers build.tur, builds .tur-repl-cache/lib.so,
+#      writes exports.manifest, prints "Loaded spice from ... (N export...)".
+#   3. Rerun is a no-op: lib.so's mtime is unchanged.
+#   4. Touching a source rebuilds: lib.so's mtime advances.
+#   5. TUR_NO_AUTO_SPICE=1 opts out: no Loaded line, no cache dir created.
+#   6. Auto-injected `.gitignore` entry: when a .gitignore exists, RP3 appends
+#      `.tur-repl-cache/` exactly once.
+#
+# RP4 will exercise the symbol map via actual (import M) forms. This test
+# pre-emptively asserts the data the loader put on the env (via the
+# startup status line + manifest file inspection).
+
+set -uo pipefail
+cd "$(dirname "$0")/../.."
+
+TUR="${TUR:-./build/tur}"
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+# The REPL invokes `tur` as a subprocess; point at the local build.
+export TUR_BIN="$PWD/$TUR"
+# Ensure TUR_BIN is an absolute path (not "./build/tur") so the subprocess
+# works regardless of where the loader is invoked from.
+case "$TUR_BIN" in
+    /*) ;;
+    *)  TUR_BIN="$(cd "$(dirname "$TUR_BIN")" && pwd)/$(basename "$TUR_BIN")" ;;
+esac
+
+WORK="$(mktemp -d -t tur-rp3.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+
+PASS=0
+FAIL=0
+pass() { PASS=$((PASS + 1)); echo "PASS $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
+
+# --- scenario 1: outside any project --------------------------------------
+NOPROJ="$WORK/no-project"
+mkdir -p "$NOPROJ"
+out=$(cd "$NOPROJ" && echo ':quit' | "$TUR_BIN" repl 2>&1)
+if echo "$out" | grep -q 'Loaded spice'; then
+    fail "repl-spice-load-outside-project" \
+         "unexpected 'Loaded spice' line: $out"
+else
+    pass "repl-spice-load-outside-project"
+fi
+
+# --- scenario 2: inside a project (initial build) -------------------------
+PROJ="$WORK/proj"
+mkdir -p "$PROJ/src"
+cat > "$PROJ/build.tur" <<'EOF'
+(defpackage rp3-fixture)
+EOF
+cat > "$PROJ/src/smoke.tur" <<'EOF'
+(defmodule smokelib
+  (export add42)
+  (defn add42 [x :int] :int (+ x 42)))
+EOF
+out=$(cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl 2>&1)
+if echo "$out" | grep -q 'Loaded spice from .*proj (1 export)'; then
+    pass "repl-spice-load-initial"
+else
+    fail "repl-spice-load-initial" "missing/wrong status line: $out"
+fi
+
+if [ -f "$PROJ/.tur-repl-cache/lib.so" ] \
+    && [ -f "$PROJ/.tur-repl-cache/exports.manifest" ]; then
+    pass "repl-spice-load-cache-populated"
+else
+    fail "repl-spice-load-cache-populated" \
+         "lib.so or exports.manifest missing under .tur-repl-cache"
+fi
+
+EXPECTED='smokelib/add42 -> smokelib__add42 :: (:int) -> :int'
+if grep -qxF "$EXPECTED" "$PROJ/.tur-repl-cache/exports.manifest"; then
+    pass "repl-spice-load-manifest-line"
+else
+    fail "repl-spice-load-manifest-line" \
+         "manifest content: $(cat "$PROJ/.tur-repl-cache/exports.manifest")"
+fi
+
+# --- scenario 3: rerun is a no-op (mtime unchanged) -----------------------
+MT_BEFORE=$(stat -f %m "$PROJ/.tur-repl-cache/lib.so" 2>/dev/null \
+            || stat -c %Y "$PROJ/.tur-repl-cache/lib.so")
+sleep 1
+(cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
+MT_AFTER=$(stat -f %m "$PROJ/.tur-repl-cache/lib.so" 2>/dev/null \
+           || stat -c %Y "$PROJ/.tur-repl-cache/lib.so")
+if [ "$MT_BEFORE" = "$MT_AFTER" ]; then
+    pass "repl-spice-load-rerun-skips-rebuild"
+else
+    fail "repl-spice-load-rerun-skips-rebuild" \
+         "lib.so was rebuilt unnecessarily ($MT_BEFORE -> $MT_AFTER)"
+fi
+
+# --- scenario 4: touching a source rebuilds -------------------------------
+touch "$PROJ/src/smoke.tur"
+(cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
+MT_REBUILT=$(stat -f %m "$PROJ/.tur-repl-cache/lib.so" 2>/dev/null \
+             || stat -c %Y "$PROJ/.tur-repl-cache/lib.so")
+if [ "$MT_REBUILT" != "$MT_AFTER" ]; then
+    pass "repl-spice-load-rebuild-on-change"
+else
+    fail "repl-spice-load-rebuild-on-change" \
+         "lib.so mtime did not change after touching source"
+fi
+
+# --- scenario 5: TUR_NO_AUTO_SPICE=1 opts out -----------------------------
+NOAUTOPROJ="$WORK/noauto"
+mkdir -p "$NOAUTOPROJ/src"
+cat > "$NOAUTOPROJ/build.tur" <<'EOF'
+(defpackage rp3-noauto)
+EOF
+cat > "$NOAUTOPROJ/src/x.tur" <<'EOF'
+(defmodule noauto
+  (export id)
+  (defn id [x :int] :int x))
+EOF
+out=$(cd "$NOAUTOPROJ" && echo ':quit' \
+        | TUR_NO_AUTO_SPICE=1 "$TUR_BIN" repl 2>&1)
+if echo "$out" | grep -q 'Loaded spice'; then
+    fail "repl-spice-load-no-auto-spice" \
+         "TUR_NO_AUTO_SPICE=1 was ignored: $out"
+elif [ -d "$NOAUTOPROJ/.tur-repl-cache" ]; then
+    fail "repl-spice-load-no-auto-spice" \
+         "cache dir created despite opt-out"
+else
+    pass "repl-spice-load-no-auto-spice"
+fi
+
+# --- scenario 6: .gitignore handshake -------------------------------------
+GIPROJ="$WORK/gitproj"
+mkdir -p "$GIPROJ/src"
+cat > "$GIPROJ/build.tur" <<'EOF'
+(defpackage rp3-gi)
+EOF
+cat > "$GIPROJ/src/gi.tur" <<'EOF'
+(defmodule gi (export one) (defn one [] :int 1))
+EOF
+cat > "$GIPROJ/.gitignore" <<'EOF'
+*.o
+EOF
+(cd "$GIPROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
+if grep -q '^\.tur-repl-cache/$' "$GIPROJ/.gitignore"; then
+    pass "repl-spice-load-gitignore-appended"
+else
+    fail "repl-spice-load-gitignore-appended" \
+         ".gitignore content: $(cat "$GIPROJ/.gitignore")"
+fi
+# Second run must NOT duplicate the entry.
+(cd "$GIPROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
+COUNT=$(grep -c '^\.tur-repl-cache/$' "$GIPROJ/.gitignore")
+if [ "$COUNT" = "1" ]; then
+    pass "repl-spice-load-gitignore-idempotent"
+else
+    fail "repl-spice-load-gitignore-idempotent" \
+         "expected 1 entry, found $COUNT in: $(cat "$GIPROJ/.gitignore")"
+fi
+
+echo
+echo "repl-spice-load: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]
