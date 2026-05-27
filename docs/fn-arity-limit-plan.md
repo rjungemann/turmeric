@@ -1,6 +1,6 @@
 # Plan: Address the 8-parameter limit on `defn` / `fn`
 
-> **Status:** Phase 1 + Phase 3 + Phase 2 complete
+> **Status:** All phases complete (AR4 punted by design)
 > **Last Updated:** 2026-05-27
 > **Type:** Compiler / Language
 > **Depends on:** [Haskell-style currying (CY0–CY4)](upcoming/currying-plan.md)
@@ -394,10 +394,21 @@ work).
   (`elab_fns.c:553`, `:1324`, `:1537`, `:1691`, `elab_types.c:759`)
   to make sure they still print `MAX_FN_ARITY` correctly (they all
   use `%d` already, but verify).
-- [ ] **AR2** -- Revisit the five pain sites in `tur-frame` and
-  un-do the workarounds where the readability win is worth it
-  (e.g., `__j-assemble` no longer needs to derive `lsch` inside the
-  body). *Blocked: requires `../turmeric-spices` checkout.*
+- [x] **AR2** -- Revisited the five named pain sites in `tur-frame`
+  plus the `__ds-fill` triple-split. Findings:
+  - `__with-col-replace`, `__with-col-append`, `__g-build-agg-cols`:
+    the args dropped under the 8-cap (`ncols`, `f`, `n-aggs`) were
+    genuinely unused inside the recursion (terminator uses `i < 0`).
+    Re-adding them is pure ceremony with no readability win. *No change.*
+  - `__j-assemble`: deriving `lsch`/`rsch` from `l`/`r` is a clean
+    two-line `let`; not worth churning. *No change.*
+  - `__pv-build-tables`: function no longer exists (file refactored).
+  - `__ds-fill` in `print.tur`: **the real win.** Three near-identical
+    recursive passes (`__ds-fill`, `__ds-fill-2`, `__ds-fill-max`)
+    each calling `__ds-stats` per numeric column -- redundant work
+    purely to stay under 8 args. Unified into a single 13-arg
+    `__ds-fill`; one pass, one `__ds-stats` call per column.
+    Frame `reshape_test` (incl. the `describe` case) still passes.
 
 Stopping point if scope creeps: this phase alone resolves every
 documented pain case in the repo, regardless of whether currying or
@@ -415,11 +426,13 @@ Phase 2/3 ever lands.
     application locks in the defaults, the resulting function takes
     only the variable args.
   - Quick decision guide for choosing between options struct and `& rest`.
-- [ ] **AR4** -- (Optional, gated on adoption) Call-site keyword
-  sugar `(read-csv :delim 44 :has-header 1)` elaborates into
-  `(read-csv (CsvOpts :delim 44 :has-header 1 :quote 34 ...))`
-  using the existing `defstruct` keyword-constructor form. Punt
-  unless real usage justifies the parser work.
+- [~] **AR4** -- *Punted by design.* Call-site keyword sugar
+  `(read-csv :delim 44 :has-header 1)` elaborating into
+  `(read-csv (CsvOpts :delim 44 :has-header 1 :quote 34 ...))` was
+  always gated on adoption. No usage has yet justified the parser
+  work; the AR3 style-guide pattern (`(def read-csv-fast (read-csv
+  default-opts))`) covers the common case via currying. Revisit if a
+  concrete options-heavy API calls for it.
 
 ### Phase 2 -- variadic rest params (~1 week, depends on CY1+ and CY-Q4)
 
