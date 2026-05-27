@@ -1068,6 +1068,11 @@ const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 void         type_codegen_reset_struct_apps(void);
 void         type_codegen_emit_struct_apps(Buf *out);
+/* TS4P1: ADT-app (polymorphic ADT monomorphisation) registry. */
+void         type_codegen_reset_adt_apps(void);
+void         type_codegen_emit_adt_apps(Buf *out);
+const char  *type_register_adt_app(Type t);
+char        *type_adt_app_ctor_suffix(Type t);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 

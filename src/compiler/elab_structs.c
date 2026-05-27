@@ -1236,10 +1236,23 @@ Expr *elab_defdata(Elab *e, const Form *call) {
             /* N-arg: register as TY_FN */
             TypeKind arg_kinds[MAX_FN_ARITY];
             uint8_t arity = (uint8_t)(n_fields > MAX_FN_ARITY ? MAX_FN_ARITY : n_fields);
+            bool any_tyvar = false;
             for (uint8_t fi = 0; fi < arity; fi++) {
                 arg_kinds[fi] = ctor->fields[fi].kind;
+                if (ctor->fields[fi].full_type && ctor->fields[fi].full_type->kind == TY_TYVAR)
+                    any_tyvar = true;
             }
             Type fn_type = type_fn(arg_kinds, arity, TY_ADT);
+            /* TS4P1: If any field carries a type-variable full_type, attach the
+             * arg_full_types array so elab_call_fn can detect the polymorphic
+             * constructor and accept concrete types where TY_INT is expected. */
+            if (any_tyvar) {
+                Type **aft = (Type **)arena_alloc(e->arena, arity * sizeof(Type *));
+                for (uint8_t fi = 0; fi < arity; fi++) {
+                    aft[fi] = ctor->fields[fi].full_type; /* may be NULL for non-tyvar fields */
+                }
+                fn_type.as.fn.arg_full_types = aft;
+            }
             Binding *cb = binding_new(e, ctor_name, fn_type, false, true,
                                       ctor_name_form->span);
             scope_add(&e->global, cb);
@@ -2615,6 +2628,24 @@ Expr *elab_match(Elab *e, const Form *call) {
                     } else {
                         ftype = gadt_resolve_type_from_form(e, adt,
                                                             ctor->field_forms[bi], &arm_senv);
+                    }
+                } else if (ctor->fields[bi].full_type &&
+                               ctor->fields[bi].full_type->kind == TY_TYVAR &&
+                               adt->n_type_params > 0) {
+                    /* TS4P1/TP6: Type-variable field on a defdata constructor.
+                     * When the scrutinee has a TY_APP chain (monomorphised instance),
+                     * substitute the concrete type argument for the TY_TYVAR name.
+                     * This handles the case where ctor->field_forms[bi] is NULL
+                     * (because the field was declared as a bare type-variable symbol
+                     * like `a` in `(defdata Maybe [a] (Just a))` and the type-variable
+                     * branch in defdata parsing used `continue`, skipping field_forms). */
+                    Type *type_args = (Type *)arena_alloc(e->arena,
+                        adt->n_type_params * sizeof(Type));
+                    if (elab_adt_type_extract_args(&scrutinee->type, adt, type_args)) {
+                        ftype = adt_field_instantiate_type(e, adt,
+                                    ctor->fields[bi].full_type, type_args);
+                    } else {
+                        ftype = type_from_kind(ctor->fields[bi].kind);
                     }
                 } else if (ctor->field_forms && ctor->field_forms[bi]) {
                     /* F6-1 (cross-plan-followups): defdata ctor field with

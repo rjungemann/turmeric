@@ -1,0 +1,19 @@
+;; TS4-poly-ADT P1-P3: Maybe__float is constructed, passed through a non-erasing
+;; let binding, and matched; the payload reads correctly at both ends.
+
+(defdata Maybe [a]
+  (Just a)
+  (Nothing))
+
+(defn main [] :int
+  ;; Construct, bind, and match at :float.
+  (let [v (Just 1.5)]
+    (match v
+      (Just x)   (println x)
+      (Nothing)  (println 0)))
+  ;; Construct with a different value.
+  (let [v (Just 2.5)]
+    (match v
+      (Just x)   (println x)
+      (Nothing)  (println 0)))
+  0)

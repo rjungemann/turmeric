@@ -426,6 +426,76 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
     }
 }
 
+/* TS4P1: Walk all expressions and register concrete ADT-app types for monomorphisation. */
+static void scan_adt_apps_in_expr(const Expr *e) {
+    if (!e) return;
+    /* If this expression's type is a TY_APP, try to register it as a concrete ADT app. */
+    if (e->type.kind == TY_APP) {
+        (void)type_register_adt_app(e->type);
+    }
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                scan_adt_apps_in_expr(e->as.program.items[i]);
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) scan_adt_apps_in_expr(e->as.fn_def_.fn->body);
+            break;
+        case EX_DEF:
+            scan_adt_apps_in_expr(e->as.def_.init);
+            break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                scan_adt_apps_in_expr(e->as.let_.bindings[i].init);
+            scan_adt_apps_in_expr(e->as.let_.body);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                scan_adt_apps_in_expr(e->as.do_.items[i]);
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                scan_adt_apps_in_expr(e->as.builtin.args[i]);
+            break;
+        case EX_IF:
+            scan_adt_apps_in_expr(e->as.if_.cond);
+            scan_adt_apps_in_expr(e->as.if_.then_);
+            scan_adt_apps_in_expr(e->as.if_.else_or_null);
+            break;
+        case EX_WHILE:
+            scan_adt_apps_in_expr(e->as.while_.cond);
+            scan_adt_apps_in_expr(e->as.while_.body);
+            break;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                scan_adt_apps_in_expr(e->as.call_.args[i]);
+            scan_adt_apps_in_expr(e->as.call_.fn_expr);
+            break;
+        case EX_MATCH:
+            scan_adt_apps_in_expr(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                scan_adt_apps_in_expr(e->as.match_.arms[i].body);
+                if (e->as.match_.arms[i].guard)
+                    scan_adt_apps_in_expr(e->as.match_.arms[i].guard);
+            }
+            break;
+        case EX_RETURN:
+            scan_adt_apps_in_expr(e->as.return_.value);
+            break;
+        case EX_ASCRIBE:
+            scan_adt_apps_in_expr(e->as.ascribe_.inner);
+            break;
+        case EX_CAST:
+            scan_adt_apps_in_expr(e->as.cast_.expr);
+            break;
+        case EX_REINTERPRET:
+            scan_adt_apps_in_expr(e->as.reinterpret_.expr);
+            break;
+        default:
+            break;
+    }
+}
+
 static bool emit_abi_fn_is_generic_unsafe(const Expr *e) {
     if (!e || e->kind != EX_FN_DEF || e->type.kind != TY_FN) return false;
     if (e->type.as.fn.result_full_type &&
@@ -539,6 +609,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
     type_codegen_reset_struct_apps();
+    type_codegen_reset_adt_apps();
 
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
@@ -546,6 +617,11 @@ int emit_program(Buf *out, const Expr *program) {
 
     for (uint32_t i = 0; i < n_items; i++) {
         emit_abi_scan_expr(&ctx, items[i], items, n_items);
+    }
+
+    /* TS4P1: Scan for concrete ADT-app types to register for monomorphisation. */
+    for (uint32_t i = 0; i < n_items; i++) {
+        scan_adt_apps_in_expr(items[i]);
     }
 
     /* Check if user defined a main function */
@@ -3498,18 +3574,22 @@ int emit_program(Buf *out, const Expr *program) {
     emit_pending_defer_thunks(&ctx, &defer_thunks);
     Buf concrete_struct_apps; buf_init(&concrete_struct_apps);
     type_codegen_emit_struct_apps(&concrete_struct_apps);
+    Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
+    type_codegen_emit_adt_apps(&concrete_adt_apps);
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
-     *  2. concrete_struct_apps - monomorphized generic struct typedefs
-     *  3. extern_decls - user extern-c declarations
-     *  4. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  5. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
-     *  6. pending_handler_fns - effect handler functions (can call Turmeric fns)
-     *  7. file        - Turmeric function definitions (can reference handler fns by name)
-     *  8. main()      - entry point body
+     *  2. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
+     *  3. concrete_struct_apps - monomorphized generic struct typedefs
+     *  4. extern_decls - user extern-c declarations
+     *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
+     *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
+     *  8. file        - Turmeric function definitions (can reference handler fns by name)
+     *  9. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
+    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (concrete_struct_apps.len) { buf_write(out, concrete_struct_apps.data, concrete_struct_apps.len); buf_putc(out, '\n'); }
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
@@ -3521,6 +3601,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&fwd_decls);
     buf_free(&defer_thunks);
     buf_free(&concrete_struct_apps);
+    buf_free(&concrete_adt_apps);
 
     /* Phase 19: Effect handler functions (after fwd_decls so they can call
      * user-defined Turmeric functions, before file so fn defs can reference them). */
@@ -3642,6 +3723,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
     }
 
     type_codegen_reset_struct_apps();
+    type_codegen_reset_adt_apps();
 
     /* Forward declarations for functions.
      * In separate_compilation mode, only emit exported symbols. */
@@ -3679,6 +3761,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
         }
     }
     type_codegen_emit_struct_apps(out);
+    type_codegen_emit_adt_apps(out);
 
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
@@ -3761,6 +3844,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     }
 
     type_codegen_reset_struct_apps();
+    type_codegen_reset_adt_apps();
 
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);

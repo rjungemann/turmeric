@@ -1,0 +1,17 @@
+;; TS4-poly-ADT P1-P3: Polymorphic ADT (defdata Maybe [a] ...) used at :float.
+;; The payload round-trips without user bit-cast or ascription.
+
+(defdata Maybe [a]
+  (Just a)
+  (Nothing))
+
+(defn main [] :int
+  ;; Direct construction and match at :float.
+  (match (Just 1.5)
+    (Just x)   (println x)
+    (Nothing)  (println 0))
+  ;; A second value.
+  (match (Just 2.5)
+    (Just x)   (println x)
+    (Nothing)  (println 0))
+  0)
