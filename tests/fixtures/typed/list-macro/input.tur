@@ -1,6 +1,7 @@
 ;;
 ;; list-literal macro: (list ...) should expand to nested tcons chains
 ;; and produce values indistinguishable from hand-written tcons code.
+;; Also covers list* round-trip tests.
 
 (defn test-empty [] :bool
   (tnil? (list)))
@@ -17,7 +18,26 @@
     (tcons 1 (tcons 2 (tcons 3 (tnil))))
     (fn [a b] (= a b))))
 
+;; list* tests
+(defn test-list-star-identity [] :bool
+  (tnil? (list* (tnil))))
+
+(defn test-list-star-prepend [] :bool
+  (list-eq?
+    (list* 1 2 (tnil))
+    (list 1 2)
+    (fn [a b] (= a b))))
+
+(defn test-list-star-with-tail [] :bool
+  (list-eq?
+    (list* 1 2 (list 3 4))
+    (list 1 2 3 4)
+    (fn [a b] (= a b))))
+
 (println (test-empty))
 (println (test-single))
 (println (test-many-length))
 (println (test-eq-handwritten))
+(println (test-list-star-identity))
+(println (test-list-star-prepend))
+(println (test-list-star-with-tail))

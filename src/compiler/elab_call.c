@@ -1536,6 +1536,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                 fn_binding->name->name, i + 1,
                                 expected_str,
                                 type_name(args[i]->type));
+            /* List-macro tuple hint: tcons arg 1 is the element; when it fails
+             * to unify with the expected :int type, the caller is most likely
+             * mixing types in a (list ...) or hand-written (tcons ...) chain.
+             * Suggest tupleN for heterogeneous fixed-arity needs. */
+            if (strcmp(fn_binding->name->name, "tcons") == 0 && i == 0) {
+                diag_emit(DIAG_HELP, args[i]->span,
+                          "for heterogeneous fixed-arity collections, "
+                          "consider tuple2, tuple3, tuple4, or tuple5 "
+                          "instead of (list ...)");
+            }
             return NULL;
         }
 

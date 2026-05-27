@@ -1,0 +1,20 @@
+;;
+;; list-concat: concatenate two carrier-level lists.
+;; Covers empty-LHS, empty-RHS, and both-non-empty cases.
+
+(defn test-concat-empty-lhs [] :bool
+  (list-eq? (list-concat (list) (list 1 2)) (list 1 2) (fn [a b] (= a b))))
+
+(defn test-concat-empty-rhs [] :bool
+  (list-eq? (list-concat (list 1 2) (list)) (list 1 2) (fn [a b] (= a b))))
+
+(defn test-concat-both [] :bool
+  (list-eq? (list-concat (list 1 2) (list 3 4)) (list 1 2 3 4) (fn [a b] (= a b))))
+
+(defn test-concat-length [] :int
+  (list-length (list-concat (list 10 20 30) (list 40 50))))
+
+(println (test-concat-empty-lhs))
+(println (test-concat-empty-rhs))
+(println (test-concat-both))
+(println (test-concat-length))
