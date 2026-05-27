@@ -476,6 +476,473 @@ See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md)
 
 ---
 
+## KB-016 -- Codegen snapshots stale after Tuple2/3/4/5 additions
+
+**Discovered:** 2026-05-27
+**Status:** Open -- snapshot maintenance issue.
+
+### Symptom
+
+49 fixture tests report "codegen mismatch" even though the programs run
+correctly and produce the expected stdout.  The `diff` always shows the
+same pattern: new `Tuple2`/`Tuple3`/`Tuple4`/`Tuple5` struct typedefs
+and a new `__inst_Eq_eq__Tuple2` declaration appearing in the generated
+C, plus incrementally shifted `__fn_NNN` counter numbers throughout the
+rest of the file.
+
+### Root cause
+
+The stdlib was extended with explicit Tuple2--5 structs and an `Eq`
+instance for `Tuple2`.  These definitions are auto-loaded into every
+compilation unit, so the generated C now always includes them -- but
+the `expected.c` snapshot files were never regenerated.  This is the
+same maintenance category as KB-006 (which covered a previous round of
+stale snapshots).
+
+### Affected fixtures (49 total)
+
+`arc-refcount-snapshot`, `continuation-advanced`, `continuation-basic`,
+`defer-conditional`, `defer-in-loop`, `defer-mutated-binding`,
+`defn-basic`, `dump-kinds-basic`, `extern-printf`, `fiber-cross-resume`,
+`hkt-instances`, `hkt-typeclass-declare`, `hkt-typeclass-instance`,
+`macro-defmacro`, `macro-multi-arg`, `macro-nested`,
+`macro-quasiquote`, `macro-quasiquote-unquote`, `macro-quote`,
+`macro-threading`, `macro-threading-last`, `mutex-snapshot`,
+`mutual-recursion`, `panic-catch-of-type`, `panic-catch-unwind`,
+`panic-double-panic`, `panic-downcast`, `panic-trace`,
+`rc-auto-drop-multiple`, `rc-auto-drop-negative-consumed`,
+`rc-auto-drop-nested-scope`, `rc-auto-drop-positive`,
+`rc-auto-drop-test`, `rc-unique-violation`, `ref-basic`, `ref-deref`,
+`ref-explicit-drop`, `ref-nested`, `scheduler-multithread`,
+`stdlib-slice-bounds-negative`, `stdlib-vec-bounds-negative`,
+`thread-spawn-snapshot`, `typeclass-basic`, `typeclass-closure`,
+`typeclass-constraint`, `typeclass-derived`, `typeclass-macro`,
+`typeclass-multiple`, `typeclass-operator`, `typeclass-primitives`.
+
+### Fix
+
+Regenerate `expected.c` for all affected fixtures:
+
+```sh
+for f in tests/fixtures/*/input.tur; do
+  dir=$(dirname "$f")
+  [ -f "$dir/expected.c" ] && ./build/tur emit-c "$f" > "$dir/expected.c"
+done
+```
+
+Verify runtime stdout is still correct before committing.
+
+---
+
+## KB-017 -- Effect row type annotation syntax not supported in `fn` type expressions
+
+**Discovered:** 2026-05-27
+**Status:** Open -- compiler limitation.
+
+### Symptom
+
+Any `defn` whose parameter uses a `fn` type with an effect row variable
+fails at parse/elaboration:
+
+```
+error: unsupported type expression form (expected symbol, keyword, or list)
+(defn apply [f :(fn [:int] #{e} :int) x :int] #{e} :int
+                    ^^^^^^
+```
+
+### Root cause
+
+The type-annotation elaborator recognises `:(fn [...] :ret)` but does
+not support the three-component form `:(fn [...] #{row} :ret)` where
+the middle `#{row}` element is an effect row.  The parser sees `#{e}`
+as an unknown form and emits the generic "unsupported type expression"
+error, so the entire function signature is rejected before type-checking
+begins.
+
+This blocks 10 fixture tests that exercise effect-polymorphic higher-
+order functions:
+
+`effect-fn-type-annot`, `effect-poly-bracket`, `effect-poly-infer`,
+`effect-poly-map`, `effect-poly-typeclass`, `effect-row-compose`,
+`effect-row-ho`, `effect-row-var-unused`, `effect-subtype-assign`,
+`effect-subtype-ho`.
+
+It also causes 5 `errors/` fixtures to produce the wrong diagnostic
+(the "unsupported form" error fires before the expected type-error):
+
+`errors/effect-fn-type-mismatch`, `errors/effect-poly-escape`,
+`errors/effect-row-occurs`, `errors/effect-row-var-mismatch`,
+`errors/effect-subtype-violation`.
+
+### Workaround
+
+Omit the effect row from the `fn` type annotation.  The effect row is
+still inferred from the function body.  This works for most cases but
+prevents explicit effect-polymorphism in the signature.
+
+### Fix needed
+
+Extend `type_expr_from_form` (or the type-annotation elaborator) to
+recognise `(fn [arg-types...] #{row} ret-type)` as a valid function
+type with an explicit effect row, analogous to how bare
+`(fn [arg-types...] ret-type)` is handled today.
+
+---
+
+## KB-018 -- `(handler E V R)` type expression not supported
+
+**Discovered:** 2026-05-27
+**Status:** Open -- compiler limitation.
+
+### Symptom
+
+Using `:(handler Write cstr nil)` as a parameter type fails:
+
+```
+error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as
+a type constructor; type must have kind '* -> *' ...
+(defn run-with-handler [h :(handler Write cstr nil)] :nil
+                                    ^^^^^^^
+```
+
+The error test `errors/effect-handler-needs-flag` expects the message:
+`'handler' type expression requires -Xeffect-types`
+but instead gets the generic kind-mismatch error.
+
+### Root cause
+
+`handler` is not registered as a recognised type constructor in the
+elaborator.  The parser passes `(handler Write cstr nil)` as a generic
+type application, which resolves `handler` as a concrete `TY_*` type
+of kind `*` and then rejects applying arguments to it.
+
+### Fix needed
+
+Add a `handler` case to `type_expr_from_form` that either:
+- Desugars `(handler E V R)` into the appropriate internal
+  representation, or
+- Emits the "requires -Xeffect-types" diagnostic if the flag is unset,
+  matching the expected error message.
+
+---
+
+## KB-019 -- Session type annotation syntax causes kind mismatch
+
+**Discovered:** 2026-05-27
+**Status:** Open -- compiler limitation.
+
+### Symptom
+
+Any function parameter annotated as `:(Session ...)` or `:(Role ...)`
+fails with:
+
+```
+error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as
+a type constructor; type must have kind '* -> *' ...
+(defn double-server [^linear ch :(Session (Recv int (Send int Close)))] :nil
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+### Root cause
+
+`Session` and `Role` are session-type constructors defined via macros
+or stdlib, but the type-annotation elaborator does not recognise the
+nested protocol type expressions (`Recv`, `Send`, `Branch`, `Rec`,
+`Close`, `Choice`) as compound type-constructor applications.  They are
+parsed as raw lists and the inner form fails kind-checking when applied
+to `Session`.
+
+Affects 13 session-type fixture tests:
+
+`session-calc-rpc`, `session-delegated-rpc`, `session-delegation`,
+`session-echo-rpc`, `session-effects`, `session-mp-calc`,
+`session-mp-delegated`, `session-mp-effects`, `session-mp-three-role`,
+`session-project-basic`, `session-project-choice`,
+`session-project-loop`, `session-rec`.
+
+### Workaround
+
+None -- the session-type tests are completely blocked until the type
+elaborator supports nested session protocol expressions.
+
+### Fix needed
+
+Extend `type_expr_from_form` to handle the session-type protocol
+constructors (`Recv`, `Send`, `Branch`, `Rec`, `Close`, `Choice`) as
+type constructors of appropriate kinds, so that `(Session proto)` can
+be resolved to the correct internal type representation.
+
+---
+
+## KB-020 -- Spaced compound type annotations fail for `->` and `lref`
+
+**Discovered:** 2026-05-27
+**Status:** Open -- extends KB-008.
+
+### Symptom
+
+In addition to KB-008 (`(-> int int)` in spaced form), two other
+compound types fail in spaced annotation position:
+
+```
+;; linear-fn-type
+(defn apply-linear [f : (-> ^linear int int) n] :int ...)
+;; => error [TUR-E0012]: kind mismatch: cannot apply type of kind '*'
+
+;; linear-lref-type-ann
+(defn consume-lref [p : (lref int)] :int ...)
+;; => error [TUR-E0012]: kind mismatch: cannot apply type of kind '*'
+```
+
+Both `->` and `lref` fail for the same reason as KB-008: the
+type-annotation elaborator treats them as kind-`*` concrete types
+rather than type constructors when they appear in spaced annotation
+form (`: (-> ...)` vs. `:(-> ...)`).
+
+### Fix needed
+
+The fix from KB-008 (teach the elaborator to recognise `->` in spaced
+annotation position as a type constructor) should be generalised to
+also cover `lref`, `rc`, and other built-in type constructors that can
+appear as the head of a compound type form.
+
+---
+
+## KB-021 -- Typeclass dispatch vtable ABI mismatch for struct-typed instances
+
+**Discovered:** 2026-05-27
+**Status:** Open -- codegen bug.
+
+### Symptom
+
+Calling a typeclass method on a monomorphic struct instance fails to
+compile when the vtable entry expects the struct by value but the
+callsite passes an `int64_t` carrier:
+
+```c
+// generated callsite:
+dict_Eq_Vec_singleton.eq_(__cmp_a, __cmp_b);
+// __cmp_a / __cmp_b are Vec__int (struct), but the cast target is:
+// bool (*)(Vec__int, Vec__int) -- expects struct by value
+// while the actual stored function expects int64_t (carrier ABI)
+```
+
+C rejects this as an incompatible argument type.
+
+### Affected fixtures
+
+`ptc4-basic`, `map-of-tvec-eq`, `mutmap-eq`, `option-of-tvec-eq`,
+`result-of-typed-eq`, `set-of-tvec-eq`, `vec-of-tvec-eq`.
+
+Also related: `vec-eq-ascribed`, `vec-eq-ascribed-multi` (KB-010).
+
+### Root cause
+
+Two calling conventions are in use simultaneously:
+
+1. **Carrier ABI** (legacy): instances store and call via `int64_t`;
+   the instance body casts the carrier to a struct pointer.
+2. **By-value ABI** (new): the callsite casts the vtable entry to
+   `bool (*)(StructType, StructType)` and passes the struct directly.
+
+The vtable is populated with a carrier-ABI function (the instance body
+takes `int64_t`) but the callsite casts to the by-value ABI.  One of
+the two sides needs to be made consistent.
+
+### Workaround
+
+Avoid calling typeclass methods that dispatch to struct-type instances
+(e.g. `Eq [Vec]`, `Eq [Map]`, `Eq [MutableMap]`).  Use the
+library-specific comparison helpers instead (`vec-eq?`, `map-eq?`,
+etc.).
+
+### Fix needed
+
+Choose one ABI for struct-valued typeclass dispatch and make both the
+instance-body codegen and the callsite cast agree on it.  The by-value
+ABI is more type-safe; the carrier ABI requires explicit pointer casts
+in every instance body but keeps the vtable uniform.
+
+---
+
+## KB-022 -- `gadt-equal-cong`: HKT function-type parameter rejected at callsite
+
+**Discovered:** 2026-05-27
+**Status:** Open -- HKT limitation.
+
+### Symptom
+
+```
+error [TUR-E0001]: function 'equal-cong' arg 1: expected
+  (type-app (type-app Equal tyvar) tyvar), got Equal
+(let [pf (equal-cong (Refl))])
+                      ^^^^^^
+```
+
+`equal-cong` is declared with a kind-polymorphic parameter `^f` and
+takes `eq : (Equal a b)`.  At the callsite, `(Refl)` has type
+`(Equal a a)` (monomorphic in one variable), but the checker expects
+`(Equal a b)` with two distinct type variables.
+
+### Root cause
+
+The HKT kind inference for `^f` constrains the `Equal` type arguments
+differently from the monomorphic `Refl` constructor.  The type
+unification fails to match `(Equal a a)` against `(Equal a b)` in the
+presence of a kind-variable annotation.
+
+### Fix needed
+
+Investigate HKT constraint unification for GADT constructors where the
+same type variable appears in multiple positions in the constructor's
+return type.
+
+---
+
+## KB-023 -- `gadt-stdlib-vec-stdlib`: GADT `Vec` name collides with stdlib `Vec` struct
+
+**Discovered:** 2026-05-27
+**Status:** Open -- naming conflict.
+
+### Symptom
+
+Loading `stdlib/gadt-vec.tur` produces:
+
+```
+warning: GADT 'Vec' shadows existing struct 'Vec'; uses of ':Vec'
+         in type annotations resolve to the GADT
+```
+
+followed by:
+
+```
+error: defn: 'vec-len' is already defined by an auto-loaded stdlib module
+```
+
+### Root cause
+
+The stdlib auto-loads `stdlib/vec.tur` which defines a `Vec` struct
+and a `vec-len` function.  `stdlib/gadt-vec.tur` then defines a GADT
+also named `Vec` and a function also named `vec-len`, creating both a
+shadowing warning and a hard redefinition error.
+
+Additionally, `stdlib/gadt-vec.tur` uses effect-row type syntax in
+`vzip-with` (KB-017), which fails independently.
+
+### Fix needed
+
+Rename the GADT in `stdlib/gadt-vec.tur` (e.g. `GVec` / `TypedVec`)
+and its associated functions (e.g. `gvec-len`, `gvec-cons`) to avoid
+colliding with the stdlib `Vec` names.
+
+---
+
+## KB-024 -- `errors/defstruct-copy-noncopy-compound-field`: type name missing in diagnostic
+
+**Discovered:** 2026-05-27
+**Status:** Open -- diagnostic bug.
+
+### Symptom
+
+```
+error: defstruct: field 'r' has non-copy type : and cannot be used in :copy struct
+```
+
+Expected (from `expected.diag`):
+
+```
+defstruct: field 'r' has non-copy type lref<int>
+```
+
+The type name is printed as `:` (the colon character only) instead of
+`lref<int>`.
+
+### Root cause
+
+When the field type is written in compound form `(lref int)` (a list
+expression rather than a keyword like `:lref`), the diagnostic printer
+falls through to a code path that prints the raw token `:` from the
+parser form rather than resolving and printing the fully-qualified type
+name.  The simple keyword path (`defstruct Bad :copy [r :lref]`) already
+prints `lref` correctly.
+
+### Fix needed
+
+In the `defstruct` compound-field type diagnostic emission, resolve the
+compound type form to its string representation (e.g. via `type_to_str`
+or equivalent) before formatting the error message.
+
+---
+
+## KB-025 -- `errors/gadt-refine-escape`: skolem escape not detected
+
+**Discovered:** 2026-05-27
+**Status:** Open -- missing check.
+
+### Symptom
+
+The fixture `errors/gadt-refine-escape` expects a GADT skolem-escape
+diagnostic but the compiler accepts the program without error.
+
+```turmeric
+(defn my-unbox [b] :int
+  (match b
+    (MkBox x) x))   ;; x has type 'a' (skolem), expected to escape
+```
+
+### Root cause
+
+`my-unbox` is declared `:int` but the match arm binds `x` to the
+GADT's phantom type variable `a`.  The compiler should detect that a
+skolem type variable is escaping its scope through the `:int` return
+annotation and emit an error.  Currently no escape check is performed,
+so the program compiles silently.
+
+### Fix needed
+
+Add a skolem-escape check after GADT match-arm elaboration: if the
+type of any match-arm result contains an unresolved skolem variable
+that is not bound by the surrounding function's type, emit an error.
+
+---
+
+## KB-026 -- `errors/kinds-kind-variable`: kind variable annotation produces no error
+
+**Discovered:** 2026-05-27
+**Status:** Open -- missing validation.
+
+### Symptom
+
+The fixture `errors/kinds-kind-variable` expects an error when a kind-
+variable annotation `^f` is used in `defn` parameters, but the compiler
+accepts the program silently.
+
+```turmeric
+(defn map [^f a x] :a
+  x)
+```
+
+The `:a` return type is also not a built-in type; the fixture expected a
+"unsupported" diagnostic for this.
+
+### Root cause
+
+Kind-variable annotations (`^f`) on function parameters are silently
+erased at runtime (Phase H4 complete).  The return type `:a` is also
+not rejected -- it appears to be accepted as a type variable or
+unresolved symbol without producing an error.  The fixture was written
+expecting both annotations to trigger diagnostics, but neither does.
+
+### Fix needed
+
+Determine the intended semantics: if `^f` and `:a` in this position
+should be errors (e.g. outside a `defclass`/`definstance` context),
+add validation in the elaborator and emit clear diagnostics.  If they
+are intentionally silently erased, update `expected.diag` to reflect
+the accepted form.
+
+---
+
 ## Fixed Issues
 
 Brief log of previously-tracked bugs that have been fully resolved.  Refer
