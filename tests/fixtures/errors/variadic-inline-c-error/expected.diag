@@ -1,0 +1,1 @@
+variadic body contains inline-C; inline-C blocks need a fixed arity signature

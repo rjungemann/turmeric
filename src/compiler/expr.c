@@ -569,5 +569,13 @@ void expr_print(Buf *b, const Expr *e) {
             if (e->as.gen_done_.gen_expr) expr_print(b, e->as.gen_done_.gen_expr);
             buf_putc(b, ')');
             break;
+        case EX_CONS_LIST:
+            buf_puts(b, "(cons-list");
+            for (uint32_t i = 0; i < e->as.cons_list_.n; i++) {
+                buf_putc(b, ' ');
+                expr_print(b, e->as.cons_list_.items[i]);
+            }
+            buf_putc(b, ')');
+            break;
     }
 }

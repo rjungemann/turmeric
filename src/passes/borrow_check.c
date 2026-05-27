@@ -649,6 +649,14 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_expr_recursive(ctx, e->as.gen_next_.gen_expr);
         case EX_GEN_DONE:
             return borrow_check_expr_recursive(ctx, e->as.gen_done_.gen_expr);
+        case EX_CONS_LIST: {
+            /* AR8: check each item in the rest-list construction */
+            bool ok = true;
+            for (uint32_t i = 0; i < e->as.cons_list_.n; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.cons_list_.items[i])) ok = false;
+            }
+            return ok;
+        }
     }
 
     return true;

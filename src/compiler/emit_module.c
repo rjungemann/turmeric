@@ -1217,6 +1217,16 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
+    if (g_has_variadics) {
+        buf_puts(out, "/* AR8: __tur_cons_of -- allocate and link a cons cell */\n");
+        buf_puts(out, "typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;\n");
+        buf_puts(out, "static int64_t __tur_cons_of(int64_t h, int64_t t) {\n");
+        buf_puts(out, "    __tur_cons_cell *c = (__tur_cons_cell *)malloc(sizeof(__tur_cons_cell));\n");
+        buf_puts(out, "    c->head = h; c->tail = t;\n");
+        buf_puts(out, "    return (int64_t)(intptr_t)c;\n");
+        buf_puts(out, "}\n");
+    }
     /* Phase X3: Set literal runtime — sorted-array representation (Option A, v1) */
     buf_puts(out, "/* Phase X3: tur_set_t — sorted int64_t array */\n");
     buf_puts(out, "typedef struct { int64_t *items; uint32_t n; } tur_set_t;\n");

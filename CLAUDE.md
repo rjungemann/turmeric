@@ -413,3 +413,107 @@ build of libturi (`web/turmeric.js`).
 
 The doc panel in the web REPL calls `turi_doc_lookup(name)` (exported from
 `src/wasm_glue.c`) to retrieve doc strings without printing to the console.
+
+## Function Arity Style Guide
+
+### Hard parameter limit
+
+`MAX_FN_ARITY` is **16**. Functions with more than ~5 positional parameters
+are a code smell; 16 is an emergency escape hatch, not a target.
+
+### More than 5 params -- reach for `defstruct`
+
+When a function needs many named, independent inputs, pack them into a
+struct and pass a single options value:
+
+```turmeric
+(defstruct CsvOpts
+  [delim       :int   ;; field separator (e.g. 44 = ',')
+   quote       :int   ;; quote char (e.g. 34 = '"')
+   has-header  :int   ;; 1 = first row is header
+   infer-rows  :int   ;; rows to sample for type inference
+   null-str    :cstr  ;; string that represents NULL (e.g. "")
+  ])
+
+(defn read-csv [src :cstr opts :CsvOpts] :int
+  ...)
+```
+
+**Default values via partial application** (Haskell-style idiom):
+
+```turmeric
+(def default-csv-opts (CsvOpts 44 34 1 100 ""))
+
+;; read-csv-fast already has opts baked in; call it with just the filename.
+(def read-csv-fast (read-csv default-csv-opts))
+
+(read-csv-fast "data.csv")
+```
+
+This composes cleanly with currying: `(read-csv default-csv-opts)` returns a
+closure `(fn [src :cstr] :int ...)` that already has the defaults locked in.
+
+### Genuine variadic interfaces -- use `& rest :type`
+
+When a function takes an *unknown number of values of the same type*
+(e.g., `println`, `format`, aggregation column lists), use a variadic rest
+parameter:
+
+```turmeric
+(defn println-all [first :cstr & rest :cstr] :void
+  (println first)
+  ;; rest is a cons-list of :cstr; walk it with head/tail helpers
+  ...)
+
+(println-all "hello")              ;; rest = nil
+(println-all "a" "b" "c")         ;; rest = cons("b", cons("c", 0))
+```
+
+Rules for `& rest`:
+
+- **One `&` per parameter list** -- the rest parameter must be last.
+- **Type annotation required** -- `& rest :int`, `& rest :cstr`, etc.
+- **Nil when absent** -- calling with zero rest args passes `rest = 0`.
+- **No inline-C in variadic bodies** -- inline-C blocks declare fixed C
+  signatures; wrap the inline-C in a fixed-arity helper and call it from
+  the variadic body.
+- **Not auto-curried** -- variadic `defn` does not produce a curried entry
+  point. You can still under-saturate up to the required positional params
+  (which returns a variadic closure), but you cannot partially apply into
+  the rest slot.
+
+### Cons-list manipulation in `#{Unsafe}` code
+
+The rest parameter is a `int64_t` holding a pointer to a linked list of
+`__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0` (nil).
+Inline-C helpers that walk it look like:
+
+```turmeric
+(defn cons-list-sum [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t acc = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  while (p) { acc += p->head; p = (__tur_cons_cell *)(intptr_t)p->tail; }
+  return acc;
+  ```)
+```
+
+Or use a pure tail-recursive helper:
+
+```turmeric
+(defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
+  (if (= lst 0)
+    acc
+    (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))
+```
+
+### Quick decision guide
+
+| Situation | Reach for |
+|---|---|
+| >5 named, independent params | `defstruct` options value |
+| Default values + currying | `defstruct` + `(def fast (f defaults))` |
+| Unknown number of same-type values | `& rest :type` variadic |
+| Recursive accumulator threading context | closure-capture for context; fixed-arity for changing args |
+| Genuinely >16 params | Something is wrong -- split the function |

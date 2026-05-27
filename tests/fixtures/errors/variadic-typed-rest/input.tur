@@ -1,0 +1,10 @@
+;; AR10: variadic-typed-rest -- compile error on type-mismatched rest arg.
+;;
+;; Checks:
+;;   (1) Passing a :cstr where :int rest is declared is a compile error.
+
+(defn var-sum [& rest :int] :int
+  rest)
+
+(defn main [] :int
+  (var-sum 1 "hello" 3))
