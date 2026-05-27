@@ -12,7 +12,7 @@
 
 ;; ── GridCtx helpers ──────────────────────────────────────────────────────────
 
-(defn grid-new [width height] :int
+(defn lgrid-new [width height] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *g = malloc(sizeof(GCtx));
@@ -118,7 +118,7 @@
 ;; Gen 2: same as gen 0 (period 2)
 
 (defn main [] :int
-  (let [g0 (grid-new 5 5)]
+  (let [g0 (lgrid-new 5 5)]
     (do
       (grid-set g0 1 2 1)
       (grid-set g0 2 2 1)

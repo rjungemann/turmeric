@@ -1,10 +1,10 @@
 ;; scscm-compile -- round-trip tests: compile known scscm snippets, compare sclang output.
 
-(load "../turmeric-spices/tur-scscm/src/scscm/lexer.tur")
-(load "../turmeric-spices/tur-scscm/src/scscm/parser.tur")
-(load "../turmeric-spices/tur-scscm/src/scscm/codegen.tur")
-(load "../turmeric-spices/tur-scscm/src/scscm/expander.tur")
-(load "../turmeric-spices/tur-scscm/src/scscm/compile.tur")
+(load "../turmeric-spices/spices/scscm/src/scscm/lexer.tur")
+(load "../turmeric-spices/spices/scscm/src/scscm/parser.tur")
+(load "../turmeric-spices/spices/scscm/src/scscm/codegen.tur")
+(load "../turmeric-spices/spices/scscm/src/scscm/expander.tur")
+(load "../turmeric-spices/spices/scscm/src/scscm/compile.tur")
 
 (defn print-cstr [s :cstr] #{Unsafe} :void
   ```c

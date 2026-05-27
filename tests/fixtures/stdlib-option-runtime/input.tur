@@ -1,4 +1,4 @@
-(defn some [x] :ptr<void>
+(defn lopt-some [x] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
@@ -6,18 +6,18 @@
   return opt;
   ```)
 
-(defn none [] :ptr<void>
+(defn lopt-none [] :ptr<void>
   ```c
   return NULL;
   ```)
 
-(defn some? [o :ptr<void>] :bool
+(defn lopt-some? [o :ptr<void>] :bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
   ```)
 
-(defn option-unwrap [o :ptr<void>] :int
+(defn lopt-unwrap [o :ptr<void>] :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -27,16 +27,16 @@
   return (int)opt->value;
   ```)
 
-(defn option-free [o :ptr<void>]
+(defn lopt-free [o :ptr<void>]
   ```c
   free(o);
   ```)
 
 (defn main [] :int
-  (let [a (some 42)]
-    (let [b (none)]
-      (println (some? a))
-      (println (some? b))
-      (println (option-unwrap a))
-      (option-free a)
+  (let [a (lopt-some 42)]
+    (let [b (lopt-none)]
+      (println (lopt-some? a))
+      (println (lopt-some? b))
+      (println (lopt-unwrap a))
+      (lopt-free a)
       0)))

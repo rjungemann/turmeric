@@ -2,7 +2,7 @@
 ;;   - some (non-NULL) when the rc is still alive
 ;;   - none (NULL) after the rc has been dropped
 
-(defn some? [o :ptr<void>] :bool
+(defn ptr-opt-some? [o :ptr<void>] :bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
@@ -13,12 +13,12 @@
   (let [rc1 (rc/of 42)]
     (let [w1 (weak rc1)
           opt1 (upgrade w1)]
-      (println (some? opt1))))   ; expected: true
+      (println (ptr-opt-some? opt1))))   ; expected: true
 
   ;; Case 2: rc dropped -- upgrade should fail (none / NULL)
   (let [w2 (let [rc2 (rc/of 99)]
               (weak rc2))]
     (let [opt2 (upgrade w2)]
-      (println (some? opt2))))   ; expected: false
+      (println (ptr-opt-some? opt2))))   ; expected: false
 
   0)

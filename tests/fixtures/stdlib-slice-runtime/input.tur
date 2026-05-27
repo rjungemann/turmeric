@@ -1,4 +1,4 @@
-(defn slice-new [data :ptr<void> length] :ptr<void>
+(defn ls-new [data :ptr<void> length] :ptr<void>
   ```c
   struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
   s->p = (int64_t*)data;
@@ -6,13 +6,13 @@
   return s;
   ```)
 
-(defn slice-len [s :ptr<void>] :int
+(defn ls-len [s :ptr<void>] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
   return (int)slice->len;
   ```)
 
-(defn slice-get [s :ptr<void> i] :int
+(defn ls-get [s :ptr<void> i] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
   if (i >= 0 && (size_t)i < slice->len) return (int)slice->p[i];
@@ -20,7 +20,7 @@
   return 0;
   ```)
 
-(defn slice-free [s :ptr<void>]
+(defn ls-free [s :ptr<void>]
   ```c
   free(s);
   ```)
@@ -41,10 +41,10 @@
 
 (defn main [] :int
   (let [p (make-buf)]
-    (let [s (slice-new p 3)]
-      (println (slice-len s))
-      (println (slice-get s 0))
-      (println (slice-get s 2))
-      (slice-free s)
+    (let [s (ls-new p 3)]
+      (println (ls-len s))
+      (println (ls-get s 0))
+      (println (ls-get s 2))
+      (ls-free s)
       (free-buf p)
       0)))

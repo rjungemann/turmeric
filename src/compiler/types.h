@@ -242,6 +242,10 @@ typedef struct StructDef {
     /* Phase TM0: type parameters for parameterized structs (e.g. Map[K V], Vec[A]). */
     const char **type_params;   /* arena-allocated array of type param name strings */
     uint8_t     n_type_params;
+    /* TP4: arena-alloc'd Kind array, one per type_params entry.
+     * Initialised to KIND_STAR; infer_struct_type_param_kinds refines based on
+     * usage in StructField.full_type.  NULL when n_type_params == 0. */
+    Kind       *type_param_kinds;
 } StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this

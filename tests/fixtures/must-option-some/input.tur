@@ -1,6 +1,6 @@
 ;; Phase R4: must-option-some — option-must on a some value succeeds
 
-(defn some [x :int] :ptr<void>
+(defn lopt-some [x :int] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true; opt->value = x; return (void*)opt;
@@ -22,6 +22,6 @@
 
 (defn main [] :int
   (do
-    (println (option-must (some 42)))
-    (println (option-expect (some 99) "expected some"))
+    (println (option-must (lopt-some 42)))
+    (println (option-expect (lopt-some 99) "expected some"))
     0))

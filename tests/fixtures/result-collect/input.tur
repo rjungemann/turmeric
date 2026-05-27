@@ -44,19 +44,19 @@
   ```)
 
 ;; ── vec primitives ────────────────────────────────────────────────────────────
-(defn vec-new [] :ptr<void>
+(defn lv-new [] :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0; return v;
   ```)
 
-(defn vec-len [v :ptr<void>] :int
+(defn lv-len [v :ptr<void>] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->len;
   ```)
 
-(defn vec-get [v :ptr<void> i :int] :int
+(defn lv-get [v :ptr<void> i :int] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
@@ -70,7 +70,7 @@
   fprintf(stderr, "vec index out of bounds\n"); abort(); return NULL;
   ```)
 
-(defn vec-push! [v :ptr<void> val :int]
+(defn lv-push! [v :ptr<void> val :int]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -164,7 +164,7 @@
 (defn main [] :int
   (do
     ;; u-result-collect: all u-ok
-    (let [v1 (vec-new)]
+    (let [v1 (lv-new)]
       (do
         (vec-push-ptr! v1 (u-ok 10))
         (vec-push-ptr! v1 (u-ok 20))
@@ -174,12 +174,12 @@
             (println (u-ok? c1))
             (let [ov (ok-val-ptr c1)]
               (do
-                (println (vec-len ov))
-                (println (vec-get ov 0))
-                (println (vec-get ov 1))
-                (println (vec-get ov 2))))))))
+                (println (lv-len ov))
+                (println (lv-get ov 0))
+                (println (lv-get ov 1))
+                (println (lv-get ov 2))))))))
     ;; u-result-collect: first u-err wins
-    (let [v2 (vec-new)]
+    (let [v2 (lv-new)]
       (do
         (vec-push-ptr! v2 (u-ok 1))
         (vec-push-ptr! v2 (u-err 99))
@@ -189,7 +189,7 @@
             (println (u-err? c2))
             (println (u-err-val c2))))))
     ;; u-result-partition
-    (let [v3 (vec-new)]
+    (let [v3 (lv-new)]
       (do
         (vec-push-ptr! v3 (u-ok 10))
         (vec-push-ptr! v3 (u-err 1))
@@ -200,10 +200,10 @@
             (let [oks  (u-result-partition-ok  p)]
               (let [errs (u-result-partition-err p)]
                 (do
-                  (println (vec-len oks))
-                  (println (vec-get oks 0))
-                  (println (vec-get oks 1))
-                  (println (vec-len errs))
-                  (println (vec-get errs 0))
-                  (println (vec-get errs 1)))))))))
+                  (println (lv-len oks))
+                  (println (lv-get oks 0))
+                  (println (lv-get oks 1))
+                  (println (lv-len errs))
+                  (println (lv-get errs 0))
+                  (println (lv-get errs 1)))))))))
     0))

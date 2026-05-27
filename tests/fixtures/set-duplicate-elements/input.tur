@@ -1,23 +1,23 @@
 ; Phase X3: set literals deduplicate elements silently.
 
-(defn set-count [s :set] :int
+(defn lset-count [s :set] :int
   ```c
   return s ? (int64_t)s->n : 0;
   ```)
 
-(defn set-member? [s :set x] :bool
+(defn lset-member? [s :set x] :bool
   ```c
   return tur_set_member(s, x);
   ```)
 
 ; #s(1 1 2 2 3) should deduplicate to {1, 2, 3}
 (def s #s(1 1 2 2 3))
-(println (set-count s))       ; 3
-(println (set-member? s 1))   ; true
-(println (set-member? s 2))   ; true
-(println (set-member? s 3))   ; true
+(println (lset-count s))       ; 3
+(println (lset-member? s 1))   ; true
+(println (lset-member? s 2))   ; true
+(println (lset-member? s 3))   ; true
 
 ; #s(5 5 5) deduplicates to {5}
 (def t #s(5 5 5))
-(println (set-count t))       ; 1
-(println (set-member? t 5))   ; true
+(println (lset-count t))       ; 1
+(println (lset-member? t 5))   ; true

@@ -59,7 +59,7 @@
   return (int64_t)(intptr_t)p;
   ```)
 
-(defn pair-eq? [p1 p2 cmp-fn] :bool
+(defn lpair-eq? [p1 p2 cmp-fn] :bool
   ```c
   struct { int64_t first; int64_t second; } *a = (void*)(intptr_t)p1;
   struct { int64_t first; int64_t second; } *b = (void*)(intptr_t)p2;
@@ -82,12 +82,12 @@
   return (int64_t)(intptr_t)opt;
   ```)
 
-(defn none [] :int
+(defn lopt-none [] :int
   ```c
   return 0;
   ```)
 
-(defn option-eq? [o1 o2 cmp-fn] :bool
+(defn lopt-eq? [o1 o2 cmp-fn] :bool
   ```c
   struct { bool is_some; int64_t value; } *a =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
@@ -142,7 +142,7 @@
 ;; vec helpers
 ;; ---------------------------------------------------------------------------
 
-(defn vec-new [] :int
+(defn lv-new [] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
@@ -151,7 +151,7 @@
   return (int64_t)(intptr_t)v;
   ```)
 
-(defn vec-push! [v val]
+(defn lv-push! [v val]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
@@ -165,7 +165,7 @@
   vec->data[vec->len++] = val;
   ```)
 
-(defn vec-eq? [v1 v2 cmp-fn] :bool
+(defn lv-eq? [v1 v2 cmp-fn] :bool
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *a =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
@@ -199,7 +199,7 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
-(defn list-eq? [l1 l2 cmp-fn] :bool
+(defn llist-eq? [l1 l2 cmp-fn] :bool
   ```c
   struct { int64_t value; int64_t next; } *a =
       (struct { int64_t value; int64_t next; } *)(intptr_t)l1;
@@ -245,9 +245,9 @@
 
 ;; vec of different lengths: [10,20] vs [10] -- should be not equal
 (defn test-vec-diff-len [] :int
-  (if (vec-eq? (make-vec2 10 20) (make-vec1 10) (fn [a b] (= a b))) 0 1))
+  (if (lv-eq? (make-vec2 10 20) (make-vec1 10) (fn [a b] (= a b))) 0 1))
 
-;; vec of options: [u-some(1), u-some(2), none] vs [u-some(1), u-some(2), none]
+;; vec of options: [u-some(1), u-some(2), lopt-none] vs [u-some(1), u-some(2), lopt-none]
 (defn test-vec-nested-options [] :int
   ```c
   typedef struct { bool is_some; int64_t value; } SEqOpt;
@@ -345,31 +345,31 @@
     (fn []
       (if (str-eq? (str-from-cstr "hello") (str-from-cstr "world")) 0 1)))
 
-  ;; --- pair-eq? ---
-  (register-test "pair-eq? equal pairs"
+  ;; --- lpair-eq? ---
+  (register-test "lpair-eq? equal pairs"
     (fn []
-      (if (pair-eq? (pair-new 1 2) (pair-new 1 2) (fn [a b] (= a b))) 1 0)))
+      (if (lpair-eq? (pair-new 1 2) (pair-new 1 2) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "pair-eq? unequal pairs"
+  (register-test "lpair-eq? unequal pairs"
     (fn []
-      (if (pair-eq? (pair-new 1 2) (pair-new 1 3) (fn [a b] (= a b))) 0 1)))
+      (if (lpair-eq? (pair-new 1 2) (pair-new 1 3) (fn [a b] (= a b))) 0 1)))
 
-  ;; --- option-eq? ---
-  (register-test "option-eq? u-some equal"
+  ;; --- lopt-eq? ---
+  (register-test "lopt-eq? u-some equal"
     (fn []
-      (if (option-eq? (u-some 42) (u-some 42) (fn [a b] (= a b))) 1 0)))
+      (if (lopt-eq? (u-some 42) (u-some 42) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "option-eq? none equal"
+  (register-test "lopt-eq? lopt-none equal"
     (fn []
-      (if (option-eq? (none) (none) (fn [a b] (= a b))) 1 0)))
+      (if (lopt-eq? (lopt-none) (lopt-none) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "option-eq? u-some vs none"
+  (register-test "lopt-eq? u-some vs lopt-none"
     (fn []
-      (if (option-eq? (u-some 1) (none) (fn [a b] (= a b))) 0 1)))
+      (if (lopt-eq? (u-some 1) (lopt-none) (fn [a b] (= a b))) 0 1)))
 
-  (register-test "option-eq? u-some different values"
+  (register-test "lopt-eq? u-some different values"
     (fn []
-      (if (option-eq? (u-some 1) (u-some 2) (fn [a b] (= a b))) 0 1)))
+      (if (lopt-eq? (u-some 1) (u-some 2) (fn [a b] (= a b))) 0 1)))
 
   ;; --- u-result-eq? ---
   (register-test "u-result-eq? u-ok equal"
@@ -388,38 +388,38 @@
     (fn []
       (if (u-result-eq? (u-ok 1) (u-ok 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
 
-  ;; --- vec-eq? ---
-  (register-test "vec-eq? empty vecs equal"
+  ;; --- lv-eq? ---
+  (register-test "lv-eq? empty vecs equal"
     (fn []
-      (if (vec-eq? (vec-new) (vec-new) (fn [a b] (= a b))) 1 0)))
+      (if (lv-eq? (lv-new) (lv-new) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "vec-eq? same integer elements"
+  (register-test "lv-eq? same integer elements"
     (fn []
-      (if (vec-eq? (make-vec2 10 20) (make-vec2 10 20) (fn [a b] (= a b))) 1 0)))
+      (if (lv-eq? (make-vec2 10 20) (make-vec2 10 20) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "vec-eq? different lengths"
+  (register-test "lv-eq? different lengths"
     (fn [] (test-vec-diff-len)))
 
-  (register-test "vec-eq? same length different elements"
+  (register-test "lv-eq? same length different elements"
     (fn []
-      (if (vec-eq? (make-vec2 10 20) (make-vec2 10 99) (fn [a b] (= a b))) 0 1)))
+      (if (lv-eq? (make-vec2 10 20) (make-vec2 10 99) (fn [a b] (= a b))) 0 1)))
 
-  ;; --- list-eq? ---
-  (register-test "list-eq? nil lists equal"
+  ;; --- llist-eq? ---
+  (register-test "llist-eq? nil lists equal"
     (fn []
-      (if (list-eq? (nil-value) (nil-value) (fn [a b] (= a b))) 1 0)))
+      (if (llist-eq? (nil-value) (nil-value) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "list-eq? same elements"
+  (register-test "llist-eq? same elements"
     (fn []
-      (if (list-eq? (make-list2 1 2) (make-list2 1 2) (fn [a b] (= a b))) 1 0)))
+      (if (llist-eq? (make-list2 1 2) (make-list2 1 2) (fn [a b] (= a b))) 1 0)))
 
-  (register-test "list-eq? different lengths"
+  (register-test "llist-eq? different lengths"
     (fn []
-      (if (list-eq? (make-list2 1 2) (list-cons 1 (nil-value)) (fn [a b] (= a b))) 0 1)))
+      (if (llist-eq? (make-list2 1 2) (list-cons 1 (nil-value)) (fn [a b] (= a b))) 0 1)))
 
-  (register-test "list-eq? same length different elements"
+  (register-test "llist-eq? same length different elements"
     (fn []
-      (if (list-eq? (make-list2 1 2) (make-list2 1 9) (fn [a b] (= a b))) 0 1)))
+      (if (llist-eq? (make-list2 1 2) (make-list2 1 9) (fn [a b] (= a b))) 0 1)))
 
   ;; --- map-eq? (using top-level helpers to avoid ptr<void> in closures) ---
   (register-test "map-eq? empty maps equal"
@@ -431,8 +431,8 @@
   (register-test "map-eq? different entry counts"
     (fn [] (test-map-diff-count)))
 
-  ;; --- nested: vec of options with option-eq? comparator ---
-  (register-test "vec-eq? with option-eq? comparator"
+  ;; --- nested: vec of options with lopt-eq? comparator ---
+  (register-test "lv-eq? with lopt-eq? comparator"
     (fn [] (test-vec-nested-options)))
 
   (run-tests!))

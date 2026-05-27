@@ -233,17 +233,17 @@
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, map1->hamt);
+  tur_hamt_iter_init((void*)iter_buf, map1->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
-      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
+      if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
       bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
           (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
-      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
+      if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   return true;
   ```)
 

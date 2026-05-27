@@ -3,17 +3,17 @@
 ;; same slot reuses the ok?mbsok?ne (ok?mb count drops, len up).
 
 (defn main [] :int
-  (let [mm (tmumap-new)]
-    (tmumap-set! mm 1 1 100)
-    (tmumap-set! mm 2 2 200)
-    (tmumap-set! mm 3 3 300)
-    (println (tmumap-delete! mm 2 2))   ; true
-    (println (tmumap-len mm))           ; 2
-    (println (tmumap-has? mm 2 2))      ; false
-    (println (tmumap-get mm 1 1))        ; 100 (probe chain intact)
-    (println (tmumap-get mm 3 3))        ; 300
+  (let [mm (mutmap-new)]
+    (mutmap-set! mm 1 1 100)
+    (mutmap-set! mm 2 2 200)
+    (mutmap-set! mm 3 3 300)
+    (println (mutmap-delete! mm 2 2))   ; true
+    (println (mutmap-len mm))           ; 2
+    (println (mutmap-has? mm 2 2))      ; false
+    (println (mutmap-get mm 1 1))        ; 100 (probe chain intact)
+    (println (mutmap-get mm 3 3))        ; 300
     ;; Deleting absent key returns false, leaves len unchanged
-    (println (tmumap-delete! mm 99 99)) ; false
-    (println (tmumap-len mm))           ; 2
-    (tmumap-free mm))
+    (println (mutmap-delete! mm 99 99)) ; false
+    (println (mutmap-len mm))           ; 2
+    (mutmap-free mm))
   0)

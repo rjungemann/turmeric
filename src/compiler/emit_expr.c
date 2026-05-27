@@ -1494,6 +1494,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* When param expects void * (TY_PTR_VOID), cast to void * not int64_t.
                  * Passing int64_t to void * is invalid in C99 (-Wint-conversion error). */
                 bool cast_to_void_ptr = false;
+                /* Phase P3: TY_INT (int64_t) arg passed to a TY_PTR_VOID (void*) param
+                 * requires (void*)(intptr_t) coercion. Occurs when persistent-map
+                 * lowering passes a map handle (int64_t) to hamt/count etc. */
+                if (!needs_fn_cast && e->as.call_.args[i]->type.kind == TY_INT &&
+                    fn_binding->type.kind == TY_FN) {
+                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
+                    if (fn_binding->type.as.fn.arg_kinds[param_idx] == TY_PTR_VOID) {
+                        needs_fn_cast = true;
+                        cast_to_void_ptr = true;
+                    }
+                }
                 if (needs_fn_cast && fn_binding->type.kind == TY_FN) {
                     uint8_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);

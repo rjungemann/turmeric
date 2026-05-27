@@ -15,6 +15,7 @@ static TypeKind gadt_field_typekind_from_form(const Form *f);
 static Type *adt_field_type_from_form(Arena *arena, const Form *ft_form,
     const char **type_params, uint8_t n_type_params);
 static void infer_type_param_kinds(AdtDef *def);
+static void infer_struct_type_param_kinds(StructDef *def, Kind *field_type_param_kinds);
 
 /* Phase 11: defstruct - define a struct type
  * Syntax: (defstruct Name [:copy] [field1 :type1 field2 :type2 ...])
@@ -132,12 +133,6 @@ static StructDef *lookup_rc_inner_struct_def(Elab *e, const char *tname, uint32_
     return NULL;
 }
 
-static Kind struct_type_param_kind(uint8_t n_type_params, uint8_t idx) {
-    (void)idx;
-    if (n_type_params >= 2) return KIND_ARROW2;
-    if (n_type_params == 1) return KIND_ARROW;
-    return KIND_STAR;
-}
 
 static bool struct_type_param_index(const StructDef *def, const char *name, uint8_t *out_idx) {
     if (!def || !name) return false;
@@ -522,7 +517,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             for (uint8_t pi = 0; pi < n_type_params_v; pi++) {
                 type_params_arr[pi] = maybe_tp->as.list.items[pi]->as.sym->name;
                 field_type_params[pi] = maybe_tp->as.list.items[pi]->as.sym;
-                field_type_param_kinds[pi] = struct_type_param_kind(n_type_params_v, pi);
+                field_type_param_kinds[pi] = KIND_STAR;
             }
             fields_start_idx++;
             new_field_syntax = true;
@@ -925,6 +920,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 def->needs_drop_glue = true;
             }
         }
+    }
+
+    /* TP4: Infer type-param kinds from actual usage in field types.
+     * Replaces the position-based struct_type_param_kind heuristic. */
+    if (n_type_params_v > 0 && field_type_param_kinds) {
+        infer_struct_type_param_kinds(def, field_type_param_kinds);
     }
 
     /* Return EX_DEF with struct_def populated.
@@ -1387,6 +1388,71 @@ static void infer_type_param_kinds(AdtDef *def) {
                     }
                 }
             }
+        }
+    }
+}
+
+/* TP4: Recursively fix up hkt_kind on TY_TYVAR nodes embedded in a Type tree.
+ * Called after struct type-param kind inference to propagate inferred kinds
+ * into the TY_TYVAR nodes stored in StructField.full_type. */
+static void fix_tyvar_hkt_kinds(Type *t, const char **type_params,
+                                 Kind *type_param_kinds, uint8_t n) {
+    if (!t) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.name) {
+                for (uint8_t i = 0; i < n; i++) {
+                    if (type_params[i] &&
+                        strcmp(type_params[i], t->as.tyvar_.name) == 0) {
+                        t->hkt_kind = type_param_kinds[i];
+                        break;
+                    }
+                }
+            }
+            break;
+        case TY_APP:
+            fix_tyvar_hkt_kinds(t->as.app.fn,  type_params, type_param_kinds, n);
+            fix_tyvar_hkt_kinds(t->as.app.arg, type_params, type_param_kinds, n);
+            break;
+        default:
+            break;
+    }
+}
+
+/* TP4: Infer Kind for each type parameter of a struct from the declared
+ * StructField.full_type nodes.  Analogous to infer_type_param_kinds for AdtDef.
+ *   - TY_TYVAR on the fn-side of TY_APP                → KIND_ARROW
+ *   - TY_TYVAR used directly (or not seen)              → KIND_STAR (default)
+ * Stores the inferred kinds on def->type_param_kinds and fixes up hkt_kind
+ * on all TY_TYVAR nodes in stored full_type values. */
+static void infer_struct_type_param_kinds(StructDef *def, Kind *field_type_param_kinds) {
+    if (!def || !field_type_param_kinds || def->n_type_params == 0) return;
+
+    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+        const Type *ft = def->fields[fi].full_type;
+        if (!ft) continue;
+        if (ft->kind == TY_APP) {
+            const Type *fn_side = ft->as.app.fn;
+            if (fn_side && fn_side->kind == TY_TYVAR && fn_side->as.tyvar_.name) {
+                for (uint8_t pi = 0; pi < def->n_type_params; pi++) {
+                    if (def->type_params[pi] &&
+                        strcmp(def->type_params[pi], fn_side->as.tyvar_.name) == 0) {
+                        field_type_param_kinds[pi] = KIND_ARROW;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    def->type_param_kinds = field_type_param_kinds;
+
+    /* Fix up hkt_kind on stored TY_TYVAR nodes so they reflect inferred kinds. */
+    for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+        if (def->fields[fi].full_type) {
+            fix_tyvar_hkt_kinds(def->fields[fi].full_type,
+                                def->type_params, field_type_param_kinds,
+                                def->n_type_params);
         }
     }
 }

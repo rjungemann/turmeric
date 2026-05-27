@@ -157,15 +157,15 @@
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, sa->hamt);
+  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
       }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
   return (int64_t)(intptr_t)r;
@@ -191,15 +191,15 @@
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, sa->hamt);
+  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
       }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
   return (int64_t)(intptr_t)r;
@@ -225,16 +225,16 @@
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, sa->hamt);
+  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          tur_hamt_iter_free(iter_buf);
+          tur_hamt_iter_free((void*)iter_buf);
           return false;
       }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   return true;
   ```)
 
@@ -265,30 +265,30 @@
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
   uint64_t iter_a[32];
   for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
-  tur_hamt_iter_init(iter_a, sa->hamt);
+  tur_hamt_iter_init((void*)iter_a, sa->hamt);
   uint64_t hash_a;
   void *key_a = NULL, *val_a = NULL;
-  while (tur_hamt_iter_next(iter_a, &hash_a, &key_a, &val_a)) {
+  while (tur_hamt_iter_next((void*)iter_a, &hash_a, &key_a, &val_a)) {
       bool found = false;
       uint64_t iter_b[32];
       for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
-      tur_hamt_iter_init(iter_b, sb->hamt);
+      tur_hamt_iter_init((void*)iter_b, sb->hamt);
       uint64_t hash_b;
       void *key_b = NULL, *val_b = NULL;
-      while (tur_hamt_iter_next(iter_b, &hash_b, &key_b, &val_b)) {
+      while (tur_hamt_iter_next((void*)iter_b, &hash_b, &key_b, &val_b)) {
           if (((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(
                 (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
               found = true;
               break;
           }
       }
-      tur_hamt_iter_free(iter_b);
+      tur_hamt_iter_free((void*)iter_b);
       if (!found) {
-          tur_hamt_iter_free(iter_a);
+          tur_hamt_iter_free((void*)iter_a);
           return false;
       }
   }
-  tur_hamt_iter_free(iter_a);
+  tur_hamt_iter_free((void*)iter_a);
   return true;
   ```)
 

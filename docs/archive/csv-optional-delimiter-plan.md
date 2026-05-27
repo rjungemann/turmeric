@@ -1,6 +1,6 @@
 # Plan: Optional delimiter support in stdlib/csv.tur
 
-> **Status:** Proposed
+> **Status:** Completed
 > **Last Updated:** 2026-05-26
 > **Type:** Stdlib enhancement
 

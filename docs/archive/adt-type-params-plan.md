@@ -1,6 +1,6 @@
 # Plan: Typed type parameters for `defdata` and `defgadt`
 
-> **Status:** Draft
+> **Status:** Complete
 > **Last Updated:** 2026-05-26
 > **Type:** Compiler / Language
 
@@ -254,7 +254,7 @@ inference pass over the declared field types.
   - If a param appears as the `fn` side of a `TY_APP` node, its kind is
     `KIND_ARROW` (or `KIND_ARROW2` if applied twice).
   - Unify across all constructors; emit `TUR-E0012` kind-mismatch if inconsistent.
-- [ ] Replace the `struct_type_param_kind` heuristic in `elab_defstruct` with
+- [x] Replace the `struct_type_param_kind` heuristic in `elab_defstruct` with
   the same pass so structs benefit too.
 - [x] Propagate inferred kinds into `AdtDef.type_param_kinds` and
   `StructDef`'s equivalent.
@@ -311,7 +311,7 @@ declared `CtorField.full_type` (TP1/TP2) to derive the concrete binding type.
 
 #### Tasks
 
-- [ ] In the match-arm elaboration loop (`elab_structs.c` around
+- [x] In the match-arm elaboration loop (`elab_structs.c` around
   `elab_match_arm` / the match-arm field-binding section), after the skolem env
   is built (for GADTs) or trivially empty (for plain ADTs with no return-type
   annotation):
@@ -322,9 +322,9 @@ declared `CtorField.full_type` (TP1/TP2) to derive the concrete binding type.
     type (`TY_APP` chain) — this requires `elab_struct_type_extract_args`
     (or a new `elab_adt_type_extract_args` analogue) to unpack the type args
     from the scrutinee `Type`.
-- [ ] Extend `elab_adt_type_extract_args` (new, analogous to
+- [x] Extend `elab_adt_type_extract_args` (new, analogous to
   `elab_struct_type_extract_args`) to unpack `TY_APP` chains on an ADT type.
-- [ ] Add fixture: `tests/fixtures/adt-param-match-type/` — `(defdata Pair [a b] (MkPair a b))`;
+- [x] Add fixture: `tests/fixtures/adt-param-match-type/` — `(defdata Pair [a b] (MkPair a b))`;
   match on a `(Pair int bool)` scrutinee; verify the bound variables carry
   `TY_INT` and `TY_BOOL` respectively.
 
@@ -401,6 +401,6 @@ each other.
 | TP1 | `defdata` field types as full `Type*` | Done |
 | TP2 | `defgadt` field types as full `Type*` | Done |
 | TP3 | ADT-typed skolem args in `gadt_build_skolem_env` | Done |
-| TP4 | Kind inference for type parameters | Done (partial — `struct_type_param_kind` replacement deferred) |
+| TP4 | Kind inference for type parameters | Done |
 | TP5 | Call-site type-argument consistency | Done |
-| TP6 | Match-arm binding types reflect type params | Open |
+| TP6 | Match-arm binding types reflect type params | Done |

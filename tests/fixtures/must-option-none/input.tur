@@ -1,6 +1,6 @@
 ;; Phase R4: must-option-none — option-must on none panics
 
-(defn none [] :ptr<void>
+(defn lopt-none [] :ptr<void>
   ```c
   return NULL;
   ```)
@@ -14,5 +14,5 @@
 
 (defn main [] :int
   (do
-    (option-must (none))
+    (option-must (lopt-none))
     0))

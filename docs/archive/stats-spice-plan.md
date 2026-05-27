@@ -438,42 +438,42 @@ Resampling utilities. None of these mutate their inputs.
 
 ## Implementation phases
 
-- [ ] **ST0** -- `build.tur`; spice deps on `tur-frame`, `tur-math`; vendor
+- [x] **ST0** -- `build.tur`; spice deps on `tur-frame`, `tur-math`; vendor
   `pcg32.h`; `stats/mathx` (erf/erfc/lgamma/tgamma/expm1/log1p);
   `stats/rng` (rng-make, rng-uniform, rng-uint32, rng-int-range, rng-shuffle!).
 
-- [ ] **ST1** -- `stats/summary`: col-* reductions through col-kurtosis; frame
+- [x] **ST1** -- `stats/summary`: col-* reductions through col-kurtosis; frame
   wrappers; `describe`; alignment with `tur-frame`'s describe (decide who owns).
 
-- [ ] **ST2** -- `stats/cov`: cov, cor, cor-spearman; cov-matrix, cor-matrix.
+- [x] **ST2** -- `stats/cov`: cov, cor, cor-spearman; cov-matrix, cor-matrix.
 
-- [ ] **ST3** -- `stats/dist`: dist-normal + dist-t + dist-chi2 + dist-f with
+- [x] **ST3** -- `stats/dist`: dist-normal + dist-t + dist-chi2 + dist-f with
   pdf/cdf/quantile/random; continued-fraction implementations of the regularized
   incomplete beta and gamma functions; round-trip tests
   (quantile(cdf(x)) ~= x; rng samples converge to expected moments).
 
-- [ ] **ST4** -- `stats/dist` remainder: dist-uniform, dist-binomial,
+- [x] **ST4** -- `stats/dist` remainder: dist-uniform, dist-binomial,
   dist-poisson, dist-exponential, dist-beta, dist-gamma; top-level
   convenience wrappers (dnorm / pnorm / qnorm / rnorm and the rest).
 
-- [ ] **ST5** -- `stats/test`: t-tests (1-sample, 2-sample pooled/Welch,
+- [x] **ST5** -- `stats/test`: t-tests (1-sample, 2-sample pooled/Welch,
   paired), var-test, cor-test; test-result struct; `stats/fmt` print-test;
   reproduce R's t.test output on Fisher's iris on at least three pairings.
 
-- [ ] **ST6** -- `stats/test` remainder: anova-oneway, chi2-gof,
+- [x] **ST6** -- `stats/test` remainder: anova-oneway, chi2-gof,
   chi2-contingency, mann-whitney, wilcoxon-signed-rank, ks-test-1samp,
   ks-test-2samp.
 
-- [ ] **ST7** -- `stats/regress`: ols via Cholesky on X'X; predict;
+- [x] **ST7** -- `stats/regress`: ols via Cholesky on X'X; predict;
   diagnostics; lm-fit struct + `stats/fmt` print-fit; reproduce R's lm()
   coefficients on Fisher's iris (Sepal.Length ~ Sepal.Width + Petal.Length)
   to at least 6 significant figures.
 
-- [ ] **ST8** -- `stats/sample`: bootstrap (percentile + BCa),
+- [x] **ST8** -- `stats/sample`: bootstrap (percentile + BCa),
   bootstrap-2samp, permutation-test; train-test-split (simple + stratified);
   cv-folds + cv-folds-stratified.
 
-- [ ] **ST9** -- Tests pass on all CI targets; README in `turmeric-spices`;
+- [x] **ST9** -- Tests pass on all CI targets; README in `turmeric-spices`;
   `docs/guides/stats-guide.md`; `stats-v0.1.0` tag.
 
 ---

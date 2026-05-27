@@ -1,28 +1,28 @@
-;; Phase F5: MutableMap structural equality via tmumap-eq?.
+;; Phase F5: MutableMap structural equality via mutmap-eq?.
 ;; Same key/value sets compare equal regardless of insertion order;
 ;; differing sets compare unequal.
 
 (defn main [] :int
-  (let [a (tmumap-new)
-        b (tmumap-new)
-        c (tmumap-new)]
-    (tmumap-set! a 1 1 100)
-    (tmumap-set! a 2 2 200)
-    (tmumap-set! a 3 3 300)
+  (let [a (mutmap-new)
+        b (mutmap-new)
+        c (mutmap-new)]
+    (mutmap-set! a 1 1 100)
+    (mutmap-set! a 2 2 200)
+    (mutmap-set! a 3 3 300)
     ;; b: same key/value set, different insertion order
-    (tmumap-set! b 3 3 300)
-    (tmumap-set! b 2 2 200)
-    (tmumap-set! b 1 1 100)
+    (mutmap-set! b 3 3 300)
+    (mutmap-set! b 2 2 200)
+    (mutmap-set! b 1 1 100)
     ;; c: differs in one value
-    (tmumap-set! c 1 1 100)
-    (tmumap-set! c 2 2 999)
-    (tmumap-set! c 3 3 300)
-    (println (tmumap-eq? a b (fn [x y] (= x y))))   ; true
-    (println (tmumap-eq? a c (fn [x y] (= x y))))   ; false
+    (mutmap-set! c 1 1 100)
+    (mutmap-set! c 2 2 999)
+    (mutmap-set! c 3 3 300)
+    (println (mutmap-eq? a b (fn [x y] (= x y))))   ; true
+    (println (mutmap-eq? a c (fn [x y] (= x y))))   ; false
     ;; Same content via the typeclass dispatch (uses (= x y))
     (println (.eq? (:: a (MutableMap int int))
                    (:: b (MutableMap int int))))     ; true
-    (tmumap-free a)
-    (tmumap-free b)
-    (tmumap-free c))
+    (mutmap-free a)
+    (mutmap-free b)
+    (mutmap-free c))
   0)

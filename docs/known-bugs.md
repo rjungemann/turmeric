@@ -52,7 +52,7 @@ Either:
 ## KB-003 — GADT match arm: `TY_TYVAR` field binding causes overload-resolution failure
 
 **Discovered:** 2026-05-26  
-**Status:** Open (by design until TP6)
+**Status:** Fixed by TP6 — scrutinee TY_APP unwrapping now propagates concrete type args to match-arm bindings
 
 ### Symptom
 
@@ -174,4 +174,187 @@ trying to extract through `ok-val`/`err-val`.
 Needs a dedicated cast/coerce form that understands the pointer-as-int
 representation and emits the correct `*(ResultType *)(intptr_t)r` dereference.
 Track as a future compiler improvement (post-TP6).
+
+
+---
+
+## KB-005 -- `emit_expr.c` ADT match crashes when scrutinee type is `TY_APP`
+
+**Discovered:** 2026-05-26
+**Status:** Fixed in TP6 (commit accompanying this note)
+
+### Symptom
+
+A `match` expression whose scrutinee has a `TY_APP`-wrapped ADT type (produced
+by an explicit type annotation like `:(Opt2 int)` on a function parameter)
+crashes at code generation with a SEGV inside `mangle_field_name`:
+
+```
+AddressSanitizer: SEGV ... in _platform_strlen
+  emit_core.c:410 mangle_field_name
+  emit_expr.c:3164 emit_value      <- was: AdtDef *adt = scrutinee->type.as.adt_.def
+  emit_fns.c:220  emit_fn_def
+```
+
+### Root cause
+
+`emit_expr.c` (ADT match fallthrough branch) did:
+
+```c
+AdtDef *adt = e->as.match_.scrutinee->type.as.adt_.def;
+```
+
+When `scrutinee->type.kind == TY_APP`, `.as.adt_.def` reads the wrong union
+member (the TY_APP's `.fn`/`.arg` pointers), yielding a garbage `AdtDef *`
+whose `name` field is NULL.  `mangle_field_name` then crashes in `strlen`.
+
+The elab side (`elab_structs.c`) already handled TY_APP scrutinees correctly
+(TP6 work); the emit side had not been updated to match.
+
+### Fix
+
+Unwrap the TY_APP chain before accessing `.as.adt_.def`:
+
+```c
+const Type *base = &e->as.match_.scrutinee->type;
+while (base && base->kind == TY_APP && base->as.app.fn)
+    base = base->as.app.fn;
+AdtDef *adt = (base && base->kind == TY_ADT) ? base->as.adt_.def
+                                              : e->as.match_.scrutinee->type.as.adt_.def;
+```
+
+### Affected file
+
+`src/compiler/emit_expr.c` (line ~3161 before fix).
+
+---
+
+## KB-006 — 48 `expected.c` codegen snapshots were stale
+
+**Status**: Fixed (snapshots regenerated).
+
+### Symptom
+
+48 fixture tests reported "codegen mismatch" — the test programs ran correctly
+and produced the right stdout, but the `expected.c` codegen snapshot differed
+from the current emit-c output.
+
+### Root cause
+
+The codegen for stdlib structs and various features evolved (e.g. `void *`
+→ `int64_t` for some parameterized fields, changed function/helper names) but
+the snapshot files were never regenerated.  This is a maintenance issue, not a
+compiler defect.
+
+### Fix
+
+Regenerated `expected.c` for all 48 affected fixtures by running
+`./build/tur emit-c <input.tur>` after verifying runtime output was still
+correct.  Reduced unique test failures from ~142 to ~95.
+
+---
+
+## KB-007 — `derive-show-struct` / `derive-show-nested` fixtures use wrong return cast in inline C
+
+**Status**: Open — fixture bug.
+
+### Symptom
+
+```
+error: incompatible integer to pointer conversion returning 'int64_t' from a function with result type 'const char *'
+```
+
+Both `tests/fixtures/derive-show-struct/input.tur` and
+`tests/fixtures/derive-show-nested/input.tur` define `str-concat` with the
+inline C body ending in:
+
+```c
+return (int64_t)(intptr_t)out;
+```
+
+but the declared return type is `:cstr` (`const char *`), so the compiler now
+rejects the cast as an incompatible integer-to-pointer conversion.
+
+### Fix needed
+
+Change the final `return` line in the `str-concat` inline C block in both
+fixtures to:
+
+```c
+return (const char *)(intptr_t)out;
+```
+
+---
+
+## KB-008 — `defn-spaced-compound`: kind mismatch on `(-> int int)` type annotation
+
+**Status**: Open — compiler bug.
+
+### Symptom
+
+```
+error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as a type constructor;
+type must have kind '* -> *' or '* -> * -> *'
+```
+
+on `(defn apply1 [f : (-> int int)] :int ...)`.
+
+### Root cause
+
+When a function type is written in spaced annotation form (`f : (-> int int)`),
+the `->` symbol is resolved to a concrete `TY_FN` type of kind `*` rather than
+being treated as a type constructor of kind `* -> * -> *`.  The non-spaced form
+(`f :(-> int int)`) may or may not have the same issue.
+
+### Fix needed
+
+The type-annotation elaborator needs to recognise `->` in spaced annotation
+position as a type constructor and expand it to a `TY_FN` application, matching
+the behaviour of the `:` shorthand syntax.
+
+---
+
+## KB-009 — `result-question-op`: `?` operator lowering returns `:int` where `:bool` expected
+
+**Status**: Open — compiler bug.
+
+### Symptom
+
+```
+error: if condition must be bool, got int
+```
+
+inside `(unsafe (? (get-value b)))` — the `?` operator is lowered to a call
+that returns `:int` (via `err?`), but the surrounding `if` expects `:bool`.
+
+### Fix needed
+
+The `?` macro expansion (or the `err?` stdlib function) should return `:bool`.
+Check whether `err?` is declared `:bool` in `stdlib/result.tur` and whether the
+lowering pass is picking up the correct overload.
+
+---
+
+## KB-010 — `vec-eq-ascribed`: `vec_new()` emits `int64_t` result, incompatible with struct type
+
+**Status**: Open — codegen bug.
+
+### Symptom
+
+```
+error: initializing 'Vec__int' (aka 'struct Vec__int') with an expression of incompatible type 'int64_t'
+  Vec__int a_532 = vec_new();
+```
+
+### Root cause
+
+`vec_new()` is a stdlib function that returns an opaque `int64_t` handle.  The
+codegen emits `Vec__int a = vec_new()` when the declared type is `:(Vec int)`,
+creating a C type mismatch.  The initialisation needs either a cast or the
+emitter needs to know `Vec` fields are struct-typed, not handle-typed.
+
+### Fix needed
+
+Investigate whether the code path that monomorphises `Vec[A]` fields is
+emitting the right C struct name vs. treating Vec as an opaque handle.
 

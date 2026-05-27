@@ -2060,17 +2060,17 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 typedef struct Map {
-    void * hamt;
+    int64_t hamt;
 } Map;
 
 typedef struct Vec {
-    void * data;
+    int64_t data;
     int64_t len;
     int64_t cap;
 } Vec;
 
 typedef struct Slice {
-    void * ptr;
+    int64_t ptr;
     int64_t len;
 } Slice;
 
@@ -2096,7 +2096,7 @@ typedef struct Cons {
 } Cons;
 
 typedef struct Grid {
-    void * data;
+    int64_t data;
     int64_t width;
     int64_t height;
     int64_t cx;
@@ -2104,19 +2104,19 @@ typedef struct Grid {
 } Grid;
 
 typedef struct Zipper {
-    void * left;
+    int64_t left;
     int64_t left_len;
     int64_t focus;
-    void * right;
+    int64_t right;
     int64_t right_len;
 } Zipper;
 
 typedef struct Set {
-    void * hamt;
+    int64_t hamt;
 } Set;
 
 typedef struct MutableMap {
-    void * storage;
+    int64_t storage;
 } MutableMap;
 
 
@@ -2158,22 +2158,22 @@ static bool __inst_Eq_eq__uint16(uint16_t, uint16_t);
 static bool __inst_Eq_eq__uint32(uint32_t, uint32_t);
 static bool __inst_Eq_eq__uint64(uint64_t, uint64_t);
 static bool __inst_Eq_eq__float32(float, float);
-static bool __fn_441(int64_t, int64_t);
+static bool __fn_353(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_461(int64_t, int64_t);
+static bool __fn_373(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_488(int64_t, int64_t);
+static bool __fn_400(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_508(int64_t, int64_t);
-static bool __fn_512(int64_t, int64_t);
+static bool __fn_420(int64_t, int64_t);
+static bool __fn_424(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_528(int64_t, int64_t);
-static bool __fn_532(int64_t, int64_t);
+static bool __fn_440(int64_t, int64_t);
+static bool __fn_444(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_548(int64_t, int64_t);
+static bool __fn_460(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_619(int64_t, int64_t);
+static bool __fn_531(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
@@ -2212,124 +2212,81 @@ static void hamt_transient_set_(void *, int64_t, void *, void *);
 static void hamt_transient_del_(void *, int64_t, void *);
 static void * hamt_persistent_(void *);
 static int64_t hamt_autolink_hint();
-static void * map_new();
-static void * assoc(void *, void *, void *);
-static void * dissoc(void *, void *);
-static void * get(void *, void *);
-static bool has_(void *, void *);
-static int64_t count(void *);
-static void * merge(void *, void *);
+static int64_t map_new();
+static void * map_hamt(int64_t);
+static int64_t map_wrap(void *);
+static int64_t map_assoc(int64_t, int64_t, int64_t);
+static int64_t map_assoc_h(int64_t, int64_t, int64_t, int64_t);
+static int64_t map_dissoc(int64_t, int64_t, int64_t);
+static int64_t map_get(int64_t, int64_t, int64_t);
+static bool map_has_(int64_t, int64_t, int64_t);
+static int64_t map_count(int64_t);
+static int64_t map_merge(int64_t, int64_t);
+static void map_free(int64_t);
 static bool map_eq_(int64_t, int64_t, int64_t);
-static void * ok(int64_t);
-static void * err(int64_t);
-static bool ok_(void *);
-static bool err_(void *);
-static int64_t ok_val(void *);
-static int64_t err_val(void *);
-static bool __tur_q_is_err_(void *);
-static int64_t __tur_q_ok_val(void *);
-static int64_t result_unwrap(void *);
-static int64_t result_unwrap_or(void *, int64_t);
-static int64_t result_expect(void *, const char *);
-static void * result_map(void *, void *);
-static void * result_map_err(void *, void *);
-static void * result_flat_map(void *, void *);
-static void * result_or(void *, void *);
-static void * result_or_else(void *, void *);
-static void * ok_or(void *, int64_t);
-static void * err_context(void *, const char *);
+static int64_t vec_new();
+static int64_t vec_len(int64_t);
+static int64_t vec_get(int64_t, int64_t);
+static void vec_push_(int64_t, int64_t);
+static int64_t vec_pop_(int64_t);
+static void vec_set_(int64_t, int64_t, int64_t);
+static void vec_free(int64_t);
+static bool vec_eq_(int64_t, int64_t, int64_t);
+static int64_t slice_new(void *, int64_t);
+static int64_t slice_len(int64_t);
+static int64_t slice_get(int64_t, int64_t);
+static void slice_free(int64_t);
+static bool slice_eq_(int64_t, int64_t, int64_t);
+static int64_t some(int64_t);
+static int64_t none();
+static bool some_(int64_t);
+static int64_t unwrap_or(int64_t, int64_t);
+static void option_free(int64_t);
+static int64_t option_map(int64_t, int64_t);
+static bool option_eq_(int64_t, int64_t, int64_t);
+static int64_t ok(int64_t);
+static int64_t err(int64_t);
+static bool ok_(int64_t);
+static bool err_(int64_t);
+static void result_free(int64_t);
+static int64_t result_map(int64_t, int64_t);
 static bool result_eq_(int64_t, int64_t, int64_t, int64_t);
-static void result_free(void *);
-static void * result_collect(void *);
-static void * result_partition(void *);
-static void * result_partition_ok(void *);
-static void * result_partition_err(void *);
-static int64_t result_must(void *);
-static int64_t result_must_msg(void *, const char *);
-static int64_t tmap_new();
-static void * tmap_hamt(int64_t);
-static int64_t tmap_wrap(void *);
-static int64_t tmap_assoc(int64_t, int64_t, int64_t);
-static int64_t tmap_assoc_h(int64_t, int64_t, int64_t, int64_t);
-static int64_t tmap_dissoc(int64_t, int64_t, int64_t);
-static int64_t tmap_get(int64_t, int64_t, int64_t);
-static bool tmap_has_(int64_t, int64_t, int64_t);
-static int64_t tmap_count(int64_t);
-static int64_t tmap_merge(int64_t, int64_t);
-static void tmap_free(int64_t);
-static bool tmap_eq_(int64_t, int64_t, int64_t);
-static int64_t tvec_new();
-static int64_t tvec_len(int64_t);
-static int64_t tvec_get(int64_t, int64_t);
-static void tvec_push_(int64_t, int64_t);
-static int64_t tvec_pop_(int64_t);
-static void tvec_set_(int64_t, int64_t, int64_t);
-static void tvec_free(int64_t);
-static bool tvec_eq_(int64_t, int64_t, int64_t);
-static int64_t tslice_new(void *, int64_t);
-static int64_t tslice_len(int64_t);
-static int64_t tslice_get(int64_t, int64_t);
-static void tslice_free(int64_t);
-static bool tslice_eq_(int64_t, int64_t, int64_t);
-static int64_t tsome(int64_t);
-static int64_t tnone();
-static bool tsome_(int64_t);
-static int64_t tunwrap(int64_t);
-static int64_t tunwrap_or(int64_t, int64_t);
-static void toption_free(int64_t);
-static int64_t toption_map(int64_t, int64_t);
-static bool toption_eq_(int64_t, int64_t, int64_t);
-static int64_t tok(int64_t);
-static int64_t terr(int64_t);
-static bool tok_(int64_t);
-static bool terr_(int64_t);
-static int64_t tok_val(int64_t);
-static int64_t terr_val(int64_t);
-static void tresult_free(int64_t);
-static int64_t tresult_map(int64_t, int64_t);
-static bool tresult_eq_(int64_t, int64_t, int64_t, int64_t);
-static int64_t tpair(int64_t, int64_t);
-static int64_t tpair_fst(int64_t);
-static int64_t tpair_snd(int64_t);
-static void tpair_free(int64_t);
-static bool tpair_eq_(int64_t, int64_t, int64_t, int64_t);
+static bool pair_eq_carrier_(int64_t, int64_t, int64_t, int64_t);
 static int64_t tcons(int64_t, int64_t);
 static int64_t tnil();
 static bool tnil_(int64_t);
-static int64_t thead(int64_t);
-static int64_t ttail(int64_t);
-static int64_t tlist_length(int64_t);
-static bool tlist_eq_(int64_t, int64_t, int64_t);
-static int64_t tgrid_new(int64_t, int64_t);
-static int64_t tgrid_get(int64_t, int64_t, int64_t);
-static void tgrid_set_(int64_t, int64_t, int64_t, int64_t);
-static int64_t tgrid_width(int64_t);
-static int64_t tgrid_height(int64_t);
-static void tgrid_free(int64_t);
-static int64_t tzipper_new(void *, int64_t, int64_t, void *, int64_t);
-static int64_t tzipper_focus(int64_t);
-static int64_t tzipper_move_left(int64_t);
-static int64_t tzipper_move_right(int64_t);
-static void tzipper_free(int64_t);
-static int64_t tset_new();
-static int64_t tset_add(int64_t, int64_t, int64_t);
-static int64_t tset_remove(int64_t, int64_t, int64_t);
-static bool tset_member_(int64_t, int64_t, int64_t);
-static int64_t tset_count(int64_t);
-static int64_t tset_union(int64_t, int64_t);
-static int64_t tset_intersect(int64_t, int64_t);
-static int64_t tset_diff(int64_t, int64_t);
-static bool tset_eq_(int64_t, int64_t);
-static bool tset_eq_cmp_(int64_t, int64_t, int64_t);
-static void tset_free(int64_t);
-static int64_t tmutmap_new();
-static int64_t tmutmap_len(int64_t);
-static void tmutmap_set_(int64_t, int64_t, int64_t, int64_t);
-static int64_t tmutmap_get(int64_t, int64_t, int64_t);
-static bool tmutmap_has_(int64_t, int64_t, int64_t);
-static bool tmutmap_delete_(int64_t, int64_t, int64_t);
-static bool tmutmap_eq_(int64_t, int64_t, int64_t);
-static void tmutmap_free(int64_t);
+static int64_t list_length(int64_t);
+static bool list_eq_(int64_t, int64_t, int64_t);
+static int64_t grid_new(int64_t, int64_t);
+static int64_t grid_get(int64_t, int64_t, int64_t);
+static void grid_set_(int64_t, int64_t, int64_t, int64_t);
+static int64_t grid_width(int64_t);
+static int64_t grid_height(int64_t);
+static void grid_free(int64_t);
+static int64_t zipper_new(void *, int64_t, int64_t, void *, int64_t);
+static int64_t zipper_focus(int64_t);
+static int64_t zipper_move_left(int64_t);
+static int64_t zipper_move_right(int64_t);
+static void zipper_free(int64_t);
+static int64_t set_new();
+static int64_t set_add(int64_t, int64_t, int64_t);
+static int64_t set_remove(int64_t, int64_t, int64_t);
+static bool set_member_(int64_t, int64_t, int64_t);
+static int64_t set_count(int64_t);
+static int64_t set_union(int64_t, int64_t);
+static int64_t set_intersect(int64_t, int64_t);
+static int64_t set_diff(int64_t, int64_t);
+static bool set_eq_(int64_t, int64_t);
+static bool set_eq_cmp_(int64_t, int64_t, int64_t);
+static void set_free(int64_t);
+static int64_t mutmap_new();
+static int64_t mutmap_len(int64_t);
+static void mutmap_set_(int64_t, int64_t, int64_t, int64_t);
+static int64_t mutmap_get(int64_t, int64_t, int64_t);
+static bool mutmap_has_(int64_t, int64_t, int64_t);
+static bool mutmap_delete_(int64_t, int64_t, int64_t);
+static bool mutmap_eq_(int64_t, int64_t, int64_t);
+static void mutmap_free(int64_t);
 static int64_t add5(int64_t);
 static int64_t mul2(int64_t);
 
@@ -2480,12 +2437,12 @@ static dict_Eq_float32 dict_Eq_float32_singleton = {
     .eq_ = __inst_Eq_eq__float32,
 };
 
-static bool __fn_441(int64_t a, int64_t b) {
+static bool __fn_353(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return tmap_eq_(x, y, (int64_t)(intptr_t)(__fn_441));
+        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_353));
 }
 
 typedef struct dict_Eq_Map {
@@ -2496,12 +2453,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_461(int64_t a, int64_t b) {
+static bool __fn_373(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return tvec_eq_(x, y, (int64_t)(intptr_t)(__fn_461));
+        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_373));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2512,12 +2469,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_488(int64_t a, int64_t b) {
+static bool __fn_400(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return toption_eq_(x, y, (int64_t)(intptr_t)(__fn_488));
+        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_400));
 }
 
 typedef struct dict_Eq_Option {
@@ -2528,16 +2485,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_508(int64_t a, int64_t b) {
+static bool __fn_420(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
-static bool __fn_512(int64_t a, int64_t b) {
+static bool __fn_424(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return tresult_eq_(x, y, (int64_t)(intptr_t)(__fn_508), (int64_t)(intptr_t)(__fn_512));
+        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_420), (int64_t)(intptr_t)(__fn_424));
 }
 
 typedef struct dict_Eq_Result {
@@ -2548,16 +2505,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_528(int64_t a, int64_t b) {
+static bool __fn_440(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
-static bool __fn_532(int64_t a, int64_t b) {
+static bool __fn_444(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return tpair_eq_(x, y, (int64_t)(intptr_t)(__fn_528), (int64_t)(intptr_t)(__fn_532));
+        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_440), (int64_t)(intptr_t)(__fn_444));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2568,12 +2525,12 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_548(int64_t a, int64_t b) {
+static bool __fn_460(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return tlist_eq_(x, y, (int64_t)(intptr_t)(__fn_548));
+        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_460));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2585,7 +2542,7 @@ static dict_Eq_Cons dict_Eq_Cons_singleton = {
 };
 
 static bool __inst_Eq_eq__Set(int64_t x, int64_t y) {
-        return tset_eq_(x, y);
+        return set_eq_(x, y);
 }
 
 typedef struct dict_Eq_Set {
@@ -2596,12 +2553,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_619(int64_t a, int64_t b) {
+static bool __fn_531(int64_t a, int64_t b) {
         return ((a) == (b));
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return tmutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_619));
+        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_531));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -2806,362 +2763,27 @@ static int64_t hamt_autolink_hint() {
   
 }
 
-static void * map_new() {
-        return hamt_new();
-}
-
-static void * assoc(void * m, void * key, void * val) {
-        return hamt_set((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key), (void *)(intptr_t)(val));
-}
-
-static void * dissoc(void * m, void * key) {
-        return hamt_del((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key));
-}
-
-static void * get(void * m, void * key) {
-        return hamt_get((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key));
-}
-
-static bool has_(void * m, void * key) {
-        return hamt_has_((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key));
-}
-
-static int64_t count(void * m) {
-        return hamt_count((void *)(intptr_t)(m));
-}
-
-static void * merge(void * a, void * b) {
-        return hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b));
-}
-
-static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
-        if (tur_hamt_count((void*)(intptr_t)m1) !=
-      tur_hamt_count((void*)(intptr_t)m2)) return false;
-  uint64_t iter_buf[32];
-  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, (void*)(intptr_t)m1);
-  uint64_t hash_out;
-  void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
-      void *val_in_b = tur_hamt_get(
-          (void*)(intptr_t)m2, (int64_t)hash_out, key_out);
-      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
-      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
-          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
-      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
-  }
-  tur_hamt_iter_free(iter_buf);
-  return true;
-  
-}
-
-static void * ok(int64_t x) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  result->is_ok = true;
-  result->ok_val = x;
-  result->err_val = 0;
-  return result;
-  
-}
-
-static void * err(int64_t e) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  result->is_ok = false;
-  result->ok_val = 0;
-  result->err_val = e;
-  return result;
-  
-}
-
-static bool ok_(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result != NULL && result->is_ok;
-  
-}
-
-static bool err_(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result == NULL || !result->is_ok;
-  
-}
-
-static int64_t ok_val(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->ok_val;
-  
-}
-
-static int64_t err_val(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->err_val;
-  
-}
-
-static bool __tur_q_is_err_(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result == NULL || !result->is_ok;
-  
-}
-
-static int64_t __tur_q_ok_val(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  return result->ok_val;
-  
-}
-
-static int64_t result_unwrap(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  if (result == NULL || !result->is_ok) {
-    fprintf(stderr, "result-unwrap: called on err\n");
-    abort();
-  }
-  return (int)result->ok_val;
-  
-}
-
-static int64_t result_unwrap_or(void * r, int64_t default_val) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  if (result != NULL && result->is_ok) return (int)result->ok_val;
-  return default_val;
-  
-}
-
-static int64_t result_expect(void * r, const char * msg) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
-  if (result == NULL || !result->is_ok) {
-    fprintf(stderr, "result-expect: %s\n", (const char*)msg);
-    abort();
-  }
-  return (int)result->ok_val;
-  
-}
-
-static void * result_map(void * r, void * f) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) return r;
-  int64_t new_val = ((int64_t (*)(int64_t))f)(res->ok_val);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok   = true;
-  out->ok_val  = new_val;
-  out->err_val = 0;
-  return out;
-  
-}
-
-static void * result_map_err(void * r, void * f) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || res->is_ok) return r;
-  int64_t new_err = ((int64_t (*)(int64_t))f)(res->err_val);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok   = false;
-  out->ok_val  = 0;
-  out->err_val = new_err;
-  return out;
-  
-}
-
-static void * result_flat_map(void * r, void * f) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) return r;
-  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
-  
-}
-
-static void * result_or(void * r, void * alt) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res != NULL && res->is_ok) return r;
-  return alt;
-  
-}
-
-static void * result_or_else(void * r, void * f) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res != NULL && res->is_ok) return r;
-  int64_t ev = res ? res->err_val : 0;
-  return (void *)((int64_t (*)(int64_t))f)(ev);
-  
-}
-
-static void * ok_or(void * opt, int64_t e) {
-        struct { bool is_some; int64_t value; } *o = (void*)opt;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
-  if (o != NULL && o->is_some) {
-    result->is_ok   = true;
-    result->ok_val  = o->value;
-    result->err_val = 0;
-  } else {
-    result->is_ok   = false;
-    result->ok_val  = 0;
-    result->err_val = e;
-  }
-  return result;
-  
-}
-
-static void * err_context(void * r, const char * ctx) {
-        extern size_t strlen(const char*);
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || res->is_ok) return r;
-  const char *orig = (const char *)(intptr_t)res->err_val;
-  size_t ctx_len  = strlen((const char*)ctx);
-  size_t orig_len = orig ? strlen(orig) : 0;
-  char *msg = malloc(ctx_len + 2 + orig_len + 1);
-  memmove(msg, ctx, ctx_len);
-  msg[ctx_len]     = ':';
-  msg[ctx_len + 1] = ' ';
-  if (orig) memmove(msg + ctx_len + 2, orig, orig_len);
-  msg[ctx_len + 2 + orig_len] = '\0';
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
-  out->is_ok   = false;
-  out->ok_val  = 0;
-  out->err_val = (int64_t)(intptr_t)msg;
-  return out;
-  
-}
-
-static bool result_eq_(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void *)(intptr_t)r1;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void *)(intptr_t)r2;
-  if (!a && !b) return true;
-  if (!a || !b) return false;
-  if (a->is_ok != b->is_ok) return false;
-  if (a->is_ok) {
-      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
-  } else {
-      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
-  }
-  
-}
-
-static void result_free(void * r) {
-        free(r);
-  
-}
-
-static void * result_collect(void * v) {
-        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
-  /* Check for first error */
-  for (size_t i = 0; i < vec->len; i++) {
-    res_ptr = (void *)(intptr_t)vec->data[i];
-    if (res_ptr == NULL || !res_ptr->is_ok) {
-      int64_t ev = res_ptr ? res_ptr->err_val : 0;
-      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-          malloc(sizeof(*out));
-      out->is_ok   = false;
-      out->ok_val  = 0;
-      out->err_val = ev;
-      return out;
-    }
-  }
-  /* All ok -- build a new vec of ok values */
-  struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
-      malloc(sizeof(*ok_vec));
-  ok_vec->len  = vec->len;
-  ok_vec->cap  = vec->len;
-  ok_vec->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
-  for (size_t i = 0; i < vec->len; i++) {
-    res_ptr = (void *)(intptr_t)vec->data[i];
-    ok_vec->data[i] = res_ptr->ok_val;
-  }
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
-      malloc(sizeof(*out));
-  out->is_ok   = true;
-  out->ok_val  = (int64_t)(intptr_t)ok_vec;
-  out->err_val = 0;
-  return out;
-  
-}
-
-static void * result_partition(void * v) {
-        typedef struct __tur_res_vec { int64_t *data; size_t len; size_t cap; } __tur_res_vec_t;
-  __tur_res_vec_t *vec = (void*)v;
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
-  /* Build ok and err vecs */
-  __tur_res_vec_t *ok_vec = malloc(sizeof(*ok_vec));
-  ok_vec->data = NULL; ok_vec->len = 0; ok_vec->cap = 0;
-  __tur_res_vec_t *err_vec = malloc(sizeof(*err_vec));
-  err_vec->data = NULL; err_vec->len = 0; err_vec->cap = 0;
-  for (size_t i = 0; i < vec->len; i++) {
-    res_ptr = (void *)(intptr_t)vec->data[i];
-    int64_t val;
-    __tur_res_vec_t *dst;
-    if (res_ptr != NULL && res_ptr->is_ok) {
-      val = res_ptr->ok_val;
-      dst = ok_vec;
-    } else {
-      val = res_ptr ? res_ptr->err_val : 0;
-      dst = err_vec;
-    }
-    if (dst->len >= dst->cap) {
-      size_t new_cap = dst->cap > 0 ? dst->cap * 2 : 4;
-      int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
-      for (size_t j = 0; j < dst->len; j++) new_data[j] = dst->data[j];
-      free(dst->data);
-      dst->data = new_data;
-      dst->cap  = new_cap;
-    }
-    dst->data[dst->len++] = val;
-  }
-  /* Return pair */
-  struct { void *ok_vec; void *err_vec; } *pair = malloc(sizeof(*pair));
-  pair->ok_vec  = ok_vec;
-  pair->err_vec = err_vec;
-  return pair;
-  
-}
-
-static void * result_partition_ok(void * pair) {
-        struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
-  return p->ok_vec;
-  
-}
-
-static void * result_partition_err(void * pair) {
-        struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
-  return p->err_vec;
-  
-}
-
-static int64_t result_must(void * r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) {
-    tur_panic("result-must: called on err");
-  }
-  return (int)res->ok_val;
-  
-}
-
-static int64_t result_must_msg(void * r, const char * msg) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
-  if (res == NULL || !res->is_ok) {
-    tur_panic(msg);
-  }
-  return (int)res->ok_val;
-  
-}
-
-static int64_t tmap_new() {
+static int64_t map_new() {
         struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)m;
   
 }
 
-static void * tmap_hamt(int64_t m) {
+static void * map_hamt(int64_t m) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   return map->hamt;
   
 }
 
-static int64_t tmap_wrap(void * h) {
+static int64_t map_wrap(void * h) {
         struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = (void*)(intptr_t)h;
   return (int64_t)(intptr_t)m;
   
 }
 
-static int64_t tmap_assoc(int64_t m, int64_t key, int64_t val) {
+static int64_t map_assoc(int64_t m, int64_t key, int64_t val) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   void *new_hamt = tur_hamt_set(map->hamt, (int64_t)key, (void*)(intptr_t)key, (void*)(intptr_t)val);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -3170,7 +2792,7 @@ static int64_t tmap_assoc(int64_t m, int64_t key, int64_t val) {
   
 }
 
-static int64_t tmap_assoc_h(int64_t m, int64_t h, int64_t key, int64_t val) {
+static int64_t map_assoc_h(int64_t m, int64_t h, int64_t key, int64_t val) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   void *new_hamt = tur_hamt_set(map->hamt, h, (void*)(intptr_t)key, (void*)(intptr_t)val);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -3179,7 +2801,7 @@ static int64_t tmap_assoc_h(int64_t m, int64_t h, int64_t key, int64_t val) {
   
 }
 
-static int64_t tmap_dissoc(int64_t m, int64_t h, int64_t key) {
+static int64_t map_dissoc(int64_t m, int64_t h, int64_t key) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   void *new_hamt = tur_hamt_del(map->hamt, h, (void*)(intptr_t)key);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -3188,25 +2810,25 @@ static int64_t tmap_dissoc(int64_t m, int64_t h, int64_t key) {
   
 }
 
-static int64_t tmap_get(int64_t m, int64_t h, int64_t key) {
+static int64_t map_get(int64_t m, int64_t h, int64_t key) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get(map->hamt, h, (void*)(intptr_t)key);
   
 }
 
-static bool tmap_has_(int64_t m, int64_t h, int64_t key) {
+static bool map_has_(int64_t m, int64_t h, int64_t key) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   return tur_hamt_has(map->hamt, h, (void*)(intptr_t)key);
   
 }
 
-static int64_t tmap_count(int64_t m) {
+static int64_t map_count(int64_t m) {
         struct { void *hamt; } *map = (void*)(intptr_t)m;
   return tur_hamt_count(map->hamt);
   
 }
 
-static int64_t tmap_merge(int64_t a, int64_t b) {
+static int64_t map_merge(int64_t a, int64_t b) {
         struct { void *hamt; } *ma = (void*)(intptr_t)a;
   struct { void *hamt; } *mb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
@@ -3216,33 +2838,33 @@ static int64_t tmap_merge(int64_t a, int64_t b) {
   
 }
 
-static void tmap_free(int64_t m) {
+static void map_free(int64_t m) {
         free((void*)(intptr_t)m);
   
 }
 
-static bool tmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
+static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
         struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, map1->hamt);
+  tur_hamt_iter_init((void*)iter_buf, map1->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       void *val_in_b = tur_hamt_get(map2->hamt, (int64_t)hash_out, key_out);
-      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
+      if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
       bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
           (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
-      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
+      if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   return true;
   
 }
 
-static int64_t tvec_new() {
+static int64_t vec_new() {
         struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
@@ -3251,13 +2873,13 @@ static int64_t tvec_new() {
   
 }
 
-static int64_t tvec_len(int64_t v) {
+static int64_t vec_len(int64_t v) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   
 }
 
-static int64_t tvec_get(int64_t v, int64_t i) {
+static int64_t vec_get(int64_t v, int64_t i) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
@@ -3266,7 +2888,7 @@ static int64_t tvec_get(int64_t v, int64_t i) {
   
 }
 
-static void tvec_push_(int64_t v, int64_t val) {
+static void vec_push_(int64_t v, int64_t val) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
     size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
@@ -3280,29 +2902,29 @@ static void tvec_push_(int64_t v, int64_t val) {
   
 }
 
-static int64_t tvec_pop_(int64_t v) {
+static int64_t vec_pop_(int64_t v) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
   
 }
 
-static void tvec_set_(int64_t v, int64_t i, int64_t val) {
+static void vec_set_(int64_t v, int64_t i, int64_t val) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
-  fprintf(stderr, "tvec-set! index out of bounds\n");
+  fprintf(stderr, "vec-set! index out of bounds\n");
   exit(1);
   
 }
 
-static void tvec_free(int64_t v) {
+static void vec_free(int64_t v) {
         struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
   
 }
 
-static bool tvec_eq_(int64_t v1, int64_t v2, int64_t cmp_fn) {
+static bool vec_eq_(int64_t v1, int64_t v2, int64_t cmp_fn) {
         struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
@@ -3314,7 +2936,7 @@ static bool tvec_eq_(int64_t v1, int64_t v2, int64_t cmp_fn) {
   
 }
 
-static int64_t tslice_new(void * data, int64_t length) {
+static int64_t slice_new(void * data, int64_t length) {
         struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
   s->p = (int64_t*)(intptr_t)data;
   s->len = (size_t)length;
@@ -3322,13 +2944,13 @@ static int64_t tslice_new(void * data, int64_t length) {
   
 }
 
-static int64_t tslice_len(int64_t s) {
+static int64_t slice_len(int64_t s) {
         struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   return (int)slice->len;
   
 }
 
-static int64_t tslice_get(int64_t s, int64_t i) {
+static int64_t slice_get(int64_t s, int64_t i) {
         struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   if (i >= 0 && (size_t)i < slice->len) return (int64_t)slice->p[i];
   fprintf(stderr, "tslice index out of bounds\n");
@@ -3337,12 +2959,12 @@ static int64_t tslice_get(int64_t s, int64_t i) {
   
 }
 
-static void tslice_free(int64_t s) {
+static void slice_free(int64_t s) {
         free((void*)(intptr_t)s);
   
 }
 
-static bool tslice_eq_(int64_t s1, int64_t s2, int64_t cmp_fn) {
+static bool slice_eq_(int64_t s1, int64_t s2, int64_t cmp_fn) {
         struct { int64_t *p; size_t len; } *a = (void*)(intptr_t)s1;
   struct { int64_t *p; size_t len; } *b = (void*)(intptr_t)s2;
   if (a->len != b->len) return false;
@@ -3354,7 +2976,7 @@ static bool tslice_eq_(int64_t s1, int64_t s2, int64_t cmp_fn) {
   
 }
 
-static int64_t tsome(int64_t x) {
+static int64_t some(int64_t x) {
         struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
   opt->value = x;
@@ -3362,37 +2984,30 @@ static int64_t tsome(int64_t x) {
   
 }
 
-static int64_t tnone() {
+static int64_t none() {
         return 0;
   
 }
 
-static bool tsome_(int64_t o) {
+static bool some_(int64_t o) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   return opt != NULL && opt->is_some;
   
 }
 
-static int64_t tunwrap(int64_t o) {
-        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) tur_panic("tunwrap called on none");
-  return (int64_t)opt->value;
-  
-}
-
-static int64_t tunwrap_or(int64_t o, int64_t dflt) {
+static int64_t unwrap_or(int64_t o, int64_t dflt) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return dflt;
   return (int64_t)opt->value;
   
 }
 
-static void toption_free(int64_t o) {
+static void option_free(int64_t o) {
         if (o) free((void*)(intptr_t)o);
   
 }
 
-static int64_t toption_map(int64_t o, int64_t f) {
+static int64_t option_map(int64_t o, int64_t f) {
         struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
@@ -3402,7 +3017,7 @@ static int64_t toption_map(int64_t o, int64_t f) {
   
 }
 
-static bool toption_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
+static bool option_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
         struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;
@@ -3413,7 +3028,7 @@ static bool toption_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
   
 }
 
-static int64_t tok(int64_t x) {
+static int64_t ok(int64_t x) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true;
   r->ok_val = x;
@@ -3422,7 +3037,7 @@ static int64_t tok(int64_t x) {
   
 }
 
-static int64_t terr(int64_t e) {
+static int64_t err(int64_t e) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false;
   r->ok_val = 0;
@@ -3431,38 +3046,24 @@ static int64_t terr(int64_t e) {
   
 }
 
-static bool tok_(int64_t r) {
+static bool ok_(int64_t r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res && res->is_ok;
   
 }
 
-static bool terr_(int64_t r) {
+static bool err_(int64_t r) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return !res || !res->is_ok;
   
 }
 
-static int64_t tok_val(int64_t r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || !res->is_ok) tur_panic("tok-val called on err");
-  return (int64_t)res->ok_val;
-  
-}
-
-static int64_t terr_val(int64_t r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  if (!res || res->is_ok) tur_panic("terr-val called on ok");
-  return (int64_t)res->err_val;
-  
-}
-
-static void tresult_free(int64_t r) {
+static void result_free(int64_t r) {
         if (r) free((void*)(intptr_t)r);
   
 }
 
-static int64_t tresult_map(int64_t r, int64_t f) {
+static int64_t result_map(int64_t r, int64_t f) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   if (!res) return 0;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
@@ -3478,7 +3079,7 @@ static int64_t tresult_map(int64_t r, int64_t f) {
   
 }
 
-static bool tresult_eq_(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp) {
+static bool result_eq_(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
   if (!a && !b) return true;
@@ -3491,32 +3092,7 @@ static bool tresult_eq_(int64_t r1, int64_t r2, int64_t ok_cmp, int64_t err_cmp)
   
 }
 
-static int64_t tpair(int64_t a, int64_t b) {
-        struct { int64_t fst; int64_t snd; } *p = malloc(sizeof(*p));
-  p->fst = a;
-  p->snd = b;
-  return (int64_t)(intptr_t)p;
-  
-}
-
-static int64_t tpair_fst(int64_t p) {
-        struct { int64_t fst; int64_t snd; } *pair = (void*)(intptr_t)p;
-  return (int64_t)pair->fst;
-  
-}
-
-static int64_t tpair_snd(int64_t p) {
-        struct { int64_t fst; int64_t snd; } *pair = (void*)(intptr_t)p;
-  return (int64_t)pair->snd;
-  
-}
-
-static void tpair_free(int64_t p) {
-        free((void*)(intptr_t)p);
-  
-}
-
-static bool tpair_eq_(int64_t p1, int64_t p2, int64_t fst_cmp, int64_t snd_cmp) {
+static bool pair_eq_carrier_(int64_t p1, int64_t p2, int64_t fst_cmp, int64_t snd_cmp) {
         struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
   struct { int64_t fst; int64_t snd; } *b = (void*)(intptr_t)p2;
   if (!a && !b) return true;
@@ -3543,21 +3119,7 @@ static bool tnil_(int64_t l) {
         return ((l) == (INT64_C(0)));
 }
 
-static int64_t thead(int64_t l) {
-        struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
-  if (!cell) tur_panic("thead called on empty list");
-  return (int64_t)cell->head;
-  
-}
-
-static int64_t ttail(int64_t l) {
-        struct { int64_t head; int64_t tail; } *cell = (void*)(intptr_t)l;
-  if (!cell) tur_panic("ttail called on empty list");
-  return (int64_t)cell->tail;
-  
-}
-
-static int64_t tlist_length(int64_t l) {
+static int64_t list_length(int64_t l) {
         struct __tur_cell_t { int64_t head; int64_t tail; };
   struct __tur_cell_t *cell = (void*)(intptr_t)l;
   int64_t count = 0;
@@ -3569,7 +3131,7 @@ static int64_t tlist_length(int64_t l) {
   
 }
 
-static bool tlist_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
+static bool list_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
         struct __tur_cons_t { int64_t head; int64_t tail; };
   struct __tur_cons_t *a = (void*)(intptr_t)l1;
   struct __tur_cons_t *b = (void*)(intptr_t)l2;
@@ -3582,7 +3144,7 @@ static bool tlist_eq_(int64_t l1, int64_t l2, int64_t cmp_fn) {
   
 }
 
-static int64_t tgrid_new(int64_t width, int64_t height) {
+static int64_t grid_new(int64_t width, int64_t height) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
   g->width  = (int)width;
   g->height = (int)height;
@@ -3593,38 +3155,38 @@ static int64_t tgrid_new(int64_t width, int64_t height) {
   
 }
 
-static int64_t tgrid_get(int64_t g, int64_t x, int64_t y) {
+static int64_t grid_get(int64_t g, int64_t x, int64_t y) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   
 }
 
-static void tgrid_set_(int64_t g, int64_t x, int64_t y, int64_t v) {
+static void grid_set_(int64_t g, int64_t x, int64_t y, int64_t v) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   grid->data[(size_t)(y * grid->width + x)] = v;
   
 }
 
-static int64_t tgrid_width(int64_t g) {
+static int64_t grid_width(int64_t g) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->width;
   
 }
 
-static int64_t tgrid_height(int64_t g) {
+static int64_t grid_height(int64_t g) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->height;
   
 }
 
-static void tgrid_free(int64_t g) {
+static void grid_free(int64_t g) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (grid->data) free(grid->data);
   free(grid);
   
 }
 
-static int64_t tzipper_new(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
+static int64_t zipper_new(void * left, int64_t left_len, int64_t focus, void * right, int64_t right_len) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
   z->left_len  = (size_t)left_len;
   z->right_len = (size_t)right_len;
@@ -3637,13 +3199,13 @@ static int64_t tzipper_new(void * left, int64_t left_len, int64_t focus, void * 
   
 }
 
-static int64_t tzipper_focus(int64_t z) {
+static int64_t zipper_focus(int64_t z) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   return (int64_t)zip->focus;
   
 }
 
-static int64_t tzipper_move_left(int64_t z) {
+static int64_t zipper_move_left(int64_t z) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   if (zip->left_len == 0) return 0;
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *nz = malloc(sizeof(*nz));
@@ -3662,7 +3224,7 @@ static int64_t tzipper_move_left(int64_t z) {
   
 }
 
-static int64_t tzipper_move_right(int64_t z) {
+static int64_t zipper_move_right(int64_t z) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   if (zip->right_len == 0) return 0;
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *nz = malloc(sizeof(*nz));
@@ -3681,7 +3243,7 @@ static int64_t tzipper_move_right(int64_t z) {
   
 }
 
-static void tzipper_free(int64_t z) {
+static void zipper_free(int64_t z) {
         struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   if (zip->left)  free(zip->left);
   if (zip->right) free(zip->right);
@@ -3689,14 +3251,14 @@ static void tzipper_free(int64_t z) {
   
 }
 
-static int64_t tset_new() {
+static int64_t set_new() {
         struct { void *hamt; } *s = malloc(sizeof(*s));
   s->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)s;
   
 }
 
-static int64_t tset_add(int64_t s, int64_t h, int64_t x) {
+static int64_t set_add(int64_t s, int64_t h, int64_t x) {
         struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -3705,7 +3267,7 @@ static int64_t tset_add(int64_t s, int64_t h, int64_t x) {
   
 }
 
-static int64_t tset_remove(int64_t s, int64_t h, int64_t x) {
+static int64_t set_remove(int64_t s, int64_t h, int64_t x) {
         struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
   struct { void *hamt; } *r = malloc(sizeof(*r));
@@ -3714,19 +3276,19 @@ static int64_t tset_remove(int64_t s, int64_t h, int64_t x) {
   
 }
 
-static bool tset_member_(int64_t s, int64_t h, int64_t x) {
+static bool set_member_(int64_t s, int64_t h, int64_t x) {
         struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_has(set->hamt, h, (void*)(intptr_t)x);
   
 }
 
-static int64_t tset_count(int64_t s) {
+static int64_t set_count(int64_t s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_count(set->hamt);
   
 }
 
-static int64_t tset_union(int64_t a, int64_t b) {
+static int64_t set_union(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
@@ -3736,71 +3298,71 @@ static int64_t tset_union(int64_t a, int64_t b) {
   
 }
 
-static int64_t tset_intersect(int64_t a, int64_t b) {
+static int64_t set_intersect(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, sa->hamt);
+  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
       }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
   return (int64_t)(intptr_t)r;
   
 }
 
-static int64_t tset_diff(int64_t a, int64_t b) {
+static int64_t set_diff(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, sa->hamt);
+  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
           result = tur_hamt_set(result, (int64_t)hash_out, key_out, (void*)1);
       }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = result;
   return (int64_t)(intptr_t)r;
   
 }
 
-static bool tset_eq_(int64_t a, int64_t b) {
+static bool set_eq_(int64_t a, int64_t b) {
         struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
   uint64_t iter_buf[32];
   for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
-  tur_hamt_iter_init(iter_buf, sa->hamt);
+  tur_hamt_iter_init((void*)iter_buf, sa->hamt);
   uint64_t hash_out;
   void *key_out = NULL, *val_out = NULL;
-  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
       if (!tur_hamt_has(sb->hamt, (int64_t)hash_out, key_out)) {
-          tur_hamt_iter_free(iter_buf);
+          tur_hamt_iter_free((void*)iter_buf);
           return false;
       }
   }
-  tur_hamt_iter_free(iter_buf);
+  tur_hamt_iter_free((void*)iter_buf);
   return true;
   
 }
 
-static bool tset_eq_cmp_(int64_t a, int64_t b, int64_t cmp_fn) {
+static bool set_eq_cmp_(int64_t a, int64_t b, int64_t cmp_fn) {
         /* O(n*m) comparison: iterate a's elements, scan b for a structural
-   * match per element.  Bigger constant than tset-eq?'s hash lookup
+   * match per element.  Bigger constant than set-eq?'s hash lookup
    * but correct for arbitrarily-structured element types.  Used by
    * the F3-5 dispatcher synthesis for Set[T] where T is a TY_APP. */
   struct { void *hamt; } *sa = (void*)(intptr_t)a;
@@ -3808,40 +3370,40 @@ static bool tset_eq_cmp_(int64_t a, int64_t b, int64_t cmp_fn) {
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
   uint64_t iter_a[32];
   for (int __i = 0; __i < 32; __i++) iter_a[__i] = 0;
-  tur_hamt_iter_init(iter_a, sa->hamt);
+  tur_hamt_iter_init((void*)iter_a, sa->hamt);
   uint64_t hash_a;
   void *key_a = NULL, *val_a = NULL;
-  while (tur_hamt_iter_next(iter_a, &hash_a, &key_a, &val_a)) {
+  while (tur_hamt_iter_next((void*)iter_a, &hash_a, &key_a, &val_a)) {
       bool found = false;
       uint64_t iter_b[32];
       for (int __j = 0; __j < 32; __j++) iter_b[__j] = 0;
-      tur_hamt_iter_init(iter_b, sb->hamt);
+      tur_hamt_iter_init((void*)iter_b, sb->hamt);
       uint64_t hash_b;
       void *key_b = NULL, *val_b = NULL;
-      while (tur_hamt_iter_next(iter_b, &hash_b, &key_b, &val_b)) {
+      while (tur_hamt_iter_next((void*)iter_b, &hash_b, &key_b, &val_b)) {
           if (((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(
                 (int64_t)(intptr_t)key_a, (int64_t)(intptr_t)key_b)) {
               found = true;
               break;
           }
       }
-      tur_hamt_iter_free(iter_b);
+      tur_hamt_iter_free((void*)iter_b);
       if (!found) {
-          tur_hamt_iter_free(iter_a);
+          tur_hamt_iter_free((void*)iter_a);
           return false;
       }
   }
-  tur_hamt_iter_free(iter_a);
+  tur_hamt_iter_free((void*)iter_a);
   return true;
   
 }
 
-static void tset_free(int64_t s) {
+static void set_free(int64_t s) {
         free((void*)(intptr_t)s);
   
 }
 
-static int64_t tmutmap_new() {
+static int64_t mutmap_new() {
         /* Backing storage layout:
    *   uint64_t cap;        capacity (power of two)
    *   uint64_t len;        live entry count (OCCUPIED slots only)
@@ -3871,7 +3433,7 @@ static int64_t tmutmap_new() {
   
 }
 
-static int64_t tmutmap_len(int64_t m) {
+static int64_t mutmap_len(int64_t m) {
         struct __tur_mm_storage_l { uint64_t cap; uint64_t len; uint64_t tomb; };
   struct { void *storage; } *mm = (void*)(intptr_t)m;
   struct __tur_mm_storage_l *s = (struct __tur_mm_storage_l *)mm->storage;
@@ -3879,7 +3441,7 @@ static int64_t tmutmap_len(int64_t m) {
   
 }
 
-static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
+static void mutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -3940,7 +3502,7 @@ static void tmutmap_set_(int64_t m, int64_t h, int64_t key, int64_t val) {
   
 }
 
-static int64_t tmutmap_get(int64_t m, int64_t h, int64_t key) {
+static int64_t mutmap_get(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -3959,7 +3521,7 @@ static int64_t tmutmap_get(int64_t m, int64_t h, int64_t key) {
   
 }
 
-static bool tmutmap_has_(int64_t m, int64_t h, int64_t key) {
+static bool mutmap_has_(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -3978,7 +3540,7 @@ static bool tmutmap_has_(int64_t m, int64_t h, int64_t key) {
   
 }
 
-static bool tmutmap_delete_(int64_t m, int64_t h, int64_t key) {
+static bool mutmap_delete_(int64_t m, int64_t h, int64_t key) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -4001,7 +3563,7 @@ static bool tmutmap_delete_(int64_t m, int64_t h, int64_t key) {
   
 }
 
-static bool tmutmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
+static bool mutmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
         enum { TUR_MM_EMPTY=0, TUR_MM_OCCUPIED=1, TUR_MM_DELETED=2 };
   struct __tur_mm_slot { uint8_t tag; int64_t hash; int64_t key; int64_t value; };
   struct __tur_mm_storage { uint64_t cap; uint64_t len; uint64_t tomb; struct __tur_mm_slot slots[]; };
@@ -4037,7 +3599,7 @@ static bool tmutmap_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
   
 }
 
-static void tmutmap_free(int64_t m) {
+static void mutmap_free(int64_t m) {
         struct { void *storage; } *mm = (void*)(intptr_t)m;
   if (mm->storage) free(mm->storage);
   free(mm);
@@ -4055,9 +3617,9 @@ static int64_t mul2(int64_t x) {
 int main() {
         int64_t __t0;
         {
-            int64_t result_624 = mul2(add5(INT64_C(10)));
-            (void)result_624;
-            printf("%lld\n", (long long)(result_624));
+            int64_t result_536 = mul2(add5(INT64_C(10)));
+            (void)result_536;
+            printf("%lld\n", (long long)(result_536));
             int64_t __t1;
             __t1 = INT64_C(0);
             __t0 = __t1;

@@ -1,6 +1,6 @@
-(defn str-from-cstr [cstr :cstr] :ptr<void>
+(defn str-from-cstr [cs :cstr] :ptr<void>
   ```c
-  const char *s = (const char*)cstr;
+  const char *s = (const char*)cs;
   size_t len = 0;
   while (s[len] != '\0') len++;
   struct { const char *p; size_t len; } *str = malloc(sizeof(*str));

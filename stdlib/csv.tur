@@ -9,26 +9,33 @@
 ;; (doubled as ""), and embedded newlines within quoted fields.
 ;; Depends on: str.tur (cstr ops), vec.tur layout, fs.tur for file helpers.
 
-;;; csv/parse-row -- parse one CSV line into a vec of field cstrs.
+;;; csv/parse-row-with-delim -- parse one delimiter-separated line into a vec of field cstrs.
 ;;;
-;;; Handles RFC 4180 quoting: fields may be optionally enclosed in
+;;; Handles RFC 4180-style quoting: fields may be optionally enclosed in
 ;;; double-quotes; embedded quotes are doubled ("").  The trailing
 ;;; newline (if any) is ignored.
 ;;;
 ;;; Parameters:
-;;;   line -- NUL-terminated CSV row cstr
+;;;   line -- NUL-terminated delimiter-separated row cstr
+;;;   delim -- delimiter character as ASCII code (e.g., 44 for comma, 9 for tab)
 ;;;
 ;;; Returns:
 ;;;   A heap-allocated vec whose elements are (int64_t)(char*) field cstrs.
 ;;;   Both the vec and all field strings are independently heap-allocated.
 ;;;   Free with csv/row-free.
+;;;   Returns 0 on invalid delimiter (NUL, quote, CR, LF).
 ;;;
 ;;; Example:
-;;;   (csv/parse-row "a,\"b,c\",d")  ; => vec ["a", "b,c", "d"]
+;;;   (csv/parse-row-with-delim "a|b|c" 124)  ; => vec of 3 fields
+;;;   (csv/parse-row-with-delim "x\ty\tz" 9)  ; => vec of 3 fields
+;;;   (csv/parse-row-with-delim "bad" 0)  ; => 0
 ;;;
-;;; Since: Phase B2
-(defn csv/parse-row [line :cstr] :int
+;;; Since: Phase D2
+(defn csv/parse-row-with-delim [line :cstr delim :int] :int
   ```c
+  /* Validate delimiter */
+  if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
+  char sep = (char)delim;
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   const char *p = line;
@@ -58,7 +65,7 @@
       }
     } else {
       /* unquoted field */
-      while (p < end && *p != ',') {
+      while (p < end && *p != sep) {
         if (flen+1 >= fcap) { fcap*=2; field=realloc(field,fcap); }
         field[flen++] = *p++;
       }
@@ -69,11 +76,34 @@
       v->data = realloc(v->data, v->cap * sizeof(int64_t));
     }
     v->data[v->len++] = (int64_t)(intptr_t)field;
-    /* skip comma separator */
-    if (p < end && *p == ',') p++;
+    /* skip delimiter separator */
+    if (p < end && *p == sep) p++;
     else break;
   }
   return (int64_t)(intptr_t)v;
+  ```)
+
+;;; csv/parse-row -- parse one CSV line into a vec of field cstrs.
+;;;
+;;; Handles RFC 4180 quoting: fields may be optionally enclosed in
+;;; double-quotes; embedded quotes are doubled ("").  The trailing
+;;; newline (if any) is ignored.
+;;;
+;;; Parameters:
+;;;   line -- NUL-terminated CSV row cstr
+;;;
+;;; Returns:
+;;;   A heap-allocated vec whose elements are (int64_t)(char*) field cstrs.
+;;;   Both the vec and all field strings are independently heap-allocated.
+;;;   Free with csv/row-free.
+;;;
+;;; Example:
+;;;   (csv/parse-row "a,\"b,c\",d")  ; => vec ["a", "b,c", "d"]
+;;;
+;;; Since: Phase B2
+(defn csv/parse-row [line :cstr] :int
+  ```c
+  return csv_parse_row_with_delim(line, 44);
   ```)
 
 ;;; csv/row-free -- free a row vec and all its field strings.
@@ -94,21 +124,28 @@
   free(vec);
   ```)
 
-;;; csv/parse -- parse a multi-line CSV string into a cons list of row vecs.
+;;; csv/parse-with-delim -- parse a multi-line delimiter-separated string into a cons list of row vecs.
 ;;;
 ;;; Parameters:
-;;;   s -- NUL-terminated CSV string (possibly multi-line)
+;;;   s -- NUL-terminated delimiter-separated string (possibly multi-line)
+;;;   delim -- delimiter character as ASCII code (e.g., 44 for comma, 9 for tab)
 ;;;
 ;;; Returns:
-;;;   A cons list of row vec pointers (each from csv/parse-row).
+;;;   A cons list of row vec pointers (each from csv/parse-row-with-delim).
 ;;;   Free with csv/free.
+;;;   Returns 0 on invalid delimiter (NUL, quote, CR, LF).
 ;;;
 ;;; Example:
-;;;   (csv/parse "a,b\n1,2\n")  ; => cons of two row vecs
+;;;   (csv/parse-with-delim "a\tb\n1\t2\n" 9)  ; => cons list of 2 rows
+;;;   (csv/parse-with-delim "x;y" 59)  ; => cons list of 1 row
+;;;   (csv/parse-with-delim "bad" 0)  ; => 0
 ;;;
-;;; Since: Phase B2
-(defn csv/parse [s :cstr] :int
+;;; Since: Phase D2
+(defn csv/parse-with-delim [s :cstr delim :int] :int
   ```c
+  /* Validate delimiter */
+  if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
+  char sep = (char)delim;
   const char *p = s;
   int64_t head = 0;
   /* We reuse the row parser by feeding it lines */
@@ -121,7 +158,7 @@
     char *line = malloc(llen + 1);
     memcpy(line, p, llen);
     line[llen] = '\0';
-    /* parse the row using the same logic as csv/parse-row */
+    /* parse the row using delimiter-aware logic */
     struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
     v->data = NULL; v->len = 0; v->cap = 0;
     const char *rp = line;
@@ -143,12 +180,12 @@
           }
         }
       } else {
-        while (rp < rend && *rp != ',') { if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);} field[flen++]=*rp++; }
+        while (rp < rend && *rp != sep) { if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);} field[flen++]=*rp++; }
       }
       field[flen]='\0';
       if(v->len>=v->cap){v->cap=v->cap>0?v->cap*2:4;v->data=realloc(v->data,v->cap*sizeof(int64_t));}
       v->data[v->len++]=(int64_t)(intptr_t)field;
-      if (rp < rend && *rp == ',') rp++;
+      if (rp < rend && *rp == sep) rp++;
       else break;
     }
     free(line);
@@ -160,6 +197,24 @@
     if (*p == '\n') p++;
   }
   return head;
+  ```)
+
+;;; csv/parse -- parse a multi-line CSV string into a cons list of row vecs.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated CSV string (possibly multi-line)
+;;;
+;;; Returns:
+;;;   A cons list of row vec pointers (each from csv/parse-row).
+;;;   Free with csv/free.
+;;;
+;;; Example:
+;;;   (csv/parse "a,b\n1,2\n")  ; => cons of two row vecs
+;;;
+;;; Since: Phase B2
+(defn csv/parse [s :cstr] :int
+  ```c
+  return csv_parse_with_delim(s, 44);
   ```)
 
 ;;; csv/free -- free a cons list of rows returned by csv/parse.
@@ -189,24 +244,31 @@
   }
   ```)
 
-;;; csv/emit-row -- serialize a vec of field cstrs to a CSV line cstr.
+;;; csv/emit-row-with-delim -- serialize a vec of field cstrs to a delimiter-separated line cstr.
 ;;;
-;;; Fields containing commas, double-quotes, or newlines are enclosed in
+;;; Fields containing delimiter, double-quotes, or newlines are enclosed in
 ;;; double-quotes; embedded quotes are doubled.
 ;;;
 ;;; Parameters:
 ;;;   v -- vec of (int64_t)(char*) field cstrs
+;;;   delim -- delimiter character as ASCII code (e.g., 44 for comma, 9 for tab)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated NUL-terminated CSV line without a trailing newline.
+;;;   A heap-allocated NUL-terminated delimiter-separated line without a trailing newline.
 ;;;   The caller must free.
+;;;   Returns 0 on invalid delimiter (NUL, quote, CR, LF).
 ;;;
 ;;; Example:
-;;;   (csv/emit-row my-vec)  ; => "a,\"b,c\",d"
+;;;   (csv/emit-row-with-delim my-vec 124)  ; => "a|\"b|c\"|d" (pipe-delimited)
+;;;   (csv/emit-row-with-delim (csv/parse-row "a,b") 44)  ; => "a,b"
+;;;   (csv/emit-row-with-delim (csv/parse-row "a,b") 0)  ; => 0
 ;;;
-;;; Since: Phase B2
-(defn csv/emit-row [v :int] :cstr
+;;; Since: Phase D2
+(defn csv/emit-row-with-delim [v :int delim :int] :cstr
   ```c
+  /* Validate delimiter */
+  if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
+  char sep = (char)delim;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   size_t out_cap = 256, pos = 0;
   char *out = malloc(out_cap);
@@ -215,11 +277,11 @@
     /* check if quoting is needed */
     int needs_quote = 0;
     for (const char *q = f; *q; q++) {
-      if (*q == ',' || *q == '"' || *q == '\n' || *q == '\r') { needs_quote = 1; break; }
+      if (*q == sep || *q == '"' || *q == '\n' || *q == '\r') { needs_quote = 1; break; }
     }
     if (i > 0) {
       if (pos+1 >= out_cap) { out_cap*=2; out=realloc(out,out_cap); }
-      out[pos++] = ',';
+      out[pos++] = sep;
     }
     if (needs_quote) {
       if (pos+2 >= out_cap) { out_cap*=2; out=realloc(out,out_cap); }
@@ -241,21 +303,49 @@
   return out;
   ```)
 
-;;; csv/emit -- serialize a cons list of row vecs to a full CSV string.
+;;; csv/emit-row -- serialize a vec of field cstrs to a CSV line cstr.
+;;;
+;;; Fields containing commas, double-quotes, or newlines are enclosed in
+;;; double-quotes; embedded quotes are doubled.
 ;;;
 ;;; Parameters:
-;;;   rows -- cons list of row vecs (as from csv/parse)
+;;;   v -- vec of (int64_t)(char*) field cstrs
 ;;;
 ;;; Returns:
-;;;   A heap-allocated NUL-terminated CSV string with newline-separated rows.
+;;;   A heap-allocated NUL-terminated CSV line without a trailing newline.
 ;;;   The caller must free.
 ;;;
 ;;; Example:
-;;;   (csv/emit my-rows)  ; => "a,b\n1,2\n"
+;;;   (csv/emit-row my-vec)  ; => "a,\"b,c\",d"
 ;;;
 ;;; Since: Phase B2
-(defn csv/emit [rows :int] :cstr
+(defn csv/emit-row [v :int] :cstr
   ```c
+  return csv_emit_row_with_delim(v, 44);
+  ```)
+
+;;; csv/emit-with-delim -- serialize a cons list of row vecs to a full delimiter-separated string.
+;;;
+;;; Parameters:
+;;;   rows -- cons list of row vecs (as from csv/parse-with-delim)
+;;;   delim -- delimiter character as ASCII code (e.g., 44 for comma, 9 for tab)
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated delimiter-separated string with newline-separated rows.
+;;;   The caller must free.
+;;;   Returns 0 on invalid delimiter (NUL, quote, CR, LF).
+;;;
+;;; Example:
+;;;   (csv/emit-with-delim my-rows 9)  ; => "a\tb\n1\t2\n" (TSV)
+;;;   (csv/emit-with-delim (csv/parse "a,b\n1,2\n") 44)  ; => "a,b\n1,2\n"
+;;;   (csv/emit-with-delim (csv/parse "a,b\n") 0)  ; => 0
+;;;
+;;; Since: Phase D2
+(defn csv/emit-with-delim [rows :int delim :int] :cstr
+  ```c
+  /* Validate delimiter */
+  if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
+  char sep = (char)delim;
   size_t out_cap = 256, pos = 0;
   char *out = malloc(out_cap);
   out[0] = '\0';
@@ -263,16 +353,16 @@
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
     int64_t vptr = cell[0];
-    /* emit this row using csv/emit-row logic inline */
+    /* emit this row using delimiter-aware logic inline */
     if (vptr) {
       struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
       for (size_t i = 0; i < vec->len; i++) {
         const char *f = (const char*)(intptr_t)vec->data[i];
         int needs_quote = 0;
         for (const char *q = f; *q; q++) {
-          if (*q==',' || *q=='"' || *q=='\n' || *q=='\r') { needs_quote=1; break; }
+          if (*q==sep || *q=='"' || *q=='\n' || *q=='\r') { needs_quote=1; break; }
         }
-        if (i > 0) { if(pos+1>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]=','; }
+        if (i > 0) { if(pos+1>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]=sep; }
         if (needs_quote) {
           if(pos+2>=out_cap){out_cap*=2;out=realloc(out,out_cap);} out[pos++]='"';
           for (const char *q=f;*q;q++) {
@@ -294,21 +384,45 @@
   return out;
   ```)
 
-;;; csv/read-file -- read a CSV file and parse it into a cons list of row vecs.
+;;; csv/emit -- serialize a cons list of row vecs to a full CSV string.
+;;;
+;;; Parameters:
+;;;   rows -- cons list of row vecs (as from csv/parse)
+;;;
+;;; Returns:
+;;;   A heap-allocated NUL-terminated CSV string with newline-separated rows.
+;;;   The caller must free.
+;;;
+;;; Example:
+;;;   (csv/emit my-rows)  ; => "a,b\n1,2\n"
+;;;
+;;; Since: Phase B2
+(defn csv/emit [rows :int] :cstr
+  ```c
+  return csv_emit_with_delim(rows, 44);
+  ```)
+
+;;; csv/read-file-with-delim -- read a delimiter-separated file and parse it into a cons list of row vecs.
 ;;;
 ;;; Parameters:
 ;;;   path -- NUL-terminated file path cstr
+;;;   delim -- delimiter character as ASCII code (e.g., 44 for comma, 9 for tab)
 ;;;
 ;;; Returns:
-;;;   A cons list of row vecs (same as csv/parse), or 0 on read error.
+;;;   A cons list of row vecs (same as csv/parse-with-delim), or 0 on read error or invalid delimiter.
 ;;;   Free with csv/free.
 ;;;
 ;;; Example:
-;;;   (csv/read-file "data.csv")  ; => cons list of rows
+;;;   (csv/read-file-with-delim "data.tsv" 9)  ; => cons list of TSV rows
+;;;   (csv/read-file-with-delim "/nonexistent" 44)  ; => 0
+;;;   (csv/read-file-with-delim "/etc/hosts" 0)  ; => 0
 ;;;
-;;; Since: Phase B2
-(defn csv/read-file [path :cstr] :int
+;;; Since: Phase D2
+(defn csv/read-file-with-delim [path :cstr delim :int] :int
   ```c
+  /* Validate delimiter */
+  if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
+  char sep = (char)delim;
   FILE *f = fopen(path, "rb");
   if (!f) return 0;
   fseek(f, 0, SEEK_END);
@@ -340,12 +454,12 @@
         rp++;
         while(rp<=rend){if(*rp=='"'){if(*(rp+1)=='"'){if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]='"';rp+=2;}else{rp++;break;}}else{if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]=*rp++;}}
       } else {
-        while(rp<rend&&*rp!=','){if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]=*rp++;}
+        while(rp<rend&&*rp!=sep){if(flen+1>=fcap){fcap*=2;field=realloc(field,fcap);}field[flen++]=*rp++;}
       }
       field[flen]='\0';
       if(v->len>=v->cap){v->cap=v->cap>0?v->cap*2:4;v->data=realloc(v->data,v->cap*sizeof(int64_t));}
       v->data[v->len++]=(int64_t)(intptr_t)field;
-      if(rp<rend&&*rp==',')rp++; else break;
+      if(rp<rend&&*rp==sep)rp++; else break;
     }
     free(line);
     int64_t *cell=malloc(2*sizeof(int64_t)); cell[0]=(int64_t)(intptr_t)v; cell[1]=head; head=(int64_t)(intptr_t)cell;
@@ -353,6 +467,74 @@
   }
   free(buf);
   return head;
+  ```)
+
+;;; csv/read-file -- read a CSV file and parse it into a cons list of row vecs.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated file path cstr
+;;;
+;;; Returns:
+;;;   A cons list of row vecs (same as csv/parse), or 0 on read error.
+;;;   Free with csv/free.
+;;;
+;;; Example:
+;;;   (csv/read-file "data.csv")  ; => cons list of rows
+;;;
+;;; Since: Phase B2
+(defn csv/read-file [path :cstr] :int
+  ```c
+  return csv_read_file_with_delim(path, 44);
+  ```)
+
+;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated destination path cstr
+;;;   rows -- cons list of row vecs
+;;;   delim -- delimiter character as ASCII code (e.g., 44 for comma, 9 for tab)
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error or invalid delimiter.
+;;;
+;;; Example:
+;;;   (csv/write-file-with-delim "out.tsv" my-rows 9)  ; => 0 (TSV file)
+;;;   (csv/write-file-with-delim "/dev/null" (csv/parse "a,b") 44)  ; => 0
+;;;   (csv/write-file-with-delim "/dev/null" (csv/parse "a") 0)  ; => -1
+;;;
+;;; Since: Phase D2
+(defn csv/write-file-with-delim [path :cstr rows :int delim :int] :int
+  ```c
+  /* Validate delimiter */
+  if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return -1;
+  char sep = (char)delim;
+  FILE *f = fopen(path, "wb");
+  if (!f) return -1;
+  int64_t cur = rows;
+  while (cur) {
+    int64_t *cell = (int64_t*)(intptr_t)cur;
+    int64_t vptr  = cell[0];
+    if (vptr) {
+      struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
+      for (size_t i = 0; i < vec->len; i++) {
+        const char *fd = (const char*)(intptr_t)vec->data[i];
+        int nq = 0;
+        for (const char *q=fd;*q;q++) if(*q==sep||*q=='"'||*q=='\n'||*q=='\r'){nq=1;break;}
+        if (i > 0) fputc(sep, f);
+        if (nq) {
+          fputc('"', f);
+          for (const char *q=fd;*q;q++) { if(*q=='"')fputc('"',f); fputc(*q,f); }
+          fputc('"', f);
+        } else {
+          fputs(fd, f);
+        }
+      }
+      fputc('\n', f);
+    }
+    cur = cell[1];
+  }
+  fclose(f);
+  return 0;
   ```)
 
 ;;; csv/write-file -- serialize a cons list of row vecs to a CSV file.
@@ -370,31 +552,5 @@
 ;;; Since: Phase B2
 (defn csv/write-file [path :cstr rows :int] :int
   ```c
-  FILE *f = fopen(path, "wb");
-  if (!f) return -1;
-  int64_t cur = rows;
-  while (cur) {
-    int64_t *cell = (int64_t*)(intptr_t)cur;
-    int64_t vptr  = cell[0];
-    if (vptr) {
-      struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)vptr;
-      for (size_t i = 0; i < vec->len; i++) {
-        const char *fd = (const char*)(intptr_t)vec->data[i];
-        int nq = 0;
-        for (const char *q=fd;*q;q++) if(*q==','||*q=='"'||*q=='\n'||*q=='\r'){nq=1;break;}
-        if (i > 0) fputc(',', f);
-        if (nq) {
-          fputc('"', f);
-          for (const char *q=fd;*q;q++) { if(*q=='"')fputc('"',f); fputc(*q,f); }
-          fputc('"', f);
-        } else {
-          fputs(fd, f);
-        }
-      }
-      fputc('\n', f);
-    }
-    cur = cell[1];
-  }
-  fclose(f);
-  return 0;
+  return csv_write_file_with_delim(path, rows, 44);
   ```)

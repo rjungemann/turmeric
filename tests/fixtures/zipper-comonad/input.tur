@@ -26,7 +26,7 @@
   return (int64_t)(intptr_t)z;
   ```)
 
-(defn zipper-focus [z] :int
+(defn lz-focus [z] :int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   return ((Zip *)(intptr_t)z)->focus;
@@ -110,7 +110,7 @@
   ```)
 
 (definstance Comonad [zipper]
-  (extract   [wa]    (zipper-focus wa))
+  (extract   [wa]    (lz-focus wa))
   (extend    [wa fn] (__zipper_extend wa fn))
   (duplicate [wa]    (__zipper_extend wa (fn [zi] zi))))
 

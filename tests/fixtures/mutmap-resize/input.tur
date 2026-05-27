@@ -4,16 +4,16 @@
 ;; rehashing.
 
 (defn main [] :int
-  (let [mm (tmumap-new)
+  (let [mm (mutmap-new)
         ^mut i 0]
     (while (< i 100)
-      (tmumap-set! mm i i (* i 10))
+      (mutmap-set! mm i i (* i 10))
       (set! i (+ i 1)))
-    (println (tmumap-len mm))           ; 100
-    (println (tmumap-get mm 0 0))         ; 0
-    (println (tmumap-get mm 50 50))       ; 500
-    (println (tmumap-get mm 99 99))       ; 990
-    (println (tmumap-has? mm 0 0))        ; true
-    (println (tmumap-has? mm 100 100))    ; false
-    (tmumap-free mm))
+    (println (mutmap-len mm))           ; 100
+    (println (mutmap-get mm 0 0))         ; 0
+    (println (mutmap-get mm 50 50))       ; 500
+    (println (mutmap-get mm 99 99))       ; 990
+    (println (mutmap-has? mm 0 0))        ; true
+    (println (mutmap-has? mm 100 100))    ; false
+    (mutmap-free mm))
   0)
