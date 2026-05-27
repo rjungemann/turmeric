@@ -61,7 +61,7 @@
 ;;;
 ;;; Parameters:
 ;;;   ma -- a Free value
-;;;   kont -- a fat-closure from a to (Free f b), stored as :int
+;;;   kont -- a typed fat-closure from a to (Free f b), stored as :fn
 ;;;
 ;;; Returns:
 ;;;   A new Free value representing the sequenced computation.
@@ -70,49 +70,47 @@
 ;;;   (free-bind (free-pure 3) (fn [x] (free-pure (* x 2))))  ; => (PureFree 6)
 ;;;
 ;;; Since: Phase RF3
-(defn free-bind [ma :int kont :int] #{Unsafe} :int
+;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
+(defn free-bind [ma :int kont :fn] #{Unsafe} :int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
   tur_adt_Free_fb *fr = (tur_adt_Free_fb*)(intptr_t)ma;
   if (fr->tag == 0) { /* PureFree */
-    int64_t *fat = (int64_t*)(intptr_t)kont;
-    int64_t thunk = fat[0];
-    return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, fr->as.PureFree._0);
-  } else { /* Suspend -- pass through */
-    return ma;
+    int64_t *_fat = (int64_t*)(intptr_t)kont;
+    tur_poly_fn_t _kont = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
+    return _kont.fn(_kont.env, fr->as.PureFree._0);
   }
+  return ma; /* Suspend -- pass through */
   ```)
 
 ;;; free-fmap -- functor map for Free: apply a function to all pure leaves.
 ;;;
 ;;; Parameters:
 ;;;   free -- a Free value
-;;;   f    -- a fat-closure from a to b, stored as :int
+;;;   f    -- a typed fat-closure from a to b, stored as :fn
 ;;;
 ;;; Returns:
 ;;;   A new Free value with f applied to all pure leaves.
 ;;;
 ;;; Since: Phase RF3
-(defn free-fmap [free :int f :int] #{Unsafe} :int
+;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
+(defn free-fmap [free :int f :fn] #{Unsafe} :int
   ```c
-  /* Apply f to the pure value inside a PureFree, or pass Suspend through. */
-  /* Assume free is a tur_adt_Free pointer */
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free;
   tur_adt_Free *fr = (tur_adt_Free*)(intptr_t)free;
   if (fr->tag == 0) { /* PureFree */
-    int64_t *fat = (int64_t*)(intptr_t)f;
-    int64_t thunk = fat[0];
-    int64_t mapped = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, fr->as.PureFree._0);
+    int64_t *_fat = (int64_t*)(intptr_t)f;
+    tur_poly_fn_t _f = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
+    int64_t mapped = _f.fn(_f.env, fr->as.PureFree._0);
     return free_pure(mapped);
-  } else { /* Suspend */
-    return free;
   }
+  return free; /* Suspend -- pass through */
   ```)
 
 ;;; free-run -- interpret a Free computation with a natural transformation.
 ;;;
 ;;; Parameters:
-;;;   interp -- a fat-closure from (f a) to a, stored as :int
+;;;   interp -- a typed fat-closure from (f a) to a, stored as :fn
 ;;;   free   -- a Free computation to run
 ;;;
 ;;; Returns:
@@ -122,15 +120,15 @@
 ;;;   (free-run my-interp my-program)
 ;;;
 ;;; Since: Phase RF3
-(defn free-run [interp :int free :int] #{Unsafe} :int
+;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
+(defn free-run [interp :fn free :int] #{Unsafe} :int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;
   tur_adt_Free_fr *fr = (tur_adt_Free_fr*)(intptr_t)free;
-  if (fr->tag == 0) { /* PureFree */
+  if (fr->tag == 0) /* PureFree */
     return fr->as.PureFree._0;
-  } else { /* Suspend */
-    int64_t *fat = (int64_t*)(intptr_t)interp;
-    int64_t thunk = fat[0];
-    return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, fr->as.Suspend._0);
-  }
+  /* Suspend: call interpreter via TS5 tur_poly_fn_t */
+  int64_t *_fat = (int64_t*)(intptr_t)interp;
+  tur_poly_fn_t _interp = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
+  return _interp.fn(_interp.env, fr->as.Suspend._0);
   ```)
