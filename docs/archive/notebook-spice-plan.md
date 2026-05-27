@@ -1,7 +1,7 @@
 # Spice Plan: tur-notebook
 
-> **Status:** In Progress -- NB0-NB10 implemented in `../turmeric-spices/spices/notebook`; NB11-NB12 pending
-> **Last Updated:** 2026-05-26
+> **Status:** Implementation complete -- NB0-NB12 implemented in `../turmeric-spices/spices/notebook`; pending only the v0.1.0 tag / release sweep
+> **Last Updated:** 2026-05-27
 > **Type:** Spice Design / Tooling
 
 ---
@@ -31,13 +31,18 @@ Status below reflects the implementation currently living in the sibling
 - [x] Edit-mode workflow is present in the TUI: `e` shells out to `$EDITOR`,
   structural actions (`a`, `b`, `dd`, `p`) update the notebook in place,
   modified notebooks track dirty state, and `q` warns before quitting unsaved changes
-- [ ] Remaining CLI surface after NB7 is not present yet (`tur nb exec`,
-  `tur nb new`)
+- [x] Remaining CLI surface after NB7 is present: `tur nb exec` (with
+  `--cell` / `--all`) and `tur nb new` (starter scaffold) ship in `notebook/cli`
+  and are covered by `tests/exec_test.tur`
 - [x] NB10 interactive polish is present: search (`/`, `n`, `N`) spans cell
   source and output text, `?` opens a help overlay, `o` toggles focused output,
   and `--keybindings` merges user overrides onto the default TUI bindings
-- [ ] Later interactive pieces are not present yet (image protocol support)
-- [ ] Docs / release follow-through is not present yet (guide, examples, tag / release work)
+- [x] Later interactive pieces are present: `notebook/image` ships the stdout
+  marker hook, base64 PNG encoder, and TUI inline image display via the Kitty
+  graphics protocol / iTerm2 inline-image protocol with a `[image: path]`
+  text fallback; the TUI integrates image paths from `cell-output.image-paths`
+- [x] Guide is present at `../turmeric-spices/docs/guides/notebook-guide.md`
+- [ ] Release follow-through is not present yet (examples, `notebook-v0.1.0` tag)
 
 ---
 
@@ -797,15 +802,25 @@ CommonMark 0.30 spec test suite as its acceptance criterion.
   keybindings override file (`--keybindings`) merged onto built-in defaults;
   `tur nb tui` also accepts `--no-color`.
 
-- [ ] **NB11** -- `notebook/image` hook; integration glue documented for
-  `tur-plot` and `tur-plutovg`; inline graphics show in the TUI's output
-  region via the Kitty / iTerm2 image protocol when the terminal supports
-  it, sixel where available, or a `[image: path]` placeholder otherwise.
+- [x] **NB11** -- `notebook/image` hook (stdout marker convention,
+  `image-hook-record-path`, `png->data-url`, `image-display-tui`); the TUI
+  renders image paths recorded into `cell-output.image-paths` via the Kitty
+  graphics protocol or iTerm2 inline-image protocol when detected, with a
+  `[image: path]` text fallback on other terminals; integration with
+  `tur-plot` / `tur-plutovg` is opt-in: cells call `(image-hook-record-path
+  path)` after `plot-write-png` / `surface-write-png` to advertise the PNG.
+  Sixel was deferred to a follow-up. See the notebook guide for the full
+  integration pattern.
 
-- [ ] **NB12** -- `notebook/cli exec`, `notebook/cli new` (starter file
-  scaffold); end-to-end tests for every subcommand; README in
-  `turmeric-spices`; `docs/guides/notebook-guide.md`;
-  `notebook-v0.1.0` tag.
+- [x] **NB12** -- `notebook/cli exec` (`--cell <id>` and `--all`) and
+  `notebook/cli new` (starter file scaffold) ship in `src/notebook/cli.tur`;
+  `tests/exec_test.tur` covers the happy and error paths for both; README in
+  `turmeric-spices` lists the spice; `docs/guides/notebook-guide.md` covers
+  cells, rendering, the TUI, caching, plots, reproducibility, and
+  keybindings. The `notebook-v0.1.0` tag is the only remaining step and will
+  be cut once the v0.1.0 examples (`quickstart.tur.md`,
+  `stats-walkthrough.tur.md`, `plot-gallery.tur.md`) are added under
+  `spices/notebook/examples/`.
 
 ---
 
