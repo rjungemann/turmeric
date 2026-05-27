@@ -16,4 +16,12 @@ int emit_program(Buf *out, const Expr *program);
 int emit_header(Buf *out, const char *module_name, const Expr *program, bool separate_compilation);
 int emit_implementation(Buf *out, const char *module_name, const Expr *program, bool separate_compilation);
 
+/* RP1: append one manifest line per exported defn of the form
+ *   <module>/<defn> -> <mangled-c-symbol> :: (:arg-tag ...) -> :ret-tag
+ * to `out`. Tags use the Turmeric type DSL (:int, :cstr, :float, :bool,
+ * :void, :ptr, :any). Variadic defns get a `& :rest-tag` after the fixed
+ * args. Returns 0 on success, -1 on error. Used by `tur build --shared`
+ * to produce exports.manifest for the dlopen host (REPL, FFI dispatcher). */
+int emit_exports_manifest(Buf *out, const Expr *program);
+
 #endif

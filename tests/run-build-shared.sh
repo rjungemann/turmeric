@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# tests/run-build-shared.sh -- RP0 smoke test for `tur build --shared`.
+# tests/run-build-shared.sh -- RP0+RP1 smoke test for `tur build --shared`.
 #
 # Builds tests/fixtures/build-shared-smoke as a shared library, then
 # compiles a hand-written C harness that dlopens it and calls the
 # exported `smokelib__add42` symbol. Confirms the end-to-end pipe
 # from `defmodule ... (export ...)` -> linker -> dlopen -> dlsym -> call.
+#
+# RP1 additions: assert that exports.manifest is produced with the right
+# format and that --manifest <path> redirects the output.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -79,6 +82,53 @@ if out=$("$HARNESS" "$LIB" 2>&1); then
     fi
 else
     fail "build-shared-smoke-dlopen-call" "harness exit=$?, output: $out"
+fi
+
+# RP1: exports.manifest is produced at the default location (<out>.manifest)
+# and records the export with the expected mangled symbol and signature.
+DEFAULT_MANIFEST="$LIB.manifest"
+if [ -f "$DEFAULT_MANIFEST" ]; then
+    pass "build-shared-smoke-manifest-default-exists"
+else
+    fail "build-shared-smoke-manifest-default-exists" "expected $DEFAULT_MANIFEST"
+fi
+
+EXPECTED='smokelib/add42 -> smokelib__add42 :: (:int) -> :int'
+if grep -qxF "$EXPECTED" "$DEFAULT_MANIFEST" 2>/dev/null; then
+    pass "build-shared-smoke-manifest-line"
+else
+    fail "build-shared-smoke-manifest-line" \
+         "expected line not found. got: $(cat "$DEFAULT_MANIFEST" 2>/dev/null)"
+fi
+
+# --manifest <path> redirects manifest output and does NOT write the default.
+LIB2="$WORK/libsmoke-alt.$LIB_EXT"
+ALT_MANIFEST="$WORK/exports.manifest"
+"$TUR" build --shared "$FIXTURE" -o "$LIB2" --manifest "$ALT_MANIFEST" \
+       >"$WORK/build2.log" 2>&1
+if [ ! -f "$ALT_MANIFEST" ]; then
+    fail "build-shared-smoke-manifest-override" \
+         "--manifest did not produce $ALT_MANIFEST: $(cat "$WORK/build2.log")"
+elif [ -f "$LIB2.manifest" ]; then
+    fail "build-shared-smoke-manifest-override" \
+         "default $LIB2.manifest should not exist when --manifest is given"
+elif ! grep -qxF "$EXPECTED" "$ALT_MANIFEST"; then
+    fail "build-shared-smoke-manifest-override" \
+         "expected line missing from $ALT_MANIFEST: $(cat "$ALT_MANIFEST")"
+else
+    pass "build-shared-smoke-manifest-override"
+fi
+
+# --manifest without --shared must be rejected.
+if "$TUR" build "$FIXTURE" --manifest /tmp/should-not-exist.manifest \
+        >"$WORK/build3.log" 2>&1; then
+    fail "build-shared-smoke-manifest-requires-shared" \
+         "expected non-zero exit; output: $(cat "$WORK/build3.log")"
+elif ! grep -q -- '--manifest requires --shared' "$WORK/build3.log"; then
+    fail "build-shared-smoke-manifest-requires-shared" \
+         "missing expected diagnostic; got: $(cat "$WORK/build3.log")"
+else
+    pass "build-shared-smoke-manifest-requires-shared"
 fi
 
 echo

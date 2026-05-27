@@ -3691,6 +3691,76 @@ static void mangle_module_name(char *out, const char *name, size_t cap) {
     out[k] = '\0';
 }
 
+/* RP1: map a TypeKind to its Turmeric type-DSL spelling for the
+ * exports.manifest. The dispatch table is intentionally narrow -- the
+ * FFI runtime only handles primitives in v1; anything richer falls back
+ * to :any so the dispatcher can still recognise the shape. */
+static const char *manifest_type_tag(TypeKind k) {
+    switch (k) {
+        case TY_NIL:      return ":void";
+        case TY_BOOL:     return ":bool";
+        case TY_INT:      return ":int";
+        case TY_FLOAT:    return ":float";
+        case TY_CSTR:     return ":cstr";
+        case TY_PTR_VOID: return ":ptr";
+        case TY_INT8:     return ":int8";
+        case TY_INT16:    return ":int16";
+        case TY_INT32:    return ":int32";
+        case TY_INT64:    return ":int64";
+        case TY_UINT8:    return ":uint8";
+        case TY_UINT16:   return ":uint16";
+        case TY_UINT32:   return ":uint32";
+        case TY_UINT64:   return ":uint64";
+        case TY_FLOAT32:  return ":float32";
+        case TY_FLOAT64:  return ":float64";
+        case TY_NEVER:    return ":never";
+        default:          return ":any";
+    }
+}
+
+/* RP1: append a manifest line per exported defn. See emit.h for format. */
+int emit_exports_manifest(Buf *out, const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) {
+        fprintf(stderr, "tur: emit_exports_manifest: expected EX_PROGRAM\n");
+        return -1;
+    }
+    uint32_t n_items;
+    const Expr **items = flatten_program_items(program, &n_items);
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind != EX_FN_DEF) continue;
+        FnDef *fd = e->as.fn_def_.fn;
+        const Binding *b = fd->binding;
+        if (!b->is_exported) continue;
+        /* `main` is exempt from module-prefixing and from --shared anyway. */
+        if (b->name->len == 4 && memcmp(b->name->name, "main", 4) == 0) continue;
+        if (e->type.kind != TY_FN) continue;
+        /* Module qualifier: the defmodule name (or `_` for top-level
+         * exports outside a defmodule -- those don't get a C prefix
+         * either, so the host can still resolve them via the bare name). */
+        const char *mod_name = b->defining_module_name
+                             ? b->defining_module_name->name
+                             : "_";
+        char *mangled = raw_name_for_binding(b);
+        buf_printf(out, "%s/%.*s -> %s :: (",
+                   mod_name, (int)b->name->len, b->name->name, mangled);
+        for (uint8_t j = 0; j < fd->n_params; j++) {
+            if (j > 0) buf_puts(out, " ");
+            buf_puts(out, manifest_type_tag(fd->param_types[j].kind));
+        }
+        if (e->type.as.fn.is_variadic) {
+            if (fd->n_params > 0) buf_puts(out, " ");
+            buf_printf(out, "& %s", manifest_type_tag(e->type.as.fn.rest_kind));
+        }
+        buf_puts(out, ") -> ");
+        TypeKind ret = e->type.as.fn.result_kind;
+        buf_puts(out, manifest_type_tag(ret));
+        buf_putc(out, '\n');
+        free(mangled);
+    }
+    return 0;
+}
+
 /* Emit a C header file for a module. Contains declarations (not definitions).
  * When separate_compilation is true (Phase M3): only exported functions are
  * declared, and #includes for each imported module's header are emitted. */

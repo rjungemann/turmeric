@@ -825,11 +825,15 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     return rc;
 }
 
-/* Compile a .tur file to a C implementation (.c). Returns 0 on success. */
+/* Compile a .tur file to a C implementation (.c). Returns 0 on success.
+ * RP1: when `out_manifest` is non-NULL, append one exports.manifest line
+ * per exported defn (see emit.h:emit_exports_manifest). Pass NULL when
+ * the caller only wants the .c output. */
 static int compile_to_implementation(const char *path, Buf *out_c, const char *module_name,
                                      const char **include_dirs, int n_include_dirs,
                                      const char **reader_macro_paths,
-                                     int n_reader_macro_paths) {
+                                     int n_reader_macro_paths,
+                                     Buf *out_manifest) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -890,6 +894,14 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true) != 0) {
+            rc = 1;
+        }
+        /* RP1: emit_exports_manifest only inspects bindings on `ctx.prog`
+         * and is safe to run after emit_implementation (which doesn't
+         * mutate the program). Skip on prior error to avoid surfacing
+         * incomplete manifest entries. */
+        if (rc == 0 && out_manifest
+            && emit_exports_manifest(out_manifest, ctx.prog) != 0) {
             rc = 1;
         }
     }
@@ -1009,7 +1021,8 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
                                 (const char **)rm_p, rm_n);
         int c_rc = compile_to_implementation(input, &c_buf, mod_name,
                                              include_dirs, n_include_dirs,
-                                             (const char **)rm_p, rm_n);
+                                             (const char **)rm_p, rm_n,
+                                             NULL /* no manifest in emit-c */);
         free_reader_macro_paths(rm_p, rm_n);
 
         if (h_rc != 0 || c_rc != 0) {
@@ -2236,8 +2249,12 @@ static int cmd_test(const char *dir) {
  * plus a _main.c that includes all headers. */
 /* RP0: `shared` selects shared-library build (skip _main.c, link with
  * -fPIC -shared, default output `lib<dir>.so`). The host can then
- * dlopen the result and dlsym exported defns. */
-static int cmd_build_multi(const char *dir, const char *out_path, bool shared) {
+ * dlopen the result and dlsym exported defns.
+ * RP1: `manifest_path` overrides the default exports.manifest location
+ * (`<out_path>.manifest`). NULL means use the default. Ignored unless
+ * `shared` is true. */
+static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
+                           const char *manifest_path) {
     int n_files;
     char **tur_files = collect_tur_files(dir, &n_files);
     if (!tur_files || n_files == 0) {
@@ -2262,6 +2279,14 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared) {
     char **h_files = (char **)malloc(n_files * sizeof(char *));
     char **c_files = (char **)malloc(n_files * sizeof(char *));
     if (!h_files || !c_files) { fprintf(stderr, "tur: oom\n"); return 2; }
+
+    /* RP1: in shared mode, accumulate one exports.manifest line per
+     * exported defn across all compiled modules, then write the file
+     * once after the link succeeds. NULL in executable mode -- nothing
+     * dlopens an executable, so the manifest would be unused. */
+    Buf manifest;
+    buf_init(&manifest);
+    Buf *manifest_ptr = shared ? &manifest : NULL;
 
     /* Generate module names (basename without .tur) */
     for (int i = 0; i < n_files; i++) {
@@ -2310,7 +2335,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared) {
         buf_init(&c_out);
         if (compile_to_implementation(tur_files[i], &c_out, mod_name_no_ext,
                                       NULL, 0,
-                                      (const char **)rm_p, rm_n) != 0) {
+                                      (const char **)rm_p, rm_n,
+                                      manifest_ptr) != 0) {
             fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
             buf_free(&c_out);
             free_reader_macro_paths(rm_p, rm_n);
@@ -2412,9 +2438,38 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared) {
     if (!shared) unlink("_main.c");
 
     if (sys_rc != 0) {
+        buf_free(&manifest);
         fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
         return 2;
     }
+
+    /* RP1: write exports.manifest alongside the .so. Default location is
+     * `<out_path>.manifest` (lives next to the library); --manifest <path>
+     * overrides. The host (REPL / FFI dispatcher) reads this file to map
+     * `<module>/<defn>` -> mangled C symbol + type signature. */
+    if (shared) {
+        char default_mp[2048];
+        if (!manifest_path) {
+            snprintf(default_mp, sizeof(default_mp), "%s.manifest", out_path);
+            manifest_path = default_mp;
+        }
+        FILE *mf = fopen(manifest_path, "wb");
+        if (!mf) {
+            fprintf(stderr, "tur: cannot open %s for write: %s\n",
+                    manifest_path, strerror(errno));
+            buf_free(&manifest);
+            return 2;
+        }
+        if (manifest.len > 0 &&
+            fwrite(manifest.data, 1, manifest.len, mf) != manifest.len) {
+            fprintf(stderr, "tur: failed writing %s\n", manifest_path);
+            fclose(mf);
+            buf_free(&manifest);
+            return 2;
+        }
+        fclose(mf);
+    }
+    buf_free(&manifest);
     return 0;
 }
 
@@ -4834,7 +4889,7 @@ static int usage_build(void) {
         "usage:\n"
         "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
-        "  tur build --shared <dir> [-o <out>]              build a shared library (.so)\n"
+        "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library (.so)\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
         "  tur emit-c [-I <dir>...] --output-dir <dir> <files...>  emit per-module .h/.c\n"
         "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
@@ -4847,6 +4902,9 @@ static int usage_build(void) {
         "  --shared          build a shared library (`-fPIC -shared`, no main);\n"
         "                    requires a directory argument. Exported defns are\n"
         "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
+        "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
+        "                    (defaults to `<out>.manifest`). Lists each export\n"
+        "                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.\n"
         "  --target wasm     compile to WebAssembly via emcc (requires Emscripten)\n"
         "\n"
         "Try 'tur --help' for global options.\n");
@@ -5711,6 +5769,7 @@ int main(int argc, char **argv) {
         const char *out = NULL;
         const char *build_target = NULL;
         bool        shared = false;  /* RP0: --shared selects shared-library build */
+        const char *manifest_out = NULL; /* RP1: --manifest <path> override */
         /* SC1: collect -I flags once via the shared helper, then walk argv
          * a second time for the build-specific flags (`-o`, `--target`)
          * and the positional input. */
@@ -5726,6 +5785,8 @@ int main(int argc, char **argv) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "--shared") == 0) {
                 shared = true;
+            } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
+                manifest_out = argv[++i];
             } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
                 build_target = argv[++i];
                 if (strcmp(build_target, "wasm") != 0) {
@@ -5754,10 +5815,14 @@ int main(int argc, char **argv) {
             fprintf(stderr, "tur build: --shared and --target are mutually exclusive\n");
             free(build_inc); return 1;
         }
+        if (manifest_out && !shared) {
+            fprintf(stderr, "tur build: --manifest requires --shared\n");
+            free(build_inc); return 1;
+        }
         /* Check if input is a directory - use multi-file build */
         int rc;
         if (is_directory(input)) {
-            rc = cmd_build_multi(input, out, shared);
+            rc = cmd_build_multi(input, out, shared, manifest_out);
         } else {
             /* RM4: auto-discover the spice manifest containing `input` so
              * `:reader-macros [...]` entries apply when building a single
