@@ -78,8 +78,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             for (uint8_t i = 0; i < fd->closure->n_captures; i++) {
                 Binding *captured = fd->closure->captures[i];
-                buf_printf(file, "%s %s; ",
-                           type_c_name(captured->type), captured->name->name);
+                /* CY4: rank-2 captures must live as tur_poly_fn_t. */
+                const char *cap_ctype = captured->is_poly_fn
+                                          ? "tur_poly_fn_t"
+                                          : type_c_name(captured->type);
+                buf_printf(file, "%s %s; ", cap_ctype, captured->name->name);
             }
             buf_puts(file, "};\n");
             free(thunk_typedef);

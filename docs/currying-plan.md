@@ -1,13 +1,13 @@
 # Haskell-Style Currying -- Implementation Plan (CY0–CY4)
 
-> **Status:** CY0–CY3 complete. CY4 not started.
+> **Status:** CY0–CY4 complete.
 >
 > **Prerequisites:** Phase 2 (closures, `fn`, `defn`), Phase HRT1 (`->` type
 > constructor), Phase HKT (kind system). No effect-row interaction is required
 > for CY0–CY2; effect-row propagation through partial applications is deferred
 > to CY4.
 >
-> **Last updated:** 2026-05-14
+> **Last updated:** 2026-05-27
 
 ---
 
@@ -293,9 +293,36 @@ declared type once type inference is in place.)
 
 - [x] Write `point-free.tur` fixture using `(map (+ 1) xs)`.
 - [x] Add `curry` macro to `stdlib/macros.tur`.
-- [ ] Add `curry` fixture: `currying-curry-macro.tur`.
-- [ ] Audit `list.tur` / `vec.tur` higher-order functions; note which need
-  generalisation and file follow-up tasks.
+- [x] Add `curry` fixture: `currying-curry-macro.tur`.
+- [x] Audit `list.tur` / `vec.tur` higher-order functions; note which need
+  generalisation and file follow-up tasks. See *Stdlib HOF audit* below.
+
+### Stdlib HOF audit (CY3)
+
+At the time of the audit, `list.tur` and `vec.tur` had **no** dedicated
+`list-map`/`list-filter`/`list-fold` or `vec-map`/`vec-filter`/`vec-fold`
+entry points; the only higher-order entries in those files were:
+
+| File | Function | Higher-order arg position | Notes |
+|---|---|---|---|
+| `list.tur` | `list-eq?` | last (`cmp-fn`) | comparator used internally for `Eq [Cons]` |
+| `list.tur` | `__cons-fmap` | last (`f :fn`) | internal `Functor [Cons]` helper |
+| `vec.tur` | `vec-eq?` | last (`cmp-fn`) | comparator used internally for `Eq [Vec]` |
+
+These work with currying as written -- the trailing function/comparator
+slot can be partial-applied -- but the more common pattern (`(map f xs)`
+with the function *first* so `(map (+ 1))` becomes a section) is not
+expressible until the polymorphic, function-first list/vec helpers exist.
+
+Follow-up tasks (out of scope for CY4):
+
+1. Add `list-map`, `list-filter`, `list-fold` to `list.tur` with the
+   `(fn ... xs)` argument order (function first). Once these exist,
+   `(map (+ 1) xs)` works out of the box via partial application.
+2. Add `vec-map`, `vec-filter`, `vec-fold` to `vec.tur` with the same
+   ordering convention.
+3. Generalise these from `int -> int` over `(Functor f)` / `(Foldable f)`
+   typeclasses (depends on HKT typeclasses).
 
 **Exit criterion:** `point-free.tur` passes; `curry` macro is in stdlib and
 documented.
@@ -330,11 +357,11 @@ argument. If this is partially applied, the resulting closure must retain the
 
 ### Tasks
 
-- [ ] Propagate `effect_row` through `elab_partial_apply`.
-- [ ] Propagate `arg_full_types` fully through partial application.
-- [ ] Fixture: `currying-effect-partial.tur` -- partial application of an
+- [x] Propagate `effect_row` through `elab_partial_apply`.
+- [x] Propagate `arg_full_types` fully through partial application.
+- [x] Fixture: `currying-effect-partial.tur` -- partial application of an
   effectful function retains the effect annotation.
-- [ ] Fixture: `currying-rank2-partial.tur` -- partial application of a rank-2
+- [x] Fixture: `currying-rank2-partial.tur` -- partial application of a rank-2
   function.
 
 **Exit criterion:** Both fixtures pass; effect-check pass produces no spurious
