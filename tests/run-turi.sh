@@ -13,6 +13,8 @@
 # Environment:
 #   TUR              path to the tur binary (default: ./build/tur)
 #   TURI_FILTER      optional additional grep -E pattern to narrow the run
+#                    (TUR_TEST_FILTER is accepted as an alias for parity with
+#                    tests/run.sh -- see KB-002 in docs/known-bugs.md)
 #   TUR_TEST_JOBS    parallelism (default: cpu count, capped at 8)
 #   TUR_FORCE        set to 1 to skip stamp-cache fast-path
 
@@ -211,8 +213,11 @@ run_turi_fixture() {
     local name="${dir#tests/fixtures/}"
     local input
 
-    # Skip if not in the turi include set.
+    # Skip if not in the turi include set.  Emit a visible SKIP so allowlist
+    # gaps don't go unnoticed -- see KB-001 in docs/known-bugs.md.
     if ! fixture_in_turi_set "$name"; then
+        printf 'SKIP %s (not in turi allowlist)\n' "$name"
+        echo "SKIP_ALLOWLIST" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
         return
     fi
 
@@ -317,8 +322,10 @@ for d in tests/fixtures/*/ tests/fixtures/*/*/; do
     ALL_DIRS+=("$d")
 done
 
-# Apply optional additional filter.
-TURI_FILTER="${TURI_FILTER:-}"
+# Apply optional additional filter.  Accept TUR_TEST_FILTER as an alias so the
+# same filter env var works against both tests/run.sh and tests/run-turi.sh.
+# TURI_FILTER wins when both are set.
+TURI_FILTER="${TURI_FILTER:-${TUR_TEST_FILTER:-}}"
 FILTERED_DIRS=()
 for d in "${ALL_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
@@ -333,6 +340,7 @@ if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
 fi
 
 # Tally results.
+ALLOWLIST_GAP=0
 for rf in "$RESULTS_DIR"/*.result; do
     [ -f "$rf" ] || continue
     kind="$(cat "$rf")"
@@ -342,6 +350,9 @@ for rf in "$RESULTS_DIR"/*.result; do
     elif [ "$kind" = "FAIL" ]; then
         FAIL=$((FAIL + 1))
         FAILED+=("$name")
+    elif [ "$kind" = "SKIP_ALLOWLIST" ]; then
+        SKIP=$((SKIP + 1))
+        ALLOWLIST_GAP=$((ALLOWLIST_GAP + 1))
     fi
 done
 
@@ -361,6 +372,9 @@ done
 
 echo
 echo "turi fixture summary: $PASS passed, $FAIL failed, $SKIP skipped"
+if [ "$ALLOWLIST_GAP" -gt 0 ]; then
+    echo "  (of which $ALLOWLIST_GAP not in turi allowlist; see KB-001)"
+fi
 if [ $FAIL -ne 0 ]; then
     echo "failed:"
     for f in "${FAILED[@]}"; do echo "  - $f"; done

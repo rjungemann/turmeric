@@ -20,7 +20,7 @@
   memcpy(out, sa, la);
   memcpy(out + la, sb, lb);
   out[la + lb] = '\0';
-  return (int64_t)(intptr_t)out;
+  return (const char *)(intptr_t)out;
   ```)
 
 (defstruct Triple :copy [a :int b :int c :int])
