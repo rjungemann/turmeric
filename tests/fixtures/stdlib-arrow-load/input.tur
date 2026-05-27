@@ -1,0 +1,8 @@
+;; Regression: stdlib/arrow.tur must load cleanly.
+;; Tracks docs/stdlib-arrow-typeclass-plan.md (KB-011).
+
+(load "stdlib/arrow.tur")
+
+(defn main [] :int
+  (println "arrow loaded")
+  0)

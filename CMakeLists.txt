@@ -45,6 +45,14 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Type-checks a curated allowlist of non-auto-loaded stdlib files so
+# regressions in their loadability are caught even when no fixture
+# imports them. See docs/stdlib-check-allowlist-plan.md.
+add_test(
+  NAME tur_stdlib_checks
+  COMMAND bash tests/run-stdlib-checks.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # GS-M2: global spice install / uninstall / subcommand fallthrough.
 add_test(
   NAME tur_install_tests

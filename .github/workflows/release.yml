@@ -15,15 +15,16 @@ jobs:
         include:
           - target: linux-x86_64
             os: ubuntu-latest
+            cmake_extra: ""
           - target: linux-aarch64
             os: ubuntu-24.04-arm
-          - target: macos-arm64
+            cmake_extra: ""
+          - target: macos-universal
             os: macos-latest
-          - target: macos-x86_64
-            os: macos-13
+            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -34,10 +35,13 @@ jobs:
         run: brew install libedit || true
 
       - name: Configure (Release)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ${{ matrix.cmake_extra }}
 
       - name: Build
         run: cmake --build build -j --config Release
+
+      - name: Smoke test
+        run: ./build/tur --version
 
       - name: Package
         run: |
@@ -49,12 +53,13 @@ jobs:
           cp build/tur dist/
           cp build/src/libturi.a dist/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
+          cp -R stdlib dist/
 
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: turmeric-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
@@ -63,16 +68,23 @@ jobs:
   release:
     name: Create Release
     needs: build
+    if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > sha256sums.txt
+          cat sha256sums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -111,94 +111,16 @@
   ```)
 
 ;; =============================================================================
-;; Arrow Instance for Function Arrow (->)
+;; Instances for Function Arrow (->) -- omitted
 ;; =============================================================================
-
-;;; Arrow instance for plain functions (->).
-(definstance Arrow [->]
-  (arr [f] f)
-  (>>> [f g]
-    (let [fv f gv g]
-      (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
-  (first [f]
-    (let [fv f]
-      (fn [p]
-        ```c
-        Tuple2 *pair = (Tuple2 *)(intptr_t)p;
-        Tuple2 *result = (Tuple2 *)malloc(sizeof(Tuple2));
-        result->e1 = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->e1);
-        result->e2 = pair->e2;
-        return (int64_t)(intptr_t)result;
-        ```)))
-  (second [f]
-    (let [fv f]
-      (fn [p]
-        ```c
-        Tuple2 *pair = (Tuple2 *)(intptr_t)p;
-        Tuple2 *result = (Tuple2 *)malloc(sizeof(Tuple2));
-        result->e1 = pair->e1;
-        result->e2 = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->e2);
-        return (int64_t)(intptr_t)result;
-        ```))))
-
-;; =============================================================================
-;; ArrowChoice Instance for Function Arrow
-;; =============================================================================
-
-;;; ArrowChoice instance for plain functions (->).
-;;; Note: requires Left/Right/Either (future feature); bodies are stubs.
-(definstance ArrowChoice [->]
-  (left [f]
-    (let [fv f]
-      (fn [eac]
-        ```c return 0; ```)))
-  (right [f]
-    (let [fv f]
-      (fn [eca]
-        ```c return 0; ```)))
-  (+++ [f g]
-    (let [fv f gv g]
-      (fn [eac]
-        ```c return 0; ```)))
-  (||| [f g]
-    (let [fv f gv g]
-      (fn [eab]
-        ```c return 0; ```))))
-
-;; =============================================================================
-;; ArrowZero / ArrowPlus / ArrowLoop / ArrowApply instances
-;; =============================================================================
-
-;;; ArrowZero instance for plain functions (->).
-(definstance ArrowZero [->]
-  (zeroArrow []
-    (fn [_] (error "zeroArrow for functions: no value"))))
-
-;;; ArrowPlus instance for plain functions (->).
-(definstance ArrowPlus [->]
-  (<+> [f g]
-    (let [fv f gv g]
-      (fn [x] (error "ArrowPlus for functions: choice not defined")))))
-
-;;; ArrowLoop instance for plain functions (->).
-;;; Note: uses mutation for the feedback value.
-(definstance ArrowLoop [->]
-  (loop [f]
-    (let [fv f
-          c-ref (ref 0)]
-      (fn [a]
-        (let [pair (__arrow_call1 fv (tuple2 a @c-ref))]
-          ```c
-          /* Stub: feedback not fully implemented without Tuple support */
-          return 0;
-          ```)))))
-
-;;; ArrowApply instance for plain functions (->).
-(definstance ArrowApply [->]
-  (app [f]
-    (let [fv f]
-      (fn [a]
-        (__arrow_call1 (__arrow_call1 fv a) a)))))
+;; The typeclass instances (Arrow [->], ArrowChoice [->], ArrowZero [->],
+;; ArrowPlus [->], ArrowLoop [->], ArrowApply [->]) are intentionally omitted.
+;; They tripped codegen bugs around closure-returning instance methods (dict
+;; field types resolved to void * rather than int64_t) and several stub bodies
+;; relied on language features (Either/Left/Right, full Tuple feedback) that
+;; aren't available yet. The free function implementations below cover the
+;; (->) case; reintroduce instances once those gaps are closed. See
+;; docs/stdlib-arrow-typeclass-plan.md.
 
 ;; =============================================================================
 ;; Plain Function Implementations
@@ -311,35 +233,6 @@
   (let [fv f]
     (fn [p] (__arrow_pair_second fv p))))
 
-;;; arrow-id -- identity arrow for any Arrow instance.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-;;;   a    -- the type parameter
-;;;
-;;; Returns:
-;;;   An arrow that passes its input unchanged.
-;;;
-;;; Example:
-;;;   (arrow-id)  ; => arr (fn [x] x)
-(defn arrow-id [^arr a]
-  (arr (fn [x] x)))
-
-;;; arrow-comp -- compose two arrows sequentially.
-;;;
-;;; Parameters:
-;;;   ^arr -- the arrow type constructor
-;;;   f    -- first arrow (a -> b)
-;;;   g    -- second arrow (b -> c)
-;;;
-;;; Returns:
-;;;   An arrow (a -> c) that applies f then g.
-;;;
-;;; Example:
-;;;   (arrow-comp f g)  ; => f >>> g
-(defn arrow-comp [^arr a b c f g]
-  (>>> f g))
-
 ;;; par-comp -- parallel composition of two functions on Tuple2 types.
 ;;;
 ;;; Parameters:
@@ -371,23 +264,9 @@
   (let [fv f gv g]
     (fn [x] (__arrow_pair_split fv gv x))))
 
-;;; <<< -- compose two function arrows in reverse order.
-;;;
-;;; Parameters:
-;;;   g -- second arrow (b -> c), applied second
-;;;   f -- first arrow (a -> b), applied first
-;;;
-;;; Returns:
-;;;   A function (a -> c) equivalent to (>>> f g). Useful when reading
-;;;   composition right-to-left: (<<< mul2 add1) = "mul2 after add1".
-;;;
-;;; Example:
-;;;   ((<<< (fn [x] (* x 2)) (fn [x] (+ x 1))) 3)  ; => 8
-;;;
-;;; Since: Phase B2
-(defn <<< [g f]
-  (let [fv f gv g]
-    (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
+;; <<< (reverse composition) is omitted. Both <<< and >>> mangle to the
+;; same C identifier (___), so they can't coexist as free defns. Write
+;; (>>> f g) with the arguments in the order you want them applied.
 
 ;;; arrow-const -- arrow that ignores its input and always returns v.
 ;;;
