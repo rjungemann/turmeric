@@ -1,21 +1,15 @@
-;;; tur/tuple -- typed N-ary tuples (Tuple2 only in TP1).
+;;; tur/tuple -- typed N-ary tuples (Tuple2..Tuple5).
 ;;;
 ;;; Fixed-arity heterogeneous tuples with statically typed elements.
-;;; Spike for the N-ary Tuple Type Plan (Option A).
-;;;
-;;; Status: only Tuple2 is shipped in TP1.  Tuple3..Tuple5 are blocked
-;;; on a kind-system extension: the current kind checker
-;;; (src/passes/kind_check.c, KIND_ARROW2) only supports type
-;;; constructors of arity 1 or 2, so a `(defstruct Tuple3 [A B C] ...)`
-;;; fails with TUR-E0012 the first time it's referenced.  Extending the
-;;; kind ladder to KIND_ARROW3..KIND_ARROW5 is a prerequisite for the
-;;; rest of the family; it is tracked as a follow-up to TP1.
+;;; Phase TP1 shipped Tuple2 only; Phase TP2 extends the kind ladder
+;;; (KIND_ARROW3..KIND_ARROW5 in src/compiler/types.h) so the rest of
+;;; the family can land.
 ;;;
 ;;; Tuple2 is intentionally distinct from Pair[A B]; see the
 ;;; "two-tuple-types problem" decision in docs/tuple-type-plan.md.
 ;;;
-;;; Since: Phase TP1
-;; tuple.tur -- Tuple2 struct, constructor and accessors.
+;;; Since: Phase TP1 (Tuple2); Phase TP2 (Tuple3..Tuple5)
+;; tuple.tur -- TupleN structs, constructors and accessors.
 
 ;;; Tuple2 -- two-element tuple with element types A, B.
 ;;;
@@ -69,3 +63,156 @@
 ;;; Since: Phase TP1
 (defn tuple2-2nd [A B] [t :(Tuple2 A B)] :B
   (.e2 t))
+
+;;; Tuple3 -- three-element tuple with element types A, B, C.
+;;;
+;;; Since: Phase TP2
+(defstruct Tuple3 [A B C]
+  (e1 A)
+  (e2 B)
+  (e3 C))
+
+;;; tuple3 -- construct a Tuple3[A B C].
+;;;
+;;; Parameters:
+;;;   a -- first element (type A)
+;;;   b -- second element (type B)
+;;;   c -- third element (type C)
+;;;
+;;; Returns:
+;;;   A Tuple3[A B C] value.
+;;;
+;;; Example:
+;;;   (tuple3 1 "hi" 3.14)  ; => Tuple3(1, "hi", 3.14)
+;;;
+;;; Since: Phase TP2
+(defn tuple3 [A B C] [a :A b :B c :C] :(Tuple3 A B C)
+  (make-struct Tuple3 a b c))
+
+;;; tuple3-1st -- first element of a Tuple3[A B C].
+;;;
+;;; Since: Phase TP2
+(defn tuple3-1st [A B C] [t :(Tuple3 A B C)] :A
+  (.e1 t))
+
+;;; tuple3-2nd -- second element of a Tuple3[A B C].
+;;;
+;;; Since: Phase TP2
+(defn tuple3-2nd [A B C] [t :(Tuple3 A B C)] :B
+  (.e2 t))
+
+;;; tuple3-3rd -- third element of a Tuple3[A B C].
+;;;
+;;; Since: Phase TP2
+(defn tuple3-3rd [A B C] [t :(Tuple3 A B C)] :C
+  (.e3 t))
+
+;;; Tuple4 -- four-element tuple with element types A, B, C, D.
+;;;
+;;; Since: Phase TP2
+(defstruct Tuple4 [A B C D]
+  (e1 A)
+  (e2 B)
+  (e3 C)
+  (e4 D))
+
+;;; tuple4 -- construct a Tuple4[A B C D].
+;;;
+;;; Parameters:
+;;;   a -- first element  (type A)
+;;;   b -- second element (type B)
+;;;   c -- third element  (type C)
+;;;   d -- fourth element (type D)
+;;;
+;;; Returns:
+;;;   A Tuple4[A B C D] value.
+;;;
+;;; Example:
+;;;   (tuple4 1 "hi" 3.14 #t)  ; => Tuple4(1, "hi", 3.14, #t)
+;;;
+;;; Since: Phase TP2
+(defn tuple4 [A B C D] [a :A b :B c :C d :D] :(Tuple4 A B C D)
+  (make-struct Tuple4 a b c d))
+
+;;; tuple4-1st -- first element of a Tuple4[A B C D].
+;;;
+;;; Since: Phase TP2
+(defn tuple4-1st [A B C D] [t :(Tuple4 A B C D)] :A
+  (.e1 t))
+
+;;; tuple4-2nd -- second element of a Tuple4[A B C D].
+;;;
+;;; Since: Phase TP2
+(defn tuple4-2nd [A B C D] [t :(Tuple4 A B C D)] :B
+  (.e2 t))
+
+;;; tuple4-3rd -- third element of a Tuple4[A B C D].
+;;;
+;;; Since: Phase TP2
+(defn tuple4-3rd [A B C D] [t :(Tuple4 A B C D)] :C
+  (.e3 t))
+
+;;; tuple4-4th -- fourth element of a Tuple4[A B C D].
+;;;
+;;; Since: Phase TP2
+(defn tuple4-4th [A B C D] [t :(Tuple4 A B C D)] :D
+  (.e4 t))
+
+;;; Tuple5 -- five-element tuple with element types A, B, C, D, E.
+;;;
+;;; Since: Phase TP2
+(defstruct Tuple5 [A B C D E]
+  (e1 A)
+  (e2 B)
+  (e3 C)
+  (e4 D)
+  (e5 E))
+
+;;; tuple5 -- construct a Tuple5[A B C D E].
+;;;
+;;; Parameters:
+;;;   a -- first element  (type A)
+;;;   b -- second element (type B)
+;;;   c -- third element  (type C)
+;;;   d -- fourth element (type D)
+;;;   e -- fifth element  (type E)
+;;;
+;;; Returns:
+;;;   A Tuple5[A B C D E] value.
+;;;
+;;; Example:
+;;;   (tuple5 1 "hi" 3.14 #t :ok)  ; => Tuple5(1, "hi", 3.14, #t, :ok)
+;;;
+;;; Since: Phase TP2
+(defn tuple5 [A B C D E] [a :A b :B c :C d :D e :E] :(Tuple5 A B C D E)
+  (make-struct Tuple5 a b c d e))
+
+;;; tuple5-1st -- first element of a Tuple5[A B C D E].
+;;;
+;;; Since: Phase TP2
+(defn tuple5-1st [A B C D E] [t :(Tuple5 A B C D E)] :A
+  (.e1 t))
+
+;;; tuple5-2nd -- second element of a Tuple5[A B C D E].
+;;;
+;;; Since: Phase TP2
+(defn tuple5-2nd [A B C D E] [t :(Tuple5 A B C D E)] :B
+  (.e2 t))
+
+;;; tuple5-3rd -- third element of a Tuple5[A B C D E].
+;;;
+;;; Since: Phase TP2
+(defn tuple5-3rd [A B C D E] [t :(Tuple5 A B C D E)] :C
+  (.e3 t))
+
+;;; tuple5-4th -- fourth element of a Tuple5[A B C D E].
+;;;
+;;; Since: Phase TP2
+(defn tuple5-4th [A B C D E] [t :(Tuple5 A B C D E)] :D
+  (.e4 t))
+
+;;; tuple5-5th -- fifth element of a Tuple5[A B C D E].
+;;;
+;;; Since: Phase TP2
+(defn tuple5-5th [A B C D E] [t :(Tuple5 A B C D E)] :E
+  (.e5 t))

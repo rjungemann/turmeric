@@ -1667,6 +1667,9 @@ const char *kind_to_string(Kind k) {
         case KIND_STAR:   return "*";
         case KIND_ARROW:  return "* -> *";
         case KIND_ARROW2: return "* -> * -> *";
+        case KIND_ARROW3: return "* -> * -> * -> *";
+        case KIND_ARROW4: return "* -> * -> * -> * -> *";
+        case KIND_ARROW5: return "* -> * -> * -> * -> * -> *";
         case KIND_ROW:    return "Row";
     }
     return "*";  /* default */
@@ -1674,14 +1677,39 @@ const char *kind_to_string(Kind k) {
 
 Kind kind_parse(const char *s) {
     if (!s) return KIND_STAR;
-    if (s[0] == '*' && s[1] == ' ' && s[2] == '-' && s[3] == '>' &&
-        s[4] == ' ' && s[5] == '*' && s[6] == ' ' && s[7] == '-' &&
-        s[8] == '>' && s[9] == ' ' && s[10] == '*' && s[11] == '\0') {
-        return KIND_ARROW2;
+    /* Count " -> *" suffixes after the leading "*". An arity-N constructor
+     * has N occurrences of " -> *". */
+    if (s[0] != '*') return KIND_STAR;
+    uint32_t arrows = 0;
+    const char *p = s + 1;
+    while (p[0] == ' ' && p[1] == '-' && p[2] == '>' && p[3] == ' ' && p[4] == '*') {
+        arrows++;
+        p += 5;
     }
-    if (s[0] == '*' && s[1] == ' ' && s[2] == '-' && s[3] == '>' &&
-        s[4] == ' ' && s[5] == '*' && s[6] == '\0') {
-        return KIND_ARROW;
+    if (*p != '\0') return KIND_STAR;
+    return kind_for_arity(arrows);
+}
+
+Kind kind_for_arity(uint32_t n) {
+    switch (n) {
+        case 0:  return KIND_STAR;
+        case 1:  return KIND_ARROW;
+        case 2:  return KIND_ARROW2;
+        case 3:  return KIND_ARROW3;
+        case 4:  return KIND_ARROW4;
+        default: return KIND_ARROW5;
+    }
+}
+
+Kind kind_apply_one(Kind k) {
+    switch (k) {
+        case KIND_ARROW5: return KIND_ARROW4;
+        case KIND_ARROW4: return KIND_ARROW3;
+        case KIND_ARROW3: return KIND_ARROW2;
+        case KIND_ARROW2: return KIND_ARROW;
+        case KIND_ARROW:  return KIND_STAR;
+        case KIND_STAR:
+        case KIND_ROW:    return k;
     }
     return KIND_STAR;
 }

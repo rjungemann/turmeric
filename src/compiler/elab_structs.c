@@ -670,9 +670,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         /* Phase TM0 */
         def->type_params = type_params_arr;
         def->n_type_params = n_type_params_v;
-        if (n_type_params_v >= 2) b->type.hkt_kind = KIND_ARROW2;
-        else if (n_type_params_v == 1) b->type.hkt_kind = KIND_ARROW;
-        else b->type.hkt_kind = KIND_STAR;
+        b->type.hkt_kind = kind_for_arity(n_type_params_v);
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
@@ -690,8 +688,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         def->n_type_params = n_type_params_v;
 
         Type struct_type = type_struct(def);
-        if (n_type_params_v >= 2) struct_type.hkt_kind = KIND_ARROW2;
-        else if (n_type_params_v == 1) struct_type.hkt_kind = KIND_ARROW;
+        struct_type.hkt_kind = kind_for_arity(n_type_params_v);
         b = binding_new(e, name, struct_type, false, true, name_form->span);
         scope_add(&e->global, b);
         elab_register_struct_def(e, def);
@@ -1098,8 +1095,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         adt_type = type_adt(def);
         /* Phase G1/HKT: Apply KIND_ARROW fix so that the kind check can detect
          * when a parameterized defdata type is used in a kind-* slot. */
-        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
-        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_type.hkt_kind = kind_for_arity(n_type_params);
         adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
@@ -1126,8 +1122,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
          * elab_defgadt's belt-and-suspenders kind check can detect when a
          * parameterized type constructor is used in a kind-* argument slot. */
         adt_type = type_adt(def);
-        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
-        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_type.hkt_kind = kind_for_arity(n_type_params);
         adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
         scope_add(&e->global, adt_binding);
     }
@@ -1707,8 +1702,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         adt_type = type_adt(def);
         /* Phase G1/HKT: Apply the same KIND_ARROW fix as the non-stub branch so
          * that kind checks see the correct kind for parameterized GADTs. */
-        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
-        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_type.hkt_kind = kind_for_arity(n_type_params);
         adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
@@ -1734,8 +1728,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
          * the belt-and-suspenders kind check can detect when a parameterized
          * GADT is used in a kind-* argument slot of another GADT. */
         adt_type = type_adt(def);
-        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
-        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_type.hkt_kind = kind_for_arity(n_type_params);
         adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
         scope_add(&e->global, adt_binding);
     }
@@ -3028,8 +3021,7 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
             Type expected = elab_struct_field_use_type(e, NULL, def, &def->fields[i]);
             if (have_type_args && def->n_type_params > 0) {
                 Type ctor_type = type_struct(def);
-                if (def->n_type_params >= 2) ctor_type.hkt_kind = KIND_ARROW2;
-                else if (def->n_type_params == 1) ctor_type.hkt_kind = KIND_ARROW;
+                ctor_type.hkt_kind = kind_for_arity(def->n_type_params);
                 Type applied = ctor_type;
                 for (uint8_t tp = 0; tp < def->n_type_params; tp++) {
                     applied = type_app(e->arena, applied, inferred_type_args[tp], call->span);

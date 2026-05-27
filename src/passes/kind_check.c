@@ -82,13 +82,22 @@ void kind_env_bind(KindEnv *env, const Symbol *sym, Kind k, Span span) {
  * Phase HKT H2: kind_unify
  * ------------------------------------------------------------------------- */
 
+/* True if k is one of KIND_ARROW..KIND_ARROW5 (i.e. a non-zero arity
+ * type-constructor kind, excluding KIND_STAR and KIND_ROW). */
+static bool kind_is_arrow_ladder(Kind k) {
+    return k == KIND_ARROW  || k == KIND_ARROW2 ||
+           k == KIND_ARROW3 || k == KIND_ARROW4 || k == KIND_ARROW5;
+}
+
 static Kind kind_unify_internal(Kind k1, Kind k2, Span span, bool emit_diag) {
     if (k1 == k2) return k1;
-    /* KIND_ARROW2 + KIND_ARROW: use the higher kind */
-    if ((k1 == KIND_ARROW2 && k2 == KIND_ARROW) ||
-        (k1 == KIND_ARROW  && k2 == KIND_ARROW2))
-        return KIND_ARROW2;
-    /* Mismatch between star and arrow */
+    /* Within the arrow ladder, prefer the more refined (higher-arity) kind.
+     * This preserves the legacy KIND_ARROW + KIND_ARROW2 → KIND_ARROW2
+     * behaviour and extends it to the full ladder. */
+    if (kind_is_arrow_ladder(k1) && kind_is_arrow_ladder(k2)) {
+        return (k1 > k2) ? k1 : k2;
+    }
+    /* Mismatch between star and arrow (or anything involving KIND_ROW) */
     if (emit_diag) {
         diag_emit_with_code(DIAG_ERROR, span, TUR_E0012_KIND_MISMATCH,
             "kind mismatch (TUR-E0012): cannot unify kind '%s' with kind '%s'",
@@ -127,11 +136,7 @@ static Kind type_effective_kind(Type t) {
         case TY_APP:
             /* Phase HKT-P1: result kind depends on fn's kind */
             if (t.as.app.fn) {
-                switch (t.as.app.fn->hkt_kind) {
-                    case KIND_ARROW2: return KIND_ARROW;
-                    case KIND_ARROW:  return KIND_STAR;
-                    default:          return KIND_STAR;
-                }
+                return kind_apply_one(t.as.app.fn->hkt_kind);
             }
             return KIND_STAR;
         case TY_INT:
@@ -152,26 +157,26 @@ static Kind type_effective_kind(Type t) {
 
 /* Infer the result kind of a type application (type-app fn_type arg_type).
  *
- * fn_type.hkt_kind must be KIND_ARROW (unary) or KIND_ARROW2 (binary):
- *   KIND_ARROW  → applying one arg fully saturates → result KIND_STAR
- *   KIND_ARROW2 → partial application → result KIND_ARROW
+ * fn_type.hkt_kind must be one of KIND_ARROW..KIND_ARROW5; each application
+ * steps the kind one rung down the ladder (ARROW5 → ARROW4 → ... → STAR).
  *
  * Emits TUR_E0012_KIND_MISMATCH and returns KIND_STAR if fn_type.hkt_kind
- * is KIND_STAR (cannot apply a concrete type as a type constructor). */
+ * is KIND_STAR or KIND_ROW (cannot apply a non-constructor kind). */
 Kind kind_of_type_app(Type fn_type, Type arg_type, Span span) {
     (void)arg_type;  /* arg kind not validated separately in v1 */
     switch (fn_type.hkt_kind) {
         case KIND_ARROW:
-            /* Unary type constructor fully applied → concrete type */
-            return KIND_STAR;
         case KIND_ARROW2:
-            /* Binary type constructor partially applied → still a constructor */
-            return KIND_ARROW;
+        case KIND_ARROW3:
+        case KIND_ARROW4:
+        case KIND_ARROW5:
+            return kind_apply_one(fn_type.hkt_kind);
         case KIND_STAR:
         case KIND_ROW:
             diag_emit_with_code(DIAG_ERROR, span, TUR_E0012_KIND_MISMATCH,
                 "kind mismatch (TUR-E0012): cannot apply a type of kind '*' as a "
-                "type constructor; type must have kind '* -> *' or '* -> * -> *'");
+                "type constructor; type must have kind '* -> *' through "
+                "'* -> * -> * -> * -> * -> *'");
             return KIND_STAR;
     }
     return KIND_STAR;
@@ -353,7 +358,7 @@ static int kind_check_expr(Expr *expr) {
  * Phase HKT H2: bottom-up kind inference from definstance type arguments
  *
  * Walk all EX_INSTANCE_DEF nodes in the top-level do-block.  For each
- * instance that provides a KIND_ARROW (or KIND_ARROW2) type arg at position i,
+ * instance that provides a KIND_ARROW..KIND_ARROW5 type arg at position i,
  * if the corresponding typeclass parameter's recorded kind is KIND_STAR
  * (i.e. no explicit `^f` annotation was given), upgrade it to the inferred
  * kind.
@@ -516,11 +521,19 @@ void kind_dump_program(Expr *program, FILE *out) {
  * Verifies that Kind information is preserved through all compiler passes.
  * --------------------------------------------------------------------------- */
 
+/* True if k is a known kind value on the * / arrow ladder (KIND_ROW is
+ * intentionally excluded — it appears only on row variables, not as a
+ * type's hkt_kind). */
+static bool kind_is_valid(Kind k) {
+    return k == KIND_STAR   || k == KIND_ARROW  || k == KIND_ARROW2 ||
+           k == KIND_ARROW3 || k == KIND_ARROW4 || k == KIND_ARROW5;
+}
+
 /* Helper: recursively verify kind info is present on types */
 static bool kind_verify_type(const Type *t) {
     if (!t) return true;
-    /* All types should have a valid hkt_kind (KIND_STAR, KIND_ARROW, or KIND_ARROW2) */
-    if (t->hkt_kind != KIND_STAR && t->hkt_kind != KIND_ARROW && t->hkt_kind != KIND_ARROW2) {
+    /* All types should have a valid hkt_kind on the ladder. */
+    if (!kind_is_valid(t->hkt_kind)) {
         return false;
     }
     switch (t->kind) {
@@ -541,7 +554,7 @@ static bool kind_verify_typeclass_instance(const TypeClassInstance *inst) {
     if (inst->typeclass && inst->typeclass->type_param_kinds) {
         for (uint8_t i = 0; i < inst->typeclass->n_type_params; i++) {
             Kind k = inst->typeclass->type_param_kinds[i];
-            if (k != KIND_STAR && k != KIND_ARROW && k != KIND_ARROW2) {
+            if (!kind_is_valid(k)) {
                 return false;
             }
         }

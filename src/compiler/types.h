@@ -47,6 +47,9 @@ typedef enum Kind {
     KIND_ARROW  = 1,  /* * -> * — a unary type constructor, e.g. vec, option */
     KIND_ARROW2 = 2,  /* * -> * -> * — a binary type constructor, e.g. result, either */
     KIND_ROW    = 3,  /* Row — an effect row variable, e.g. e in (forall [e] ...) */
+    KIND_ARROW3 = 4,  /* * -> * -> * -> * — ternary, e.g. Tuple3 */
+    KIND_ARROW4 = 5,  /* 4-ary, e.g. Tuple4 */
+    KIND_ARROW5 = 6,  /* 5-ary, e.g. Tuple5 */
 } Kind;
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */
@@ -1079,6 +1082,17 @@ void         type_print(Buf *b, Type t);
 bool         kind_eq(Kind a, Kind b);             /* true if a == b */
 const char  *kind_to_string(Kind k);              /* "*", "* -> *", … */
 Kind         kind_parse(const char *s);           /* parse "*" / "* -> *"; default KIND_STAR */
+
+/* Phase TP2: kind ladder helpers for n-ary type constructors.
+ * kind_for_arity(n) returns the kind of a type constructor with n params:
+ *   0 -> KIND_STAR, 1 -> KIND_ARROW, ..., 5 -> KIND_ARROW5.
+ * Values above 5 also map to KIND_ARROW5 — arity-cap is enforced
+ * at definition sites, not here. */
+Kind         kind_for_arity(uint32_t n);
+/* kind_apply_one(k) returns the kind after applying one type argument
+ * to a constructor of kind k: ARROW5 -> ARROW4 -> ... -> ARROW -> STAR.
+ * KIND_STAR and KIND_ROW are returned unchanged (caller validates). */
+Kind         kind_apply_one(Kind k);
 
 /* Phase HKT-P2: Recursive type guards */
 bool         type_is_guarded_recursive(Type t, const char *rec_name);

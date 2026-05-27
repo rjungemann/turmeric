@@ -18,8 +18,7 @@ Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
             /* Phase G1/HKT: parameterized GADTs need a non-* kind so kind
              * checks against type-constructor arg slots stay consistent
              * with how defgadt itself stamps the binding. */
-            if (d->n_type_params >= 2)      t->hkt_kind = KIND_ARROW2;
-            else if (d->n_type_params == 1) t->hkt_kind = KIND_ARROW;
+            t->hkt_kind = kind_for_arity(d->n_type_params);
             return t;
         }
     }
@@ -28,8 +27,7 @@ Type *elab_lookup_type_by_name(Elab *e, const Symbol *name) {
         if (d && d->name && strcmp(d->name, name->name) == 0) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_struct(d);
-            if (d->n_type_params >= 2)      t->hkt_kind = KIND_ARROW2;
-            else if (d->n_type_params == 1) t->hkt_kind = KIND_ARROW;
+            t->hkt_kind = kind_for_arity(d->n_type_params);
             return t;
         }
     }
@@ -1250,14 +1248,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             memset(app, 0, sizeof(Type));
             app->kind = TY_APP;
             app->copy_kind = CK_COPY;
-            /* Derive kind: KIND_ARROW2 → KIND_ARROW → KIND_STAR */
-            if (t->hkt_kind == KIND_ARROW2) {
-                app->hkt_kind = KIND_ARROW;
-            } else if (t->hkt_kind == KIND_ARROW) {
-                app->hkt_kind = KIND_STAR;
-            } else {
-                app->hkt_kind = KIND_STAR;
-            }
+            /* Derive kind: step one rung down the arrow ladder. */
+            app->hkt_kind = kind_apply_one(t->hkt_kind);
             app->as.app.fn  = t;
             app->as.app.arg = arg_type;
             t = app;
@@ -1497,24 +1489,13 @@ Expr *elab_deftype(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Determine the kind of this deftype:
-     * - If there are kind parameters, the result kind is KIND_ARROW or KIND_ARROW2
-     *   based on the number and kinds of parameters.
-     * - If there are no parameters, it's KIND_STAR.
-     * For simplicity in v1, we just check: if any param is KIND_ARROW2, result is KIND_ARROW2.
-     * Otherwise, if any param is KIND_ARROW, result is KIND_ARROW.
-     * Otherwise, KIND_STAR. */
+    /* Determine the kind of this deftype: pick the highest-arity arrow
+     * kind that appears among the type parameters (v1 heuristic — proper
+     * tracking of param-kinds in the result kind is future work). */
     Kind result_kind = KIND_STAR;
-    if (n_type_params > 0) {
-        result_kind = KIND_STAR;
-        for (uint8_t i = 0; i < n_type_params; i++) {
-            if (type_param_kinds[i] == KIND_ARROW2) {
-                result_kind = KIND_ARROW2;
-                break;
-            }
-            if (type_param_kinds[i] == KIND_ARROW) {
-                result_kind = KIND_ARROW;
-            }
+    for (uint8_t i = 0; i < n_type_params; i++) {
+        if (type_param_kinds[i] > result_kind) {
+            result_kind = type_param_kinds[i];
         }
     }
 
@@ -1581,13 +1562,7 @@ Expr *elab_type_app(Elab *e, const Form *call) {
         }
         fn_type = type_typeclass(tc);
         /* Set hkt_kind from number of type parameters so kind_of_type_app succeeds */
-        if (tc->n_type_params == 1) {
-            fn_type.hkt_kind = KIND_ARROW;
-        } else if (tc->n_type_params >= 2) {
-            fn_type.hkt_kind = KIND_ARROW2;
-        } else {
-            fn_type.hkt_kind = KIND_STAR;
-        }
+        fn_type.hkt_kind = kind_for_arity(tc->n_type_params);
     } else {
         fn_type = fn_binding->type;
     }
