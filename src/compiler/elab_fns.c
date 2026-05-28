@@ -45,15 +45,16 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
     if (form->tag == F_LIST && form->as.list.len >= 1 &&
         form->as.list.items[0]->tag == F_SYM) {
         const Symbol *head = form->as.list.items[0]->as.sym;
-        /* KB-008/KB-020: (-> T1 T2), (fn [...] :ret), and (lref T) are
-         * type-constructor forms with special handling in
-         * type_expr_from_form, not generic type applications. Route them
-         * through the same path so the spaced annotation form (`x : (-> a b)`,
-         * `p : (lref int)`) resolves identically to the keyword form. */
+        /* KB-008/KB-020/KB-018: (-> T1 T2), (fn [...] :ret), (lref T),
+         * and (handler E V R) are type-constructor forms with special
+         * handling in type_expr_from_form, not generic type applications.
+         * Route them through the same path so the spaced annotation form
+         * (`x : (-> a b)`, `p : (lref int)`, `h :(handler E V R)`)
+         * resolves identically to the keyword form. */
         if (head == e->sym_forall || head == e->sym_exists ||
             head == e->sym_forall_u || head == e->sym_exists_u ||
             head == e->sym_arrow || head == e->sym_fn ||
-            head == e->sym_lref) {
+            head == e->sym_lref || head == e->sym_handler_type) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
         bool has_pipe = false, has_amp = false;

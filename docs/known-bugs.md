@@ -580,37 +580,26 @@ type with an explicit effect row, analogous to how bare
 ## KB-018 -- `(handler E V R)` type expression not supported
 
 **Discovered:** 2026-05-27
-**Status:** Open -- compiler limitation.
-
-### Symptom
-
-Using `:(handler Write cstr nil)` as a parameter type fails:
-
-```
-error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as
-a type constructor; type must have kind '* -> *' ...
-(defn run-with-handler [h :(handler Write cstr nil)] :nil
-                                    ^^^^^^^
-```
-
-The error test `errors/effect-handler-needs-flag` expects the message:
-`'handler' type expression requires -Xeffect-types`
-but instead gets the generic kind-mismatch error.
+**Status:** Fixed 2026-05-28 -- `handler` is now routed through
+`type_expr_from_form` from the parameter-type path, matching the
+existing keyword-form behaviour.
 
 ### Root cause
 
-`handler` is not registered as a recognised type constructor in the
-elaborator.  The parser passes `(handler Write cstr nil)` as a generic
-type application, which resolves `handler` as a concrete `TY_*` type
-of kind `*` and then rejects applying arguments to it.
+`type_expr_from_form` already had a `(handler E V R)` case (gated on
+`-Xeffect-types`) but the parameter-type path in `fn_type_from_form`
+intercepted compound forms first and treated `handler` as the head of
+a generic TY_APP application -- which failed the arrow-kind check and
+emitted TUR-E0012 instead of the intended "requires -Xeffect-types"
+diagnostic.
 
-### Fix needed
+### Fix
 
-Add a `handler` case to `type_expr_from_form` that either:
-- Desugars `(handler E V R)` into the appropriate internal
-  representation, or
-- Emits the "requires -Xeffect-types" diagnostic if the flag is unset,
-  matching the expected error message.
+Added `e->sym_handler_type` to the KB-008/KB-020 special-case list in
+`fn_type_from_form` so `(handler E V R)` reaches the dedicated
+handler-type case in `type_expr_from_form`, regardless of whether the
+annotation is spaced (`h : (handler ...)`) or keyword-prefixed
+(`h :(handler ...)`).
 
 ---
 
