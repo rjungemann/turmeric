@@ -22,7 +22,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics -- DONE | Medium | Medium |
 | KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) | Low | Medium |
 | KB-029 | `stdlib/session.tur` tuple return-type syntax | Low | Medium |
-| KB-030 | Orphan-instance checker rejects instances on built-ins | Medium | Medium |
+| KB-030 | Orphan-instance checker rejects instances on built-ins -- DONE | Medium | Medium |
 | KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults | Medium | Medium |
 
 ---
@@ -440,6 +440,42 @@ risks load-order issues, so the checker change is preferred.
 ### Effort
 
 Medium -- orphan checker change plus a built-in-home registry.
+
+### Resolution (DONE)
+
+Implemented the preferred path (a built-in-home registry consulted by the
+orphan checker) plus the kind-inference fix that the change exposed:
+
+1. **Built-in-home registry (`elab_typeclasses.c`)** -- a built-in primitive
+   that resolves to an opaque `TY_STRUCT` (`def == NULL`, e.g. `str`, `rc`,
+   `weak`) has no `origin_file_id`, so it could never satisfy the existing
+   ownership rule.  `builtin_type_home_basename` maps each such name to its
+   designated home stdlib file (`str -> str.tur`, `rc`/`weak -> rc.tur`), and
+   the orphan check now also credits a type arg whose built-in home basename
+   matches the current file's basename (via `diag_file_path` +
+   `tc_path_basename`).  `(definstance Eq [str] ...)` in `stdlib/str.tur` is
+   therefore no longer flagged orphan.
+
+2. **Kind-inference fix (`kind_check.c`, `kind_infer_from_instances`)** --
+   removing the orphan error unmasked a latent problem: an opaque struct
+   reference reports `type_effective_kind == KIND_ARROW` (the right answer for
+   a genuine HKT constructor like `option`/`vec`, validated separately against
+   an explicit `^f`), which the bottom-up inference used to *promote* a
+   STAR-declared class such as `Eq [a]` to `* -> *` -- breaking every concrete
+   `Eq [int]` / `Eq [bool]` instance.  The inference now skips the STAR->ARROW
+   upgrade for opaque-struct args; real constructor args (`TY_APP`, `TY_REC`)
+   still drive inference, and the explicit-`^f` validation path is unchanged.
+
+`stdlib/str.tur` now type-checks standalone and was added to
+`tests/run-stdlib-checks.sh` (28 passed).  The full `tests/run.sh` (1025) and
+`tests/run-turi.sh` suites remain green.
+
+Out of scope / still pending: `stdlib/typeclass.tur` continues to fail its
+standalone check because of orphan `Clone [int]` / `Clone [bool]` / `Clone
+[cstr]` instances (these primitives resolve to concrete `TY_*` kinds with no
+`type_arg_syms` entry, so they are not covered by the name-keyed registry and
+their natural "home" is debatable).  This pre-dates the KB-030 change and is
+left as a separate follow-up.
 
 ---
 

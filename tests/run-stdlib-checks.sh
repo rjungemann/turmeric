@@ -56,6 +56,9 @@ STDLIB_FILES=(
     stdlib/gadt-vec.tur
     stdlib/nat.tur
     stdlib/sized.tur
+    # KB-030: Eq [str] is non-orphan now that the orphan checker credits a
+    # built-in primitive type to its designated home file (str -> str.tur).
+    stdlib/str.tur
 )
 STDLIB_FLAGS=(
     ""
@@ -90,6 +93,7 @@ STDLIB_FLAGS=(
     "-Xgadt"
     "-Xgadt"
     "-Xgadt"
+    ""
 )
 
 PASS=0

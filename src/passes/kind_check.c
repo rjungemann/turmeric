@@ -397,8 +397,26 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                 /* Infer: upgrade parameter kind from STAR to ARROW / ARROW2.
                  * Only upgrade when the param was un-annotated (KIND_STAR by
                  * default from elab).  Explicit annotations (KIND_ARROW or
-                 * KIND_ARROW2 from '^f' / '^^f') are never overridden. */
-                tc->type_param_kinds[i] = arg_kind;
+                 * KIND_ARROW2 from '^f' / '^^f') are never overridden.
+                 *
+                 * Exception (KB-030): an opaque struct reference (TY_STRUCT
+                 * with def == NULL) is the elaborator's representation for any
+                 * bare type name it could not resolve to a concrete struct --
+                 * both genuine HKT constructors (option, vec) and concrete
+                 * built-in types that simply have no defstruct (str).
+                 * type_effective_kind optimistically reports KIND_ARROW for it,
+                 * which is right for an explicitly higher-kinded class ('^f',
+                 * validated separately) but must NOT silently promote a
+                 * STAR-declared class (e.g. Eq [a]) just because one of its
+                 * instances names such a built-in.  Skip the upgrade for
+                 * opaque-struct args; real constructor args (TY_APP, TY_REC)
+                 * still drive inference. */
+                bool opaque_struct_arg =
+                    (inst->type_args[i].kind == TY_STRUCT &&
+                     inst->type_args[i].as.struct_.def == NULL);
+                if (!opaque_struct_arg) {
+                    tc->type_param_kinds[i] = arg_kind;
+                }
             }
             /* If cur_kind is already non-STAR (explicitly annotated), we trust
              * the annotation and skip any conflict check.  type_effective_kind
