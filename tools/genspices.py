@@ -149,6 +149,8 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
         text = STUB_FRONT_PAGE.format(name=meta['name'], github=GITHUB_BASE)
         source_label = '(no README -- stub)'
 
+    text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
+                  flags=re.MULTILINE)
     conv = md_lib.Markdown(
         extensions=['fenced_code', 'tables', 'toc'],
         extension_configs={'toc': {'permalink': False}},

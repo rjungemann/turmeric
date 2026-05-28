@@ -289,6 +289,8 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
         return f'href="{Path(href).stem}.html"'
 
     text = re.sub(r'href="([^"]+\.md)"', rewrite_md_link, text)
+    text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
+                  flags=re.MULTILINE)
 
     conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
                             extension_configs={'toc': {'permalink': False}})
