@@ -24,14 +24,36 @@ static const char *builtin_type_home_basename(const char *type_name) {
 }
 
 /* KB-030/KB-027: as above, but keyed on a resolved built-in TypeKind.  Some
- * built-ins (`rc`, `weak`) resolve to a dedicated TypeKind rather than an
- * opaque-struct name, so they carry no type_arg_syms entry; map those kinds
- * to their home file directly.  Returns NULL for kinds with no fixed home. */
+ * built-ins resolve to a dedicated TypeKind rather than an opaque-struct name,
+ * so they carry no type_arg_syms entry; map those kinds to their home file
+ * directly.  Two families:
+ *   - rc<T>/weak<T> are data types with their own module -> rc.tur;
+ *   - the bare scalar primitives (int, bool, cstr, the sized numeric kinds)
+ *     have no data module of their own, so their canonical typeclass instances
+ *     live in the comprehensive typeclass module -> typeclass.tur.  This lets
+ *     typeclass.tur host `Clone [int]`, `Clone [uint8]`, ... without tripping
+ *     the orphan check (Clone is declared in typeclass-clone.tur).
+ * Returns NULL for kinds with no fixed home. */
 static const char *builtin_kind_home_basename(TypeKind k) {
     switch (k) {
         case TY_RC:
         case TY_WEAK:
             return "rc.tur";
+        case TY_INT:
+        case TY_BOOL:
+        case TY_CSTR:
+        case TY_FLOAT:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_INT64:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+            return "typeclass.tur";
         default:
             return NULL;
     }

@@ -13,10 +13,8 @@ written; the affected fixtures originally failed under `tests/run.sh` (run with
 `ASAN_OPTIONS=detect_leaks=0`, matching CI).
 
 **Status: all items are now resolved (DONE).**  Each section below records the
-implemented resolution.  The one known remaining gap is that
-`stdlib/typeclass.tur` still fails its standalone `tur check` due to orphan
-`Clone [int]` / `[bool]` / `[cstr]` instances -- a pre-existing failure tracked
-as a follow-up in the KB-030 section, not one of the items in this plan.
+implemented resolution, and the whole `tests/run-stdlib-checks.sh` allowlist
+(including `typeclass.tur`) now passes.
 
 ## Status overview
 
@@ -530,15 +528,21 @@ orphan checker) plus the kind-inference fix that the change exposed:
    still drive inference, and the explicit-`^f` validation path is unchanged.
 
 `stdlib/str.tur` now type-checks standalone and was added to
-`tests/run-stdlib-checks.sh` (28 passed).  The full `tests/run.sh` (1025) and
+`tests/run-stdlib-checks.sh`.  The full `tests/run.sh` (1025) and
 `tests/run-turi.sh` suites remain green.
 
-Out of scope / still pending: `stdlib/typeclass.tur` continues to fail its
+Follow-up folded in: `stdlib/typeclass.tur` previously still failed its
 standalone check because of orphan `Clone [int]` / `Clone [bool]` / `Clone
-[cstr]` instances (these primitives resolve to concrete `TY_*` kinds with no
-`type_arg_syms` entry, so they are not covered by the name-keyed registry and
-their natural "home" is debatable).  This pre-dates the KB-030 change and is
-left as a separate follow-up.
+[cstr]` (and the sized-numeric) instances.  These primitives resolve to
+concrete `TY_*` kinds with no `type_arg_syms` entry, so they are handled by the
+kind-keyed `builtin_kind_home_basename` table instead: the bare scalar
+primitives (`int`, `bool`, `cstr`, and the sized numeric kinds) home to
+`typeclass.tur`, the comprehensive typeclass module where their canonical
+instances live (data types such as `rc`/`weak` continue to home to their own
+module).  The mapping is consulted only in the orphan-check fallback and is
+purely permissive, so it credits these instances in `typeclass.tur` without
+relaxing the check anywhere else.  The full `tests/run-stdlib-checks.sh`
+allowlist now passes.
 
 ---
 
