@@ -1723,6 +1723,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
                 }
+                /* Phase H §1: direct call to a typeclass instance impl (dict_arg
+                 * is set by elab to mark statically-resolved typeclass dispatch).
+                 * Bridge concrete aggregate → carrier so the impl reads the
+                 * heap-pointer carrier it expects.  Mirrors the carrier_bridge
+                 * applied on the dict-dispatch path.  Gated on dict_arg so it
+                 * does not fire on ordinary direct calls inside instance bodies,
+                 * where the receiver var is already int64_t at the C level even
+                 * though its elab type is TY_APP/TY_ADT.  Also require the
+                 * post-strip emit_arg type to be aggregate (concrete struct/ADT/
+                 * APP) — when emit_arg->type is TY_INT, the EX_ASCRIBE was
+                 * stripped above and the value is already a carrier int64_t,
+                 * which the impl accepts as-is. */
+                if (!needs_fn_cast && !matched_spec &&
+                    e->as.call_.dict_arg != NULL &&
+                    emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
+                    type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
+                    type_uses_carrier_in_dispatch(e->as.call_.args[i]->type) &&
+                    fn_binding->type.kind == TY_FN &&
+                    i < fn_binding->type.as.fn.arity &&
+                    fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CONCRETE, CK_CARRIER,
+                                             e->as.call_.args[i]->type);
+                }
                 /* Phase D: large struct args must be passed as const T*.
                  * Only apply when the CALLEE also uses pass-by-ptr for that param
                  * (i.e., was compiled with Phase D signatures). Generic/typeclass

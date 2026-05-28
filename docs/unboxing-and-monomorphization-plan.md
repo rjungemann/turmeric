@@ -333,27 +333,49 @@ twice. The emitted C contains both a carrier form
 `static double cube__spec__double_double(double x)`; runtime output
 matches `27 / 15.625` for `(cube 3)` / `(cube 2.5)`.
 
-### Phase H -- Specialize typeclass methods
+### Phase H -- Specialize typeclass methods *(landed)*
 
-This is the largest item; only attempt after Phase A is solid.
+Path (b) from the original plan: keep dictionary singletons (still used for
+existential witnesses), but at every typeclass method call site whose
+receiver type is statically resolved, emit a direct call to the instance
+impl instead of an indirect call through the dictionary's function-pointer
+field.
 
-1. Decide between two paths:
-   - **(a) Per-instance monomorphization at every concrete use
-     site** -- removes the dictionary indirection but multiplies
-     emitted code.
-   - **(b) Keep dictionaries; specialize the *call* through the
-     dictionary** -- emit a direct call when the receiver type is
-     statically known, fall back to dict dispatch otherwise.
-2. Recommended: start with (b), since it composes with the
-   existing dictionary infrastructure and the existing
-   `EmitAbiSpecialization` machinery already keys on call-site
-   types.
-3. Resolve KB-012's convention question once and for all: the
-   instance body matches the specialized convention.
+Implementation:
 
-**Signal:** a parametric `Eq` instance on `Tuple2[int int]` shows
-no `tur_typeclass_dispatch__Eq__eq?` call in the emitted C for a
-statically-known receiver; KB-012 fixture passes.
+- `elab_typeclasses.c` builds the typeclass method call's `EX_CALL` with
+  `fn_binding = best_method->binding` (direct call) when `best_inst` was
+  resolved by the type-based instance search.  The previously preferred
+  `fn_expr = dict_expr` (dictionary-vtable load) is now only used as a
+  defensive fallback.  Both the main dispatch path (around
+  `elab_typeclasses.c:2654`) and the witness-pinning path (around
+  `elab_typeclasses.c:2072`) take the direct call.  The `dict_arg` field
+  on the call is preserved as an annotation so downstream passes can
+  still recognise the call as a typeclass dispatch.
+- `emit_expr.c` adds a concrete → carrier bridge in the direct-call path,
+  gated on `e->as.call_.dict_arg != NULL` (so it only fires for typeclass
+  method dispatch, not ordinary direct calls).  The bridge fires when the
+  argument's elab type is a parametric aggregate (TY_STRUCT-with-params /
+  TY_APP / TY_ADT) and the callee's C-level parameter is `int64_t`
+  (carrier).  An additional guard on the post-strip `emit_arg->type` skips
+  the bridge when the value is already a carrier `int64_t` (e.g. inside
+  the instance body, where the receiver parameter is `int64_t` even
+  though its elab type is `TY_APP`; or when an `EX_ASCRIBE` was stripped
+  and the underlying value is the carrier).  Mirrors the carrier bridge
+  that was applied in the previous dict-dispatch path.
+
+KB-012 stays fixed: the instance body uses the carrier ABI (int64_t
+parameters), and the direct-call site bridges concrete aggregates to the
+carrier just as the dispatch path did.  Existential witnesses still go
+through the dictionary singletons (see `EX_EXISTS_PACK` in
+`emit_expr.c`), which is why the singletons are still emitted.
+
+**Signal:** the parametric `Eq` instance on `Tuple2[int int]` in
+`tests/fixtures/typed-slots/tuple2-eq-method/` emits
+`__inst_Eq_eq__Tuple2(...)` (direct call) instead of
+`((... (*)(...)) (intptr_t)(dict_Eq_Tuple2_singleton.eq_))(...)`
+(dictionary indirection) at the statically-known call site, and the
+KB-012 fixture continues to pass.
 
 ### Phase I -- Specialization observability
 
