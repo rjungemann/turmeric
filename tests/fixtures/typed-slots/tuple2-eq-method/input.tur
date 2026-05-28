@@ -1,0 +1,21 @@
+;; KB-012 regression: calling (.eq? t1 t2) on (Tuple2 int int) values should
+;; not SEGV.
+;;
+;; The ABI specialisation of (tuple2 1 2) returns a concrete Tuple2__int__int
+;; struct by value.  When the dictionary dispatch casts the eq_ function pointer,
+;; it must use the carrier int64_t convention (not Tuple2__int__int by value)
+;; because __inst_Eq_eq__Tuple2 declares int64_t parameters.  Without the
+;; carrier bridge, the caller pushed two int64_t fields of the struct in four
+;; registers while the callee read only two, misaligning all arguments.
+
+(defn main [] :int
+  (let [t1 (tuple2 1 2)
+        t2 (tuple2 1 2)
+        t3 (tuple2 1 3)]
+    (if (.eq? t1 t2)
+      (println "t1==t2")
+      (println "t1!=t2"))
+    (if (.eq? t1 t3)
+      (println "t1==t3")
+      (println "t1!=t3"))
+    0))

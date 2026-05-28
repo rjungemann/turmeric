@@ -1194,7 +1194,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * -Wint-conversion error in C99. */
                     bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
                                           e->as.call_.args[i]->type.kind == TY_PTR_VOID);
-                    arg_cast[i] = needs_fn_cast;
+                    /* KB-012: dictionary method pointers use the carrier ABI (int64_t).
+                     * When the argument is a concrete aggregate (TY_APP / TY_STRUCT /
+                     * TY_ADT) -- as happens when an ABI-specialised constructor returns
+                     * a concrete struct -- bridge it to carrier before the call so the
+                     * function signature and the actual parameter type agree. */
+                    bool needs_carrier_bridge = !needs_fn_cast && ctx &&
+                        type_kind_is_aggregate(e->as.call_.args[i]->type.kind);
+                    arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
                     if (needs_fn_cast) {
                         Buf cast; buf_init(&cast);
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
@@ -1202,6 +1209,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(raw);
                         raw = strdup(cast.data);
                         buf_free(&cast);
+                    } else if (needs_carrier_bridge) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CONCRETE, CK_CARRIER,
+                                                  e->as.call_.args[i]->type);
                     }
                     arg_strs[i] = raw;
                 }
