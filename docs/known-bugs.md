@@ -161,31 +161,11 @@ return (const char *)(intptr_t)out;
 
 ## KB-008 — `defn-spaced-compound`: kind mismatch on `(-> int int)` type annotation
 
-**Status:** Open — compiler bug; tracked in
-[docs/function-type-kind-plan.md](function-type-kind-plan.md).
-
-### Symptom
-
-```
-error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as a type constructor;
-type must have kind '* -> *' or '* -> * -> *'
-```
-
-on `(defn apply1 [f : (-> int int)] :int ...)`.
-
-### Root cause
-
-When a function type is written in spaced annotation form (`f : (-> int int)`),
-the `->` symbol is resolved to a concrete `TY_FN` type of kind `*` rather than
-being treated as a type constructor of kind `* -> * -> *`.  The non-spaced form
-(`f :(-> int int)`) may or may not have the same issue.
-
-### Fix needed
-
-The type-annotation elaborator needs to recognise `->` in spaced annotation
-position as a type constructor and expand it to a `TY_FN` application, matching
-the behaviour of the `:` shorthand syntax.  See
-[docs/function-type-kind-plan.md](function-type-kind-plan.md) for the phased fix.
+**Status:** Fixed — `fn_type_from_form` (`src/compiler/elab_fns.c`)
+routes `->`, `fn`, `forall`, and `exists` heads through
+`type_expr_from_form` so the spaced annotation form (`f : (-> int int)`)
+resolves identically to the keyword form.  See KB-020 for the
+generalised follow-up that adds `lref`.
 
 ---
 
@@ -685,34 +665,19 @@ be resolved to the correct internal type representation.
 ## KB-020 -- Spaced compound type annotations fail for `->` and `lref`
 
 **Discovered:** 2026-05-27
-**Status:** Open -- extends KB-008.
+**Status:** Fixed 2026-05-28 -- the KB-008 fix already covered `->`;
+added `lref` to the special-case list in `fn_type_from_form`
+(`src/compiler/elab_fns.c`).  Both `(defn consume-lref [p : (lref int)] ...)`
+and `(defn apply-linear [f : (-> ^linear int int) ...] ...)` now elaborate.
 
-### Symptom
+### Fix
 
-In addition to KB-008 (`(-> int int)` in spaced form), two other
-compound types fail in spaced annotation position:
-
-```
-;; linear-fn-type
-(defn apply-linear [f : (-> ^linear int int) n] :int ...)
-;; => error [TUR-E0012]: kind mismatch: cannot apply type of kind '*'
-
-;; linear-lref-type-ann
-(defn consume-lref [p : (lref int)] :int ...)
-;; => error [TUR-E0012]: kind mismatch: cannot apply type of kind '*'
-```
-
-Both `->` and `lref` fail for the same reason as KB-008: the
-type-annotation elaborator treats them as kind-`*` concrete types
-rather than type constructors when they appear in spaced annotation
-form (`: (-> ...)` vs. `:(-> ...)`).
-
-### Fix needed
-
-The fix from KB-008 (teach the elaborator to recognise `->` in spaced
-annotation position as a type constructor) should be generalised to
-also cover `lref`, `rc`, and other built-in type constructors that can
-appear as the head of a compound type form.
+The KB-008 special-case in `fn_type_from_form` was already routing
+`->`, `fn`, `forall`, and `exists` heads through `type_expr_from_form`.
+Extended it to also route `lref` (the only other compound built-in
+constructor that was still falling through to the generic TY_APP path).
+If additional built-in heads ever need the same treatment (e.g. `rc`
+gains a list-form constructor), add them to the same list.
 
 ---
 
