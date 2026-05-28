@@ -946,6 +946,137 @@ the accepted form.
 
 ---
 
+## KB-027 -- `stdlib/rc.tur` fails `tur check`: kind mismatch on `Functor [ptr<void>]`
+
+**Discovered:** 2026-05-28
+**Status:** Open -- stdlib design limitation.
+
+### Symptom
+
+```
+$ ./build/tur check stdlib/rc.tur
+stdlib/rc.tur:59:1: error [TUR-E0012]: kind mismatch: typeclass 'Functor'
+  parameter 1 expects kind '* -> *' (a type constructor),
+  but 'ptr<void>' has kind '*'
+stdlib/rc.tur:104:14: error: typeclass 'Foldable' is not defined
+```
+
+`tur check stdlib/rc.tur` fails on two distinct issues.  The file is not
+in `tests/run-stdlib-checks.sh`.
+
+### Root cause
+
+1. `(definstance Functor [ptr<void>])` is a kind error: `Functor` requires
+   a type constructor of kind `* -> *` (something like `Option` or `List`),
+   but `ptr<void>` is a concrete type of kind `*`.  The comment in the file
+   acknowledges this is a v1 approximation
+   (`; Uses ptr<void> as the type constructor representation in v1`).
+
+2. `Foldable` and `Traversable` are defined in `stdlib/typeclass.tur`, which
+   is not in the auto-loaded stdlib list, so they are not in scope when the
+   file is checked standalone.
+
+### Fix needed
+
+Replace the `ptr<void>` instances with a newtype wrapper (e.g. `(defstruct Rc
+[inner :ptr<void>])`) that introduces a proper type constructor of kind `* -> *`.
+Once the kind is correct the `Functor`, `Foldable`, and `Traversable` instances
+can be expressed without approximation.  Alternatively, add `typeclass.tur` to
+the auto-load list (after resolving its own Functor/Applicative/Monad overlap
+with `typeclass-functor.tur`).
+
+---
+
+## KB-028 -- `stdlib/ref.tur` fails `tur check`: `Clone` typeclass not in scope
+
+**Discovered:** 2026-05-28
+**Status:** Open -- missing auto-load dependency.
+
+### Symptom
+
+```
+$ ./build/tur check stdlib/ref.tur
+stdlib/ref.tur:82:14: error: typeclass 'Clone' is not defined
+stdlib/ref.tur:101:14: error: typeclass 'Clone' is not defined
+```
+
+The file is not in `tests/run-stdlib-checks.sh`.
+
+### Root cause
+
+`Clone` is defined in `stdlib/typeclass.tur`.  That file is not in the
+auto-loaded stdlib list (`stdlib_files[]` in `src/main.c`), so `Clone` is
+not in scope when `ref.tur` is checked in isolation.  Programs that compile
+`ref.tur` explicitly via an `import` chain work correctly at runtime because
+the full stdlib is usually present; the gap only surfaces when `tur check` is
+run on the file directly without the rest of the stdlib.
+
+### Fix needed
+
+Either (a) add `stdlib/typeclass.tur` to the auto-load list (after auditing
+for duplicate definitions with already-loaded typeclass files), or (b) have
+`ref.tur` declare an explicit `(import tur/typeclass :refer [Clone])` so it
+resolves the dependency regardless of load order.
+
+---
+
+## KB-029 -- `stdlib/session.tur` excluded from `tur check` allowlist
+
+**Discovered:** 2026-05-28
+**Status:** Open -- see KB-019 for the root cause.
+
+`stdlib/session.tur` is not in `tests/run-stdlib-checks.sh` because
+`tur check stdlib/session.tur` fails with the same kind-mismatch error
+documented in KB-019: the session type constructors (`Session`, `Rec`,
+`Branch`, `Recv`, `Send`, `Close`) are not registered in the kind table,
+so any function annotated with a session type triggers TUR-E0012.  The
+file can be added to the allowlist once KB-019 is resolved.
+
+---
+
+## KB-030 -- `stdlib/str.tur` fails `tur check`: orphan instance for `Eq [str]`
+
+**Discovered:** 2026-05-28
+**Status:** Open -- orphan-instance checker does not recognise compiler built-ins.
+
+### Symptom
+
+```
+$ ./build/tur check stdlib/str.tur
+stdlib/str.tur:114:1: error [TUR-E0013]: orphan instance: typeclass 'Eq' is
+  defined in a different module and none of the type arguments belong to this
+  module; move the instance to the module that defines the typeclass or one
+  of the type arguments
+(definstance Eq [str]
+```
+
+The file is not in `tests/run-stdlib-checks.sh`.
+
+### Root cause
+
+The orphan-instance rule (TUR-E0013) requires that a `(definstance TC [T]
+...)` lives either in the file that defines `TC` or in the file that defines
+`T`.  `Eq` is defined in `stdlib/typeclass-eq.tur`.  `str` is a compiler
+built-in -- it has no `defstruct` or other definition in any `.tur` file, so
+the orphan checker finds no file that "owns" `str` and rejects the instance.
+
+### Workaround
+
+None for standalone `tur check`.  At runtime the instances work correctly
+because they are loaded alongside the rest of the stdlib and the orphan check
+is not repeated at link time.
+
+### Fix needed
+
+The orphan checker needs a mechanism to mark certain built-in primitive types
+(`str`, `cstr`, `int`, `bool`, etc.) as "owned" by a designated file so that
+instances for those types can legitimately appear there.  Alternatively, the
+`Eq [str]`, `Ord [str]`, `Show [str]`, and `Clone [str]` instances could be
+moved into `typeclass-eq.tur` / `typeclass.tur` where the typeclasses are
+defined, satisfying the existing orphan rule without any compiler changes.
+
+---
+
 ## Fixed Issues
 
 Brief log of previously-tracked bugs that have been fully resolved.  Refer
