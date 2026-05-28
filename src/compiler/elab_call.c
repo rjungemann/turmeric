@@ -50,6 +50,15 @@ static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings
     return false;
 }
 
+/* Walk an applied type down its `fn` spine to the head, returning the head's
+ * AdtDef when the spine bottoms out at a TY_ADT (e.g. the head of
+ * (type-app (type-app Equal a) b) is the ADT `Equal`). Returns NULL otherwise. */
+static const AdtDef *call_app_head_adt(const Type *t) {
+    while (t && t->kind == TY_APP) t = t->as.app.fn;
+    if (t && t->kind == TY_ADT) return t->as.adt_.def;
+    return NULL;
+}
+
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
@@ -69,6 +78,16 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
         case TY_APP:
             if (actual.kind != TY_APP || !expected->as.app.fn || !expected->as.app.arg ||
                 !actual.as.app.fn || !actual.as.app.arg) {
+                /* KB-022: A bare GADT/ADT value (TY_ADT) is a valid argument for a
+                 * parameterised parameter type (TY_APP) when their heads agree --
+                 * e.g. (Refl) : Equal passed where (Equal a b) is expected. The
+                 * value carries no per-position type arguments to refine the named
+                 * tyvars, so accept the head match and leave a/b unbound (the
+                 * parameter is polymorphic, so any instantiation is sound). */
+                if (actual.kind == TY_ADT) {
+                    const AdtDef *exp_head = call_app_head_adt(expected);
+                    return exp_head && exp_head == actual.as.adt_.def;
+                }
                 return false;
             }
             return call_collect_type_bindings(expected->as.app.fn, *actual.as.app.fn,

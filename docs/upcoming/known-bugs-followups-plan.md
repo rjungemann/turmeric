@@ -17,7 +17,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 | ID | Title | Severity | Effort |
 |----|-------|----------|--------|
 | KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances | High | Large |
-| KB-022 | GADT HKT constraint unification (`equal-cong`) | Low | Medium |
+| KB-022 | GADT HKT constraint unification (`equal-cong`) -- DONE | Low | Medium |
 | KB-025 | GADT skolem-escape check missing | Medium | Medium |
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics | Medium | Medium |
 | KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) | Low | Medium |
@@ -115,6 +115,32 @@ The unifier should allow `(Equal a a)` to refine `(Equal a b)` by binding
 ### Effort
 
 Medium -- isolated to the GADT/HKT unifier, but type-system work.
+
+### Resolution (DONE)
+
+Two coordinated fixes, both small:
+
+1. **Unifier (`elab_call.c`, `call_collect_type_bindings`)** -- a bare
+   GADT/ADT value (`TY_ADT`) is now accepted as an argument for a
+   parameterised parameter type (`TY_APP`) when their heads agree. `(Refl) :
+   Equal` passed where `(Equal a b)` is expected matches on the `Equal` head
+   and leaves the named tyvars `a`/`b` unbound (the parameter is polymorphic,
+   so any instantiation is sound), instead of rejecting on the
+   `TY_APP`-vs-`TY_ADT` shape mismatch.
+
+2. **Codegen (`emit_module.c`, `emit_abi_fn_skip_generic`)** -- `equal-cong`'s
+   result type permanently mentions the unbound kind variable `f` (`(Equal (f
+   a) (f b))`), so it can never be ABI-monomorphized and no specialization
+   clone is ever produced. The generic-unsafe suppression that normally
+   defers such functions to per-callsite clones now tracks whether a direct
+   (non-specialized) carrier call to the binding was observed during the ABI
+   scan, and emits the carrier definition in that case so the call resolves.
+   Every type in `equal-cong`'s signature lowers to the `int64_t` carrier, so
+   the single carrier definition is valid C.
+
+Verified: `gadt-equal-cong` passes; the full `tests/run.sh` suite shows no new
+failures (the remaining `gadt-refine-escape`, `kinds-kind-variable`, and
+`typeann-diag-hint` failures are the still-open KB-025/KB-026 items).
 
 ---
 
