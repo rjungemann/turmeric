@@ -2,10 +2,10 @@
 ;; Tests that (type-app F A) can be used to apply type constructors
 
 ;; First, define a type constructor
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
-;; Apply Functor to option - this should create a Functor[option] type
-(type-app Functor option)
+;; Apply TestFunctor to option - this should create a TestFunctor[option] type
+(type-app TestFunctor option)
 
 (defn main [] :int 0)

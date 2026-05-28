@@ -1,9 +1,9 @@
 ;; Phase HKT §3: Partial type application — (result int) as a * -> * type constructor.
-;; Verifies that (definstance Functor [(result int)] ...) compiles and the method
+;; Verifies that (definstance TestFunctor [(result int)] ...) compiles and the method
 ;; implementation dispatches correctly, where result is a binary type constructor
 ;; (KIND_ARROW2) partially applied to fix the error type as int.
 
-(defclass Functor [^container]
+(defclass TestFunctor [^container]
   (fmap [container fn] :int))
 
 ;; ── Inline result helpers (avoid stdlib dependency) ─────────────────────────
@@ -59,12 +59,12 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-;; Partially-applied instance: Functor over (result int), i.e., result<int, _>
+;; Partially-applied instance: TestFunctor over (result int), i.e., result<int, _>
 ;; This exercises the §3 TY_APP parsing and name mangling:
 ;;   type arg (result int) → TY_APP(fn=TY_STRUCT(result), arg=TYPE_INT)
 ;;   method name: __inst_Functor_fmap_result_int
 ;;   dict struct: dict_Functor_result_int
-(definstance Functor [(result int)]
+(definstance TestFunctor [(result int)]
   (fmap [container fn] (__functor_result_int_fmap container fn)))
 
 ;; ── Tests ────────────────────────────────────────────────────────────────────

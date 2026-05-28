@@ -2,7 +2,7 @@
 ;; Exercises fmap, pure, bind, foldl, and bimap on each migrated stdlib type.
 
 ;; ── Typeclass declarations ──────────────────────────────────────────────────
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 (defclass Applicative [^f]
@@ -47,7 +47,7 @@
   return (int64_t)(p->value);
   ```)
 
-;; Option Functor
+;; Option TestFunctor
 (defn __fmap_option [container fn] :int
   ```c
   struct { bool is_some; int64_t value; } *c =
@@ -59,7 +59,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Option Foldable
@@ -154,7 +154,7 @@
   return (int64_t)vec->len;
   ```)
 
-;; Vec Functor
+;; Vec TestFunctor
 (defn __fmap_vec [container fn] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
@@ -169,7 +169,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [vec]
+(definstance TestFunctor [vec]
   (fmap [container fn] (__fmap_vec container fn)))
 
 ;; Vec Foldable
@@ -280,7 +280,7 @@
   return lst == 0;
   ```)
 
-;; List Functor
+;; List TestFunctor
 (defn __fmap_list [container fn] :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
@@ -305,7 +305,7 @@
   return (int64_t)(intptr_t)result;
   ```)
 
-(definstance Functor [list]
+(definstance TestFunctor [list]
   (fmap [container fn] (__fmap_list container fn)))
 
 ;; List Foldable
@@ -425,7 +425,7 @@
   return res->err_val;
   ```)
 
-;; Result Functor (maps over ok value)
+;; Result TestFunctor (maps over ok value)
 (defn __fmap_result [container fn] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -438,7 +438,7 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-(definstance Functor [result]
+(definstance TestFunctor [result]
   (fmap [container fn] (__fmap_result container fn)))
 
 ;; Result Foldable

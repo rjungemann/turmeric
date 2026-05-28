@@ -3,7 +3,7 @@
 ;; bind none     _ = none
 
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 (defclass Monad [^m]
@@ -37,7 +37,7 @@
   return (int)(p->value);
   ```)
 
-;; Functor[option] — needed to satisfy Monad superclass structure.
+;; TestFunctor[option] — needed to satisfy Monad superclass structure.
 (defn __fmap_option [container fn] :int
   ```c
   struct { bool is_some; int64_t value; } *c =
@@ -49,7 +49,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Monad[option]: bind (some x) f = f x; bind none _ = none.

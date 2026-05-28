@@ -1,16 +1,16 @@
-;; Phase B1: Clone trait for the built-in rc type.
+;; Phase B1: TestClone trait for the built-in rc type.
 ;;
-;; Demonstrates that (definstance Clone [rc] ...) implements a shallow clone
+;; Demonstrates that (definstance TestClone [rc] ...) implements a shallow clone
 ;; (refcount increment): after .clone, both handles point to the same
 ;; RcControlBlock and the strong-count reflects both owners.
 ;;
 ;; Type note: .clone returns int64_t (the rc pointer cast), so the cloned
 ;; handle is freed via an inline C helper rather than rc/drop.
 
-(defclass Clone [a]
+(defclass TestClone [a]
   (clone [x] :int))
 
-(definstance Clone [rc]
+(definstance TestClone [rc]
   (clone [x] :int
     ```c
     /* x is RcControlBlock *; increment refcount, return same pointer. */
