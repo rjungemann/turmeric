@@ -44,6 +44,10 @@ extern bool g_strict_effects;
 /* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
 extern bool g_dump_effects;
 
+/* Phase I: --emit-abi-trace flag — print the resolved ABI path (concrete-clone,
+ * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
+extern bool g_emit_abi_trace;
+
 /* ER6: --lint-effects flag — advisory warnings for unannotated effectful functions */
 extern bool g_lint_effects;
 

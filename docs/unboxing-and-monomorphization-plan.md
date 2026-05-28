@@ -377,16 +377,37 @@ through the dictionary singletons (see `EX_EXISTS_PACK` in
 (dictionary indirection) at the statically-known call site, and the
 KB-012 fixture continues to pass.
 
-### Phase I -- Specialization observability
+### Phase I -- Specialization observability *(landed)*
 
-A small, cheap, high-leverage phase: add an `--emit-abi-trace` flag
-that prints, per call site, which path was taken (concrete-clone,
-carrier, dictionary, polymorphic-wrapper). Use it to drive Phase F
-and Phase H without flying blind.
+A small, cheap, high-leverage phase: the `--emit-abi-trace` flag prints,
+per call site, which path was taken (concrete-clone, carrier, dictionary,
+polymorphic-wrapper). Use it to drive Phase F and Phase H without flying
+blind.
+
+Implementation:
+
+- `g_emit_abi_trace` (`src/runtime/globals.{c,h}`) is set by the global
+  `--emit-abi-trace` flag, parsed in `src/main.c` alongside the other
+  diagnostic flags (argv rewrite + `TUR_FLAGS` env + `--help` text).
+- `src/compiler/emit_module.c` runs `emit_abi_trace_expr` after the
+  `emit_abi_scan_expr` pre-pass (so `specialized_call_exprs` /
+  `abi_specializations` are populated). It walks every program item and
+  prints one stderr line per `EX_CALL`. Classification:
+  `abi_trace_clone_name` mirrors `emit_call_name`'s two-step
+  specialization lookup (exact call-expr match, then binding + arg-type
+  match) -> `concrete-clone`; otherwise `is_poly_call` ->
+  `polymorphic-wrapper`, `dict_arg != NULL` -> `dictionary`, else
+  `carrier`. The trace runs during emit only, so `emit-c`/`build` fire it
+  (the interpreter `run` path emits C under the hood and also prints).
+- Line format: `abi-trace <line>:<col> <callee> <path>[ <clone-name>]`.
+  The full flag reference lives in
+  `docs/guides/compiler-flags-guide.md`.
 
 **Signal:** `tur emit-c --emit-abi-trace fixture.tur` prints one
-line per resolved call; a stdlib benchmark file shows the expected
-mix of clones and carriers.
+line per resolved call; the `tests/fixtures/emit-abi-trace/` fixture
+exercises all four paths (`cube` at `:int` -> carrier, `cube` at
+`:float` -> concrete-clone, a rank-2 `f` -> polymorphic-wrapper, an `Eq`
+method -> dictionary) and asserts the corresponding trace lines.
 
 ### Phase J -- Cross-module specialization cache (optional)
 

@@ -2832,6 +2832,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
+        else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
         else if (strcmp(tok, "--lint-unsafe")       == 0) { g_lint_unsafe_enabled = true; g_unsafe_warn_nested = true; }
         else if (strncmp(tok, "--lint-unsafe-max-lines=", 24) == 0) {
@@ -4994,6 +4995,7 @@ static int usage(void) {
         "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
+        "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
         "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
@@ -5654,6 +5656,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-clone-plan") == 0) {
             /* Phase B5: dump cloneable capture plan after CPS */
             g_dump_clone_plan = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--emit-abi-trace") == 0) {
+            /* Phase I: trace the resolved ABI path for each call site during emit */
+            g_emit_abi_trace = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

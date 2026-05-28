@@ -41,6 +41,7 @@ between flags.
 | `--keep-contracts` | 📋 Planned | Retains contract checks in release builds (`just release`); without this flag, contracts are stripped in release mode |
 | `--dump-kinds` | ✅ Complete | After the kind-checking pass, prints the kind of every bound type to stdout |
 | `--dump-effects` | ✅ Complete | Prints inferred effect rows for every function, e.g. `run-twice : forall [e]. (fn [...] #{e} int)` |
+| `--emit-abi-trace` | ✅ Complete | During `emit-c`/`build`, prints one line per resolved call site naming the C-level ABI path it takes (`concrete-clone`, `carrier`, `dictionary`, `polymorphic-wrapper`) |
 
 ---
 
@@ -396,6 +397,55 @@ Prints the inferred effect row for every function after elaboration, e.g.:
 ```
 run-twice : forall [e]. (fn [(fn [] #{e} int)] #{e} int)
 ```
+
+### `--emit-abi-trace`
+
+Prints, for each resolved call site, which C-level ABI path the emitter
+takes to reach the callee. It is a codegen-time diagnostic: the trace is
+produced while emitting C, so it only fires for `tur emit-c` and
+`tur build` (the `tur run` interpreter still emits C under the hood, so it
+also prints). Output goes to **stderr**, one line per call:
+
+```
+abi-trace <line>:<col> <callee> <path>[ <clone-name>]
+```
+
+The `<path>` is one of four forms:
+
+| Path | Meaning | When |
+|---|---|---|
+| `concrete-clone` | A monomorphized variant is called. The clone's mangled name is appended (e.g. `cube__spec__double_double`). | A polymorphic global is instantiated at a concrete type whose C ABI differs from the carrier (Phases F/G/H). |
+| `carrier` | The generic `int64_t` carrier ABI is used; the value round-trips through the universal 64-bit handle. | Genuinely polymorphic call sites, type-erased containers, and instantiations whose C type matches the carrier (e.g. `cube` at `:int`). |
+| `dictionary` | A typeclass method is dispatched through the instance machinery (`dict_arg` is set on the call). The callee name is the instance impl, e.g. `__inst_Eq_eq__Tuple2`. | Any `(.method ...)` typeclass dispatch, whether resolved to a direct instance call (Phase H) or a dictionary vtable load. |
+| `polymorphic-wrapper` | The call goes through a `tur_poly_fn_t` rank-2 wrapper rather than a direct C function. | Calling a `forall`-quantified function parameter inside a rank-2/rank-N body. |
+
+Example, against a file that exercises all four (see
+`tests/fixtures/emit-abi-trace/`):
+
+```sh
+$ tur emit-c --emit-abi-trace input.tur >/dev/null
+...
+abi-trace 26:11 cube carrier
+abi-trace 29:11 cube concrete-clone cube__spec__double_double
+abi-trace 17:12 f polymorphic-wrapper
+abi-trace 36:9 __inst_Eq_eq__Tuple2 dictionary
+```
+
+Notes:
+
+- The stdlib is prepended to every program, so the trace is dominated by
+  stdlib carrier calls. Grep for your own function names to find the call
+  sites that matter.
+- Line numbers are emitted without a file id, so a stdlib line N and a
+  user-file line N print the same prefix; disambiguate by the callee name.
+- The classification mirrors what the emitter actually emits: a call is
+  reported as `concrete-clone` exactly when `emit_call_name` would resolve
+  it to a specialization (matched by call-expr or by binding + argument
+  types).
+
+Use this flag to verify that a fully-typed hot path is being
+monomorphized rather than silently falling back to the carrier ABI --
+specialization is best-effort and otherwise silent on fallback.
 
 ---
 

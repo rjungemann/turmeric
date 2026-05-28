@@ -51,6 +51,9 @@ bool g_strict_effects = false;
 /* ER6: --dump-effects flag */
 bool g_dump_effects = false;
 
+/* Phase I: --emit-abi-trace flag */
+bool g_emit_abi_trace = false;
+
 /* ER6: --lint-effects flag */
 bool g_lint_effects = false;
 
