@@ -8,9 +8,9 @@
     (vec-push! v1 42)
     (vec-push! v2 42)
     (vec-push! v3 99)
-    (let [o1 (:: (some? v1) (Option (Vec int)))
-          o2 (:: (some? v2) (Option (Vec int)))
-          o3 (:: (some? v3) (Option (Vec int)))
+    (let [o1 (:: (some v1) (Option (Vec int)))
+          o2 (:: (some v2) (Option (Vec int)))
+          o3 (:: (some v3) (Option (Vec int)))
           on (:: (none)    (Option (Vec int)))]
       (println (.eq? o1 o2))   ; true:  Some [42] vs Some [42]
       (println (.eq? o1 o3))   ; false: Some [42] vs Some [99]

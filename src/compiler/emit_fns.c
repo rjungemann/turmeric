@@ -134,7 +134,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * function pointer) in Turmeric's calling convention. */
             buf_puts(file, "int64_t");
         } else if (use_abi_spec) {
-            buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]));
+            const char *pc = emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]);
+            buf_puts(file, pc);
+            /* KB-021: a concrete carrier-ABI spec param is passed by value. */
+            if (fd->params[i] &&
+                type_uses_carrier_abi(emit_resolve_type(ctx, ctx->current_abi_specialization->arg_types[i])) &&
+                strcmp(pc, "int64_t") != 0)
+                fd->params[i]->emit_byvalue_carrier_abi = true;
         } else {
             /* Phase D: large structs use const T* ABI unless in inline-C or closure. */
             Type param_ty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
@@ -143,7 +149,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             if (!fd->closure && !body_is_inline_c && type_struct_pass_by_ptr(param_ty)) {
                 buf_printf(file, "const %s *", emit_type_c_name(ctx, param_ty));
             } else {
-                buf_puts(file, emit_type_c_name(ctx, param_ty));
+                const char *pc = emit_type_c_name(ctx, param_ty);
+                buf_puts(file, pc);
+                /* KB-021: a by-value concrete carrier-ABI parameter must be
+                 * bridged to the carrier when used at a dispatch callsite. */
+                if (fd->params[i] &&
+                    type_uses_carrier_abi(emit_resolve_type(ctx, param_ty)) &&
+                    strcmp(pc, "int64_t") != 0)
+                    fd->params[i]->emit_byvalue_carrier_abi = true;
             }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
