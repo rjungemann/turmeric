@@ -198,6 +198,7 @@ typedef struct RegisteredStructApp {
     char *name;
     bool emitted;
     bool emitting;
+    bool pass_by_ptr;    /* Phase D: sizeof(T) > 16 -- pass as const T* */
 } RegisteredStructApp;
 
 static RegisteredStructApp *g_struct_apps = NULL;
@@ -404,6 +405,19 @@ static void free_struct_app_type(Type t) {
     }
 }
 
+/* Phase D: forward declaration — substitute_struct_app_type is defined below. */
+static Type substitute_struct_app_type(const Type *t, const StructDef *def, const Type *args);
+
+/* Phase D: approximate field size (bytes) from a TypeKind for pass-by-ptr threshold. */
+static size_t phase_d_field_size(TypeKind k) {
+    switch (k) {
+        case TY_BOOL: case TY_INT8: case TY_UINT8:   return 1;
+        case TY_INT16: case TY_UINT16:                return 2;
+        case TY_INT32: case TY_UINT32: case TY_FLOAT32: return 4;
+        default:                                       return 8;
+    }
+}
+
 static const char *register_struct_app(Type t) {
     if (!type_has_concrete_codegen_layout(&t)) return "int64_t";
     for (uint32_t i = 0; i < g_n_struct_apps; i++) {
@@ -424,6 +438,26 @@ static const char *register_struct_app(Type t) {
     g_struct_apps[g_n_struct_apps].name = tur_strdup(name.data);
     g_struct_apps[g_n_struct_apps].emitted = false;
     g_struct_apps[g_n_struct_apps].emitting = false;
+    /* Phase D: compute pass_by_ptr by summing field sizes with concrete args substituted. */
+    {
+        StructDef *def = NULL;
+        Type args[16];
+        uint8_t n_args = 0;
+        bool pbp = false;
+        if (type_extract_struct_app(&t, &def, args, &n_args) && def && !def->is_opaque) {
+            size_t total = 0;
+            for (uint32_t fi = 0; fi < def->n_fields; fi++) {
+                TypeKind fk = def->fields[fi].kind;
+                if (def->fields[fi].full_type && n_args > 0) {
+                    Type resolved = substitute_struct_app_type(def->fields[fi].full_type, def, args);
+                    fk = resolved.kind;
+                }
+                total += phase_d_field_size(fk);
+            }
+            pbp = (total > 16);
+        }
+        g_struct_apps[g_n_struct_apps].pass_by_ptr = pbp;
+    }
     buf_free(&name);
     if (!g_struct_apps[g_n_struct_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
     return g_struct_apps[g_n_struct_apps++].name;
@@ -2301,4 +2335,26 @@ bool type_is_subtype(Type sub, Type super_) {
         return type_eq(sub, super_);
     }
     return false;
+}
+
+/* Phase D: returns true when t is a struct type whose estimated sizeof exceeds 16
+ * bytes, meaning it should be passed as const T* rather than by value. */
+bool type_struct_pass_by_ptr(Type t) {
+    switch (t.kind) {
+        case TY_STRUCT: {
+            StructDef *def = t.as.struct_.def;
+            return def && !def->is_opaque && def->n_type_params == 0 && def->pass_by_ptr;
+        }
+        case TY_APP: {
+            /* Look up in the registry (registers on first encounter). */
+            if (!type_has_concrete_codegen_layout(&t)) return false;
+            register_struct_app(t);
+            for (uint32_t i = 0; i < g_n_struct_apps; i++) {
+                if (type_eq(g_struct_apps[i].type, t)) return g_struct_apps[i].pass_by_ptr;
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
 }

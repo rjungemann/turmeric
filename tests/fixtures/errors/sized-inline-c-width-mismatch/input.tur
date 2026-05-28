@@ -1,0 +1,10 @@
+; Phase C: --Werror=inline-c-narrow-params flags defns whose inline-C body
+; receives narrow-type parameters. The C code sees int16_t (not int64_t),
+; which can silently truncate values written expecting the carrier width.
+
+(defn scale [x :int16 factor :int16] :int16
+  ```c
+  return x * factor;
+  ```)
+
+(defn main [] :int 0)

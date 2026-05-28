@@ -681,6 +681,18 @@ static void emit_gen_functions(EmitCtx *ctx, const GenDef *def) {
 }
 
 
+/* Phase D: returns true when struct_expr is an EX_VAR reference to a current-function
+ * parameter that is passed by pointer (const T*) rather than by value. */
+static bool expr_is_pbp_param(EmitCtx *ctx, const Expr *struct_expr) {
+    if (!ctx || !struct_expr || struct_expr->kind != EX_VAR) return false;
+    Binding *b = struct_expr->as.var.binding;
+    if (!b) return false;
+    for (uint8_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+        if (ctx->pbp_param_ptrs[_i] == b) return true;
+    }
+    return false;
+}
+
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
@@ -1642,6 +1654,47 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     raw = emit_carrier_bridge(ctx, body, raw,
                                              CK_CARRIER, CK_CONCRETE,
                                              matched_spec->arg_types[i]);
+                }
+                /* Phase D: large struct args must be passed as const T*.
+                 * Only apply when the CALLEE also uses pass-by-ptr for that param
+                 * (i.e., was compiled with Phase D signatures). Generic/typeclass
+                 * callees use int64_t; passing a pointer there would be wrong.
+                 * If the arg is already a pbp param (already a pointer), pass as-is.
+                 * Otherwise spill to a temp local and take its address. */
+                /* Phase D: check whether the callee's i-th param uses pass-by-ptr.
+                 * arg_full_types is only set for poly/rank-2 params; for ordinary
+                 * struct params fall back to arg_kinds: TY_STRUCT/TY_APP means the
+                 * callee has a concrete struct param (same type as the arg by type
+                 * safety), so pbp applies iff the arg itself is pbp.
+                 * TY_INT / TY_TYVAR means generic/opaque int64_t -- no pbp. */
+                bool _callee_pbp = false;
+                if (fn_binding->type.kind == TY_FN && i < fn_binding->type.as.fn.arity) {
+                    if (fn_binding->type.as.fn.arg_full_types &&
+                            fn_binding->type.as.fn.arg_full_types[i]) {
+                        _callee_pbp = type_struct_pass_by_ptr(
+                            *fn_binding->type.as.fn.arg_full_types[i]);
+                    } else {
+                        TypeKind _cpk = fn_binding->type.as.fn.arg_kinds[i];
+                        _callee_pbp = (_cpk == TY_STRUCT || _cpk == TY_APP) &&
+                            type_struct_pass_by_ptr(e->as.call_.args[i]->type);
+                    }
+                }
+                if (!needs_fn_cast && !fn_binding->is_extern_c &&
+                    !matched_spec &&
+                    _callee_pbp &&
+                    type_struct_pass_by_ptr(e->as.call_.args[i]->type) &&
+                    !expr_is_pbp_param(ctx, emit_arg)) {
+                    char *_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = %s;\n",
+                               emit_type_c_name(ctx, e->as.call_.args[i]->type), _tmp, raw);
+                    free(raw);
+                    Buf _ab; buf_init(&_ab);
+                    buf_printf(&_ab, "&%s", _tmp);
+                    buf_putc(&_ab, '\0');
+                    raw = strdup(_ab.data);
+                    buf_free(&_ab);
+                    free(_tmp);
                 }
                 arg_strs[i] = raw;
             }
@@ -2683,7 +2736,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * CS1b: for parameterized struct receivers that arrive via the
              * int64_t carrier ABI (TY_STRUCT with n_type_params > 0), cast
              * through the unspecialized carrier typedef so field access is
-             * valid C even though the C parameter type is int64_t. */
+             * valid C even though the C parameter type is int64_t.
+             * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             StructDef *def = e->as.get_field_.def;
             const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
@@ -2692,12 +2746,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool through_carrier = !through_rc
                 && e->as.get_field_.struct_expr->type.kind == TY_STRUCT
                 && def->n_type_params > 0;
+            bool through_pbp = !through_rc && !through_carrier
+                && expr_is_pbp_param(ctx, e->as.get_field_.struct_expr);
             Buf lit; buf_init(&lit);
             if (through_rc) {
                 buf_printf(&lit, "((%s *)((RcControlBlock *)(%s))->value)->%s",
                            def->name, sv, fname);
             } else if (through_carrier) {
                 buf_printf(&lit, "((%s *)(intptr_t)(%s))->%s", def->name, sv, fname);
+            } else if (through_pbp) {
+                buf_printf(&lit, "(%s)->%s", sv, fname);
             } else {
                 buf_printf(&lit, "(%s).%s", sv, fname);
             }

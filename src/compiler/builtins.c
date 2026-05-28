@@ -86,6 +86,24 @@ static BuiltinSpec table_[] = {
     UINT_OPS(TY_UINT64),
 #undef UINT_OPS
 
+    /* Phase C: Bitwise operations for all integer types (kind-preserving). */
+#define BITWISE_OPS(TK) \
+    { "bit-and", NULL, 2, 2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX, "&"  }, \
+    { "bit-or",  NULL, 2, 2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX, "|"  }, \
+    { "bit-xor", NULL, 2, 2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX, "^"  }, \
+    { "bit-shl", NULL, 2, 2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX, "<<" }, \
+    { "bit-shr", NULL, 2, 2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX, ">>" }
+    BITWISE_OPS(TY_INT),
+    BITWISE_OPS(TY_INT8),
+    BITWISE_OPS(TY_INT16),
+    BITWISE_OPS(TY_INT32),
+    BITWISE_OPS(TY_INT64),
+    BITWISE_OPS(TY_UINT8),
+    BITWISE_OPS(TY_UINT16),
+    BITWISE_OPS(TY_UINT32),
+    BITWISE_OPS(TY_UINT64),
+#undef BITWISE_OPS
+
     /* Phase N: Arithmetic for float32. */
     { "+",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "+" },
     { "-",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "-" },

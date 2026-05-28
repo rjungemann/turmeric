@@ -116,6 +116,11 @@ typedef struct EmitCtx {
     uint32_t     cap_specialized_calls;
     const EmitAbiSpecialization *current_abi_specialization;
     const char  *fn_name_override;
+    /* Phase D: pass-by-ptr param bindings for the current function.
+     * Populated by emit_fn_def before body emission; cleared after.
+     * expr_is_pbp_param checks this to decide whether a receiver uses -> . */
+    Binding     *pbp_param_ptrs[16]; /* MAX_FN_ARITY */
+    uint8_t      n_pbp_params;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */

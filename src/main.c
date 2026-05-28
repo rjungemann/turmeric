@@ -2842,6 +2842,8 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--require-unsafe-docs")== 0) { g_lint_unsafe_enabled = true; g_unsafe_require_safety = true; }
         else if (strcmp(tok, "--lint-unsafe-nested")== 0) { g_lint_unsafe_enabled = true; }
         else if (strcmp(tok, "--lint-inline-c-unsafe") == 0) g_lint_inline_c_unsafe = true;
+        else if (strcmp(tok, "--Werror=inline-c-narrow-params") == 0 ||
+                 strcmp(tok, "-Werror=inline-c-narrow-params") == 0) g_werror_inline_c_narrow_params = true;
         tok = strtok(NULL, " \t");
     }
 }
@@ -5310,6 +5312,19 @@ static bool parse_werror_deprecated(int argc, char **argv) {
     return false;
 }
 
+/* Phase C: --Werror=inline-c-narrow-params promotes narrow-param-in-inline-C
+ * warnings to hard errors so a strict build can gate against unannotated
+ * narrow parameters reaching inline-C bodies. */
+static bool parse_werror_inline_c_narrow_params(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--Werror=inline-c-narrow-params") == 0 ||
+            strcmp(argv[i], "-Werror=inline-c-narrow-params") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Phase R6: Handle --lint-panic flag */
 static bool parse_lint_panic(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -5463,6 +5478,8 @@ int main(int argc, char **argv) {
     g_lint_panic = parse_lint_panic(argc, argv);
     /* F4: --Werror=deprecated promotes ^deprecated warnings to errors */
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
+    /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param warnings */
+    g_werror_inline_c_narrow_params = parse_werror_inline_c_narrow_params(argc, argv);
     /* SC4: --no-auto-spice disables enclosing-spice auto-discovery in
      * per-file subcommands (check/emit-c/emit-h/run). */
     g_no_auto_spice = parse_no_auto_spice(argc, argv);
@@ -5500,6 +5517,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--Werror=deprecated") == 0 ||
                    strcmp(argv[i], "-Werror=deprecated") == 0) {
             /* F4: already parsed into g_werror_deprecated; remove from argv. */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--Werror=inline-c-narrow-params") == 0 ||
+                   strcmp(argv[i], "-Werror=inline-c-narrow-params") == 0) {
+            /* Phase C: already parsed into g_werror_inline_c_narrow_params; remove. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

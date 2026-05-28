@@ -123,6 +123,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_printf(file, " %s(", fn_name);
 
     /* Emit parameters - use raw names (without ID suffix) */
+    bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i > 0) buf_puts(file, ", ");
         /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
@@ -134,10 +135,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_puts(file, "int64_t");
         } else if (use_abi_spec) {
             buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->arg_types[i]));
-        } else if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i]) {
-            buf_puts(file, emit_type_c_name(ctx, *e->type.as.fn.arg_full_types[i]));
         } else {
-            buf_puts(file, emit_type_c_name(ctx, fd->param_types[i]));
+            /* Phase D: large structs use const T* ABI unless in inline-C or closure. */
+            Type param_ty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+                ? *e->type.as.fn.arg_full_types[i]
+                : fd->param_types[i];
+            if (!fd->closure && !body_is_inline_c && type_struct_pass_by_ptr(param_ty)) {
+                buf_printf(file, "const %s *", emit_type_c_name(ctx, param_ty));
+            } else {
+                buf_puts(file, emit_type_c_name(ctx, param_ty));
+            }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
         buf_printf(file, " %s", pn);
@@ -167,6 +174,18 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     uint8_t saved_n_params = ctx->n_fn_params;
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
+
+    /* Phase D: record which params are pbp for field-access and call-site handling. */
+    uint8_t saved_n_pbp = ctx->n_pbp_params;
+    ctx->n_pbp_params = 0;
+    if (!fd->closure && !body_is_inline_c) {
+        for (uint8_t _pi = 0; _pi < fd->n_params && ctx->n_pbp_params < 16; _pi++) {
+            Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
+                ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];
+            if (type_struct_pass_by_ptr(pty))
+                ctx->pbp_param_ptrs[ctx->n_pbp_params++] = fd->params[_pi];
+        }
+    }
 
     /* Phase R5: Set no_unwind context from the function's binding attribute */
     bool saved_no_unwind = ctx->no_unwind;
@@ -247,6 +266,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
     ctx->no_unwind = saved_no_unwind;  /* Phase R5 */
+    ctx->n_pbp_params = saved_n_pbp;   /* Phase D */
     ctx->closure = saved_closure;
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;

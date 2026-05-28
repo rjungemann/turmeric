@@ -937,6 +937,18 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
         infer_struct_type_param_kinds(def, field_type_param_kinds);
     }
 
+    /* Phase D: decide pass-by-pointer threshold for non-parameterized structs.
+     * For generic structs (n_type_params > 0) the decision is deferred to
+     * RegisteredStructApp.pass_by_ptr, computed per-instantiation. */
+    if (def->n_type_params == 0 && !def->is_opaque) {
+        size_t _d_total = 0;
+        for (uint32_t _dfi = 0; _dfi < def->n_fields; _dfi++) {
+            int _fsz = type_size_bytes(def->fields[_dfi].kind);
+            _d_total += (_fsz > 0) ? (size_t)_fsz : 8;
+        }
+        def->pass_by_ptr = (_d_total > 16);
+    }
+
     /* Return EX_DEF with struct_def populated.
      * Registration in global scope and elab registry was done above (RF0). */
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
