@@ -140,8 +140,7 @@ static char *repl_readline(const char *prompt) {
     if (line && line[0] != '\0') add_history(line);
     return line; /* readline returns malloc'd memory */
 #else
-    printf("%s", prompt);
-    fflush(stdout);
+    if (isatty(STDIN_FILENO)) { printf("%s", prompt); fflush(stdout); }
     char buf[4096];
     if (!fgets(buf, sizeof(buf), stdin)) return NULL;
     size_t len = strlen(buf);

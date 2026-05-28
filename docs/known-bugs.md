@@ -480,28 +480,32 @@ See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md)
 
 ---
 
-## KB-016 -- Codegen snapshots stale after Tuple2/3/4/5 additions
+## KB-016 -- Codegen snapshots stale after Tuple2/3/4/5 additions and ACB Phase 1 field changes
 
 **Discovered:** 2026-05-27
+**Updated:** 2026-05-28 (ACB Phase 1 adds additional drift)
 **Status:** Open -- snapshot maintenance issue.
 
 ### Symptom
 
-49 fixture tests report "codegen mismatch" even though the programs run
-correctly and produce the expected stdout.  The `diff` always shows the
-same pattern: new `Tuple2`/`Tuple3`/`Tuple4`/`Tuple5` struct typedefs
-and a new `__inst_Eq_eq__Tuple2` declaration appearing in the generated
-C, plus incrementally shifted `__fn_NNN` counter numbers throughout the
-rest of the file.
+Multiple fixture tests report "codegen mismatch" even though the programs run
+correctly and produce the expected stdout.  The `diff` shows two patterns:
+
+1. New `Tuple2`/`Tuple3`/`Tuple4`/`Tuple5` struct typedefs and a new
+   `__inst_Eq_eq__Tuple2` declaration appearing in the generated C, plus
+   shifted `__fn_NNN` counter numbers.
+2. (Added by ACB Phase 1, commit `27ba615`) Certain pointer-typed stdlib
+   struct fields changed from `int64_t` to `void *` in the generated
+   preamble (e.g. `hamt`, `data`, `ptr`, `left`, `right`, `storage` fields
+   in the HAMT and Vec structs).
 
 ### Root cause
 
 The stdlib was extended with explicit Tuple2--5 structs and an `Eq`
-instance for `Tuple2`.  These definitions are auto-loaded into every
-compilation unit, so the generated C now always includes them -- but
-the `expected.c` snapshot files were never regenerated.  This is the
-same maintenance category as KB-006 (which covered a previous round of
-stale snapshots).
+instance for `Tuple2`.  Additionally, ACB Phase 1 changed the C type of
+several pointer-typed struct fields from `int64_t` to `void *`.  Both
+changes affect the generated C preamble, so the `expected.c` snapshot
+files are now stale.  This is the same maintenance category as KB-006.
 
 ### Affected fixtures (49 total)
 
@@ -1075,6 +1079,170 @@ instances for those types can legitimately appear there.  Alternatively, the
 `Eq [str]`, `Ord [str]`, `Show [str]`, and `Clone [str]` instances could be
 moved into `typeclass-eq.tur` / `typeclass.tur` where the typeclasses are
 defined, satisfying the existing orphan rule without any compiler changes.
+
+---
+
+## KB-031 -- ACB Phase 1 regression: struct args passed as pointer in typeclass callsites
+
+**Discovered:** 2026-05-28
+**Status:** Open -- ACB Phase 1 incomplete.
+
+### Symptom
+
+Typeclass method calls on struct-typed instances compile without error
+but produce wrong output at runtime -- printing large integer values
+(pointer addresses) instead of the expected computed results:
+
+```
+FAIL clone-option -- expected 55, got 140731972107744
+FAIL clone-list   -- expected 42, got 140729152516592
+FAIL clone-pair   -- expected 30, got 281444052896520
+FAIL clone-vec    -- expected 60, got 234945342349283
+FAIL backtrack-clone-ref  -- expected 42, got 140733503244160
+FAIL derive-show-struct   -- expected "Point { x = 3, y = 4 }", got pointer addresses
+FAIL gadt-stdlib-vec-stdlib -- segfault inside vec_len (uninitialized field access)
+```
+
+### Affected fixtures
+
+`clone-option`, `clone-list`, `clone-pair`, `clone-vec`,
+`backtrack-clone-ref`, `derive-show-struct`, `gadt-stdlib-vec-stdlib`.
+
+### Root cause
+
+ACB Phase 1 (commit `27ba615`) changed typeclass callsites to pass
+struct-typed arguments as an `int64_t` holding the address of the
+struct (`(int64_t)(intptr_t)(&__t1)`) rather than passing the struct
+by value.  However, the callee -- the instance body -- was not updated
+and still expects the struct to arrive by value.  As a result the
+function body receives the raw pointer integer as the first field of
+the struct, producing garbage output.
+
+The generated call pattern is:
+
+```c
+// ACB Phase 1 callsite (wrong -- passes pointer-as-int64_t):
+int64_t result = ((int64_t (*)(int64_t))(intptr_t)(dict_Clone_Opt_singleton.clone))
+                     ((int64_t)(intptr_t)(&__t1));  // __t1 is Opt by value
+
+// Instance body still expects by-value (unchanged):
+static int64_t __inst_Clone_clone_Opt(Opt x) {
+    struct { int64_t value; } *dst = malloc(sizeof(Opt));
+    dst->value = x.value;  // x.value is the raw pointer, not 55
+    return (int64_t)(intptr_t)dst;
+}
+```
+
+### Workaround
+
+None -- the ABI mismatch is in generated code.  Avoid writing typeclass
+instances that take struct-valued arguments until ACB Phase 2 resolves
+the calling convention uniformly.
+
+### Fix needed
+
+ACB Phase 2 must make the callsite and the instance body agree on a
+single convention.  Either:
+- Revert callsites to pass structs by value (matches current instance bodies), or
+- Update instance bodies to receive an `int64_t` carrier and dereference it.
+
+---
+
+## KB-032 -- `defclass Functor` in fixtures conflicts with auto-loaded `stdlib/typeclass-functor.tur`
+
+**Discovered:** 2026-05-28
+**Status:** Open -- stdlib auto-load collision.
+
+### Symptom
+
+Fixtures that define their own `Functor` typeclass fail at `emit-c` time
+with a duplicate-definition error, and fixtures that define
+`definstance Functor [...]` fail with an orphan-instance error:
+
+```
+FAIL dump-kinds-basic -- emit-c failed
+  input.tur:3:1: error: typeclass 'Functor' is already defined
+
+FAIL hkt-closure-capture -- build failed
+  input.tur:40:1: error [TUR-E0013]: orphan instance: typeclass 'Functor'
+    is defined in a different module ...
+
+FAIL errors/hkt-orphan-instance -- diagnostic mismatch
+  tc/functor.tur:2:3: error: typeclass 'Functor' is already defined
+  (expected "orphan instance: typeclass 'Functor' is defined in a
+   different module")
+```
+
+### Affected fixtures
+
+`dump-kinds-basic`, `hkt-closure-capture`, `errors/hkt-orphan-instance`.
+
+### Root cause
+
+`stdlib/typeclass-functor.tur` defines `Functor` and is unconditionally
+auto-loaded by `main.c` (since commit `2046ec3`, TS5+TS6 PR #86).
+Any fixture that tries to define its own `Functor` class triggers a
+duplicate-definition error.  Any fixture that defines a `Functor`
+instance but not the `Functor` class itself gets an orphan-instance
+error because the class is now owned by a different module.
+
+The `--no-auto-stdlib` flag only applies to `tur check`, not to
+`tur emit-c` or `tur build`.
+
+### Fix needed
+
+One of:
+(a) Rename the `Functor` typeclass in the affected fixtures to a
+    non-colliding name (e.g. `TestFunctor`) and regenerate their
+    `expected.c` snapshots.
+(b) Move the fixture instances into `typeclass-functor.tur` (not
+    practical for test isolation).
+(c) Extend `--no-auto-stdlib` to cover `emit-c` and `build`, allowing
+    fixtures to opt out of the auto-loaded stdlib when they define
+    their own typeclasses.
+
+---
+
+## KB-033 -- `any` type guard bypassed when using spaced annotation syntax
+
+**Discovered:** 2026-05-28
+**Status:** Open -- parser gap.
+
+### Symptom
+
+The `any` top type is supposed to require `-Xunion-types` or
+`-Xintersection-types`.  Without either flag, compiling a file that
+uses `any` in a parameter annotation should fail with:
+
+```
+error: 'any' type requires -Xunion-types or -Xintersection-types
+```
+
+However, using the *spaced* annotation form `x : any` (with a space
+before the colon) bypasses the check entirely and compiles successfully:
+
+```sh
+# FAIL -- exits 0, emits C, no diagnostic
+./build/tur emit-c tests/fixtures/errors/any-type-disabled/input.tur
+```
+
+```
+; any-type-disabled fixture
+(defn f [x : any] :nil nil)
+```
+
+The gate at `elab_types.c:344` is reached only via the compact form
+`x :any`; the spaced `: any` path goes through a different parser
+branch that resolves `any` before the flag check is applied.
+
+### Affected fixtures
+
+`errors/any-type-disabled`.
+
+### Fix needed
+
+Ensure both annotation forms (compact `:any` and spaced `: any`)
+route through the flag-gated `TY_ANY` path in `type_expr_from_form`.
 
 ---
 
