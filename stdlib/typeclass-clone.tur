@@ -25,6 +25,12 @@
 (defclass Clone [a]
   (clone [x] :int))
 
+;;; Clone [int] -- Clone instance for int (trivial copy).
+;;;
+;;; Since: Phase B1
+(definstance Clone [int]
+  (clone [x] x))
+
 ;;; Clone [ref] -- deep-clone a raw ref<T> (TY_REF): allocates a new int64_t cell and copies the value.
 ;;;
 ;;; Since: Phase B1

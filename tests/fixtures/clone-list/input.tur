@@ -5,11 +5,7 @@
 
 (defstruct Cell [value :int next :int])
 
-(defclass Clone [a]
-  (clone [x] :int))
-
-(definstance Clone [int]
-  (clone [x] x))
+;; Clone typeclass and Clone [int] are provided by stdlib (auto-loaded).
 
 ;; Clone [Cell]: deep-copy a Cell cell into a heap allocation.
 ;; x has type Cell (struct value) inside the generated C function;
