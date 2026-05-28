@@ -47,6 +47,8 @@ typedef enum DiagCode {
     TUR_E0020_AMBIGUOUS_DISPATCH,                 /* .method on int64_t receiver matches multiple instances */
     /* ER5: module effect visibility (PR5-1) */
     TUR_E0021_PRIVATE_EFFECT,                     /* effect is private to its defining module */
+    /* Phase B: mixed-width numeric arithmetic (no implicit coercion) */
+    TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
     TUR_W0030_STRICT_EFFECTS_UNANNOTATED,  /* unannotated fn has non-empty inferred row (--strict-effects) */
     TUR_W0031_EFFECT_OVER_ANNOTATED,       /* declared effect never performed */

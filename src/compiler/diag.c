@@ -126,6 +126,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
+        /* Phase B: mixed-width numeric arithmetic */
+        case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
         /* ET3: handler typing errors */
         case TUR_E0251_HANDLER_OVERLAP:                  return "TUR-E0251";
@@ -211,6 +213,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
+    if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     /* ET3: handler typing errors */
     if (strcmp(s, "TUR-E0251") == 0) return TUR_E0251_HANDLER_OVERLAP;
@@ -294,6 +297,26 @@ static const DiagExplanation diag_explanations_[] = {
       "Ensure that argument types, return types, and binding types are\n"
       "consistent.  Explicit type annotations help the compiler pinpoint the\n"
       "mismatch.\n"
+    },
+    { TUR_E0042_MIXED_WIDTH_ARITH,
+      "TUR-E0042: Mixed-width numeric arithmetic\n"
+      "\n"
+      "An arithmetic or comparison operator received operands of distinct\n"
+      "numeric kinds.  Turmeric does not implicitly widen or narrow numeric\n"
+      "values -- every conversion must be written explicitly with (as ...).\n"
+      "\n"
+      "Example:\n"
+      "  (+ 1i8 2i16)    ; error: int8 and int16 cannot be mixed\n"
+      "  (+ 1i8 (as int8 2i16))  ; ok: explicit narrowing cast\n"
+      "  (+ (as int16 1i8) 2i16) ; ok: explicit widening cast\n"
+      "\n"
+      "  (+ 1i32 2)      ; error: int32 and int (64-bit) cannot be mixed\n"
+      "  (+ 1i32 2i32)   ; ok: same kind on both sides\n"
+      "\n"
+      "Rationale: implicit numeric coercion hides ABI-level representation\n"
+      "changes and makes it easy to accidentally widen to a 64-bit carrier\n"
+      "where a 32-bit computation was intended.  Explicit casts make the\n"
+      "intent clear and keep the emitted C free of silent int64 round-trips.\n"
     },
     { TUR_E0002_ARITY_MISMATCH,
       "TUR-E0002: Arity mismatch\n"

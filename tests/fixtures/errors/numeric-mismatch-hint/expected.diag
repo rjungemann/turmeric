@@ -1,2 +1,3 @@
-type mismatch - expected int, got int8
-use (as <type> expr) for explicit numeric conversion
+TUR-E0042
+mixed-width numeric arithmetic
+use (as int expr) for explicit numeric conversion
