@@ -4,6 +4,6 @@
 ;; Neither the typeclass nor any type arg belongs to this module → orphan.
 (defmodule myapp
   (import tc/functor)
-  (definstance Functor [option]
+  (definstance TestFunctor [option]
     (fmap [container fn] 0))
   (defn main [] :int 0))

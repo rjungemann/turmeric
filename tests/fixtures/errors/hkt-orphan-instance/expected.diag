@@ -1,1 +1,1 @@
-orphan instance: typeclass 'Functor' is defined in a different module
+orphan instance: typeclass 'TestFunctor' is defined in a different module

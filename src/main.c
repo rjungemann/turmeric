@@ -628,6 +628,10 @@ static int compile_to_c(const char *path, Buf *out_c,
          * rc.tur and other typed-collection modules can declare
          * (definstance Functor [...]) without importing typeclass.tur. */
         "typeclass-functor.tur",
+        /* Phase B1: typeclass-clone.tur defines the Clone class stub so that
+         * ref.tur can declare (definstance Clone [...]) without importing
+         * typeclass.tur. */
+        "typeclass-clone.tur",
         /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
          * (now under unprefixed module names). */
         "map.tur",

@@ -703,38 +703,37 @@ return type.
 ## KB-023 -- `gadt-stdlib-vec-stdlib`: GADT `Vec` name collides with stdlib `Vec` struct
 
 **Discovered:** 2026-05-27
-**Status:** Open -- naming conflict.
+**Status:** Fixed 2026-05-28 -- `stdlib/gadt-vec.tur` renamed the GADT
+from `Vec` to `GVec` and all associated constructors and functions
+(`GVNil`, `GVCons`, `gvec-nil`, `gvec-cons`, `gvec-len`, `gvec-sum`,
+`gvec-head-or`, `gvec-tail`, `gvmap`, `gvzip-with`).  The
+`gadt-stdlib-vec-stdlib` fixture was updated to use the new names.
 
-### Symptom
+### Symptom (before fix)
 
-Loading `stdlib/gadt-vec.tur` produces:
+Loading `stdlib/gadt-vec.tur` produced:
 
 ```
 warning: GADT 'Vec' shadows existing struct 'Vec'; uses of ':Vec'
          in type annotations resolve to the GADT
 ```
 
-followed by:
-
-```
-error: defn: 'vec-len' is already defined by an auto-loaded stdlib module
-```
-
 ### Root cause
 
-The stdlib auto-loads `stdlib/vec.tur` which defines a `Vec` struct
-and a `vec-len` function.  `stdlib/gadt-vec.tur` then defines a GADT
-also named `Vec` and a function also named `vec-len`, creating both a
-shadowing warning and a hard redefinition error.
+The stdlib auto-loads `stdlib/vec.tur` which defines a `Vec` struct.
+`stdlib/gadt-vec.tur` then defined a GADT also named `Vec`, creating a
+shadowing warning and a potential naming conflict.
 
-Additionally, `stdlib/gadt-vec.tur` uses effect-row type syntax in
-`vzip-with` (KB-017), which fails independently.
+### Remaining limitation
 
-### Fix needed
-
-Rename the GADT in `stdlib/gadt-vec.tur` (e.g. `GVec` / `TypedVec`)
-and its associated functions (e.g. `gvec-len`, `gvec-cons`) to avoid
-colliding with the stdlib `Vec` names.
+`gvzip-with` takes its combining function as `:ptr<void>` and calls it
+with two arguments.  Passing a plain 2-arg `defn` via `ptr<void>` is
+not supported by the current thunk calling convention (the call emits a
+2-arg thunk cast that dereferences the function address as a struct,
+causing a segfault).  The `gadt-stdlib-vec-stdlib` fixture omits the
+`gvzip-with` test for this reason; a future fix should either change
+`gvzip-with` to use `[f :fn]` (fat-closure) or add a 2-arg
+`__gvec-call-fn2` helper that bypasses the thunk cast.
 
 ---
 
@@ -895,9 +894,14 @@ with `typeclass-functor.tur`).
 ## KB-028 -- `stdlib/ref.tur` fails `tur check`: `Clone` typeclass not in scope
 
 **Discovered:** 2026-05-28
-**Status:** Open -- missing auto-load dependency.
+**Status:** Fixed 2026-05-28 -- created `stdlib/typeclass-clone.tur`
+(minimal `Clone` stub auto-loaded alongside `typeclass-eq.tur` and
+`typeclass-functor.tur`) and moved the `Clone [ref]` instance there
+(since `ref` is a built-in with no home module, the orphan rule requires
+the instance to live with the typeclass definition).  The `Clone [Ref]`
+instance remains in `ref.tur` because `Ref` is defined there.
 
-### Symptom
+### Symptom (before fix)
 
 ```
 $ ./build/tur check stdlib/ref.tur
@@ -905,23 +909,11 @@ stdlib/ref.tur:82:14: error: typeclass 'Clone' is not defined
 stdlib/ref.tur:101:14: error: typeclass 'Clone' is not defined
 ```
 
-The file is not in `tests/run-stdlib-checks.sh`.
-
 ### Root cause
 
 `Clone` is defined in `stdlib/typeclass.tur`.  That file is not in the
 auto-loaded stdlib list (`stdlib_files[]` in `src/main.c`), so `Clone` is
-not in scope when `ref.tur` is checked in isolation.  Programs that compile
-`ref.tur` explicitly via an `import` chain work correctly at runtime because
-the full stdlib is usually present; the gap only surfaces when `tur check` is
-run on the file directly without the rest of the stdlib.
-
-### Fix needed
-
-Either (a) add `stdlib/typeclass.tur` to the auto-load list (after auditing
-for duplicate definitions with already-loaded typeclass files), or (b) have
-`ref.tur` declare an explicit `(import tur/typeclass :refer [Clone])` so it
-resolves the dependency regardless of load order.
+not in scope when `ref.tur` is checked in isolation.
 
 ---
 
@@ -1063,13 +1055,15 @@ single convention.  Either:
 ## KB-032 -- `defclass Functor` in fixtures conflicts with auto-loaded `stdlib/typeclass-functor.tur`
 
 **Discovered:** 2026-05-28
-**Status:** Open -- stdlib auto-load collision.
+**Status:** Fixed 2026-05-28 -- renamed `Functor` to `TestFunctor` in all
+three affected fixtures (option a).  `dump-kinds-basic` also had its
+`expected.c` snapshot regenerated.
 
-### Symptom
+### Symptom (before fix)
 
-Fixtures that define their own `Functor` typeclass fail at `emit-c` time
+Fixtures that define their own `Functor` typeclass failed at `emit-c` time
 with a duplicate-definition error, and fixtures that define
-`definstance Functor [...]` fail with an orphan-instance error:
+`definstance Functor [...]` failed with an orphan-instance error:
 
 ```
 FAIL dump-kinds-basic -- emit-c failed
@@ -1085,33 +1079,21 @@ FAIL errors/hkt-orphan-instance -- diagnostic mismatch
    different module")
 ```
 
-### Affected fixtures
-
-`dump-kinds-basic`, `hkt-closure-capture`, `errors/hkt-orphan-instance`.
-
 ### Root cause
 
 `stdlib/typeclass-functor.tur` defines `Functor` and is unconditionally
 auto-loaded by `main.c` (since commit `2046ec3`, TS5+TS6 PR #86).
 Any fixture that tries to define its own `Functor` class triggers a
-duplicate-definition error.  Any fixture that defines a `Functor`
-instance but not the `Functor` class itself gets an orphan-instance
-error because the class is now owned by a different module.
+duplicate-definition error.
 
-The `--no-auto-stdlib` flag only applies to `tur check`, not to
-`tur emit-c` or `tur build`.
+### Fix
 
-### Fix needed
-
-One of:
-(a) Rename the `Functor` typeclass in the affected fixtures to a
-    non-colliding name (e.g. `TestFunctor`) and regenerate their
-    `expected.c` snapshots.
-(b) Move the fixture instances into `typeclass-functor.tur` (not
-    practical for test isolation).
-(c) Extend `--no-auto-stdlib` to cover `emit-c` and `build`, allowing
-    fixtures to opt out of the auto-loaded stdlib when they define
-    their own typeclasses.
+Renamed the local `Functor` class to `TestFunctor` in
+`tests/fixtures/dump-kinds-basic/input.tur`,
+`tests/fixtures/hkt-closure-capture/input.tur`,
+`tests/fixtures/errors/hkt-orphan-instance/tc/functor.tur`, and
+`tests/fixtures/errors/hkt-orphan-instance/input.tur`.  Updated
+`expected.diag` and regenerated `expected.c` for `dump-kinds-basic`.
 
 ---
 
@@ -1160,6 +1142,80 @@ Added the same `TY_ANY`-flag guard to the bare-symbol branch in
 `type_expr_from_form` so the spaced annotation form (`x : any`) now
 emits the same `'any' type requires -Xunion-types or
 -Xintersection-types` diagnostic as the keyword form (`x :any`).
+
+---
+
+## KB-034 -- Calling a `:ptr<void>` function with 2 arguments segfaults
+
+**Discovered:** 2026-05-28
+**Status:** Open -- thunk calling-convention limitation.
+
+### Symptom
+
+Any Turmeric function that receives a function argument typed `:ptr<void>`
+and then calls it with two arguments segfaults at runtime:
+
+```turmeric
+(defn call2 [f :ptr<void> a :int b :int] :int (f a b))
+
+(defn add [a :int b :int] :int (+ a b))
+
+(defn main [] :int
+  (println (call2 add 10 20))   ; => Segmentation fault
+  0)
+```
+
+Single-argument `:ptr<void>` calls work correctly when `f` is a partial
+application closure (e.g. `(mul 2)`):
+
+```turmeric
+(defn call1 [f :ptr<void> x :int] :int (f x))
+(println (call1 (mul 2) 5))   ; => 10  (correct)
+```
+
+### Root cause
+
+When a function `f` is called with N arguments and `f` has type `:ptr<void>`,
+the codegen emits an N-arg thunk call:
+
+```c
+/* 2-arg case */
+(* (tur_thunk_int64_t_int64_t_int64_t_t *)(f))(f, a, b)
+```
+
+The cast `(tur_thunk_int64_t_int64_t_int64_t_t *)(f)` treats `f` (the raw
+function address) as a pointer to a function pointer.  Dereferencing that
+reads the first bytes of the function's machine code as an integer, then
+tries to call that integer as a function pointer -- which crashes.
+
+This works for 1-arg partial application closures because the closure struct
+layout has the thunk pointer `__fn` as its first field, so dereferencing the
+struct pointer yields the correct function pointer.  A plain 2-arg `defn`
+passed directly has no such struct wrapper.
+
+### Workaround
+
+For `gvzip-with` and similar combinators: wrap the 2-arg function in a
+unary closure via partial application at the call site.  This is only
+possible if the function is curried (i.e. the caller has one value to
+capture):
+
+```turmeric
+;; Instead of:  (gvzip-with add v1 v2)
+;; If you want to add a fixed offset k, use:
+(gvzip-with (add k) v1 v2)   ;; (add k) is a 1-arg closure
+```
+
+There is no general workaround for calling a non-capturing 2-arg function
+through a `:ptr<void>` slot.
+
+### Fix needed
+
+Change functions that need to call their argument with 2 values to use
+`[f :fn]` (fat-closure, `tur_poly_fn_t`) instead of `:ptr<void>`.  The
+fat-closure type stores `(fn_ptr, env)` and the call site emits
+`fn.fn(fn.env, a, b)` rather than the broken struct-dereference thunk.
+Affected stdlib functions: `gvzip-with` in `stdlib/gadt-vec.tur`.
 
 ---
 
