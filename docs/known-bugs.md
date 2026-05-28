@@ -464,7 +464,9 @@ See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md)
 
 **Discovered:** 2026-05-27
 **Updated:** 2026-05-28 (ACB Phase 1 adds additional drift)
-**Status:** Open -- snapshot maintenance issue.
+**Status:** Fixed 2026-05-28 -- all 49 stale `expected.c` snapshots regenerated;
+`hkt-instances` also fixed for the KB-032 `Functor` conflict (renamed to
+`TestFunctor`).  All affected fixtures now pass.
 
 ### Symptom
 

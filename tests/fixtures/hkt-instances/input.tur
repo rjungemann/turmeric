@@ -1,9 +1,11 @@
 ;; Phase HKT H3: All five built-in HKT typeclasses declared together.
-;; This compilation test verifies that Functor, Applicative, Monad,
+;; This compilation test verifies that TestFunctor, Applicative, Monad,
 ;; Foldable, and Traversable can all be defined in the same program
 ;; and that instances compile cleanly.
+;; (Renamed Functor -> TestFunctor to avoid conflict with auto-loaded
+;; stdlib/typeclass-functor.tur; see KB-032.)
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 (defclass Applicative [^f]
@@ -21,7 +23,7 @@
   (traverse [ta fn] :int))
 
 ;; Minimal instances so the typeclasses are exercised.
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] 0))
 
 (definstance Applicative [option]
