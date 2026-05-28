@@ -1,5 +1,6 @@
 /* emit_module.c -- program/module assembly (emit_program, emit_header, emit_implementation). */
 #include "emit_internal.h"
+#include "globals.h"   /* Phase I: g_emit_abi_trace */
 
 /* ------------ program-level emit ------------ */
 
@@ -435,6 +436,161 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
     }
 }
 
+/* Phase I: --emit-abi-trace -- classify each resolved call site by the C-level
+ * ABI path it takes, then print one line per call to stderr.  Runs after the
+ * abi scan pass has populated ctx->specialized_call_exprs / abi_specializations
+ * so the classification matches what emit actually emits. */
+typedef enum {
+    ABI_PATH_CONCRETE_CLONE,
+    ABI_PATH_DICTIONARY,
+    ABI_PATH_POLY_WRAPPER,
+    ABI_PATH_CARRIER,
+} AbiTracePath;
+
+static const char *abi_trace_path_name(AbiTracePath p) {
+    switch (p) {
+        case ABI_PATH_CONCRETE_CLONE: return "concrete-clone";
+        case ABI_PATH_DICTIONARY:     return "dictionary";
+        case ABI_PATH_POLY_WRAPPER:   return "polymorphic-wrapper";
+        case ABI_PATH_CARRIER:        return "carrier";
+    }
+    return "carrier";
+}
+
+/* Mirror emit_call_name's specialization lookup: an exact call-expr match, then
+ * a binding + arg-type match against the specialization table.  Returns the
+ * clone name (borrowed) when the call resolves to a concrete clone, else NULL. */
+static const char *abi_trace_clone_name(const EmitCtx *ctx, const Expr *call) {
+    if (!ctx || !call) return NULL;
+    for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+        if (ctx->specialized_call_exprs[i] == call) {
+            return ctx->specialized_call_names[i];
+        }
+    }
+    const Binding *b = call->kind == EX_CALL ? call->as.call_.fn_binding : NULL;
+    if (call->kind == EX_CALL && b) {
+        for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+            const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+            if (spec->binding != b || spec->n_args != call->as.call_.n_args) continue;
+            bool args_match = true;
+            for (uint32_t ai = 0; ai < call->as.call_.n_args; ai++) {
+                const Expr *cur = call->as.call_.args[ai];
+                while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                Type actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
+                    ? cur->as.reinterpret_.expr->type
+                    : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                if (!type_eq(spec->arg_types[ai], actual)) { args_match = false; break; }
+            }
+            if (args_match) return spec->clone_name;
+        }
+    }
+    return NULL;
+}
+
+static void emit_abi_trace_call(const EmitCtx *ctx, const Expr *call) {
+    const char *callee = "<indirect>";
+    if (call->as.call_.fn_binding && call->as.call_.fn_binding->name) {
+        callee = call->as.call_.fn_binding->name->name;
+    }
+    const char *clone = abi_trace_clone_name(ctx, call);
+    AbiTracePath path;
+    if (clone) {
+        path = ABI_PATH_CONCRETE_CLONE;
+    } else if (call->as.call_.is_poly_call) {
+        path = ABI_PATH_POLY_WRAPPER;
+    } else if (call->as.call_.dict_arg) {
+        path = ABI_PATH_DICTIONARY;
+    } else {
+        path = ABI_PATH_CARRIER;
+    }
+    fprintf(stderr, "abi-trace %u:%u %s %s",
+            call->span.line, call->span.col_start, callee, abi_trace_path_name(path));
+    if (clone) fprintf(stderr, " %s", clone);
+    fputc('\n', stderr);
+}
+
+static void emit_abi_trace_expr(const EmitCtx *ctx, const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                emit_abi_trace_expr(ctx, e->as.program.items[i]);
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) emit_abi_trace_expr(ctx, e->as.fn_def_.fn->body);
+            break;
+        case EX_DEF:
+            emit_abi_trace_expr(ctx, e->as.def_.init);
+            break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                emit_abi_trace_expr(ctx, e->as.let_.bindings[i].init);
+            emit_abi_trace_expr(ctx, e->as.let_.body);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                emit_abi_trace_expr(ctx, e->as.do_.items[i]);
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                emit_abi_trace_expr(ctx, e->as.builtin.args[i]);
+            break;
+        case EX_IF:
+            emit_abi_trace_expr(ctx, e->as.if_.cond);
+            emit_abi_trace_expr(ctx, e->as.if_.then_);
+            emit_abi_trace_expr(ctx, e->as.if_.else_or_null);
+            break;
+        case EX_WHILE:
+            emit_abi_trace_expr(ctx, e->as.while_.cond);
+            emit_abi_trace_expr(ctx, e->as.while_.body);
+            break;
+        case EX_CALL:
+            emit_abi_trace_call(ctx, e);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                emit_abi_trace_expr(ctx, e->as.call_.args[i]);
+            emit_abi_trace_expr(ctx, e->as.call_.fn_expr);
+            break;
+        case EX_MATCH:
+            emit_abi_trace_expr(ctx, e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                emit_abi_trace_expr(ctx, e->as.match_.arms[i].body);
+                emit_abi_trace_expr(ctx, e->as.match_.arms[i].guard);
+            }
+            break;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                emit_abi_trace_expr(ctx, e->as.make_struct_.field_values[i]);
+            break;
+        case EX_GET_FIELD:
+            emit_abi_trace_expr(ctx, e->as.get_field_.struct_expr);
+            break;
+        case EX_SET_FIELD:
+            emit_abi_trace_expr(ctx, e->as.set_field_.receiver);
+            emit_abi_trace_expr(ctx, e->as.set_field_.value);
+            break;
+        case EX_SET:
+            emit_abi_trace_expr(ctx, e->as.set_.value);
+            break;
+        case EX_RETURN:
+            emit_abi_trace_expr(ctx, e->as.return_.value);
+            break;
+        case EX_ASCRIBE:
+            emit_abi_trace_expr(ctx, e->as.ascribe_.inner);
+            break;
+        case EX_CAST:
+            emit_abi_trace_expr(ctx, e->as.cast_.expr);
+            break;
+        case EX_REINTERPRET:
+            emit_abi_trace_expr(ctx, e->as.reinterpret_.expr);
+            break;
+        case EX_POLY_WRAP:
+            emit_abi_trace_expr(ctx, e->as.poly_wrap_.inner);
+            break;
+        default:
+            break;
+    }
+}
+
 /* TS4P1: Walk all expressions and register concrete ADT-app types for monomorphisation. */
 static void scan_adt_apps_in_expr(const Expr *e) {
     if (!e) return;
@@ -628,6 +784,13 @@ int emit_program(Buf *out, const Expr *program) {
 
     for (uint32_t i = 0; i < n_items; i++) {
         emit_abi_scan_expr(&ctx, items[i], items, n_items);
+    }
+
+    /* Phase I: --emit-abi-trace -- report the resolved ABI path per call site. */
+    if (g_emit_abi_trace) {
+        for (uint32_t i = 0; i < n_items; i++) {
+            emit_abi_trace_expr(&ctx, items[i]);
+        }
     }
 
     /* TS4P1: Scan for concrete ADT-app types to register for monomorphisation. */

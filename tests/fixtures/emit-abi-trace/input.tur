@@ -1,0 +1,39 @@
+;;; Phase I: --emit-abi-trace -- classify each resolved call site by the
+;;; C-level ABI path it takes.  This fixture exercises all four paths in one
+;;; file; the `flags` file passes --emit-abi-trace and expected.stderr asserts
+;;; the abi-trace lines for this file's own calls (substring match, so the
+;;; noisy stdlib trace lines are ignored).
+
+;; A generic numeric function.  Called at :int (carrier form) and :float
+;; (specialized concrete clone) below.
+(defn cube [T] [x :T] :T
+  ```c
+  __TUR_TY_T__ v = x;
+  return (__TUR_TY_T__)(v * v * v);
+  ```)
+
+;; A rank-2 function: f is invoked through the polymorphic-wrapper ABI.
+(defn apply-twice [f (forall [a] (-> a a)) x :int y :int] :int
+  (let [r1 (f x)
+        r2 (f y)]
+    (+ r1 r2)))
+
+(defn twice [x :int] :int
+  (* x 2))
+
+(defn main [] :int
+  ;; carrier: cube at :int keeps the int64_t carrier ABI
+  (let [a (cube 3)]
+    (println a))
+  ;; concrete-clone: cube at :float specializes to cube__spec__double_double
+  (let [b (cube 2.5)]
+    (println b))
+  ;; polymorphic-wrapper: twice is called through f's tur_poly_fn_t wrapper
+  (println (apply-twice twice 3 5))
+  ;; dictionary: Eq method dispatch through the typeclass machinery
+  (let [t1 (tuple2 1 2)
+        t2 (tuple2 1 2)]
+    (if (.eq? t1 t2)
+      (println "eq")
+      (println "neq")))
+  0)
