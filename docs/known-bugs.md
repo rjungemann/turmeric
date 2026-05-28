@@ -161,31 +161,11 @@ return (const char *)(intptr_t)out;
 
 ## KB-008 — `defn-spaced-compound`: kind mismatch on `(-> int int)` type annotation
 
-**Status:** Open — compiler bug; tracked in
-[docs/function-type-kind-plan.md](function-type-kind-plan.md).
-
-### Symptom
-
-```
-error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as a type constructor;
-type must have kind '* -> *' or '* -> * -> *'
-```
-
-on `(defn apply1 [f : (-> int int)] :int ...)`.
-
-### Root cause
-
-When a function type is written in spaced annotation form (`f : (-> int int)`),
-the `->` symbol is resolved to a concrete `TY_FN` type of kind `*` rather than
-being treated as a type constructor of kind `* -> * -> *`.  The non-spaced form
-(`f :(-> int int)`) may or may not have the same issue.
-
-### Fix needed
-
-The type-annotation elaborator needs to recognise `->` in spaced annotation
-position as a type constructor and expand it to a `TY_FN` application, matching
-the behaviour of the `:` shorthand syntax.  See
-[docs/function-type-kind-plan.md](function-type-kind-plan.md) for the phased fix.
+**Status:** Fixed — `fn_type_from_form` (`src/compiler/elab_fns.c`)
+routes `->`, `fn`, `forall`, and `exists` heads through
+`type_expr_from_form` so the spaced annotation form (`f : (-> int int)`)
+resolves identically to the keyword form.  See KB-020 for the
+generalised follow-up that adds `lref`.
 
 ---
 
@@ -545,174 +525,87 @@ Verify runtime stdout is still correct before committing.
 ## KB-017 -- Effect row type annotation syntax not supported in `fn` type expressions
 
 **Discovered:** 2026-05-27
-**Status:** Open -- compiler limitation.
-
-### Symptom
-
-Any `defn` whose parameter uses a `fn` type with an effect row variable
-fails at parse/elaboration:
-
-```
-error: unsupported type expression form (expected symbol, keyword, or list)
-(defn apply [f :(fn [:int] #{e} :int) x :int] #{e} :int
-                    ^^^^^^
-```
-
-### Root cause
-
-The type-annotation elaborator recognises `:(fn [...] :ret)` but does
-not support the three-component form `:(fn [...] #{row} :ret)` where
-the middle `#{row}` element is an effect row.  The parser sees `#{e}`
-as an unknown form and emits the generic "unsupported type expression"
-error, so the entire function signature is rejected before type-checking
-begins.
-
-This blocks 10 fixture tests that exercise effect-polymorphic higher-
-order functions:
-
-`effect-fn-type-annot`, `effect-poly-bracket`, `effect-poly-infer`,
-`effect-poly-map`, `effect-poly-typeclass`, `effect-row-compose`,
-`effect-row-ho`, `effect-row-var-unused`, `effect-subtype-assign`,
-`effect-subtype-ho`.
-
-It also causes 5 `errors/` fixtures to produce the wrong diagnostic
-(the "unsupported form" error fires before the expected type-error):
-
-`errors/effect-fn-type-mismatch`, `errors/effect-poly-escape`,
-`errors/effect-row-occurs`, `errors/effect-row-var-mismatch`,
-`errors/effect-subtype-violation`.
-
-### Workaround
-
-Omit the effect row from the `fn` type annotation.  The effect row is
-still inferred from the function body.  This works for most cases but
-prevents explicit effect-polymorphism in the signature.
-
-### Fix needed
-
-Extend `type_expr_from_form` (or the type-annotation elaborator) to
-recognise `(fn [arg-types...] #{row} ret-type)` as a valid function
-type with an explicit effect row, analogous to how bare
-`(fn [arg-types...] ret-type)` is handled today.
+**Status:** Fixed (no longer reproduces 2026-05-28) -- all 10
+happy-path fixtures (`effect-fn-type-annot`, `effect-poly-bracket`,
+`effect-poly-infer`, `effect-poly-map`, `effect-poly-typeclass`,
+`effect-row-compose`, `effect-row-ho`, `effect-row-var-unused`,
+`effect-subtype-assign`, `effect-subtype-ho`) and the 5 corresponding
+error fixtures (`errors/effect-fn-type-mismatch`,
+`errors/effect-poly-escape`, `errors/effect-row-occurs`,
+`errors/effect-row-var-mismatch`, `errors/effect-subtype-violation`)
+now pass.  The `(fn [arg-types...] #{row} ret-type)` form is accepted
+in type-annotation position.  Closing this entry; consult the git log
+on `src/compiler/elab_types.c` for the implementation detail.
 
 ---
 
 ## KB-018 -- `(handler E V R)` type expression not supported
 
 **Discovered:** 2026-05-27
-**Status:** Open -- compiler limitation.
-
-### Symptom
-
-Using `:(handler Write cstr nil)` as a parameter type fails:
-
-```
-error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as
-a type constructor; type must have kind '* -> *' ...
-(defn run-with-handler [h :(handler Write cstr nil)] :nil
-                                    ^^^^^^^
-```
-
-The error test `errors/effect-handler-needs-flag` expects the message:
-`'handler' type expression requires -Xeffect-types`
-but instead gets the generic kind-mismatch error.
+**Status:** Fixed 2026-05-28 -- `handler` is now routed through
+`type_expr_from_form` from the parameter-type path, matching the
+existing keyword-form behaviour.
 
 ### Root cause
 
-`handler` is not registered as a recognised type constructor in the
-elaborator.  The parser passes `(handler Write cstr nil)` as a generic
-type application, which resolves `handler` as a concrete `TY_*` type
-of kind `*` and then rejects applying arguments to it.
+`type_expr_from_form` already had a `(handler E V R)` case (gated on
+`-Xeffect-types`) but the parameter-type path in `fn_type_from_form`
+intercepted compound forms first and treated `handler` as the head of
+a generic TY_APP application -- which failed the arrow-kind check and
+emitted TUR-E0012 instead of the intended "requires -Xeffect-types"
+diagnostic.
 
-### Fix needed
+### Fix
 
-Add a `handler` case to `type_expr_from_form` that either:
-- Desugars `(handler E V R)` into the appropriate internal
-  representation, or
-- Emits the "requires -Xeffect-types" diagnostic if the flag is unset,
-  matching the expected error message.
+Added `e->sym_handler_type` to the KB-008/KB-020 special-case list in
+`fn_type_from_form` so `(handler E V R)` reaches the dedicated
+handler-type case in `type_expr_from_form`, regardless of whether the
+annotation is spaced (`h : (handler ...)`) or keyword-prefixed
+(`h :(handler ...)`).
 
 ---
 
 ## KB-019 -- Session type annotation syntax causes kind mismatch
 
 **Discovered:** 2026-05-27
-**Status:** Open -- compiler limitation.
-
-### Symptom
-
-Any function parameter annotated as `:(Session ...)` or `:(Role ...)`
-fails with:
-
-```
-error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as
-a type constructor; type must have kind '* -> *' ...
-(defn double-server [^linear ch :(Session (Recv int (Send int Close)))] :nil
-                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-```
+**Status:** Fixed 2026-05-28 -- `Session`, `Send`, `Recv`, `Choose`,
+`Branch`, `Rec`, `Timeout`, `Role`, and `project` are now routed
+through `type_expr_from_form` from the parameter-type path.  All 13
+previously-blocked happy-path fixtures pass.
 
 ### Root cause
 
-`Session` and `Role` are session-type constructors defined via macros
-or stdlib, but the type-annotation elaborator does not recognise the
-nested protocol type expressions (`Recv`, `Send`, `Branch`, `Rec`,
-`Close`, `Choice`) as compound type-constructor applications.  They are
-parsed as raw lists and the inner form fails kind-checking when applied
-to `Session`.
+`type_expr_from_form` already handled `(Session proto)` and the nested
+protocol constructors, but the parameter-type path in
+`fn_type_from_form` intercepted compound forms first and treated each
+head as the start of a generic TY_APP application -- which failed the
+arrow-kind check on `Session` (kind `*`) and surfaced TUR-E0012 before
+the protocol handler could fire.
 
-Affects 13 session-type fixture tests:
+### Fix
 
-`session-calc-rpc`, `session-delegated-rpc`, `session-delegation`,
-`session-echo-rpc`, `session-effects`, `session-mp-calc`,
-`session-mp-delegated`, `session-mp-effects`, `session-mp-three-role`,
-`session-project-basic`, `session-project-choice`,
-`session-project-loop`, `session-rec`.
-
-### Workaround
-
-None -- the session-type tests are completely blocked until the type
-elaborator supports nested session protocol expressions.
-
-### Fix needed
-
-Extend `type_expr_from_form` to handle the session-type protocol
-constructors (`Recv`, `Send`, `Branch`, `Rec`, `Close`, `Choice`) as
-type constructors of appropriate kinds, so that `(Session proto)` can
-be resolved to the correct internal type representation.
+Added the session/role/project constructor heads to the KB-008/KB-020
+special-case list in `fn_type_from_form` so the dedicated protocol
+rules in `type_expr_from_form` are reached for every annotation form.
 
 ---
 
 ## KB-020 -- Spaced compound type annotations fail for `->` and `lref`
 
 **Discovered:** 2026-05-27
-**Status:** Open -- extends KB-008.
+**Status:** Fixed 2026-05-28 -- the KB-008 fix already covered `->`;
+added `lref` to the special-case list in `fn_type_from_form`
+(`src/compiler/elab_fns.c`).  Both `(defn consume-lref [p : (lref int)] ...)`
+and `(defn apply-linear [f : (-> ^linear int int) ...] ...)` now elaborate.
 
-### Symptom
+### Fix
 
-In addition to KB-008 (`(-> int int)` in spaced form), two other
-compound types fail in spaced annotation position:
-
-```
-;; linear-fn-type
-(defn apply-linear [f : (-> ^linear int int) n] :int ...)
-;; => error [TUR-E0012]: kind mismatch: cannot apply type of kind '*'
-
-;; linear-lref-type-ann
-(defn consume-lref [p : (lref int)] :int ...)
-;; => error [TUR-E0012]: kind mismatch: cannot apply type of kind '*'
-```
-
-Both `->` and `lref` fail for the same reason as KB-008: the
-type-annotation elaborator treats them as kind-`*` concrete types
-rather than type constructors when they appear in spaced annotation
-form (`: (-> ...)` vs. `:(-> ...)`).
-
-### Fix needed
-
-The fix from KB-008 (teach the elaborator to recognise `->` in spaced
-annotation position as a type constructor) should be generalised to
-also cover `lref`, `rc`, and other built-in type constructors that can
-appear as the head of a compound type form.
+The KB-008 special-case in `fn_type_from_form` was already routing
+`->`, `fn`, `forall`, and `exists` heads through `type_expr_from_form`.
+Extended it to also route `lref` (the only other compound built-in
+constructor that was still falling through to the generic TY_APP path).
+If additional built-in heads ever need the same treatment (e.g. `rc`
+gains a list-form constructor), add them to the same list.
 
 ---
 
@@ -848,7 +741,10 @@ colliding with the stdlib `Vec` names.
 ## KB-024 -- `errors/defstruct-copy-noncopy-compound-field`: type name missing in diagnostic
 
 **Discovered:** 2026-05-27
-**Status:** Open -- diagnostic bug.
+**Status:** Fixed 2026-05-28 -- `elab_structs.c` now tracks the resolved
+compound Type for the F_LIST field-type path and uses it for the :copy
+diagnostic, so the message now reads
+`defstruct: field 'r' has non-copy type lref<int>`.
 
 ### Symptom
 
@@ -867,18 +763,22 @@ The type name is printed as `:` (the colon character only) instead of
 
 ### Root cause
 
-When the field type is written in compound form `(lref int)` (a list
-expression rather than a keyword like `:lref`), the diagnostic printer
-falls through to a code path that prints the raw token `:` from the
-parser form rather than resolving and printing the fully-qualified type
-name.  The simple keyword path (`defstruct Bad :copy [r :lref]`) already
-prints `lref` correctly.
+When the field type is written in compound form `(lref int)`, the
+F_LIST handling in `elab_structs.c` only stored the resolved Type on
+`full_type` when its kind was `TY_APP` / `TY_EXISTS` / `TY_FORALL` (or
+when the struct had type parameters).  For `(lref int)` the resolved
+kind is `TY_LREF`, so `full_type` stayed NULL and the diagnostic fell
+through to a branch that printed `type_name_form->as.sym->name` --
+but `type_name_form` is an F_LIST in this path, so the union read
+yielded a stray `:` character.
 
-### Fix needed
+### Fix
 
-In the `defstruct` compound-field type diagnostic emission, resolve the
-compound type form to its string representation (e.g. via `type_to_str`
-or equivalent) before formatting the error message.
+Introduced a separate `compound_type` local that is set whenever the
+field came from an F_LIST form, regardless of the resolved kind.  The
+:copy diagnostic now prefers `full_type` (when set, preserving the
+existing storage path) and falls back to `compound_type` (used purely
+for the diagnostic) before resorting to the bare-symbol fallback.
 
 ---
 
@@ -1028,14 +928,26 @@ resolves the dependency regardless of load order.
 ## KB-029 -- `stdlib/session.tur` excluded from `tur check` allowlist
 
 **Discovered:** 2026-05-28
-**Status:** Open -- see KB-019 for the root cause.
+**Updated:** 2026-05-28 -- the KB-019 blocker is resolved; the file
+still trips a different issue.
+**Status:** Open -- now blocked on tuple return-type syntax, not
+session types.
 
-`stdlib/session.tur` is not in `tests/run-stdlib-checks.sh` because
-`tur check stdlib/session.tur` fails with the same kind-mismatch error
-documented in KB-019: the session type constructors (`Session`, `Rec`,
-`Branch`, `Recv`, `Send`, `Close`) are not registered in the kind table,
-so any function annotated with a session type triggers TUR-E0012.  The
-file can be added to the allowlist once KB-019 is resolved.
+`tur check -Xsessions stdlib/session.tur` no longer reports a session
+kind mismatch (KB-019 is fixed).  It now fails on a single line that
+uses a tuple return-type annotation:
+
+```
+stdlib/session.tur:70: error: unsupported type expression form
+  (expected symbol, keyword, or list)
+... :[(int (Session ...))]
+       ^^^^^^^^^^^^^^^^^^
+```
+
+The remaining work is to either teach the type-annotation elaborator
+to accept the `:[(...)]` tuple-return-type form, or rewrite the
+affected signatures to use a named tuple struct.  Once that resolves,
+`stdlib/session.tur` can be added to `tests/run-stdlib-checks.sh`.
 
 ---
 
@@ -1206,7 +1118,9 @@ One of:
 ## KB-033 -- `any` type guard bypassed when using spaced annotation syntax
 
 **Discovered:** 2026-05-28
-**Status:** Open -- parser gap.
+**Status:** Fixed 2026-05-28 -- the bare-symbol path in
+`type_expr_from_form` now applies the same `-Xunion-types` /
+`-Xintersection-types` flag check as the keyword `:any` path.
 
 ### Symptom
 
@@ -1232,17 +1146,20 @@ before the colon) bypasses the check entirely and compiles successfully:
 ```
 
 The gate at `elab_types.c:344` is reached only via the compact form
-`x :any`; the spaced `: any` path goes through a different parser
-branch that resolves `any` before the flag check is applied.
+`x :any`; the spaced `: any` path went through the bare-symbol branch
+which called `typekind_from_symbol("any")` (returning `TY_ANY`) and
+returned the type without ever checking the feature flags.
 
 ### Affected fixtures
 
 `errors/any-type-disabled`.
 
-### Fix needed
+### Fix
 
-Ensure both annotation forms (compact `:any` and spaced `: any`)
-route through the flag-gated `TY_ANY` path in `type_expr_from_form`.
+Added the same `TY_ANY`-flag guard to the bare-symbol branch in
+`type_expr_from_form` so the spaced annotation form (`x : any`) now
+emits the same `'any' type requires -Xunion-types or
+-Xintersection-types` diagnostic as the keyword form (`x :any`).
 
 ---
 

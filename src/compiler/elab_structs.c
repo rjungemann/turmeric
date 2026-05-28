@@ -707,6 +707,10 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 ? field_type_form->as.list.items[0] : field_type_form;
             TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
             Type *full_type = NULL;
+            /* KB-024: track the resolved compound Type (when the field came
+             * from an F_LIST) so the :copy diagnostic can print the actual
+             * type name even when we don't store it as full_type. */
+            Type *compound_type = NULL;
 
             /* F8 (cross-plan-followups): if the field type is a compound
              * form (F_LIST -- e.g. (exists [a] [(C a)] a), (Vec int)),
@@ -725,6 +729,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     t->kind == TY_FORALL) {
                     full_type = t;
                 }
+                compound_type = t;
                 struct_field_storage_from_type(t, &fkind, &finner);
             } else {
                 const char *tname = type_name_form->as.sym->name;
@@ -772,11 +777,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 return NULL;
             }
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                if (full_type) {
+                Type *diag_type = full_type ? full_type : compound_type;
+                if (diag_type) {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
                               field_name_form->as.sym->name,
-                              type_name(*full_type));
+                              type_name(*diag_type));
                 } else {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
@@ -806,6 +812,10 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                 ? field_type_form->as.list.items[0] : field_type_form;
             TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
             Type *full_type = NULL;
+            /* KB-024: track the resolved compound Type (when the field came
+             * from an F_LIST) so the :copy diagnostic can print the actual
+             * type name even when we don't store it as full_type. */
+            Type *compound_type = NULL;
 
             /* F8 (cross-plan-followups): F_LIST compound field type
              * (e.g. (exists ...), (Vec int)) -- route through
@@ -822,6 +832,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                     t->kind == TY_FORALL) {
                     full_type = t;
                 }
+                compound_type = t;
                 struct_field_storage_from_type(t, &fkind, &finner);
             } else {
                 const char *tname = type_name_form->as.sym->name;
@@ -875,11 +886,12 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
             }
             /* :copy struct validation: all fields must be copy */
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-                if (full_type) {
+                Type *diag_type = full_type ? full_type : compound_type;
+                if (diag_type) {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type %s and cannot be used in :copy struct",
                               field_name_form->as.sym->name,
-                              type_name(*full_type));
+                              type_name(*diag_type));
                 } else {
                     diag_emit(DIAG_ERROR, field_type_form->span,
                               "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
