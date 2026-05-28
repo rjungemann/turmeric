@@ -1145,6 +1145,80 @@ emits the same `'any' type requires -Xunion-types or
 
 ---
 
+## KB-034 -- Calling a `:ptr<void>` function with 2 arguments segfaults
+
+**Discovered:** 2026-05-28
+**Status:** Open -- thunk calling-convention limitation.
+
+### Symptom
+
+Any Turmeric function that receives a function argument typed `:ptr<void>`
+and then calls it with two arguments segfaults at runtime:
+
+```turmeric
+(defn call2 [f :ptr<void> a :int b :int] :int (f a b))
+
+(defn add [a :int b :int] :int (+ a b))
+
+(defn main [] :int
+  (println (call2 add 10 20))   ; => Segmentation fault
+  0)
+```
+
+Single-argument `:ptr<void>` calls work correctly when `f` is a partial
+application closure (e.g. `(mul 2)`):
+
+```turmeric
+(defn call1 [f :ptr<void> x :int] :int (f x))
+(println (call1 (mul 2) 5))   ; => 10  (correct)
+```
+
+### Root cause
+
+When a function `f` is called with N arguments and `f` has type `:ptr<void>`,
+the codegen emits an N-arg thunk call:
+
+```c
+/* 2-arg case */
+(* (tur_thunk_int64_t_int64_t_int64_t_t *)(f))(f, a, b)
+```
+
+The cast `(tur_thunk_int64_t_int64_t_int64_t_t *)(f)` treats `f` (the raw
+function address) as a pointer to a function pointer.  Dereferencing that
+reads the first bytes of the function's machine code as an integer, then
+tries to call that integer as a function pointer -- which crashes.
+
+This works for 1-arg partial application closures because the closure struct
+layout has the thunk pointer `__fn` as its first field, so dereferencing the
+struct pointer yields the correct function pointer.  A plain 2-arg `defn`
+passed directly has no such struct wrapper.
+
+### Workaround
+
+For `gvzip-with` and similar combinators: wrap the 2-arg function in a
+unary closure via partial application at the call site.  This is only
+possible if the function is curried (i.e. the caller has one value to
+capture):
+
+```turmeric
+;; Instead of:  (gvzip-with add v1 v2)
+;; If you want to add a fixed offset k, use:
+(gvzip-with (add k) v1 v2)   ;; (add k) is a 1-arg closure
+```
+
+There is no general workaround for calling a non-capturing 2-arg function
+through a `:ptr<void>` slot.
+
+### Fix needed
+
+Change functions that need to call their argument with 2 values to use
+`[f :fn]` (fat-closure, `tur_poly_fn_t`) instead of `:ptr<void>`.  The
+fat-closure type stores `(fn_ptr, env)` and the call site emits
+`fn.fn(fn.env, a, b)` rather than the broken struct-dereference thunk.
+Affected stdlib functions: `gvzip-with` in `stdlib/gadt-vec.tur`.
+
+---
+
 ## Fixed Issues
 
 Brief log of previously-tracked bugs that have been fully resolved.  Refer
