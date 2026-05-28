@@ -1,0 +1,17 @@
+;;; Phase G: inline-C bodies can opt in to ABI specialization via
+;;; __TUR_TY_<NAME>__ template markers. Each marker resolves to the
+;;; concrete C type bound to that tyvar at the specialized call site;
+;;; in the generic / carrier form it resolves to int64_t.
+
+(defn cube [T] [x :T] :T
+  ```c
+  __TUR_TY_T__ v = x;
+  return (__TUR_TY_T__)(v * v * v);
+  ```)
+
+(defn main [] :int
+  (let [a (cube 3)]      ;; T = int   -> carrier form,    3^3   = 27
+    (println a))
+  (let [b (cube 2.5)]    ;; T = float -> specialized form, 2.5^3 = 15.625
+    (println b))
+  0)
