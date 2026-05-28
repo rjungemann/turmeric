@@ -188,15 +188,6 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
         } else {
-            /* ACB (KB-010): when the init expression is a carrier (int64_t) but
-             * the binding type is a concrete aggregate, bridge before declaring
-             * the variable so the C declaration and the initialiser agree. */
-            const Expr *init_e = e->as.let_.bindings[i].init;
-            if (init_e && init_e->type.kind == TY_INT &&
-                type_kind_is_aggregate(b->type.kind)) {
-                iv = emit_carrier_bridge(ctx, body, iv,
-                                         CK_CARRIER, CK_CONCRETE, b->type);
-            }
             buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, b->type), bn, iv);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
@@ -1495,10 +1486,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool args_match = true;
                     for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
                         const Expr *cur = e->as.call_.args[ai];
-                        while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
-                        Type actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
-                            ? cur->as.reinterpret_.expr->type
-                            : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                        /* ACB (KB-004): when the arg is EX_ASCRIBE, use the ascribed
+                         * type for spec matching -- it records the concrete type that
+                         * the carrier holds.  Without this, stripping to the inner
+                         * TY_INT expression prevents the spec from matching. */
+                        Type actual;
+                        if (cur && cur->kind == EX_ASCRIBE) {
+                            actual = cur->type;
+                        } else {
+                            while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                            actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
+                                ? cur->as.reinterpret_.expr->type
+                                : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                        }
                         if (!type_eq(spec->arg_types[ai], actual)) {
                             args_match = false;
                             break;
@@ -1594,6 +1594,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(cast.data);
                     buf_free(&cast);
+                }
+                /* ACB (KB-004): when a specialized call expects a concrete aggregate
+                 * argument but the emitted value is a carrier (int64_t), bridge it
+                 * here.  Skip when needs_fn_cast already applied a different coercion. */
+                if (!needs_fn_cast && matched_spec &&
+                    emit_arg && emit_arg->type.kind == TY_INT &&
+                    type_kind_is_aggregate(matched_spec->arg_types[i].kind)) {
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CARRIER, CK_CONCRETE,
+                                             matched_spec->arg_types[i]);
                 }
                 arg_strs[i] = raw;
             }
