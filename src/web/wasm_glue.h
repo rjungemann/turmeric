@@ -2,7 +2,7 @@
 #define TURI_WASM_GLUE_H
 
 /* Version string for the WASM module */
-#define TURMERIC_VERSION "0.12.0"
+#define TURMERIC_VERSION "0.13.0"
 
 #ifdef __cplusplus
 extern "C" {

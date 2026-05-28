@@ -2,6 +2,59 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.13.0] -- 2026-05-27
+
+### Added
+
+- **Spice-aware REPL (RP0--RP8)** -- `tur build --shared` emits a dlopen-able `.so`;
+  `tur repl` auto-discovers and dlopens the enclosing spice, binds all exports as
+  callables at the prompt, and refreshes them via `(reload)` or `--watch`. Error paths
+  surface actionable hints for the three most common failure modes.
+
+- **`#rx` regex literals and `#name"body"` reader macros** -- `#rx"pattern"` compiles
+  to a regex literal at read time; `#name"body"` is a general reader-macro hook. `re`
+  union helpers round out the regex API.
+
+- **Variadic rest parameters** (`& rest :type`) -- functions now accept an unknown number
+  of same-type trailing arguments; rest is a cons-list of the declared type and is `nil`
+  when absent.
+
+- **Currying** (`curry` macro, effects, rank-2) -- `curry` macro, algebraic effects in
+  curried bodies, and rank-2 support (CY3+CY4).
+
+- **Tuple2--Tuple5 built-in structs** -- `Tuple2` through `Tuple5` are now pre-defined
+  in the compiler; pointer-type slots are handled correctly.
+
+- **Sized-primitives mixed-width arithmetic (TUR-E0042)** -- mixed-width expressions over
+  `i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/`u64` now elaborate without manual casts.
+
+- **`vec-of` macro** -- construct a `Vec` from a literal element list.
+
+### Changed
+
+- **Contract macros removed; `--no-auto-stdlib` added** -- the old `assert!`/`require!`/
+  `ensure!` contract macros are no longer loaded by default; `--no-auto-stdlib` suppresses
+  automatic stdlib injection entirely.
+
+- **macOS release binary is now arm64-only** -- the release matrix is
+  `linux-x86_64`, `linux-aarch64`, and `macos-arm64`.
+
+### Fixed
+
+- **Aggregate Carrier ABI (ACB Phase 1 + 3)** -- ACB Phase 1 audited call sites for
+  struct-carrying aggregates; Phase 3 completes the carrier-to-struct bridge in
+  `EX_ASCRIBE` so aggregate returns through ascription work correctly.
+
+- **GADT `Vec` rename, `Clone` typeclass, `Functor` collision** -- `Vec` GADT renamed to
+  avoid shadowing the stdlib type; `Clone` typeclass added; `Functor` name collision
+  between stdlib and user definitions resolved.
+
+- **Spaced compound type annotations** -- `f : (-> int int)` and compound annotations
+  with internal spaces now elaborate correctly through the full pipeline.
+
+- **`?` operator** -- missing `__tur-q-is-err?` and `__tur-q-ok-val` stdlib helpers
+  added so the `?` early-return operator functions correctly.
+
 ## [0.12.0] -- 2026-05-25
 
 ### Changed

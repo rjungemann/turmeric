@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.12.0` -- drops the old `t*` typed-stdlib prefixes in favor of canonical module names like `vec`, `map`, `option`, `result`, `set`, and `mutmap`, with the docs layout cleaned up to match.
+**Latest release:** `v0.13.0` -- adds a spice-aware REPL (`tur build --shared`, auto-discovery, `(reload)`, `--watch`), `#rx` regex literals, variadic rest parameters, currying, Tuple2--Tuple5 structs, and sized-primitive mixed-width arithmetic.
 
 ## What
 
