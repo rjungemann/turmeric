@@ -1,12 +1,16 @@
 ; Phase G4: Test GADT-based GVec from stdlib/gadt-vec.tur.
 ; Exercises the public functions: gvec-nil, gvec-cons, gvec-len, gvec-sum,
-; gvec-head-or, gvec-tail, and gvmap.
-; Note: gvzip-with requires a 2-arg ptr<void> call which is not yet supported.
+; gvec-head-or, gvec-tail, gvmap, and gvzip-with.
+; KB-034: gvzip-with takes a typed fn (not ptr<void>), so a 2-arg call with a
+; bare function works instead of segfaulting.
 
 (load "stdlib/gadt-vec.tur")
 
 ; Helper function used by gvmap.
 (defn mul [a :int b :int] :int (* a b))
+
+; Helper function used by gvzip-with.
+(defn add [a :int b :int] :int (+ a b))
 
 (defn main [] :int
   ; gvec-len of empty = 0
@@ -23,4 +27,8 @@
   (println (gvec-len (gvec-tail (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil)))))))
   ; gvmap (*2) [1,2,3] sums to 12
   (println (gvec-sum (gvmap (mul 2) (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil)))))))
+  ; gvzip-with add [1,2] [10,20] sums to 33 (KB-034: 2-arg fn callback)
+  (println (gvec-sum (gvzip-with add
+                       (gvec-cons 1 (gvec-cons 2 (gvec-nil)))
+                       (gvec-cons 10 (gvec-cons 20 (gvec-nil))))))
   0)

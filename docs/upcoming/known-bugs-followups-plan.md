@@ -23,7 +23,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 | KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) -- DONE | Low | Medium |
 | KB-029 | `stdlib/session.tur` tuple return-type syntax -- DONE | Low | Medium |
 | KB-030 | Orphan-instance checker rejects instances on built-ins -- DONE | Medium | Medium |
-| KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults | Medium | Medium |
+| KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults -- DONE | Medium | Medium |
 
 ---
 
@@ -574,3 +574,25 @@ the slots to `:fn` is the safer, type-checked fix.
 
 Medium -- per-combinator signature change, or a codegen discrimination in the
 `:ptr<void>` call path.
+
+### Resolution (DONE)
+
+Took the recommended per-combinator signature change (the safer, type-checked
+path).  `gvzip-with` in `stdlib/gadt-vec.tur` now declares its callback as
+`[f :(fn [int int] :int)]` instead of `[f :ptr<void>]`.  A typed `fn`
+parameter is lowered to a `tur_poly_fn_t` and any callee -- a bare
+non-capturing function (`add`) or a capturing closure -- is wrapped into that
+fat-closure layout, so `(f x y)` dispatches via `fn.fn(fn.env, x, y)` instead
+of the `:ptr<void>` path that blindly dereferences the value as a
+function-pointer table and crashed on a raw code address.
+
+The `gadt-stdlib-vec-stdlib` fixture (which previously documented gvzip-with as
+"not yet supported") now exercises `(gvzip-with add [1 2] [10 20])` and asserts
+the sum `33`, locking in the fix as a regression test.
+
+The underlying codegen path (`emit_expr.c`, `TY_PTR_VOID` N-arg call) still
+assumes a fat-closure layout for `n >= 1`; calling a *raw* function directly
+through a `:ptr<void>` value remains unsafe by construction in v1.  The
+longer-term codegen discrimination (detect a raw-function `:ptr<void>` and emit
+a direct call) is left as a future enhancement -- using a typed `fn` parameter
+is the type-checked way to express a multi-argument callback.
