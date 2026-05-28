@@ -692,11 +692,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_REINTERPRET: {
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
+                const Expr *inner_call = e->as.reinterpret_.expr;
                 for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
                     const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
-                    if (spec->call_expr == e->as.reinterpret_.expr &&
+                    if (spec->call_expr == inner_call &&
                         type_eq(spec->result_type, e->type)) {
-                        return emit_value(ctx, body, e->as.reinterpret_.expr);
+                        return emit_value(ctx, body, inner_call);
+                    }
+                }
+                /* KB-015: the first call to a specialised clone registers spec->call_expr
+                 * pointing to that first EX_CALL node.  Subsequent calls to the same
+                 * instantiation get fresh EX_CALL nodes that appear only in
+                 * specialized_call_exprs[] -- spec->call_expr does not cover them.
+                 * Without this second check, the reinterpretation fires on a call that
+                 * already returns the concrete type, truncating the double to int64_t. */
+                if (ctx) {
+                    for (uint32_t si = 0; si < ctx->n_specialized_calls; si++) {
+                        if (ctx->specialized_call_exprs[si] == inner_call) {
+                            return emit_value(ctx, body, inner_call);
+                        }
                     }
                 }
             }
