@@ -848,7 +848,10 @@ colliding with the stdlib `Vec` names.
 ## KB-024 -- `errors/defstruct-copy-noncopy-compound-field`: type name missing in diagnostic
 
 **Discovered:** 2026-05-27
-**Status:** Open -- diagnostic bug.
+**Status:** Fixed 2026-05-28 -- `elab_structs.c` now tracks the resolved
+compound Type for the F_LIST field-type path and uses it for the :copy
+diagnostic, so the message now reads
+`defstruct: field 'r' has non-copy type lref<int>`.
 
 ### Symptom
 
@@ -867,18 +870,22 @@ The type name is printed as `:` (the colon character only) instead of
 
 ### Root cause
 
-When the field type is written in compound form `(lref int)` (a list
-expression rather than a keyword like `:lref`), the diagnostic printer
-falls through to a code path that prints the raw token `:` from the
-parser form rather than resolving and printing the fully-qualified type
-name.  The simple keyword path (`defstruct Bad :copy [r :lref]`) already
-prints `lref` correctly.
+When the field type is written in compound form `(lref int)`, the
+F_LIST handling in `elab_structs.c` only stored the resolved Type on
+`full_type` when its kind was `TY_APP` / `TY_EXISTS` / `TY_FORALL` (or
+when the struct had type parameters).  For `(lref int)` the resolved
+kind is `TY_LREF`, so `full_type` stayed NULL and the diagnostic fell
+through to a branch that printed `type_name_form->as.sym->name` --
+but `type_name_form` is an F_LIST in this path, so the union read
+yielded a stray `:` character.
 
-### Fix needed
+### Fix
 
-In the `defstruct` compound-field type diagnostic emission, resolve the
-compound type form to its string representation (e.g. via `type_to_str`
-or equivalent) before formatting the error message.
+Introduced a separate `compound_type` local that is set whenever the
+field came from an F_LIST form, regardless of the resolved kind.  The
+:copy diagnostic now prefers `full_type` (when set, preserving the
+existing storage path) and falls back to `compound_type` (used purely
+for the diagnostic) before resorting to the bare-symbol fallback.
 
 ---
 
