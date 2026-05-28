@@ -23,6 +23,20 @@ static const char *builtin_type_home_basename(const char *type_name) {
     return NULL;
 }
 
+/* KB-030/KB-027: as above, but keyed on a resolved built-in TypeKind.  Some
+ * built-ins (`rc`, `weak`) resolve to a dedicated TypeKind rather than an
+ * opaque-struct name, so they carry no type_arg_syms entry; map those kinds
+ * to their home file directly.  Returns NULL for kinds with no fixed home. */
+static const char *builtin_kind_home_basename(TypeKind k) {
+    switch (k) {
+        case TY_RC:
+        case TY_WEAK:
+            return "rc.tur";
+        default:
+            return NULL;
+    }
+}
+
 /* Return the final path component of `path` (the basename), or `path` itself
  * when it contains no '/'.  NULL-safe. */
 static const char *tc_path_basename(const char *path) {
@@ -1900,17 +1914,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 if (type_args[i].as.struct_.def->origin_file_id == call->span.file_id) {
                     owns_a_type_arg = true;
                 }
-            } else if (type_arg_syms && type_arg_syms[i]) {
-                /* KB-030: a built-in primitive type (str, rc, ...) has no
-                 * StructDef, so it can never match origin_file_id.  Credit it
-                 * to its designated home file instead, so primitive instances
-                 * can live in the natural module without tripping the orphan
-                 * check. */
-                const char *home =
-                    builtin_type_home_basename(type_arg_syms[i]->name);
-                if (home && cur_basename && strcmp(cur_basename, home) == 0) {
-                    owns_a_type_arg = true;
-                }
+                continue;
+            }
+            /* KB-030: a built-in primitive type (str, rc, ...) has no StructDef,
+             * so it can never match origin_file_id.  Credit it to its designated
+             * home file instead, so primitive instances can live in the natural
+             * module without tripping the orphan check.  The home is found
+             * either from the resolved TypeKind (rc/weak -> TY_RC/TY_WEAK) or,
+             * for opaque-struct names with no dedicated kind (str), from the
+             * recorded type-arg symbol. */
+            const char *home = builtin_kind_home_basename(type_args[i].kind);
+            if (!home && type_arg_syms && type_arg_syms[i]) {
+                home = builtin_type_home_basename(type_arg_syms[i]->name);
+            }
+            if (home && cur_basename && strcmp(cur_basename, home) == 0) {
+                owns_a_type_arg = true;
             }
         }
         if (!owns_a_type_arg) {

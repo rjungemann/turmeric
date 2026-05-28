@@ -20,7 +20,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 | KB-022 | GADT HKT constraint unification (`equal-cong`) -- DONE | Low | Medium |
 | KB-025 | GADT skolem-escape check missing -- DONE | Medium | Medium |
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics -- DONE | Medium | Medium |
-| KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) | Low | Medium |
+| KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) -- DONE | Low | Medium |
 | KB-029 | `stdlib/session.tur` tuple return-type syntax | Low | Medium |
 | KB-030 | Orphan-instance checker rejects instances on built-ins -- DONE | Medium | Medium |
 | KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults | Medium | Medium |
@@ -359,6 +359,45 @@ list -- but only after resolving its Functor/Applicative/Monad overlap with
 ### Effort
 
 Medium -- stdlib redesign of the Rc type constructor.
+
+### Resolution (DONE)
+
+Resolved by dispatching on the built-in `rc<T>` type constructor instead of
+`ptr<void>`, building on the KB-030 orphan-checker change:
+
+1. **Dispatch on `rc`, not `ptr<void>` (`stdlib/rc.tur`)** -- `Functor`,
+   `Foldable`, and `Clone` instances now target the built-in `rc` constructor.
+   `rc` resolves to `TY_RC`, which the kind system treats as kind `* -> *`, so
+   the `Functor`/`Foldable` instances are well-kinded (no more "expects kind
+   '* -> *', but 'ptr<void>' has kind '*'").  The redundant `ptr<void>` mirror
+   of the `Clone` instance (and its `__clone_rc_shallow` / `__foldable_rc_*`
+   helpers) was removed; the `Foldable` bodies now inline the same C the
+   `Functor` instance uses.
+2. **`TY_RC`/`TY_WEAK` kind (`kind_check.c`)** -- `type_effective_kind` now
+   reports `KIND_ARROW` for `TY_RC`/`TY_WEAK` so the secondary (belt-and-
+   suspenders) kind validation agrees with the elab-time check that these are
+   type constructors.  The bottom-up kind inference additionally skips the
+   `STAR -> ARROW` promotion for `rc`/`weak` args, so a `STAR`-declared class
+   used as a concrete carrier handle (`Clone [rc]`) is not mistakenly lifted to
+   higher kind.
+3. **Local `Foldable` class stub (`stdlib/rc.tur`)** -- `Foldable` is not
+   auto-loaded (unlike `Functor`/`Clone`), so rc.tur declares the class locally
+   with the same signature as `stdlib/typeclass.tur` (accepted by the
+   idempotent-redefinition rule).  This keeps rc.tur standalone-checkable
+   without a global auto-load that would have changed the `Foldable` ownership
+   seen by existing HKT fixtures.
+4. **Orphan ownership** -- with KB-030's built-in-home registry extended to map
+   `TY_RC`/`TY_WEAK` (and the `rc`/`weak` names) to `rc.tur`, all three
+   instances are credited to their home module.
+
+`stdlib/rc.tur` now type-checks standalone and was added to
+`tests/run-stdlib-checks.sh` (29 passed).  The full `tests/run.sh` (1025) and
+`tests/run-turi.sh` suites remain green.
+
+Note: `stdlib/docstrings.tur` (auto-generated) still carries stale entries for
+the removed helpers; it was already drifted from the current stdlib, so a full
+`just docs` regeneration is left as separate housekeeping rather than mixing
+unrelated doc churn into this fix.
 
 ---
 

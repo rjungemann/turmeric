@@ -133,6 +133,12 @@ static Kind type_effective_kind(Type t) {
              * (definstance Functor [option])) and default to KIND_ARROW. */
             return (t.as.struct_.def != NULL) ? KIND_STAR : KIND_ARROW;
         case TY_REC:    return KIND_ARROW;  /* Phase HKT-P2 */
+        /* KB-027: rc<T> and weak<T> are built-in type constructors of kind
+         * '* -> *', so a Functor/Foldable instance on the bare `rc` constructor
+         * is well-kinded.  (The inference pass below avoids promoting a
+         * STAR-declared class such as Clone [rc] off the back of this.) */
+        case TY_RC:
+        case TY_WEAK:   return KIND_ARROW;
         case TY_APP:
             /* Phase HKT-P1: result kind depends on fn's kind */
             if (t.as.app.fn) {
@@ -414,7 +420,14 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                 bool opaque_struct_arg =
                     (inst->type_args[i].kind == TY_STRUCT &&
                      inst->type_args[i].as.struct_.def == NULL);
-                if (!opaque_struct_arg) {
+                /* KB-027: rc<T>/weak<T> report KIND_ARROW (they are genuine
+                 * constructors), but in v1 they also stand in as concrete
+                 * carrier handles for STAR-declared classes (Clone [rc]).
+                 * Don't let such an instance promote the class to higher kind. */
+                bool builtin_carrier_arg =
+                    (inst->type_args[i].kind == TY_RC ||
+                     inst->type_args[i].kind == TY_WEAK);
+                if (!opaque_struct_arg && !builtin_carrier_arg) {
                     tc->type_param_kinds[i] = arg_kind;
                 }
             }

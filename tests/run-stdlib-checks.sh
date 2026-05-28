@@ -59,6 +59,9 @@ STDLIB_FILES=(
     # KB-030: Eq [str] is non-orphan now that the orphan checker credits a
     # built-in primitive type to its designated home file (str -> str.tur).
     stdlib/str.tur
+    # KB-027: rc.tur dispatches Functor/Foldable/Clone on the built-in rc<T>
+    # constructor (kind * -> *, home rc.tur) instead of ptr<void>.
+    stdlib/rc.tur
 )
 STDLIB_FLAGS=(
     ""
@@ -93,6 +96,7 @@ STDLIB_FLAGS=(
     "-Xgadt"
     "-Xgadt"
     "-Xgadt"
+    ""
     ""
 )
 
