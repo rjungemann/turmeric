@@ -70,6 +70,14 @@ static int reinterpret_kind_size_bytes(TypeKind kind) {
     }
 }
 
+/* Phase F: Returns true for sub-64-bit integer kinds eligible for concrete
+ * typed poly dispatch on x86-64 SysV ABI.  These types zero-extend into
+ * 64-bit registers, so a call through a narrower function pointer type
+ * still delivers the correct bit pattern after the callee's truncation. */
+static bool type_kind_is_poly_concrete(TypeKind k) {
+    return k == TY_BOOL || k == TY_INT8 || k == TY_INT16 || k == TY_INT32;
+}
+
 static Binding *emit_expr_closure_fn_binding(const Expr *expr) {
     if (!expr) return NULL;
 
@@ -1300,44 +1308,82 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase HRT1: poly call through rank-2 fn param: emit fn_name.fn(fn_name.env, arg0, ...) */
             if (e->as.call_.is_poly_call) {
                 char *fn_name = emit_call_name(ctx, e, fn_binding);
-                char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
-                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
-                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                uint32_t n = e->as.call_.n_args;
+
+                /* Phase F: Use concrete typed dispatch when all arg/result types are
+                 * sub-64-bit integer kinds.  Cast fn.fn to the concrete signature
+                 * instead of widening to the int64_t carrier.
+                 *
+                 * Safety (x86-64 SysV ABI): sub-64-bit integer args are zero-extended
+                 * into 64-bit registers by the caller, and the callee truncates back to
+                 * the concrete type — so the bit pattern survives the round-trip.
+                 * Return values are placed in rax; reading eax (lower 32 bits) yields
+                 * the correct narrow integer regardless of sign-extension in rax.
+                 * This makes casting fn.fn from int64_t(*)(void*,int64_t) back to the
+                 * concrete type correct for both closure thunks (native concrete sig)
+                 * and generic poly wrappers (which truncate internally). */
+                bool phase_f_concrete = !e->as.call_.poly_arg_mask &&
+                                        type_kind_is_poly_concrete(e->type.kind);
+                for (uint32_t i = 0; i < n && phase_f_concrete; i++) {
+                    if (!type_kind_is_poly_concrete(e->as.call_.args[i]->type.kind))
+                        phase_f_concrete = false;
+                }
+
+                char **arg_strs = n ? (char **)malloc(n * sizeof(char *)) : NULL;
+                if (n && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint32_t i = 0; i < n; i++) {
                     char *raw = emit_value(ctx, body, e->as.call_.args[i]);
-                    /* Phase HRT3: nested poly fn arg — take address of compound literal so it
-                     * can be passed as int64_t through the poly fn dispatch layer. */
-                    if (e->as.call_.poly_arg_mask & (1u << i)) {
-                        Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(int64_t)(intptr_t)(&(%s))", raw);
-                        buf_putc(&cast, '\0');
-                        free(raw);
-                        raw = strdup(cast.data);
-                        buf_free(&cast);
-                    } else {
-                        /* Poly fn expects int64_t args — cast fn ptrs and void* through intptr_t */
-                        bool needs_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
-                                           e->as.call_.args[i]->type.kind == TY_PTR_VOID);
-                        if (needs_cast) {
+                    if (!phase_f_concrete) {
+                        /* Generic carrier path: apply poly_arg_mask / needs_cast wrapping */
+                        if (e->as.call_.poly_arg_mask & (1u << i)) {
+                            /* Phase HRT3: nested poly fn arg — pass by pointer as int64_t */
                             Buf cast; buf_init(&cast);
-                            buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                            buf_printf(&cast, "(int64_t)(intptr_t)(&(%s))", raw);
                             buf_putc(&cast, '\0');
                             free(raw);
                             raw = strdup(cast.data);
                             buf_free(&cast);
+                        } else {
+                            /* Cast fn ptrs and void* through intptr_t */
+                            bool needs_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                                               e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                            if (needs_cast) {
+                                Buf cast; buf_init(&cast);
+                                buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                                buf_putc(&cast, '\0');
+                                free(raw);
+                                raw = strdup(cast.data);
+                                buf_free(&cast);
+                            }
                         }
                     }
+                    /* Phase F concrete path: args used as-is, no int64_t widening. */
                     arg_strs[i] = raw;
                 }
+
                 Buf out; buf_init(&out);
-                buf_printf(&out, "%s.fn(%s.env", fn_name, fn_name);
-                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);
+                if (phase_f_concrete) {
+                    /* Phase F: cast fn.fn to the concrete signature and call directly */
+                    buf_printf(&out, "((%s (*)(void*", emit_type_c_name(ctx, e->type));
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", %s", emit_type_c_name(ctx, e->as.call_.args[i]->type));
+                    }
+                    buf_printf(&out, "))%s.fn)(%s.env", fn_name, fn_name);
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", %s", arg_strs[i]);
+                    }
+                } else {
+                    /* Generic carrier dispatch: all args cast to int64_t */
+                    buf_printf(&out, "%s.fn(%s.env", fn_name, fn_name);
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);
+                    }
                 }
                 buf_puts(&out, ")");
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
-                for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
+                for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                 free(arg_strs);
                 free(fn_name);
                 return result;
@@ -2846,10 +2892,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Phase HRT4: pass-through — inner is already a tur_poly_fn_t, emit directly. */
                 return emit_value(ctx, body, e->as.poly_wrap_.inner);
             }
-            /* Emit (tur_poly_fn_t){ NULL, wrapper_fn_name } */
+            /* Emit (tur_poly_fn_t){ NULL, wrapper_fn_name }.
+             * Phase F: cast to int64_t(*)(void*,int64_t) to match the field type;
+             * concrete call sites reverse this cast via the concrete dispatch path. */
             char *wn = raw_name_for_binding(e->as.poly_wrap_.wrapper_binding);
             Buf out; buf_init(&out);
-            buf_printf(&out, "(tur_poly_fn_t){ NULL, %s }", wn);
+            buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s }", wn);
             buf_putc(&out, '\0');
             free(wn);
             char *result = strdup(out.data);
