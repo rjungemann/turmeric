@@ -3773,7 +3773,7 @@ static void mutmap_free(int64_t m) {
 
 int main() {
         int64_t __t1;
-        if (((bool (*)(int64_t, int64_t))(intptr_t)(dict_MyEq_int_singleton.eq_))(INT64_C(1), INT64_C(1))) {
+        if (__inst_MyEq_eq__int(INT64_C(1), INT64_C(1))) {
             __t1 = INT64_C(0);
         } else {
             __t1 = INT64_C(1);

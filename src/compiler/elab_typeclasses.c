@@ -2070,8 +2070,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
             for (uint32_t i = 0; i < n_args_w; i++) call_args_w[i + 1] = args_w[i];
 
             Expr *out_w = expr_new(e->arena, EX_CALL, result_type_w, call->span);
-            out_w->as.call_.fn_binding = NULL;
-            out_w->as.call_.fn_expr    = dict_w;
+            /* Phase H §1: witness pins a specific instance statically, so emit
+             * a direct call to the instance impl instead of dict-dispatching. */
+            if (witness_method_fn && witness_method_fn->binding) {
+                out_w->as.call_.fn_binding = witness_method_fn->binding;
+                out_w->as.call_.fn_expr    = NULL;
+            } else {
+                out_w->as.call_.fn_binding = NULL;
+                out_w->as.call_.fn_expr    = dict_w;
+            }
             out_w->as.call_.args       = call_args_w;
             out_w->as.call_.n_args     = n_args_w + 1;
             out_w->as.call_.dict_arg   = dict_w;
@@ -2652,14 +2659,20 @@ found_method:;
     }
 
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
-    if (dict_expr && !has_poly_params) {
-        /* Dictionary dispatch: indirect call through the vtable field. */
+    /* Phase H §1: receiver type is statically known here (best_inst was resolved
+     * by the type-based instance search above; ambiguous matches would have
+     * errored with TUR_E0020 earlier).  Emit a direct call to the instance
+     * impl, skipping the dictionary indirection.  Keep dict_arg as an
+     * annotation for downstream passes that may still want to know which
+     * instance was selected.  Fall back to dict dispatch only when there is
+     * no resolved instance (defensive). */
+    if (best_method && best_method->binding) {
+        out->as.call_.fn_binding = best_method->binding;
+        out->as.call_.fn_expr    = NULL;
+    } else if (dict_expr && !has_poly_params) {
         out->as.call_.fn_binding = NULL;
         out->as.call_.fn_expr    = dict_expr;
     } else {
-        /* Direct call: either no instance resolved, or method has rank-N (poly fn)
-         * params that require tur_poly_fn_t calling convention — dictionary dispatch
-         * doesn't support tur_poly_fn_t params, so bypass it. */
         out->as.call_.fn_binding = best_method->binding;
         out->as.call_.fn_expr    = NULL;
     }
