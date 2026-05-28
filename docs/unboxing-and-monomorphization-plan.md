@@ -418,6 +418,19 @@ keyed by `(module, fn_name, type_args)` could dedupe.
 This is an optimization, not a correctness item. Defer unless
 benchmarks justify it.
 
+**Premise correction (2026-05-28).** The "two modules both emit their
+own clones" premise does not hold in the current codebase: the
+whole-program path (`emit_program`) flattens all imports into one TU and
+already dedupes clones by `(binding, arg_types, result_type)`
+(`emit_module.c:312`), while the separate-compilation path
+(`emit_implementation`) never scans or emits specializations at all
+(generic calls there take the carrier ABI). So a faithful Phase J is a
+two-part job: first enable per-module specialization under separate
+compilation, then add the persistent cache to dedupe clone *bodies*
+across modules. The full design is written up separately:
+
+- [docs/upcoming/cross-module-specialization-cache-plan.md](upcoming/cross-module-specialization-cache-plan.md)
+
 ---
 
 ## Out of scope
