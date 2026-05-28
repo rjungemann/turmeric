@@ -294,22 +294,44 @@ shows the specialized closure path avoiding the polymorphic wrapper
 call -- measured by `(emit-c)` snapshot diff and a wall-clock
 improvement.
 
-### Phase G -- Specialize inline-C bodies
+### Phase G -- Specialize inline-C bodies *(landed)*
 
-1. Today inline-C bodies are skipped because their C signature is
-   declared inline. Introduce a per-kind-suffixed inline-C variant:
-   the developer writes a template `\`\`\`c \<INT_TYPE\> ... \`\`\`` and
-   the emitter substitutes the concrete C type per specialization.
-2. Or: keep the existing inline-C convention but generate a thin
-   wrapper that casts at the boundary, monomorphized per call.
-3. Audit `stdlib/list.tur`, `stdlib/option.tur`, `stdlib/vec.tur`
-   for inline-C blocks that would benefit. Concrete candidate:
-   `cons-list-sum`-style accumulators on `(List int32)` today
-   silently widen to int64.
+Inline-C bodies opt in to ABI specialization with a `__TUR_TY_<NAME>__`
+template marker. Each marker resolves to the concrete C type bound to
+`<NAME>` at the specialized call site (read from the active
+`EmitAbiSpecialization`'s `bindings`); when no specialization is active
+(the original / carrier emission) it resolves to `int64_t`.
 
-**Signal:** at least one stdlib inline-C helper opts in to the new
-form; an existing fixture's emitted C shows the kind-specific
-variant (e.g. `cons_list_sum__int32`).
+Implementation:
+
+- `emit_core.c::inline_c_substitute` recognises `__TUR_TY_<NAME>__` and
+  substitutes the resolved C type, alongside the existing
+  `__TUR_CAP_N__` / `__TUR_VAL_N__` rules. `__TUR_VAL_N__` temporaries
+  also resolve their declared type through the active specialization,
+  so a `TY_TYVAR`-typed sub-expression lands at the concrete width
+  (`int32_t tmp = arg;` rather than `int64_t tmp = arg;`).
+- `emit_core.c::inline_c_has_ty_template` gates opt-in: only inline-C
+  bodies that contain the marker participate in specialization.
+- `emit_module.c::emit_abi_register_call` lifts the previous
+  `EX_INLINE_C` early-exit when the body has a template marker, so
+  cloning proceeds through the existing `EmitAbiSpecialization`
+  machinery. Inline-C bodies without markers continue to fall back to
+  the carrier path (their hand-rolled `int64_t` signature is preserved
+  and a specialized parameter width would mismatch the inline code).
+
+Audit notes (stdlib): every inline-C helper in `stdlib/list.tur`,
+`stdlib/option.tur`, and `stdlib/vec.tur` is carrier-only (parameters
+typed `:int`, fields read as `int64_t`); none take a type variable, so
+none need to convert today. The template form is now available for any
+new typed helper that wants direct inline-C access to a concrete A
+width without a carrier round-trip.
+
+**Signal:** `tests/fixtures/inline-c-template-spec/` defines a generic
+`(defn cube [T] [x :T] :T)` whose inline-C body uses `__TUR_TY_T__`
+twice. The emitted C contains both a carrier form
+`static int64_t cube(int64_t x)` and a kind-specific specialization
+`static double cube__spec__double_double(double x)`; runtime output
+matches `27 / 15.625` for `(cube 3)` / `(cube 2.5)`.
 
 ### Phase H -- Specialize typeclass methods
 

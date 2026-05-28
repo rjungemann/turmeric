@@ -709,12 +709,35 @@ char *atom_cstr(StrSlice s) {
     return p;
 }
 
+/* Phase G: scan an inline-C body for __TUR_TY_<NAME>__ template markers.
+ * Used by emit_abi_register_call to decide whether an inline-C function
+ * opts in to ABI specialization. */
+bool inline_c_has_ty_template(const InlineC *ic) {
+    if (!ic || !ic->code.p) return false;
+    const char *code = ic->code.p;
+    uint32_t len = ic->code.len;
+    if (len < 10) return false;
+    for (uint32_t i = 0; i + 9 < len; i++) {
+        if (memcmp(code + i, "__TUR_TY_", 9) == 0) return true;
+    }
+    return false;
+}
+
 /* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
  * Emits val_exprs[N] into temp vars in body, then returns a malloc'd C string
- * with all __TUR_CAP_N__ and __TUR_VAL_N__ placeholders substituted. */
+ * with all __TUR_CAP_N__ and __TUR_VAL_N__ placeholders substituted.
+ *
+ * Phase G: also substitutes __TUR_TY_<NAME>__ placeholders. Under an active
+ * ABI specialization, <NAME> resolves to the concrete C type bound to that
+ * type variable; otherwise (generic / carrier emission) it resolves to
+ * int64_t (the carrier). val_expr temporary types are also resolved through
+ * the active specialization, so __TUR_VAL_N__ temps land at the concrete
+ * C width rather than the generic carrier width. */
 char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
+    bool has_ty_template = inline_c_has_ty_template(ic);
+
     /* Fast path: no substitution needed. */
-    if (ic->n_captures == 0 && ic->n_val_exprs == 0) {
+    if (ic->n_captures == 0 && ic->n_val_exprs == 0 && !has_ty_template) {
         return strndup(ic->code.p, ic->code.len);
     }
 
@@ -727,7 +750,9 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
         }
     }
 
-    /* Evaluate val_exprs into temp variables. */
+    /* Evaluate val_exprs into temp variables. Phase G: resolve the temp
+     * declared type through the active specialization so a TY_TYVAR-typed
+     * subexpression ends up at the concrete C width. */
     char **val_temps = NULL;
     if (ic->n_val_exprs > 0) {
         val_temps = (char **)calloc(ic->n_val_exprs, sizeof(char *));
@@ -736,7 +761,7 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
             char *vv = emit_value(ctx, body, ic->val_exprs[vi]);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s %s = %s;\n",
-                       type_c_name(ic->val_exprs[vi]->type), tmp, vv);
+                       emit_type_c_name(ctx, ic->val_exprs[vi]->type), tmp, vv);
             free(vv);
             val_temps[vi] = tmp;
         }
@@ -772,6 +797,51 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
                 j += 2;
                 buf_puts(&result, (val_temps && n < ic->n_val_exprs) ? val_temps[n] : "0");
                 i = j; matched = true;
+            }
+        }
+        /* Phase G: Check for __TUR_TY_<NAME>__ — substitutes to the concrete
+         * C type bound to <NAME> in the active ABI specialization, or to
+         * int64_t (the carrier) when no specialization is active. */
+        if (!matched && i + 11 <= len && memcmp(code + i, "__TUR_TY_", 9) == 0) {
+            uint32_t j = i + 9;
+            uint32_t name_start = j;
+            while (j < len && (
+                (code[j] >= 'A' && code[j] <= 'Z') ||
+                (code[j] >= 'a' && code[j] <= 'z') ||
+                (code[j] >= '0' && code[j] <= '9') ||
+                code[j] == '_')) {
+                /* a single trailing "__" closes the placeholder; check that
+                 * we have not stepped into the closing pair before consuming */
+                if (code[j] == '_' && j + 1 < len && code[j+1] == '_') {
+                    /* peek: only treat as terminator if this leaves a real
+                     * name (j > name_start) and the chars after are not
+                     * additional underscores (a name like FOO__BAR is allowed
+                     * by greedy match below) */
+                    break;
+                }
+                j++;
+            }
+            if (j > name_start && j + 1 < len && code[j] == '_' && code[j+1] == '_') {
+                uint32_t name_len = j - name_start;
+                char name_buf[64];
+                if (name_len < sizeof(name_buf)) {
+                    memcpy(name_buf, code + name_start, name_len);
+                    name_buf[name_len] = '\0';
+                    const char *resolved = "int64_t";
+                    const EmitAbiSpecialization *spec =
+                        ctx ? ctx->current_abi_specialization : NULL;
+                    if (spec) {
+                        for (uint8_t bi = 0; bi < spec->n_bindings; bi++) {
+                            if (spec->bindings[bi].name &&
+                                strcmp(spec->bindings[bi].name, name_buf) == 0) {
+                                resolved = type_c_name(spec->bindings[bi].type);
+                                break;
+                            }
+                        }
+                    }
+                    buf_puts(&result, resolved);
+                    i = j + 2; matched = true;
+                }
             }
         }
         if (!matched) { buf_putc(&result, code[i++]); }

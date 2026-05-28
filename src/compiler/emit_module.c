@@ -272,7 +272,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     const Expr *fn_expr = emit_abi_find_fn_expr(items, n_items, fn_binding);
     if (!fn_expr || !fn_expr->as.fn_def_.fn) return;
     FnDef *fd = fn_expr->as.fn_def_.fn;
-    if (fd->closure || !fd->body || fd->body->kind == EX_INLINE_C) return;
+    if (fd->closure || !fd->body) return;
+    /* Phase G: inline-C bodies only opt in to ABI specialization when they
+     * contain __TUR_TY_<NAME>__ template markers. Without the template, the
+     * body's C signature is hand-rolled (e.g. typedef'd as int64_t) and the
+     * specialized parameter widths would mismatch the inline code; fall back
+     * to the carrier path. */
+    if (fd->body->kind == EX_INLINE_C &&
+        !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c)) {
+        return;
+    }
 
     bool abi_changes = false;
     Type arg_types[MAX_FN_ARITY];
