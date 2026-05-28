@@ -8,6 +8,19 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
+/* KB-031: true when a type's dictionary-dispatch instance body uses the carrier
+ * ABI (int64_t parameter) rather than concrete by-value.
+ *
+ * elab_typeclasses.c assigns carrier ABI to parametric structs (n_type_params > 0)
+ * and TY_APP / TY_ADT; it leaves non-parametric structs (n_type_params == 0) as
+ * concrete by-value.  The dictionary callsite must match. */
+static bool type_uses_carrier_in_dispatch(Type t) {
+    if (t.kind == TY_APP || t.kind == TY_ADT) return true;
+    if (t.kind == TY_STRUCT && t.as.struct_.def &&
+        t.as.struct_.def->n_type_params > 0) return true;
+    return false;
+}
+
 static bool reinterpret_kind_is_scalar(TypeKind kind) {
     switch (kind) {
         case TY_BOOL:
@@ -1194,13 +1207,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * -Wint-conversion error in C99. */
                     bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
                                           e->as.call_.args[i]->type.kind == TY_PTR_VOID);
-                    /* KB-012: dictionary method pointers use the carrier ABI (int64_t).
-                     * When the argument is a concrete aggregate (TY_APP / TY_STRUCT /
-                     * TY_ADT) -- as happens when an ABI-specialised constructor returns
-                     * a concrete struct -- bridge it to carrier before the call so the
-                     * function signature and the actual parameter type agree. */
+                    /* KB-012: dictionary method pointers use the carrier ABI (int64_t)
+                     * for parametric structs (TY_APP / TY_ADT / TY_STRUCT with type
+                     * params).  Non-parametric struct instance bodies use concrete
+                     * by-value ABI (KB-031); only bridge when the dispatch type is
+                     * parametric. */
                     bool needs_carrier_bridge = !needs_fn_cast && ctx &&
-                        type_kind_is_aggregate(e->as.call_.args[i]->type.kind);
+                        type_uses_carrier_in_dispatch(e->as.call_.args[i]->type);
                     arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
                     if (needs_fn_cast) {
                         Buf cast; buf_init(&cast);
