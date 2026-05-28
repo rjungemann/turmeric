@@ -1,0 +1,11 @@
+;; KB-010 regression: (let [v :(Vec int) (vec-new)]) should compile cleanly
+;;
+;; vec-new returns :int (carrier ABI).  When the let-binding is annotated with
+;; :(Vec int), the emitter previously emitted Vec__int v = vec_new(); which is
+;; a C-level type error.  The bridge detects the int64_t-to-aggregate crossing
+;; and emits a pointer dereference so the declaration is type-correct.
+
+(defn main [] :int
+  (let [v :(Vec int) (vec-new)]
+    (println "allocated")
+    0))

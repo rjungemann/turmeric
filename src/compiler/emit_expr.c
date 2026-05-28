@@ -1,6 +1,13 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 
+/* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
+ * type-application) that the carrier ABI stores as a heap pointer.  Used by
+ * KB-004 and KB-010 bridge insertion sites. */
+static bool type_kind_is_aggregate(TypeKind k) {
+    return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
+}
+
 static bool reinterpret_kind_is_scalar(TypeKind kind) {
     switch (kind) {
         case TY_BOOL:
@@ -181,6 +188,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
         } else {
+            /* ACB (KB-010): when the init expression is a carrier (int64_t) but
+             * the binding type is a concrete aggregate, bridge before declaring
+             * the variable so the C declaration and the initialiser agree. */
+            const Expr *init_e = e->as.let_.bindings[i].init;
+            if (init_e && init_e->type.kind == TY_INT &&
+                type_kind_is_aggregate(b->type.kind)) {
+                iv = emit_carrier_bridge(ctx, body, iv,
+                                         CK_CARRIER, CK_CONCRETE, b->type);
+            }
             buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, b->type), bn, iv);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
@@ -2704,9 +2720,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
-        /* Phase HRT1: type ascription — erase type, emit inner expression */
+        /* Phase HRT1: type ascription — erase type, emit inner expression.
+         * ACB (KB-004): when the inner expression is a carrier (int64_t) and
+         * the ascribed type is a concrete aggregate, insert the bridge so the
+         * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
-            return emit_value(ctx, body, e->as.ascribe_.inner);
+            char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
+            if (e->as.ascribe_.inner->type.kind == TY_INT &&
+                type_kind_is_aggregate(e->type.kind)) {
+                return emit_carrier_bridge(ctx, body, inner_val,
+                                           CK_CARRIER, CK_CONCRETE, e->type);
+            }
+            return inner_val;
         }
         /* Phase HRT2 / EX1e / EXG1: existential pack.
          *   - Unconstrained: emit a bare scalar/pointer cast as in HRT2.
