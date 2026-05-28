@@ -5,7 +5,7 @@
 ;; the typeclass method already documents the kind requirement.
 
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 (defn __opt_some [x] :int
@@ -33,7 +33,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; No explicit ^f: kind is inferred from the .fmap usage.

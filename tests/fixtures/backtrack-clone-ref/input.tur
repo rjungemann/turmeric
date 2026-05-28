@@ -1,6 +1,6 @@
-;; Phase B1: Clone trait for the Ref (heap-allocated reference) type.
+;; Phase B1: TestClone trait for the Ref (heap-allocated reference) type.
 ;;
-;; Demonstrates that (definstance Clone [Ref] ...) implements a deep clone:
+;; Demonstrates that (definstance TestClone [Ref] ...) implements a deep clone:
 ;; after .clone, both handles own independent heap allocations, so freeing
 ;; one does not affect the other.
 ;;
@@ -9,15 +9,15 @@
 
 (defstruct Ref [value :int])
 
-(defclass Clone [a]
+(defclass TestClone [a]
   (clone [x] :int))
 
-(definstance Clone [int]
+(definstance TestClone [int]
   (clone [x] x))
 
-;; Clone [Ref]: deep-copy — allocate a new cell with a copy of the value.
+;; TestClone [Ref]: deep-copy — allocate a new cell with a copy of the value.
 ;; x has type Ref (struct value); x.value is the stored int64_t.
-(definstance Clone [Ref]
+(definstance TestClone [Ref]
   (clone [x] :int
     ```c
     struct { int64_t value; } *dst = malloc(sizeof(Ref));

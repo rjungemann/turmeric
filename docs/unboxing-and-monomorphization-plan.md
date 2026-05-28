@@ -6,7 +6,7 @@
 > **Related:**
 > - `docs/aggregate-carrier-abi-plan.md` (carrier <-> concrete bridge)
 > - `docs/guides/type-erasure-guide.md` (current erasure map)
-> - `docs/known-bugs.md` (KB-004, KB-008, KB-010, KB-012, KB-015)
+> - `docs/archive/history/known-bugs.md` (KB-004, KB-008, KB-010, KB-012, KB-015)
 
 ---
 

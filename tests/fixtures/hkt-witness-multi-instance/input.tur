@@ -1,9 +1,9 @@
 ;; Phase D1: Type witness with multiple instances -- disambiguation case.
-;; Both Functor[option] and Functor[vec] are in scope.
+;; Both TestFunctor[option] and TestFunctor[vec] are in scope.
 ;; @option and @vec witnesses select the correct implementation each time,
 ;; producing correct output for both types through erased-type receivers.
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -66,10 +66,10 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [c f] (__fmap_option c f)))
 
-(definstance Functor [vec]
+(definstance TestFunctor [vec]
   (fmap [c f] (__fmap_vec c f)))
 
 (defn add5 [x] :int (+ x 5))
@@ -81,14 +81,14 @@
 
 (defn main [] :int
   (do
-    ;; @option witness -> Functor[option]: fmap add5 (some 10) => some 15
+    ;; @option witness -> TestFunctor[option]: fmap add5 (some 10) => some 15
     (let [o (mk-opt)]
       (let [o2 (.fmap @option o add5)]
         (do
           (println (__opt_some? o2))   ;; true
           (println (__opt_unwrap o2))))) ;; 15
 
-    ;; @vec witness -> Functor[vec]: fmap twice (vec-of 7) => vec-of 14
+    ;; @vec witness -> TestFunctor[vec]: fmap twice (vec-of 7) => vec-of 14
     (let [v (mk-vec)]
       (let [v2 (.fmap @vec v twice)]
         (println (__vec_get0 v2))))    ;; 14

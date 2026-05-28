@@ -3,7 +3,7 @@
 > **Status:** Draft Plan
 > **Last Updated:** 2026-05-27
 > **Type:** Compiler / Codegen
-> **Tracks:** KB-004, KB-010, KB-012, KB-015 (see `docs/known-bugs.md`)
+> **Tracks:** KB-004, KB-010, KB-012, KB-015 (see `docs/archive/history/known-bugs.md`)
 
 ---
 

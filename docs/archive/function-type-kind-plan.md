@@ -3,7 +3,7 @@
 > **Status:** Draft Plan
 > **Last Updated:** 2026-05-27
 > **Type:** Compiler / Elaboration
-> **Tracks:** KB-008 (see `docs/known-bugs.md`)
+> **Tracks:** KB-008 (see `docs/archive/history/known-bugs.md`)
 
 ---
 

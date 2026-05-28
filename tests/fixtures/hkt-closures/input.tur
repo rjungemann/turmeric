@@ -13,7 +13,7 @@
 ;; handled by __fmap_option using the existing function-pointer calling
 ;; convention.  Tests 1 & 2 pass named functions to exercise this path.
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -67,7 +67,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Named helper functions for tests 1 & 2 (raw fn-ptr path).

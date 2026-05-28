@@ -4,7 +4,7 @@
 ;; the function compiles to a regular function that takes container and fn.
 
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 (defn __opt_some [x] :int
@@ -32,7 +32,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Both ^f and ^g kind-variable annotations are erased at runtime.

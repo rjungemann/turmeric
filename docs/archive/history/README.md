@@ -73,6 +73,10 @@ Plans whose features have shipped and are documented in [../../guides/](../../gu
 
 - **higher-kinded-types-plan.md** -- HKT architecture and design (Phase H3); mostly implemented; kept as reference for understanding the type system design
 
+## Historical Bug Log
+
+- **known-bugs.md** -- Development log of subtle bugs and footguns (KB-001..KB-035); nearly all fixed.  The few still-open entries were migrated to [../../upcoming/known-bugs-followups-plan.md](../../upcoming/known-bugs-followups-plan.md)
+
 ---
 
 These documents are archived for:

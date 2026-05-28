@@ -5,7 +5,7 @@
 ;; its runtime parameters are the concrete container and function values.
 
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container fn] :int))
 
 ;; Option helpers
@@ -34,7 +34,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn] (__fmap_option container fn)))
 
 ;; Kind-polymorphic function: ^f declares f as a type constructor of kind * -> *.
