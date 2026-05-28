@@ -1,0 +1,32 @@
+; Phase B: every disallowed mixed-width op must emit TUR-E0042.
+; No implicit coercion is allowed between distinct numeric kinds.
+
+; arithmetic: signed integer width mismatch
+(println (+ 1i8 2i16))
+
+; arithmetic: unsigned integer width mismatch
+(println (+ 1u16 2u32))
+
+; arithmetic: float width mismatch (float32 vs canonical float64)
+(println (+ 1.5f32 2.0))
+
+; arithmetic: sized vs canonical int (int32 vs int64)
+(println (+ 1i32 2))
+
+; subtraction: mixed unsigned
+(println (- 1u32 2u16))
+
+; multiplication: mixed signed
+(println (* 1i8 2i32))
+
+; comparison: mixed signed
+(println (< 1i8 2i32))
+
+; comparison: mixed unsigned
+(println (> 1u8 2u16))
+
+; equality: mixed signed
+(println (= 1i16 2i32))
+
+; equality: mixed unsigned
+(println (not= 1u8 2u16))

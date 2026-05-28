@@ -985,21 +985,22 @@ Expr *elab_call(Elab *e, Form *call) {
         if (!type_eq(args[i]->type, spec->arg_type)) {
             const char *expected_str = type_name(spec->arg_type);
             const char *actual_str = type_name(args[i]->type);
-            
-            /* Check if we can suggest a coercion */
-            const char *suggestion = NULL;
-            if (args[i]->type.kind == TY_BOOL && spec->arg_type.kind == TY_INT) {
-                suggestion = "try wrapping the bool in (if x 1 0)";
-            } else if (typekind_is_numeric(args[i]->type.kind) &&
-                       typekind_is_numeric(spec->arg_type.kind)) {
-                suggestion = "use (as <type> expr) for explicit numeric conversion";
-            }
 
-            diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
-                                "'%s' arg %u: type mismatch - expected %s, got %s",
-                                name->name, i + 1, expected_str, actual_str);
-            if (suggestion) {
-                diag_emit(DIAG_HELP, args[i]->span, "%s", suggestion);
+            if (typekind_is_numeric(args[i]->type.kind) &&
+                       typekind_is_numeric(spec->arg_type.kind)) {
+                /* Phase B: TUR-E0042 -- no implicit coercion between distinct numeric kinds */
+                diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0042_MIXED_WIDTH_ARITH,
+                                    "mixed-width numeric arithmetic: '%s' arg %u is %s, expected %s",
+                                    name->name, i + 1, actual_str, expected_str);
+                diag_emit(DIAG_HELP, args[i]->span,
+                          "use (as %s expr) for explicit numeric conversion", expected_str);
+            } else {
+                diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+                                    "'%s' arg %u: type mismatch - expected %s, got %s",
+                                    name->name, i + 1, expected_str, actual_str);
+                if (args[i]->type.kind == TY_BOOL && spec->arg_type.kind == TY_INT) {
+                    diag_emit(DIAG_HELP, args[i]->span, "try wrapping the bool in (if x 1 0)");
+                }
             }
             diag_emit(DIAG_NOTE, args[i]->span, "argument has this type");
             return NULL;
