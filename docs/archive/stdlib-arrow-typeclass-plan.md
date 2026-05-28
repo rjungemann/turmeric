@@ -3,7 +3,7 @@
 > **Status:** Complete
 > **Last Updated:** 2026-05-28
 > **Type:** Stdlib
-> **Tracks:** KB-011 (see `docs/known-bugs.md`)
+> **Tracks:** KB-011 (see `docs/archive/history/known-bugs.md`)
 
 ---
 

@@ -1,7 +1,7 @@
 # Known-Bugs Follow-ups Plan
 
 This plan tracks the remaining open issues that were carried in the (now
-archived) `docs/known-bugs.md` log.  Each section describes the problem,
+archived) `docs/archive/history/known-bugs.md` log.  Each section describes the problem,
 the confirmed root cause, the proposed fix, the affected fixtures, and an
 effort estimate.
 

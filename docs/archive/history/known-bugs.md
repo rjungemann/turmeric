@@ -1,12 +1,20 @@
-# Known Bugs and Footguns
+# Known Bugs and Footguns (Archived)
+
+> **Archived log.**  This file is a historical record of subtle bugs,
+> footguns, and surprising behaviour discovered during development.  Nearly
+> every entry below has been fixed (see each entry's Status and the
+> [Fixed Issues](#fixed-issues) summary; consult `git log` for the
+> implementation details).
+>
+> The handful of entries that remain open (KB-021, KB-022, KB-025, KB-026,
+> KB-027, KB-029, KB-030, KB-034) have been migrated to a forward-looking
+> plan with concrete fix proposals and effort estimates:
+> [../upcoming/known-bugs-followups-plan.md](../../upcoming/known-bugs-followups-plan.md).
+> Their entries here are kept for context but the plan is the source of truth.
 
 A running log of subtle bugs, footguns, and surprising behaviour discovered
 during development.  Each entry describes the symptom, root cause, workaround,
 and fix status.
-
-Bugs that have been fully fixed are summarised in the
-[Fixed Issues](#fixed-issues) section at the bottom; consult `git log` for
-the implementation details.
 
 ---
 
@@ -132,7 +140,7 @@ generalised follow-up that adds `lref`.
 
 **Status:** Fixed -- `__tur-q-is-err?` and `__tur-q-ok-val` helpers added to
 `stdlib/result.tur`; `?` no longer requires an `(unsafe ...)` wrapper at call
-sites.  See [docs/result-question-bool-plan.md](result-question-bool-plan.md).
+sites.  See [docs/result-question-bool-plan.md](../result-question-bool-plan.md).
 
 ### Symptom (resolved)
 
@@ -170,7 +178,7 @@ handled.  Regression fixture: `tests/fixtures/typed-slots/let-vec-new/`.
 **Discovered:** 2026-05-27
 **Status:** Fixed (2026-05-28) -- `arrow-id` and `arrow-comp` removed (Option A);
 `stdlib-arrow-load` fixture and `tur_stdlib_checks` CMake target added.
-See [docs/stdlib-arrow-typeclass-plan.md](stdlib-arrow-typeclass-plan.md).
+See [docs/stdlib-arrow-typeclass-plan.md](../stdlib-arrow-typeclass-plan.md).
 
 ### Symptom
 
@@ -217,7 +225,7 @@ inline the implementations directly — see
 
 ### Fix needed
 
-See [docs/stdlib-arrow-typeclass-plan.md](stdlib-arrow-typeclass-plan.md)
+See [docs/stdlib-arrow-typeclass-plan.md](../stdlib-arrow-typeclass-plan.md)
 for the options under consideration (the leading recommendation is to drop
 the broken helpers, since typeclass dispatch needs a receiver they don't
 have).
@@ -346,7 +354,8 @@ gains a list-form constructor), add them to the same list.
 ## KB-021 -- Typeclass dispatch vtable ABI mismatch for struct-typed instances
 
 **Discovered:** 2026-05-27
-**Status:** Open -- codegen bug.
+**Status:** Open -- codegen bug.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-021](../../upcoming/known-bugs-followups-plan.md).
 
 ### Symptom
 
@@ -403,7 +412,8 @@ in every instance body but keeps the vtable uniform.
 ## KB-022 -- `gadt-equal-cong`: HKT function-type parameter rejected at callsite
 
 **Discovered:** 2026-05-27
-**Status:** Open -- HKT limitation.
+**Status:** Open -- HKT limitation.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-022](../../upcoming/known-bugs-followups-plan.md).
 
 ### Symptom
 
@@ -518,7 +528,8 @@ for the diagnostic) before resorting to the bare-symbol fallback.
 ## KB-025 -- `errors/gadt-refine-escape`: skolem escape not detected
 
 **Discovered:** 2026-05-27
-**Status:** Open -- missing check.
+**Status:** Open -- missing check.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-025](../../upcoming/known-bugs-followups-plan.md).
 
 ### Symptom
 
@@ -550,7 +561,10 @@ that is not bound by the surrounding function's type, emit an error.
 ## KB-026 -- `errors/kinds-kind-variable`: kind variable annotation produces no error
 
 **Discovered:** 2026-05-27
-**Status:** Open -- missing validation.
+**Status:** Open -- missing validation.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-026](../../upcoming/known-bugs-followups-plan.md).
+Now also covers the related `errors/typeann-diag-hint` regression (the
+implicit-tyvar acceptance suppresses the parameter type-annotation hint).
 
 ### Symptom
 
@@ -587,7 +601,8 @@ the accepted form.
 ## KB-027 -- `stdlib/rc.tur` fails `tur check`: kind mismatch on `Functor [ptr<void>]`
 
 **Discovered:** 2026-05-28
-**Status:** Open -- stdlib design limitation.
+**Status:** Open -- stdlib design limitation.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-027](../../upcoming/known-bugs-followups-plan.md).
 
 ### Symptom
 
@@ -657,7 +672,8 @@ not in scope when `ref.tur` is checked in isolation.
 **Updated:** 2026-05-28 -- the KB-019 blocker is resolved; the file
 still trips a different issue.
 **Status:** Open -- now blocked on tuple return-type syntax, not
-session types.
+session types.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-029](../../upcoming/known-bugs-followups-plan.md).
 
 `tur check -Xsessions stdlib/session.tur` no longer reports a session
 kind mismatch (KB-019 is fixed).  It now fails on a single line that
@@ -681,6 +697,11 @@ affected signatures to use a named tuple struct.  Once that resolves,
 
 **Discovered:** 2026-05-28
 **Status:** Open -- orphan-instance checker does not recognise compiler built-ins.
+Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-030](../../upcoming/known-bugs-followups-plan.md).
+This is the same root cause that broke the `clone-vec` / `backtrack-clone-*`
+fixtures (orphan instances on built-in `int`/`vec`); those fixtures were
+worked around via the KB-035 rename, but the checker limitation remains.
 
 ### Symptom
 
@@ -735,9 +756,11 @@ use concrete by-value ABI; the callsite now matches.  Fixtures `clone-option`,
 ## KB-032 -- `defclass Functor` in fixtures conflicts with auto-loaded `stdlib/typeclass-functor.tur`
 
 **Discovered:** 2026-05-28
-**Status:** Fixed 2026-05-28 -- renamed `Functor` to `TestFunctor` in all
-three affected fixtures (option a).  `dump-kinds-basic` also had its
-`expected.c` snapshot regenerated.
+**Status:** Fixed 2026-05-28 (initial), completed 2026-05-28 (see KB-035).
+The initial fix renamed `Functor` to `TestFunctor` in three fixtures
+(`dump-kinds-basic`, `hkt-closure-capture`, `errors/hkt-orphan-instance`;
+option a), but ~16 more happy-path fixtures with the same conflict were
+left red.  KB-035 extends the same rename to the full set.
 
 ### Symptom (before fix)
 
@@ -828,7 +851,8 @@ emits the same `'any' type requires -Xunion-types or
 ## KB-034 -- Calling a `:ptr<void>` function with 2 arguments segfaults
 
 **Discovered:** 2026-05-28
-**Status:** Open -- thunk calling-convention limitation.
+**Status:** Open -- thunk calling-convention limitation.  Migrated to
+[../upcoming/known-bugs-followups-plan.md#kb-034](../../upcoming/known-bugs-followups-plan.md).
 
 ### Symptom
 
@@ -896,6 +920,51 @@ Change functions that need to call their argument with 2 values to use
 fat-closure type stores `(fn_ptr, env)` and the call site emits
 `fn.fn(fn.env, a, b)` rather than the broken struct-dereference thunk.
 Affected stdlib functions: `gvzip-with` in `stdlib/gadt-vec.tur`.
+
+---
+
+## KB-035 -- Auto-loaded `Functor`/`Clone` typeclasses broke ~19 HKT/Clone fixtures
+
+**Discovered:** 2026-05-28
+**Status:** Fixed 2026-05-28 -- completes KB-032 and resolves the analogous
+`Clone` fallout from KB-028.
+
+### Symptom (before fix)
+
+After `stdlib/typeclass-functor.tur` (KB-032) and `stdlib/typeclass-clone.tur`
+(KB-028) became auto-loaded, every fixture that defined its own `Functor` or
+`Clone` typeclass failed -- either with `typeclass 'Functor' is already
+defined` or with a TUR-E0013 orphan-instance error on a built-in type arg:
+
+```
+FAIL hkt-functor-option -- typeclass 'Functor' is already defined
+FAIL clone-vec          -- orphan instance: typeclass 'Clone' is defined in a
+                           different module ... (definstance Clone [int])
+```
+
+KB-032 only renamed three fixtures, leaving ~16 happy-path HKT fixtures and
+the three `Clone` fixtures red under `tests/run.sh`.
+
+### Fix
+
+Applied the KB-032 rename pattern to the full set: the locally-defined
+`Functor` class/instances became `TestFunctor` and the locally-defined `Clone`
+class/instances became `TestClone` (the method names `fmap` / `clone` are
+unchanged because they dispatch via `.fmap` / `.clone`).  No `expected.c`
+snapshots were involved.
+
+Fixtures fixed (Functor): `hkt-functor-option`, `hkt-monad-option`,
+`hkt-functor-laws`, `hkt-do-m`, `hkt-closures`, `hkt-closures-defers-refs`,
+`hkt-witness-basic`, `hkt-witness-multi-instance`, `hkt-fn-constraints`,
+`hkt-fn-implicit-kind`, `hkt-fn-kind-param`, `hkt-dispatch-unambiguous`,
+`hkt-partial-app`, `hkt-stdlib-suite`, `kinds-inference`, `type-app`.
+
+Fixtures fixed (Clone): `clone-vec`, `backtrack-clone-rc`,
+`backtrack-clone-ref`.
+
+The underlying orphan-on-built-in checker limitation is tracked as KB-030
+(see the follow-ups plan).  After this change `tests/run.sh` is down to the
+12 failures owned by KB-021 (8), KB-022 (1), and KB-025/KB-026 (3).
 
 ---
 

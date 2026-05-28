@@ -14,7 +14,7 @@
 #   TUR              path to the tur binary (default: ./build/tur)
 #   TURI_FILTER      optional additional grep -E pattern to narrow the run
 #                    (TUR_TEST_FILTER is accepted as an alias for parity with
-#                    tests/run.sh -- see KB-002 in docs/known-bugs.md)
+#                    tests/run.sh -- see KB-002 in docs/archive/history/known-bugs.md)
 #   TUR_TEST_JOBS    parallelism (default: cpu count, capped at 8)
 #   TUR_FORCE        set to 1 to skip stamp-cache fast-path
 
@@ -214,7 +214,7 @@ run_turi_fixture() {
     local input
 
     # Skip if not in the turi include set.  Emit a visible SKIP so allowlist
-    # gaps don't go unnoticed -- see KB-001 in docs/known-bugs.md.
+    # gaps don't go unnoticed -- see KB-001 in docs/archive/history/known-bugs.md.
     if ! fixture_in_turi_set "$name"; then
         printf 'SKIP %s (not in turi allowlist)\n' "$name"
         echo "SKIP_ALLOWLIST" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
