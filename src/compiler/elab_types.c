@@ -323,6 +323,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             } else if (k == TY_UNKNOWN && sym->len == 9 && memcmp(sym->name, "ptr<void>", 9) == 0) {
                 k = TY_PTR_VOID;
             }
+            /* IT4: gate `any` behind the feature flags here as well, so the
+             * spaced annotation form (`x : any`) routes through the same
+             * check as the compact `:any` keyword form below. */
+            if (k == TY_ANY && !g_union_types_enabled && !g_intersection_types_enabled) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'any' type requires -Xunion-types or -Xintersection-types");
+                return NULL;
+            }
             if (k != TY_UNKNOWN) {
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_from_kind(k);

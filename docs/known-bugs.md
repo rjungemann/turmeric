@@ -1206,7 +1206,9 @@ One of:
 ## KB-033 -- `any` type guard bypassed when using spaced annotation syntax
 
 **Discovered:** 2026-05-28
-**Status:** Open -- parser gap.
+**Status:** Fixed 2026-05-28 -- the bare-symbol path in
+`type_expr_from_form` now applies the same `-Xunion-types` /
+`-Xintersection-types` flag check as the keyword `:any` path.
 
 ### Symptom
 
@@ -1232,17 +1234,20 @@ before the colon) bypasses the check entirely and compiles successfully:
 ```
 
 The gate at `elab_types.c:344` is reached only via the compact form
-`x :any`; the spaced `: any` path goes through a different parser
-branch that resolves `any` before the flag check is applied.
+`x :any`; the spaced `: any` path went through the bare-symbol branch
+which called `typekind_from_symbol("any")` (returning `TY_ANY`) and
+returned the type without ever checking the feature flags.
 
 ### Affected fixtures
 
 `errors/any-type-disabled`.
 
-### Fix needed
+### Fix
 
-Ensure both annotation forms (compact `:any` and spaced `: any`)
-route through the flag-gated `TY_ANY` path in `type_expr_from_form`.
+Added the same `TY_ANY`-flag guard to the bare-symbol branch in
+`type_expr_from_form` so the spaced annotation form (`x : any`) now
+emits the same `'any' type requires -Xunion-types or
+-Xintersection-types` diagnostic as the keyword form (`x :any`).
 
 ---
 
