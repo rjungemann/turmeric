@@ -8,16 +8,106 @@ static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
 
-/* KB-031: true when a type's dictionary-dispatch instance body uses the carrier
- * ABI (int64_t parameter) rather than concrete by-value.
- *
- * elab_typeclasses.c assigns carrier ABI to parametric structs (n_type_params > 0)
- * and TY_APP / TY_ADT; it leaves non-parametric structs (n_type_params == 0) as
- * concrete by-value.  The dictionary callsite must match. */
+/* KB-021/KB-031: a type's dictionary-dispatch instance body uses the carrier
+ * ABI (int64_t parameter) exactly when its value representation is the carrier
+ * (see type_uses_carrier_abi in emit_core.c).  Both the value-declaration path
+ * and these dispatch callsites consult the single shared predicate so they can
+ * never disagree about whether an argument is already a carrier. */
 static bool type_uses_carrier_in_dispatch(Type t) {
-    if (t.kind == TY_APP || t.kind == TY_ADT) return true;
-    if (t.kind == TY_STRUCT && t.as.struct_.def &&
-        t.as.struct_.def->n_type_params > 0) return true;
+    return type_uses_carrier_abi(t);
+}
+
+/* KB-004/KB-021: find the ABI specialization (concrete-by-value clone) that an
+ * EX_CALL resolves to, or NULL.  Factored out of the EX_CALL emit path so the
+ * let-binding type can discover that a call returns a concrete struct by value
+ * (e.g. a `tuple2`/`ok`/`thead` clone) rather than the int64_t carrier. */
+static const EmitAbiSpecialization *find_matched_abi_spec(
+        EmitCtx *ctx, const Expr *e, const Binding *fn_binding) {
+    if (!ctx || !e || e->kind != EX_CALL) return NULL;
+    for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
+        const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
+        if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
+        bool args_match = true;
+        for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
+            const Expr *cur = e->as.call_.args[ai];
+            /* ACB (KB-004): when the arg is EX_ASCRIBE, match against the
+             * ascribed (concrete) type rather than the carrier inner. */
+            Type actual;
+            if (cur && cur->kind == EX_ASCRIBE) {
+                actual = cur->type;
+            } else {
+                while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
+                    ? cur->as.reinterpret_.expr->type
+                    : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+            }
+            if (!type_eq(spec->arg_types[ai], actual)) { args_match = false; break; }
+        }
+        if (args_match) return spec;
+    }
+    return NULL;
+}
+
+/* KB-021: the C type of the value that `emit_value(e)` produces, used to declare
+ * a let binding so its declared type matches its initialiser's representation.
+ *
+ * Carrier-ABI types have two coexisting C representations in this codebase
+ * (the stdlib author chooses per-operation): the int64_t carrier (heap-pointer
+ * handle, e.g. (vec-new), (some x)) and a by-value concrete struct (a struct
+ * constructor literal, or an ABI-specialized clone that returns the concrete
+ * type, e.g. (tuple2 a b)).  A binding must be declared with whichever its
+ * initialiser yields, or the C initialiser fails to type-check.  Non-carrier
+ * types have a single representation, so they fall through to emit_type_c_name. */
+static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
+                                            const Expr *init) {
+    if (!type_uses_carrier_abi(emit_resolve_type(ctx, binding_ty)))
+        return emit_type_c_name(ctx, binding_ty);
+
+    const Expr *p = init;
+    /* After KB-021 an ascription emits its inner value unchanged for carrier-ABI
+     * targets, so the representation is that of the inner expression. */
+    while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
+    if (!p) return emit_type_c_name(ctx, binding_ty);
+
+    /* The carrier (int64_t) cases -- declare int64_t so a carrier initialiser
+     * type-checks and downstream carrier-ABI uses (vec-push!, dispatch) agree:
+     *   - a carrier-returning call (not resolved to a concrete-by-value spec);
+     *   - a reference to a var that is itself a carrier. */
+    if (p->kind == EX_CALL) {
+        const EmitAbiSpecialization *spec =
+            find_matched_abi_spec(ctx, p, p->as.call_.fn_binding);
+        bool returns_concrete =
+            spec && type_uses_carrier_abi(emit_resolve_type(ctx, spec->result_type));
+        if (!returns_concrete) return "int64_t";
+    } else if (p->kind == EX_VAR) {
+        if (!(p->as.var.binding && p->as.var.binding->emit_byvalue_carrier_abi))
+            return "int64_t";
+    }
+
+    /* Everything else (struct constructor literal, concrete-spec call result,
+     * by-value var, or a control-form result temp declared via emit_type_c_name)
+     * keeps the by-value concrete representation. */
+    return emit_type_c_name(ctx, binding_ty);
+}
+
+/* KB-021: true when emitting `e` yields a *by-value* concrete carrier-ABI
+ * aggregate rather than the int64_t carrier.  Such a value must be bridged to
+ * the carrier before a dictionary-dispatch / carrier-ABI call; an already-
+ * carrier value must not.  By-value producers are: a struct constructor literal
+ * (EX_MAKE_STRUCT), a var/param declared by-value (tracked on the binding), and
+ * a call resolving to a concrete-by-value ABI specialization. */
+static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e) return false;
+    if (!type_uses_carrier_abi(e->type)) return false;
+    if (e->kind == EX_MAKE_STRUCT) return true;
+    if (e->kind == EX_VAR)
+        return e->as.var.binding && e->as.var.binding->emit_byvalue_carrier_abi;
+    if (e->kind == EX_CALL) {
+        const EmitAbiSpecialization *spec =
+            find_matched_abi_spec(ctx, e, e->as.call_.fn_binding);
+        return spec && type_uses_carrier_abi(emit_resolve_type(ctx, spec->result_type));
+    }
     return false;
 }
 
@@ -209,7 +299,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
         } else {
-            buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, b->type), bn, iv);
+            /* KB-021: declare the binding with the C representation its
+             * initialiser actually yields.  Carrier-ABI types have two C
+             * representations (int64_t carrier vs by-value concrete struct);
+             * picking the wrong one makes the C initialiser fail to type-check
+             * (e.g. `int64_t v = (Vec__int){...}` or `Vec__int v = vec_new()`). */
+            const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
+                                     e->as.let_.bindings[i].init);
+            /* KB-021: record whether this binding ended up by-value so that a
+             * later dictionary-dispatch use of the var bridges it to the carrier. */
+            if (e->as.let_.bindings[i].binding)
+                e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
+                    type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
+                    strcmp(bind_c, "int64_t") != 0;
+            buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
@@ -1244,11 +1347,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool needs_fn_cast = !is_typed_fn_field &&
                         (e->as.call_.args[i]->type.kind == TY_FN ||
                          e->as.call_.args[i]->type.kind == TY_PTR_VOID);
-                    /* KB-012: dictionary method pointers use the carrier ABI (int64_t)
-                     * for parametric structs (TY_APP / TY_ADT / TY_STRUCT with type
-                     * params).  Non-parametric struct instance bodies use concrete
-                     * by-value ABI (KB-031); only bridge when the dispatch type is
-                     * parametric. */
+                    /* KB-012/KB-021: dictionary method pointers use the carrier
+                     * ABI (int64_t) for carrier-ABI types (TY_APP / TY_ADT /
+                     * parametric struct).  Non-parametric struct instance bodies
+                     * use the concrete by-value ABI (KB-031).  Carrier-ABI values
+                     * are already int64_t carriers in value position (KB-021), so
+                     * no bridge transformation is applied -- but the emitted
+                     * fn-pointer signature must still declare the parameter as
+                     * int64_t (arg_cast stays set) rather than the concrete
+                     * struct typedef. */
                     bool needs_carrier_bridge = !needs_fn_cast && ctx &&
                         type_uses_carrier_in_dispatch(e->as.call_.args[i]->type);
                     arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
@@ -1259,7 +1366,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(raw);
                         raw = strdup(cast.data);
                         buf_free(&cast);
-                    } else if (needs_carrier_bridge) {
+                    } else if (needs_carrier_bridge &&
+                               expr_emits_byvalue_carrier_abi(ctx, e->as.call_.args[i])) {
+                        /* KB-021: only a by-value aggregate (struct literal, by-value
+                         * var/param, or concrete spec result) needs bridging to the
+                         * carrier; an already-carrier value passes through. */
                         raw = emit_carrier_bridge(ctx, body, raw,
                                                   CK_CONCRETE, CK_CARRIER,
                                                   e->as.call_.args[i]->type);
@@ -1596,38 +1707,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit function call: fn(arg1, arg2, ...) */
             /* Use raw name for function calls (functions are defined with raw names) */
             char *fn_name = emit_call_name(ctx, e, fn_binding);
-            const EmitAbiSpecialization *matched_spec = NULL;
-            if (ctx) {
-                for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
-                    const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
-                    if (spec->binding != fn_binding || spec->n_args != e->as.call_.n_args) continue;
-                    bool args_match = true;
-                    for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
-                        const Expr *cur = e->as.call_.args[ai];
-                        /* ACB (KB-004): when the arg is EX_ASCRIBE, use the ascribed
-                         * type for spec matching -- it records the concrete type that
-                         * the carrier holds.  Without this, stripping to the inner
-                         * TY_INT expression prevents the spec from matching. */
-                        Type actual;
-                        if (cur && cur->kind == EX_ASCRIBE) {
-                            actual = cur->type;
-                        } else {
-                            while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
-                            actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
-                                ? cur->as.reinterpret_.expr->type
-                                : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
-                        }
-                        if (!type_eq(spec->arg_types[ai], actual)) {
-                            args_match = false;
-                            break;
-                        }
-                    }
-                    if (args_match) {
-                        matched_spec = spec;
-                        break;
-                    }
-                }
-            }
+            const EmitAbiSpecialization *matched_spec =
+                find_matched_abi_spec(ctx, e, fn_binding);
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -1735,11 +1816,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * APP) — when emit_arg->type is TY_INT, the EX_ASCRIBE was
                  * stripped above and the value is already a carrier int64_t,
                  * which the impl accepts as-is. */
+                /* KB-021: after standardising carrier-ABI values on the int64_t
+                 * carrier, only a by-value struct literal still needs bridging
+                 * here; a plain var / call result / temp is already a carrier
+                 * int64_t that the impl accepts as-is. */
                 if (!needs_fn_cast && !matched_spec &&
                     e->as.call_.dict_arg != NULL &&
                     emit_arg && type_kind_is_aggregate(emit_arg->type.kind) &&
                     type_kind_is_aggregate(e->as.call_.args[i]->type.kind) &&
                     type_uses_carrier_in_dispatch(e->as.call_.args[i]->type) &&
+                    expr_emits_byvalue_carrier_abi(ctx, emit_arg) &&
                     fn_binding->type.kind == TY_FN &&
                     i < fn_binding->type.as.fn.arity &&
                     fn_binding->type.as.fn.arg_kinds[i] == TY_INT) {
@@ -2934,8 +3020,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
          * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
             char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
+            /* KB-021: an ascription `(:: (vec-new) (Vec int))` pins the static
+             * type for dispatch discrimination but must NOT change the runtime
+             * representation of a carrier-ABI aggregate.  The carrier (int64_t
+             * heap pointer) flows straight through; dereferencing it into a
+             * by-value struct copy would both mismatch the carrier ABI of
+             * stdlib functions (vec-push!, ok, ...) and break mutation/aliasing.
+             * Only non-carrier (by-value) aggregates need the carrier->concrete
+             * bridge here. */
             if (e->as.ascribe_.inner->type.kind == TY_INT &&
-                type_kind_is_aggregate(e->type.kind)) {
+                type_kind_is_aggregate(e->type.kind) &&
+                !type_uses_carrier_abi(e->type)) {
                 return emit_carrier_bridge(ctx, body, inner_val,
                                            CK_CARRIER, CK_CONCRETE, e->type);
             }

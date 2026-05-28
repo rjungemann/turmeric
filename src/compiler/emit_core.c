@@ -111,6 +111,28 @@ const char *emit_type_c_name(EmitCtx *ctx, Type t) {
     return type_c_name(emit_resolve_type(ctx, t));
 }
 
+/* KB-021: the single arbiter of which types may use the int64_t carrier ABI
+ * (a heap-pointer handle) for dictionary-dispatched typeclass methods.
+ *
+ * Carrier-ABI types:
+ *   - TY_APP            (e.g. (Vec int), (Box int)) -- parametric container apps
+ *   - TY_ADT            (algebraic data types, already int64_t in type_c_name)
+ *   - parametric struct (TY_STRUCT with n_type_params > 0)
+ *
+ * These types have two coexisting C value representations: the int64_t carrier
+ * (returned by carrier-ABI stdlib functions like (vec-new)/(some x)) and a
+ * by-value concrete struct (a struct constructor literal, or an ABI-specialized
+ * clone that returns the concrete type).  The dictionary-dispatch callsites and
+ * the let-binding declaration path both consult this predicate (together with
+ * the per-expression representation check) so they agree about whether a value
+ * is already a carrier or a by-value aggregate that must be bridged. */
+bool type_uses_carrier_abi(Type t) {
+    if (t.kind == TY_APP || t.kind == TY_ADT) return true;
+    if (t.kind == TY_STRUCT && t.as.struct_.def &&
+        t.as.struct_.def->n_type_params > 0) return true;
+    return false;
+}
+
 void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
 }

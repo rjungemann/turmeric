@@ -11,7 +11,7 @@
         v2 (:: (vec-new) (Vec int))]
     (vec-push! v1 1)
     (vec-push! v2 1)
-    (let [r1 (:: (ok? v1) (Result (Vec int) cstr))
-          r2 (:: (ok? v2) (Result (Vec int) cstr))]
+    (let [r1 (:: (ok v1) (Result (Vec int) cstr))
+          r2 (:: (ok v2) (Result (Vec int) cstr))]
       (println (.eq? r1 r2))))  ; true: Ok [1] vs Ok [1]
   0)

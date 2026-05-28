@@ -111,6 +111,14 @@ struct Binding {
      * shadows a stdlib name (which would otherwise produce conflicting
      * static functions of the same C name and break the C compile). */
     bool          is_from_stdlib;
+    /* KB-021: true when this binding's emitted C value is a *by-value* concrete
+     * carrier-ABI aggregate (e.g. a `Tuple2__int__int`/`Cons__int` local or
+     * parameter) rather than the int64_t carrier.  Carrier-ABI types have two
+     * coexisting C representations; the dictionary-dispatch callsite consults
+     * this flag to decide whether a var argument must be bridged to the carrier
+     * before the call.  Set at the binding's declaration site (let binding or
+     * function parameter emission). */
+    bool          emit_byvalue_carrier_abi;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */
