@@ -876,8 +876,8 @@ feature can either avoid it or file an issue against the post-v0 roadmap.
 - Link reference definitions
 - Footnotes (GFM extension; can be added in v0.2)
 - Definition lists
-- Math blocks (`$$ ... $$`); a `math` fence language could carry MathJax /
-  KaTeX content in a future render extension
+- ~~Math blocks (`$$ ... $$`)~~ -- implemented in KaTeX plan
+  ([`docs/notebook-katex-plan.md`](../../notebook-katex-plan.md))
 
 ### Size estimate
 

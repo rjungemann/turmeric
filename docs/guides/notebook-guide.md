@@ -175,6 +175,97 @@ which the session evaluator captures and strips before returning output.
 
 ---
 
+## Math (KaTeX)
+
+Notebooks support LaTeX math via [KaTeX](https://katex.org). Math is rendered
+client-side in the browser when you export to HTML.
+
+### Inline math
+
+Wrap LaTeX between single `$` delimiters on the same line:
+
+```markdown
+The variance is $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(x_i - \mu)^2$.
+```
+
+An opening `$` is only recognized when it is **not** immediately followed by a
+digit or whitespace, so currency amounts like `$5` and `$10` are left as
+literal text.
+
+### Display math
+
+Wrap multi-line expressions between `$$` on their own lines:
+
+````markdown
+The Gaussian PDF is
+
+$$
+f(x) = \frac{1}{\sigma\sqrt{2\pi}}\,
+       e^{-\tfrac{1}{2}\left(\tfrac{x-\mu}{\sigma}\right)^2}
+$$
+````
+
+A one-line form `$$ E = mc^2 $$` is also accepted.
+
+### HTML export
+
+Math is injected automatically during `export html`:
+
+```sh
+tur nb export html notebook.tur.md
+```
+
+The `--math` flag controls KaTeX injection:
+
+| Flag | Behavior |
+|------|----------|
+| `--math=auto` (default) | Inject KaTeX only if the document contains math nodes |
+| `--math=always` | Always inject (useful when cells emit math at runtime) |
+| `--math=never` | Never inject; math nodes render as raw `$$...$$` source |
+
+By default the KaTeX CSS and JS are **inlined** into the HTML file so it works
+offline. Use `--assets=sibling` to write `katex.min.css`, `katex.min.js`, and
+`auto-render.min.js` as separate files next to the HTML instead:
+
+```sh
+tur nb export html notebook.tur.md --assets=sibling
+```
+
+Font files (`katex-fonts/`) are always written as siblings regardless of mode.
+
+### Cell output math (`math=true`)
+
+Add `math=true` to a cell's fence attributes to have the cell's stdout
+rendered as math rather than preformatted text:
+
+````markdown
+```turmeric {math=true}
+(println "$$ E = mc^2 $$")
+```
+````
+
+The cell output is scanned for `$$...$$` and `$...$` spans and wrapped in
+`<div class="math-output">`. This also implies `--math=always` for the page
+even if no prose math nodes are present.
+
+### Unsupported macros
+
+KaTeX implements a large subset of LaTeX but not everything. If you hit an
+unsupported macro (`\newcommand` chains, `tikzpicture`, etc.) the expression
+renders in red with the error message. As a fallback, generate the math as an
+image from your preferred TeX engine and embed it via the image pipeline:
+
+```turmeric
+(import notebook/image :refer [image-hook-record-path])
+;; generate /tmp/eq.png from LaTeX here ...
+(image-hook-record-path "/tmp/eq.png")
+```
+
+The full list of supported KaTeX functions is at
+<https://katex.org/docs/supported.html>.
+
+---
+
 ## TUI Key Bindings
 
 | Key | Action |
