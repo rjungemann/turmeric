@@ -9,8 +9,14 @@ The historical bug log (with the full list of already-fixed entries) lives
 at [../archive/history/known-bugs.md](../archive/history/known-bugs.md).
 
 All items below were re-verified against the build at the time this plan was
-written; the affected fixtures fail under `tests/run.sh` (run with
+written; the affected fixtures originally failed under `tests/run.sh` (run with
 `ASAN_OPTIONS=detect_leaks=0`, matching CI).
+
+**Status: all items are now resolved (DONE).**  Each section below records the
+implemented resolution.  The one known remaining gap is that
+`stdlib/typeclass.tur` still fails its standalone `tur check` due to orphan
+`Clone [int]` / `[bool]` / `[cstr]` instances -- a pre-existing failure tracked
+as a follow-up in the KB-030 section, not one of the items in this plan.
 
 ## Status overview
 
