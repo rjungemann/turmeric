@@ -16,7 +16,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 
 | ID | Title | Severity | Effort |
 |----|-------|----------|--------|
-| KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances | High | Large |
+| KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances -- DONE | High | Large |
 | KB-022 | GADT HKT constraint unification (`equal-cong`) -- DONE | Low | Medium |
 | KB-025 | GADT skolem-escape check missing -- DONE | Medium | Medium |
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics -- DONE | Medium | Medium |
@@ -77,6 +77,44 @@ snapshots.
 ### Effort
 
 Large -- touches the dispatch ABI contract; needs careful snapshot review.
+
+### Resolution (DONE)
+
+Carrier-ABI types (`TY_APP`, `TY_ADT`, parametric structs) have two coexisting
+C representations: the `int64_t` carrier (a heap-pointer handle returned by
+carrier-ABI stdlib functions like `(vec-new)` / `(some x)`) and a by-value
+concrete struct (a struct constructor literal, or an ABI-specialized clone
+returning the concrete type, e.g. `(tuple2 a b)`).  Function signatures and
+dictionary dispatch use the carrier, but value-position `let` bindings declared
+the concrete struct -- so an ascribed `(:: (vec-new) (Vec int))` local became a
+by-value `Vec__int` while `vec-push!` and `.eq?` dispatch expected the carrier,
+producing "incompatible type for argument 1 of `vec_push_` / `ok_` /
+`result_eq_`".
+
+The fix standardises on a single shared arbiter, `type_uses_carrier_abi`, that
+both the declaration path and the dispatch callsites consult:
+
+- A `let` binding now declares the C representation its initialiser actually
+  yields (`emit_binding_repr_c_name`): the `int64_t` carrier for a
+  carrier-returning call or carrier var, the concrete struct for a struct
+  literal, a by-value var, or an ABI-specialized concrete result.
+- The dictionary-dispatch callsites bridge concrete->carrier only for genuinely
+  by-value producers (struct literals, by-value vars/params, concrete ABI-spec
+  results), tracked via a new `Binding.emit_byvalue_carrier_abi` flag set at each
+  declaration site; an already-carrier value passes through unbridged.
+- Type ascription to a carrier-ABI target keeps the carrier representation
+  instead of dereferencing it into a by-value copy.
+- The ABI-spec lookup is factored into `find_matched_abi_spec`, reused by both
+  the call emit path and the binding-representation decision.
+
+Also fixed a latent typo in two affected fixtures (`some?`/`ok?` predicates used
+where the `some`/`ok` constructors were intended); the prior build failure had
+masked it.
+
+Verified: all eight fixtures (`ptc4-basic`, `vec-eq-ascribed`,
+`vec-eq-ascribed-multi`, `map-of-tvec-eq`, `option-of-tvec-eq`,
+`result-of-typed-eq`, `set-of-tvec-eq`, `vec-of-tvec-eq`) pass under
+`tests/run.sh`.
 
 ---
 
