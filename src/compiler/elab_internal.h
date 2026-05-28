@@ -460,6 +460,12 @@ typedef struct Elab {
      * NULL outside GADT match arms.  Used by diagnostics to name which
      * constructor's return-type annotation caused a type refinement. */
     const CtorDef *g2_current_ctor;
+    /* KB-025: named type variables quantified by the enclosing fn/defn
+     * signatures (params + return type), accumulated outermost-first.  A GADT
+     * match arm whose result type is a named type variable NOT in this set is
+     * a skolem that escapes the arm into a concrete return position. */
+    const char *sig_tyvars[32];
+    uint8_t      n_sig_tyvars;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;
     /* Phase G3: (~ a b) equality constraint notation */

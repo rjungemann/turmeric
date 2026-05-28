@@ -2646,9 +2646,29 @@ Expr *elab_match(Elab *e, const Form *call) {
                             ctor->fields[bi].full_type->as.tyvar_.name) {
                         const char *tvname = ctor->fields[bi].full_type->as.tyvar_.name;
                         TypeKind resolved = gadt_skolem_lookup(&arm_senv, tvname);
-                        ftype = (resolved != TY_UNKNOWN)
-                            ? type_from_kind(resolved)
-                            : *ctor->fields[bi].full_type;
+                        if (resolved != TY_UNKNOWN) {
+                            ftype = type_from_kind(resolved);
+                        } else {
+                            /* KB-025: the constructor's return-type annotation did
+                             * not pin this parameter to a concrete kind.  Refine it
+                             * via the scrutinee's instantiation -- a scrutinee of
+                             * type (Box t) binds the `a` field to `t`, so a properly
+                             * polymorphic arm yields the function's own signature
+                             * variable rather than the GADT's internal parameter
+                             * name.  When the scrutinee carries no instantiation
+                             * (e.g. an unannotated parameter), the field keeps its
+                             * unresolved tyvar so the skolem-escape check can fire. */
+                            ftype = *ctor->fields[bi].full_type;
+                            if (adt->n_type_params > 0) {
+                                Type *type_args = (Type *)arena_alloc(e->arena,
+                                    adt->n_type_params * sizeof(Type));
+                                if (elab_adt_type_extract_args(&scrutinee->type,
+                                                               adt, type_args)) {
+                                    ftype = adt_field_instantiate_type(e, adt,
+                                        ctor->fields[bi].full_type, type_args);
+                                }
+                            }
+                        }
                     } else {
                         ftype = gadt_resolve_type_from_form(e, adt,
                                                             ctor->field_forms[bi], &arm_senv);
@@ -2801,18 +2821,38 @@ Expr *elab_match(Elab *e, const Form *call) {
             }
             if (!body || lt1_arm_fail || st1_arm_fail) { free(covered); return NULL; }
 
-            /* Phase G2/HRT: detect skolem escape -- arm body result is anonymous TY_TYVAR.
-             * Named TY_TYVAR (type variable from a :a parameter annotation) is a properly
-             * polymorphic result and is allowed; only anonymous TY_TYVAR (unresolved field
-             * type with no name) indicates a skolem that escaped its scope. */
-            if (adt->is_gadt && body->type.kind == TY_TYVAR
-                    && body->type.as.tyvar_.name == NULL) {
-                diag_emit(DIAG_ERROR, body_form->span,
-                          "match: skolem type variable escapes match arm "
-                          "(constructor '%s' of '%s'): the arm body has an "
-                          "unresolved GADT type variable as its result type",
-                          ctor->name, adt->name);
-                free(covered); return NULL;
+            /* Phase G2/HRT: detect skolem escape -- the arm body result is a GADT
+             * type variable that the enclosing function does not quantify.
+             *
+             * An anonymous TY_TYVAR (name == NULL) is always a skolem escape: it
+             * is an unresolved GADT field type with no name.
+             *
+             * KB-025: a *named* TY_TYVAR is only legitimately polymorphic when the
+             * surrounding function's signature actually binds it (e.g. `[b :
+             * (Box a)] : a`).  When the name is absent from the signature-tyvar
+             * set -- as in `[b] : int`, where matching a `(Box a)` binds `x : a`
+             * and the arm yields `x` through a concrete `:int` return -- the
+             * skolem `a` escapes the match arm. */
+            if (adt->is_gadt && body->type.kind == TY_TYVAR) {
+                const char *tvname = body->type.as.tyvar_.name;
+                bool quantified = false;
+                if (tvname) {
+                    for (uint8_t si = 0; si < e->n_sig_tyvars; si++) {
+                        if (e->sig_tyvars[si] &&
+                            strcmp(e->sig_tyvars[si], tvname) == 0) {
+                            quantified = true;
+                            break;
+                        }
+                    }
+                }
+                if (!quantified) {
+                    diag_emit(DIAG_ERROR, body_form->span,
+                              "match: skolem type variable escapes match arm "
+                              "(constructor '%s' of '%s'): the arm body has an "
+                              "unresolved GADT type variable as its result type",
+                              ctor->name, adt->name);
+                    free(covered); return NULL;
+                }
             }
 
             /* Phase G0/G2: Arm body type consistency check.

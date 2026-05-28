@@ -114,6 +114,12 @@ typedef struct EmitCtx {
     const char **specialized_call_names;
     uint32_t     n_specialized_calls;
     uint32_t     cap_specialized_calls;
+    /* KB-022: function bindings that are the target of a direct (non-specialized)
+     * call.  A generic-unsafe function with such a callsite must still have its
+     * carrier definition emitted, since no specialization clone will stand in. */
+    const Binding **carrier_call_bindings;
+    uint32_t        n_carrier_call_bindings;
+    uint32_t        cap_carrier_call_bindings;
     const EmitAbiSpecialization *current_abi_specialization;
     const char  *fn_name_override;
     /* Phase D: pass-by-ptr param bindings for the current function.

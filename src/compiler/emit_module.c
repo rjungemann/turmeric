@@ -237,6 +237,25 @@ static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type 
     return result;
 }
 
+/* KB-022: record that `binding` is the target of a direct (carrier) call, so a
+ * generic-unsafe definition for it is still emitted as a fallback. */
+static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
+    if (!ctx || !binding) return;
+    for (uint32_t i = 0; i < ctx->n_carrier_call_bindings; i++) {
+        if (ctx->carrier_call_bindings[i] == binding) return;
+    }
+    if (ctx->n_carrier_call_bindings >= ctx->cap_carrier_call_bindings) {
+        uint32_t new_cap = ctx->cap_carrier_call_bindings
+                           ? ctx->cap_carrier_call_bindings * 2 : 8;
+        const Binding **grown = (const Binding **)realloc(ctx->carrier_call_bindings,
+            new_cap * sizeof(const Binding *));
+        if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->carrier_call_bindings = grown;
+        ctx->cap_carrier_call_bindings = new_cap;
+    }
+    ctx->carrier_call_bindings[ctx->n_carrier_call_bindings++] = binding;
+}
+
 static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, const char *clone_name) {
     if (ctx->n_specialized_calls >= ctx->cap_specialized_calls) {
         uint32_t new_cap = ctx->cap_specialized_calls ? ctx->cap_specialized_calls * 2 : 8;
@@ -392,13 +411,22 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             emit_abi_scan_expr(ctx, e->as.while_.cond, items, n_items);
             emit_abi_scan_expr(ctx, e->as.while_.body, items, n_items);
             break;
-        case EX_CALL:
+        case EX_CALL: {
+            uint32_t before = ctx->n_specialized_calls;
             emit_abi_register_call(ctx, e, items, n_items, NULL);
+            /* If register_call did not turn this into a specialization clone, it
+             * is a direct carrier call; remember its target so the generic
+             * definition is still emitted. */
+            if (!e->as.call_.fn_expr && e->as.call_.fn_binding &&
+                ctx->n_specialized_calls == before) {
+                emit_abi_note_carrier_call(ctx, e->as.call_.fn_binding);
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 emit_abi_scan_expr(ctx, e->as.call_.args[i], items, n_items);
             }
             emit_abi_scan_expr(ctx, e->as.call_.fn_expr, items, n_items);
             break;
+        }
         case EX_MAKE_STRUCT:
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
                 emit_abi_scan_expr(ctx, e->as.make_struct_.field_values[i], items, n_items);
@@ -422,7 +450,13 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         case EX_REINTERPRET:
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
-                emit_abi_register_call(ctx, e->as.reinterpret_.expr, items, n_items, &e->type);
+                const Expr *rc = e->as.reinterpret_.expr;
+                uint32_t before = ctx->n_specialized_calls;
+                emit_abi_register_call(ctx, rc, items, n_items, &e->type);
+                if (!rc->as.call_.fn_expr && rc->as.call_.fn_binding &&
+                    ctx->n_specialized_calls == before) {
+                    emit_abi_note_carrier_call(ctx, rc->as.call_.fn_binding);
+                }
                 for (uint32_t i = 0; i < e->as.reinterpret_.expr->as.call_.n_args; i++) {
                     emit_abi_scan_expr(ctx, e->as.reinterpret_.expr->as.call_.args[i], items, n_items);
                 }
@@ -679,6 +713,35 @@ static bool emit_abi_fn_is_generic_unsafe(const Expr *e) {
     return false;
 }
 
+static bool emit_abi_has_carrier_call(const EmitCtx *ctx, const Binding *binding) {
+    if (!ctx || !binding) return false;
+    for (uint32_t i = 0; i < ctx->n_carrier_call_bindings; i++) {
+        if (ctx->carrier_call_bindings[i] == binding) return true;
+    }
+    return false;
+}
+
+/* Decide whether emit_fn_def should be skipped for a top-level generic
+ * function.  A generic-unsafe function (one with a named type variable nested
+ * inside a compound arg/result type) is normally emitted only as per-callsite
+ * specialization clones, so its non-specialized "carrier" definition is
+ * suppressed to avoid an unused/ill-typed duplicate.
+ *
+ * KB-022: that suppression is only sound when callsites actually produced
+ * specializations.  A fully-generic function such as `equal-cong`, whose
+ * result type permanently mentions an unbound kind variable (`(Equal (f a)
+ * (f b))`), can never be monomorphized -- every type in its signature lowers
+ * to the int64_t carrier -- and no clone is ever generated.  Skipping it then
+ * leaves a dangling call.  Emit the carrier definition whenever a direct
+ * (non-specialized) call to the binding was observed during the abi scan;
+ * otherwise keep suppressing it (the function is either unused here or fully
+ * served by specialization clones, and its body may not be carrier-safe). */
+static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
+    if (!emit_abi_fn_is_generic_unsafe(e)) return false;
+    if (e->kind != EX_FN_DEF || !e->as.fn_def_.fn) return false;
+    return !emit_abi_has_carrier_call(ctx, e->as.fn_def_.fn->binding);
+}
+
 static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     if (!spec || !spec->fn) return;
     buf_puts(out, "static ");
@@ -771,6 +834,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.specialized_call_names = NULL;
     ctx.n_specialized_calls = 0;
     ctx.cap_specialized_calls = 0;
+    ctx.carrier_call_bindings = NULL;
+    ctx.n_carrier_call_bindings = 0;
+    ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
@@ -1171,7 +1237,7 @@ int emit_program(Buf *out, const Expr *program) {
             FnDef *fd = e->as.fn_def_.fn;
             /* Skip main - it's not called from other functions in the same file */
             if (strcmp(fd->binding->name->name, "main") == 0) continue;
-            if (emit_abi_fn_is_generic_unsafe(e)) {
+            if (emit_abi_fn_skip_generic(&ctx, e)) {
                 continue;
             }
             /* Phase M6: exported module functions don't need static on their
@@ -1275,7 +1341,7 @@ int emit_program(Buf *out, const Expr *program) {
             free(bn);
         } else if (e->kind == EX_FN_DEF) {
             /* Emit function definition at file scope */
-            if (emit_abi_fn_is_generic_unsafe(e)) {
+            if (emit_abi_fn_skip_generic(&ctx, e)) {
                 continue;
             }
             emit_fn_def(&ctx, &file, e);
@@ -3861,6 +3927,10 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     free(ctx.env_struct_names);
+    free(ctx.abi_specializations);
+    free(ctx.specialized_call_exprs);
+    free(ctx.specialized_call_names);
+    free(ctx.carrier_call_bindings);
     return 0;
 }
 
@@ -4194,6 +4264,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     ctx.specialized_call_names = NULL;
     ctx.n_specialized_calls = 0;
     ctx.cap_specialized_calls = 0;
+    ctx.carrier_call_bindings = NULL;
+    ctx.n_carrier_call_bindings = 0;
+    ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
@@ -4344,5 +4417,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     free(ctx.env_struct_names);
+    free(ctx.abi_specializations);
+    free(ctx.specialized_call_exprs);
+    free(ctx.specialized_call_names);
+    free(ctx.carrier_call_bindings);
     return 0;
 }
