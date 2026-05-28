@@ -2,7 +2,7 @@
 ;; Exercises the (fn, env) pairs in dict structs feature: fat closures
 ;; whose environment pointer is packed into tur_poly_fn_t at call sites.
 
-(defclass Functor [^f]
+(defclass TestFunctor [^f]
   (fmap [container [fn :fn]] :int))
 
 (defclass Monad [^m]
@@ -37,7 +37,7 @@
   ```)
 
 ;; Functor [option] -- fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
-(definstance Functor [option]
+(definstance TestFunctor [option]
   (fmap [container fn]
     ```c
     struct { bool is_some; int64_t value; } *c =

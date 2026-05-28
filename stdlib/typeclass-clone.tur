@@ -1,0 +1,40 @@
+;;; tur/typeclass-clone -- minimal Clone typeclass stub for definstance sites.
+;;;
+;;; Auto-loaded so ref.tur and other modules can declare
+;;; (definstance Clone [...] ...) without importing typeclass.tur.
+;;;
+;;; Since: Phase B1
+;; Phase B1: Minimal Clone class stub.
+;; Auto-loaded so that ref.tur can declare (definstance Clone [ref] ...)
+;; without requiring the user to import stdlib/typeclass.tur.
+;; The full typeclass.tur (with all Clone primitive instances) is still
+;; available on demand via (load "stdlib/typeclass.tur").
+
+;;; Clone -- typeclass for deep copying a value.
+;;;
+;;; Parameters:
+;;;   a -- the type to clone
+;;;
+;;; Returns:
+;;;   A copy of x; for primitive types this is the identity.
+;;;
+;;; Example:
+;;;   (clone 42)  ; => 42
+;;;
+;;; Since: Phase B1
+(defclass Clone [a]
+  (clone [x] :int))
+
+;;; Clone [ref] -- deep-clone a raw ref<T> (TY_REF): allocates a new int64_t cell and copies the value.
+;;;
+;;; Since: Phase B1
+(definstance Clone [ref]
+  (clone [x] :int
+    ```c
+    /* x is void *; allocate a new int64_t cell and copy the stored value. */
+    int64_t *src = (int64_t *)x;
+    int64_t *dst = (int64_t *)malloc(sizeof(int64_t));
+    if (!dst) abort();
+    *dst = src ? *src : 0;
+    return (int64_t)(intptr_t)dst;
+    ```))

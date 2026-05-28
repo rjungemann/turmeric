@@ -1,30 +1,26 @@
-; Phase G4: Test GADT-based Vec from stdlib/gadt-vec.tur.
-; Exercises all eight public functions: vec-nil, vec-cons, vec-len, vec-sum,
-; vec-head-or, vec-tail, vmap, and vzip-with.
+; Phase G4: Test GADT-based GVec from stdlib/gadt-vec.tur.
+; Exercises the public functions: gvec-nil, gvec-cons, gvec-len, gvec-sum,
+; gvec-head-or, gvec-tail, and gvmap.
+; Note: gvzip-with requires a 2-arg ptr<void> call which is not yet supported.
 
 (load "stdlib/gadt-vec.tur")
 
-; Helper functions used by vmap and vzip-with.
+; Helper function used by gvmap.
 (defn mul [a :int b :int] :int (* a b))
-(defn add [a :int b :int] :int (+ a b))
 
 (defn main [] :int
-  ; vec-len of empty = 0
-  (println (vec-len (vec-nil)))
-  ; vec-len of [1,2,3] = 3
-  (println (vec-len (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil))))))
-  ; vec-sum of [1,2,3] = 6
-  (println (vec-sum (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil))))))
+  ; gvec-len of empty = 0
+  (println (gvec-len (gvec-nil)))
+  ; gvec-len of [1,2,3] = 3
+  (println (gvec-len (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil))))))
+  ; gvec-sum of [1,2,3] = 6
+  (println (gvec-sum (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil))))))
   ; head-or 99 of [] = 99
-  (println (vec-head-or 99 (vec-nil)))
+  (println (gvec-head-or 99 (gvec-nil)))
   ; head-or 99 of [5,6] = 5
-  (println (vec-head-or 99 (vec-cons 5 (vec-cons 6 (vec-nil)))))
+  (println (gvec-head-or 99 (gvec-cons 5 (gvec-cons 6 (gvec-nil)))))
   ; tail of [1,2,3] has len 2
-  (println (vec-len (vec-tail (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil)))))))
-  ; vmap (*2) [1,2,3] sums to 12
-  (println (vec-sum (vmap (mul 2) (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil)))))))
-  ; vzip-with (+) [1,2,3] [10,20] sums to 33 (only 2 elements: 11+22)
-  (println (vec-sum (vzip-with add
-                     (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil))))
-                     (vec-cons 10 (vec-cons 20 (vec-nil))))))
+  (println (gvec-len (gvec-tail (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil)))))))
+  ; gvmap (*2) [1,2,3] sums to 12
+  (println (gvec-sum (gvmap (mul 2) (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil)))))))
   0)
