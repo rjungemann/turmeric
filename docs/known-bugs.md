@@ -568,48 +568,25 @@ annotation is spaced (`h : (handler ...)`) or keyword-prefixed
 ## KB-019 -- Session type annotation syntax causes kind mismatch
 
 **Discovered:** 2026-05-27
-**Status:** Open -- compiler limitation.
-
-### Symptom
-
-Any function parameter annotated as `:(Session ...)` or `:(Role ...)`
-fails with:
-
-```
-error [TUR-E0012]: kind mismatch: cannot apply a type of kind '*' as
-a type constructor; type must have kind '* -> *' ...
-(defn double-server [^linear ch :(Session (Recv int (Send int Close)))] :nil
-                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-```
+**Status:** Fixed 2026-05-28 -- `Session`, `Send`, `Recv`, `Choose`,
+`Branch`, `Rec`, `Timeout`, `Role`, and `project` are now routed
+through `type_expr_from_form` from the parameter-type path.  All 13
+previously-blocked happy-path fixtures pass.
 
 ### Root cause
 
-`Session` and `Role` are session-type constructors defined via macros
-or stdlib, but the type-annotation elaborator does not recognise the
-nested protocol type expressions (`Recv`, `Send`, `Branch`, `Rec`,
-`Close`, `Choice`) as compound type-constructor applications.  They are
-parsed as raw lists and the inner form fails kind-checking when applied
-to `Session`.
+`type_expr_from_form` already handled `(Session proto)` and the nested
+protocol constructors, but the parameter-type path in
+`fn_type_from_form` intercepted compound forms first and treated each
+head as the start of a generic TY_APP application -- which failed the
+arrow-kind check on `Session` (kind `*`) and surfaced TUR-E0012 before
+the protocol handler could fire.
 
-Affects 13 session-type fixture tests:
+### Fix
 
-`session-calc-rpc`, `session-delegated-rpc`, `session-delegation`,
-`session-echo-rpc`, `session-effects`, `session-mp-calc`,
-`session-mp-delegated`, `session-mp-effects`, `session-mp-three-role`,
-`session-project-basic`, `session-project-choice`,
-`session-project-loop`, `session-rec`.
-
-### Workaround
-
-None -- the session-type tests are completely blocked until the type
-elaborator supports nested session protocol expressions.
-
-### Fix needed
-
-Extend `type_expr_from_form` to handle the session-type protocol
-constructors (`Recv`, `Send`, `Branch`, `Rec`, `Close`, `Choice`) as
-type constructors of appropriate kinds, so that `(Session proto)` can
-be resolved to the correct internal type representation.
+Added the session/role/project constructor heads to the KB-008/KB-020
+special-case list in `fn_type_from_form` so the dedicated protocol
+rules in `type_expr_from_form` are reached for every annotation form.
 
 ---
 
@@ -951,14 +928,26 @@ resolves the dependency regardless of load order.
 ## KB-029 -- `stdlib/session.tur` excluded from `tur check` allowlist
 
 **Discovered:** 2026-05-28
-**Status:** Open -- see KB-019 for the root cause.
+**Updated:** 2026-05-28 -- the KB-019 blocker is resolved; the file
+still trips a different issue.
+**Status:** Open -- now blocked on tuple return-type syntax, not
+session types.
 
-`stdlib/session.tur` is not in `tests/run-stdlib-checks.sh` because
-`tur check stdlib/session.tur` fails with the same kind-mismatch error
-documented in KB-019: the session type constructors (`Session`, `Rec`,
-`Branch`, `Recv`, `Send`, `Close`) are not registered in the kind table,
-so any function annotated with a session type triggers TUR-E0012.  The
-file can be added to the allowlist once KB-019 is resolved.
+`tur check -Xsessions stdlib/session.tur` no longer reports a session
+kind mismatch (KB-019 is fixed).  It now fails on a single line that
+uses a tuple return-type annotation:
+
+```
+stdlib/session.tur:70: error: unsupported type expression form
+  (expected symbol, keyword, or list)
+... :[(int (Session ...))]
+       ^^^^^^^^^^^^^^^^^^
+```
+
+The remaining work is to either teach the type-annotation elaborator
+to accept the `:[(...)]` tuple-return-type form, or rewrite the
+affected signatures to use a named tuple struct.  Once that resolves,
+`stdlib/session.tur` can be added to `tests/run-stdlib-checks.sh`.
 
 ---
 
