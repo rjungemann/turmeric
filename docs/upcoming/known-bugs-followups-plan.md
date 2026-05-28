@@ -21,7 +21,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 | KB-025 | GADT skolem-escape check missing -- DONE | Medium | Medium |
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics -- DONE | Medium | Medium |
 | KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) -- DONE | Low | Medium |
-| KB-029 | `stdlib/session.tur` tuple return-type syntax | Low | Medium |
+| KB-029 | `stdlib/session.tur` tuple return-type syntax -- DONE | Low | Medium |
 | KB-030 | Orphan-instance checker rejects instances on built-ins -- DONE | Medium | Medium |
 | KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults | Medium | Medium |
 
@@ -432,6 +432,24 @@ change and lets `stdlib/session.tur` join `tests/run-stdlib-checks.sh`.
 ### Effort
 
 Medium -- (a) is a parser/elaborator feature; (b) is a contained stdlib edit.
+
+### Resolution (DONE)
+
+Took the contained-stdlib path, slightly refined.  The single offending
+signature was `echo-client-call`, whose body is `(recv ch)` -- and `(recv ch)`
+returns the *internal* session recv-pair (`TY_SESSION_RECV_PAIR`,
+`[echoed-int, updated-Session]`), which is destructured specially by
+`(let [[v ch] (recv ch)] ...)` and has no surface type syntax.  Neither a
+`TupleN` lowering (option a) nor a named-tuple struct (option b) matches what
+the body actually yields, so the return-type annotation was simply dropped and
+left to inference: the inferred type is precisely the recv-pair the body
+produces and that callers already destructure.  The behaviour-documenting
+docstring is unchanged.
+
+`stdlib/session.tur` now checks clean under `-Xsessions` and was added to
+`tests/run-stdlib-checks.sh` (30 passed).  No compiler change was required; the
+`:[(...)]` parser gap noted in the original plan remains an unimplemented
+feature but is no longer on any stdlib file's path.
 
 ---
 

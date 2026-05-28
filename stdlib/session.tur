@@ -67,7 +67,12 @@
 ;;;     (println r))   ; => 42
 ;;;
 ;;; Since: SS4
-(defn echo-client-call [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) val :int] :[(int (Session (Rec self (Choose (Send int (Recv int self)) Close))))]
+;; KB-029: the return value of (recv ch) is the internal session recv-pair
+;; [echoed-int, updated-Session], which has no surface type syntax (the prior
+;; :[(int (Session ...))] tuple annotation is not a supported type form).  The
+;; return type is left to inference -- it is exactly the recv-pair the body
+;; yields and that callers destructure with (let [[r ch] (echo-client-call ...)]).
+(defn echo-client-call [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) val :int]
   (let [ch (choose-left ch)]
     (let [ch (send ch val)]
       (recv ch))))
