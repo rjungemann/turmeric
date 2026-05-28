@@ -3758,6 +3758,7 @@ int emit_exports_manifest(Buf *out, const Expr *program) {
         buf_putc(out, '\n');
         free(mangled);
     }
+    free(items);
     return 0;
 }
 

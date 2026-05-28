@@ -2343,7 +2343,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
             fprintf(stderr, "tur: failed to compile %s to header\n", tur_files[i]);
             buf_free(&h_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
             return 1;
@@ -2352,7 +2352,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
             fprintf(stderr, "tur: failed to write %s\n", h_files[i]);
             buf_free(&h_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
             return 1;
@@ -2368,7 +2368,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
             fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
             buf_free(&c_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
             return 1;
@@ -2377,7 +2377,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
             fprintf(stderr, "tur: failed to write %s\n", c_files[i]);
             buf_free(&c_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < i; j++) { free(h_files[j]); free(c_files[j]); }
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
             free(h_files); free(c_files);
             free_tur_files(tur_files, n_files);
             return 1;
