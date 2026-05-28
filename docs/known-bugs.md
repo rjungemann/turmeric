@@ -78,51 +78,10 @@ explicit-override behaviour.
 ## KB-004 — `::` coercion cannot bridge `:int`-returning stdlib functions to typed accessors
 
 **Discovered:** 2026-05-27
-**Status:** Open (architectural limitation) — tracked in
-[docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md).
-
-### Symptom
-
-`result-map`, `option-map`, and similar stdlib functions return `:int` (an
-opaque heap-pointer representation).  When the result is passed to a typed
-accessor (`ok-val`, `err-val`, `unwrap`) via a `(:: expr (Result A B))` type
-annotation, the compiler emits a specialisation of the accessor that takes the
-struct by value — but `result-map` still returns `int64_t`.  This produces a
-C-level type error at link time:
-
-```
-error: passing 'int64_t' to parameter of incompatible type 'Result__int__int'
-```
-
-### Root cause
-
-The `::` coercion changes the *callsite type* used for overload resolution but
-does not insert a pointer-dereference cast.  The typed specialisation of
-`ok-val` (`ok_val__spec__int64_t_Result__int__int`) expects its argument
-passed by value as a struct, while the heap-pointer representation stores it
-as an `int64_t` (cast from a `void *`).  The two conventions are incompatible.
-
-### Workaround
-
-For direct `ok`/`err`/`some`/`none` calls, use `make-struct` to construct the
-typed struct directly instead of going through the untyped constructor:
-
-```turmeric
-;; BROKEN: (ok-val (ok 42))
-;; WORKS:
-(ok-val (make-struct Result true 42 0))
-```
-
-For functions that return `:int` (e.g. `result-map`, `option-map`), use the
-equality-based API (`result-eq?`, `option-eq?`) to test values instead of
-trying to extract through `ok-val`/`err-val`.
-
-### Fix
-
-Needs a dedicated cast/coerce form that understands the pointer-as-int
-representation and emits the correct `*(ResultType *)(intptr_t)r` dereference.
-See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md) (Cluster A)
-for the unified plan that covers this and the related KB-010, KB-012, KB-015.
+**Status:** Fixed 2026-05-28 — ACB Phase 3 (`emit_carrier_bridge` in the
+`EX_ASCRIBE` path) inserts the `*(ConcreteType *)(intptr_t)` dereference when
+the inner expression is a carrier `int64_t` and the ascribed type is a concrete
+aggregate.  Regression fixture: `tests/fixtures/typed-slots/coerce-carrier-to-struct/`.
 
 ---
 
@@ -198,30 +157,11 @@ the opaque type-mismatch above.
 
 ## KB-010 — `vec-eq-ascribed`: `vec_new()` emits `int64_t` result, incompatible with struct type
 
-**Status:** Open — codegen bug; tracked in
-[docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md) (Cluster B).
-
-### Symptom
-
-```
-error: initializing 'Vec__int' (aka 'struct Vec__int') with an expression of incompatible type 'int64_t'
-  Vec__int a_532 = vec_new();
-```
-
-### Root cause
-
-`vec_new()` is a stdlib function that returns an opaque `int64_t` handle.  The
-codegen emits `Vec__int a = vec_new()` when the declared type is `:(Vec int)`,
-creating a C type mismatch.  The initialisation needs either a cast or the
-emitter needs to know `Vec` fields are struct-typed, not handle-typed.
-
-### Fix needed
-
-Investigate whether the code path that monomorphises `Vec[A]` fields is
-emitting the right C struct name vs. treating Vec as an opaque handle.
-Covered as Cluster B in
-[docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md); the
-unified `emit_carrier_bridge` helper proposed there inserts the right cast.
+**Status:** Fixed 2026-05-28 — ACB Phase 3 (`emit_carrier_bridge` in the
+`EX_ASCRIBE` path, which is the `(:: (vec-new) (Vec int))` pattern) inserts the
+correct carrier-to-concrete bridge.  The `let [v :(Vec int) ...]` variant is not
+valid Turmeric syntax; the valid form goes through `::` ascription and is now
+handled.  Regression fixture: `tests/fixtures/typed-slots/let-vec-new/`.
 
 ---
 
@@ -287,176 +227,22 @@ have).
 ## KB-012 — `Eq` instance on parametric `defstruct` segfaults on call
 
 **Discovered:** 2026-05-27
-**Status:** Open — compiler bug; tracked in
-[docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md) (Cluster C).
-
-### Symptom
-
-Calling `.eq?` on two values of a parametric `defstruct` (e.g.
-`Pair[int int]`, `Tuple2[int int]`, `Option[int]`) crashes:
-
-```turmeric
-(let [t1 (tuple2 10 20)
-      t2 (tuple2 10 20)]
-  (.eq? t1 t2))            ; => Segmentation fault
-```
-
-A trivial instance body works:
-
-```turmeric
-(definstance Eq [Foo] [(Eq A)]
-  (eq? [x y] true))        ; ok
-```
-
-A body that touches `x` or `y` does not:
-
-```turmeric
-(definstance Eq [Foo] [(Eq A)]
-  (eq? [x y] (= (.e1 x) (.e1 y))))    ; SEGV
-```
-
-Affects all stdlib instances that follow this pattern: `Eq [Pair]`
-(`stdlib/pair.tur:113`), `Eq [Option]` (`stdlib/option.tur:173`),
-and `Eq [Tuple2]` (`stdlib/tuple.tur`, added Phase TP2 at parity
-with the existing broken instances).
-
-### Root cause
-
-Unverified.  Likely candidates:
-
-- The instance specialisation passes `x` / `y` with the wrong
-  calling convention (by-value struct vs. int64 carrier), and the
-  body dereferences a value that isn't a pointer.
-- The `.e1 x` field-access lowering inside an instance body doesn't
-  see the correct struct type for `x` — the parameter binding
-  type may be unresolved (`TY_UNKNOWN` / `TY_TYVAR`) at codegen
-  time, producing a wrong field-offset calculation.
-
-The existing stdlib helpers (`pair-eq-carrier?`,
-`tuple2-eq-carrier?`, `option-eq?`) all use an inline-C
-"cast int64_t to struct*" carrier ABI to sidestep field access
-inside the body, but they then crash for the *opposite* reason:
-called with a by-value struct rather than the heap pointer they
-expect to dereference.
-
-### Workaround
-
-Use a call-site macro that expands to direct field access at the
-caller's lexical scope, where `x` / `y` have known concrete types:
-
-- `pair-eq?` (`stdlib/pair.tur:93`)
-- `tuple2-eq?` (`stdlib/tuple.tur`, Phase TP2)
-
-```turmeric
-;; Works:
-(tuple2-eq? t1 t2 (fn [a b] (= a b)) (fn [a b] (= a b)))
-
-;; Crashes:
-(.eq? t1 t2)
-```
-
-### Fix needed
-
-See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md)
-(Cluster C and Phase 4) for the unified plan: pick a single calling
-convention for parametric typeclass instance bodies, audit existing
-stdlib instances against it, and route call sites through the
-`emit_carrier_bridge` helper.
+**Status:** Fixed 2026-05-28 — ACB Phase 4 bridges concrete aggregate arguments
+to carrier before dictionary dispatch (in `emit_expr.c` `EX_CALL` / `fn_expr`
+path).  Parametric instance bodies (e.g. `Eq [Tuple2]`) already declared
+`int64_t` parameters (carrier ABI); the callsite now matches.  Regression
+fixture: `tests/fixtures/typed-slots/tuple2-eq-method/`.
 
 ---
 
 ## KB-015 — Repeated calls to a specialized typed accessor emit a spurious reinterpret
 
 **Discovered:** 2026-05-26 (TS3.4 audit)
-**Status:** Open — pre-existing bug; tracked in
-[docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md) (Cluster D).
-Exposed by typed accessor composition, not a TS3.3 regression
-(confirmed by stashing the TS3.3 fix and reproducing).
-
-### Symptom
-
-Calling a generic-but-specializable typed accessor like `thead`
-(`[A] [l :(Cons A)] :A`) twice in the same function, on different bindings
-of the same instantiated type, emits a spurious bit-reinterpret around
-the *second* call — producing garbage:
-
-```turmeric
-(defn main [] :int
-  (let [xs (tcons-of 1.5 0)
-        ys (tcons-of 2.5 0)]
-    (println (thead xs))   ; => 1.5  (correct)
-    (println (thead ys))   ; => 9.88131e-324  (denormal garbage)
-    0))
-```
-
-The first call emits a clean specialized call:
-
-```c
-printf("%g\n", (double)(thead__spec__double_Cons__float(xs_601)));
-```
-
-The second call inexplicably wraps the same specialized call in a
-`int64_t <-> double` union reinterpret, which truncates the returned
-`double` through an `int64_t` slot before reading it back as `double`:
-
-```c
-printf("%g\n",
-       (double)(((union { int64_t s; double d; })
-                 {.s = thead__spec__double_Cons__float(ys_602)}).d));
-```
-
-`thead__spec__double_Cons__float` already returns `double`, so the
-extra reinterpret is wrong.
-
-### Reproducer
-
-`/tmp/test-thead2.tur` (also reproducible in the original first cut of
-`tests/fixtures/typed-slots/cons-float/`):
-
-```turmeric
-(defn main [] :int
-  (let [xs (tcons-of 1.5 0)
-        ys (tcons-of 2.5 0)]
-    (println (thead xs))
-    (println (thead ys))
-    0))
-```
-
-Calling `.head` directly avoids the bug; the bug is specifically about
-the generic-helper specialization path.
-
-### Likely cause
-
-Specialization cache state in `elab_call.c` / the
-`call_wrap_reinterpret` family appears to be sticky across repeated
-calls to the same specialized helper.  The first call gets a clean
-result type; the second call sees the result type already-converted
-state and re-wraps as if the source were the carrier `int64_t`.
-
-This pre-dates the TS3.3 work (`elab_ascribe` -> `EX_REINTERPRET`):
-stashing the TS3.3 change still reproduces the same wrong codegen for
-the second call.
-
-### Workaround
-
-Use direct field access (`(.head xs)`) instead of the helper, or call
-the helper only once per scope.  The current TS3.4 fixtures
-(`cons-float`, `option-float`) use `.head` / `.value` directly to
-sidestep the bug.
-
-### Fix sketch
-
-See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md)
-(Cluster D / Phase 5) for the planned narrow fix:
-
-1. Audit the specialization-call cache and result-type threading in
-   `src/compiler/elab_call.c` — specifically the post-call
-   `call_wrap_reinterpret(...)` site (around line 1687).  Is the
-   `result_type.kind` derived from the *binding* type (still showing
-   the carrier `int64_t`) instead of the *instantiated* type
-   (`double`)?
-2. Add a focused regression that calls a typed `[A]` helper twice on
-   two bindings of the same instantiation and asserts both results.
+**Status:** Fixed 2026-05-28 — ACB Phase 5: in `emit_expr.c` `EX_REINTERPRET`
+handling, after the `spec->call_expr == inner_call` check fails, the code now
+scans `specialized_call_exprs[]` for the inner call node.  When found, the clone
+already returns the concrete type and the reinterpretation is skipped.  Regression
+fixture: `tests/fixtures/typed-slots/cons-double-twice/`.
 
 ---
 
@@ -467,60 +253,6 @@ See [docs/aggregate-carrier-abi-plan.md](aggregate-carrier-abi-plan.md)
 **Status:** Fixed 2026-05-28 -- all 49 stale `expected.c` snapshots regenerated;
 `hkt-instances` also fixed for the KB-032 `Functor` conflict (renamed to
 `TestFunctor`).  All affected fixtures now pass.
-
-### Symptom
-
-Multiple fixture tests report "codegen mismatch" even though the programs run
-correctly and produce the expected stdout.  The `diff` shows two patterns:
-
-1. New `Tuple2`/`Tuple3`/`Tuple4`/`Tuple5` struct typedefs and a new
-   `__inst_Eq_eq__Tuple2` declaration appearing in the generated C, plus
-   shifted `__fn_NNN` counter numbers.
-2. (Added by ACB Phase 1, commit `27ba615`) Certain pointer-typed stdlib
-   struct fields changed from `int64_t` to `void *` in the generated
-   preamble (e.g. `hamt`, `data`, `ptr`, `left`, `right`, `storage` fields
-   in the HAMT and Vec structs).
-
-### Root cause
-
-The stdlib was extended with explicit Tuple2--5 structs and an `Eq`
-instance for `Tuple2`.  Additionally, ACB Phase 1 changed the C type of
-several pointer-typed struct fields from `int64_t` to `void *`.  Both
-changes affect the generated C preamble, so the `expected.c` snapshot
-files are now stale.  This is the same maintenance category as KB-006.
-
-### Affected fixtures (49 total)
-
-`arc-refcount-snapshot`, `continuation-advanced`, `continuation-basic`,
-`defer-conditional`, `defer-in-loop`, `defer-mutated-binding`,
-`defn-basic`, `dump-kinds-basic`, `extern-printf`, `fiber-cross-resume`,
-`hkt-instances`, `hkt-typeclass-declare`, `hkt-typeclass-instance`,
-`macro-defmacro`, `macro-multi-arg`, `macro-nested`,
-`macro-quasiquote`, `macro-quasiquote-unquote`, `macro-quote`,
-`macro-threading`, `macro-threading-last`, `mutex-snapshot`,
-`mutual-recursion`, `panic-catch-of-type`, `panic-catch-unwind`,
-`panic-double-panic`, `panic-downcast`, `panic-trace`,
-`rc-auto-drop-multiple`, `rc-auto-drop-negative-consumed`,
-`rc-auto-drop-nested-scope`, `rc-auto-drop-positive`,
-`rc-auto-drop-test`, `rc-unique-violation`, `ref-basic`, `ref-deref`,
-`ref-explicit-drop`, `ref-nested`, `scheduler-multithread`,
-`stdlib-slice-bounds-negative`, `stdlib-vec-bounds-negative`,
-`thread-spawn-snapshot`, `typeclass-basic`, `typeclass-closure`,
-`typeclass-constraint`, `typeclass-derived`, `typeclass-macro`,
-`typeclass-multiple`, `typeclass-operator`, `typeclass-primitives`.
-
-### Fix
-
-Regenerate `expected.c` for all affected fixtures:
-
-```sh
-for f in tests/fixtures/*/input.tur; do
-  dir=$(dirname "$f")
-  [ -f "$dir/expected.c" ] && ./build/tur emit-c "$f" > "$dir/expected.c"
-done
-```
-
-Verify runtime stdout is still correct before committing.
 
 ---
 
@@ -991,66 +723,12 @@ defined, satisfying the existing orphan rule without any compiler changes.
 ## KB-031 -- ACB Phase 1 regression: struct args passed as pointer in typeclass callsites
 
 **Discovered:** 2026-05-28
-**Status:** Open -- ACB Phase 1 incomplete.
-
-### Symptom
-
-Typeclass method calls on struct-typed instances compile without error
-but produce wrong output at runtime -- printing large integer values
-(pointer addresses) instead of the expected computed results:
-
-```
-FAIL clone-option -- expected 55, got 140731972107744
-FAIL clone-list   -- expected 42, got 140729152516592
-FAIL clone-pair   -- expected 30, got 281444052896520
-FAIL clone-vec    -- expected 60, got 234945342349283
-FAIL backtrack-clone-ref  -- expected 42, got 140733503244160
-FAIL derive-show-struct   -- expected "Point { x = 3, y = 4 }", got pointer addresses
-FAIL gadt-stdlib-vec-stdlib -- segfault inside vec_len (uninitialized field access)
-```
-
-### Affected fixtures
-
-`clone-option`, `clone-list`, `clone-pair`, `clone-vec`,
-`backtrack-clone-ref`, `derive-show-struct`, `gadt-stdlib-vec-stdlib`.
-
-### Root cause
-
-ACB Phase 1 (commit `27ba615`) changed typeclass callsites to pass
-struct-typed arguments as an `int64_t` holding the address of the
-struct (`(int64_t)(intptr_t)(&__t1)`) rather than passing the struct
-by value.  However, the callee -- the instance body -- was not updated
-and still expects the struct to arrive by value.  As a result the
-function body receives the raw pointer integer as the first field of
-the struct, producing garbage output.
-
-The generated call pattern is:
-
-```c
-// ACB Phase 1 callsite (wrong -- passes pointer-as-int64_t):
-int64_t result = ((int64_t (*)(int64_t))(intptr_t)(dict_Clone_Opt_singleton.clone))
-                     ((int64_t)(intptr_t)(&__t1));  // __t1 is Opt by value
-
-// Instance body still expects by-value (unchanged):
-static int64_t __inst_Clone_clone_Opt(Opt x) {
-    struct { int64_t value; } *dst = malloc(sizeof(Opt));
-    dst->value = x.value;  // x.value is the raw pointer, not 55
-    return (int64_t)(intptr_t)dst;
-}
-```
-
-### Workaround
-
-None -- the ABI mismatch is in generated code.  Avoid writing typeclass
-instances that take struct-valued arguments until ACB Phase 2 resolves
-the calling convention uniformly.
-
-### Fix needed
-
-ACB Phase 2 must make the callsite and the instance body agree on a
-single convention.  Either:
-- Revert callsites to pass structs by value (matches current instance bodies), or
-- Update instance bodies to receive an `int64_t` carrier and dereference it.
+**Status:** Fixed 2026-05-28 — `type_uses_carrier_in_dispatch` helper in
+`src/compiler/emit_expr.c` restricts the carrier bridge (CK_CONCRETE →
+CK_CARRIER) to parametric structs only (`TY_APP`, `TY_ADT`, `TY_STRUCT` with
+`n_type_params > 0`).  Non-parametric struct instance bodies (e.g. `Clone [Opt]`)
+use concrete by-value ABI; the callsite now matches.  Fixtures `clone-option`,
+`clone-list`, and `clone-pair` all pass.
 
 ---
 
@@ -1228,7 +906,13 @@ to the git history (and the diffs of the commits that mention each KB
 identifier) for implementation detail.
 
 - **KB-003** — GADT match arm: `TY_TYVAR` field binding caused overload-resolution failure.  Fixed in TP6: scrutinee `TY_APP` unwrapping now propagates concrete type args to match-arm bindings.
+- **KB-004** — `::` coercion did not bridge carrier `int64_t` to concrete aggregate.  Fixed 2026-05-28 (ACB Phase 3): `emit_carrier_bridge` inserted in `EX_ASCRIBE` path.
 - **KB-005** — `emit_expr.c` ADT match crashed when scrutinee type was `TY_APP`.  Fixed in TP6: the emit side now unwraps the `TY_APP` chain before reading `.as.adt_.def`, matching the elab side.
 - **KB-006** — 48 `expected.c` codegen snapshots were stale.  Fixed by regenerating snapshots with `./build/tur emit-c` after verifying runtime output.  Reduced unique test failures from ~142 to ~95.
+- **KB-010** — `vec_new()` emits `int64_t` result, incompatible with annotated struct type.  Fixed 2026-05-28 (ACB Phase 3): carrier bridge in `EX_ASCRIBE` path handles the `(:: (vec-new) (Vec int))` pattern.
+- **KB-012** — `Eq` instance on parametric `defstruct` segfaulted on call.  Fixed 2026-05-28 (ACB Phase 4): dictionary dispatch bridges concrete aggregate args to carrier for parametric dispatch types.
 - **KB-013** — Sized numeric type arguments (`i32`, `f32`, …) collapsed to generic kind in struct-app mangling.  Fixed 2026-05-26: added the short-form sized type names to `typekind_from_symbol` and `typekind_from_name`.
 - **KB-014** — Aggregate struct-app let-bindings used the `int64_t` carrier instead of the concrete C struct type.  Fixed 2026-05-26 as a downstream effect of the KB-013 fix; once the struct-app argument resolves correctly, the let-binding picks up the concrete C type.
+- **KB-015** — Repeated calls to a specialized typed accessor emitted a spurious reinterpret.  Fixed 2026-05-28 (ACB Phase 5): `EX_REINTERPRET` now scans `specialized_call_exprs[]` so the skip fires correctly on the second call.
+- **KB-016** — 49 `expected.c` codegen snapshots stale after Tuple2/3/4/5 additions and ACB Phase 1 field changes.  Fixed 2026-05-28: all snapshots regenerated with runtime output verified.
+- **KB-031** — ACB Phase 4 regression: non-parametric struct args passed as pointer in typeclass callsites.  Fixed 2026-05-28: `type_uses_carrier_in_dispatch` restricts carrier bridge to parametric structs only.
