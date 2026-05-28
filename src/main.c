@@ -624,6 +624,10 @@ static int compile_to_c(const char *path, Buf *out_c,
          * typed-collection definstances (Eq[Vec], Eq[Map], etc.) have Eq in scope.
          * The full typeclass.tur (with all primitive instances) remains on-demand. */
         "typeclass-eq.tur",
+        /* Phase TS5: typeclass-functor.tur defines the Functor class stub so that
+         * rc.tur and other typed-collection modules can declare
+         * (definstance Functor [...]) without importing typeclass.tur. */
+        "typeclass-functor.tur",
         /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
          * (now under unprefixed module names). */
         "map.tur",

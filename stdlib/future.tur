@@ -129,7 +129,7 @@
 ;;;   cell -- FutureCell pointer from promise-new
 ;;;
 ;;; Since: Phase T20-C
-(defmacro promise-pair [cell :ptr<void>]
+(defmacro promise-pair [cell]
   (list (promise-of-cell cell) (future-of-cell cell)))
 
 ;; Fulfill a promise with a value.

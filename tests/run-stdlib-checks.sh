@@ -31,6 +31,7 @@ STDLIB_FILES=(
     stdlib/contract.tur
     stdlib/hamt.tur
     stdlib/typeclass-eq.tur
+    stdlib/typeclass-functor.tur
     stdlib/map.tur
     stdlib/vec.tur
     stdlib/slice.tur
@@ -43,10 +44,23 @@ STDLIB_FILES=(
     stdlib/zipper.tur
     stdlib/set.tur
     stdlib/mutmap.tur
+
+    # Bucket B: non-auto-loaded stdlib files that pass tur check standalone.
+    # Files needing feature flags are documented inline.
+    stdlib/effects.tur
+    stdlib/future.tur
+    stdlib/threadpool.tur
+    stdlib/typeclass.tur
+    stdlib/dynvar.tur
+    stdlib/equal.tur
+    stdlib/gadt-vec.tur
+    stdlib/nat.tur
+    stdlib/sized.tur
 )
 STDLIB_FLAGS=(
     ""
 
+    # Bucket A flags
     "--no-auto-stdlib"
     "--no-auto-stdlib"
     "--no-auto-stdlib"
@@ -64,6 +78,18 @@ STDLIB_FLAGS=(
     "--no-auto-stdlib"
     "--no-auto-stdlib"
     "--no-auto-stdlib"
+    "--no-auto-stdlib"
+
+    # Bucket B flags
+    ""
+    ""
+    ""
+    ""
+    "-Xdynamic-vars"
+    "-Xgadt"
+    "-Xgadt"
+    "-Xgadt"
+    "-Xgadt"
 )
 
 PASS=0
