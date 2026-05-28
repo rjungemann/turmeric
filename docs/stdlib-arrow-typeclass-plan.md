@@ -1,7 +1,7 @@
 # Plan: Fix `stdlib/arrow.tur` Typeclass Method Calls
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-27
+> **Status:** Complete
+> **Last Updated:** 2026-05-28
 > **Type:** Stdlib
 > **Tracks:** KB-011 (see `docs/known-bugs.md`)
 

@@ -248,8 +248,9 @@ unified `emit_carrier_bridge` helper proposed there inserts the right cast.
 ## KB-011 — `stdlib/arrow.tur` does not load: typeclass methods called as free functions
 
 **Discovered:** 2026-05-27
-**Status:** Open — stdlib bug; tracked in
-[docs/stdlib-arrow-typeclass-plan.md](stdlib-arrow-typeclass-plan.md).
+**Status:** Fixed (2026-05-28) -- `arrow-id` and `arrow-comp` removed (Option A);
+`stdlib-arrow-load` fixture and `tur_stdlib_checks` CMake target added.
+See [docs/stdlib-arrow-typeclass-plan.md](stdlib-arrow-typeclass-plan.md).
 
 ### Symptom
 
