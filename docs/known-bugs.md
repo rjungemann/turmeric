@@ -525,55 +525,17 @@ Verify runtime stdout is still correct before committing.
 ## KB-017 -- Effect row type annotation syntax not supported in `fn` type expressions
 
 **Discovered:** 2026-05-27
-**Status:** Open -- compiler limitation.
-
-### Symptom
-
-Any `defn` whose parameter uses a `fn` type with an effect row variable
-fails at parse/elaboration:
-
-```
-error: unsupported type expression form (expected symbol, keyword, or list)
-(defn apply [f :(fn [:int] #{e} :int) x :int] #{e} :int
-                    ^^^^^^
-```
-
-### Root cause
-
-The type-annotation elaborator recognises `:(fn [...] :ret)` but does
-not support the three-component form `:(fn [...] #{row} :ret)` where
-the middle `#{row}` element is an effect row.  The parser sees `#{e}`
-as an unknown form and emits the generic "unsupported type expression"
-error, so the entire function signature is rejected before type-checking
-begins.
-
-This blocks 10 fixture tests that exercise effect-polymorphic higher-
-order functions:
-
-`effect-fn-type-annot`, `effect-poly-bracket`, `effect-poly-infer`,
-`effect-poly-map`, `effect-poly-typeclass`, `effect-row-compose`,
-`effect-row-ho`, `effect-row-var-unused`, `effect-subtype-assign`,
-`effect-subtype-ho`.
-
-It also causes 5 `errors/` fixtures to produce the wrong diagnostic
-(the "unsupported form" error fires before the expected type-error):
-
-`errors/effect-fn-type-mismatch`, `errors/effect-poly-escape`,
-`errors/effect-row-occurs`, `errors/effect-row-var-mismatch`,
-`errors/effect-subtype-violation`.
-
-### Workaround
-
-Omit the effect row from the `fn` type annotation.  The effect row is
-still inferred from the function body.  This works for most cases but
-prevents explicit effect-polymorphism in the signature.
-
-### Fix needed
-
-Extend `type_expr_from_form` (or the type-annotation elaborator) to
-recognise `(fn [arg-types...] #{row} ret-type)` as a valid function
-type with an explicit effect row, analogous to how bare
-`(fn [arg-types...] ret-type)` is handled today.
+**Status:** Fixed (no longer reproduces 2026-05-28) -- all 10
+happy-path fixtures (`effect-fn-type-annot`, `effect-poly-bracket`,
+`effect-poly-infer`, `effect-poly-map`, `effect-poly-typeclass`,
+`effect-row-compose`, `effect-row-ho`, `effect-row-var-unused`,
+`effect-subtype-assign`, `effect-subtype-ho`) and the 5 corresponding
+error fixtures (`errors/effect-fn-type-mismatch`,
+`errors/effect-poly-escape`, `errors/effect-row-occurs`,
+`errors/effect-row-var-mismatch`, `errors/effect-subtype-violation`)
+now pass.  The `(fn [arg-types...] #{row} ret-type)` form is accepted
+in type-annotation position.  Closing this entry; consult the git log
+on `src/compiler/elab_types.c` for the implementation detail.
 
 ---
 
