@@ -1200,11 +1200,26 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
              * Emit: ((ret_t (*)(arg_t, ...))(intptr_t)(struct_val).field_name)(args...)
-             * Effect-row annotation is advisory (erased to a plain function pointer). */
+             * Effect-row annotation is advisory (erased to a plain function pointer).
+             * Phase E: when the field is a typed fn ptr (concrete), call directly
+             * without the intptr_t round-trip. */
             if (e->as.call_.fn_expr) {
                 Expr *gf = e->as.call_.fn_expr;
                 char *fn_ptr_val = emit_value(ctx, body, gf);
                 const char *ret_c = type_c_name(e->type);
+
+                /* Phase E: detect concrete typed fn-ptr field. */
+                bool is_typed_fn_field = false;
+                if (gf->kind == EX_GET_FIELD) {
+                    StructDef *gf_def = gf->as.get_field_.def;
+                    uint32_t  gf_fi   = gf->as.get_field_.field_idx;
+                    const StructField *gf_field = &gf_def->fields[gf_fi];
+                    if (gf_field->kind == TY_FN && gf_field->full_type &&
+                            gf_field->full_type->kind == TY_FN) {
+                        is_typed_fn_field =
+                            (register_fn_ptr_typedef(gf_field->full_type) != NULL);
+                    }
+                }
 
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -1216,9 +1231,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * C99 forbids implicit conversion from function pointer to integer.
                      * Track which args were cast so the signature uses int64_t, not
                      * void *, for those positions — passing int64_t to void * is
-                     * -Wint-conversion error in C99. */
-                    bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
-                                          e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                     * -Wint-conversion error in C99.
+                     * Phase E: skip fn cast when field is already typed (no carrier). */
+                    bool needs_fn_cast = !is_typed_fn_field &&
+                        (e->as.call_.args[i]->type.kind == TY_FN ||
+                         e->as.call_.args[i]->type.kind == TY_PTR_VOID);
                     /* KB-012: dictionary method pointers use the carrier ABI (int64_t)
                      * for parametric structs (TY_APP / TY_ADT / TY_STRUCT with type
                      * params).  Non-parametric struct instance bodies use concrete
@@ -1243,24 +1260,29 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
 
                 Buf out; buf_init(&out);
-                /* Cast function pointer to the right signature, then call. */
-                buf_printf(&out, "((%s (*)(", ret_c);
-                if (e->as.call_.n_args == 0) {
-                    buf_puts(&out, "void");
+                if (is_typed_fn_field) {
+                    /* Phase E: typed fn-ptr — call directly, no intptr_t cast. */
+                    buf_printf(&out, "(%s)(", fn_ptr_val);
                 } else {
-                    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                        if (i > 0) buf_puts(&out, ", ");
-                        /* If we cast this arg to int64_t above, the signature must
-                         * say int64_t (not void *) to avoid -Wint-conversion. */
-                        if (arg_cast[i]) {
-                            buf_puts(&out, "int64_t");
-                        } else {
-                            buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                    /* Cast function pointer via intptr_t to the right signature. */
+                    buf_printf(&out, "((%s (*)(", ret_c);
+                    if (e->as.call_.n_args == 0) {
+                        buf_puts(&out, "void");
+                    } else {
+                        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                            if (i > 0) buf_puts(&out, ", ");
+                            /* If we cast this arg to int64_t above, the signature must
+                             * say int64_t (not void *) to avoid -Wint-conversion. */
+                            if (arg_cast[i]) {
+                                buf_puts(&out, "int64_t");
+                            } else {
+                                buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                            }
                         }
                     }
+                    buf_printf(&out, "))(intptr_t)(%s))(", fn_ptr_val);
                 }
                 free(arg_cast);
-                buf_printf(&out, "))(intptr_t)(%s))(", fn_ptr_val);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     if (i > 0) buf_puts(&out, ", ");
                     buf_puts(&out, arg_strs[i]);
@@ -2694,8 +2716,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (i > 0) buf_puts(&lit, ", ");
                 char *mfn = mangle_field_name(def->fields[i].name);
                 if (is_fn_field && val_is_fn) {
-                    /* Phase 16 v2: function pointer → int64_t field cast */
-                    buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
+                    /* Phase E: use typed fn-ptr cast for concrete fields; fall
+                     * back to int64_t carrier for generic/bare :fn fields. */
+                    const char *fn_td = (def->fields[i].full_type &&
+                                         def->fields[i].full_type->kind == TY_FN)
+                        ? register_fn_ptr_typedef(def->fields[i].full_type) : NULL;
+                    if (fn_td) {
+                        buf_printf(&lit, ".%s = (%s)%s", mfn, fn_td, fv);
+                    } else {
+                        buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
+                    }
                 } else {
                     buf_printf(&lit, ".%s = %s", mfn, fv);
                 }

@@ -1012,6 +1012,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 /* Phase X3: set return type */
                 return_kind = TY_SET;
             } else {
+                /* Phase N6: sized primitive types as return type keywords.
+                 * elab_types.c handles these via typekind_from_symbol; mirror
+                 * that lookup here so `:int32`, `:uint8`, etc. work in defn. */
+                {
+                    TypeKind sized_k = typekind_from_symbol(kw->name);
+                    if (sized_k != TY_UNKNOWN && sized_k != TY_INT &&
+                            sized_k != TY_FLOAT && sized_k != TY_BOOL &&
+                            sized_k != TY_CSTR && sized_k != TY_NIL) {
+                        return_kind = sized_k;
+                        body_start++;
+                        goto done_return_annotation;
+                    }
+                }
                 /* Phase G3: Try constraint env (type variable resolution) */
                 TypeKind ck = gadt_skolem_lookup(&param_constraint_env, kw->name);
                 uint8_t type_param_idx = 0;
@@ -1066,6 +1079,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             body_start++;
+            done_return_annotation:;
         } else if (ret_f->tag == F_TYPE_ANN) {
             /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
             if (ret_f->as.list.len > 0) {

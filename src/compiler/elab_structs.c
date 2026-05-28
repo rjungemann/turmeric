@@ -726,7 +726,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                                           NULL, NULL, NULL, 0);
                 if (!t) return NULL;
                 if (n_type_params_v > 0 || t->kind == TY_APP || t->kind == TY_EXISTS ||
-                    t->kind == TY_FORALL) {
+                    t->kind == TY_FORALL || t->kind == TY_FN) {
                     full_type = t;
                 }
                 compound_type = t;
@@ -829,7 +829,7 @@ Expr *elab_defstruct(Elab *e, const Form *call) {
                                           NULL, NULL, NULL, 0);
                 if (!t) return NULL;
                 if (n_type_params_v > 0 || t->kind == TY_APP || t->kind == TY_EXISTS ||
-                    t->kind == TY_FORALL) {
+                    t->kind == TY_FORALL || t->kind == TY_FN) {
                     full_type = t;
                 }
                 compound_type = t;

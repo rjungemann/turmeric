@@ -611,6 +611,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
+    type_codegen_reset_fn_ptr_typedefs();
 
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
@@ -646,12 +647,27 @@ int emit_program(Buf *out, const Expr *program) {
             StructDef *def = e->as.def_.struct_def;
             /* SI4-C: opaque types are just int64_t in C -- no typedef needed. */
             if (def->is_opaque) continue;
+            /* Phase E: pre-register fn-ptr typedefs for concrete fn fields so
+             * they are emitted before the struct typedef that references them. */
+            for (uint32_t j = 0; j < def->n_fields; j++) {
+                StructField *f = &def->fields[j];
+                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(f->full_type);
+                    if (td) {
+                        type_codegen_emit_fn_ptr_typedefs(&early_file);
+                    }
+                }
+            }
             /* Emit: typedef struct Name { fields... } Name; */
             buf_printf(&early_file, "typedef struct %s {\n", def->name);
             for (uint32_t j = 0; j < def->n_fields; j++) {
                 StructField *f = &def->fields[j];
                 const char *ctype;
-                switch (f->kind) {
+                /* Phase E: typed function pointer for concrete fn fields. */
+                if (f->kind == TY_FN && f->full_type && f->full_type->kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(f->full_type);
+                    ctype = td ? td : "int64_t";
+                } else switch (f->kind) {
                     case TY_INT:      ctype = "int64_t"; break;
                     case TY_BOOL:     ctype = "bool"; break;
                     case TY_FLOAT:    ctype = "double"; break;
@@ -3602,20 +3618,25 @@ int emit_program(Buf *out, const Expr *program) {
     type_codegen_emit_struct_apps(&concrete_struct_apps);
     Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
     type_codegen_emit_adt_apps(&concrete_adt_apps);
+    /* Phase E: fn-ptr typedefs for concrete fn fields in parametric structs */
+    Buf concrete_fn_ptr_typedefs; buf_init(&concrete_fn_ptr_typedefs);
+    type_codegen_emit_fn_ptr_typedefs(&concrete_fn_ptr_typedefs);
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
      *  2. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
-     *  3. concrete_struct_apps - monomorphized generic struct typedefs
-     *  4. extern_decls - user extern-c declarations
-     *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
-     *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
-     *  8. file        - Turmeric function definitions (can reference handler fns by name)
-     *  9. main()      - entry point body
+     *  3. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
+     *  4. concrete_struct_apps - monomorphized generic struct typedefs
+     *  5. extern_decls - user extern-c declarations
+     *  6. fwd_decls   - Turmeric function forward declarations (visible to handlers)
+     *  7. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  8. pending_handler_fns - effect handler functions (can call Turmeric fns)
+     *  9. file        - Turmeric function definitions (can reference handler fns by name)
+     * 10. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
+    if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_struct_apps.len) { buf_write(out, concrete_struct_apps.data, concrete_struct_apps.len); buf_putc(out, '\n'); }
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
@@ -3628,6 +3649,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&defer_thunks);
     buf_free(&concrete_struct_apps);
     buf_free(&concrete_adt_apps);
+    buf_free(&concrete_fn_ptr_typedefs);
 
     /* Phase 19: Effect handler functions (after fwd_decls so they can call
      * user-defined Turmeric functions, before file so fn defs can reference them). */
@@ -3821,6 +3843,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
 
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
+    type_codegen_reset_fn_ptr_typedefs();
 
     /* Forward declarations for functions.
      * In separate_compilation mode, only emit exported symbols. */
@@ -3859,6 +3882,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
     }
     type_codegen_emit_struct_apps(out);
     type_codegen_emit_adt_apps(out);
+    type_codegen_emit_fn_ptr_typedefs(out);
 
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
@@ -3947,6 +3971,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
 
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
+    type_codegen_reset_fn_ptr_typedefs();
 
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);

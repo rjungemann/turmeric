@@ -1,0 +1,17 @@
+;; Phase E: Unboxed function-pointer fields.
+;; A non-parametric defstruct whose fn field carries a fully-annotated
+;; concrete function type.  The emitted C should use a typed function
+;; pointer field (tur_fnptr_..._t) rather than int64_t, and the call
+;; through (.op cb) should need no intptr_t cast.
+
+(defstruct Callback :copy
+  [op (fn [:int32] :int32)])
+
+(defn double-it [x :int32] :int32
+  (as int32 (* (as int x) (as int x))))
+
+(defn main [] :int
+  (let [cb (make-struct Callback double-it)]
+    (println (as int (.op cb 3i32)))
+    (println (as int (.op cb 7i32))))
+  0)

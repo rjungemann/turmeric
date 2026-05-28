@@ -218,6 +218,20 @@ static RegisteredAdtApp *g_adt_apps = NULL;
 static uint32_t g_n_adt_apps = 0;
 static uint32_t g_cap_adt_apps = 0;
 
+/* Phase E: Registry for typed function-pointer typedefs used as struct field types.
+ * Each entry tracks one concrete fn type and its generated typedef name. */
+typedef struct RegisteredFnPtrTypedef {
+    char    *typedef_name;            /* e.g. "tur_fnptr_int64_t_int32_t_t" */
+    TypeKind result_kind;
+    uint8_t  arity;
+    TypeKind arg_kinds[MAX_FN_ARITY];
+    bool     emitted;
+} RegisteredFnPtrTypedef;
+
+static RegisteredFnPtrTypedef *g_fn_ptr_typedefs = NULL;
+static uint32_t g_n_fn_ptr_typedefs = 0;
+static uint32_t g_cap_fn_ptr_typedefs = 0;
+
 static bool type_extract_struct_app(const Type *t, StructDef **out_def,
                                     Type *out_args, uint8_t *out_n) {
     if (!t) return false;
@@ -503,8 +517,104 @@ static Type substitute_struct_app_type(const Type *t, const StructDef *def, cons
     }
 }
 
+/* Phase E: Returns true if a TypeKind maps to a concrete C scalar type. */
+static bool fn_kind_is_primitive(TypeKind k) {
+    switch (k) {
+        case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT:
+        case TY_CSTR: case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Phase E: Returns true when all arg and result kinds of a TY_FN type are
+ * concrete primitives (no TY_TYVAR). */
+static bool fn_type_is_concrete_for_ptr(const Type *t) {
+    if (!t || t->kind != TY_FN) return false;
+    if (!fn_kind_is_primitive(t->as.fn.result_kind)) return false;
+    for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+        if (!fn_kind_is_primitive(t->as.fn.arg_kinds[i])) return false;
+    }
+    return true;
+}
+
+/* Phase E: Build a stable typedef name for a concrete fn type, e.g.
+ * "tur_fnptr_int64_t_int32_t_t" for (fn [:int32] :int). */
+static char *fn_ptr_typedef_name(const Type *fn_type) {
+    Buf name; buf_init(&name);
+    buf_puts(&name, "tur_fnptr_");
+    const char *ret_c = type_c_name(type_from_kind(fn_type->as.fn.result_kind));
+    for (const char *p = ret_c; *p; p++)
+        buf_putc(&name, isalnum((unsigned char)*p) ? *p : '_');
+    for (uint8_t i = 0; i < fn_type->as.fn.arity; i++) {
+        buf_putc(&name, '_');
+        const char *arg_c = type_c_name(type_from_kind(fn_type->as.fn.arg_kinds[i]));
+        for (const char *p = arg_c; *p; p++)
+            buf_putc(&name, isalnum((unsigned char)*p) ? *p : '_');
+    }
+    buf_puts(&name, "_t");
+    buf_putc(&name, '\0');
+    char *result = tur_strdup(name.data);
+    buf_free(&name);
+    return result;
+}
+
+/* Phase E: Register a concrete fn type and return its typedef name.
+ * Returns NULL when the fn type is not fully concrete. */
+const char *register_fn_ptr_typedef(const Type *fn_type) {
+    if (!fn_type_is_concrete_for_ptr(fn_type)) return NULL;
+
+    char *name = fn_ptr_typedef_name(fn_type);
+
+    for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++) {
+        if (strcmp(g_fn_ptr_typedefs[i].typedef_name, name) == 0) {
+            free(name);
+            return g_fn_ptr_typedefs[i].typedef_name;
+        }
+    }
+
+    if (g_n_fn_ptr_typedefs >= g_cap_fn_ptr_typedefs) {
+        uint32_t new_cap = g_cap_fn_ptr_typedefs ? g_cap_fn_ptr_typedefs * 2 : 8;
+        RegisteredFnPtrTypedef *arr = (RegisteredFnPtrTypedef *)realloc(
+            g_fn_ptr_typedefs, new_cap * sizeof(RegisteredFnPtrTypedef));
+        if (!arr) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_fn_ptr_typedefs = arr;
+        g_cap_fn_ptr_typedefs = new_cap;
+    }
+    RegisteredFnPtrTypedef *entry = &g_fn_ptr_typedefs[g_n_fn_ptr_typedefs++];
+    entry->typedef_name = name;
+    entry->emitted = false;
+    entry->result_kind = fn_type->as.fn.result_kind;
+    entry->arity = fn_type->as.fn.arity;
+    for (uint8_t i = 0; i < fn_type->as.fn.arity; i++)
+        entry->arg_kinds[i] = fn_type->as.fn.arg_kinds[i];
+
+    return entry->typedef_name;
+}
+
 static const char *struct_field_c_type(const StructDef *owner, const StructField *field, const Type *args) {
-    if (field->kind == TY_FN) return "int64_t";
+    if (field->kind == TY_FN) {
+        /* Phase E: emit typed function pointer when the fn type is fully concrete. */
+        if (field->full_type && field->full_type->kind == TY_FN) {
+            /* Non-parametric or fn field doesn't use type params: use directly. */
+            if (!owner || owner->n_type_params == 0 || !args) {
+                const char *td = register_fn_ptr_typedef(field->full_type);
+                if (td) return td;
+            } else {
+                /* Parametric struct: substitute and check if result is concrete. */
+                Type resolved = substitute_struct_app_type(field->full_type, owner, args);
+                if (resolved.kind == TY_FN) {
+                    const char *td = register_fn_ptr_typedef(&resolved);
+                    if (td) return td;
+                }
+            }
+        }
+        return "int64_t";
+    }
     if (field->full_type && owner && args) {
         Type resolved = substitute_struct_app_type(field->full_type, owner, args);
         return type_c_name(resolved);
@@ -701,6 +811,34 @@ static void emit_registered_struct_app_rec(Buf *out, uint32_t idx) {
                     if (type_eq(g_struct_apps[di].type, resolved)) {
                         emit_registered_struct_app_rec(out, di);
                         break;
+                    }
+                }
+            }
+            /* Phase E: emit fn-ptr typedef before the struct that uses it. */
+            if (resolved.kind == TY_FN && fn_type_is_concrete_for_ptr(&resolved)) {
+                const char *td = register_fn_ptr_typedef(&resolved);
+                if (td) {
+                    /* Find and emit the typedef if not yet emitted. */
+                    for (uint32_t di = 0; di < g_n_fn_ptr_typedefs; di++) {
+                        if (!g_fn_ptr_typedefs[di].emitted &&
+                                strcmp(g_fn_ptr_typedefs[di].typedef_name, td) == 0) {
+                            g_fn_ptr_typedefs[di].emitted = true;
+                            const char *ret_c = type_c_name(
+                                type_from_kind(g_fn_ptr_typedefs[di].result_kind));
+                            buf_printf(out, "typedef %s (*%s)(", ret_c, td);
+                            uint8_t ar = g_fn_ptr_typedefs[di].arity;
+                            if (ar == 0) {
+                                buf_puts(out, "void");
+                            } else {
+                                for (uint8_t j = 0; j < ar; j++) {
+                                    if (j > 0) buf_puts(out, ", ");
+                                    buf_puts(out, type_c_name(type_from_kind(
+                                        g_fn_ptr_typedefs[di].arg_kinds[j])));
+                                }
+                            }
+                            buf_puts(out, ");\n");
+                            break;
+                        }
                     }
                 }
             }
@@ -2130,6 +2268,37 @@ void type_codegen_reset_adt_apps(void) {
 void type_codegen_emit_adt_apps(Buf *out) {
     for (uint32_t i = 0; i < g_n_adt_apps; i++) {
         emit_registered_adt_app_rec(out, i);
+    }
+}
+
+/* Phase E: Reset the fn-ptr typedef registry (called before each compilation unit). */
+void type_codegen_reset_fn_ptr_typedefs(void) {
+    for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++)
+        free(g_fn_ptr_typedefs[i].typedef_name);
+    free(g_fn_ptr_typedefs);
+    g_fn_ptr_typedefs     = NULL;
+    g_n_fn_ptr_typedefs   = 0;
+    g_cap_fn_ptr_typedefs = 0;
+}
+
+/* Phase E: Emit all registered fn-ptr typedefs.
+ * Must be called before any struct typedef that uses them as field types. */
+void type_codegen_emit_fn_ptr_typedefs(Buf *out) {
+    for (uint32_t i = 0; i < g_n_fn_ptr_typedefs; i++) {
+        RegisteredFnPtrTypedef *entry = &g_fn_ptr_typedefs[i];
+        if (entry->emitted) continue;
+        entry->emitted = true;
+        const char *ret_c = type_c_name(type_from_kind(entry->result_kind));
+        buf_printf(out, "typedef %s (*%s)(", ret_c, entry->typedef_name);
+        if (entry->arity == 0) {
+            buf_puts(out, "void");
+        } else {
+            for (uint8_t j = 0; j < entry->arity; j++) {
+                if (j > 0) buf_puts(out, ", ");
+                buf_puts(out, type_c_name(type_from_kind(entry->arg_kinds[j])));
+            }
+        }
+        buf_puts(out, ");\n");
     }
 }
 
