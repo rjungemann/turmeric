@@ -19,7 +19,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 | KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances | High | Large |
 | KB-022 | GADT HKT constraint unification (`equal-cong`) -- DONE | Low | Medium |
 | KB-025 | GADT skolem-escape check missing -- DONE | Medium | Medium |
-| KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics | Medium | Medium |
+| KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics -- DONE | Medium | Medium |
 | KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) | Low | Medium |
 | KB-029 | `stdlib/session.tur` tuple return-type syntax | Low | Medium |
 | KB-030 | Orphan-instance checker rejects instances on built-ins | Medium | Medium |
@@ -251,6 +251,39 @@ Recommendation: option 1, preserving the diagnostics.
 
 Medium -- the parameter and return-type paths in `elab_fns.c` both need the
 gating logic; option 2 is small but degrades UX.
+
+### Resolution (DONE)
+
+Implemented option 1 (context-gated tyvars) as a post-signature pass in
+`elab_defn` (after params + return type are parsed, before body elaboration),
+plus two helpers in `elab_fns.c`:
+
+- `fn_type_mentions_named` -- does a type mention a given named tyvar?
+- `fn_name_is_adt_tyvar` -- is a name the declared type parameter of some
+  in-scope ADT/struct (e.g. `a` from `(defgadt Witness [a] ...)`)?
+
+The gate distinguishes a genuine type variable from a typo:
+
+- **Bare-keyword parameter** (`[n : nope]`): kept as a type variable when the
+  name is declared in the function's type-param / kind-var list, is an
+  ADT/struct type parameter, or relates >=2 signature type positions
+  (appears in another param type or the return).  Otherwise it is a typo and
+  is demoted to the unresolved opaque type (`TY_STRUCT` with NULL def), which
+  restores the `use-after-move` + "parameter looks like it was followed by a
+  type annotation" hint when the binding is misused.  The ADT-type-param
+  exemption is what keeps GADT-refined params such as `[w :Witness v :a] :int`
+  working (`a` is `Witness`'s parameter, refined per match arm).
+- **Bare return type variable** (`:a`): kept only when it is declared or
+  appears in a parameter type (the binder it would be quantified by).  A `:a`
+  return with no such binder -- as in `(defn map [^f a x] :a x)` -- now emits
+  `unsupported return type keyword`.  (The ADT-type-param exemption is
+  deliberately *not* applied here, so a bare `:a` return stays an error even
+  though stdlib ADTs use `a`.)
+
+Verified: both `errors/kinds-kind-variable` and `errors/typeann-diag-hint`
+produce their expected diagnostics; the legitimate generic forms
+(`[x : a] : a`, explicit `[a] [x : a] : a`, and GADT refinement in
+`gadt-refine-witness`) still compile; the full `tests/run.sh` suite is green.
 
 ---
 

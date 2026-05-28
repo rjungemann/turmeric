@@ -155,6 +155,52 @@ static void fn_collect_sig_tyvars(Elab *e, const Type *t) {
     }
 }
 
+/* KB-026: does `t` mention the named type variable `name` anywhere? */
+static bool fn_type_mentions_named(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return fn_type_mentions_named(t->as.app.fn, name) ||
+                   fn_type_mentions_named(t->as.app.arg, name);
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++)
+                if (fn_type_mentions_named(t->as.union_.members[i], name)) return true;
+            return false;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++)
+                if (fn_type_mentions_named(t->as.intersection_.members[i], name)) return true;
+            return false;
+        case TY_FN:
+            if (t->as.fn.arg_full_types)
+                for (uint8_t i = 0; i < t->as.fn.arity; i++)
+                    if (fn_type_mentions_named(t->as.fn.arg_full_types[i], name)) return true;
+            return fn_type_mentions_named(t->as.fn.result_full_type, name);
+        default:
+            return false;
+    }
+}
+
+/* KB-026: is `name` the declared type parameter of some in-scope ADT or
+ * struct?  Such a name (e.g. `a` from `(defgadt Witness [a] ...)`) is a genuine
+ * type variable even when it occurs only once in a signature, because it gets
+ * refined per match arm. */
+static bool fn_name_is_adt_tyvar(const Elab *e, const char *name) {
+    if (!name) return false;
+    for (uint32_t i = 0; i < e->n_adt_defs; i++) {
+        const AdtDef *d = e->adt_defs[i];
+        for (uint8_t k = 0; k < d->n_type_params; k++)
+            if (d->type_params[k] && strcmp(d->type_params[k], name) == 0) return true;
+    }
+    for (uint32_t i = 0; i < e->n_struct_defs; i++) {
+        const StructDef *d = e->struct_defs[i];
+        for (uint8_t k = 0; k < d->n_type_params; k++)
+            if (d->type_params[k] && strcmp(d->type_params[k], name) == 0) return true;
+    }
+    return false;
+}
+
 static bool form_mentions_type_param(const Form *form, const Symbol *sym) {
     if (!form || !sym) return false;
     switch (form->tag) {
@@ -1240,6 +1286,94 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Push params into the inner scope (created earlier for kind-var bindings). */
     for (uint8_t i = 0; i < n_params; i++) {
         scope_add(&inner, params[i]);
+    }
+
+    /* KB-026: gate GS4 implicit type variables.  A *bare* unknown lowercase
+     * keyword used as a param or return type (e.g. `:a`) is treated as a named
+     * type variable for generic binder forms -- but only when the name is
+     * genuinely quantified by the signature: it is declared in an explicit
+     * type-param list, is a kind variable, or relates two type positions
+     * (appears in >=2 of {param types, return type}).  A name occurring in just
+     * its own single annotation is a typo, and recovering it as a type variable
+     * silently swallowed two diagnostics:
+     *   - a bare `:a` return with no param mentioning `a` should be an
+     *     "unsupported return type keyword" error; and
+     *   - a lone `[n : nope]` should stay an unresolved type so the
+     *     "parameter looks like it was followed by a type annotation" hint can
+     *     fire on misuse.
+     * This pass undoes those two over-eager recoveries. */
+    {
+        /* Demote lone bare-keyword params to an unresolved type. */
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->type.kind != TY_TYVAR ||
+                !params[i]->type.as.tyvar_.name) continue;
+            const char *nm = params[i]->type.as.tyvar_.name;
+            bool declared = false;
+            for (uint8_t k = 0; k < n_fn_type_params; k++)
+                if (fn_type_params[k] && strcmp(fn_type_params[k]->name, nm) == 0) {
+                    declared = true; break;
+                }
+            for (uint8_t k = 0; !declared && k < n_kind_vars; k++)
+                if (kind_var_names[k] && strcmp(kind_var_names[k]->name, nm) == 0) {
+                    declared = true; break;
+                }
+            if (declared) continue;
+            /* A name that is some ADT/struct's declared type parameter (e.g. `a`
+             * from a defgadt) is a genuine type variable -- it is refined per
+             * match arm -- even when it appears only once in this signature. */
+            if (fn_name_is_adt_tyvar(e, nm)) continue;
+            uint8_t occ = 0;
+            for (uint8_t j = 0; j < n_params; j++) {
+                const Type *jt = param_poly_types[j]
+                    ? param_poly_types[j] : &params[j]->type;
+                if (fn_type_mentions_named(jt, nm)) occ++;
+            }
+            if (fn_type_mentions_named(return_tyvar_type, nm) ||
+                fn_type_mentions_named(return_app_type, nm) ||
+                fn_type_mentions_named(return_fn_type, nm) ||
+                fn_type_mentions_named(return_exists_type, nm)) occ++;
+            if (occ >= 2) continue;  /* genuine: relates >=2 type positions */
+            Type unresolved; memset(&unresolved, 0, sizeof(unresolved));
+            unresolved.kind = TY_STRUCT;
+            unresolved.copy_kind = CK_MOVE;
+            unresolved.hkt_kind = KIND_STAR;
+            unresolved.as.struct_.def = NULL;
+            params[i]->type = unresolved;
+            param_kinds[i] = TY_STRUCT;
+            param_poly_types[i] = NULL;
+        }
+
+        /* Reject a bare return type variable with no quantifying binder. */
+        if (return_kind == TY_TYVAR && return_tyvar_type &&
+            return_tyvar_type->as.tyvar_.name) {
+            const char *rn = return_tyvar_type->as.tyvar_.name;
+            bool declared = false;
+            for (uint8_t k = 0; k < n_fn_type_params; k++)
+                if (fn_type_params[k] && strcmp(fn_type_params[k]->name, rn) == 0) {
+                    declared = true; break;
+                }
+            for (uint8_t k = 0; !declared && k < n_kind_vars; k++)
+                if (kind_var_names[k] && strcmp(kind_var_names[k]->name, rn) == 0) {
+                    declared = true; break;
+                }
+            uint8_t occ = 1;  /* the return position itself */
+            for (uint8_t j = 0; j < n_params; j++) {
+                const Type *jt = param_poly_types[j]
+                    ? param_poly_types[j] : &params[j]->type;
+                if (fn_type_mentions_named(jt, rn)) occ++;
+            }
+            if (!declared && occ < 2) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "unsupported return type keyword '%s': it is not a "
+                          "built-in type and is not bound by any parameter; "
+                          "declare it (e.g. `[%s]` type params) or annotate a "
+                          "parameter with it to use it as a type variable",
+                          rn, rn);
+                e->scope = inner.parent;
+                scope_free(&inner);
+                return NULL;
+            }
+        }
     }
 
     /* KB-025: record this function's signature type variables (params + return)
