@@ -1153,6 +1153,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_ampersand = intern_cstr(st, "&");
     /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
     e->g2_skolem_env = NULL;
+    /* KB-025: no enclosing fn signature type variables at top level */
+    e->n_sig_tyvars = 0;
     /* Phase G3: coerce */
     e->sym_coerce = intern_cstr(st, "coerce");
     /* Phase G3: (~ a b) equality constraint */

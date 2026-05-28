@@ -113,6 +113,48 @@ static bool fn_type_has_named_tyvar(const Type *t) {
     }
 }
 
+/* KB-025: append every named type variable appearing in `t` to the elaborator's
+ * signature-tyvar set (deduped, capped).  Used so a GADT match arm can tell a
+ * legitimately-polymorphic result (`a` is quantified by the fn) apart from a
+ * skolem that escapes into a concrete return position. */
+static void fn_collect_sig_tyvars(Elab *e, const Type *t) {
+    if (!t) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.name) {
+                for (uint8_t i = 0; i < e->n_sig_tyvars; i++) {
+                    if (e->sig_tyvars[i] &&
+                        strcmp(e->sig_tyvars[i], t->as.tyvar_.name) == 0) return;
+                }
+                if (e->n_sig_tyvars < 32) {
+                    e->sig_tyvars[e->n_sig_tyvars++] = t->as.tyvar_.name;
+                }
+            }
+            return;
+        case TY_APP:
+            fn_collect_sig_tyvars(e, t->as.app.fn);
+            fn_collect_sig_tyvars(e, t->as.app.arg);
+            return;
+        case TY_UNION:
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++)
+                fn_collect_sig_tyvars(e, t->as.union_.members[i]);
+            return;
+        case TY_INTERSECTION:
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++)
+                fn_collect_sig_tyvars(e, t->as.intersection_.members[i]);
+            return;
+        case TY_FN:
+            if (t->as.fn.arg_full_types) {
+                for (uint8_t i = 0; i < t->as.fn.arity; i++)
+                    fn_collect_sig_tyvars(e, t->as.fn.arg_full_types[i]);
+            }
+            fn_collect_sig_tyvars(e, t->as.fn.result_full_type);
+            return;
+        default:
+            return;
+    }
+}
+
 static bool form_mentions_type_param(const Form *form, const Symbol *sym) {
     if (!form || !sym) return false;
     switch (form->tag) {
@@ -1200,6 +1242,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
         scope_add(&inner, params[i]);
     }
 
+    /* KB-025: record this function's signature type variables (params + return)
+     * so a GADT match arm can distinguish a quantified-`a` result from a skolem
+     * that escapes.  Accumulated on top of any enclosing function's set. */
+    uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
+    for (uint8_t i = 0; i < n_params; i++) {
+        if (param_poly_types[i]) fn_collect_sig_tyvars(e, param_poly_types[i]);
+        else                     fn_collect_sig_tyvars(e, &params[i]->type);
+    }
+    fn_collect_sig_tyvars(e, return_tyvar_type);
+    fn_collect_sig_tyvars(e, return_app_type);
+    fn_collect_sig_tyvars(e, return_fn_type);
+    fn_collect_sig_tyvars(e, return_exists_type);
+
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
 
@@ -1212,6 +1267,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (!body) {
             if (fn_declared_unsafe) e->unsafe_depth--;
             e->fn_body_depth--;
+            e->n_sig_tyvars = saved_n_sig_tyvars;
             /* Phase R6: Reset current function name */
             e->current_fn_name = NULL;
             e->scope = inner.parent;
@@ -1225,6 +1281,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if (!items[i]) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                e->n_sig_tyvars = saved_n_sig_tyvars;
                 /* Phase R6: Reset current function name */
                 e->current_fn_name = NULL;
                 e->scope = inner.parent;
@@ -1247,6 +1304,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
+    e->n_sig_tyvars = saved_n_sig_tyvars;
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
 
@@ -1976,6 +2034,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
         scope_add(&inner, params[i]);
     }
 
+    /* KB-025: accumulate this closure's signature type variables on top of the
+     * enclosing function's set (see elab_defn for the rationale). */
+    uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
+    for (uint8_t i = 0; i < n_params; i++) {
+        fn_collect_sig_tyvars(e, &params[i]->type);
+    }
+    fn_collect_sig_tyvars(e, return_full_type);
+    fn_collect_sig_tyvars(e, return_fn_type);
+
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
     e->fn_body_depth++;
@@ -1985,6 +2052,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (!body) {
             if (fn_declared_unsafe) e->unsafe_depth--;
             e->fn_body_depth--;
+            e->n_sig_tyvars = saved_n_sig_tyvars;
             e->scope = inner.parent;
             scope_free(&inner);
             return NULL;
@@ -1996,6 +2064,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (!items[i]) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -2007,6 +2076,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
+    e->n_sig_tyvars = saved_n_sig_tyvars;
 
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */

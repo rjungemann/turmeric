@@ -18,7 +18,7 @@ written; the affected fixtures fail under `tests/run.sh` (run with
 |----|-------|----------|--------|
 | KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances | High | Large |
 | KB-022 | GADT HKT constraint unification (`equal-cong`) -- DONE | Low | Medium |
-| KB-025 | GADT skolem-escape check missing | Medium | Medium |
+| KB-025 | GADT skolem-escape check missing -- DONE | Medium | Medium |
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics | Medium | Medium |
 | KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) | Low | Medium |
 | KB-029 | `stdlib/session.tur` tuple return-type syntax | Low | Medium |
@@ -170,6 +170,38 @@ type signature, emit `skolem type variable escapes match arm`.
 ### Effort
 
 Medium -- requires tracking skolem provenance through match-arm result types.
+
+### Resolution (DONE)
+
+Two coordinated fixes:
+
+1. **Signature-tyvar tracking (`elab_fns.c`)** -- `elab_defn` and the `fn`
+   elaborator now accumulate the named type variables that appear in the
+   enclosing function's signature (parameter types + return type) into a new
+   `Elab.sig_tyvars` set (additive across nesting, so closures see their own
+   plus the outer function's). This is the authoritative answer to "is `a`
+   bound by the surrounding function's type signature?".
+
+2. **Escape check + field refinement (`elab_structs.c`)** -- the GADT match
+   path now:
+   - refines a type-variable field via the *scrutinee's* instantiation when
+     the constructor's return annotation does not pin it to a concrete kind
+     (matching a `(Box t)` binds the `a` field to `t`), so a properly
+     polymorphic arm yields the function's own signature variable rather than
+     the GADT's internal parameter name; and
+   - widens the skolem-escape diagnostic: it fires for any arm-body result of
+     kind `TY_TYVAR` that is either anonymous or a named variable absent from
+     `sig_tyvars`. `(defn my-unbox [b] :int (match b (MkBox x) x))` -- where
+     `x : a` escapes through the concrete `:int` return -- is now rejected with
+     `skolem type variable escapes match arm`.
+
+The field refinement (1->2a) is what keeps the legitimate polymorphic forms
+(`[b : (Box a)] : a` and the differently-named `[b : (Box t)] : t`) compiling
+while the genuinely-unsound form is rejected.
+
+Verified: `errors/gadt-refine-escape` now produces the expected diagnostic; the
+full `tests/run.sh` suite passes except for the still-open KB-026 fixtures
+(`kinds-kind-variable`, `typeann-diag-hint`).
 
 ---
 
