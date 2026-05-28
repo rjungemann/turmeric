@@ -6,58 +6,6 @@
 ;; Phase 15: Typeclasses
 ;; Built-in typeclasses: Eq, Ord, Show, Num
 
-;;; Eq -- typeclass for equality comparison.
-;;;
-;;; Parameters:
-;;;   a -- the type to compare
-;;;
-;;; Since: Phase 15
-;; Eq typeclass - equality comparison
-(defclass Eq [a]
-  (eq? [x y] :bool))
-
-;; Instances for primitive types
-;;; Eq [int] -- Eq instance for int.
-(definstance Eq [int]
-  (eq? [x y] (= x y)))
-
-;;; Eq [bool] -- Eq instance for bool.
-(definstance Eq [bool]
-  (eq? [x y] (= x y)))
-
-;; Phase N4: Eq instances for new numeric types
-;;; Eq [int8] -- Eq instance for int8.
-(definstance Eq [int8]
-  (eq? [x y] (= x y)))
-
-;;; Eq [int16] -- Eq instance for int16.
-(definstance Eq [int16]
-  (eq? [x y] (= x y)))
-
-;;; Eq [int32] -- Eq instance for int32.
-(definstance Eq [int32]
-  (eq? [x y] (= x y)))
-
-;;; Eq [uint8] -- Eq instance for uint8.
-(definstance Eq [uint8]
-  (eq? [x y] (= x y)))
-
-;;; Eq [uint16] -- Eq instance for uint16.
-(definstance Eq [uint16]
-  (eq? [x y] (= x y)))
-
-;;; Eq [uint32] -- Eq instance for uint32.
-(definstance Eq [uint32]
-  (eq? [x y] (= x y)))
-
-;;; Eq [uint64] -- Eq instance for uint64.
-(definstance Eq [uint64]
-  (eq? [x y] (= x y)))
-
-;;; Eq [float32] -- Eq instance for float32.
-(definstance Eq [float32]
-  (eq? [x y] (= x y)))
-
 ;;; Ord -- typeclass for total ordering.
 ;;;
 ;;; Parameters:

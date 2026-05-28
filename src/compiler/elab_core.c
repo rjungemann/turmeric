@@ -28,7 +28,7 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "float64") == 0) return TY_FLOAT;   /* alias */
     if (strcmp(name, "cstr") == 0) return TY_CSTR;
     if (strcmp(name, "nil") == 0) return TY_NIL;
-    if (strcmp(name, "ptr-void") == 0) return TY_PTR_VOID;
+    if (strcmp(name, "ptr-void") == 0 || strcmp(name, "ptr<void>") == 0) return TY_PTR_VOID;
     if (strcmp(name, "ref") == 0) return TY_REF;
     if (strcmp(name, "lref") == 0) return TY_LREF;
     if (strcmp(name, "rc") == 0) return TY_RC;

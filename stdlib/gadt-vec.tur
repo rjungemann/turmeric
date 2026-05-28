@@ -41,7 +41,7 @@
 (defn vec-cons [x :int v :Vec] :Vec
   (VCons x v))
 
-;;; vec-len -- compute the length of a Vec.
+;;; gadt-vec-len -- compute the length of a Vec.
 ;;;
 ;;; Parameters:
 ;;;   v -- the (Vec int) to measure
@@ -50,13 +50,13 @@
 ;;;   The number of elements in v as an int.
 ;;;
 ;;; Example:
-;;;   (vec-len (vec-cons 1 (vec-cons 2 (vec-nil))))  ; => 2
+;;;   (gadt-vec-len (vec-cons 1 (vec-cons 2 (vec-nil))))  ; => 2
 ;;;
 ;;; Since: Phase G4
-(defn vec-len [v :Vec] :int
+(defn gadt-vec-len [v :Vec] :int
   (match v
     (VNil)      0
-    (VCons _ t) (+ 1 (vec-len t))))
+    (VCons _ t) (+ 1 (gadt-vec-len t))))
 
 ;;; vec-sum -- sum all elements of a Vec.
 ;;;
@@ -152,7 +152,7 @@
 ;;;              (vec-cons 10 (vec-cons 20 (vec-nil)))))  ; => 33
 ;;;
 ;;; Since: Phase G4
-(defn vzip-with [f :(fn [int int] #{} :int) v1 v2] :Vec
+(defn vzip-with [f :ptr<void> v1 v2] :Vec
   (match v1
     (VNil)       (VNil)
     (VCons x t1) (match v2
