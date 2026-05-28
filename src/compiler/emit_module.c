@@ -1217,6 +1217,14 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* POSIX regex (stdlib/re.tur): hoist regex.h to file scope so every
+     * generated re_* function sees regex_t and friends. Per-function
+     * `#include <regex.h>` only works for the first function due to header
+     * include guards; lifting it here unblocks all re-module functions.
+     * Gated so non-regex programs don't churn codegen snapshots. */
+    if (g_needs_regex_h) {
+        buf_puts(out, "#include <regex.h>\n");
+    }
     /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
     if (g_has_variadics) {
         buf_puts(out, "/* AR8: __tur_cons_of -- allocate and link a cons cell */\n");

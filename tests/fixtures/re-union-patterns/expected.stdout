@@ -1,0 +1,6 @@
+([A-Za-z]+)|([0-9]+)|(foo-bar)
+alpha-yes
+digit-yes
+lit-yes
+punct-no
+0

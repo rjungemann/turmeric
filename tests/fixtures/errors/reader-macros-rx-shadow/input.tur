@@ -1,0 +1,5 @@
+; The built-in `rx` named string macro is reserved -- user macros may not
+; shadow it.
+(reader-macros/define 'rx :string '(println $body))
+
+(defn main [] :int 0)

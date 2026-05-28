@@ -239,6 +239,125 @@
   return out;
   ```)
 
+;;; re/union-patterns -- build an alternation regex from a cons list of patterns.
+;;;
+;;; Each pattern is wrapped in a non-grouping-aware parenthesised branch and
+;;; joined with `|`. The result is a freshly heap-allocated cstr that the
+;;; caller must free.
+;;;
+;;; Parameters:
+;;;   patterns -- cons list of cstr patterns (head = cstr pointer, tail = next)
+;;;
+;;; Returns:
+;;;   A heap-allocated cstr containing the unioned pattern, or 0 if the list
+;;;   is empty or contains a null element. POSIX ERE has no portable
+;;;   "match nothing" pattern, so empty input is reported as 0 rather than
+;;;   silently producing a degenerate regex.
+;;;
+;;; Example:
+;;;   (re/union-patterns (cons "[A-Za-z]+" (cons "[0-9]+" 0)))
+;;;     ; => "([A-Za-z]+)|([0-9]+)"
+;;;
+;;; Since: Phase RU1
+(defn re/union-patterns [patterns :int] :cstr
+  ```c
+  struct __tur_cons_t { int64_t head; int64_t tail; };
+  if (!patterns) return 0;
+  /* First pass: validate elements and compute output size. Each branch
+   * contributes strlen(p) + 2 (parens) bytes; n-1 bars sit between them. */
+  struct __tur_cons_t *cur = (struct __tur_cons_t *)(intptr_t)patterns;
+  size_t total = 0;
+  size_t count = 0;
+  while (cur) {
+    const char *s = (const char *)(intptr_t)cur->head;
+    if (!s) return 0;
+    total += strlen(s) + 2;
+    count++;
+    cur = (struct __tur_cons_t *)(intptr_t)cur->tail;
+  }
+  if (count == 0) return 0;
+  total += (count - 1); /* separators */
+  char *out = (char *)malloc(total + 1);
+  if (!out) return 0;
+  size_t pos = 0;
+  cur = (struct __tur_cons_t *)(intptr_t)patterns;
+  int first = 1;
+  while (cur) {
+    if (!first) out[pos++] = '|';
+    first = 0;
+    const char *s = (const char *)(intptr_t)cur->head;
+    size_t n = strlen(s);
+    out[pos++] = '(';
+    memcpy(out + pos, s, n);
+    pos += n;
+    out[pos++] = ')';
+    cur = (struct __tur_cons_t *)(intptr_t)cur->tail;
+  }
+  out[pos] = '\0';
+  return out;
+  ```)
+
+;;; re/compile-union -- compile an alternation of multiple regex patterns.
+;;;
+;;; Convenience wrapper around re/union-patterns followed by re/compile.
+;;; The intermediate pattern buffer is freed before returning; the caller is
+;;; responsible for re/free on the returned handle.
+;;;
+;;; Parameters:
+;;;   patterns -- cons list of cstr patterns (head = cstr pointer, tail = next)
+;;;
+;;; Returns:
+;;;   A compiled regex handle (:int) on success, or 0 if the input list is
+;;;   empty, contains a null element, or compilation fails.
+;;;
+;;; Example:
+;;;   (re/compile-union (cons "[A-Za-z]+" (cons "[0-9]+" 0)))  ; => <handle>
+;;;
+;;; Since: Phase RU2
+(defn re/compile-union [patterns :int] :int
+  ```c
+  #include <regex.h>
+  struct __tur_cons_t { int64_t head; int64_t tail; };
+  if (!patterns) return 0;
+  struct __tur_cons_t *cur = (struct __tur_cons_t *)(intptr_t)patterns;
+  size_t total = 0, count = 0;
+  while (cur) {
+    const char *s = (const char *)(intptr_t)cur->head;
+    if (!s) return 0;
+    total += strlen(s) + 2;
+    count++;
+    cur = (struct __tur_cons_t *)(intptr_t)cur->tail;
+  }
+  if (count == 0) return 0;
+  total += (count - 1);
+  char *pat = (char *)malloc(total + 1);
+  if (!pat) return 0;
+  size_t pos = 0;
+  cur = (struct __tur_cons_t *)(intptr_t)patterns;
+  int first = 1;
+  while (cur) {
+    if (!first) pat[pos++] = '|';
+    first = 0;
+    const char *s = (const char *)(intptr_t)cur->head;
+    size_t n = strlen(s);
+    pat[pos++] = '(';
+    memcpy(pat + pos, s, n);
+    pos += n;
+    pat[pos++] = ')';
+    cur = (struct __tur_cons_t *)(intptr_t)cur->tail;
+  }
+  pat[pos] = '\0';
+  regex_t *re = (regex_t *)malloc(sizeof(regex_t));
+  if (!re) { free(pat); return 0; }
+  if (regcomp(re, pat, REG_EXTENDED) != 0) {
+    free(re);
+    free(pat);
+    return 0;
+  }
+  free(pat);
+  return (int64_t)(intptr_t)re;
+  ```)
+
 ;;; re/replace-all -- replace all non-overlapping matches of a regex.
 ;;;
 ;;; Parameters:

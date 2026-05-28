@@ -22,6 +22,7 @@ typedef enum ReaderMacroMode {
     RM_BODY_NONE = 0,   /* bare identifier, e.g. #nan */
     RM_BODY_RAW,        /* verbatim source slice, balanced delim scan */
     RM_BODY_DATUM,      /* recursive read_form until close-delim */
+    RM_BODY_STRING,     /* standard string literal body, e.g. #name"..." */
 } ReaderMacroMode;
 
 typedef struct ReaderMacroEntry {

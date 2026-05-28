@@ -1782,7 +1782,9 @@ static Form *expand_datum_template(Reader *r, const Form *t,
  * In RM1 only RM_BODY_NONE (bare) and RM_BODY_RAW are honored end-to-end;
  * RM_BODY_DATUM lands in RM2. */
 static Form *try_read_user_macro(Reader *r) {
-    if (!r->user_macros || r->user_macros->len == 0) return NULL;
+    /* We always need to attempt parsing here because built-in named string
+     * macros (currently `#rx"..."`) dispatch through this hook too — a
+     * blanket "skip when registry empty" would miss them. */
 
     size_t   save_pos  = r->pos;
     uint32_t save_line = r->line;
@@ -1805,31 +1807,59 @@ static Form *try_read_user_macro(Reader *r) {
 
     int delim_char = peek(r);
     int try_delim  = 0;
-    if (delim_char == '(' || delim_char == '[' || delim_char == '{') {
+    if (delim_char == '(' || delim_char == '[' || delim_char == '{'
+        || delim_char == '"') {
         try_delim = delim_char;
     }
 
-    /* Prefer a matching-delim registration; fall back to a bare entry. */
-    const ReaderMacroEntry *e = NULL;
-    if (try_delim != 0) {
-        e = reader_macros_lookup(r->user_macros, name, try_delim);
+    /* Built-in named string macro: #rx"..." → (re/compile "..."). The name
+     * `rx` is reserved (see reader_macros.c::kReserved) so no user macro
+     * can shadow it. */
+    if (try_delim == '"' && name.len == 2
+        && name.p[0] == 'r' && name.p[1] == 'x') {
+        bool save_neo = r->neoteric_enabled;
+        r->neoteric_enabled = false;
+        Form *str = read_string(r);
+        r->neoteric_enabled = save_neo;
+        if (!str || r->error) return NULL;
+        Span full_site =
+            span_from_to(r, call_line, call_col, call_off, r->pos);
+        const Symbol *re_compile =
+            symtab_intern(r->st, strslice("re/compile", 10));
+        Form *head = form_sym(r->arena, full_site, re_compile);
+        Form **items = (Form **)arena_alloc(r->arena, sizeof(Form *) * 2);
+        items[0] = head;
+        items[1] = str;
+        return form_list(r->arena, full_site, items, 2);
     }
-    if (!e) {
-        e = reader_macros_lookup(r->user_macros, name, 0);
+
+    /* From here on we need a user-registry hit. */
+    const ReaderMacroEntry *e = NULL;
+    if (r->user_macros && r->user_macros->len > 0) {
+        if (try_delim != 0) {
+            e = reader_macros_lookup(r->user_macros, name, try_delim);
+        }
+        if (!e) {
+            e = reader_macros_lookup(r->user_macros, name, 0);
+        }
     }
     if (!e) {
         /* No exact (name, delim) match. If a macro with this name exists
          * under a different delimiter, the user almost certainly meant it —
          * emit a targeted diagnostic instead of silently rewinding into
          * the generic "unexpected character" path. */
-        const ReaderMacroEntry *any =
-            reader_macros_lookup_any(r->user_macros, name);
+        const ReaderMacroEntry *any = (r->user_macros && r->user_macros->len > 0)
+            ? reader_macros_lookup_any(r->user_macros, name) : NULL;
         if (any) {
             if (any->mode == RM_BODY_NONE) {
                 diag_emit(DIAG_ERROR, span_point(r),
                           "reader macro '#%.*s' takes no body, "
                           "but a '%c' delimiter follows",
                           (int)name.len, name.p, (char)delim_char);
+            } else if (any->mode == RM_BODY_STRING) {
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "reader string macro '#%.*s' expects string body",
+                          (int)name.len, name.p);
             } else {
                 diag_emit(DIAG_ERROR, span_point(r),
                           "reader macro '#%.*s' expects '%c' body, got '%c'",
@@ -1837,6 +1867,17 @@ static Form *try_read_user_macro(Reader *r) {
                           (char)any->delim,
                           delim_char == -1 ? '?' : (char)delim_char);
             }
+            r->error = true;
+            return NULL;
+        }
+        /* A `#name"..."` invocation that didn't match anything is almost
+         * certainly an intended string macro the user forgot to register —
+         * emit a targeted diagnostic rather than silently rewinding (which
+         * would surface as the generic "unexpected character" later). */
+        if (try_delim == '"') {
+            diag_emit(DIAG_ERROR, span_point(r),
+                      "unknown reader string macro '#%.*s'",
+                      (int)name.len, name.p);
             r->error = true;
             return NULL;
         }
@@ -1854,11 +1895,29 @@ static Form *try_read_user_macro(Reader *r) {
     }
 
     if (try_delim == 0 || try_delim != e->delim) {
-        diag_emit(DIAG_ERROR, span_point(r),
-                  "reader macro '#%.*s' expects '%c' body",
-                  (int)name.len, name.p, (char)e->delim);
+        if (e->mode == RM_BODY_STRING) {
+            diag_emit(DIAG_ERROR, span_point(r),
+                      "reader string macro '#%.*s' expects string body",
+                      (int)name.len, name.p);
+        } else {
+            diag_emit(DIAG_ERROR, span_point(r),
+                      "reader macro '#%.*s' expects '%c' body",
+                      (int)name.len, name.p, (char)e->delim);
+        }
         r->error = true;
         return NULL;
+    }
+
+    if (e->mode == RM_BODY_STRING) {
+        bool save_neo = r->neoteric_enabled;
+        r->neoteric_enabled = false;
+        Form *str = read_string(r);
+        r->neoteric_enabled = save_neo;
+        if (!str || r->error) return NULL;
+        Span full_site =
+            span_from_to(r, call_line, call_col, call_off, r->pos);
+        return expand_raw_template(r, e->template,
+                                   str->as.s.p, str->as.s.len, full_site);
     }
 
     int close = matching_close_for(e->delim);

@@ -1,0 +1,30 @@
+; RU1/RU2: re/union-patterns + re/compile-union build an alternation regex
+; from a runtime cons-list of cstr patterns.
+(load "stdlib/re.tur")
+
+; Build a cons list of three patterns: alphas, digits, and a literal token.
+(defn make-pats [] :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } cell;
+  cell *c3 = malloc(sizeof(cell));
+  c3->head = (int64_t)(intptr_t)"foo-bar"; c3->tail = 0;
+  cell *c2 = malloc(sizeof(cell));
+  c2->head = (int64_t)(intptr_t)"[0-9]+";   c2->tail = (int64_t)(intptr_t)c3;
+  cell *c1 = malloc(sizeof(cell));
+  c1->head = (int64_t)(intptr_t)"[A-Za-z]+"; c1->tail = (int64_t)(intptr_t)c2;
+  return (int64_t)(intptr_t)c1;
+  ```)
+
+(defn main [] :int
+  (let [pats   (make-pats)
+        joined (re/union-patterns pats)
+        r      (re/compile-union pats)]
+    (println joined)
+    (if (re/match? r "abc")     (println "alpha-yes") (println "alpha-no"))
+    (if (re/match? r "12345")   (println "digit-yes") (println "digit-no"))
+    (if (re/match? r "foo-bar") (println "lit-yes")   (println "lit-no"))
+    (if (re/match? r "!!!")     (println "punct-yes") (println "punct-no"))
+    ; Empty list: union returns 0
+    (println (re/compile-union 0))
+    (re/free r))
+  0)
