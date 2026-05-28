@@ -1,0 +1,15 @@
+;; KB-004 regression: (:: carrier (Result int int)) -> ok-val
+;;
+;; result-map returns :int (carrier ABI).  When the caller ascribes the result
+;; to (Result int int) via ::, the emitter must bridge the int64_t carrier to
+;; the concrete Result__int__int struct so that ok-val (which takes the struct
+;; by value) receives the right type.
+
+(defn double-if-ok [r :int] :int
+  (result-map r (fn [x] (* x 2))))
+
+(defn main [] :int
+  (let [r (double-if-ok (ok 21))
+        v (ok-val (:: r (Result int int)))]
+    (println v)
+    0))

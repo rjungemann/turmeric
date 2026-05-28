@@ -1,0 +1,16 @@
+;; KB-015 regression: two calls to (thead xs) on the same (Cons double) instantiation.
+;;
+;; The first call elaborates as EX_REINTERPRET { double, EX_CALL { int64_t } } and
+;; the ABI scan registers spec->call_expr = first EX_CALL node.  The second call gets
+;; a fresh EX_CALL node in the spec's specialized_call_exprs[] list but NOT in
+;; spec->call_expr, so the EX_REINTERPRET skip did not fire -- the specialized
+;; (double-returning) clone was wrapped in a union int64_t-to-double cast, truncating
+;; the result.
+
+(defn main [] :int
+  (let [xs (tcons-of 3.14 0)
+        a (thead xs)
+        b (thead xs)]
+    (println a)
+    (println b)
+    0))

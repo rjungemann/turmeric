@@ -1405,3 +1405,74 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
     *n_out = ncaps;
     return caps;
 }
+
+/* ------------ Phase ACB: emit_carrier_bridge ------------ */
+
+/* Returns true when concrete_ty fits entirely in an int64_t-wide slot and
+ * the carrier stores the value inline (bitwise reinterpret) rather than as
+ * a heap pointer.  Scalars with type_size_bytes == 8 qualify; pointer-sized
+ * types (TY_CSTR, TY_PTR_VOID) are already int64_t-compatible so no
+ * reinterpret is needed and this returns false for them.
+ * Struct/ADT/composite types have size 0 in type_size_bytes and are always
+ * pointer carriers. */
+static bool carrier_is_inline(TypeKind k) {
+    switch (k) {
+        case TY_FLOAT:
+        case TY_FLOAT64:
+        case TY_FLOAT32:
+        case TY_INT32:
+        case TY_UINT32:
+        case TY_INT16:
+        case TY_UINT16:
+        case TY_INT8:
+        case TY_UINT8:
+        case TY_BOOL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
+                          char *src_str,
+                          CarrierKind src_ck, CarrierKind sink_ck,
+                          Type concrete_ty) {
+    /* No crossing needed. */
+    if (src_ck == sink_ck) return src_str;
+
+    const char *cname = emit_type_c_name(ctx, concrete_ty);
+    Buf out;
+    buf_init(&out);
+
+    if (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE) {
+        if (carrier_is_inline(concrete_ty.kind)) {
+            /* Inline scalar: union bitwise reinterpret int64_t -> concrete. */
+            buf_printf(&out, "((union { int64_t s; %s d; }){.s = (%s)}).d",
+                       cname, src_str);
+        } else {
+            /* Pointer carrier: dereference the heap pointer. */
+            buf_printf(&out, "(*(%s *)(intptr_t)(%s))", cname, src_str);
+        }
+    } else {
+        /* CK_CONCRETE -> CK_CARRIER */
+        if (carrier_is_inline(concrete_ty.kind)) {
+            /* Inline scalar: union bitwise reinterpret concrete -> int64_t. */
+            buf_printf(&out, "((union { %s s; int64_t d; }){.s = (%s)}).d",
+                       cname, src_str);
+        } else {
+            /* Aggregate: spill to a local, return its address as int64_t.
+             * The spill local uses a fresh tmp so it stays live through the
+             * expression that consumes the carrier value. */
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = %s;\n", cname, tmp, src_str);
+            buf_printf(&out, "(int64_t)(intptr_t)(&%s)", tmp);
+            free(tmp);
+        }
+    }
+
+    free(src_str);
+    char *result = strdup(out.data);
+    buf_free(&out);
+    return result;
+}

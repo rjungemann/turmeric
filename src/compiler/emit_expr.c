@@ -1,6 +1,13 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 
+/* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
+ * type-application) that the carrier ABI stores as a heap pointer.  Used by
+ * KB-004 and KB-010 bridge insertion sites. */
+static bool type_kind_is_aggregate(TypeKind k) {
+    return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
+}
+
 static bool reinterpret_kind_is_scalar(TypeKind kind) {
     switch (kind) {
         case TY_BOOL:
@@ -685,11 +692,25 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_REINTERPRET: {
             if (e->as.reinterpret_.expr && e->as.reinterpret_.expr->kind == EX_CALL) {
+                const Expr *inner_call = e->as.reinterpret_.expr;
                 for (uint32_t si = 0; si < ctx->n_abi_specializations; si++) {
                     const EmitAbiSpecialization *spec = &ctx->abi_specializations[si];
-                    if (spec->call_expr == e->as.reinterpret_.expr &&
+                    if (spec->call_expr == inner_call &&
                         type_eq(spec->result_type, e->type)) {
-                        return emit_value(ctx, body, e->as.reinterpret_.expr);
+                        return emit_value(ctx, body, inner_call);
+                    }
+                }
+                /* KB-015: the first call to a specialised clone registers spec->call_expr
+                 * pointing to that first EX_CALL node.  Subsequent calls to the same
+                 * instantiation get fresh EX_CALL nodes that appear only in
+                 * specialized_call_exprs[] -- spec->call_expr does not cover them.
+                 * Without this second check, the reinterpretation fires on a call that
+                 * already returns the concrete type, truncating the double to int64_t. */
+                if (ctx) {
+                    for (uint32_t si = 0; si < ctx->n_specialized_calls; si++) {
+                        if (ctx->specialized_call_exprs[si] == inner_call) {
+                            return emit_value(ctx, body, inner_call);
+                        }
                     }
                 }
             }
@@ -1173,7 +1194,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * -Wint-conversion error in C99. */
                     bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
                                           e->as.call_.args[i]->type.kind == TY_PTR_VOID);
-                    arg_cast[i] = needs_fn_cast;
+                    /* KB-012: dictionary method pointers use the carrier ABI (int64_t).
+                     * When the argument is a concrete aggregate (TY_APP / TY_STRUCT /
+                     * TY_ADT) -- as happens when an ABI-specialised constructor returns
+                     * a concrete struct -- bridge it to carrier before the call so the
+                     * function signature and the actual parameter type agree. */
+                    bool needs_carrier_bridge = !needs_fn_cast && ctx &&
+                        type_kind_is_aggregate(e->as.call_.args[i]->type.kind);
+                    arg_cast[i] = needs_fn_cast || needs_carrier_bridge;
                     if (needs_fn_cast) {
                         Buf cast; buf_init(&cast);
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
@@ -1181,6 +1209,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(raw);
                         raw = strdup(cast.data);
                         buf_free(&cast);
+                    } else if (needs_carrier_bridge) {
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CONCRETE, CK_CARRIER,
+                                                  e->as.call_.args[i]->type);
                     }
                     arg_strs[i] = raw;
                 }
@@ -1479,10 +1511,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool args_match = true;
                     for (uint32_t ai = 0; ai < e->as.call_.n_args; ai++) {
                         const Expr *cur = e->as.call_.args[ai];
-                        while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
-                        Type actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
-                            ? cur->as.reinterpret_.expr->type
-                            : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                        /* ACB (KB-004): when the arg is EX_ASCRIBE, use the ascribed
+                         * type for spec matching -- it records the concrete type that
+                         * the carrier holds.  Without this, stripping to the inner
+                         * TY_INT expression prevents the spec from matching. */
+                        Type actual;
+                        if (cur && cur->kind == EX_ASCRIBE) {
+                            actual = cur->type;
+                        } else {
+                            while (cur && cur->kind == EX_ASCRIBE) cur = cur->as.ascribe_.inner;
+                            actual = (cur && cur->kind == EX_REINTERPRET && cur->as.reinterpret_.expr)
+                                ? cur->as.reinterpret_.expr->type
+                                : (cur ? cur->type : emit_type_from_kind(TY_UNKNOWN));
+                        }
                         if (!type_eq(spec->arg_types[ai], actual)) {
                             args_match = false;
                             break;
@@ -1578,6 +1619,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(cast.data);
                     buf_free(&cast);
+                }
+                /* ACB (KB-004): when a specialized call expects a concrete aggregate
+                 * argument but the emitted value is a carrier (int64_t), bridge it
+                 * here.  Skip when needs_fn_cast already applied a different coercion. */
+                if (!needs_fn_cast && matched_spec &&
+                    emit_arg && emit_arg->type.kind == TY_INT &&
+                    type_kind_is_aggregate(matched_spec->arg_types[i].kind)) {
+                    raw = emit_carrier_bridge(ctx, body, raw,
+                                             CK_CARRIER, CK_CONCRETE,
+                                             matched_spec->arg_types[i]);
                 }
                 arg_strs[i] = raw;
             }
@@ -2704,9 +2755,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
-        /* Phase HRT1: type ascription — erase type, emit inner expression */
+        /* Phase HRT1: type ascription — erase type, emit inner expression.
+         * ACB (KB-004): when the inner expression is a carrier (int64_t) and
+         * the ascribed type is a concrete aggregate, insert the bridge so the
+         * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
-            return emit_value(ctx, body, e->as.ascribe_.inner);
+            char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
+            if (e->as.ascribe_.inner->type.kind == TY_INT &&
+                type_kind_is_aggregate(e->type.kind)) {
+                return emit_carrier_bridge(ctx, body, inner_val,
+                                           CK_CARRIER, CK_CONCRETE, e->type);
+            }
+            return inner_val;
         }
         /* Phase HRT2 / EX1e / EXG1: existential pack.
          *   - Unconstrained: emit a bare scalar/pointer cast as in HRT2.
