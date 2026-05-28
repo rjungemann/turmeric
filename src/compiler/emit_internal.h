@@ -126,6 +126,33 @@ typedef struct DeferThunk {
     struct DeferThunk *next; /* Linked list */
 } DeferThunk;
 
+/* ------------ emit_core.c: carrier ABI bridge ------------ */
+
+/* Two-state tag: which ABI is a value in?
+ * CK_CARRIER  -- int64_t slot (heap pointer cast to intptr_t, or inline
+ *                8-byte payload reinterpreted from the scalar value)
+ * CK_CONCRETE -- concrete C type (struct by value, or scalar at its native
+ *                width) */
+typedef enum { CK_CARRIER = 0, CK_CONCRETE = 1 } CarrierKind;
+
+/* Emit a bridge expression so that src_str (already emitted, malloc'd) is
+ * delivered with the ABI expected by sink_ck.
+ *
+ * Returns a fresh malloc'd C expression string.  When src_ck == sink_ck the
+ * input string is returned unchanged (ownership transferred).  When the
+ * crossing requires spilling to a local (CK_CONCRETE -> CK_CARRIER for
+ * aggregate types), the spill statement is appended to body at the current
+ * indent level and the returned expression refers to the spill variable.
+ *
+ * concrete_ty must describe the concrete type at the crossing (the struct,
+ * ADT, or scalar type -- never TY_INT / TY_TYVAR).
+ *
+ * Ownership: consumes src_str (frees it when wrapping). */
+char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
+                          char *src_str,
+                          CarrierKind src_ck, CarrierKind sink_ck,
+                          Type concrete_ty);
+
 /* ------------ emit_core.c: helpers, naming, atoms, builtins ------------ */
 /* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
  * Evaluates val_exprs[N] into temp vars; returns a malloc'd substituted string. */
