@@ -1082,6 +1082,10 @@ void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);
 const char  *type_register_adt_app(Type t);
 char        *type_adt_app_ctor_suffix(Type t);
+/* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */
+const char  *register_fn_ptr_typedef(const Type *fn_type);
+void         type_codegen_reset_fn_ptr_typedefs(void);
+void         type_codegen_emit_fn_ptr_typedefs(Buf *out);
 /* Phase D: true if t is a struct type whose sizeof exceeds 16 bytes,
  * meaning it should be passed as const T* rather than by value. */
 bool         type_struct_pass_by_ptr(Type t);

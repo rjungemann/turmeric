@@ -1,0 +1,24 @@
+;; Phase F: concrete poly dispatch for sub-64-bit integer types.
+;; When a (forall [a] (-> a a)) poly fn is called with int32_t args,
+;; the emitter casts fn.fn to the concrete signature rather than using
+;; the int64_t carrier widening path.
+
+(defn apply32 [f (forall [a] (-> a a)) x :int32] :int32
+  (f x))
+
+(defn double32 [x :int32] :int32
+  (as int32 (* (as int x) 2)))
+
+(defn main [] :int
+  ;; Named function through poly fn param (non-closure path)
+  (println (as int (apply32 double32 5i32)))
+  (println (as int (apply32 double32 100i32)))
+
+  ;; Closure through poly fn param
+  (println (as int (apply32 (fn [x :int32] :int32 (as int32 (+ (as int x) 1))) 7i32)))
+
+  ;; Apply poly fn to result of another poly fn call (chained)
+  (let [r (apply32 double32 (apply32 double32 3i32))]
+    (println (as int r)))
+
+  0)

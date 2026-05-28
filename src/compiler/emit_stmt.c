@@ -70,7 +70,21 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     indent_buf(body, ctx->indent);
-    buf_printf(body, "%s = %s;\n", lhs.data, vv);
+    /* Phase E: for typed fn-ptr fields, cast through the typedef rather than
+     * storing a raw int64_t.  For bare :fn fields (full_type == NULL) keep the
+     * existing int64_t assignment so nothing regresses. */
+    if (fk == TY_FN && e->as.set_field_.value->type.kind == TY_FN
+            && def->fields[fi].full_type
+            && def->fields[fi].full_type->kind == TY_FN) {
+        const char *fn_td = register_fn_ptr_typedef(def->fields[fi].full_type);
+        if (fn_td) {
+            buf_printf(body, "%s = (%s)%s;\n", lhs.data, fn_td, vv);
+        } else {
+            buf_printf(body, "%s = %s;\n", lhs.data, vv);
+        }
+    } else {
+        buf_printf(body, "%s = %s;\n", lhs.data, vv);
+    }
 
     buf_free(&lhs);
     free(rv); free(vv); free(mfn);

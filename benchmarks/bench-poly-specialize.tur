@@ -1,0 +1,32 @@
+;; Phase F signal benchmark: concrete poly dispatch for int32_t types.
+;;
+;; Demonstrates that (forall [a] (-> a a)) calls with int32_t arguments
+;; use a concrete function-pointer cast instead of the int64_t carrier
+;; widening path.  Compare the emitted C for `apply32` before and after
+;; Phase F:
+;;
+;;   Before: f.fn(f.env, (int64_t)(x))
+;;   After:  ((int32_t (*)(void*, int32_t))f.fn)(f.env, x)
+;;
+;; The concrete cast path avoids unnecessary widening (int32->int64) and
+;; the internal truncation inside the poly wrapper (int64->int32).
+;;
+;; Signal: run `tur emit-c bench-poly-specialize.tur | grep "apply32("` and
+;; verify the body contains `(int32_t (*)(void*, int32_t))` not `(int64_t)`.
+
+(defn apply32 [f (forall [a] (-> a a)) x :int32] :int32
+  (f x))
+
+(defn double32 [x :int32] :int32
+  (as int32 (* (as int x) 2)))
+
+(defn square32 [x :int32] :int32
+  (as int32 (* (as int x) (as int x))))
+
+(defn main [] :int
+  ;; Named function path: avoids int32->int64->int32 round-trip in wrapper
+  (println (as int (apply32 double32 21i32)))   ;; 42
+  (println (as int (apply32 square32 7i32)))    ;; 49
+  ;; Chained: applies poly fn twice
+  (println (as int (apply32 double32 (apply32 double32 5i32))))  ;; 20
+  0)
