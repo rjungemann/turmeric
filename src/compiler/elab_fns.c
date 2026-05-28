@@ -850,6 +850,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         param_kinds[n_params - 1] = TY_ADT;
                         params[n_params - 1]->type = type_adt(param_adt);
                     } else {
+                        /* Phase D: try to look up as a struct name (mirrors return-type path). */
+                        StructDef *param_struct = NULL;
+                        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+                            if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
+                                param_struct = e->struct_defs[si];
+                                break;
+                            }
+                        }
+                        if (param_struct) {
+                            param_kinds[n_params - 1] = TY_STRUCT;
+                            params[n_params - 1]->type = type_struct(param_struct);
+                        } else {
                         /* Phase HRT/G2: Unknown keyword -- treat as an implicit type variable.
                          * A parameter annotation like :a where 'a' is not a known type or ADT
                          * is an implicit type variable. Mark the binding TY_TYVAR so that inside
@@ -858,6 +870,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         params[n_params - 1]->type = type_tyvar_named(kw->name);
                         param_poly_types[n_params - 1] = (Type *)arena_alloc(e->arena, sizeof(Type));
                         *param_poly_types[n_params - 1] = params[n_params - 1]->type;
+                        } /* end struct else */
                     }
                     } /* end TA1 else */
                 }

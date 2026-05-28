@@ -608,6 +608,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.cap_specialized_calls = 0;
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
+    ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
 
@@ -1026,10 +1027,17 @@ int emit_program(Buf *out, const Expr *program) {
                 } else if (fd->param_types[j].kind == TY_FN) {
                     /* ER4: function-typed parameters are passed as int64_t. */
                     buf_puts(&fwd_decls, "int64_t");
-                } else if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j]) {
-                    buf_puts(&fwd_decls, type_c_name(*e->type.as.fn.arg_full_types[j]));
                 } else {
-                    buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
+                    /* Phase D: mirror emit_fn_def's pass-by-ptr logic. */
+                    bool _fwd_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+                    Type _fwd_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                        ? *e->type.as.fn.arg_full_types[j]
+                        : fd->param_types[j];
+                    if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
+                        buf_printf(&fwd_decls, "const %s *", type_c_name(_fwd_pty));
+                    } else {
+                        buf_puts(&fwd_decls, type_c_name(_fwd_pty));
+                    }
                 }
             }
             buf_puts(&fwd_decls, ");\n");
@@ -3880,10 +3888,15 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
             buf_printf(out, " %s(", fn_name);
             for (uint8_t j = 0; j < fd->n_params; j++) {
                 if (j > 0) buf_puts(out, ", ");
-                if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j]) {
-                    buf_puts(out, type_c_name(*e->type.as.fn.arg_full_types[j]));
+                /* Phase D: mirror emit_fn_def's pass-by-ptr logic. */
+                bool _hdr_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+                Type _hdr_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                    ? *e->type.as.fn.arg_full_types[j]
+                    : fd->param_types[j];
+                if (!fd->closure && !_hdr_inline_c && type_struct_pass_by_ptr(_hdr_pty)) {
+                    buf_printf(out, "const %s *", type_c_name(_hdr_pty));
                 } else {
-                    buf_puts(out, type_c_name(fd->param_types[j]));
+                    buf_puts(out, type_c_name(_hdr_pty));
                 }
             }
             buf_puts(out, ");\n");
@@ -3986,6 +3999,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     ctx.cap_specialized_calls = 0;
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
+    ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
 
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));

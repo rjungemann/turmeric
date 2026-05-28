@@ -1,0 +1,27 @@
+;; Phase D: structs with sizeof > 16 bytes are passed as const T* at the C ABI level.
+;; Vec3 has 3 :int fields = 24 bytes -- exceeds the 16-byte threshold.
+
+(defstruct Vec3 [x :int y :int z :int])
+
+(defn vec3-add [a :Vec3 b :Vec3] :Vec3
+  (make-struct Vec3
+    (+ (.x a) (.x b))
+    (+ (.y a) (.y b))
+    (+ (.z a) (.z b))))
+
+(defn vec3-dot [a :Vec3 b :Vec3] :int
+  (+ (+ (* (.x a) (.x b))
+        (* (.y a) (.y b)))
+     (* (.z a) (.z b))))
+
+(defn main [] :int
+  (let [a1 (make-struct Vec3 1 2 3)
+        b1 (make-struct Vec3 4 5 6)
+        a2 (make-struct Vec3 1 2 3)
+        b2 (make-struct Vec3 4 5 6)]
+    (let [c (vec3-add a1 b1)]
+      (println (.x c))
+      (println (.y c))
+      (println (.z c)))
+    (println (vec3-dot a2 b2))
+    0))

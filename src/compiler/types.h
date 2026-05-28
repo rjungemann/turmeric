@@ -249,6 +249,10 @@ typedef struct StructDef {
      * Initialised to KIND_STAR; infer_struct_type_param_kinds refines based on
      * usage in StructField.full_type.  NULL when n_type_params == 0. */
     Kind       *type_param_kinds;
+    /* Phase D: sum of field sizes exceeds 16 bytes -- pass as const T* at C ABI level.
+     * Only meaningful for non-parameterized structs (n_type_params == 0); for generic
+     * structs the per-instantiation RegisteredStructApp.pass_by_ptr flag is used. */
+    bool        pass_by_ptr;
 } StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this
@@ -1078,6 +1082,9 @@ void         type_codegen_reset_adt_apps(void);
 void         type_codegen_emit_adt_apps(Buf *out);
 const char  *type_register_adt_app(Type t);
 char        *type_adt_app_ctor_suffix(Type t);
+/* Phase D: true if t is a struct type whose sizeof exceeds 16 bytes,
+ * meaning it should be passed as const T* rather than by value. */
+bool         type_struct_pass_by_ptr(Type t);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 
