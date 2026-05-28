@@ -89,3 +89,7 @@ bool g_interpret_mode = false;
  * warnings emitted by elab_lookup_sym to errors so a clean build can
  * gate against new uses of deprecated APIs. */
 bool g_werror_deprecated = false;
+
+/* Phase C: --Werror=inline-c-narrow-params promotes narrow-param-in-inline-C
+ * warnings to errors. */
+bool g_werror_inline_c_narrow_params = false;

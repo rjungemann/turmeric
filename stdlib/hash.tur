@@ -1,0 +1,157 @@
+;;; tur/hash -- canonical integer hashing across numeric widths.
+;;;
+;;; Signed narrow types sign-extend to :int before hashing, so
+;;; (= (hash-int8 n) (hash-int (as int n))) holds for any valid int8 n.
+;;; Unsigned narrow types zero-extend, so (hash-uint8 255u8) differs
+;;; from (hash-int -1) even though both share the same 8-bit pattern.
+;;;
+;;; Hash function: splitmix64 finalizer (bijective, avalanche-complete).
+;;;
+;;; Since: Phase C
+;; hash.tur -- canonical integer hashing.
+
+;;; hash-int -- hash a 64-bit signed integer via splitmix64 finalizer.
+;;;
+;;; Parameters:
+;;;   n -- value to hash
+;;;
+;;; Returns:
+;;;   A 64-bit hash of n as :int.
+;;;
+;;; Example:
+;;;   (hash-int 42)  ; => some stable 64-bit integer
+;;;
+;;; Since: Phase C
+(defn hash-int [n :int] :int
+  ```c
+  uint64_t h = (uint64_t)n;
+  h ^= h >> 30;
+  h *= 0xbf58476d1ce4e5b9ULL;
+  h ^= h >> 27;
+  h *= 0x94d049bb133111ebULL;
+  h ^= h >> 31;
+  return (int64_t)h;
+  ```)
+
+;;; hash-int8 -- hash an int8; equals (hash-int (as int n)) via sign-extension.
+;;;
+;;; Parameters:
+;;;   n -- int8 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)).
+;;;
+;;; Example:
+;;;   (= (hash-int8 42i8) (hash-int 42))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-int8 [n :int8] :int
+  (hash-int (as int n)))
+
+;;; hash-int16 -- hash an int16; equals (hash-int (as int n)) via sign-extension.
+;;;
+;;; Parameters:
+;;;   n -- int16 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)).
+;;;
+;;; Example:
+;;;   (= (hash-int16 1000i16) (hash-int 1000))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-int16 [n :int16] :int
+  (hash-int (as int n)))
+
+;;; hash-int32 -- hash an int32; equals (hash-int (as int n)) via sign-extension.
+;;;
+;;; Parameters:
+;;;   n -- int32 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)).
+;;;
+;;; Example:
+;;;   (= (hash-int32 100000i32) (hash-int 100000))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-int32 [n :int32] :int
+  (hash-int (as int n)))
+
+;;; hash-int64 -- hash an int64; identical to hash-int.
+;;;
+;;; Parameters:
+;;;   n -- int64 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)).
+;;;
+;;; Example:
+;;;   (= (hash-int64 42i64) (hash-int 42))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-int64 [n :int64] :int
+  (hash-int (as int n)))
+
+;;; hash-uint8 -- hash a uint8 via zero-extension to :int.
+;;;
+;;; A uint8 value of 0xFF (255) produces a different hash than :int -1,
+;;; since zero-extension gives 255, not 0xFFFFFFFFFFFFFFFF.
+;;;
+;;; Parameters:
+;;;   n -- uint8 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)) where (as int n) zero-extends.
+;;;
+;;; Example:
+;;;   (not= (hash-uint8 255u8) (hash-int -1))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-uint8 [n :uint8] :int
+  (hash-int (as int n)))
+
+;;; hash-uint16 -- hash a uint16 via zero-extension to :int.
+;;;
+;;; Parameters:
+;;;   n -- uint16 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)) where (as int n) zero-extends.
+;;;
+;;; Example:
+;;;   (= (hash-uint16 1000u16) (hash-int 1000))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-uint16 [n :uint16] :int
+  (hash-int (as int n)))
+
+;;; hash-uint32 -- hash a uint32 via zero-extension to :int.
+;;;
+;;; Parameters:
+;;;   n -- uint32 value to hash
+;;;
+;;; Returns:
+;;;   Same as (hash-int (as int n)) where (as int n) zero-extends.
+;;;
+;;; Example:
+;;;   (= (hash-uint32 1000u32) (hash-int 1000))  ; => true
+;;;
+;;; Since: Phase C
+(defn hash-uint32 [n :uint32] :int
+  (hash-int (as int n)))
+
+;;; hash-uint64 -- hash a uint64 by reinterpreting as :int then hashing.
+;;;
+;;; Parameters:
+;;;   n -- uint64 value to hash
+;;;
+;;; Returns:
+;;;   Hash of the 64-bit bit pattern of n.
+;;;
+;;; Example:
+;;;   (hash-uint64 0u64)  ; => same as (hash-int 0)
+;;;
+;;; Since: Phase C
+(defn hash-uint64 [n :uint64] :int
+  (hash-int (as int n)))

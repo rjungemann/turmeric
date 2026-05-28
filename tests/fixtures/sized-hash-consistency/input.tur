@@ -1,0 +1,34 @@
+; Phase C: hash equality semantics across numeric widths.
+;
+; Rules:
+;   - Signed narrow types sign-extend to :int before hashing:
+;       hash(int8(n)) == hash(int(n))
+;   - Unsigned narrow types zero-extend:
+;       hash(uint8(0xFF)) != hash(int(-1))
+
+; splitmix64 finalizer: bijective, used as the canonical integer hash.
+(defn hash-int [n :int] :int
+  ```c
+  uint64_t h = (uint64_t)n;
+  h ^= h >> 30;
+  h *= 0xbf58476d1ce4e5b9ULL;
+  h ^= h >> 27;
+  h *= 0x94d049bb133111ebULL;
+  h ^= h >> 31;
+  return (int64_t)h;
+  ```)
+
+(defn hash-int8  [n :int8]  :int (hash-int (as int n)))
+(defn hash-uint8 [n :uint8] :int (hash-int (as int n)))
+
+; int8(42) sign-extends to int(42): same hash
+(println (= (hash-int8 42i8) (hash-int 42)))
+
+; int8(-1) sign-extends to int(-1): same hash
+(println (= (hash-int8 -1i8) (hash-int -1)))
+
+; uint8(255) zero-extends to int(255), which != int(-1)
+(println (not= (hash-uint8 255u8) (hash-int -1)))
+
+; uint8(0) zero-extends to int(0): same hash
+(println (= (hash-uint8 0u8) (hash-int 0)))

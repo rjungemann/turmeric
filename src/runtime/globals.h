@@ -81,3 +81,8 @@ extern bool g_interpret_mode;
 /* F4 (cross-plan-followups): --Werror=deprecated flag — promotes
  * ^deprecated use-site warnings to errors. */
 extern bool g_werror_deprecated;
+
+/* Phase C: --Werror=inline-c-narrow-params — promote narrow-type-in-inline-C
+ * warnings to errors so a strict build can gate against unannotated narrow
+ * parameters reaching inline-C bodies. */
+extern bool g_werror_inline_c_narrow_params;

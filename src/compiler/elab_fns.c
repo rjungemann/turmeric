@@ -749,7 +749,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 *param_poly_types[n_params - 1] = params[n_params - 1]->type;
                 continue;
             }
-            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+            /* Phase N: use typekind_from_symbol to resolve all known type names
+             * (including fixed-width numeric types) before falling through to the
+             * type-variable path.  The fast-path checks below are kept for the
+             * most common cases; everything else goes through typekind_from_symbol. */
+            TypeKind _kw_kind = typekind_from_symbol(kw->name);
+            if (_kw_kind != TY_UNKNOWN) {
+                param_kinds[n_params - 1] = _kw_kind;
+                params[n_params - 1]->type = type_from_kind(_kw_kind);
+                params[n_params - 1]->type.copy_kind = typekind_default_copy_kind(_kw_kind);
+                /* :ref and :lref params need substructural handling (see below) */
+                if (_kw_kind == TY_REF) {
+                    params[n_params - 1]->type = type_ref(TY_INT);
+                    if (g_substructural_enabled && !params[n_params - 1]->is_linear
+                            && !params[n_params - 1]->is_affine
+                            && !params[n_params - 1]->is_relevant) {
+                        params[n_params - 1]->is_linear = true;
+                        params[n_params - 1]->type.substruct = SK_LINEAR;
+                    }
+                } else if (_kw_kind == TY_LREF) {
+                    params[n_params - 1]->type = type_lref(TY_INT);
+                    if (g_linear_enabled) params[n_params - 1]->is_linear = true;
+                }
+            } else if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 param_kinds[n_params - 1] = TY_INT;
                 params[n_params - 1]->type = TYPE_INT;
             } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
@@ -1631,6 +1653,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
                   "inline-C blocks need a fixed arity signature",
                   name_f->as.sym->name);
         return NULL;
+    }
+
+    /* Phase C: warn (or error under --Werror=inline-c-narrow-params) when a
+     * narrow-width parameter reaches an inline-C body.  The C code sees the
+     * parameter at its narrow C type (e.g. int16_t), not int64_t, which
+     * surprises callers that wrote the body expecting the carrier width. */
+    if (body && body->kind == EX_INLINE_C) {
+        for (uint8_t _ci = 0; _ci < n_params; _ci++) {
+            TypeKind k = param_kinds[_ci];
+            bool is_narrow = (k == TY_INT8  || k == TY_INT16  || k == TY_INT32 ||
+                              k == TY_UINT8 || k == TY_UINT16 || k == TY_UINT32 ||
+                              k == TY_FLOAT32);
+            if (!is_narrow) continue;
+            DiagLevel sev = g_werror_inline_c_narrow_params ? DIAG_ERROR : DIAG_WARNING;
+            diag_emit_with_code(sev, body->span, TUR_W0037_INLINE_C_NARROW_PARAM,
+                "defn '%s': parameter '%s' has narrow type %s -- "
+                "inline-C sees %s, not int64_t; add explicit casts if needed",
+                name_f->as.sym->name,
+                params[_ci]->name->name,
+                type_name(type_from_kind(k)),
+                type_c_name(type_from_kind(k)));
+            if (g_werror_inline_c_narrow_params) return NULL;
+        }
     }
 
     Expr *out = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);

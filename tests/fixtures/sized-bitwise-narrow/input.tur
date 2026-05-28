@@ -1,0 +1,33 @@
+; Phase C: kind-preserving bitwise operations on narrow integer types.
+; bit-and/bit-or/bit-xor/bit-shl/bit-shr return the same kind as their operands.
+
+; bit-and on :uint16
+(println (bit-and 65280u16 3855u16))    ; 0xFF00 & 0x0F0F = 0x0F00 = 3840
+
+; bit-or on :uint16
+(println (bit-or 65280u16 255u16))      ; 0xFF00 | 0x00FF = 0xFFFF = 65535
+
+; bit-xor on :uint16
+(println (bit-xor 65535u16 3855u16))    ; 0xFFFF ^ 0x0F0F = 0xF0F0 = 61680
+
+; bit-shl on :uint8
+(println (bit-shl 1u8 3u8))             ; 1 << 3 = 8
+
+; bit-shr on :uint8 (unsigned: logical shift, 0-fills high bits)
+(println (bit-shr 128u8 3u8))           ; 128 >> 3 = 16
+
+; kind preservation: result of bit-and is :uint16, usable in further :uint16 ops
+(println (+ (bit-and 100u16 255u16) 1u16))  ; (100 & 255 = 100) + 1 = 101
+
+; bit-and on :int8 (signed narrow)
+(println (bit-and 120i8 15i8))          ; 0x78 & 0x0F = 0x08 = 8
+
+; bit-or on :int32
+(println (bit-or 256i32 15i32))         ; 0x100 | 0x0F = 0x10F = 271
+
+; bitwise ops on canonical :int
+(println (bit-and 12 10))               ; 1100 & 1010 = 1000 = 8
+(println (bit-or 12 10))                ; 1100 | 1010 = 1110 = 14
+(println (bit-xor 12 10))               ; 1100 ^ 1010 = 0110 = 6
+(println (bit-shl 1 4))                 ; 1 << 4 = 16
+(println (bit-shr 256 4))               ; 256 >> 4 = 16
