@@ -27,6 +27,8 @@ static const ReservedPrefix kReserved[] = {
     { "?",    '(' },  /* #?(...) reader conditional */
     { "|",    0   },  /* #| ... |# block comment */
     { "lang", 0   },  /* #lang directive */
+    /* Built-in named string macros: cannot be redefined by user macros. */
+    { "rx",   '"' },  /* #rx"..." regex literal */
     { NULL,   0   },
 };
 
@@ -236,6 +238,7 @@ static bool keyword_to_mode_delim(const Symbol *kw,
         { "datum-paren",   RM_BODY_DATUM, '(' },
         { "datum-bracket", RM_BODY_DATUM, '[' },
         { "datum-brace",   RM_BODY_DATUM, '{' },
+        { "string",        RM_BODY_STRING, '"' },
     };
     for (size_t i = 0; i < sizeof(table)/sizeof(*table); ++i) {
         size_t n = strlen(table[i].name);
@@ -272,7 +275,7 @@ int reader_macros_register_from_form(ReaderMacroRegistry *reg, const Form *f) {
                   mode_arg ? mode_arg->span : f->span,
                   "reader-macros/define: second argument must be a mode "
                   "keyword (:none, :raw-paren, :raw-bracket, :raw-brace, "
-                  ":datum-paren, :datum-bracket, :datum-brace)");
+                  ":datum-paren, :datum-bracket, :datum-brace, :string)");
         return -1;
     }
     ReaderMacroMode mode;

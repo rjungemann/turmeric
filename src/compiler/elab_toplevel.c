@@ -312,6 +312,25 @@ Expr *elab_form(Elab *e, Form *f) {
                     "inline-C block in function not annotated #{Unsafe}; "
                     "add #{Unsafe} to the function or wrap the call site in (unsafe ...)");
             }
+            /* Hoist regex.h to the file preamble when any inline-C
+             * references it. Per-function `#include <regex.h>` only takes
+             * effect for the first function in the TU (subsequent includes
+             * are suppressed by the header guard), so without hoisting,
+             * multi-function stdlib modules like stdlib/re.tur fail to
+             * compile. */
+            extern bool g_needs_regex_h;
+            if (!g_needs_regex_h && f->as.cblock.p) {
+                const char *needle = "regex.h";
+                size_t nlen = 7;
+                if (f->as.cblock.len >= nlen) {
+                    for (uint32_t i = 0; i + nlen <= f->as.cblock.len; ++i) {
+                        if (memcmp(f->as.cblock.p + i, needle, nlen) == 0) {
+                            g_needs_regex_h = true;
+                            break;
+                        }
+                    }
+                }
+            }
             /* For now, we don't support captures, so the InlineC has no captures */
             InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
             ic->code = f->as.cblock;

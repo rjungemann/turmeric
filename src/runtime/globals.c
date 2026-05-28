@@ -34,6 +34,11 @@ uint32_t g_unsafe_total_lines = 0;
 /* Phase P3: HAMT lowering - track if HAMT is needed for this compilation */
 bool g_needs_hamt = false;
 
+/* stdlib/re.tur: track when any inline-C in this compilation references
+ * <regex.h>. When true, the emitter hoists `#include <regex.h>` into the
+ * preamble so multiple re_* functions can share the typedef. */
+bool g_needs_regex_h = false;
+
 /* AR8: Variadic rest parameters -- track if any variadic defn is compiled */
 bool g_has_variadics = false;
 

@@ -1,7 +1,7 @@
 # Plan: Regex literals, regex union API, and named reader string macros
 
-> **Status:** Proposed
-> **Last Updated:** 2026-05-26
+> **Status:** Implemented
+> **Last Updated:** 2026-05-27
 > **Type:** Reader + stdlib/re
 
 ---

@@ -375,22 +375,23 @@ benchmarks justify it.
 
 ## Open questions
 
-1. **Implicit widening: yes or no?** Phase B picks "no" by default;
-   confirm that fits the language's general "explicit over
-   implicit" stance. Mixed-width arithmetic in scientific code is
-   common; require `(as ...)` may be tedious.
-2. **Pass-by-pointer threshold.** 16 bytes is conservative; 24 or
-   32 may be more aligned with x86-64 calling conventions. Benchmark.
-3. **Closure specialization vs codegen size.** Phase F can balloon
-   the C output. A `--max-specializations-per-fn=N` knob may be
-   needed; pick N empirically.
-4. **Typeclass path (a) vs (b).** (a) is more aggressive but risks
-   instance-explosion. (b) needs careful handling of dictionary
-   *threading* through higher-order code where the dictionary value
-   crosses a closure boundary.
-5. **Does Phase G's template inline-C make stdlib unreadable?** An
-   alternative is to mark certain helpers as "carrier-only" and
-   force users into a typed wrapper; less power, more clarity.
+**All questions resolved (2026-05-27).**
+
+1. **Implicit widening: no.** No implicit coercion between numeric
+   widths. Mixed-width arithmetic requires an explicit `(as ...)`.
+   Matches the language's "explicit over implicit" stance.
+2. **Pass-by-pointer threshold: 16 bytes.** Structs wider than 16
+   bytes are passed as `const T *`. No benchmark-driven adjustment
+   for now.
+3. **Closure specialization cap: none.** Ship Phase F without a
+   `--max-specializations-per-fn` cap. Add one only if benchmarks
+   show it is needed.
+4. **Typeclass path: (b).** Keep dictionaries; specialize the call
+   through the dictionary when the receiver type is statically known.
+   Fall back to dict dispatch otherwise.
+5. **Phase G inline-C: template approach.** The kind-suffixed
+   template inline-C form is acceptable for stdlib. Carrier-only
+   wrappers are not required.
 
 ---
 

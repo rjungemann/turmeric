@@ -1,0 +1,16 @@
+; Built-in #rx"..." regex literal reader macro.
+;
+; Expands to (re/compile "...") and shares the same lifetime rules as a
+; manual re/compile call.
+(load "stdlib/re.tur")
+
+(defn main [] :int
+  (let [digits   #rx"^[0-9]+$"
+        words    #rx"^[A-Za-z]+$"]
+    (if (re/match? digits "12345")  (println "digits-match")    (println "digits-miss"))
+    (if (re/match? digits "hello")  (println "digits-bad")      (println "digits-skip"))
+    (if (re/match? words  "hello")  (println "words-match")     (println "words-miss"))
+    (if (re/match? words  "h3llo")  (println "words-bad")       (println "words-skip"))
+    (re/free digits)
+    (re/free words))
+  0)

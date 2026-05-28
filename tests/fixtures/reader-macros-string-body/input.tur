@@ -1,0 +1,14 @@
+; RS3: user-registered string-body reader macros.
+;
+; #name"body" reads a standard string literal as the body. Inside the
+; template, $body substitutes the parsed string value (escapes resolved).
+
+(reader-macros/define 'shout :string '(println $body))
+
+; #echo"text" -> (println "text")
+(reader-macros/define 'echo  :string '(println $body))
+
+(defn main [] :int
+  #shout"hello world"
+  #echo"escapes work: line1\nline2"
+  0)
