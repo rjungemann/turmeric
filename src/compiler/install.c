@@ -399,6 +399,83 @@ static int do_install_spec(const InstallSpec *spec) {
     char tur_root[4096];
     bool have_root = inst_find_turmeric_root(self_exe, tur_root, sizeof(tur_root));
 
+    /* ---------------------------------------------------------------- */
+    /* 4a. Fetch :spices deps and collect their src/ dirs for -I.       */
+    /* ---------------------------------------------------------------- */
+#define INST_MAX_DEPS 64
+    char *dep_srcs[INST_MAX_DEPS];
+    int   n_dep_srcs = 0;
+    bool  deps_ok = true;
+
+    for (int j = 0; j < m.n_spices && n_dep_srcs < INST_MAX_DEPS; j++) {
+        const PkgSpice *dep = &m.spices[j];
+        char dep_dest[4096];
+
+        if (dep->path) {
+            /* Local path dep: resolve relative to src_dir. */
+            if (dep->path[0] == '/')
+                snprintf(dep_dest, sizeof(dep_dest), "%s", dep->path);
+            else
+                snprintf(dep_dest, sizeof(dep_dest), "%s/%s",
+                         src_dir, dep->path);
+        } else if (dep->url) {
+            /* Git dep: fetch into global spices dir if not already present. */
+            char ref_tag[128];
+            snprintf(ref_tag, sizeof(ref_tag), "%s",
+                     dep->ref ? dep->ref : "HEAD");
+            for (char *p = ref_tag; *p; p++) if (*p == '/') *p = '-';
+
+            if (dep->ref)
+                snprintf(dep_dest, sizeof(dep_dest), "%s/%s-%s",
+                         spices_dir, dep->name, ref_tag);
+            else
+                snprintf(dep_dest, sizeof(dep_dest), "%s/%s",
+                         spices_dir, dep->name);
+
+            struct stat dep_st;
+            if (stat(dep_dest, &dep_st) != 0 || !S_ISDIR(dep_st.st_mode)) {
+                fprintf(stderr, "tur %s: fetching dep '%s' ...\n",
+                        verb, dep->name);
+                char *sha = pkg_git_fetch(dep->url, dep->ref, dep_dest);
+                if (!sha) {
+                    if (dep->optional) {
+                        fprintf(stderr,
+                            "tur %s: optional dep '%s' unavailable, skipping\n",
+                            verb, dep->name);
+                        continue;
+                    }
+                    fprintf(stderr,
+                        "tur %s: failed to fetch required dep '%s'\n",
+                        verb, dep->name);
+                    deps_ok = false;
+                    break;
+                }
+                free(sha);
+            }
+        } else {
+            continue;
+        }
+
+        /* Compute the src/ dir, accounting for :subdir. */
+        char dep_src[4096];
+        if (dep->subdir)
+            snprintf(dep_src, sizeof(dep_src), "%s/%s/src",
+                     dep_dest, dep->subdir);
+        else
+            snprintf(dep_src, sizeof(dep_src), "%s/src", dep_dest);
+
+        struct stat src_st;
+        if (stat(dep_src, &src_st) == 0 && S_ISDIR(src_st.st_mode))
+            dep_srcs[n_dep_srcs++] = tur_strdup(dep_src);
+    }
+
+    if (!deps_ok) {
+        for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
+        pkg_manifest_free(&m);
+        free(resolved_sha);
+        return 1;
+    }
+
     for (int i = 0; i < m.n_bins; i++) {
         const char *bin_name = m.bin_names[i];
         const char *entry    = m.bin_paths[i];
@@ -413,6 +490,7 @@ static int do_install_spec(const InstallSpec *spec) {
             fprintf(stderr,
                 "tur %s: :bin entrypoint '%s' for binary '%s' "
                 "not found.\n", verb, entry_abs, bin_name);
+            for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
@@ -433,6 +511,8 @@ static int do_install_spec(const InstallSpec *spec) {
         buf_printf(&cmd, "'%s' build '%s'", self_exe, entry_abs);
         if (has_src)
             buf_printf(&cmd, " -I '%s'", src_subdir);
+        for (int j = 0; j < n_dep_srcs; j++)
+            buf_printf(&cmd, " -I '%s'", dep_srcs[j]);
         buf_printf(&cmd, " -o '%s'", bin_out);
         buf_putc(&cmd, '\0');
 
@@ -443,6 +523,7 @@ static int do_install_spec(const InstallSpec *spec) {
             fprintf(stderr,
                 "tur %s: build failed for '%s' (rc=%d)\n",
                 verb, bin_name, rc);
+            for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
@@ -451,11 +532,13 @@ static int do_install_spec(const InstallSpec *spec) {
             fprintf(stderr,
                 "tur %s: build produced no output at '%s'\n",
                 verb, bin_out);
+            for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
             pkg_manifest_free(&m);
             free(resolved_sha);
             return 1;
         }
     }
+    for (int j = 0; j < n_dep_srcs; j++) free(dep_srcs[j]);
 
     /* ---------------------------------------------------------------- */
     /* 5. Symlink each binary into bin_dir.                             */
