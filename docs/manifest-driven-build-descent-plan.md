@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Phases 1 & 2 implemented; Phase 3 (docs) + follow-ups pending
+> **Status:** Phases 1-3 implemented; follow-up T1 pending
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -199,6 +199,20 @@ latent correctness gap, but Phase 1 does not strictly depend on it.
 3. **Docs.** Update `CLAUDE.md` ("Build System" / "Per-file Commands") and the
    spice-development guide to document that `tur build <spice-root>` is now
    manifest-aware and descends into `src/`. Reference this plan.
+
+**Implemented.**
+
+- The `build-project-smoke` fixture (`build.tur` + nested `src/app/` with a
+  cross-module import) and `tests/run-build-project.sh` (the `tur_build_project`
+  ctest target) cover: exit 0, the manifest not being compiled as source, a
+  resolved cross-module import (runs to exit 42), the Phase 2 missing-export
+  failure, and a flat-layout project (`build.tur` + root-level source, no
+  `src/`) that exercises the shallow-scan fallback and re-confirms the stray
+  manifest is skipped.
+- `CLAUDE.md` ("Per-file Commands Inside a Spice") and
+  `docs/guides/developing-spices-guide.md` now describe the descent/skip/
+  include-resolution/export-validation behavior and link back to this plan,
+  replacing the previously aspirational "already configures itself" wording.
 
 ## Interaction with the scscm refactor
 

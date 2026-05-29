@@ -88,6 +88,28 @@ else
     fail "build-project-missing-export-fails" "rc=$ghost_rc out=$ghost_out"
 fi
 
+# Flat layout: build.tur at the root with sources alongside it (no src/ dir).
+# Exercises the shallow-scan fallback in collect_project_src_files and the
+# regression guard that the stray manifest is never compiled as source.
+FLAT="$WORK/flat"
+mkdir -p "$FLAT"
+cat > "$FLAT/build.tur" <<'EOF'
+(defpackage tur-flat
+  :name    "tur-flat"
+  :version "0.1.0")
+EOF
+cat > "$FLAT/prog.tur" <<'EOF'
+(defmodule prog (defn main [] :int 7))
+EOF
+flat_out=$(cd "$WORK" && "$TUR" build "$FLAT" -o "$WORK/flatbin" 2>&1)
+flat_rc=$?
+if [ $flat_rc -eq 0 ] && [ -x "$WORK/flatbin" ] \
+   && ! echo "$flat_out" | grep -q "unbound symbol 'tur-flat'"; then
+    pass "build-project-flat-skips-manifest"
+else
+    fail "build-project-flat-skips-manifest" "rc=$flat_rc out=$flat_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
