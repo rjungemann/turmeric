@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.13.0` -- adds a spice-aware REPL (`tur build --shared`, auto-discovery, `(reload)`, `--watch`), `#rx` regex literals, variadic rest parameters, currying, Tuple2--Tuple5 structs, and sized-primitive mixed-width arithmetic.
+**Latest release:** `v0.14.0` -- adds typed ABI specialization for typeclass methods and concrete structs (Phases C--I, including `--emit-abi-trace`); resolves six typeclass and stdlib known-bug items (KB-021--034).
 
 ## What
 

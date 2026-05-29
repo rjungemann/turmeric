@@ -2,6 +2,37 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.0] -- 2026-05-28
+
+### Added
+
+- **ABI specialization (Phases C--I)** -- the compiler now performs typed ABI
+  specialization for typeclass methods, concrete structs, and inline-C bodies.
+  Integer hashing, bitwise ops, and pass-by-ptr structs use unboxed calling
+  conventions (C/D); function-pointer fields in concrete structs are unboxed (E);
+  inline-C bodies opt in via `__TUR_TY_<NAME>__` macros (G); typeclass dispatch
+  routes directly to the instance implementation rather than going through the
+  generic slot (H). New `--emit-abi-trace` flag reports applied specializations (I).
+
+### Changed
+
+- **Web playground promoted to public beta.**
+
+### Fixed
+
+- **Typeclass and stdlib fixes (KB-021--034)** -- GADT HKT constraint unification
+  for `equal-cong` (KB-022); typeclass dispatch ABI mismatch for struct-typed
+  instances (KB-021); `rc.tur` HKT instances now dispatch on `rc<T>` rather than
+  `ptr<void>` (KB-027); orphan checker credits built-in primitive types to their
+  home module (KB-030); `session.tur` return-type annotation corrected (KB-029);
+  `gvzip-with` in `gadt-vec.tur` now takes a typed function parameter (KB-034).
+
+- **HKT/Clone fixture conflicts** with auto-loaded stdlib typeclasses resolved.
+
+- **macOS Clang compatibility** -- `run.sh` adds `-Wno-error` gates for
+  `int-conversion` and `incompatible-function-pointer-types` when building with
+  Clang, fixing CI failures on macOS Xcode 15+.
+
 ## [0.13.0] -- 2026-05-27
 
 ### Added
