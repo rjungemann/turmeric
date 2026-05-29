@@ -164,9 +164,8 @@ A single `handle` block can match several different effects.
 ;; Performs both effects: asks for a number, then tells the result.
 (defn use-both [] :int
   (let [result (+ 1 (perform (Ask)))]
-    (do
-      (perform (Tell result))
-      result)))
+    (perform (Tell result))
+    result))
 
 (println (handle (use-both)
   (Ask  []    k) (resume k 41)
@@ -181,9 +180,8 @@ defeffect Tell [x :int] :nil
 ;; Performs both effects: asks for a number, then tells the result.
 defn use-both [] :int
   let [result {1 + perform(Ask())}]
-    do
-      perform(Tell(result))
-      result
+    perform(Tell(result))
+    result
 
 println(handle use-both()
   (Ask  []  k) resume(k 41)
@@ -519,9 +517,8 @@ Replace real I/O with a test double by swapping the handler. The business logic 
 ;; Pure business logic -- no I/O primitives.
 (defn echo-doubled [] :int
   (let [n (perform (Read))]
-    (do
-      (perform (Write (int->cstr (* n 2))))
-      0)))
+    (perform (Write (int->cstr (* n 2))))
+    0))
 
 ;; Production handler: real stdin/stdout.
 (defmacro with-real-io [body]
@@ -550,9 +547,8 @@ defeffect Write [s :cstr] :nil
 ;; Pure business logic -- no I/O primitives.
 defn echo-doubled [] :int
   let [n perform(Read())]
-    do
-      perform(Write(int->cstr({n * 2})))
-      0
+    perform(Write(int->cstr({n * 2})))
+    0
 
 ;; Production handler: real stdin/stdout.
 defmacro with-real-io [body]
@@ -588,12 +584,10 @@ Define a `Log` effect with levels. Wire it to a real logger in production, suppr
 
 ;; Business logic
 (defn process [x :int] :int
-  (do
-    (perform (Log "info" "starting"))
-    (let [result (* x 2)]
-      (do
-        (perform (Log "info" "done"))
-        result))))
+  (perform (Log "info" "starting"))
+  (let [result (* x 2)]
+    (perform (Log "info" "done"))
+    result))
 
 ;; Handler: print everything
 (defmacro with-stderr-log [body]
@@ -624,12 +618,10 @@ defeffect Log [level :cstr msg :cstr] :nil
 
 ;; Business logic
 defn process [x :int] :int
-  do
-    perform(Log("info" "starting"))
-    let [result {x * 2}]
-      do
-        perform(Log("info" "done"))
-        result
+  perform(Log("info" "starting"))
+  let [result {x * 2}]
+    perform(Log("info" "done"))
+    result
 
 ;; Handler: print everything
 defmacro with-stderr-log [body]

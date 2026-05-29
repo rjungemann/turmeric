@@ -90,7 +90,7 @@ them uniformly.
 - `TY_FN` inside a struct field -- `src/compiler/types.c:473` --
   always `int64_t`.
 - Fat closure struct -- `src/compiler/emit_expr.c:1715`:
-  ```
+  ```c
   struct __env_N { int64_t __fn; <captures...> };
   ```
 - Rank-2 polymorphic wrapper -- `src/compiler/emit_module.c:1314`:

@@ -168,7 +168,7 @@ Use inline C blocks to allocate and dereference them:
 
 ```turmeric
 (defn __opt_some [x] :int
-  ```
+  ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
   r->value = x;
@@ -181,7 +181,7 @@ Use inline C blocks to allocate and dereference them:
 
 ```sweet-exp
 defn __opt_some [x] :int
-  ```
+  ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
   r->value = x;
@@ -196,7 +196,7 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
 
 ```turmeric
 (defn __fmap_option [container fn] :int
-  ```
+  ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
   if (!c || !c->is_some) return 0;
@@ -217,7 +217,7 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
 
 ```sweet-exp
 defn __fmap_option [container fn] :int
-  ```
+  ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
   if (!c || !c->is_some) return 0;

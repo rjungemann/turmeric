@@ -148,11 +148,11 @@ extern-c rand   [^] :int   ;; int rand(void)
 
 ### 2.2 Inline C blocks -- Arbitrary C inside a Turmeric expression
 
-Surround C source with triple backticks and an optional `c` tag:
+Surround C source with triple backticks and a `c` tag:
 
 ```turmeric
 (defn file-size [f]
-  ```
+  ```c
   FILE* file = (FILE*)f;
   long pos = ftell(file);
   fseek(file, 0, SEEK_END);
@@ -164,7 +164,7 @@ Surround C source with triple backticks and an optional `c` tag:
 
 ```sweet-exp
 defn file-size [f]
-  ```
+  ```c
   FILE* file = (FILE*)f;
   long pos = ftell(file);
   fseek(file, 0, SEEK_END);
@@ -208,7 +208,7 @@ interface. This pattern keeps the unsafe pointer juggling isolated:
 ```turmeric
 ;; stdlib/random.tur -- capability struct wrapping libc rand()
 (defn Real-Random []
-  ```
+  ```c
   typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
@@ -240,7 +240,7 @@ interface. This pattern keeps the unsafe pointer juggling isolated:
 ```sweet-exp
 ;; stdlib/random.tur -- capability struct wrapping libc rand()
 defn Real-Random []
-  ```
+  ```c
   typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
@@ -609,7 +609,7 @@ void  vec2_free(Vec2 *v);
 ;; vec2_add and vec2_len operate on struct values, which we pass through
 ;; inline C since struct-by-value is not in the type system yet
 (defn vec2-add [a b]
-  ```
+  ```c
   #include "libmath.h"
   Vec2 *pa = (Vec2 *)a;
   Vec2 *pb = (Vec2 *)b;
@@ -640,7 +640,7 @@ extern-c vec2_free  [^ptr]          :void
 ;; vec2_add and vec2_len operate on struct values, which we pass through
 ;; inline C since struct-by-value is not in the type system yet
 defn vec2-add [a b]
-  ```
+  ```c
   #include "libmath.h"
   Vec2 *pa = (Vec2 *)a;
   Vec2 *pb = (Vec2 *)b;
