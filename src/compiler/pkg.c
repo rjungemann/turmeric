@@ -1024,8 +1024,16 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
     buf_free(&cmd);
 
     if (rc != 0) {
-        fprintf(stderr, "spice: git failed for '%s' ref '%s'\n",
-                url, ref ? ref : "(default)");
+        fprintf(stderr, "spice: git failed for '%s' ref '%s' in '%s'\n",
+                url, ref ? ref : "(default)", dest_dir);
+        if (already_cloned) {
+            fprintf(stderr,
+                "  hint: the cached clone has uncommitted changes or a "
+                "conflicting state.\n"
+                "        inspect with: git -C '%s' status\n"
+                "        discard with: rm -rf '%s'\n",
+                dest_dir, dest_dir);
+        }
         return NULL;
     }
     return pkg_git_resolve(dest_dir);

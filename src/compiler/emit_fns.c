@@ -122,6 +122,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_printf(file, " %s(", fn_name);
 
+    /* CLI-ARGS: a user-defined zero-arg `main` must still take (argc, argv)
+     * at the C level so g_tur_args can be populated from the process argv.
+     * Without this, `*args*` is always empty in user-main programs. */
+    bool emit_main_argv = (is_main && fd->n_params == 0);
+    if (emit_main_argv) {
+        buf_puts(file, "int argc, char **argv");
+    }
+
     /* Emit parameters - use raw names (without ID suffix) */
     bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
     for (uint8_t i = 0; i < fd->n_params; i++) {
@@ -170,6 +178,32 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         ctx->indent += 4;
         indent_buf(file, ctx->indent);
         buf_puts(file, "g_panic_trace = 1;\n");
+        ctx->indent -= 4;
+    }
+
+    /* CLI-ARGS: build *args* cons list from argv[1..argc-1] before user code runs.
+     * Mirrors the synthesized-main path in emit_module.c so user-main and
+     * synthesized-main programs see *args* identically. */
+    if (emit_main_argv) {
+        ctx->indent += 4;
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "/* *args*: build cons list from argv[1..argc-1] */\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "g_tur_args = 0;\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "    typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "    __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "    _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "    _c->next = g_tur_args;\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "    g_tur_args = (int64_t)(intptr_t)_c;\n");
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "}\n");
         ctx->indent -= 4;
     }
 
