@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Draft Plan
+> **Status:** Phase 1 implemented; Phase 2 + follow-ups pending
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -220,18 +220,63 @@ re-run the scscm validation checklist.
 
 ## Validation checklist
 
-- [ ] `tur build <small-project-with-src>` exits 0 and produces the expected
-      artifact, without compiling `build.tur`.
-- [ ] `tur build <project-with-nested-src/<pkg>/>` exits 0 (recursion works).
-- [ ] `tur build <bare-dir-no-manifest>` behaves exactly as before
-      (no regression to the non-project path).
-- [ ] `tur build --shared <project>` still emits a shared lib + manifest.
+- [x] `tur build <small-project-with-src>` exits 0 and produces the expected
+      artifact, without compiling `build.tur`. (`build-project-smoke`)
+- [x] `tur build <project-with-nested-src/<pkg>/>` exits 0 (recursion works).
+      (`build-project-smoke` uses `src/app/`.)
+- [x] `tur build <bare-dir-no-manifest>` behaves exactly as before
+      (no regression to the non-project path). (`run-build-shared` green.)
+- [x] `tur build --shared <project>` still emits a shared lib + manifest.
+      (`run-build-shared` exercises the shared core unchanged.)
 - [ ] `tur run <project>` and `tur build <project>` agree on the module set.
-- [ ] `ctest` for the new CLI fixtures passes; `bash tests/run.sh` is green.
+      (Not yet asserted by a test; see follow-up below.)
+- [x] `ctest` for the new CLI fixtures passes (`tur_build_project`);
+      `bash tests/run.sh` green modulo the pre-existing ASan leaks
+      (`docs/asan-debug-leaks-plan.md`).
 - [ ] (If Phase 2 done) `:exports` map keys populate `m.exports`; `emit-cmake`
       output verified.
 - [ ] After scscm Phase 2 lands: `tur build ../turmeric-spices/spices/scscm`
       exits 0.
+
+## Follow-up tasks
+
+### T1 -- Consolidate `cmd_run`'s include-resolution onto the shared helper
+
+Phase 1 factored the test runner's project include-dir resolution into
+`resolve_project_include_dirs` (`src/main.c`) and pointed `cmd_test` and
+`cmd_build_project` at it. **`cmd_run` still carries its own inline copy** of
+the same logic (the `spice_inc_dirs` build-up around `src/main.c:2556-2618`),
+left untouched in Phase 1 because it is interleaved with dependency
+fetch/verify (`pkg_fetch_all`, lock checks) and would have widened the
+blast radius. This task removes that third copy so all three commands resolve
+the include path identically (the drift risk called out under "Risks").
+
+What the consolidation must account for (why it was deferred):
+
+- **Workspace members.** `cmd_run` resolves `:spices` entries that are
+  workspace siblings via `pkg_is_workspace_member` / `pkg_workspace_member_path`
+  (`src/main.c:2483,2514,2568-2574`), preferring the sibling's on-disk path
+  over any declared `:url`/`:ref`. `resolve_project_include_dirs` does **not**
+  yet handle workspace members -- it only does `:path` / `:ref` / `:subdir`
+  plus the monorepo-sibling fallback (mirrored from the old `cmd_test` block).
+  Before `cmd_run` can adopt the helper, the helper must learn the
+  workspace-member resolution, or it will regress workspace builds.
+- **Fetch/verify stays in `cmd_run`.** The helper is pure path resolution; the
+  fetch/lock/offline logic must remain in `cmd_run` and run *before* the helper
+  is called (the helper assumes deps are already on disk).
+
+Steps:
+1. Extend `resolve_project_include_dirs` to resolve workspace-member `:spices`
+   entries (port the `pkg_workspace_member_path` branch), keeping the existing
+   `:path`/`:ref`/`:subdir` + monorepo-fallback behavior.
+2. Replace the inline `spice_inc_dirs` build-up in `cmd_run` with a call to the
+   helper (after fetch/verify), keeping `cmd_run`'s existing ownership/free
+   paths intact.
+3. Verify `tur run` against a workspace project and a `:path`/`:ref` dep
+   project; confirm `tur_spice_resolver_tests` and the REPL spice tests stay
+   green.
+4. Add a check that `tur run <project>` and `tur build <project>` collect the
+   same module/include set (closes the open validation item above).
 
 ## Out of scope
 
