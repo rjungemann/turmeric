@@ -4295,6 +4295,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
         }
     }
 
+    /* CLI-ARGS: In separate compilation mode, the standard preamble (which
+     * declares g_tur_args) is NOT included.  If this module defines main(),
+     * emit_fns.c will reference g_tur_args inside the function body, so we
+     * must declare it here. */
+    if (separate_compilation && user_has_main) {
+        buf_puts(out, "static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr */\n\n");
+    }
+
     /* Phase M5: collect top-level EX_DEFER nodes for atexit registration. */
     uint32_t n_module_defers = 0;
     for (uint32_t i = 0; i < impl_n_items; i++) {

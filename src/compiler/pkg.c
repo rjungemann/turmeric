@@ -1748,107 +1748,335 @@ static bool valid_project_name(const char *name) {
 /* Scaffold a new project inside 'dir' (must already exist).
  * 'name' is the project name string used in generated files.
  * Returns 0 on success. */
-static int scaffold_project(const char *dir, const char *name,
-                             bool is_bin, bool no_git) {
+/* ================================================================== */
+/* Scaffold options (NW0-NW5)                                          */
+/* ================================================================== */
+
+typedef struct {
+    const char *dir;         /* target directory */
+    const char *name;        /* spice name */
+    bool        is_bin;      /* --kind bin vs lib */
+    bool        no_git;      /* --no-git */
+    bool        no_ci;       /* --no-ci  */
+    bool        no_justfile; /* --no-justfile */
+    bool        dry_run;     /* --dry-run */
+    bool        here;        /* --here (scaffold into cwd) */
+    const char *author;      /* --author "Name <email>" */
+    const char *license;     /* --license MIT|Apache-2.0|BSD-3-Clause|none */
+} ScaffoldOpts;
+
+/* Write a file and print it in the scaffold summary.
+ * Returns true on success; false on I/O error. */
+static bool scaffold_write(const char *path, const char *contents, bool dry_run) {
+    printf("  %s\n", path);
+    if (dry_run) return true;
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        fprintf(stderr, "tur new: cannot write '%s': %s\n", path, strerror(errno));
+        return false;
+    }
+    fputs(contents, f);
+    fclose(f);
+    return true;
+}
+
+/* Determine author string: --author > git config > env > placeholder. */
+static void resolve_author(const ScaffoldOpts *opts, char *out, size_t cap) {
+    if (opts->author && *opts->author) {
+        strncpy(out, opts->author, cap - 1);
+        out[cap - 1] = '\0';
+        return;
+    }
+    /* Try GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL env vars */
+    const char *env_name  = getenv("GIT_AUTHOR_NAME");
+    const char *env_email = getenv("GIT_AUTHOR_EMAIL");
+    if (env_name && env_email && *env_name && *env_email) {
+        snprintf(out, cap, "%s <%s>", env_name, env_email);
+        return;
+    }
+    /* Try git config */
+    FILE *p = popen("git config user.name 2>/dev/null", "r");
+    char git_name[128] = {0};
+    char git_email[128] = {0};
+    if (p) { if (fgets(git_name, sizeof(git_name), p)) {
+        char *nl = strchr(git_name, '\n'); if (nl) *nl = '\0'; } pclose(p); }
+    p = popen("git config user.email 2>/dev/null", "r");
+    if (p) { if (fgets(git_email, sizeof(git_email), p)) {
+        char *nl = strchr(git_email, '\n'); if (nl) *nl = '\0'; } pclose(p); }
+    if (git_name[0] && git_email[0])
+        snprintf(out, cap, "%s <%s>", git_name, git_email);
+    else if (git_name[0])
+        strncpy(out, git_name, cap - 1);
+    else {
+        strncpy(out, "Anonymous <unknown@local>", cap - 1);
+        fprintf(stderr, "tur new: git config user.name/user.email not set; "
+                "using placeholder author\n");
+    }
+    out[cap - 1] = '\0';
+}
+
+/* NW2: extended scaffold -- single canonical implementation. */
+int scaffold_project_ext(const ScaffoldOpts *opts) {
+    const char *dir  = opts->dir;
+    const char *name = opts->name;
     char path[4096];
+    char buf[16384];
+    char author[256];
 
-    /* Create src/ */
-    snprintf(path, sizeof(path), "%s/src", dir);
-    if (!mkdirp(path)) {
-        fprintf(stderr, "tur: cannot create '%s'\n", path);
-        return 1;
-    }
+    resolve_author(opts, author, sizeof(author));
+    const char *license = opts->license ? opts->license : "none";
 
-    /* Write build.tur */
-    snprintf(path, sizeof(path), "%s/build.tur", dir);
-    PkgManifest m;
-    memset(&m, 0, sizeof(m));
-    m.name    = (char *)name;
-    m.version = "0.1.0";
-    if (!pkg_manifest_write(path, &m)) return 1;
+    if (opts->dry_run)
+        printf("tur new: (dry-run) would create:\n");
+    else
+        printf("Creating %s spice '%s'\n",
+               opts->is_bin ? "binary" : "library", name);
 
-    /* Write tur.lock */
-    snprintf(path, sizeof(path), "%s/tur.lock", dir);
-    PkgLockFile lock;
-    memset(&lock, 0, sizeof(lock));
-    lock.format_version = 1;
-    if (!pkg_lock_write(path, &lock)) return 1;
-
-    /* Write src/main.tur or src/lib.tur */
-    if (is_bin) {
-        snprintf(path, sizeof(path), "%s/src/main.tur", dir);
-        FILE *f = fopen(path, "w");
-        if (f) {
-            fprintf(f, "#lang turmeric\n\n");
-            fprintf(f, "(defn main [] :int\n");
-            fprintf(f, "  (println \"Hello from %s!\")\n", name);
-            fprintf(f, "  0)\n");
-            fclose(f);
-        }
-    } else {
-        snprintf(path, sizeof(path), "%s/src/lib.tur", dir);
-        FILE *f = fopen(path, "w");
-        if (f) {
-            fprintf(f, "#lang turmeric\n\n");
-            fprintf(f, ";;; greet -- return a greeting string.\n");
-            fprintf(f, ";;;\n");
-            fprintf(f, ";;; Parameters:\n");
-            fprintf(f, ";;;   name -- the name to greet\n");
-            fprintf(f, ";;;\n");
-            fprintf(f, ";;; Returns:\n");
-            fprintf(f, ";;;   A greeting string.\n");
-            fprintf(f, ";;;\n");
-            fprintf(f, ";;; Example:\n");
-            fprintf(f, ";;;   (greet \"world\")  ; => \"Hello, world!\"\n");
-            fprintf(f, ";;;\n");
-            fprintf(f, ";;; Since: 0.1.0\n");
-            fprintf(f, "(defn greet [name :str] :str\n");
-            fprintf(f, "  (str \"Hello, \" name \"!\"))\n");
-            fclose(f);
+    /* ---- src/ ---- */
+    if (!opts->dry_run) {
+        snprintf(path, sizeof(path), "%s/src", dir);
+        if (!mkdirp(path)) {
+            fprintf(stderr, "tur: cannot create '%s'\n", path);
+            return 1;
         }
     }
 
-    /* Write .gitignore */
-    snprintf(path, sizeof(path), "%s/.gitignore", dir);
-    FILE *gi = fopen(path, "w");
-    if (gi) {
-        fprintf(gi, "build/\nspices/\ncmake/CMakeLists.txt\ncmake/build/\ncmake/spice-deps-manifest.json\n");
-        fclose(gi);
+    /* ---- tests/ ---- */
+    if (!opts->dry_run) {
+        snprintf(path, sizeof(path), "%s/tests", dir);
+        if (!mkdirp(path)) {
+            fprintf(stderr, "tur: cannot create '%s'\n", path);
+            return 1;
+        }
     }
 
-    /* Write README.md */
-    snprintf(path, sizeof(path), "%s/README.md", dir);
-    FILE *rm = fopen(path, "w");
-    if (rm) {
-        fprintf(rm, "# %s\n\nA Turmeric %s project.\n",
-                name, is_bin ? "binary" : "library");
-        fclose(rm);
+    /* ---- build.tur ---- */
+    {
+        snprintf(path, sizeof(path), "%s/build.tur", dir);
+        if (!opts->dry_run) {
+            PkgManifest m;
+            memset(&m, 0, sizeof(m));
+            m.name    = (char *)name;
+            m.version = "0.1.0";
+            if (!pkg_manifest_write(path, &m)) return 1;
+            printf("  build.tur\n");
+        } else {
+            printf("  build.tur\n");
+        }
     }
 
-    /* Git init + initial commit */
-    if (!no_git) {
+    /* ---- tur.lock ---- */
+    {
+        snprintf(path, sizeof(path), "%s/tur.lock", dir);
+        if (!opts->dry_run) {
+            PkgLockFile lock;
+            memset(&lock, 0, sizeof(lock));
+            lock.format_version = 1;
+            if (!pkg_lock_write(path, &lock)) return 1;
+            printf("  tur.lock\n");
+        } else {
+            printf("  tur.lock\n");
+        }
+    }
+
+    /* ---- src/<name>.tur (lib) or src/main.tur (bin) ---- */
+    {
+        /* Convert hyphens to underscores for module/function names */
+        char mod_name[256];
+        strncpy(mod_name, name, sizeof(mod_name) - 1);
+        mod_name[sizeof(mod_name) - 1] = '\0';
+        for (char *q = mod_name; *q; q++) if (*q == '-') *q = '_';
+
+        if (opts->is_bin) {
+            snprintf(path, sizeof(path), "%s/src/main.tur", dir);
+            snprintf(buf, sizeof(buf),
+                ";;; %s -- entry point.\n"
+                ";;\n"
+                "(defn main [] :int\n"
+                "  (println \"Hello from %s!\")\n"
+                "  0)\n",
+                name, name);
+        } else {
+            snprintf(path, sizeof(path), "%s/src/%s.tur", dir, mod_name);
+            snprintf(buf, sizeof(buf),
+                ";;; %s -- library module.\n"
+                ";;;\n"
+                ";;; Since: 0.1.0\n"
+                ";;\n"
+                "\n"
+                ";;; greet -- return a greeting string.\n"
+                ";;;\n"
+                ";;; Parameters:\n"
+                ";;;   name -- the name to greet\n"
+                ";;;\n"
+                ";;; Returns:\n"
+                ";;;   A greeting string.\n"
+                ";;;\n"
+                ";;; Example:\n"
+                ";;;   (greet \"world\")  ; => \"Hello, world!\"\n"
+                ";;;\n"
+                ";;; Since: 0.1.0\n"
+                "(defn greet [name :str] :str\n"
+                "  (str \"Hello, \" name \"!\"))\n",
+                name);
+        }
+        if (!scaffold_write(path, buf, opts->dry_run)) return 1;
+    }
+
+    /* ---- tests/<name>_test.tur ---- */
+    {
+        char mod_name[256];
+        strncpy(mod_name, name, sizeof(mod_name) - 1);
+        mod_name[sizeof(mod_name) - 1] = '\0';
+        for (char *q = mod_name; *q; q++) if (*q == '-') *q = '_';
+
+        snprintf(path, sizeof(path), "%s/tests/%s_test.tur", dir, mod_name);
+        if (opts->is_bin) {
+            snprintf(buf, sizeof(buf),
+                ";;; %s_test -- smoke test for %s.\n"
+                ";;\n"
+                "(defn main [] :int\n"
+                "  (println \"tests: ok\")\n"
+                "  0)\n",
+                mod_name, name);
+        } else {
+            snprintf(buf, sizeof(buf),
+                ";;; %s_test -- unit tests for %s.\n"
+                ";;\n"
+                "(import %s :refer [greet])\n"
+                "\n"
+                "(defn main [] :int\n"
+                "  (let [result (greet \"world\")]\n"
+                "    (if (str-eq? result \"Hello, world!\")\n"
+                "      (println \"tests: ok\")\n"
+                "      (do (println \"tests: FAIL\") (exit 1)))\n"
+                "    0))\n",
+                mod_name, name, mod_name);
+        }
+        if (!scaffold_write(path, buf, opts->dry_run)) return 1;
+    }
+
+    /* ---- .gitignore ---- */
+    {
+        snprintf(path, sizeof(path), "%s/.gitignore", dir);
+        snprintf(buf, sizeof(buf),
+            "build/\nspices/\n.tur-cache/\n.tur-repl-cache/\n"
+            "cmake/CMakeLists.txt\ncmake/build/\n"
+            "cmake/spice-deps-manifest.json\n*.o\n");
+        if (!scaffold_write(path, buf, opts->dry_run)) return 1;
+    }
+
+    /* ---- README.md ---- */
+    {
+        snprintf(path, sizeof(path), "%s/README.md", dir);
+        snprintf(buf, sizeof(buf),
+            "# %s\n\n"
+            "A Turmeric %s spice.\n\n"
+            "## Getting started\n\n"
+            "```sh\n"
+            "tur run --list   # see available tasks\n"
+            "tur run build    # build the spice\n"
+            "tur run test     # run the test suite\n"
+            "```\n",
+            name, opts->is_bin ? "binary" : "library");
+        if (!scaffold_write(path, buf, opts->dry_run)) return 1;
+    }
+
+    /* ---- LICENSE ---- */
+    if (license && strcmp(license, "none") != 0) {
+        snprintf(path, sizeof(path), "%s/LICENSE", dir);
+        /* Simple stub -- full text would be very long; point to SPDX. */
+        snprintf(buf, sizeof(buf),
+            "SPDX-License-Identifier: %s\n"
+            "\n"
+            "See https://spdx.org/licenses/%s.html for the full license text.\n",
+            license, license);
+        if (!scaffold_write(path, buf, opts->dry_run)) return 1;
+    }
+
+    /* ---- Justfile ---- */
+    if (!opts->no_justfile) {
+        snprintf(path, sizeof(path), "%s/Justfile", dir);
+        if (opts->dry_run) {
+            printf("  Justfile\n");
+        } else {
+            /* justrun_write_template is defined in justrun.c */
+            extern int justrun_write_template(const char *dir,
+                                               const char *spice_name,
+                                               int force);
+            if (justrun_write_template(dir, name, 0) != 0) return 1;
+        }
+    }
+
+    /* ---- .github/workflows/ci.yml ---- */
+    if (!opts->no_ci) {
+        if (!opts->dry_run) {
+            char wf_dir[4096];
+            snprintf(wf_dir, sizeof(wf_dir), "%s/.github/workflows", dir);
+            if (!mkdirp(wf_dir)) {
+                fprintf(stderr, "tur new: cannot create '%s'\n", wf_dir);
+                /* Non-fatal -- CI is optional */
+            } else {
+                snprintf(path, sizeof(path), "%s/ci.yml", wf_dir);
+                snprintf(buf, sizeof(buf),
+                    "name: CI\n"
+                    "on: [push, pull_request]\n"
+                    "jobs:\n"
+                    "  build:\n"
+                    "    strategy:\n"
+                    "      matrix:\n"
+                    "        os: [ubuntu-latest, macos-latest]\n"
+                    "    runs-on: ${{ matrix.os }}\n"
+                    "    steps:\n"
+                    "      - uses: actions/checkout@v4\n"
+                    "      - name: Install Turmeric\n"
+                    "        run: |\n"
+                    "          curl -fsSL https://turmeric-lang.com/install.sh | sh\n"
+                    "      - name: Run CI\n"
+                    "        run: tur run ci\n");
+                if (!scaffold_write(path, buf, false)) {
+                    /* Non-fatal */
+                }
+                printf("  .github/workflows/ci.yml\n");
+            }
+        } else {
+            printf("  .github/workflows/ci.yml\n");
+        }
+    }
+
+    /* ---- Git init ---- */
+    if (!opts->no_git && !opts->dry_run) {
         char cmd[4096];
         snprintf(cmd, sizeof(cmd),
             "git -C '%s' init -q 2>/dev/null && "
             "git -C '%s' add -A 2>/dev/null && "
-            "git -C '%s' commit -q -m 'Initial commit' 2>/dev/null",
+            "git -C '%s' commit -q -m 'Initial scaffold from tur new' 2>/dev/null",
             dir, dir, dir);
-        if (system(cmd) != 0) { /* git absent or commit failed -- non-fatal */ }
+        if (system(cmd) != 0) {
+            fprintf(stderr, "tur new: git init failed (non-fatal); "
+                    "project is on disk without a git repository\n");
+        }
     }
 
-    printf("Created %s project '%s'\n", is_bin ? "binary" : "library", name);
-    printf("  build.tur\n");
-    printf("  tur.lock\n");
-    printf("  src/%s\n", is_bin ? "main.tur" : "lib.tur");
-    printf("  .gitignore\n");
-    printf("  README.md\n");
-    if (!no_git) printf("  .git/\n");
-    printf("\nRun:\n");
-    if (strcmp(dir, ".") != 0)
-        printf("  cd %s && tur run\n", name);
-    else
-        printf("  tur run\n");
+    if (!opts->dry_run) {
+        printf("\nRun:\n");
+        if (strcmp(dir, ".") != 0) printf("  cd %s && ", name);
+        printf("tur run\n");
+    }
     return 0;
+}
+
+/* Legacy shim used by cmd_pkg_init and other callers. */
+static int scaffold_project(const char *dir, const char *name,
+                             bool is_bin, bool no_git) {
+    ScaffoldOpts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.dir     = dir;
+    opts.name    = name;
+    opts.is_bin  = is_bin;
+    opts.no_git  = no_git;
+    opts.license = "none";
+    return scaffold_project_ext(&opts);
 }
 
 /* ================================================================== */
@@ -1856,52 +2084,154 @@ static int scaffold_project(const char *dir, const char *name,
 /* ================================================================== */
 
 int cmd_pkg_new(int argc, char **argv) {
-    /* Usage: tur new <name> [--bin|--lib] [--no-git] */
-    bool is_bin = true;
-    bool no_git = false;
+    /* Usage: tur new <name> [--kind lib|bin] [--bin|--lib] [--no-git]
+     *        [--no-ci] [--no-justfile] [--author "..."] [--license MIT]
+     *        [--dry-run] [--here] */
+    ScaffoldOpts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.license = "none";
+    opts.is_bin  = false; /* default: library */
+
+    bool show_help = false;
     const char *name = NULL;
 
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "--bin") == 0)         is_bin = true;
-        else if (strcmp(argv[i], "--lib") == 0)    is_bin = false;
-        else if (strcmp(argv[i], "--no-git") == 0) no_git = true;
-        else if (argv[i][0] != '-') {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            show_help = true; break;
+        }
+        if (strcmp(argv[i], "--bin") == 0)           opts.is_bin      = true;
+        else if (strcmp(argv[i], "--lib") == 0)       opts.is_bin      = false;
+        else if (strcmp(argv[i], "--no-git") == 0)    opts.no_git      = true;
+        else if (strcmp(argv[i], "--no-ci") == 0)     opts.no_ci       = true;
+        else if (strcmp(argv[i], "--no-justfile") == 0) opts.no_justfile= true;
+        else if (strcmp(argv[i], "--dry-run") == 0)   opts.dry_run     = true;
+        else if (strcmp(argv[i], "--here") == 0)      opts.here        = true;
+        else if (strcmp(argv[i], "--kind") == 0 && i + 1 < argc) {
+            i++;
+            if (strcmp(argv[i], "bin") == 0)       opts.is_bin = true;
+            else if (strcmp(argv[i], "lib") == 0)  opts.is_bin = false;
+            else {
+                fprintf(stderr, "tur new: unknown --kind '%s' (use 'lib' or 'bin')\n",
+                        argv[i]);
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--author") == 0 && i + 1 < argc) {
+            opts.author = argv[++i];
+        } else if (strcmp(argv[i], "--license") == 0 && i + 1 < argc) {
+            opts.license = argv[++i];
+        } else if (argv[i][0] != '-') {
             if (name) {
                 fprintf(stderr, "tur new: unexpected argument '%s'\n", argv[i]);
                 return 1;
             }
             name = argv[i];
+        } else {
+            fprintf(stderr, "tur new: unknown option '%s'\n", argv[i]);
+            return 2;
         }
     }
 
+    if (show_help) {
+        fprintf(stderr,
+            "usage: tur new <name> [options]\n"
+            "       tur new --here [options]\n"
+            "\n"
+            "options:\n"
+            "  --kind lib|bin     library (default) or binary spice\n"
+            "  --bin, --lib       shorthand for --kind\n"
+            "  --author NAME      author string (default: git config)\n"
+            "  --license SPDX     write LICENSE (MIT, Apache-2.0, "
+                                 "BSD-3-Clause, none)\n"
+            "  --no-git           skip git init and initial commit\n"
+            "  --no-ci            skip .github/workflows/ci.yml\n"
+            "  --no-justfile      skip the standard Justfile template\n"
+            "  --dry-run          print files that would be created; "
+                                 "do not write\n"
+            "  --here             scaffold into the current directory\n"
+            "\n"
+            "generated layout:\n"
+            "  build.tur, tur.lock, src/<name>.tur, tests/<name>_test.tur\n"
+            "  .gitignore, README.md, Justfile, .github/workflows/ci.yml\n");
+        return 0;
+    }
+
+    /* Validate license */
+    if (opts.license && strcmp(opts.license, "none") != 0 &&
+        strcmp(opts.license, "MIT") != 0 &&
+        strcmp(opts.license, "Apache-2.0") != 0 &&
+        strcmp(opts.license, "BSD-3-Clause") != 0) {
+        fprintf(stderr,
+            "tur new: unknown license '%s'\n"
+            "  Supported: MIT, Apache-2.0, BSD-3-Clause, none\n",
+            opts.license);
+        return 2;
+    }
+
+    if (opts.here) {
+        /* Scaffold into cwd; derive name from directory basename */
+        if (name) {
+            fprintf(stderr, "tur new: --here and a name argument are mutually "
+                    "exclusive\n");
+            return 2;
+        }
+        char cwd[4096];
+        if (!getcwd(cwd, sizeof(cwd))) {
+            fprintf(stderr, "tur new: cannot get current directory\n");
+            return 1;
+        }
+        /* Check the dir is empty (allow hidden files / .git) */
+        struct stat st;
+        if (stat("build.tur", &st) == 0) {
+            fprintf(stderr, "tur new: build.tur already exists in cwd "
+                    "(already initialised?)\n");
+            return 1;
+        }
+        const char *base = strrchr(cwd, '/');
+        opts.name = base ? base + 1 : cwd;
+        opts.dir  = ".";
+        if (!valid_project_name(opts.name)) {
+            fprintf(stderr,
+                "tur new: directory name '%s' is not a valid spice name\n"
+                "  Names must match [a-z][a-z0-9-]* "
+                "(lowercase letters, digits, hyphens)\n",
+                opts.name);
+            return 1;
+        }
+        return scaffold_project_ext(&opts);
+    }
+
     if (!name) {
-        fprintf(stderr, "usage: tur new <name> [--bin|--lib] [--no-git]\n");
+        fprintf(stderr, "usage: tur new <name> [--kind lib|bin] [options]\n"
+                "       tur new --help\n");
         return 1;
     }
 
     if (!valid_project_name(name)) {
         fprintf(stderr,
-            "tur new: invalid project name '%s'\n"
+            "tur new: invalid spice name '%s'\n"
             "  Names must match [a-z][a-z0-9-]* "
             "(lowercase letters, digits, hyphens)\n",
             name);
         return 1;
     }
 
-    /* Directory must not already exist */
-    struct stat st;
-    if (stat(name, &st) == 0) {
-        fprintf(stderr, "tur new: '%s' already exists\n", name);
-        return 1;
+    opts.name = name;
+    opts.dir  = name;
+
+    if (!opts.dry_run) {
+        struct stat st;
+        if (stat(name, &st) == 0) {
+            fprintf(stderr, "tur new: '%s' already exists\n", name);
+            return 1;
+        }
+        if (!mkdirp(name)) {
+            fprintf(stderr, "tur new: cannot create directory '%s': %s\n",
+                    name, strerror(errno));
+            return 1;
+        }
     }
 
-    if (!mkdirp(name)) {
-        fprintf(stderr, "tur new: cannot create directory '%s': %s\n",
-                name, strerror(errno));
-        return 1;
-    }
-
-    return scaffold_project(name, name, is_bin, no_git);
+    return scaffold_project_ext(&opts);
 }
 
 /* ================================================================== */

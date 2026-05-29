@@ -3771,7 +3771,16 @@ static void mutmap_free(int64_t m) {
   
 }
 
-int main() {
+int main(int argc, char **argv) {
+        /* *args*: build cons list from argv[1..argc-1] */
+        g_tur_args = 0;
+        for (int _ai = argc - 1; _ai >= 1; _ai--) {
+            typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+            __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+            _c->value = (int64_t)(intptr_t)argv[_ai];
+            _c->next = g_tur_args;
+            g_tur_args = (int64_t)(intptr_t)_c;
+        }
         return (int)INT64_C(0);
 }
 

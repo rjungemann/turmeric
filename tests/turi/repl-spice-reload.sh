@@ -22,6 +22,9 @@ case "$TUR" in
     /*) TUR_BIN="$TUR" ;;
     *)  TUR_BIN="$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")" ;;
 esac
+# Ensure the tur binary is on PATH so the REPL's spice-rebuild subprocess
+# can find it when running `tur build` to AOT-compile the spice.
+export PATH="$(dirname "$TUR_BIN"):$PATH"
 
 WORK="$(mktemp -d -t tur-rp5.XXXXXX)"
 trap 'rm -rf "$WORK"; rm -f "$WORK.fifo"' EXIT
@@ -81,17 +84,29 @@ REPL_PID=$!
 # Open the FIFO for write so the REPL doesn't see EOF until we close it.
 exec 3>"$FIFO"
 printf '(add42 0)\n' >&3
-# Wait long enough that the new mtime is strictly greater than the .so's
-# (HFS/APFS have sub-second resolution but `sleep 1` is the portable
-# bound across Linux ext4 / macOS APFS / mtime granularity edge cases).
-sleep 1
+
+# Wait until the first eval has printed a result before mutating the source.
+# This guarantees the REPL has loaded the spice and the new mtime will be
+# strictly greater than the loaded library's mtime.
+_ticks=0
+while ! grep -q '^=> 42$' "$OUT3" 2>/dev/null; do
+    sleep 0.1; _ticks=$((_ticks+1))
+    [ "$_ticks" -ge 600 ] && break  # 60s timeout
+done
+
+# Guarantee new mtime > library mtime on 1s-granularity filesystems.
+_mtime_before="$(stat -c %Y "$PROJ3/src/lib.tur" 2>/dev/null || stat -f %m "$PROJ3/src/lib.tur" 2>/dev/null)"
 cat > "$PROJ3/src/lib.tur" <<'EOF'
 (defmodule sh
   (export add42)
   (defn add42 [x :int] :int (+ x 100)))
 EOF
-# Give the filesystem a moment to settle the new mtime.
-sleep 1
+_mtime_now="$(stat -c %Y "$PROJ3/src/lib.tur" 2>/dev/null || stat -f %m "$PROJ3/src/lib.tur" 2>/dev/null)"
+while [ -n "$_mtime_before" ] && [ -n "$_mtime_now" ] && [ "$_mtime_now" -le "$_mtime_before" ]; do
+    sleep 0.3; touch "$PROJ3/src/lib.tur"
+    _mtime_now="$(stat -c %Y "$PROJ3/src/lib.tur" 2>/dev/null || stat -f %m "$PROJ3/src/lib.tur" 2>/dev/null)"
+done
+
 printf '(reload)\n(add42 0)\n:quit\n' >&3
 exec 3>&-
 wait "$REPL_PID"

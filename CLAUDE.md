@@ -1,5 +1,29 @@
 # Turmeric 2 -- Claude Code Guide
 
+## Fixture Snapshots -- STRICT RULE
+
+`tests/fixtures/*/expected.c` are codegen snapshots that **must match** before
+any PR is opened. A "codegen mismatch" failure is a real failure -- never dismiss
+it or open a PR with failing fixtures.
+
+**When the codegen changes** (e.g. `main` signature, new preamble, new boilerplate):
+
+1. Regenerate all snapshots:
+   ```sh
+   TUR=./build/tur
+   for dir in tests/fixtures/*/; do
+     if [ -f "$dir/expected.c" ]; then
+       input="$dir/input.tur"
+       [ -f "$input" ] || input="$dir/$(basename $dir).tur"
+       [ -f "$input" ] && "$TUR" emit-c "$input" > "$dir/expected.c" 2>/dev/null
+     fi
+   done
+   ```
+2. Verify the test suite passes: `bash tests/run.sh 2>&1 | grep "^FAIL"` (must be empty)
+3. Commit the updated snapshots alongside the codegen change -- never in a separate PR
+
+**Before opening any PR**, run `bash tests/run.sh` and confirm zero `FAIL` lines.
+
 ## CLI Argument Parsing -- STRICT RULE
 
 Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is
@@ -17,16 +41,21 @@ the file -- the interpreter will override them with stdlib natives automatically
 
 ## Build System
 
-The project uses `just` (not `make`). Common targets:
+The project uses Justfile recipes via `tur run` (or upstream `just` if
+installed). The recipe names are the same; only the invocation form differs.
 
 ```sh
-just build       # debug build
-just test        # build + run tests
-just release     # release build
-just docs        # generate API documentation
+tur run build    # debug build   (also: just build)
+tur run test     # build + run tests
+tur run release  # release build
+just docs        # generate API documentation  (tur fmt not yet installed)
 just wasm        # build WebAssembly module (runs docs first)
 just web-dev     # run web dev server
 ```
+
+For the main turmeric repo's own build you still need CMake (via `just
+configure`). `tur run` is for spice development. See
+[docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
 
 ## Spice Repository Layout
 
