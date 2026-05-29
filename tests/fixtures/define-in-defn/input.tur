@@ -1,0 +1,6 @@
+(defn compute [] :int
+  (define x 10)
+  (define y 32)
+  (+ x y))
+
+(println (compute))

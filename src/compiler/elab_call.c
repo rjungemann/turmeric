@@ -463,6 +463,7 @@ Expr *elab_call(Elab *e, Form *call) {
 
     /* Special forms. */
     if (name == e->sym_def)    return elab_def   (e, call);
+    if (name == e->sym_define) return elab_define_error(e, call);
     if (name == e->sym_let)    return elab_let   (e, call);
     if (name == e->sym_if)     return elab_if    (e, call);
     if (name == e->sym_do)     return elab_do    (e, call);

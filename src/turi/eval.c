@@ -3791,13 +3791,59 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src,
         return turi_error("parse error");
     }
 
+    /* 5b. REPL implicit-do: if the new turn's forms contain a top-level
+     * (define ...), wrap them in a single (do ...) form so the splice
+     * helper handles them.  This makes `define` usable at the REPL prompt
+     * without erroring.  Only fires when the new turn has at least one
+     * define form; top-level defn/def forms are unaffected. */
+    uint32_t prior = env->prior_toplevel;
+    {
+        bool new_has_define = false;
+        for (uint32_t i = prior; i < nforms; i++) {
+            Form *f = forms[i];
+            if (f->tag == F_LIST && f->as.list.len >= 1) {
+                Form *h = f->as.list.items[0];
+                if (h->tag == F_SYM &&
+                    strcmp(h->as.sym->name, "define") == 0) {
+                    new_has_define = true;
+                    break;
+                }
+            }
+        }
+        if (new_has_define) {
+            uint32_t nn   = nforms - prior;
+            Arena   *a    = eval_arena;
+            Span     sp   = (nn > 0) ? forms[prior]->span : (Span){0};
+            Form   **wrap = (Form **)arena_alloc(a, (nn + 1) * sizeof(Form *));
+            /* Build sym "do" in the existing symbol table. */
+            /* Intern "do" through the symbol table already in the arena. */
+            StrSlice sl_do = { "do", 2 };
+            const Symbol *sym_do_s = symtab_intern(&env->st, sl_do);
+            wrap[0] = form_sym(a, sp, sym_do_s);
+            for (uint32_t i = 0; i < nn; i++) wrap[i + 1] = forms[prior + i];
+            Form *do_form = form_list(a, sp, wrap, nn + 1);
+            /* Replace new-turn forms with the single do wrapper. */
+            forms[prior] = do_form;
+            nforms = prior + 1;
+            /* Rebuild the combined source string to match the updated nforms
+             * so src_acc stays consistent on the next turn. */
+            Buf wrapped_src;
+            buf_init(&wrapped_src);
+            buf_write(&wrapped_src, "(do ", 4);
+            buf_write(&wrapped_src, src_body, body_len);
+            buf_putc(&wrapped_src, ')');
+            src_body = arena_strdup(eval_arena, wrapped_src.data, wrapped_src.len);
+            body_len = wrapped_src.len;
+            buf_free(&wrapped_src);
+        }
+    }
+
     /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit).
      * Pass prior_toplevel as stdlib_prefix so the elaborator resets
      * has_defmodule after each defmodule in the already-accumulated forms.
      * This lets multiple stdlib files (each with their own defmodule) be
      * preloaded via successive turi_eval_file calls without hitting the
      * "only one defmodule per file" error on re-elaboration. */
-    uint32_t prior = env->prior_toplevel;
     const char *mbase = env->module_base_dir ? env->module_base_dir : ".";
     uint32_t actual_n_fsd = 0;
     bool import_blocked = !turi_env_has_cap(env, TURI_CAP_IMPORT);

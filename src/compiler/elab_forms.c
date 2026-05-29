@@ -4,6 +4,153 @@
 /* ---- file-local helper forward declarations ---- */
 static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
 
+/* ---- internal define splicing ---- */
+
+/* splice_internal_defines -- rewrite a body window that may contain
+ * (define name init) forms into nested let expressions.
+ *
+ * Returns NULL when no define is present so callers can keep their existing
+ * fast path unchanged (true no-op guarantee -- zero codegen drift).
+ *
+ * When defines are present, always returns a non-NULL Form* (a let or do)
+ * that the caller should elaborate with elab_form.  On parse error, emits a
+ * diagnostic and returns form_nil; the caller still calls elab_form on it,
+ * which returns a typed nil (preventing double-error from fallthrough).
+ *
+ * Desugaring:
+ *   (define x 1)       =>  (let [x 1] <rest>)
+ *   (define ^mut x 1)  =>  (let [^mut x 1] <rest>)
+ */
+Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span) {
+    /* Pre-scan: bail out fast when no defines are present. */
+    bool has_define = false;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *f = items[i];
+        if (f->tag == F_LIST && f->as.list.len >= 1) {
+            Form *head = f->as.list.items[0];
+            if (head->tag == F_SYM && head->as.sym == e->sym_define) {
+                has_define = true;
+                break;
+            }
+        }
+    }
+    if (!has_define) return NULL;
+
+    /* Find the first define and build (let [^ann... name init] <tail>). */
+    for (uint32_t i = 0; i < n; i++) {
+        Form *f = items[i];
+        bool is_define = (f->tag == F_LIST && f->as.list.len >= 1 &&
+                          f->as.list.items[0]->tag == F_SYM &&
+                          f->as.list.items[0]->as.sym == e->sym_define);
+        if (!is_define) continue;
+
+        /* Parse: (define [^ann...] name init) */
+        Form **dargs  = f->as.list.items + 1;  /* skip "define" head */
+        uint32_t dlen = f->as.list.len - 1;
+        if (dlen < 2) {
+            diag_emit(DIAG_ERROR, f->span,
+                      "define requires (define name init)");
+            return form_nil(e->arena, f->span);
+        }
+
+        /* Consume annotation symbols before the binding name.
+         * Mirrors the annotation loop in elab_let (elab_forms.c). */
+        uint32_t ann_end = 0;
+        {
+            uint32_t j = 0;
+            while (j < dlen) {
+                Form *cur = dargs[j];
+                if (cur->tag != F_SYM) break;
+                const Symbol *s = cur->as.sym;
+                if (s == e->sym_caret_mut       ||
+                    s == e->sym_caret_persistent ||
+                    s == e->sym_caret_linear     ||
+                    s == e->sym_caret_unique     ||
+                    s == e->sym_caret_affine     ||
+                    s == e->sym_caret_relevant) {
+                    j++;
+                } else {
+                    break;
+                }
+            }
+            ann_end = j;
+        }
+        uint32_t name_idx = ann_end;
+        if (name_idx >= dlen) {
+            diag_emit(DIAG_ERROR, f->span,
+                      "define requires (define name init)");
+            return form_nil(e->arena, f->span);
+        }
+        Form *name_form = dargs[name_idx];
+        if (name_form->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "define: binding name must be a symbol");
+            return form_nil(e->arena, f->span);
+        }
+
+        uint32_t init_idx = name_idx + 1;
+        if (init_idx >= dlen) {
+            diag_emit(DIAG_ERROR, f->span,
+                      "define requires an initial value");
+            return form_nil(e->arena, f->span);
+        }
+        if (init_idx != dlen - 1) {
+            diag_emit(DIAG_ERROR, f->span,
+                      "define: expected (define name init); got extra forms");
+            return form_nil(e->arena, f->span);
+        }
+
+        /* Build the let binding vector: [^ann... name init] */
+        uint32_t bvec_len = ann_end + 2; /* annotations + name + init */
+        Form **bvec_items = (Form **)arena_alloc(e->arena, bvec_len * sizeof(Form *));
+        uint32_t bvi = 0;
+        for (uint32_t a = 0; a < ann_end; a++) bvec_items[bvi++] = dargs[a];
+        bvec_items[bvi++] = name_form;
+        bvec_items[bvi++] = dargs[init_idx];
+        Form *bvec = form_vec(e->arena, f->span, bvec_items, bvec_len);
+
+        /* Build body from remaining items, recursively splicing. */
+        uint32_t tail_n = n - (i + 1);
+        Form   **tail   = items + i + 1;
+        Form    *body_form;
+        if (tail_n == 0) {
+            body_form = form_nil(e->arena, span);
+        } else {
+            Form *spliced_tail = splice_internal_defines(e, tail, tail_n, span);
+            if (spliced_tail) {
+                body_form = spliced_tail;
+            } else if (tail_n == 1) {
+                body_form = tail[0];
+            } else {
+                Form **do_items = (Form **)arena_alloc(e->arena, (tail_n + 1) * sizeof(Form *));
+                do_items[0] = form_sym(e->arena, span, e->sym_do);
+                for (uint32_t k = 0; k < tail_n; k++) do_items[k + 1] = tail[k];
+                body_form = form_list(e->arena, span, do_items, tail_n + 1);
+            }
+        }
+
+        /* Return (let [bvec] body_form). */
+        Form *let_items[3];
+        let_items[0] = form_sym(e->arena, f->span, e->sym_let);
+        let_items[1] = bvec;
+        let_items[2] = body_form;
+        return form_list(e->arena, f->span, let_items, 3);
+    }
+
+    /* has_define was true but we processed no defines -- shouldn't happen.
+     * Return NULL to take the safe caller path. */
+    return NULL;
+}
+
+/* elab_define_error -- stub handler for 'define' reached through normal call
+ * dispatch, i.e. outside a body sequence.  Always errors. */
+Expr *elab_define_error(Elab *e, const Form *call) {
+    diag_emit(DIAG_ERROR, call->span,
+              "define is only valid as a body form (in defn, fn, let, or do); "
+              "use def for top-level bindings");
+    return NULL;
+}
+
 /* ---- special forms ---- */
 
 Expr *elab_let(Elab *e, const Form *call) {
@@ -509,19 +656,27 @@ Expr *elab_let(Elab *e, const Form *call) {
         uint32_t body_count = call->as.list.len - 2;
         if (body_count == 0) {
             body = e_nil(e, call->span);
-        } else if (body_count == 1) {
-            body = elab_form(e, call->as.list.items[2]);
-            if (!body) rc = -1;
         } else {
-            Expr **items = (Expr **)arena_alloc(e->arena, body_count * sizeof(Expr *));
-            for (uint32_t k = 0; k < body_count; k++) {
-                items[k] = elab_form(e, call->as.list.items[2 + k]);
-                if (!items[k]) { rc = -1; break; }
-            }
-            if (rc == 0) {
-                body = expr_new(e->arena, EX_DO, items[body_count - 1]->type, call->span);
-                body->as.do_.items = items;
-                body->as.do_.n = body_count;
+            /* Internal defines in let body: splice into nested let forms. */
+            Form *spliced = splice_internal_defines(e,
+                                call->as.list.items + 2, body_count, call->span);
+            if (spliced) {
+                body = elab_form(e, spliced);
+                if (!body) rc = -1;
+            } else if (body_count == 1) {
+                body = elab_form(e, call->as.list.items[2]);
+                if (!body) rc = -1;
+            } else {
+                Expr **items = (Expr **)arena_alloc(e->arena, body_count * sizeof(Expr *));
+                for (uint32_t k = 0; k < body_count; k++) {
+                    items[k] = elab_form(e, call->as.list.items[2 + k]);
+                    if (!items[k]) { rc = -1; break; }
+                }
+                if (rc == 0) {
+                    body = expr_new(e->arena, EX_DO, items[body_count - 1]->type, call->span);
+                    body->as.do_.items = items;
+                    body->as.do_.n = body_count;
+                }
             }
         }
 
@@ -833,6 +988,12 @@ Expr *elab_do(Elab *e, const Form *call) {
     /* (do body...) — value of last expr; (do) is nil. */
     uint32_t n = call->as.list.len - 1;
     if (n == 0) return e_nil(e, call->span);
+
+    /* Internal defines: splice (define name init) into nested let forms. */
+    {
+        Form *spliced = splice_internal_defines(e, call->as.list.items + 1, n, call->span);
+        if (spliced) return elab_form(e, spliced);
+    }
 
     Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
     for (uint32_t i = 0; i < n; i++) {

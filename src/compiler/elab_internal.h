@@ -172,6 +172,7 @@ typedef struct Elab {
 
     /* Cached symbols for special-form dispatch. */
     const Symbol *sym_def;
+    const Symbol *sym_define; /* internal define -- body form only */
     const Symbol *sym_let;
     const Symbol *sym_if;
     const Symbol *sym_do;
@@ -731,6 +732,8 @@ Expr *elab_dlclose(Elab *e, const Form *call);
 Expr *elab_unsafe(Elab *e, const Form *call);
 
 /* elab_forms.c */
+Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);
+Expr *elab_define_error(Elab *e, const Form *call);
 Expr *elab_let(Elab *e, const Form *call);
 Expr *elab_do(Elab *e, const Form *call);
 Expr *elab_if(Elab *e, const Form *call);
