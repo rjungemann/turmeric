@@ -110,6 +110,77 @@ else
     fail "build-project-flat-skips-manifest" "rc=$flat_rc out=$flat_out"
 fi
 
+# T2: project-mode `tur run` from an arbitrary cwd must resolve the turmeric
+# runtime sources (e.g. src/runtime/hamt.c, pulled in by the hamt autolink
+# marker) absolutely, not relative to cwd.  Before T2 this failed with
+# `src/runtime/hamt.c: No such file` whenever cwd was not the turmeric tree.
+HAMT="$WORK/hamtproj"
+mkdir -p "$HAMT/src"
+cat > "$HAMT/build.tur" <<'EOF'
+(defpackage tur-hamtproj
+  :name    "tur-hamtproj"
+  :version "0.1.0")
+EOF
+# hamt/new + hamt/count force the src/runtime/hamt.c autolink marker; an empty
+# map has count 0, so a clean exit code proves the runtime linked and ran.
+cat > "$HAMT/src/main.tur" <<'EOF'
+(defn main [] :int
+  (let [m (hamt/new)]
+    (hamt/count m)))
+EOF
+hamt_out=$(cd "$WORK" && "$TUR" run --offline "$HAMT/src/main.tur" 2>&1)
+hamt_rc=$?
+# Reproduce the exact T2 entry point too: project mode with no file arg,
+# discovered by walking up from cwd inside the project.
+hamt_proj_out=$(cd "$HAMT" && "$TUR" run --offline 2>&1)
+hamt_proj_rc=$?
+if [ $hamt_rc -eq 0 ] && [ $hamt_proj_rc -eq 0 ] \
+   && ! echo "$hamt_out$hamt_proj_out" | grep -q "src/runtime/hamt.c: No such file"; then
+    pass "run-project-resolves-runtime-from-foreign-cwd"
+else
+    fail "run-project-resolves-runtime-from-foreign-cwd" \
+        "file-mode rc=$hamt_rc proj-mode rc=$hamt_proj_rc out=$hamt_out$hamt_proj_out"
+fi
+
+# T3: `tur build <dir>` must compile and link a :spices dependency's modules,
+# not just resolve them for type-checking.  A consumer that imports a module
+# from a :path-linked spice previously failed at cc with
+# `sib__api.h: No such file` because the dep's module was never generated.
+DEPROOT="$WORK/cross"
+mkdir -p "$DEPROOT/sib/src/sib" "$DEPROOT/consumer/src/consumer"
+cat > "$DEPROOT/sib/build.tur" <<'EOF'
+(defpackage sib :name "sib")
+EOF
+cat > "$DEPROOT/sib/src/sib/api.tur" <<'EOF'
+(defmodule sib/api
+  (export answer)
+  (defn answer [] :int 42))
+EOF
+cat > "$DEPROOT/consumer/build.tur" <<'EOF'
+(defpackage consumer
+  :name "consumer"
+  :spices #{ "sib" #{:path "../sib"} })
+EOF
+cat > "$DEPROOT/consumer/src/consumer/main.tur" <<'EOF'
+(defmodule consumer/main
+  (import sib/api :refer [answer])
+  (defn main [] :int (answer)))
+EOF
+xspice_out=$(cd "$DEPROOT/consumer" && "$TUR" build "$DEPROOT/consumer" -o "$WORK/xspice" 2>&1)
+xspice_rc=$?
+if [ $xspice_rc -ne 0 ] || [ ! -x "$WORK/xspice" ]; then
+    fail "build-project-links-cross-spice-dep" "rc=$xspice_rc out=$xspice_out"
+else
+    "$WORK/xspice"
+    xrun_rc=$?
+    # answer = 42, proving the dep module was compiled, linked, and called.
+    if [ "$xrun_rc" -eq 42 ]; then
+        pass "build-project-links-cross-spice-dep"
+    else
+        fail "build-project-links-cross-spice-dep" "exit=$xrun_rc (expected 42)"
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
