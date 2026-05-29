@@ -1,0 +1,20 @@
+;;; module-spec-same-module -- generic def and concrete call in one module.
+;;; Exercises J2: emit_implementation runs ABI scan and emits clone body.
+
+(defmodule mymod
+  (export square-float square-int main)
+  (defn square [T] [x :T] :T
+    ```c
+    __TUR_TY_T__ v = x;
+    return (__TUR_TY_T__)(v * v);
+    ```)
+  (defn square-float [x :float] :float
+    (square x))
+  (defn square-int [x :int] :int
+    (square x))
+  (defn main [] :int
+    (let [f (square-float 4.0)
+          i (square-int 5)]
+      (println f)
+      (println i)
+      0)))

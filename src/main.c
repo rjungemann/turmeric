@@ -784,11 +784,13 @@ static int compile_to_c(const char *path, Buf *out_c,
     return rc;
 }
 
-/* Compile a .tur file to a C header (.h). Returns 0 on success. */
+/* Compile a .tur file to a C header (.h). Returns 0 on success.
+ * J5/J6: forced/n_forced inject ABI clone decls for cross-module borrow specs. */
 static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
                         const char **include_dirs, int n_include_dirs,
                         const char **reader_macro_paths,
-                        int n_reader_macro_paths) {
+                        int n_reader_macro_paths,
+                        const ForcedAbiSpec *forced, uint32_t n_forced) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -848,7 +850,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
         ctx.separate_compilation = true;
         ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
-        if (rc == 0 && emit_header(out_h, module_name, ctx.prog, true) != 0) {
+        if (rc == 0 && emit_header(out_h, module_name, ctx.prog, true,
+                                   forced, n_forced) != 0) {
             rc = 1;
         }
     }
@@ -862,12 +865,16 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
 /* Compile a .tur file to a C implementation (.c). Returns 0 on success.
  * RP1: when `out_manifest` is non-NULL, append one exports.manifest line
  * per exported defn (see emit.h:emit_exports_manifest). Pass NULL when
- * the caller only wants the .c output. */
+ * the caller only wants the .c output.
+ * J5/J6: forced/n_forced inject forced ABI clone bodies; out_borrow_specs
+ * receives borrow spec info for the cross-module cache (pass NULL to skip). */
 static int compile_to_implementation(const char *path, Buf *out_c, const char *module_name,
                                      const char **include_dirs, int n_include_dirs,
                                      const char **reader_macro_paths,
                                      int n_reader_macro_paths,
-                                     Buf *out_manifest) {
+                                     Buf *out_manifest,
+                                     const ForcedAbiSpec *forced, uint32_t n_forced,
+                                     BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -927,7 +934,9 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         ctx.separate_compilation = true;
         ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
-        if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true) != 0) {
+        if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true,
+                                           forced, n_forced,
+                                           out_borrow_specs, out_n_borrow_specs) != 0) {
             rc = 1;
         }
         /* RP1: emit_exports_manifest only inspects bindings on `ctx.prog`
@@ -1010,7 +1019,8 @@ static int cmd_emit_c(const char *path,
 
 /* Phase B: emit per-module .h and .c files to a directory.
  * Usage: tur emit-c --output-dir <dir> <file1.tur> [<file2.tur> ...]
- * Each input produces <dir>/<module>.h and <dir>/<module>.c. */
+ * Each input produces <dir>/<module>.h and <dir>/<module>.c.
+ * J7: uses the same two-pass ABI specialization as cmd_build_multi. */
 static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
                              const char **include_dirs, int n_include_dirs) {
     if (n_inputs < 1) {
@@ -1019,8 +1029,8 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
     }
 
     /* Create output directory if it doesn't exist */
-    struct stat st;
-    if (stat(out_dir, &st) != 0) {
+    struct stat st_od;
+    if (stat(out_dir, &st_od) != 0) {
         if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
             fprintf(stderr, "tur emit-c: cannot create '%s': %s\n",
                     out_dir, strerror(errno));
@@ -1028,48 +1038,160 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
         }
     }
 
-    int rc = 0;
-    for (int i = 0; i < n_inputs && rc == 0; i++) {
-        const char *input = inputs[i];
-        const char *base = basename_of(input);
+    /* Pre-compute module names. */
+    char **ecd_mod_names = (char **)malloc(n_inputs * sizeof(char *));
+    char **ecd_h_paths   = (char **)malloc(n_inputs * sizeof(char *));
+    char **ecd_c_paths   = (char **)malloc(n_inputs * sizeof(char *));
+    if (!ecd_mod_names || !ecd_h_paths || !ecd_c_paths) {
+        fprintf(stderr, "tur: oom\n"); return 2;
+    }
+    for (int i = 0; i < n_inputs; i++) {
+        const char *base = basename_of(inputs[i]);
         size_t base_len = strlen(base);
-        char mod_name[256];
         size_t n = (base_len >= 4 && strcmp(base + base_len - 4, ".tur") == 0)
                    ? base_len - 4 : base_len;
-        if (n >= sizeof(mod_name)) n = sizeof(mod_name) - 1;
-        memcpy(mod_name, base, n);
-        mod_name[n] = '\0';
+        ecd_mod_names[i] = (char *)malloc(n + 1);
+        memcpy(ecd_mod_names[i], base, n);
+        ecd_mod_names[i][n] = '\0';
+        ecd_h_paths[i] = (char *)malloc(strlen(out_dir) + n + 4);
+        ecd_c_paths[i] = (char *)malloc(strlen(out_dir) + n + 4);
+        sprintf(ecd_h_paths[i], "%s/%s.h", out_dir, ecd_mod_names[i]);
+        sprintf(ecd_c_paths[i], "%s/%s.c", out_dir, ecd_mod_names[i]);
+    }
 
-        char h_path[1024], c_path[1024];
-        snprintf(h_path, sizeof(h_path), "%s/%s.h", out_dir, mod_name);
-        snprintf(c_path, sizeof(c_path), "%s/%s.c", out_dir, mod_name);
+    /* J7 Pass 1: compile all with no forced specs; collect borrow specs. */
+    BorrowSpecInfo **ecd_borrow = (BorrowSpecInfo **)calloc(n_inputs, sizeof(BorrowSpecInfo *));
+    uint32_t *ecd_n_borrow = (uint32_t *)calloc(n_inputs, sizeof(uint32_t));
+    if (!ecd_borrow || !ecd_n_borrow) { fprintf(stderr, "tur: oom\n"); return 2; }
 
-        Buf h_buf, c_buf;
-        buf_init(&h_buf);
-        buf_init(&c_buf);
-
+    int rc = 0;
+    for (int i = 0; i < n_inputs && rc == 0; i++) {
         int rm_n = 0;
-        char **rm_p = discover_manifest_reader_macros(input, &rm_n);
-        int h_rc = compile_to_h(input, &h_buf, mod_name,
+        char **rm_p = discover_manifest_reader_macros(inputs[i], &rm_n);
+        Buf h_buf, c_buf;
+        buf_init(&h_buf); buf_init(&c_buf);
+        int h_rc = compile_to_h(inputs[i], &h_buf, ecd_mod_names[i],
                                 include_dirs, n_include_dirs,
-                                (const char **)rm_p, rm_n);
-        int c_rc = compile_to_implementation(input, &c_buf, mod_name,
+                                (const char **)rm_p, rm_n, NULL, 0);
+        int c_rc = compile_to_implementation(inputs[i], &c_buf, ecd_mod_names[i],
                                              include_dirs, n_include_dirs,
-                                             (const char **)rm_p, rm_n,
-                                             NULL /* no manifest in emit-c */);
+                                             (const char **)rm_p, rm_n, NULL,
+                                             NULL, 0,
+                                             &ecd_borrow[i], &ecd_n_borrow[i]);
         free_reader_macro_paths(rm_p, rm_n);
-
         if (h_rc != 0 || c_rc != 0) {
-            rc = (h_rc != 0) ? h_rc : c_rc;
-        } else if (buf_to_path(&h_buf, h_path) != 0 ||
-                   buf_to_path(&c_buf, c_path) != 0) {
-            fprintf(stderr, "tur emit-c: failed to write output for '%s'\n",
-                    input);
+            rc = h_rc != 0 ? h_rc : c_rc;
+        } else if (buf_to_path(&h_buf, ecd_h_paths[i]) != 0 ||
+                   buf_to_path(&c_buf, ecd_c_paths[i]) != 0) {
+            fprintf(stderr, "tur emit-c: failed to write output for '%s'\n", inputs[i]);
             rc = 2;
         }
-        buf_free(&h_buf);
-        buf_free(&c_buf);
+        buf_free(&h_buf); buf_free(&c_buf);
     }
+
+    /* J7 Pass 2: recompile owners with forced specs. */
+    if (rc == 0) {
+        ForcedAbiSpec **ecd_forced = (ForcedAbiSpec **)calloc(n_inputs, sizeof(ForcedAbiSpec *));
+        uint32_t *ecd_n_forced = (uint32_t *)calloc(n_inputs, sizeof(uint32_t));
+        uint32_t *ecd_cap_forced = (uint32_t *)calloc(n_inputs, sizeof(uint32_t));
+        if (!ecd_forced || !ecd_n_forced || !ecd_cap_forced) { fprintf(stderr, "tur: oom\n"); rc = 2; }
+
+        if (rc == 0) {
+            for (int i = 0; i < n_inputs; i++) {
+                for (uint32_t bi = 0; bi < ecd_n_borrow[i]; bi++) {
+                    BorrowSpecInfo *bsi = &ecd_borrow[i][bi];
+                    if (!bsi->owning_module || !bsi->fn_symbol) continue;
+                    int owner = -1;
+                    for (int j = 0; j < n_inputs; j++) {
+                        if (strcmp(ecd_mod_names[j], bsi->owning_module) == 0) { owner = j; break; }
+                    }
+                    if (owner < 0) continue;
+                    bool dup = false;
+                    for (uint32_t fi = 0; fi < ecd_n_forced[owner]; fi++) {
+                        if (strcmp(ecd_forced[owner][fi].clone_name, bsi->clone_name) == 0) { dup = true; break; }
+                    }
+                    if (dup) continue;
+                    if (ecd_n_forced[owner] >= ecd_cap_forced[owner]) {
+                        uint32_t nc = ecd_cap_forced[owner] ? ecd_cap_forced[owner] * 2 : 4;
+                        ForcedAbiSpec *nf = (ForcedAbiSpec *)realloc(ecd_forced[owner], nc * sizeof(ForcedAbiSpec));
+                        if (!nf) { fprintf(stderr, "tur: oom\n"); rc = 2; break; }
+                        ecd_forced[owner] = nf; ecd_cap_forced[owner] = nc;
+                    }
+                    ForcedAbiSpec *fs = &ecd_forced[owner][ecd_n_forced[owner]++];
+                    fs->clone_name = bsi->clone_name;
+                    fs->fn_symbol  = bsi->fn_symbol;
+                    fs->result_kind = bsi->result_kind;
+                    fs->n_args = bsi->n_args;
+                    for (uint8_t ai = 0; ai < bsi->n_args; ai++) fs->arg_kinds[ai] = bsi->arg_kinds[ai];
+                }
+            }
+            for (int i = 0; i < n_inputs && rc == 0; i++) {
+                if (ecd_n_forced[i] == 0) continue;
+                int rm_n = 0;
+                char **rm_p = discover_manifest_reader_macros(inputs[i], &rm_n);
+                Buf h_buf, c_buf;
+                buf_init(&h_buf); buf_init(&c_buf);
+                int h_rc = compile_to_h(inputs[i], &h_buf, ecd_mod_names[i],
+                                        include_dirs, n_include_dirs,
+                                        (const char **)rm_p, rm_n,
+                                        ecd_forced[i], ecd_n_forced[i]);
+                int c_rc = compile_to_implementation(inputs[i], &c_buf, ecd_mod_names[i],
+                                                     include_dirs, n_include_dirs,
+                                                     (const char **)rm_p, rm_n, NULL,
+                                                     ecd_forced[i], ecd_n_forced[i],
+                                                     NULL, NULL);
+                free_reader_macro_paths(rm_p, rm_n);
+                if (h_rc != 0 || c_rc != 0) rc = h_rc != 0 ? h_rc : c_rc;
+                else if (buf_to_path(&h_buf, ecd_h_paths[i]) != 0 ||
+                         buf_to_path(&c_buf, ecd_c_paths[i]) != 0) rc = 2;
+                buf_free(&h_buf); buf_free(&c_buf);
+            }
+        }
+        for (int i = 0; i < n_inputs; i++) free(ecd_forced[i]);
+        free(ecd_forced); free(ecd_n_forced); free(ecd_cap_forced);
+    }
+
+    /* J5: Write .tur-abi-cache/index for emit-c --output-dir. */
+    if (rc == 0) {
+        char cache_dir[4096];
+        snprintf(cache_dir, sizeof(cache_dir), "%s/.tur-abi-cache", out_dir);
+        struct stat st_cd;
+        bool cache_dir_new = (stat(cache_dir, &st_cd) != 0);
+        if (cache_dir_new) mkdir(cache_dir, 0755);
+        char idx_tmp[4096];
+        snprintf(idx_tmp, sizeof(idx_tmp), "%s/index.tmp", cache_dir);
+        FILE *cf = fopen(idx_tmp, "w");
+        if (cf) {
+            for (int i = 0; i < n_inputs; i++) {
+                for (uint32_t bi = 0; bi < ecd_n_borrow[i]; bi++) {
+                    BorrowSpecInfo *bsi = &ecd_borrow[i][bi];
+                    if (!bsi->owning_module || !bsi->fn_symbol) continue;
+                    fprintf(cf, "%s\t%s\t%s\t%d\t%d",
+                            bsi->clone_name, bsi->owning_module, bsi->fn_symbol,
+                            (int)bsi->result_kind, (int)bsi->n_args);
+                    for (uint8_t ai = 0; ai < bsi->n_args; ai++)
+                        fprintf(cf, "\t%d", (int)bsi->arg_kinds[ai]);
+                    fprintf(cf, "\n");
+                }
+            }
+            fclose(cf);
+            char idx_path[4096];
+            snprintf(idx_path, sizeof(idx_path), "%s/index", cache_dir);
+            rename(idx_tmp, idx_path);
+        }
+    }
+
+    for (int i = 0; i < n_inputs; i++) {
+        for (uint32_t bi = 0; bi < ecd_n_borrow[i]; bi++) {
+            free(ecd_borrow[i][bi].clone_name);
+            free(ecd_borrow[i][bi].owning_module);
+            free(ecd_borrow[i][bi].fn_symbol);
+        }
+        free(ecd_borrow[i]);
+        free(ecd_mod_names[i]); free(ecd_h_paths[i]); free(ecd_c_paths[i]);
+    }
+    free(ecd_borrow); free(ecd_n_borrow);
+    free(ecd_mod_names); free(ecd_h_paths); free(ecd_c_paths);
     return rc;
 }
 
@@ -1090,7 +1212,7 @@ static int cmd_emit_h(const char *path,
     int n_rm = 0;
     char **rm = discover_manifest_reader_macros(path, &n_rm);
     int rc = compile_to_h(path, &out, mod_name, include_dirs, n_include_dirs,
-                          (const char **)rm, n_rm);
+                          (const char **)rm, n_rm, NULL, 0);
     free_reader_macro_paths(rm, n_rm);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
@@ -2381,7 +2503,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
     /* Allocate arrays for .h and .c filenames */
     char **h_files = (char **)malloc(n_files * sizeof(char *));
     char **c_files = (char **)malloc(n_files * sizeof(char *));
-    if (!h_files || !c_files) { fprintf(stderr, "tur: oom\n"); return 2; }
+    char **mod_names = (char **)malloc(n_files * sizeof(char *));
+    if (!h_files || !c_files || !mod_names) { fprintf(stderr, "tur: oom\n"); return 2; }
 
     /* RP1: in shared mode, accumulate one exports.manifest line per
      * exported defn across all compiled modules, then write the file
@@ -2397,29 +2520,34 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
         size_t len = strlen(base);
         h_files[i] = (char *)malloc(len + 4);
         c_files[i] = (char *)malloc(len + 4);
+        mod_names[i] = (char *)malloc(len);
         snprintf(h_files[i], len + 4, "%.*s.h", (int)(len - 4), base);
         snprintf(c_files[i], len + 4, "%.*s.c", (int)(len - 4), base);
+        snprintf(mod_names[i], len, "%.*s", (int)(len - 4), base);
     }
 
-    /* Compile each .tur file to .h and .c */
-    for (int i = 0; i < n_files; i++) {
-        const char *module_name = basename_of(tur_files[i]);
-        size_t len = strlen(module_name);
-        char mod_name_no_ext[256];
-        snprintf(mod_name_no_ext, sizeof(mod_name_no_ext), "%.*s", (int)(len - 4), module_name);
+    /* J6: Two-pass ABI specialization.
+     * Pass 1: compile all modules with no forced specs; collect borrow specs.
+     * Pass 2: recompile modules that own borrow specs from other modules. */
+    BorrowSpecInfo **all_borrow = (BorrowSpecInfo **)calloc(n_files, sizeof(BorrowSpecInfo *));
+    uint32_t *all_n_borrow = (uint32_t *)calloc(n_files, sizeof(uint32_t));
+    if (!all_borrow || !all_n_borrow) { fprintf(stderr, "tur: oom\n"); return 2; }
 
+    /* Pass 1: Compile each .tur file to .h and .c (no forced specs yet). */
+    for (int i = 0; i < n_files; i++) {
         int rm_n = 0;
         char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
 
         Buf h_out;
         buf_init(&h_out);
-        if (compile_to_h(tur_files[i], &h_out, mod_name_no_ext, NULL, 0,
-                         (const char **)rm_p, rm_n) != 0) {
+        if (compile_to_h(tur_files[i], &h_out, mod_names[i], NULL, 0,
+                         (const char **)rm_p, rm_n, NULL, 0) != 0) {
             fprintf(stderr, "tur: failed to compile %s to header\n", tur_files[i]);
             buf_free(&h_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
-            free(h_files); free(c_files);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(all_borrow); free(all_n_borrow);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -2427,8 +2555,9 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
             fprintf(stderr, "tur: failed to write %s\n", h_files[i]);
             buf_free(&h_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
-            free(h_files); free(c_files);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(all_borrow); free(all_n_borrow);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -2436,15 +2565,18 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
 
         Buf c_out;
         buf_init(&c_out);
-        if (compile_to_implementation(tur_files[i], &c_out, mod_name_no_ext,
+        if (compile_to_implementation(tur_files[i], &c_out, mod_names[i],
                                       NULL, 0,
                                       (const char **)rm_p, rm_n,
-                                      manifest_ptr) != 0) {
+                                      manifest_ptr,
+                                      NULL, 0,
+                                      &all_borrow[i], &all_n_borrow[i]) != 0) {
             fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
             buf_free(&c_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
-            free(h_files); free(c_files);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(all_borrow); free(all_n_borrow);
             free_tur_files(tur_files, n_files);
             return 1;
         }
@@ -2452,14 +2584,177 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
             fprintf(stderr, "tur: failed to write %s\n", c_files[i]);
             buf_free(&c_out);
             free_reader_macro_paths(rm_p, rm_n);
-            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); }
-            free(h_files); free(c_files);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(all_borrow); free(all_n_borrow);
             free_tur_files(tur_files, n_files);
             return 1;
         }
         buf_free(&c_out);
         free_reader_macro_paths(rm_p, rm_n);
     }
+
+    /* J6: Post-pass 1: build forced spec lists for each owner module. */
+    ForcedAbiSpec **forced_for = (ForcedAbiSpec **)calloc(n_files, sizeof(ForcedAbiSpec *));
+    uint32_t *n_forced_for = (uint32_t *)calloc(n_files, sizeof(uint32_t));
+    uint32_t *cap_forced_for = (uint32_t *)calloc(n_files, sizeof(uint32_t));
+    if (!forced_for || !n_forced_for || !cap_forced_for) { fprintf(stderr, "tur: oom\n"); return 2; }
+
+    for (int i = 0; i < n_files; i++) {
+        for (uint32_t bi = 0; bi < all_n_borrow[i]; bi++) {
+            BorrowSpecInfo *bsi = &all_borrow[i][bi];
+            if (!bsi->owning_module || !bsi->fn_symbol) continue;
+            /* Find the owner module index. */
+            int owner = -1;
+            for (int j = 0; j < n_files; j++) {
+                if (strcmp(mod_names[j], bsi->owning_module) == 0) { owner = j; break; }
+            }
+            if (owner < 0) continue;
+            /* Check if this clone_name is already forced for owner. */
+            bool dup = false;
+            for (uint32_t fi = 0; fi < n_forced_for[owner]; fi++) {
+                if (strcmp(forced_for[owner][fi].clone_name, bsi->clone_name) == 0) {
+                    dup = true; break;
+                }
+            }
+            if (dup) continue;
+            /* Grow the forced array for the owner. */
+            if (n_forced_for[owner] >= cap_forced_for[owner]) {
+                uint32_t nc = cap_forced_for[owner] ? cap_forced_for[owner] * 2 : 4;
+                ForcedAbiSpec *nf = (ForcedAbiSpec *)realloc(forced_for[owner],
+                                                              nc * sizeof(ForcedAbiSpec));
+                if (!nf) { fprintf(stderr, "tur: oom\n"); return 2; }
+                forced_for[owner] = nf;
+                cap_forced_for[owner] = nc;
+            }
+            ForcedAbiSpec *fs = &forced_for[owner][n_forced_for[owner]++];
+            fs->clone_name = bsi->clone_name; /* borrow (valid until all_borrow freed) */
+            fs->fn_symbol  = bsi->fn_symbol;
+            fs->result_kind = bsi->result_kind;
+            fs->n_args = bsi->n_args;
+            for (uint8_t ai = 0; ai < bsi->n_args; ai++)
+                fs->arg_kinds[ai] = bsi->arg_kinds[ai];
+        }
+    }
+
+    /* J6: Pass 2: recompile owner modules that have forced specs. */
+    for (int i = 0; i < n_files; i++) {
+        if (n_forced_for[i] == 0) continue;
+
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
+
+        Buf h_out;
+        buf_init(&h_out);
+        if (compile_to_h(tur_files[i], &h_out, mod_names[i], NULL, 0,
+                         (const char **)rm_p, rm_n,
+                         forced_for[i], n_forced_for[i]) != 0) {
+            fprintf(stderr, "tur: failed to recompile %s to header (pass 2)\n", tur_files[i]);
+            buf_free(&h_out);
+            free_reader_macro_paths(rm_p, rm_n);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
+            free(all_borrow); free(all_n_borrow);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
+        if (buf_to_path(&h_out, h_files[i]) != 0) {
+            fprintf(stderr, "tur: failed to write %s (pass 2)\n", h_files[i]);
+            buf_free(&h_out);
+            free_reader_macro_paths(rm_p, rm_n);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
+            free(all_borrow); free(all_n_borrow);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
+        buf_free(&h_out);
+
+        Buf c_out;
+        buf_init(&c_out);
+        if (compile_to_implementation(tur_files[i], &c_out, mod_names[i],
+                                      NULL, 0,
+                                      (const char **)rm_p, rm_n,
+                                      manifest_ptr,
+                                      forced_for[i], n_forced_for[i],
+                                      NULL, NULL) != 0) {
+            fprintf(stderr, "tur: failed to recompile %s to implementation (pass 2)\n", tur_files[i]);
+            buf_free(&c_out);
+            free_reader_macro_paths(rm_p, rm_n);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
+            free(all_borrow); free(all_n_borrow);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
+        if (buf_to_path(&c_out, c_files[i]) != 0) {
+            fprintf(stderr, "tur: failed to write %s (pass 2)\n", c_files[i]);
+            buf_free(&c_out);
+            free_reader_macro_paths(rm_p, rm_n);
+            for (int j = 0; j < n_files; j++) { free(h_files[j]); free(c_files[j]); free(mod_names[j]); }
+            free(h_files); free(c_files); free(mod_names);
+            free(forced_for[i]); free(forced_for); free(n_forced_for); free(cap_forced_for);
+            free(all_borrow); free(all_n_borrow);
+            free_tur_files(tur_files, n_files);
+            return 1;
+        }
+        buf_free(&c_out);
+        free_reader_macro_paths(rm_p, rm_n);
+    }
+
+    /* J5: Write .tur-abi-cache/index with ownership information. */
+    {
+        char cache_dir[4096];
+        snprintf(cache_dir, sizeof(cache_dir), "%s/.tur-abi-cache", dir);
+        struct stat st_cache;
+        bool cache_dir_new = (stat(cache_dir, &st_cache) != 0);
+        if (cache_dir_new) {
+            mkdir(cache_dir, 0755);
+            /* Append to .gitignore if present. */
+            char gitignore[4096];
+            snprintf(gitignore, sizeof(gitignore), "%s/.gitignore", dir);
+            FILE *gi = fopen(gitignore, "a");
+            if (gi) { fprintf(gi, ".tur-abi-cache/\n"); fclose(gi); }
+        }
+        char idx_tmp[4096];
+        snprintf(idx_tmp, sizeof(idx_tmp), "%s/index.tmp", cache_dir);
+        FILE *cf = fopen(idx_tmp, "w");
+        if (cf) {
+            for (int i = 0; i < n_files; i++) {
+                for (uint32_t bi = 0; bi < all_n_borrow[i]; bi++) {
+                    BorrowSpecInfo *bsi = &all_borrow[i][bi];
+                    if (!bsi->owning_module || !bsi->fn_symbol) continue;
+                    /* clone_name, owning_module, fn_symbol, result_kind, n_args, arg_kinds... */
+                    fprintf(cf, "%s\t%s\t%s\t%d\t%d",
+                            bsi->clone_name, bsi->owning_module, bsi->fn_symbol,
+                            (int)bsi->result_kind, (int)bsi->n_args);
+                    for (uint8_t ai = 0; ai < bsi->n_args; ai++)
+                        fprintf(cf, "\t%d", (int)bsi->arg_kinds[ai]);
+                    fprintf(cf, "\n");
+                }
+            }
+            fclose(cf);
+            char idx_path[4096];
+            snprintf(idx_path, sizeof(idx_path), "%s/index", cache_dir);
+            rename(idx_tmp, idx_path);
+        }
+    }
+
+    /* Free borrow and forced spec arrays. */
+    for (int i = 0; i < n_files; i++) {
+        for (uint32_t bi = 0; bi < all_n_borrow[i]; bi++) {
+            free(all_borrow[i][bi].clone_name);
+            free(all_borrow[i][bi].owning_module);
+            free(all_borrow[i][bi].fn_symbol);
+        }
+        free(all_borrow[i]);
+        free(forced_for[i]);
+    }
+    free(all_borrow); free(all_n_borrow);
+    free(forced_for); free(n_forced_for); free(cap_forced_for);
 
     /* Generate _main.c (skipped in shared-library mode: the .so has no
      * entry point; the host invokes exported defns directly via dlsym). */
@@ -2535,8 +2830,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
     buf_free(&cmd);
 
     /* Clean up temp files */
-    for (int i = 0; i < n_files; i++) { free(h_files[i]); free(c_files[i]); }
-    free(h_files); free(c_files);
+    for (int i = 0; i < n_files; i++) { free(h_files[i]); free(c_files[i]); free(mod_names[i]); }
+    free(h_files); free(c_files); free(mod_names);
     free_tur_files(tur_files, n_files);
     if (!shared) unlink("_main.c");
 

@@ -3,18 +3,53 @@
 
 #include "buf.h"
 #include "expr.h"
+#include "types.h"
 
 /* Emit a complete C99 program from a typed Expr program (EX_PROGRAM). Returns
  * 0 on success, -1 on error (diagnostics already emitted). */
 int emit_program(Buf *out, const Expr *program);
 
+/* J5/J6: A forced ABI specialization -- a clone that a borrower module needs
+ * emitted by the owner module (even when the owner has no local call sites).
+ * Passed from cmd_build_multi / cmd_emit_c_to_dir to emit_header and
+ * emit_implementation after the cross-module borrow-spec scan. */
+typedef struct {
+    const char *clone_name;          /* unique mangled clone name */
+    const char *fn_symbol;           /* binding name to look up in owner module */
+    TypeKind    result_kind;
+    TypeKind    arg_kinds[16];       /* MAX_FN_ARITY */
+    uint8_t     n_args;
+} ForcedAbiSpec;
+
+/* J6: Borrow spec info output from emit_implementation.  Each entry describes
+ * a clone this module borrowed (call-site rewrite, no body).  The owner is
+ * identified by fn_binding->defining_module_name stored in owning_module.
+ * All three string fields are malloc'd; caller must free them. */
+typedef struct {
+    char       *clone_name;          /* malloc'd */
+    char       *owning_module;       /* malloc'd (strdup of binding->defining_module_name) */
+    char       *fn_symbol;           /* malloc'd (strdup of binding->name->name) */
+    TypeKind    result_kind;
+    TypeKind    arg_kinds[16];
+    uint8_t     n_args;
+} BorrowSpecInfo;
+
 /* Phase 2: Multi-file support - emit separate .h and .c for a module.
  * Returns 0 on success, -1 on error.
  * `separate_compilation` (Phase M3): when true, the header exports only
  * exported symbols and the implementation #includes imported modules' headers
- * rather than inlining their code. */
-int emit_header(Buf *out, const char *module_name, const Expr *program, bool separate_compilation);
-int emit_implementation(Buf *out, const char *module_name, const Expr *program, bool separate_compilation);
+ * rather than inlining their code.
+ * J5/J6: `forced`/`n_forced` inject specialization clones that borrower
+ * modules need emitted here; pass NULL/0 for the first-pass compilation.
+ * `out_borrow_specs`/`out_n` (emit_implementation only): if non-NULL, receives
+ * a malloc'd array of BorrowSpecInfo describing clones this module borrowed. */
+int emit_header(Buf *out, const char *module_name, const Expr *program,
+                bool separate_compilation,
+                const ForcedAbiSpec *forced, uint32_t n_forced);
+int emit_implementation(Buf *out, const char *module_name, const Expr *program,
+                        bool separate_compilation,
+                        const ForcedAbiSpec *forced, uint32_t n_forced,
+                        BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs);
 
 /* RP1: append one manifest line per exported defn of the form
  *   <module>/<defn> -> <mangled-c-symbol> :: (:arg-tag ...) -> :ret-tag

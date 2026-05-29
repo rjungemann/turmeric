@@ -1,0 +1,9 @@
+;;; module-spec-cache-reuse/b.tur -- calls triple at :float.
+
+(defmodule b
+  (import a :refer [triple])
+  (export run main)
+  (defn run [] :int
+    (println (triple 4.0))
+    0)
+  (defn main [] :int (run)))

@@ -241,6 +241,38 @@ stamp_write() {
 run_happy() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
+
+    # hook.sh: if present, delegate entirely to the fixture-supplied script.
+    # The script is invoked with TUR, CC, and TUR_CC_FLAGS in the environment.
+    # It should write its stdout to a file named `actual.stdout` in a temp dir
+    # that the runner passes as $1, and exit 0 on success, nonzero on failure.
+    if [ -f "$dir/hook.sh" ]; then
+        local hook_tmp
+        hook_tmp=$(mktemp -d)
+        local hook_log="$hook_tmp/hook.log"
+        local actual_hook_stdout="$hook_tmp/actual.stdout"
+        TUR="$TUR" CC="$BUILD_CC" TUR_CC_FLAGS="$TUR_CC_FLAGS" \
+            bash "$dir/hook.sh" "$hook_tmp" > "$actual_hook_stdout" 2> "$hook_log"
+        local hook_rc=$?
+        if [ $hook_rc -ne 0 ]; then
+            { echo "FAIL $name -- hook.sh exited $hook_rc"; cat "$hook_log"; } > "$hook_log.final"
+            write_result "FAIL" "$name" "hook.sh failed (exit $hook_rc)" "$hook_log.final"
+            rm -rf "$hook_tmp"
+            return
+        fi
+        if [ -f "$dir/expected.stdout" ]; then
+            if ! diff -u "$dir/expected.stdout" "$actual_hook_stdout" > /dev/null; then
+                { echo "FAIL $name -- stdout mismatch"; diff -u "$dir/expected.stdout" "$actual_hook_stdout" | sed 's/^/    /'; } > "$hook_log.final"
+                write_result "FAIL" "$name" "stdout mismatch" "$hook_log.final"
+                rm -rf "$hook_tmp"
+                return
+            fi
+        fi
+        rm -rf "$hook_tmp"
+        write_result "PASS" "$name" "" ""
+        return
+    fi
+
     local input
     if   [ -f "$dir/input.tur" ]; then input="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
