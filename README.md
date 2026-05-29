@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.14.2` -- fixes `tur install` failing to build spices that declare `:spices` dependencies.
+**Latest release:** `v0.14.3` -- fixes SDK path resolution for globally-installed builds (e.g. Homebrew) and corrects the VSCode Markdown injection grammar.
 
 ## What
 

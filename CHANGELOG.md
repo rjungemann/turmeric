@@ -2,6 +2,22 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.3] -- 2026-05-28
+
+### Fixed
+
+- **`tur install` global SDK path resolution** -- prefix-installed builds
+  (e.g. Homebrew) now resolve absolute `-I`/`-L` paths to the Turmeric SDK
+  when compiling spices that use `-lturi`; previously, the relative paths in
+  `__tur_autolink__` failed when the working directory was not the source tree.
+  Resolution order: `$TUR_SDK_ROOT` override, then walking up from the
+  executable to locate `share/turmeric`.
+
+### Changed
+
+- **VSCode syntax extension** -- corrected the Markdown injection grammar so
+  Turmeric code fences in Markdown files highlight correctly.
+
 ## [0.14.2] -- 2026-05-28
 
 ### Fixed
