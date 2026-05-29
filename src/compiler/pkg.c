@@ -404,6 +404,11 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
             parse_cmake_deps(vf, out);
         } else if (strcmp(kw, "exports") == 0) {
             parse_str_vec(vf, &out->exports, &out->n_exports);
+        } else if (strcmp(kw, "members") == 0) {
+            /* LS2: workspace member spice directories, relative to this
+             * manifest. A non-empty list makes this manifest a workspace
+             * root; the resolver auto-links sibling members. */
+            parse_str_vec(vf, &out->members, &out->n_members);
         } else if (strcmp(kw, "reader-macros") == 0) {
             /* RM4: vector of paths to reader-macro definition files. */
             parse_str_vec(vf, &out->reader_macros, &out->n_reader_macros);
@@ -649,6 +654,8 @@ void pkg_manifest_free(PkgManifest *m) {
     }
     free(m->bin_names);
     free(m->bin_paths);
+    for (int i = 0; i < m->n_members; i++) free(m->members[i]);
+    free(m->members);
     memset(m, 0, sizeof(*m));
 }
 
@@ -877,6 +884,30 @@ static PkgLockEntry *lock_upsert(PkgLockFile *lock,
     return e;
 }
 
+/* LS3: drop any lock entry matching (name, is_cmake).  Returns true if
+ * an entry was removed.  Used by `tur fetch` when a previously locked
+ * dep has been switched to a local-source declaration (`:path` or a
+ * workspace member) so the lockfile records only URL deps. */
+static bool lock_remove(PkgLockFile *lock, const char *name, bool is_cmake) {
+    for (int i = 0; i < lock->n_entries; i++) {
+        PkgLockEntry *e = &lock->entries[i];
+        if (e->is_cmake != is_cmake || strcmp(e->name, name) != 0) continue;
+        free(e->name);
+        free(e->url);
+        free(e->ref);
+        free(e->resolved);
+        free(e->sha256);
+        free(e->fetched_at);
+        for (int j = 0; j < e->n_transitive; j++) free(e->transitive[j]);
+        free(e->transitive);
+        for (int j = i; j < lock->n_entries - 1; j++)
+            lock->entries[j] = lock->entries[j + 1];
+        lock->n_entries--;
+        return true;
+    }
+    return false;
+}
+
 /* ================================================================== */
 /* SHA-256                                                              */
 /* ================================================================== */
@@ -1051,9 +1082,239 @@ typedef struct FetchItem {
     char *path;   /* NULL = git dep */
     char *subdir; /* NULL = repo root; set for monorepo sub-packages */
     bool  is_cmake;
+    bool  from_root; /* LS3: true iff this item came from the root manifest */
     /* origin for error reporting */
     char *from;
 } FetchItem;
+
+/* LS3: how deep to walk looking for an enclosing workspace manifest.
+ * Must accommodate worktrees and nested checkouts; mirrors the resolver's
+ * TUR_SPICE_WALK_MAX in main.c. */
+#define PKG_WORKSPACE_WALK_MAX 16
+
+/* LS3: discover the names of *other* members of the workspace enclosing
+ * `project_dir`, if any.  Walks parents of `project_dir` looking for a
+ * `build.tur` that declares :members containing `project_dir`.  The
+ * member's name is read from its own `build.tur` `:name`, falling back
+ * to the basename of the member path when the manifest is unreadable or
+ * has no `:name`.
+ *
+ * Returns a NULL-terminated, heap-allocated array of strings (and sets
+ * *out_n to the count) on success.  Returns NULL with *out_n = 0 when
+ * `project_dir` is not part of any workspace.  Caller frees each string
+ * and the array.
+ *
+ * The workspace member list is used by `tur fetch` to skip any `:spices`
+ * entry whose dep name matches a sibling member -- the workspace is the
+ * dep source, not the remote URL. */
+static char **collect_workspace_member_names(const char *project_dir,
+                                              int *out_n) {
+    *out_n = 0;
+    if (!project_dir) return NULL;
+
+    char real_root[4096];
+    if (realpath(project_dir, real_root) == NULL) return NULL;
+
+    char anc[4096];
+    size_t rlen = strlen(real_root);
+    if (rlen + 1 > sizeof(anc)) return NULL;
+    memcpy(anc, real_root, rlen + 1);
+
+    for (int up = 0; up < PKG_WORKSPACE_WALK_MAX; up++) {
+        char *last = strrchr(anc, '/');
+        if (!last || last == anc) break;
+        *last = '\0';
+
+        char ws_manifest[4096];
+        int wn = snprintf(ws_manifest, sizeof(ws_manifest),
+                          "%s/build.tur", anc);
+        if (wn <= 0 || (size_t)wn >= sizeof(ws_manifest)) continue;
+
+        struct stat wst;
+        if (stat(ws_manifest, &wst) != 0 || !S_ISREG(wst.st_mode))
+            continue;
+
+        PkgManifest wm;
+        memset(&wm, 0, sizeof(wm));
+        if (!pkg_manifest_read(ws_manifest, &wm)) continue;
+
+        if (wm.n_members <= 0) {
+            /* Any build.tur (workspace or not) terminates the walk so
+             * we don't accidentally treat a non-workspace ancestor's
+             * project as the enclosing workspace. */
+            pkg_manifest_free(&wm);
+            break;
+        }
+
+        /* Confirm project_dir is itself a listed member of this
+         * candidate workspace. */
+        bool is_member = false;
+        for (int i = 0; i < wm.n_members; i++) {
+            char mp[4096];
+            int mn = snprintf(mp, sizeof(mp), "%s/%s",
+                              anc, wm.members[i]);
+            if (mn <= 0 || (size_t)mn >= sizeof(mp)) continue;
+            char real_mp[4096];
+            if (realpath(mp, real_mp) == NULL) continue;
+            if (strcmp(real_mp, real_root) == 0) {
+                is_member = true;
+                break;
+            }
+        }
+        if (!is_member) {
+            pkg_manifest_free(&wm);
+            break;
+        }
+
+        char **names = (char **)calloc((size_t)wm.n_members + 1,
+                                        sizeof(char *));
+        if (!names) { pkg_manifest_free(&wm); return NULL; }
+        int n = 0;
+        for (int i = 0; i < wm.n_members; i++) {
+            char member_manifest[4096];
+            int mn = snprintf(member_manifest, sizeof(member_manifest),
+                              "%s/%s/build.tur", anc, wm.members[i]);
+            const char *resolved_name = NULL;
+            PkgManifest mm;
+            memset(&mm, 0, sizeof(mm));
+            bool mm_ok = false;
+            if (mn > 0 && (size_t)mn < sizeof(member_manifest)) {
+                struct stat mst;
+                if (stat(member_manifest, &mst) == 0 && S_ISREG(mst.st_mode)
+                    && pkg_manifest_read(member_manifest, &mm)) {
+                    mm_ok = true;
+                    if (mm.name && mm.name[0]) resolved_name = mm.name;
+                }
+            }
+            if (!resolved_name) {
+                /* Fall back to the basename of the member path. */
+                const char *slash = strrchr(wm.members[i], '/');
+                resolved_name = slash ? slash + 1 : wm.members[i];
+            }
+            if (resolved_name && resolved_name[0])
+                names[n++] = tur_strdup(resolved_name);
+            if (mm_ok) pkg_manifest_free(&mm);
+        }
+        names[n] = NULL;
+        *out_n = n;
+        pkg_manifest_free(&wm);
+        return names;
+    }
+    return NULL;
+}
+
+/* LS3: case-sensitive lookup of `name` in a names[]/n_names list. */
+static bool name_in_list(const char *name, char **names, int n_names) {
+    if (!name || !names) return false;
+    for (int i = 0; i < n_names; i++) {
+        if (names[i] && strcmp(names[i], name) == 0) return true;
+    }
+    return false;
+}
+
+/* LS4: thin wrapper over collect_workspace_member_names so cmd_run (and
+ * any other resolution-time consumer) can ask "is this :spices entry a
+ * workspace sibling?" without re-implementing the workspace walk.
+ * Returns true iff `project_dir` is itself a member of some enclosing
+ * workspace AND that workspace lists a sibling member whose name (per
+ * its own build.tur `:name`, or basename fallback) matches `name`. */
+bool pkg_is_workspace_member(const char *project_dir, const char *name) {
+    if (!project_dir || !name || !name[0]) return false;
+    int n = 0;
+    char **names = collect_workspace_member_names(project_dir, &n);
+    bool hit = name_in_list(name, names, n);
+    if (names) {
+        for (int i = 0; i < n; i++) free(names[i]);
+        free(names);
+    }
+    return hit;
+}
+
+/* LS4: resolve a workspace-sibling `:spices` entry to the absolute path
+ * of the sibling's directory.  Walks parents of `project_dir` looking
+ * for a `build.tur` whose `:members [...]` list contains `project_dir`
+ * itself; in that workspace, returns the first member whose declared
+ * `:name` (or basename fallback) matches `dep_name`.  Returns NULL when
+ * no enclosing workspace lists a matching sibling.  Caller frees. */
+char *pkg_workspace_member_path(const char *project_dir, const char *dep_name) {
+    if (!project_dir || !dep_name || !dep_name[0]) return NULL;
+
+    char real_root[4096];
+    if (realpath(project_dir, real_root) == NULL) return NULL;
+
+    char anc[4096];
+    size_t rlen = strlen(real_root);
+    if (rlen + 1 > sizeof(anc)) return NULL;
+    memcpy(anc, real_root, rlen + 1);
+
+    for (int up = 0; up < PKG_WORKSPACE_WALK_MAX; up++) {
+        char *last = strrchr(anc, '/');
+        if (!last || last == anc) break;
+        *last = '\0';
+
+        char ws_manifest[4096];
+        int wn = snprintf(ws_manifest, sizeof(ws_manifest),
+                          "%s/build.tur", anc);
+        if (wn <= 0 || (size_t)wn >= sizeof(ws_manifest)) continue;
+
+        struct stat wst;
+        if (stat(ws_manifest, &wst) != 0 || !S_ISREG(wst.st_mode))
+            continue;
+
+        PkgManifest wm;
+        memset(&wm, 0, sizeof(wm));
+        if (!pkg_manifest_read(ws_manifest, &wm)) continue;
+
+        if (wm.n_members <= 0) {
+            pkg_manifest_free(&wm);
+            break;
+        }
+
+        bool is_member = false;
+        for (int i = 0; i < wm.n_members; i++) {
+            char mp[4096];
+            int mn = snprintf(mp, sizeof(mp), "%s/%s",
+                              anc, wm.members[i]);
+            if (mn <= 0 || (size_t)mn >= sizeof(mp)) continue;
+            char real_mp[4096];
+            if (realpath(mp, real_mp) == NULL) continue;
+            if (strcmp(real_mp, real_root) == 0) { is_member = true; break; }
+        }
+        if (!is_member) { pkg_manifest_free(&wm); break; }
+
+        char *found = NULL;
+        for (int i = 0; i < wm.n_members && !found; i++) {
+            char member_manifest[4096];
+            int mn = snprintf(member_manifest, sizeof(member_manifest),
+                              "%s/%s/build.tur", anc, wm.members[i]);
+            const char *resolved_name = NULL;
+            PkgManifest mm;
+            memset(&mm, 0, sizeof(mm));
+            bool mm_ok = false;
+            if (mn > 0 && (size_t)mn < sizeof(member_manifest)) {
+                struct stat mst;
+                if (stat(member_manifest, &mst) == 0 && S_ISREG(mst.st_mode)
+                    && pkg_manifest_read(member_manifest, &mm)) {
+                    mm_ok = true;
+                    if (mm.name && mm.name[0]) resolved_name = mm.name;
+                }
+            }
+            if (!resolved_name) {
+                const char *slash = strrchr(wm.members[i], '/');
+                resolved_name = slash ? slash + 1 : wm.members[i];
+            }
+            if (resolved_name && strcmp(resolved_name, dep_name) == 0) {
+                char mp[4096];
+                snprintf(mp, sizeof(mp), "%s/%s", anc, wm.members[i]);
+                found = tur_strdup(mp);
+            }
+            if (mm_ok) pkg_manifest_free(&mm);
+        }
+        pkg_manifest_free(&wm);
+        return found;
+    }
+    return NULL;
+}
 
 /* Conflict table entry */
 typedef struct ConflictEntry {
@@ -1088,6 +1349,13 @@ bool pkg_fetch_all(const char *project_dir,
     ConflictEntry *conflicts = (ConflictEntry *)malloc(cf_cap * sizeof(ConflictEntry));
     if (!conflicts) { free(queue); return false; }
 
+    /* LS3: collect the set of workspace-sibling member names so any
+     * `:spices` entry that refers to a sibling is skipped (no fetch,
+     * no lock row).  The workspace is the dep source, not the URL. */
+    int n_ws_members = 0;
+    char **ws_member_names = collect_workspace_member_names(project_dir,
+                                                             &n_ws_members);
+
     /* Seed the queue from the manifest's direct spices */
     for (int i = 0; i < manifest->n_spices; i++) {
         const PkgSpice *s = &manifest->spices[i];
@@ -1103,6 +1371,7 @@ bool pkg_fetch_all(const char *project_dir,
         it->path     = s->path   ? tur_strdup(s->path)   : NULL;
         it->subdir   = s->subdir ? tur_strdup(s->subdir) : NULL;
         it->is_cmake = false;
+        it->from_root = true;
         it->from     = tur_strdup("(root)");
     }
 
@@ -1118,13 +1387,55 @@ bool pkg_fetch_all(const char *project_dir,
             continue;
         }
 
-        /* Local path dep — no fetch needed, just record */
+        /* LS3: Local path dep — skip the fetch entirely, drop any stale
+         * lock row.  The resolver picks the source up directly from
+         * `<:path>/src` at compile time, so reproducibility for local
+         * deps is owned by git, not the lockfile.  Direct (root)
+         * `:path` deps that fail to exist on disk are a hard error,
+         * symmetric with how missing URL refs behave. */
         if (it->path) {
-            PkgLockEntry *le = lock_upsert(lock, it->name, false);
-            if (le) {
-                free(le->url); le->url = NULL;
-                free(le->ref); le->ref = NULL;
+            if (it->from_root) {
+                char abs_path[4096];
+                int an = (it->path[0] == '/')
+                    ? snprintf(abs_path, sizeof(abs_path), "%s", it->path)
+                    : snprintf(abs_path, sizeof(abs_path), "%s/%s",
+                               project_dir, it->path);
+                bool path_ok = false;
+                if (an > 0 && (size_t)an < sizeof(abs_path)) {
+                    struct stat pst;
+                    if (stat(abs_path, &pst) == 0 && S_ISDIR(pst.st_mode)) {
+                        char mp[4096];
+                        int mn = snprintf(mp, sizeof(mp), "%s/build.tur",
+                                          abs_path);
+                        if (mn > 0 && (size_t)mn < sizeof(mp)) {
+                            struct stat mst;
+                            if (stat(mp, &mst) == 0 && S_ISREG(mst.st_mode))
+                                path_ok = true;
+                        }
+                    }
+                }
+                if (!path_ok) {
+                    fprintf(stderr,
+                        "spice: '%s' declares :path \"%s\" but the "
+                        "directory does not exist or contains no "
+                        "build.tur (from %s)\n",
+                        it->name, it->path, it->from);
+                    ok = false;
+                }
             }
+            (void)lock_remove(lock, it->name, false);
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->subdir); free(it->from);
+            continue;
+        }
+
+        /* LS3: workspace-member dep — the workspace resolver already
+         * supplies sibling members at compile time; `tur fetch` should
+         * not try to fetch a URL for them, and the lockfile should not
+         * record them. */
+        if (it->from_root && name_in_list(it->name, ws_member_names,
+                                          n_ws_members)) {
+            (void)lock_remove(lock, it->name, false);
             free(it->name); free(it->url); free(it->ref);
             free(it->path); free(it->subdir); free(it->from);
             continue;
@@ -1262,6 +1573,7 @@ bool pkg_fetch_all(const char *project_dir,
                     nit->path     = ss->path   ? tur_strdup(ss->path)   : NULL;
                     nit->subdir   = ss->subdir ? tur_strdup(ss->subdir) : NULL;
                     nit->is_cmake = false;
+                    nit->from_root = false;
                     char from_buf[256];
                     snprintf(from_buf, sizeof(from_buf), "%s@%s",
                              it->name, it->ref ? it->ref : "HEAD");
@@ -1298,6 +1610,12 @@ bool pkg_fetch_all(const char *project_dir,
         free(conflicts[i].ref);
     }
     free(conflicts);
+
+    /* LS3: free workspace-member name list */
+    if (ws_member_names) {
+        for (int i = 0; i < n_ws_members; i++) free(ws_member_names[i]);
+        free(ws_member_names);
+    }
 
     return ok;
 }

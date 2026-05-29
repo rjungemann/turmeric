@@ -390,6 +390,20 @@ Expr *elab_form(Elab *e, Form *f) {
     return NULL;
 }
 
+/* LS2: file-scope holder for the active workspace-resolver context. Set
+ * by main.c around its compile_to_c invocation; read here when Elab is
+ * initialized. Stays NULL outside that scope (REPL, eval, etc.), so the
+ * warning machinery is a no-op for those paths. Single-threaded usage. */
+static const Ls2ResolverCtx *g_ls2_resolver_ctx;
+
+void ls2_resolver_ctx_set(const Ls2ResolverCtx *ctx) {
+    g_ls2_resolver_ctx = ctx;
+}
+
+const Ls2ResolverCtx *ls2_resolver_ctx_active(void) {
+    return g_ls2_resolver_ctx;
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -412,6 +426,18 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
     e.module_include_dirs   = include_dirs;
     e.n_module_include_dirs = n_include_dirs;
+    /* LS2: pull workspace-resolution context published by main.c around
+     * the compile_to_c call (NULL outside that path -- the warning code
+     * then silently no-ops). */
+    {
+        const Ls2ResolverCtx *ctx = ls2_resolver_ctx_active();
+        if (ctx && ctx->n_inc == n_include_dirs) {
+            e.module_include_workspace_producer = ctx->producer_per_inc;
+            e.module_include_warned             = ctx->warned_per_inc;
+            e.module_consumer_declared_spices   = ctx->declared_spices;
+            e.n_module_consumer_declared_spices = ctx->n_declared_spices;
+        }
+    }
     e.separate_compilation  = separate_compilation;
     e.sandboxed             = sandboxed;
     builtins_init(st);

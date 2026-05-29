@@ -1,0 +1,4 @@
+;; Consumer member: imports alpha/util via workspace resolution,
+;; with no :spices entry naming alpha.
+(defpackage beta
+  :name "beta")

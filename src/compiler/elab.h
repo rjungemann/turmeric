@@ -40,4 +40,33 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         uint32_t *out_n_file_scope_defs,
                         struct ReaderMacroRegistry *user_macros);
 
+/* LS2 (local-spice-dev-workflow-plan): per-compile workspace-sibling
+ * resolution context. Set by the entry-point (main.c's compile_to_c)
+ * around a call into the elaborator and cleared after; the elaborator
+ * picks it up when initializing Elab. Outside of compile_to_c the
+ * pointer is NULL and the warning code is inert.
+ *
+ * All arrays are parallel to the include_dirs array passed alongside:
+ *   - producer_per_inc[i]: workspace-member directory (e.g. "spices/alpha")
+ *     for include dirs added by auto-workspace discovery; NULL for -I
+ *     flags, the consumer's own src/, and URL/path :spices deps.
+ *   - warned_per_inc[i]: dedup flag, set to true after the first warning
+ *     fires for include dir i (per (consumer, producer) pair, per tur
+ *     invocation).
+ *   - declared_spices[]: keys of the consumer's :spices map, used to
+ *     suppress the warning when the producer is already declared.
+ *   - debug_resolver: TUR_DEBUG_RESOLVER=1 (full search-path breadcrumbs).
+ */
+typedef struct Ls2ResolverCtx {
+    const char **producer_per_inc;
+    bool        *warned_per_inc;
+    int          n_inc;
+    const char **declared_spices;
+    int          n_declared_spices;
+    bool         debug_resolver;
+} Ls2ResolverCtx;
+
+void                  ls2_resolver_ctx_set(const Ls2ResolverCtx *ctx);
+const Ls2ResolverCtx *ls2_resolver_ctx_active(void);
+
 #endif

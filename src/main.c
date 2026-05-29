@@ -453,10 +453,19 @@ static bool g_no_auto_spice;
 static bool g_no_auto_stdlib;
 
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
- * (called by the LSP server) and the per-file dispatchers. */
+ * (called by the LSP server) and the per-file dispatchers.
+ *
+ * LS2: when out_ls2 is non-NULL, the helper also populates a parallel
+ * provenance array (workspace-sibling producer path per include dir),
+ * the consumer's declared :spices map keys, and the TUR_DEBUG_RESOLVER
+ * flag. Caller is responsible for calling ls2_resolver_ctx_dispose
+ * after compile_to_c returns. Pass NULL to skip the LS2 bookkeeping. */
 static int auto_append_spice_includes(const char *input,
                                       char ***inc, int *n_inc,
-                                      char ***owned, int *n_owned);
+                                      char ***owned, int *n_owned,
+                                      Ls2ResolverCtx *out_ls2);
+
+static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
 
 /* Global state for symbol collection -- set by tur_collect_symbols before
  * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
@@ -986,14 +995,18 @@ int tur_check_only(const char *path) {
     int    n_inc = 0;
     char **owned = NULL;
     int    n_owned = 0;
-    auto_append_spice_includes(path, &inc, &n_inc, &owned, &n_owned);
+    Ls2ResolverCtx ls2;
+    auto_append_spice_includes(path, &inc, &n_inc, &owned, &n_owned, &ls2);
 
     Buf discard;
     buf_init(&discard);
     int rm_n = 0;
     char **rm_p = discover_manifest_reader_macros(path, &rm_n);
+    ls2_resolver_ctx_set(&ls2);
     int rc = compile_to_c(path, &discard, (const char **)inc, n_inc,
                           (const char **)rm_p, rm_n);
+    ls2_resolver_ctx_set(NULL);
+    ls2_resolver_ctx_dispose(&ls2);
     free_reader_macro_paths(rm_p, rm_n);
     buf_free(&discard);
 
@@ -1758,11 +1771,52 @@ static int append_inc_owned(const char *s,
  *     for (int i = 0; i < n_owned; i++) free(owned[i]);
  *     free(owned);
  */
+/* LS2: grow the producer-per-include parallel array by one entry, copying
+ * `producer` (may be NULL) onto the end. Length is tracked via *n_inc by
+ * the caller; this is called immediately after a successful
+ * append_inc_owned to keep the arrays aligned. */
+static int ls2_push_producer(Ls2ResolverCtx *ls2, int new_n_inc,
+                             const char *producer) {
+    if (!ls2) return 0;
+    const char **bigger = (const char **)realloc(
+        (void *)ls2->producer_per_inc, (size_t)new_n_inc * sizeof(char *));
+    if (!bigger) return -1;
+    ls2->producer_per_inc = bigger;
+    /* The caller passes new_n_inc = old_n_inc + 1, so the new slot is at
+     * new_n_inc - 1.  Any pre-existing slots stay as they were. */
+    char *copy = producer ? strdup(producer) : NULL;
+    if (producer && !copy) return -1;
+    bigger[new_n_inc - 1] = copy;
+    return 0;
+}
+
+/* LS2: when the LS2 context is active, initialize the leading slots of
+ * producer_per_inc to NULL so the per-include indices line up.  Called
+ * once at the top of auto_append_spice_includes with the count of -I
+ * entries the caller already prepended. */
+static int ls2_prime_producer_array(Ls2ResolverCtx *ls2, int n_existing) {
+    if (!ls2 || n_existing <= 0) return 0;
+    const char **arr = (const char **)calloc((size_t)n_existing, sizeof(char *));
+    if (!arr) return -1;
+    ls2->producer_per_inc = arr;
+    return 0;
+}
+
 static int auto_append_spice_includes(const char *input,
                                       char ***inc, int *n_inc,
-                                      char ***owned, int *n_owned) {
+                                      char ***owned, int *n_owned,
+                                      Ls2ResolverCtx *out_ls2) {
     *owned = NULL;
     *n_owned = 0;
+    if (out_ls2) {
+        memset(out_ls2, 0, sizeof(*out_ls2));
+        const char *dbg = getenv("TUR_DEBUG_RESOLVER");
+        out_ls2->debug_resolver = (dbg && dbg[0] == '1');
+        /* Pre-existing entries are user-supplied -I flags; mark them with
+         * NULL producer so the parallel array aligns with the final
+         * include list. */
+        if (ls2_prime_producer_array(out_ls2, *n_inc) != 0) return -1;
+    }
     if (g_no_auto_spice || !input) return 0;
 
     char *root = find_spice_root(input);
@@ -1774,7 +1828,8 @@ static int auto_append_spice_includes(const char *input,
     if (n > 0 && (size_t)n < sizeof(own_src)) {
         struct stat st;
         if (stat(own_src, &st) == 0 && S_ISDIR(st.st_mode)) {
-            (void)append_inc_owned(own_src, inc, n_inc, owned, n_owned);
+            if (append_inc_owned(own_src, inc, n_inc, owned, n_owned) == 0)
+                (void)ls2_push_producer(out_ls2, *n_inc, NULL);
         }
     }
 
@@ -1820,15 +1875,157 @@ static int auto_append_spice_includes(const char *input,
                  * missing fetched dep (offline run, etc.) shouldn't
                  * pollute the include path with bogus dirs. */
                 if (stat(chosen, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    (void)append_inc_owned(chosen, inc, n_inc, owned, n_owned);
+                    if (append_inc_owned(chosen, inc, n_inc, owned, n_owned) == 0)
+                        (void)ls2_push_producer(out_ls2, *n_inc, NULL);
+                }
+            }
+            /* LS2: snapshot the consumer's declared :spices names so the
+             * elaborator can suppress the warning when a workspace
+             * sibling is already redeclared via :spices. */
+            if (out_ls2 && m.n_spices > 0) {
+                out_ls2->declared_spices =
+                    (const char **)calloc((size_t)m.n_spices, sizeof(char *));
+                if (out_ls2->declared_spices) {
+                    for (int i = 0; i < m.n_spices; i++) {
+                        out_ls2->declared_spices[i] = strdup(m.spices[i].name);
+                    }
+                    out_ls2->n_declared_spices = m.n_spices;
                 }
             }
             pkg_manifest_free(&m);
         }
     }
 
+    /* LS2 (local-spice-dev-workflow-plan): workspace member auto-resolution.
+     *
+     * Walk ancestors of `root` looking for any directory containing a
+     * `build.tur` whose `:members [...]` list names our spice (matched by
+     * comparing the resolved absolute path of `<workspace>/<member>` to
+     * `root`).  When found, add every *other* member's `src/` to the
+     * include path.  Workspace membership is the consent boundary:
+     * sibling members can import each other without an explicit :spices
+     * entry; external publication still uses URL deps.
+     *
+     * Optional one-time warning when an undeclared sibling is consulted is
+     * a future extension (see plan §2); resolution itself is the load-
+     * bearing change.
+     */
+    {
+        char anc[4096];
+        size_t rlen = strlen(root);
+        if (rlen + 1 < sizeof(anc)) {
+            memcpy(anc, root, rlen + 1);
+            for (int up = 0; up < TUR_SPICE_WALK_MAX; up++) {
+                char *last = strrchr(anc, '/');
+                if (!last || last == anc) break;
+                *last = '\0';
+
+                char ws_manifest[4096];
+                int wn = snprintf(ws_manifest, sizeof(ws_manifest),
+                                  "%s/build.tur", anc);
+                if (wn <= 0 || (size_t)wn >= sizeof(ws_manifest)) continue;
+
+                struct stat wst;
+                if (stat(ws_manifest, &wst) != 0 || !S_ISREG(wst.st_mode))
+                    continue;
+
+                PkgManifest wm;
+                memset(&wm, 0, sizeof(wm));
+                bool ok = pkg_manifest_read(ws_manifest, &wm);
+                if (ok && wm.n_members > 0) {
+                    /* Self-detection: locate the member entry whose
+                     * absolute path matches `root`.  Only proceed if the
+                     * current spice is itself a listed member of this
+                     * candidate workspace. */
+                    const char *self_member_path = NULL;
+                    for (int i = 0; i < wm.n_members; i++) {
+                        char mp[4096];
+                        int mn = snprintf(mp, sizeof(mp), "%s/%s",
+                                          anc, wm.members[i]);
+                        if (mn <= 0 || (size_t)mn >= sizeof(mp)) continue;
+                        char real_mp[4096];
+                        if (realpath(mp, real_mp) == NULL) continue;
+                        if (strcmp(real_mp, root) == 0) {
+                            self_member_path = wm.members[i];
+                            break;
+                        }
+                    }
+                    if (self_member_path) {
+                        for (int i = 0; i < wm.n_members; i++) {
+                            if (strcmp(wm.members[i], self_member_path) == 0)
+                                continue;
+                            char sib_src[4096];
+                            int sn = snprintf(sib_src, sizeof(sib_src),
+                                              "%s/%s/src",
+                                              anc, wm.members[i]);
+                            if (sn <= 0 || (size_t)sn >= sizeof(sib_src))
+                                continue;
+                            struct stat sst;
+                            if (stat(sib_src, &sst) == 0
+                                && S_ISDIR(sst.st_mode)) {
+                                if (append_inc_owned(sib_src,
+                                                     inc, n_inc,
+                                                     owned, n_owned) == 0) {
+                                    (void)ls2_push_producer(out_ls2, *n_inc,
+                                                            wm.members[i]);
+                                    if (out_ls2 && out_ls2->debug_resolver) {
+                                        fprintf(stderr,
+                                            "tur: resolver: added workspace "
+                                            "sibling '%s' src/ -> %s\n",
+                                            wm.members[i], sib_src);
+                                    }
+                                }
+                            }
+                        }
+                        pkg_manifest_free(&wm);
+                        break;
+                    }
+                }
+                pkg_manifest_free(&wm);
+                /* Any build.tur (workspace or not) terminates the walk so
+                 * we don't accidentally treat a non-workspace ancestor's
+                 * project as the enclosing workspace. */
+                if (ok) break;
+            }
+        }
+    }
+
     free(root);
+    /* LS2: finalize ctx — set length to current *n_inc and allocate the
+     * per-include warned[] dedup array so the elaborator can mark slots
+     * after firing the first warning. */
+    if (out_ls2) {
+        out_ls2->n_inc = *n_inc;
+        if (*n_inc > 0) {
+            out_ls2->warned_per_inc =
+                (bool *)calloc((size_t)*n_inc, sizeof(bool));
+            if (!out_ls2->warned_per_inc) return -1;
+        }
+    }
     return 0;
+}
+
+/* LS2: free the parallel arrays owned by an Ls2ResolverCtx populated by
+ * auto_append_spice_includes. Idempotent; safe to call on a zero-init
+ * struct. */
+static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx) {
+    if (!ctx) return;
+    if (ctx->producer_per_inc) {
+        for (int i = 0; i < ctx->n_inc; i++) {
+            if (ctx->producer_per_inc[i])
+                free((void *)ctx->producer_per_inc[i]);
+        }
+        free((void *)ctx->producer_per_inc);
+    }
+    free(ctx->warned_per_inc);
+    if (ctx->declared_spices) {
+        for (int i = 0; i < ctx->n_declared_spices; i++) {
+            if (ctx->declared_spices[i])
+                free((void *)ctx->declared_spices[i]);
+        }
+        free((void *)ctx->declared_spices);
+    }
+    memset(ctx, 0, sizeof(*ctx));
 }
 
 /* Collect all .tur files in a directory. Returns malloc'd array, sets *n_out. */
@@ -1929,13 +2126,19 @@ static int cmd_run(int argc, char **argv) {
     const char **rm_paths       = NULL;
     int          n_rm_paths     = 0;
 
+    /* LS2 workspace-resolver ctx: populated by the explicit-file
+     * auto-append below.  Stays zero-init for project mode (the gate in
+     * elab_toplevel.c then matches no slots and the warning path is
+     * inert). */
+    Ls2ResolverCtx run_ls2 = {0};
+
     /* Helper: build 'entry', exec with optional passthrough args.
      * Cleans up user_inc, spice_inc_dirs, and auto_src_run on every exit. */
 #define RUN_ENTRY(entry_path) do {                                       \
         char out_path[] = "/tmp/tur-run-XXXXXX";                         \
         int _fd = mkstemp(out_path);                                     \
         if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
-        free(auto_run_owned); return 2; } \
+        free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return 2; } \
         close(_fd);                                                      \
         int _n_inc = n_user_inc + n_spice_inc_dirs;                      \
         const char **_inc = NULL;                                        \
@@ -1944,10 +2147,12 @@ static int cmd_run(int argc, char **argv) {
             for (int _i = 0; _i < n_user_inc; _i++) _inc[_i] = user_inc[_i]; \
             for (int _i = 0; _i < n_spice_inc_dirs; _i++) _inc[n_user_inc + _i] = spice_inc_dirs[_i]; \
         }                                                                \
+        ls2_resolver_ctx_set(&run_ls2);                                  \
         int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL, rm_paths, n_rm_paths); \
+        ls2_resolver_ctx_set(NULL);                                      \
         free(_inc);                                                      \
         if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
-        free(auto_run_owned); return _rc; } \
+        free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
         if (passthrough_start >= 0) {                                    \
@@ -1963,6 +2168,7 @@ static int cmd_run(int argc, char **argv) {
         free_reader_macro_paths(rm_paths_owned, n_rm_paths);             \
         for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned);                                              \
+        ls2_resolver_ctx_dispose(&run_ls2);                              \
         return decode_exit_status(_sys);                                 \
     } while (0)
 
@@ -1976,7 +2182,8 @@ static int cmd_run(int argc, char **argv) {
     int    n_auto_run_owned = 0;
     if (explicit_file && strcmp(explicit_file, "-") != 0) {
         auto_append_spice_includes(explicit_file, &user_inc, &n_user_inc,
-                                   &auto_run_owned, &n_auto_run_owned);
+                                   &auto_run_owned, &n_auto_run_owned,
+                                   &run_ls2);
     }
 
     /* Single-file mode: explicit file provided, skip project lookup. */
@@ -2092,6 +2299,11 @@ static int cmd_run(int argc, char **argv) {
             for (int i = 0; i < m.n_spices; i++) {
                 const PkgSpice *s = &m.spices[i];
                 if (s->path) continue; /* local path -- always present */
+                /* LS4: workspace-sibling :spices entries are local-source
+                 * (the sibling lives under the enclosing workspace), so
+                 * they cannot be "missing" the way a never-fetched URL
+                 * dep can be.  Skip them here. */
+                if (pkg_is_workspace_member(root, s->name)) continue;
                 char dep_dir[4096];
                 if (s->ref)
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
@@ -2119,6 +2331,10 @@ static int cmd_run(int argc, char **argv) {
             for (int i = 0; i < m.n_spices; i++) {
                 const PkgSpice *s = &m.spices[i];
                 if (s->path) continue;
+                /* LS4: workspace siblings never trigger a remote fetch and
+                 * have no lockfile row to check; the resolver picks them
+                 * up via the workspace walk below. */
+                if (pkg_is_workspace_member(root, s->name)) continue;
                 char dep_dir[4096];
                 if (s->ref)
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
@@ -2169,7 +2385,17 @@ static int cmd_run(int argc, char **argv) {
             for (int i = 0; i < m.n_spices; i++) {
                 const PkgSpice *s = &m.spices[i];
                 char dep_dir[4096];
-                if (s->path) {
+                /* LS4: workspace-sibling entry -- resolve to the sibling's
+                 * directory via the workspace walk, ignoring any :url/:ref
+                 * the user happened to declare for external publication. */
+                char *ws_path = NULL;
+                if (!s->path)
+                    ws_path = pkg_workspace_member_path(root, s->name);
+                if (ws_path) {
+                    strncpy(dep_dir, ws_path, sizeof(dep_dir) - 1);
+                    dep_dir[sizeof(dep_dir) - 1] = '\0';
+                    free(ws_path);
+                } else if (s->path) {
                     /* Local path dep: resolve relative to root */
                     snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
                 } else if (s->ref) {
@@ -6598,12 +6824,16 @@ int main(int argc, char **argv) {
              * hatch. */
             char **md_owned = NULL;
             int    n_md_owned = 0;
+            Ls2ResolverCtx md_ls2 = {0};
             if (n_inputs > 0) {
                 auto_append_spice_includes(inputs[0], &emit_inc, &n_emit_inc,
-                                           &md_owned, &n_md_owned);
+                                           &md_owned, &n_md_owned, &md_ls2);
             }
+            ls2_resolver_ctx_set(&md_ls2);
             int rc = cmd_emit_c_to_dir(out_dir, inputs, n_inputs,
                                        (const char **)emit_inc, n_emit_inc);
+            ls2_resolver_ctx_set(NULL);
+            ls2_resolver_ctx_dispose(&md_ls2);
             for (int i = 0; i < n_md_owned; i++) free(md_owned[i]);
             free(md_owned);
             free(inputs);
@@ -6625,9 +6855,13 @@ int main(int argc, char **argv) {
         }
         if (!input) { free(emit_inc); return usage_build(); }
         char **ec_owned = NULL; int n_ec_owned = 0;
+        Ls2ResolverCtx ec_ls2 = {0};
         auto_append_spice_includes(input, &emit_inc, &n_emit_inc,
-                                   &ec_owned, &n_ec_owned);
+                                   &ec_owned, &n_ec_owned, &ec_ls2);
+        ls2_resolver_ctx_set(&ec_ls2);
         int rc = cmd_emit_c(input, (const char **)emit_inc, n_emit_inc);
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&ec_ls2);
         for (int i = 0; i < n_ec_owned; i++) free(ec_owned[i]);
         free(ec_owned);
         free(emit_inc);
@@ -6652,9 +6886,13 @@ int main(int argc, char **argv) {
         }
         if (!input) { free(eh_inc); return usage_build(); }
         char **eh_owned = NULL; int n_eh_owned = 0;
+        Ls2ResolverCtx eh_ls2 = {0};
         auto_append_spice_includes(input, &eh_inc, &n_eh_inc,
-                                   &eh_owned, &n_eh_owned);
+                                   &eh_owned, &n_eh_owned, &eh_ls2);
+        ls2_resolver_ctx_set(&eh_ls2);
         int rc = cmd_emit_h(input, (const char **)eh_inc, n_eh_inc);
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&eh_ls2);
         for (int i = 0; i < n_eh_owned; i++) free(eh_owned[i]);
         free(eh_owned);
         free(eh_inc);
@@ -6690,8 +6928,10 @@ int main(int argc, char **argv) {
         }
         if (!input) { free(check_inc); return usage_check(); }
         char **ck_owned = NULL; int n_ck_owned = 0;
+        Ls2ResolverCtx ck_ls2 = {0};
         auto_append_spice_includes(input, &check_inc, &n_check_inc,
-                                   &ck_owned, &n_ck_owned);
+                                   &ck_owned, &n_ck_owned, &ck_ls2);
+        ls2_resolver_ctx_set(&ck_ls2);
         int rc;
         int rm_n = 0;
         char **rm_p = discover_manifest_reader_macros(input, &rm_n);
@@ -6712,6 +6952,8 @@ int main(int argc, char **argv) {
                               (const char **)rm_p, rm_n);
             buf_free(&out);
         }
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&ck_ls2);
         free_reader_macro_paths(rm_p, rm_n);
         for (int i = 0; i < n_ck_owned; i++) free(ck_owned[i]);
         free(ck_owned);

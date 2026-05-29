@@ -115,6 +115,13 @@ typedef struct PkgManifest {
     char       **bin_names;
     char       **bin_paths;
     int          n_bins;
+    /* LS2 (local-spice-dev-workflow): workspace members. A non-empty
+     * :members [...] in a manifest declares this directory as a
+     * workspace root, listing the paths (relative to this manifest)
+     * of member spices. Used by the resolver so sibling members can
+     * import each other without an explicit :spices entry. */
+    char       **members;
+    int          n_members;
 } PkgManifest;
 
 /* ------------------------------------------------------------------ */
@@ -230,6 +237,20 @@ bool pkg_cmake_build(const char *project_dir,
                      const PkgManifest *manifest,
                      PkgLockFile *lock,
                      const char *target);
+
+/* LS4: returns true iff `project_dir` is a member of an enclosing
+ * workspace (build.tur with `:members`) AND that workspace lists a
+ * sibling member named `name` (matched against each member's own
+ * `:name`, falling back to the basename of the member path).  Used at
+ * resolution time so workspace-sibling `:spices` entries get the same
+ * "skip URL fetch, no lockfile row required" treatment as `:path`
+ * deps. */
+bool pkg_is_workspace_member(const char *project_dir, const char *name);
+
+/* LS4: resolve a workspace-sibling `:spices` entry to the absolute path
+ * of the sibling's directory.  Returns NULL if no enclosing workspace
+ * lists a matching sibling member.  Caller frees. */
+char *pkg_workspace_member_path(const char *project_dir, const char *dep_name);
 
 /* Verify that each cmake dep's resolved SHA still matches tur.lock.
  * Returns true if all match (or lock has no entry yet).

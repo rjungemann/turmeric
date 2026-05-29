@@ -1,0 +1,7 @@
+;; LS2 fixture: workspace root that declares two members.
+;; A member spice can import sibling members without an explicit
+;; :spices entry — workspace membership is the consent boundary.
+(defpackage workspace-ls2
+  :name    "workspace-ls2"
+  :members ["spices/alpha"
+            "spices/beta"])

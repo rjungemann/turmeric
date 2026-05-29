@@ -128,6 +128,7 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         if (!found_in_stdlib) {
             /* Fallback: try each -I include directory (spice paths). */
             bool found_in_includes = false;
+            int  matched_ii = -1;
             for (int ii = 0; ii < e->n_module_include_dirs && !found_in_includes; ii++) {
                 char inc_path[4096];
                 int iplen = snprintf(inc_path, sizeof(inc_path), "%s/%s.tur",
@@ -137,12 +138,51 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
                         memcpy(path_buf, inc_path, (size_t)iplen + 1);
                         plen = iplen;
                         found_in_includes = true;
+                        matched_ii = ii;
                     } else if (alen < (int)sizeof(attempted) - 256) {
                         int iw = snprintf(attempted + alen, sizeof(attempted) - (size_t)alen,
                                           "    %s    (-I %s)\n", inc_path,
                                           e->module_include_dirs[ii]);
                         if (iw > 0 && (size_t)iw < sizeof(attempted) - (size_t)alen) alen += iw;
                     }
+                }
+            }
+            if (found_in_includes && matched_ii >= 0
+                && e->module_include_workspace_producer
+                && e->module_include_workspace_producer[matched_ii]) {
+                /* LS2 (local-spice-dev-workflow-plan): the import was
+                 * satisfied by a workspace-sibling member's src/.  If the
+                 * consumer doesn't declare that producer in its own
+                 * :spices, emit a one-time warning so drift between
+                 * imports and declared deps surfaces before release.
+                 *
+                 * Match producer by the basename of the sibling's
+                 * member-relative dir (e.g. "spices/alpha" -> "alpha"),
+                 * which matches the convention that :spices map keys
+                 * use the producer's spice name. */
+                const char *producer_path =
+                    e->module_include_workspace_producer[matched_ii];
+                const char *producer_basename = strrchr(producer_path, '/');
+                producer_basename = producer_basename
+                                    ? producer_basename + 1
+                                    : producer_path;
+                bool declared = false;
+                for (int dj = 0; dj < e->n_module_consumer_declared_spices; dj++) {
+                    if (strcmp(e->module_consumer_declared_spices[dj],
+                               producer_basename) == 0) {
+                        declared = true;
+                        break;
+                    }
+                }
+                if (!declared
+                    && e->module_include_warned
+                    && !e->module_include_warned[matched_ii]) {
+                    e->module_include_warned[matched_ii] = true;
+                    diag_emit(DIAG_WARNING, import_span,
+                              "import '%s' resolved via workspace sibling "
+                              "'%s'; declare it in :spices for release builds. "
+                              "(set TUR_DEBUG_RESOLVER=1 for full resolver tracing)",
+                              name->name, producer_path);
                 }
             }
             if (!found_in_includes) {

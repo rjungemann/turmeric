@@ -1288,6 +1288,11 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase PKG-1: extra module search dirs (-I) */
     e->module_include_dirs = NULL;
     e->n_module_include_dirs = 0;
+    /* LS2: workspace-sibling provenance + warning dedup */
+    e->module_include_workspace_producer = NULL;
+    e->module_include_warned             = NULL;
+    e->module_consumer_declared_spices   = NULL;
+    e->n_module_consumer_declared_spices = 0;
     /* Phase RF0: forward type declaration tracking */
     e->forward_type_syms = NULL;
     e->n_forward_type_syms = 0;

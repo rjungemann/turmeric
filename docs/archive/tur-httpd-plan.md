@@ -78,12 +78,12 @@ listener hands accepted sockets to a fixed-size pool of worker threads via a
 ```turmeric
 (import httpd/server  :refer [server-start server-stop])
 (import httpd/request :refer [req-method req-path req-header req-body req-query])
-(import httpd/response :refer [response ok not-found bad-request
+(import httpd/response :refer [response resp-ok not-found bad-request
                                 with-header with-body with-status])
 
 ;; Start a server; handler-fn :: Request -> Response
 (def srv (server-start 8080 (fn [req]
-  (ok "text/plain" "Hello, world!"))))
+  (resp-ok "text/plain" "Hello, world!"))))
 
 ;; Gracefully stop
 (server-stop srv)
@@ -103,13 +103,16 @@ listener hands accepted sockets to a fixed-size pool of worker threads via a
 
 | Function | Signature | HTTP status |
 |---|---|---|
-| `ok` | `content-type body -> Response` | 200 |
+| `resp-ok` | `content-type body -> Response` | 200 |
 | `not-found` | `body -> Response` | 404 |
 | `bad-request` | `body -> Response` | 400 |
 | `response` | `status content-type body -> Response` | caller-supplied |
 | `with-header` | `Response key val -> Response` | adds a header |
 | `with-body` | `Response body -> Response` | replaces body |
 | `with-status` | `Response status -> Response` | replaces status |
+
+> `resp-ok` rather than `ok` because Turmeric forbids shadowing `stdlib/result`'s
+> `ok` constructor at top level.
 
 ---
 
@@ -163,8 +166,9 @@ tur-httpd/
   :exports #{
     "httpd/server"   ["server-start" "server-stop"]
     "httpd/request"  ["req-method" "req-path" "req-header" "req-body" "req-query"]
-    "httpd/response" ["response" "ok" "not-found" "bad-request"
-                      "with-header" "with-body" "with-status"]
+    "httpd/response" ["response" "resp-ok" "not-found" "bad-request"
+                      "with-header" "with-body" "with-status"
+                      "free-response"]
   })
 ```
 

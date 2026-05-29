@@ -1,0 +1,3 @@
+(defmodule beta/main
+  (import alpha/util :refer [bonus])
+  (defn main [] :int (bonus)))

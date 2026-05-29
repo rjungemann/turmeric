@@ -307,14 +307,21 @@ Both ship in LS6 of this plan; neither is deferred.
   invisible. Wire in the one-time implicit-import warning at the
   same time.
 
-- [ ] **LS3** -- Make `tur fetch` skip local-source deps: any entry
+- [x] **LS3** -- Make `tur fetch` skip local-source deps: any entry
   with `:path`, plus any name matching a workspace member. Update lock
   emission so they are not recorded.
 
-- [ ] **LS4** -- Decouple resolution from the lockfile for local
+- [x] **LS4** -- Decouple resolution from the lockfile for local
   deps: when a `:spices` entry is local-source, do not require a
   matching lockfile row. (URL deps still consult the lockfile for
-  reproducibility.)
+  reproducibility.)  In practice this also closes the
+  workspace-member-declared-as-URL hole in `cmd_run`'s project mode:
+  a `:spices "alpha" #{:url ...}` entry whose name is also a
+  workspace sibling now resolves to the sibling's directory instead
+  of triggering a spurious `need_fetch=true` and inserting a phantom
+  `spices/alpha-<ref>/` path into the search list.  `pkg_is_workspace_member`
+  / `pkg_workspace_member_path` are the public helpers behind both
+  decisions.
 
 - [ ] **LS5** -- Isolate partial fetch failures so one broken URL
   cannot remove unrelated deps from the search path. Add a regression

@@ -184,6 +184,361 @@ assert_exit 100 "SC5: tur run with :spices :path dep returns dep's value (100)" 
 assert_exit 1 "SC5: --no-auto-spice disables :spices auto-resolution as well" \
     "$TUR" --no-auto-spice check "$DEPS_ENTRY"
 
+# LS2 (local-spice-dev-workflow): workspace member auto-resolution.
+# beta imports alpha/util by name with no :spices entry; the resolver
+# walks up to the workspace build.tur, sees beta is a listed member, and
+# adds sibling members' src/ dirs to the search path.
+WS_FIXTURE="tests/fixtures/workspace-ls2"
+WS_ENTRY="$WS_FIXTURE/spices/beta/src/beta/main.tur"
+
+assert_exit 0 "LS2: tur check resolves sibling member via :members" \
+    "$TUR" check "$WS_ENTRY"
+
+assert_exit 0 "LS2: tur emit-c resolves sibling member via :members" \
+    "$TUR" emit-c "$WS_ENTRY"
+
+# Sibling's `bonus` returns 42; main returns it, so binary exits 42.
+assert_exit 42 "LS2: tur run with sibling-member import returns 42" \
+    "$TUR" run "$WS_ENTRY"
+
+# --no-auto-spice disables manifest discovery, so the sibling import fails.
+assert_exit 1 "LS2: --no-auto-spice disables workspace-sibling resolution" \
+    "$TUR" --no-auto-spice check "$WS_ENTRY"
+
+# LS2 warning: undeclared sibling import emits a one-time advisory naming
+# the sibling's workspace-relative dir and pointing at TUR_DEBUG_RESOLVER.
+assert_stderr_contains "resolved via workspace sibling 'spices/alpha'" \
+    "LS2: warning fires when sibling import is undeclared" \
+    "$TUR" check "$WS_ENTRY"
+
+assert_stderr_contains "TUR_DEBUG_RESOLVER" \
+    "LS2: warning mentions TUR_DEBUG_RESOLVER opt-in" \
+    "$TUR" check "$WS_ENTRY"
+
+# LS2 breadcrumb: TUR_DEBUG_RESOLVER=1 logs every search-path addition
+# attributed to workspace siblings.
+assert_stderr_contains "added workspace sibling 'spices/alpha'" \
+    "LS2: TUR_DEBUG_RESOLVER=1 prints search-path breadcrumb" \
+    env TUR_DEBUG_RESOLVER=1 "$TUR" check "$WS_ENTRY"
+
+# LS3 (local-spice-dev-workflow §3): `tur fetch` skips local-source deps
+# (entries with `:path` or names matching a workspace member) and does
+# not record them in tur.lock.  Direct `:path` deps that point at a
+# nonexistent or build-less directory are a hard error.
+#
+# The LS3 cases below run inside per-case scratch dirs because they
+# write tur.lock; the fixture trees themselves are read-only.
+LS3_ABS_TUR="$PWD/$TUR"
+
+# LS3 case A: `:path` dep fetches no remote and writes no lock row.
+LS3_A=$(mktemp -d)
+mkdir -p "$LS3_A/sib/src/sib" "$LS3_A/consumer/src/consumer"
+cat >"$LS3_A/sib/build.tur" <<EOF
+(defpackage sib :name "sib")
+EOF
+cat >"$LS3_A/consumer/build.tur" <<EOF
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "sib" #{:path "../sib"}
+  })
+EOF
+LS3_A_OUT=$(mktemp); LS3_A_ERR=$(mktemp)
+( cd "$LS3_A/consumer" && "$LS3_ABS_TUR" fetch ) >"$LS3_A_OUT" 2>"$LS3_A_ERR"
+rc=$?
+if [ "$rc" -eq 0 ] && ! grep -qF '"sib"' "$LS3_A/consumer/tur.lock"; then
+    echo "PASS LS3: tur fetch with :path dep exits 0 and writes no lock row"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS3: tur fetch with :path dep -- exit $rc"
+    echo "  tur.lock:"; sed 's/^/    /' "$LS3_A/consumer/tur.lock" 2>/dev/null
+    echo "  stderr:"; sed 's/^/    /' "$LS3_A_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS3: :path dep produces no lock row")
+fi
+rm -f "$LS3_A_OUT" "$LS3_A_ERR"
+rm -rf "$LS3_A"
+
+# LS3 case B: a stale URL row left over from a previous lock is removed
+# once the dep is switched to `:path`.
+LS3_B=$(mktemp -d)
+mkdir -p "$LS3_B/sib" "$LS3_B/consumer"
+cat >"$LS3_B/sib/build.tur" <<EOF
+(defpackage sib :name "sib")
+EOF
+cat >"$LS3_B/consumer/build.tur" <<EOF
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "sib" #{:path "../sib"}
+  })
+EOF
+cat >"$LS3_B/consumer/tur.lock" <<'EOF'
+(deflockfile
+  :format-version 1
+  :spices #{
+    "sib" #{:url "https://example.com/sib" :ref "v0.1.0" :resolved "abc" :sha256 "def" :fetched-at "2024-01-01T00:00:00Z"}
+  }
+  :cmake-deps #{
+  })
+EOF
+( cd "$LS3_B/consumer" && "$LS3_ABS_TUR" fetch ) >/dev/null 2>&1
+if ! grep -qF '"sib"' "$LS3_B/consumer/tur.lock"; then
+    echo "PASS LS3: tur fetch prunes stale URL row when dep is now :path"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS3: stale URL row not pruned"
+    echo "  tur.lock:"; sed 's/^/    /' "$LS3_B/consumer/tur.lock"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS3: stale URL row pruned for :path dep")
+fi
+rm -rf "$LS3_B"
+
+# LS3 case C: missing `:path` directory is a hard error.
+LS3_C=$(mktemp -d)
+mkdir -p "$LS3_C/consumer"
+cat >"$LS3_C/consumer/build.tur" <<EOF
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "missing" #{:path "../nope-not-here"}
+  })
+EOF
+LS3_C_ERR=$(mktemp)
+( cd "$LS3_C/consumer" && "$LS3_ABS_TUR" fetch ) >/dev/null 2>"$LS3_C_ERR"
+rc=$?
+if [ "$rc" -ne 0 ] && grep -qF 'does not exist or contains no build.tur' "$LS3_C_ERR"; then
+    echo "PASS LS3: missing :path directory is a hard error"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS3: missing :path should error but didn't"
+    echo "  exit: $rc (want non-zero)"
+    echo "  stderr:"; sed 's/^/    /' "$LS3_C_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS3: missing :path hard error")
+fi
+rm -f "$LS3_C_ERR"
+rm -rf "$LS3_C"
+
+# LS3 case D: a `:spices` entry whose name matches a workspace member is
+# skipped by `tur fetch` -- no remote fetch attempt is made even though a
+# bogus :url is declared.
+LS3_D=$(mktemp -d)
+mkdir -p "$LS3_D/ws/alpha" "$LS3_D/ws/beta"
+cat >"$LS3_D/ws/build.tur" <<'EOF'
+(defpackage ws :name "ws" :members ["alpha" "beta"])
+EOF
+cat >"$LS3_D/ws/alpha/build.tur" <<'EOF'
+(defpackage alpha :name "alpha")
+EOF
+cat >"$LS3_D/ws/beta/build.tur" <<'EOF'
+(defpackage beta
+  :name "beta"
+  :spices #{
+    "alpha" #{:url "https://example.invalid/should-never-fetch" :ref "v9.9.9"}
+  })
+EOF
+LS3_D_ERR=$(mktemp)
+( cd "$LS3_D/ws/beta" && "$LS3_ABS_TUR" fetch ) >/dev/null 2>"$LS3_D_ERR"
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && ! grep -qF '"alpha"' "$LS3_D/ws/beta/tur.lock" \
+   && ! grep -qF 'fetching' "$LS3_D_ERR"; then
+    echo "PASS LS3: workspace-member dep skipped by tur fetch"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS3: workspace-member dep not skipped -- exit $rc"
+    echo "  tur.lock:"; sed 's/^/    /' "$LS3_D/ws/beta/tur.lock" 2>/dev/null
+    echo "  stderr:"; sed 's/^/    /' "$LS3_D_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS3: workspace-member dep skipped by tur fetch")
+fi
+rm -f "$LS3_D_ERR"
+rm -rf "$LS3_D"
+
+# LS4 (local-spice-dev-workflow §4): resolution is decoupled from the
+# lockfile for local-source deps.  `tur check` on a :path dep, a workspace
+# sibling, or a workspace member declared as a URL :spices entry must
+# succeed with no tur.lock file present at all.
+LS4_ABS_TUR="$PWD/$TUR"
+
+# LS4 case A: :path dep resolves with no tur.lock.
+LS4_A=$(mktemp -d)
+mkdir -p "$LS4_A/sib/src/sib" "$LS4_A/consumer/src/consumer"
+cat >"$LS4_A/sib/build.tur" <<'EOF'
+(defpackage sib :name "sib")
+EOF
+cat >"$LS4_A/sib/src/sib/api.tur" <<'EOF'
+(defmodule sib/api
+  (export answer)
+  (defn answer [] :int 42))
+EOF
+cat >"$LS4_A/consumer/build.tur" <<'EOF'
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "sib" #{:path "../sib"}
+  })
+EOF
+cat >"$LS4_A/consumer/src/consumer/main.tur" <<'EOF'
+(defmodule consumer/main
+  (import sib/api :refer [answer])
+  (defn main [] :int (answer)))
+EOF
+LS4_A_ERR=$(mktemp)
+( cd "$LS4_A/consumer" && "$LS4_ABS_TUR" check src/consumer/main.tur ) >/dev/null 2>"$LS4_A_ERR"
+rc=$?
+if [ "$rc" -eq 0 ] && [ ! -f "$LS4_A/consumer/tur.lock" ]; then
+    echo "PASS LS4: :path dep resolves with no tur.lock"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS4: :path dep resolution requires no lockfile"
+    echo "  exit: $rc"
+    echo "  lock present: $([ -f "$LS4_A/consumer/tur.lock" ] && echo yes || echo no)"
+    echo "  stderr:"; sed 's/^/    /' "$LS4_A_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS4: :path dep no lockfile")
+fi
+rm -f "$LS4_A_ERR"
+rm -rf "$LS4_A"
+
+# LS4 case B: :path dep resolves even when tur.lock exists but has no
+# row for the dep (the historical "lockfile gates resolution" bug).
+LS4_B=$(mktemp -d)
+mkdir -p "$LS4_B/sib/src/sib" "$LS4_B/consumer/src/consumer"
+cat >"$LS4_B/sib/build.tur" <<'EOF'
+(defpackage sib :name "sib")
+EOF
+cat >"$LS4_B/sib/src/sib/api.tur" <<'EOF'
+(defmodule sib/api
+  (export answer)
+  (defn answer [] :int 42))
+EOF
+cat >"$LS4_B/consumer/build.tur" <<'EOF'
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "sib" #{:path "../sib"}
+  })
+EOF
+cat >"$LS4_B/consumer/src/consumer/main.tur" <<'EOF'
+(defmodule consumer/main
+  (import sib/api :refer [answer])
+  (defn main [] :int (answer)))
+EOF
+cat >"$LS4_B/consumer/tur.lock" <<'EOF'
+(deflockfile
+  :format-version 1
+  :spices #{
+  }
+  :cmake-deps #{
+  })
+EOF
+LS4_B_ERR=$(mktemp)
+( cd "$LS4_B/consumer" && "$LS4_ABS_TUR" check src/consumer/main.tur ) >/dev/null 2>"$LS4_B_ERR"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    echo "PASS LS4: :path dep resolves with empty tur.lock (no row required)"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS4: :path dep resolution requires a matching lock row"
+    echo "  exit: $rc"
+    echo "  stderr:"; sed 's/^/    /' "$LS4_B_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS4: :path dep no lock row")
+fi
+rm -f "$LS4_B_ERR"
+rm -rf "$LS4_B"
+
+# LS4 case C: workspace sibling import resolves with no tur.lock in
+# either the workspace root or the member directory.
+LS4_C=$(mktemp -d)
+mkdir -p "$LS4_C/ws/alpha/src/alpha" "$LS4_C/ws/beta/src/beta"
+cat >"$LS4_C/ws/build.tur" <<'EOF'
+(defpackage ws :name "ws" :members ["alpha" "beta"])
+EOF
+cat >"$LS4_C/ws/alpha/build.tur" <<'EOF'
+(defpackage alpha :name "alpha")
+EOF
+cat >"$LS4_C/ws/alpha/src/alpha/util.tur" <<'EOF'
+(defmodule alpha/util
+  (export bonus)
+  (defn bonus [] :int 42))
+EOF
+cat >"$LS4_C/ws/beta/build.tur" <<'EOF'
+(defpackage beta :name "beta")
+EOF
+cat >"$LS4_C/ws/beta/src/beta/main.tur" <<'EOF'
+(defmodule beta/main
+  (import alpha/util :refer [bonus])
+  (defn main [] :int (bonus)))
+EOF
+LS4_C_ERR=$(mktemp)
+( cd "$LS4_C/ws/beta" && "$LS4_ABS_TUR" check src/beta/main.tur ) >/dev/null 2>"$LS4_C_ERR"
+rc=$?
+if [ "$rc" -eq 0 ] \
+   && [ ! -f "$LS4_C/ws/tur.lock" ] \
+   && [ ! -f "$LS4_C/ws/beta/tur.lock" ]; then
+    echo "PASS LS4: workspace sibling resolves with no tur.lock anywhere"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS4: workspace sibling needs a lockfile to resolve"
+    echo "  exit: $rc"
+    echo "  ws lock:   $([ -f "$LS4_C/ws/tur.lock" ] && echo yes || echo no)"
+    echo "  beta lock: $([ -f "$LS4_C/ws/beta/tur.lock" ] && echo yes || echo no)"
+    echo "  stderr:"; sed 's/^/    /' "$LS4_C_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS4: workspace sibling no lockfile")
+fi
+rm -f "$LS4_C_ERR"
+rm -rf "$LS4_C"
+
+# LS4 case D: a `:spices` entry that names a workspace sibling but ALSO
+# declares a (deliberately bogus) :url/:ref does not trigger a remote
+# fetch and does not need a lockfile row.  `tur run` must resolve the
+# sibling via the workspace, not via the URL.  The bogus URL would error
+# out if the run path tried to contact it.
+LS4_D=$(mktemp -d)
+mkdir -p "$LS4_D/ws/alpha/src/alpha" "$LS4_D/ws/beta/src"
+cat >"$LS4_D/ws/build.tur" <<'EOF'
+(defpackage ws :name "ws" :members ["alpha" "beta"])
+EOF
+cat >"$LS4_D/ws/alpha/build.tur" <<'EOF'
+(defpackage alpha :name "alpha")
+EOF
+cat >"$LS4_D/ws/alpha/src/alpha/util.tur" <<'EOF'
+(defmodule alpha/util
+  (export bonus)
+  (defn bonus [] :int 42))
+EOF
+cat >"$LS4_D/ws/beta/build.tur" <<'EOF'
+(defpackage beta
+  :name "beta"
+  :spices #{
+    "alpha" #{:url "https://example.invalid/should-never-fetch" :ref "v9.9.9"}
+  })
+EOF
+cat >"$LS4_D/ws/beta/src/main.tur" <<'EOF'
+(defmodule main
+  (import alpha/util :refer [bonus])
+  (defn main [] :int (bonus)))
+EOF
+LS4_D_ERR=$(mktemp)
+( cd "$LS4_D/ws/beta" && "$LS4_ABS_TUR" check src/main.tur ) >/dev/null 2>"$LS4_D_ERR"
+rc=$?
+if [ "$rc" -eq 0 ] && ! grep -qF 'fetching' "$LS4_D_ERR"; then
+    echo "PASS LS4: workspace-member URL :spices entry resolves locally, no fetch"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS4: workspace-member URL entry tried to fetch (or failed to resolve)"
+    echo "  exit: $rc"
+    echo "  stderr:"; sed 's/^/    /' "$LS4_D_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS4: workspace-member URL entry local resolution")
+fi
+rm -f "$LS4_D_ERR"
+rm -rf "$LS4_D"
+
 # SC4: works the same way when invoked from a deeply-nested unrelated
 # cwd, since find_spice_root canonicalizes via realpath() and walks
 # ancestors of the *file*, not the cwd.

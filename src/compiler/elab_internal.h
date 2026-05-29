@@ -488,6 +488,22 @@ typedef struct Elab {
     const char      *module_stdlib_dir;   /* stdlib fallback dir (e.g. "stdlib") */
     const char     **module_include_dirs; /* extra search dirs from -I flags / spices */
     int              n_module_include_dirs;
+    /* LS2 (local-spice-dev-workflow-plan): per-include-dir provenance for
+     * the workspace-sibling warning. Each entry is parallel to
+     * module_include_dirs[i]:
+     *   - module_include_workspace_producer[i]: producer's workspace-member
+     *     directory path (e.g. "spices/alpha") when this include dir came
+     *     from auto-added workspace siblings; NULL otherwise.
+     *   - module_include_warned[i]: set after the first warning is emitted
+     *     for this dir so we never re-warn for the same (consumer, producer)
+     *     pair within one tur invocation.
+     * These arrays may be NULL when no workspace context applies. */
+    const char     **module_include_workspace_producer;
+    bool            *module_include_warned;
+    /* LS2: names this consumer declares in its own :spices map, used to
+     * decide whether a workspace-sibling resolution warrants a warning. */
+    const char     **module_consumer_declared_spices;
+    int              n_module_consumer_declared_spices;
     struct ElabModule *loaded_modules;    /* registry of loaded modules */
     uint32_t         n_loaded_modules;
     uint32_t         cap_loaded_modules;
