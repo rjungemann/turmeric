@@ -95,6 +95,10 @@ add_test(
   COMMAND bash tests/turi/repl-spice-watch.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# RUN_SERIAL: this test drives a live REPL through a FIFO and calls cc to
+# AOT-compile a spice; under a parallel ctest run with ASAN it can time out
+# waiting for the first eval result.  Serial execution avoids that flake.
+set_tests_properties(tur_repl_spice_watch PROPERTIES RUN_SERIAL TRUE)
 # RP7: regression guards for the polished error surfaces -- stale
 # manifest, build failure (with self-heal via reload), no-dispatcher
 # hint format, and the "no spice project here" reload outcome.
