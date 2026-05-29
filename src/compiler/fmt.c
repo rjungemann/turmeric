@@ -52,15 +52,6 @@ static void fs_puts(FmtState *s, const char *str) {
     fs_write(s, str, strlen(str));
 }
 
-static void fs_printf(FmtState *s, const char *fmt, ...) {
-    char tmp[64];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
-    va_end(ap);
-    if (n > 0) fs_write(s, tmp, (size_t)n);
-}
-
 /* Emit a newline then `col` spaces. */
 static void fs_newline_indent(FmtState *s, uint32_t col) {
     fs_putc(s, '\n');
@@ -84,6 +75,52 @@ static bool sym_eq(const Symbol *sym, const char *name) {
  */
 
 static void fmt_form_flat(Buf *b, const Form *f);
+
+/* Phase N: map a numeric literal's type suffix back to its source spelling.
+ * Without this the formatter silently drops the suffix (e.g. 0i8 -> 0),
+ * changing the literal's type. */
+static const char *lit_suffix_str(LiteralSuffix suf) {
+    switch (suf) {
+        case LIT_SUF_I8:  return "i8";
+        case LIT_SUF_I16: return "i16";
+        case LIT_SUF_I32: return "i32";
+        case LIT_SUF_I64: return "i64";
+        case LIT_SUF_U8:  return "u8";
+        case LIT_SUF_U16: return "u16";
+        case LIT_SUF_U32: return "u32";
+        case LIT_SUF_U64: return "u64";
+        case LIT_SUF_F32: return "f32";
+        case LIT_SUF_F64: return "f64";
+        case LIT_SUF_NONE:
+        default:          return "";
+    }
+}
+
+/* Render an F_INT / F_FLOAT literal, preserving its type suffix. For floats,
+ * "%g" alone turns 0.0 into "0" -- which would re-parse as an int -- so append
+ * ".0" when the formatted value carries no '.', exponent, or inf/nan marker. */
+static void fmt_num_literal(Buf *b, const Form *f) {
+    if (f->tag == F_FLOAT) {
+        char tmp[64];
+        int n = snprintf(tmp, sizeof(tmp), "%g", f->as.f);
+        if (n < 0) { buf_puts(b, "0.0"); }
+        else {
+            bool floaty = false;
+            for (int i = 0; i < n; i++) {
+                char c = tmp[i];
+                if (c == '.' || c == 'e' || c == 'E' || c == 'n' || c == 'i') {
+                    floaty = true;
+                    break;
+                }
+            }
+            buf_write(b, tmp, (size_t)n);
+            if (!floaty) buf_puts(b, ".0");
+        }
+    } else {
+        buf_printf(b, "%lld", (long long)f->as.i);
+    }
+    buf_puts(b, lit_suffix_str(f->lit_suffix));
+}
 
 static void print_str_escaped_b(Buf *b, StrSlice s) {
     buf_putc(b, '"');
@@ -109,8 +146,8 @@ static void fmt_form_flat(Buf *b, const Form *f) {
     switch (f->tag) {
         case F_NIL:   buf_puts(b, "nil"); break;
         case F_BOOL:  buf_puts(b, f->as.b ? "true" : "false"); break;
-        case F_INT:   buf_printf(b, "%lld", (long long)f->as.i); break;
-        case F_FLOAT: buf_printf(b, "%g", f->as.f); break;
+        case F_INT:
+        case F_FLOAT: fmt_num_literal(b, f); break;
         case F_STR:   print_str_escaped_b(b, f->as.s); break;
         case F_SYM:
             buf_write(b, f->as.sym->name, f->as.sym->len);
@@ -702,8 +739,14 @@ static void fmt_form(FmtState *s, const Form *f) {
     switch (f->tag) {
         case F_NIL:   fs_puts(s, "nil");                               break;
         case F_BOOL:  fs_puts(s, f->as.b ? "true" : "false");         break;
-        case F_INT:   fs_printf(s, "%lld", (long long)f->as.i);        break;
-        case F_FLOAT: fs_printf(s, "%g",   f->as.f);                   break;
+        case F_INT:
+        case F_FLOAT: {
+            Buf nb; buf_init(&nb);
+            fmt_num_literal(&nb, f);
+            fs_write(s, nb.data, nb.len);
+            buf_free(&nb);
+            break;
+        }
         case F_STR:   fmt_emit_inline(s, f);                           break;
         case F_SYM:
             fs_write(s, f->as.sym->name, f->as.sym->len);
