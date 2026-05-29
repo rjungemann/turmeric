@@ -143,6 +143,7 @@ typedef enum ExprKind {
     EX_CSTR_LIT,
     EX_VAR,
     EX_LET,
+    EX_LETREC,             /* letrec -- mutually-recursive let bindings */
     EX_IF,
     EX_DO,
     EX_WHILE,

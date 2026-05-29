@@ -254,7 +254,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(frame_var);
             return;
         }
-        case EX_LET: {
+        case EX_LET:
+        case EX_LETREC: {
             char *v = emit_value(ctx, body, e);
             free(v);
             return;

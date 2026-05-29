@@ -174,6 +174,7 @@ typedef struct Elab {
     const Symbol *sym_def;
     const Symbol *sym_define; /* internal define -- body form only */
     const Symbol *sym_let;
+    const Symbol *sym_letrec; /* letrec -- recursive/mutually-recursive let */
     const Symbol *sym_if;
     const Symbol *sym_do;
     const Symbol *sym_unsafe;
@@ -751,6 +752,8 @@ Expr *elab_unsafe(Elab *e, const Form *call);
 Form *splice_internal_defines(Elab *e, Form **items, uint32_t n, Span span);
 Expr *elab_define_error(Elab *e, const Form *call);
 Expr *elab_let(Elab *e, const Form *call);
+Expr *elab_letrec(Elab *e, const Form *call);
+Expr *elab_named_let(Elab *e, const Form *call);
 Expr *elab_do(Elab *e, const Form *call);
 Expr *elab_if(Elab *e, const Form *call);
 Expr *elab_thread(Elab *e, const Form *call);

@@ -1,0 +1,4 @@
+(defn main [] :int
+  (letrec [x 42]
+    (println x)
+    0))

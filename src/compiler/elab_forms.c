@@ -154,10 +154,17 @@ Expr *elab_define_error(Elab *e, const Form *call) {
 /* ---- special forms ---- */
 
 Expr *elab_let(Elab *e, const Form *call) {
-    /* (let [b1 i1 b2 i2 ...] body...) */
+    /* (let [b1 i1 b2 i2 ...] body...)
+     * Named-let: (let name [p1 v1 ...] body...) -- desugar to letrec */
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span, "let requires a binding vector");
         return NULL;
+    }
+    /* Dispatch to named-let when item[1] is a symbol and item[2] is a vector. */
+    if (call->as.list.len >= 4 &&
+        call->as.list.items[1]->tag == F_SYM &&
+        call->as.list.items[2]->tag == F_VEC) {
+        return elab_named_let(e, call);
     }
     Form *bindings_form = call->as.list.items[1];
     if (bindings_form->tag != F_VEC) {
@@ -1023,6 +1030,319 @@ Expr *elab_do(Elab *e, const Form *call) {
     out->as.do_.items = items;
     out->as.do_.n = n;
     return out;
+}
+
+/* ---- letrec and named let ---- */
+
+/* elab_letrec -- (letrec [f1 i1 f2 i2 ...] body...)
+ *
+ * Two-pass binding: all names are pre-registered in the inner scope before
+ * any initializer is elaborated, enabling self-recursion and mutual recursion
+ * between fn-valued bindings.  Non-fn inits that reference their own name will
+ * see the TY_UNKNOWN placeholder and type-check against it, producing a
+ * type-mismatch error rather than silent undefined behaviour.
+ *
+ * Restrictions in v1:
+ *   - Binding annotations (^linear, ^unique, ^affine, ^relevant, ^mut) are
+ *     rejected.  Substructural recursive locals can be top-level defns.
+ *   - Vector destructuring is not supported.
+ */
+Expr *elab_letrec(Elab *e, const Form *call) {
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "letrec requires a binding vector and a body: (letrec [name init ...] body...)");
+        return NULL;
+    }
+    Form *bvec = call->as.list.items[1];
+    if (bvec->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, bvec->span,
+                  "letrec bindings must be a vector [name init ...]");
+        return NULL;
+    }
+    uint32_t blen = bvec->as.list.len;
+    if (blen % 2 != 0) {
+        diag_emit(DIAG_ERROR, bvec->span,
+                  "letrec binding vector must have an even number of forms (name init pairs)");
+        return NULL;
+    }
+    uint32_t n_entries = blen / 2;
+
+    /* Temporary per-binding metadata, freed before return. */
+    typedef struct { const Symbol *name; Span span; Form *init_form; } LrEntry;
+    LrEntry *entries = (LrEntry *)malloc(n_entries * sizeof(LrEntry));
+    if (!entries) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Binding **pre_b = (Binding **)malloc(n_entries * sizeof(Binding *));
+    if (!pre_b) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Scope inner;
+    scope_init(&inner, e->scope);
+    e->scope = &inner;
+    int rc = 0;
+
+    /* Parse binding vector: reject annotations, collect name/init pairs. */
+    for (uint32_t k = 0; k < n_entries && rc == 0; k++) {
+        Form *name_f = bvec->as.list.items[k * 2];
+        Form *init_f = bvec->as.list.items[k * 2 + 1];
+        /* Reject substructural / mutability annotations that make no sense in
+         * a pre-registered binding group. */
+        if (name_f->tag == F_SYM && (
+            name_f->as.sym == e->sym_caret_mut       ||
+            name_f->as.sym == e->sym_caret_linear    ||
+            name_f->as.sym == e->sym_caret_unique    ||
+            name_f->as.sym == e->sym_caret_affine    ||
+            name_f->as.sym == e->sym_caret_relevant  ||
+            name_f->as.sym == e->sym_caret_persistent)) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "letrec does not support binding annotations ('^%s'); "
+                      "use a top-level defn for annotated recursive bindings",
+                      name_f->as.sym->name);
+            rc = -1; break;
+        }
+        if (name_f->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "letrec binding name must be a symbol");
+            rc = -1; break;
+        }
+        /* Duplicate name check. */
+        for (uint32_t j = 0; j < k; j++) {
+            if (entries[j].name == name_f->as.sym) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "letrec: '%s' is bound twice in the same binding group",
+                          name_f->as.sym->name);
+                rc = -1; break;
+            }
+        }
+        if (rc != 0) break;
+        entries[k].name      = name_f->as.sym;
+        entries[k].span      = name_f->span;
+        entries[k].init_form = init_f;
+    }
+
+    /* Pass A -- pre-register all names with placeholder types.
+     * If the init is a (fn ...) literal, peek at arity and return type to build
+     * a TY_FN stub so callers see the right arity during init elaboration.
+     * Otherwise fall back to TY_UNKNOWN. */
+    for (uint32_t k = 0; k < n_entries && rc == 0; k++) {
+        Form *init_f = entries[k].init_form;
+        Type placeholder = TYPE_UNKNOWN;
+        if (init_f->tag == F_LIST && init_f->as.list.len >= 3) {
+            Form *ih = init_f->as.list.items[0];
+            if (ih->tag == F_SYM &&
+                (ih->as.sym == e->sym_fn || ih->as.sym == e->sym_lambda)) {
+                Form *params_f = init_f->as.list.items[1];
+                if (params_f->tag == F_VEC) {
+                    uint32_t arity = 0;
+                    for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
+                        Form *p = params_f->as.list.items[pi];
+                        if (p->tag != F_KEYWORD && p->tag != F_TYPE_ANN) arity++;
+                    }
+                    if (arity > MAX_FN_ARITY) arity = MAX_FN_ARITY;
+                    TypeKind arg_kinds[MAX_FN_ARITY];
+                    for (uint32_t ai = 0; ai < arity; ai++) arg_kinds[ai] = TY_INT;
+                    /* Peek at the return-type keyword at index 2 (fn [params] :ret body). */
+                    TypeKind ret_kind = TY_INT;
+                    if (init_f->as.list.len >= 4) {
+                        Form *ret_f = init_f->as.list.items[2];
+                        if (ret_f->tag == F_KEYWORD) {
+                            const char *rn = ret_f->as.sym->name;
+                            uint32_t   rl = ret_f->as.sym->len;
+                            if      (rl == 3 && memcmp(rn, "int",  3) == 0) ret_kind = TY_INT;
+                            else if (rl == 4 && memcmp(rn, "bool", 4) == 0) ret_kind = TY_BOOL;
+                            else if (rl == 4 && memcmp(rn, "void", 4) == 0) ret_kind = TY_NIL;
+                            else if (rl == 3 && memcmp(rn, "nil",  3) == 0) ret_kind = TY_NIL;
+                            else if (rl == 4 && memcmp(rn, "cstr", 4) == 0) ret_kind = TY_CSTR;
+                        }
+                    }
+                    placeholder = type_fn(arg_kinds, (uint8_t)arity, ret_kind);
+                }
+            }
+        }
+        Binding *b = binding_new(e, entries[k].name, placeholder,
+                                 false, false, entries[k].span);
+        scope_add(&inner, b);
+        pre_b[k] = b;
+    }
+
+    /* Pass B -- elaborate each init inside the inner scope, then patch the
+     * pre-registered binding's type with the actual elaborated type. */
+    LetBinding *binds = NULL;
+    uint32_t n_binds = 0;
+    if (rc == 0) {
+        binds = (LetBinding *)malloc(n_entries * sizeof(LetBinding));
+        if (!binds) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    for (uint32_t k = 0; k < n_entries && rc == 0; k++) {
+        Expr *init = elab_form(e, entries[k].init_form);
+        if (!init) { rc = -1; break; }
+        /* Patch the pre-registered binding with the real type. */
+        pre_b[k]->type = init->type;
+        /* For fn-valued bindings, mark as global so the emitter uses direct
+         * calls (C function name) rather than cast-and-call through a local
+         * pointer -- enabling self-recursion and mutual recursion. */
+        /* For no-capture fn bindings (EX_VAR pointing to a file-scope static fn),
+         * mark as global so callers emit direct C function calls, enabling
+         * self-recursion and mutual recursion without closure overhead. */
+        if (init->kind == EX_VAR && init->type.kind == TY_FN) {
+            Binding *fn_b = init->as.var.binding;
+            char *fn_c_name = elab_mangle_binding_name(fn_b);
+            pre_b[k]->is_global = true;
+            pre_b[k]->c_export_name = arena_strdup(e->arena, fn_c_name, strlen(fn_c_name));
+            free(fn_c_name);
+        }
+        /* Propagate closure metadata (mirrors elab_let). */
+        Binding *cl = expr_closure_fn_binding(init);
+        if (cl) pre_b[k]->closure_fn_binding = cl;
+        /* Phase HRT4: poly fn metadata propagation. */
+        if (init->kind == EX_VAR) {
+            Binding *ib = init->as.var.binding;
+            if (ib->is_poly_fn) {
+                pre_b[k]->is_poly_fn = true;
+                pre_b[k]->poly_type  = ib->poly_type;
+            } else if (ib->type.kind == TY_FN) {
+                Binding *root = ib->source_binding ? ib->source_binding : ib;
+                if (root->is_global) pre_b[k]->source_binding = root;
+            }
+        }
+        binds[n_binds].binding = pre_b[k];
+        binds[n_binds].init    = init;
+        n_binds++;
+    }
+
+    /* Pass C -- elaborate body. */
+    Expr *body = NULL;
+    if (rc == 0) {
+        uint32_t body_count = call->as.list.len - 2;
+        if (body_count == 0) {
+            body = e_nil(e, call->span);
+        } else {
+            Form *spliced = splice_internal_defines(e,
+                                call->as.list.items + 2, body_count, call->span);
+            if (spliced) {
+                body = elab_form(e, spliced);
+                if (!body) rc = -1;
+            } else if (body_count == 1) {
+                body = elab_form(e, call->as.list.items[2]);
+                if (!body) rc = -1;
+            } else {
+                Expr **items = (Expr **)arena_alloc(e->arena, body_count * sizeof(Expr *));
+                for (uint32_t k = 0; k < body_count && rc == 0; k++) {
+                    items[k] = elab_form(e, call->as.list.items[2 + k]);
+                    if (!items[k]) rc = -1;
+                }
+                if (rc == 0) {
+                    body = expr_new(e->arena, EX_DO, items[body_count-1]->type, call->span);
+                    body->as.do_.items = items;
+                    body->as.do_.n = body_count;
+                }
+            }
+        }
+    }
+
+    e->scope = inner.parent;
+    scope_free(&inner);
+    free(entries);
+    free(pre_b);
+
+    if (rc != 0) {
+        free(binds);
+        return NULL;
+    }
+
+    Expr *out = expr_new(e->arena, EX_LETREC, body->type, call->span);
+    LetBinding *bcopy = (LetBinding *)arena_alloc(e->arena, n_binds * sizeof(LetBinding));
+    memcpy(bcopy, binds, n_binds * sizeof(LetBinding));
+    free(binds);
+    out->as.let_.bindings = bcopy;
+    out->as.let_.n        = n_binds;
+    out->as.let_.body     = body;
+    return out;
+}
+
+/* elab_named_let -- (let name [p1 v1 p2 v2 ...] body...)
+ *
+ * Desugars to:
+ *   (letrec [name (fn [p1 p2 ...] body...)]
+ *     (name v1 v2 ...))
+ *
+ * Type annotations carry through verbatim: [n :int 10 ...] becomes (fn [n :int] ...).
+ */
+Expr *elab_named_let(Elab *e, const Form *call) {
+    /* call: (let <sym> [p1 v1 ...] body...) */
+    Form *loop_name_f = call->as.list.items[1]; /* F_SYM checked by caller */
+    const Symbol *loop_sym = loop_name_f->as.sym;
+    Form *bvec = call->as.list.items[2]; /* F_VEC checked by caller */
+    Span sp = call->span;
+    Arena *a = e->arena;
+
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, sp,
+                  "named let requires a body: (let %s [...] body...)", loop_sym->name);
+        return NULL;
+    }
+
+    /* Walk the binding vector, separating param specs from initial values.
+     * Format: [name1 [:type1] init1  name2 [:type2] init2 ...]
+     * fn_param_items: the items that go inside (fn [...] ...)
+     * init_items:     the initial call arguments for (name v1 v2 ...) */
+    uint32_t blen = bvec->as.list.len;
+    Form **fn_param_items = (Form **)arena_alloc(a, blen * sizeof(Form *));
+    Form **init_items     = (Form **)arena_alloc(a, blen * sizeof(Form *));
+    uint32_t n_params = 0, n_inits = 0;
+
+    uint32_t bi = 0;
+    while (bi < blen) {
+        Form *cur = bvec->as.list.items[bi];
+        if (cur->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "named let: binding name must be a symbol");
+            return NULL;
+        }
+        fn_param_items[n_params++] = cur;  /* the param name */
+        bi++;
+        /* Optional :type annotation */
+        if (bi < blen && bvec->as.list.items[bi]->tag == F_KEYWORD) {
+            fn_param_items[n_params++] = bvec->as.list.items[bi++]; /* :type */
+        }
+        /* Mandatory initializer */
+        if (bi >= blen) {
+            diag_emit(DIAG_ERROR, cur->span,
+                      "named let: missing initializer for parameter '%s'", cur->as.sym->name);
+            return NULL;
+        }
+        init_items[n_inits++] = bvec->as.list.items[bi++];
+    }
+
+    /* Build (fn [fn_param_items...] body...) */
+    uint32_t body_count = call->as.list.len - 3; /* items after the bvec */
+    uint32_t fn_len = 2 + body_count;             /* fn + params_vec + body... */
+    Form **fn_items_arr = (Form **)arena_alloc(a, fn_len * sizeof(Form *));
+    fn_items_arr[0] = form_sym(a, sp, e->sym_fn);
+    fn_items_arr[1] = form_vec(a, sp, fn_param_items, n_params);
+    for (uint32_t i = 0; i < body_count; i++)
+        fn_items_arr[2 + i] = call->as.list.items[3 + i];
+    Form *fn_form = form_list(a, sp, fn_items_arr, fn_len);
+
+    /* Build letrec binding vector [loop_sym fn_form] */
+    Form *lr_bvec_arr[2];
+    lr_bvec_arr[0] = form_sym(a, sp, loop_sym);
+    lr_bvec_arr[1] = fn_form;
+    Form *lr_bvec = form_vec(a, sp, lr_bvec_arr, 2);
+
+    /* Build call form (loop_sym init_items...) */
+    uint32_t call_len = 1 + n_inits;
+    Form **call_items_arr = (Form **)arena_alloc(a, call_len * sizeof(Form *));
+    call_items_arr[0] = form_sym(a, sp, loop_sym);
+    for (uint32_t i = 0; i < n_inits; i++) call_items_arr[1 + i] = init_items[i];
+    Form *call_form = form_list(a, sp, call_items_arr, call_len);
+
+    /* Build (letrec lr_bvec call_form) */
+    Form *lr_arr[3];
+    lr_arr[0] = form_sym(a, sp, e->sym_letrec);
+    lr_arr[1] = lr_bvec;
+    lr_arr[2] = call_form;
+    Form *letrec_form = form_list(a, sp, lr_arr, 3);
+
+    return elab_form(e, letrec_form);
 }
 
 Expr *elab_if(Elab *e, const Form *call) {
