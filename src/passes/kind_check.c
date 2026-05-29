@@ -82,11 +82,9 @@ void kind_env_bind(KindEnv *env, const Symbol *sym, Kind k, Span span) {
  * Phase HKT H2: kind_unify
  * ------------------------------------------------------------------------- */
 
-/* True if k is one of KIND_ARROW..KIND_ARROW5 (i.e. a non-zero arity
- * type-constructor kind, excluding KIND_STAR and KIND_ROW). */
+/* True if k is any arrow kind (arity >= 1, excluding KIND_STAR and KIND_ROW). */
 static bool kind_is_arrow_ladder(Kind k) {
-    return k == KIND_ARROW  || k == KIND_ARROW2 ||
-           k == KIND_ARROW3 || k == KIND_ARROW4 || k == KIND_ARROW5;
+    return k >= KIND_ARROW && k != KIND_ROW;
 }
 
 static Kind kind_unify_internal(Kind k1, Kind k2, Span span, bool emit_diag) {
@@ -170,21 +168,13 @@ static Kind type_effective_kind(Type t) {
  * is KIND_STAR or KIND_ROW (cannot apply a non-constructor kind). */
 Kind kind_of_type_app(Type fn_type, Type arg_type, Span span) {
     (void)arg_type;  /* arg kind not validated separately in v1 */
-    switch (fn_type.hkt_kind) {
-        case KIND_ARROW:
-        case KIND_ARROW2:
-        case KIND_ARROW3:
-        case KIND_ARROW4:
-        case KIND_ARROW5:
-            return kind_apply_one(fn_type.hkt_kind);
-        case KIND_STAR:
-        case KIND_ROW:
-            diag_emit_with_code(DIAG_ERROR, span, TUR_E0012_KIND_MISMATCH,
-                "kind mismatch (TUR-E0012): cannot apply a type of kind '*' as a "
-                "type constructor; type must have kind '* -> *' through "
-                "'* -> * -> * -> * -> * -> *'");
-            return KIND_STAR;
+    if (kind_is_arrow_ladder(fn_type.hkt_kind)) {
+        return kind_apply_one(fn_type.hkt_kind);
     }
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0012_KIND_MISMATCH,
+        "kind mismatch (TUR-E0012): cannot apply a type of kind '%s' as a "
+        "type constructor; expected an arrow kind (* -> * or higher)",
+        kind_to_string(fn_type.hkt_kind));
     return KIND_STAR;
 }
 
@@ -552,12 +542,10 @@ void kind_dump_program(Expr *program, FILE *out) {
  * Verifies that Kind information is preserved through all compiler passes.
  * --------------------------------------------------------------------------- */
 
-/* True if k is a known kind value on the * / arrow ladder (KIND_ROW is
- * intentionally excluded — it appears only on row variables, not as a
- * type's hkt_kind). */
+/* True if k is a valid hkt_kind value (star or any arrow arity).
+ * KIND_ROW is intentionally excluded -- it appears only on row variables. */
 static bool kind_is_valid(Kind k) {
-    return k == KIND_STAR   || k == KIND_ARROW  || k == KIND_ARROW2 ||
-           k == KIND_ARROW3 || k == KIND_ARROW4 || k == KIND_ARROW5;
+    return k != KIND_ROW;
 }
 
 /* Helper: recursively verify kind info is present on types */
