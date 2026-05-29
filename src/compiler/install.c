@@ -683,8 +683,32 @@ int cmd_pkg_uninstall(int argc, char **argv) {
     TurState state;
     tur_state_read(state_path, &state);
     TurStateEntry *e = tur_state_find(&state, name);
+
+    /* Fallback: older list output rendered `name-version` with no separator,
+     * so users sometimes copy the whole string. If the exact name misses and
+     * the input ends in `-<digit>...`, try the prefix. */
+    char *stripped = NULL;
+    if (!e) {
+        const char *dash = strrchr(name, '-');
+        if (dash && dash != name && isdigit((unsigned char)dash[1])) {
+            size_t pre_len = (size_t)(dash - name);
+            stripped = (char *)malloc(pre_len + 1);
+            if (stripped) {
+                memcpy(stripped, name, pre_len);
+                stripped[pre_len] = '\0';
+                TurStateEntry *e2 = tur_state_find(&state, stripped);
+                if (e2 && e2->version &&
+                    strcmp(e2->version, dash + 1) == 0) {
+                    e = e2;
+                    name = stripped;
+                }
+            }
+        }
+    }
+
     if (!e) {
         fprintf(stderr, "tur uninstall: '%s' is not installed\n", name);
+        free(stripped);
         tur_state_free(&state);
         return 1;
     }
@@ -742,10 +766,12 @@ int cmd_pkg_uninstall(int argc, char **argv) {
     tur_state_remove(&state, name);
     if (!tur_state_write(state_path, &state)) {
         tur_state_free(&state);
+        free(stripped);
         return 1;
     }
     fprintf(stderr, "tur uninstall: '%s' removed\n", name);
     tur_state_free(&state);
+    free(stripped);
     return 0;
 }
 
@@ -1044,9 +1070,13 @@ int cmd_pkg_list(int argc, char **argv) {
                                      : "\xe2\x94\x9c" "\xe2\x94\x80" "\xe2\x94\x80"; /* ├── */
         const char *bar    = is_last ? "    " : "\xe2\x94\x82" "   "; /* │    or 4 spaces */
 
-        /* Header line: name + version + origin */
+        /* Header line: name + version + origin.
+         * Use a space between name and version so kebab-cased names like
+         * `tur-notebook` are visually distinct from the version suffix —
+         * otherwise `tur-notebook-0.1.0` reads as a single identifier and
+         * users try to pass it to `tur uninstall`. */
         printf("%s %s", branch, e->name ? e->name : "(unnamed)");
-        if (e->version) printf("-%s", e->version);
+        if (e->version) printf(" %s", e->version);
         if (e->path)               printf("       (%s) [path]", e->path);
         else if (e->url && e->ref) printf("       (%s @ %s)", e->url, e->ref);
         else if (e->url)           printf("       (%s)", e->url);
