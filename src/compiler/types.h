@@ -380,7 +380,8 @@ typedef struct Type {
     /* For concrete types, the typeclass instances they implement (e.g., int has Eq, Show) */
     TypeClassInstance **typeclass_instances;
     uint8_t n_typeclass_instances;
-    /* Phase HKT (v2, stub): kind annotation — always KIND_STAR in v1, reserved for HKT. */
+    /* Phase TP3: kind annotation -- uint16_t encoding (see Kind typedef above).
+     * KIND_STAR for concrete types; KIND_ARROW{N} for N-ary type constructors. */
     Kind hkt_kind;
     union {
         struct {
