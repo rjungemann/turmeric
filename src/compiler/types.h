@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 #include "buf.h"
 #include "lifetimes.h"  /* Phase 13: Lifetime annotations */
 #include "forms.h"      /* Phase HKT-P1: for Span */
@@ -38,19 +39,27 @@ typedef enum SubstructKind {
     SK_RELEVANT,        /* No weakening: must use, can duplicate */
     SK_LINEAR,          /* No weakening, no contraction: use exactly once */
 } SubstructKind;
-/* Phase HKT (v2, stub): Kind annotations for higher-kinded type support.
- * In v1 all types have kind KIND_STAR; KIND_ARROW is reserved for future use.
- * The hkt_kind field on Type is always KIND_STAR in v1 and ignored by all
- * current elaboration, codegen, and borrow-check passes. */
-typedef enum Kind {
-    KIND_STAR   = 0,  /* * — a concrete type, e.g. int, bool, vec<int> */
-    KIND_ARROW  = 1,  /* * -> * — a unary type constructor, e.g. vec, option */
-    KIND_ARROW2 = 2,  /* * -> * -> * — a binary type constructor, e.g. result, either */
-    KIND_ROW    = 3,  /* Row — an effect row variable, e.g. e in (forall [e] ...) */
-    KIND_ARROW3 = 4,  /* * -> * -> * -> * — ternary, e.g. Tuple3 */
-    KIND_ARROW4 = 5,  /* 4-ary, e.g. Tuple4 */
-    KIND_ARROW5 = 6,  /* 5-ary, e.g. Tuple5 */
-} Kind;
+/* Phase TP3: Arbitrary-arity kind representation.
+ * Kind is an integer-backed type; the arity-5 cap is gone.
+ *
+ * Encoding:
+ *   0       -- KIND_STAR (* -- a concrete, fully-applied type)
+ *   1..N    -- arity-N arrow kind; value equals arity
+ *              (KIND_ARROW=1 means * -> *, KIND_ARROW2=2 means * -> * -> *, ...)
+ *   0xFFFF  -- KIND_ROW (effect row variable; sentinel, not an arrow kind)
+ *
+ * kind_for_arity(n) == (Kind)n for all n.
+ * kind_apply_one(k) == k-1 for k in 1..0xFFFE, identity for STAR and ROW.
+ * The hkt_kind field on Type uses this encoding; sizeof(Kind)==2 verified below. */
+typedef uint16_t Kind;
+static_assert(sizeof(Kind) == 2, "Kind must be exactly 2 bytes");
+#define KIND_STAR   ((Kind)0)       /* * -- concrete type, e.g. int, bool, vec<int> */
+#define KIND_ARROW  ((Kind)1)       /* * -> * -- unary constructor, e.g. vec, option */
+#define KIND_ARROW2 ((Kind)2)       /* * -> * -> * -- binary constructor, e.g. result */
+#define KIND_ARROW3 ((Kind)3)       /* * -> * -> * -> * -- ternary, e.g. Tuple3 */
+#define KIND_ARROW4 ((Kind)4)       /* 4-ary, e.g. Tuple4 */
+#define KIND_ARROW5 ((Kind)5)       /* 5-ary, e.g. Tuple5 */
+#define KIND_ROW    ((Kind)0xFFFF)  /* Row -- effect row variable */
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */
 
@@ -1104,14 +1113,12 @@ bool         kind_eq(Kind a, Kind b);             /* true if a == b */
 const char  *kind_to_string(Kind k);              /* "*", "* -> *", … */
 Kind         kind_parse(const char *s);           /* parse "*" / "* -> *"; default KIND_STAR */
 
-/* Phase TP2: kind ladder helpers for n-ary type constructors.
- * kind_for_arity(n) returns the kind of a type constructor with n params:
- *   0 -> KIND_STAR, 1 -> KIND_ARROW, ..., 5 -> KIND_ARROW5.
- * Values above 5 also map to KIND_ARROW5 — arity-cap is enforced
- * at definition sites, not here. */
+/* Phase TP3: kind helpers for n-ary type constructors (arbitrary arity).
+ * kind_for_arity(n) returns (Kind)n -- no cap, any n is valid.
+ *   0 -> KIND_STAR, 1 -> KIND_ARROW, 2 -> KIND_ARROW2, ... N -> arity-N kind. */
 Kind         kind_for_arity(uint32_t n);
-/* kind_apply_one(k) returns the kind after applying one type argument
- * to a constructor of kind k: ARROW5 -> ARROW4 -> ... -> ARROW -> STAR.
+/* kind_apply_one(k) returns the kind after applying one type argument:
+ * (Kind)(k-1) for any arrow kind (k >= 1, k != KIND_ROW).
  * KIND_STAR and KIND_ROW are returned unchanged (caller validates). */
 Kind         kind_apply_one(Kind k);
 

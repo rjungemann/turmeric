@@ -2111,16 +2111,31 @@ bool type_is_guarded_recursive(Type t, const char *rec_name) {
 }
 
 const char *kind_to_string(Kind k) {
-    switch (k) {
-        case KIND_STAR:   return "*";
-        case KIND_ARROW:  return "* -> *";
-        case KIND_ARROW2: return "* -> * -> *";
-        case KIND_ARROW3: return "* -> * -> * -> *";
-        case KIND_ARROW4: return "* -> * -> * -> * -> *";
-        case KIND_ARROW5: return "* -> * -> * -> * -> * -> *";
-        case KIND_ROW:    return "Row";
-    }
-    return "*";  /* default */
+    if (k == KIND_ROW) return "Row";
+    /* Zero-alloc table for arities 0..15 (covers all practical usage). */
+    static const char * const tbl[16] = {
+        "*",
+        "* -> *",
+        "* -> * -> *",
+        "* -> * -> * -> *",
+        "* -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+        "* -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> * -> *",
+    };
+    if (k < 16) return tbl[k];
+    /* Diagnostic fallback for very high arities (not reentrant; only for errors). */
+    static char fallback[64];
+    snprintf(fallback, sizeof(fallback), "* (arity %u)", (unsigned)k);
+    return fallback;
 }
 
 Kind kind_parse(const char *s) {
@@ -2139,27 +2154,12 @@ Kind kind_parse(const char *s) {
 }
 
 Kind kind_for_arity(uint32_t n) {
-    switch (n) {
-        case 0:  return KIND_STAR;
-        case 1:  return KIND_ARROW;
-        case 2:  return KIND_ARROW2;
-        case 3:  return KIND_ARROW3;
-        case 4:  return KIND_ARROW4;
-        default: return KIND_ARROW5;
-    }
+    return (Kind)n;
 }
 
 Kind kind_apply_one(Kind k) {
-    switch (k) {
-        case KIND_ARROW5: return KIND_ARROW4;
-        case KIND_ARROW4: return KIND_ARROW3;
-        case KIND_ARROW3: return KIND_ARROW2;
-        case KIND_ARROW2: return KIND_ARROW;
-        case KIND_ARROW:  return KIND_STAR;
-        case KIND_STAR:
-        case KIND_ROW:    return k;
-    }
-    return KIND_STAR;
+    if (k == KIND_STAR || k == KIND_ROW) return k;
+    return (Kind)(k - 1);
 }
 
 const char *typekind_to_string(TypeKind k) {
