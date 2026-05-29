@@ -2,6 +2,19 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.6] -- 2026-05-28
+
+### Docs
+
+- **Guide polish across stdlib documentation** -- copy edits and
+  formatting fixes for the C integration, cellular-automata comonad,
+  custom-effects, HAMT, HKT, and type-erasure guides.
+
+### Internal
+
+- **`scripts/wait-for-release.sh`** -- helper script for maintainers
+  to watch a release workflow run from the CLI after pushing a tag.
+
 ## [0.14.5] -- 2026-05-28
 
 ### Fixed

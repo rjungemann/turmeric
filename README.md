@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.14.5` -- fixes `tur uninstall` rejecting `name-version` strings copied from `tur list`, and reformats `tur list` to use a space between name and version.
+**Latest release:** `v0.14.6` -- documentation polish across several stdlib guides and a new `wait-for-release.sh` helper for monitoring release workflow runs.
 
 ## What
 
