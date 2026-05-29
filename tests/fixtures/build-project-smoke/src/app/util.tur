@@ -1,0 +1,7 @@
+;; app/util -- a leaf module imported by app/main.
+
+(defmodule app/util
+  (export double-it)
+
+  (defn double-it [x :int] :int
+    (* x 2)))

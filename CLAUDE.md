@@ -81,8 +81,13 @@ in your editor, LSP, or format-on-save hook.
 - `--no-auto-spice` (global flag, before the subcommand) opts out.
 - `tur build <file>` (single-file build) does **not** auto-discover --
   use `tur run <file>` for the same convenience, or pass `-I` explicitly.
-- `tur build <dir>` and `tur run` (project mode) already configure
-  themselves from `build.tur`; auto-discovery is a no-op there.
+- `tur build <dir>` and `tur run` (project mode) configure themselves
+  from `build.tur`; auto-discovery is a no-op there. When `<dir>` holds a
+  `build.tur`, the build descends into `src/` (recursively, including
+  nested `src/<pkg>/`), skips the manifest itself, resolves the include
+  path from the project's own `src/` plus each `:spices` dep's `src/`, and
+  validates that every declared `:exports` module has a backing source
+  file. See [docs/manifest-driven-build-descent-plan.md](docs/manifest-driven-build-descent-plan.md).
 
 See [docs/guides/developing-spices-guide.md](docs/guides/developing-spices-guide.md#per-file-commands-inside-a-spice)
 for the full rules.

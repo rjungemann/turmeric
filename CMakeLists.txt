@@ -58,6 +58,15 @@ add_test(
   COMMAND bash tests/run-build-shared.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Manifest-driven `tur build <dir>` descent: builds tests/fixtures/
+# build-project-smoke (a build.tur project with modules under src/<pkg>/),
+# resolving cross-module imports, and asserts the manifest is not compiled
+# as source. See docs/manifest-driven-build-descent-plan.md.
+add_test(
+  NAME tur_build_project
+  COMMAND bash tests/run-build-project.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP2: unit test for the generated FFI dispatcher trampolines in
 # src/runtime/ffi_dispatch.{h,c}. The executable is defined in
 # src/CMakeLists.txt as tur_ffi_dispatch_unit.

@@ -505,12 +505,17 @@ package and consumers will use `tur add spice/<name>` without a Git URL.
 ## Per-file Commands Inside a Spice
 
 `tur build <dir>` and `tur run` (project mode) know about the spice they
-live in because they start by reading `build.tur`. The per-file
-subcommands `tur check`, `tur emit-c`, `tur emit-h`, and `tur run <file>`
-get the same behavior automatically -- they walk up from the input file
-looking for a sibling `build.tur` and add that spice's `src/` to the
-include path. If the manifest declares `:spices` dependencies, those
-deps' `src/` directories are added too.
+live in because they start by reading `build.tur`. For `tur build <dir>`
+that means: descend into `src/` (recursively, including nested
+`src/<pkg>/` trees), skip the manifest itself, compile every module,
+resolve the include path from the project's own `src/` plus each
+`:spices` dep's `src/`, and verify each declared `:exports` module has a
+backing source file -- failing loudly otherwise. (See
+[manifest-driven-build-descent-plan.md](../manifest-driven-build-descent-plan.md).)
+The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`, and
+`tur run <file>` get the same module resolution automatically -- they
+walk up from the input file looking for a sibling `build.tur` and add
+that spice's `src/` (and its `:spices` deps' `src/`) to the include path.
 
 This means editors, format-on-save hooks, LSP clients, and quick
 "compile this one file" loops work without per-spice configuration:
@@ -554,7 +559,8 @@ own directory, the stdlib, and any explicit `-I` paths are searched.
 ### When auto-discovery does not apply
 
 - `tur build <dir>` -- already configures itself from the directory's
-  `build.tur`.
+  `build.tur` (reads the manifest, descends into `src/`, and resolves the
+  include path); the per-file walk-up does not apply.
 - `tur build <file>` -- the single-file build doesn't auto-discover;
   use `tur run <file>` if you want the same convenience for a one-off
   invocation, or pass `-I` explicitly.
