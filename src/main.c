@@ -4978,6 +4978,12 @@ static int usage(void) {
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
         "  tur fetch [--update]              download / update all spices\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
+        "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
+        "  tur install <path> --path         install a local spice binary globally\n"
+        "  tur uninstall <name>              remove a globally installed spice\n"
+        "  tur list [--verbose|--outdated]   list globally installed spices\n"
+        "  tur upgrade <name>...|--all       upgrade globally installed spices\n");
+    fprintf(stderr,
         "\n"
         "emit-c flags:\n"
         "  tur emit-c <file>                 compile a .tur file to C (stdout)\n"
