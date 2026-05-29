@@ -1,0 +1,16 @@
+; Regression: the reader used to drop negative exponents entirely
+; (reader.c abs_exp went negative so the apply-loop never ran), so 1e-10
+; parsed as 1.0.  It also drifted from the correctly-rounded double.
+; See docs/reader-float-parsing-plan.md.
+
+; Negative exponents -- must keep their magnitude, not collapse to the mantissa
+(println 1e-10)
+(println 1.0e-10)
+(println 2.5e-3)
+(println 5e-1)
+(println 1.25e-2)
+
+; Positive exponents and plain decimals -- unchanged
+(println 1.5e3)
+(println 2e2)
+(println 0.0001)

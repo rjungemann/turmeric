@@ -1,6 +1,6 @@
 # Plan: Reader Float-Literal Parsing -- Dropped Exponents & Precision Drift
 
-> **Status:** Draft Plan
+> **Status:** Implemented (Option B)
 > **Last Updated:** 2026-05-29
 > **Type:** Compiler correctness (reader/lexer) + precision
 > **Related:**
@@ -216,16 +216,37 @@ acceptable stop-gap if B is blocked, but it leaves drift and the fmt mismatch.
 
 ## Validation checklist
 
-- [ ] `1e-10`, `1.0e-10`, `2.5e-3` parse to the correct magnitude (not `1.0`).
-- [ ] `0.0001` parses to the nearest double and `tur fmt` prints it back as
-      `0.0001` (not a 17-digit form).
-- [ ] Empty-exponent literal `1e` still raises "expected exponent digits".
-- [ ] `1f32` / `1f64` (float suffix on integer-looking literal) still parse as
-      floats with the right value.
-- [ ] `0x`/`0b` integer literals and integer overflow diagnostics unchanged.
-- [ ] `bash tests/run.sh` reports zero `FAIL` (snapshots regenerated as
-      needed).
-- [ ] `ctest` green; `fmt-bootstrap-stdlib` and `fmt-idempotence-stdlib` pass.
+- [x] `1e-10`, `1.0e-10`, `2.5e-3` parse to the correct magnitude (not `1.0`).
+      Covered by `tests/fixtures/float-negative-exponent`.
+- [x] `0.0001` parses to the nearest double and `tur fmt` prints it back as
+      `0.0001` (not a 17-digit form). The reader now agrees with `strtod`, so
+      reader-parsed values format cleanly.
+- [x] Empty-exponent literal `1e` still raises "expected exponent digits".
+- [x] `1f32` / `1f64` (float suffix on integer-looking literal) still parse as
+      floats with the right value (`42f64` -> `42.0`).
+- [x] `0x`/`0b` integer literals and integer overflow diagnostics unchanged
+      (that code path is untouched; `errors/literal-overflow` still passes).
+- [x] `bash tests/run.sh` reports zero `FAIL` (1046 passed; no `expected.c`
+      snapshot needed regenerating -- no embedded float literal's bits shifted).
+- [x] `ctest` green; `fmt-bootstrap-stdlib` and `fmt-idempotence-stdlib` pass.
+      (The RUN_SERIAL `tur_repl_spice_*` FIFO/timeout tests flake intermittently
+      under parallel ASAN load -- unrelated; they pass in isolation.)
+
+## Implementation notes (what was actually done)
+
+Option B, as recommended. In `read_number` (`src/compiler/reader.c`) the
+decimal-number branch now uses its scan loops purely to **delimit** the lexeme
+(advance the cursor, accumulate `ival` for the integer/`1f32` paths, set
+`is_float`, and validate that an `e`/`E` is followed by digits). The float
+**value** is recovered with `strtod` over the matched slice
+`r->src[num_start, r->pos)` (a 64-byte stack buffer, falling back to an
+arena allocation for pathologically long literals). The hand-rolled `fval`
+accumulation -- the integer `*10`, the `frac += digit * scale; scale *= 0.1`
+fraction, and the buggy exponent-apply loop -- was removed. The type suffix is
+not yet consumed at that point, so the slice is pure decimal-float syntax and
+`strtod` stops exactly at its end; the leading sign is still applied via the
+existing `sign < 0` negation. The `1f32`/`1f64`, `0x`/`0b`, and overflow paths
+were left untouched.
 
 ## Appendix: the two defects, side by side
 

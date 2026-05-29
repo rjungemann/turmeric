@@ -299,11 +299,19 @@ static Form *read_number(Reader *r, int sign) {
             any = true;
         }
     } else {
+        /* Decimal number. The loops below only *delimit* the lexeme (advance
+         * the cursor, accumulate ival for the integer/suffix paths, and set
+         * is_float). The float value is recovered with strtod over the matched
+         * characters -- a hand-rolled digit accumulator drifts from the
+         * correctly-rounded double and previously dropped negative exponents
+         * outright (e.g. 1e-10 parsed as 1.0). See
+         * docs/reader-float-parsing-plan.md. */
+        size_t num_start = r->pos;
+
         /* Parse integer part */
         while (peek(r) >= '0' && peek(r) <= '9') {
             int digit = advance(r) - '0';
             ival = ival * 10 + (int64_t)digit;
-            fval = fval * 10.0 + (double)digit;
             any = true;
         }
 
@@ -311,32 +319,22 @@ static Form *read_number(Reader *r, int sign) {
         if (peek(r) == '.') {
             is_float = true;
             advance(r);  /* consume '.' */
-            double frac = 0.0;
-            double scale = 0.1;
             while (peek(r) >= '0' && peek(r) <= '9') {
-                int digit = advance(r) - '0';
-                frac += (double)digit * scale;
-                scale *= 0.1;
+                advance(r);
                 any = true;
             }
-            fval += frac;
         }
 
         /* Check for exponent part */
         if ((peek(r) == 'e' || peek(r) == 'E') && any) {
             is_float = true;
             advance(r);  /* consume 'e' or 'E' */
-            int exp_sign = 1;
-            if (peek(r) == '+') {
+            if (peek(r) == '+' || peek(r) == '-') {
                 advance(r);
-            } else if (peek(r) == '-') {
-                advance(r);
-                exp_sign = -1;
             }
-            int exp_val = 0;
             bool exp_any = false;
             while (peek(r) >= '0' && peek(r) <= '9') {
-                exp_val = exp_val * 10 + (advance(r) - '0');
+                advance(r);
                 exp_any = true;
             }
             if (!exp_any) {
@@ -345,14 +343,22 @@ static Form *read_number(Reader *r, int sign) {
                 r->error = true;
                 return NULL;
             }
-            /* Apply exponent using pow(10, exp) */
-            double exp_factor = 1.0;
-            int abs_exp = exp_sign < 0 ? -exp_val : exp_val;
-            for (int i = 0; i < abs_exp; i++) {
-                if (exp_sign > 0) exp_factor *= 10.0;
-                else exp_factor /= 10.0;
+        }
+
+        /* Recover the float value from the delimited lexeme [num_start, pos).
+         * The type suffix (f32/f64) has not been consumed yet, so the slice is
+         * pure decimal-float syntax and strtod stops exactly at its end. The
+         * leading sign is applied below via the `sign < 0` negation. */
+        if (is_float) {
+            size_t num_len = r->pos - num_start;
+            char stackbuf[64];
+            char *nb = stackbuf;
+            if (num_len >= sizeof(stackbuf)) {
+                nb = (char *)arena_alloc(r->arena, num_len + 1);
             }
-            fval *= exp_factor;
+            memcpy(nb, r->src + num_start, num_len);
+            nb[num_len] = '\0';
+            fval = strtod(nb, NULL);
         }
     }
 
