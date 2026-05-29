@@ -2135,14 +2135,116 @@ static char **collect_project_src_files(const char *root, int *n_out) {
     return files;
 }
 
-/* Resolve a project's include search path from its build.tur:
- *   - the project's own `src/` directory (so intra-spice imports resolve);
- *   - each declared `:spices` dependency's resolved `src/` (with :path / :ref
- *     / :subdir handling and the monorepo-sibling fallback).
- * Walks up from `dir` to find the enclosing build.tur.  On return *out_dirs
- * is a heap array of strdup'd directories (*out_n entries); the caller frees
- * each string and the array.  No-op (leaves *out_n = 0) when there is no
- * manifest.  Mirrors the resolution used by `tur run` / the test runner. */
+/* Build a project's include search path from an already-loaded manifest.
+ * `root` is the project root (the dir holding build.tur); `m` its manifest.
+ * When `include_own_src` is set, `root/src` is added first (so intra-spice
+ * imports resolve for callers whose entry/test files live outside `src/`).
+ * Each `:spices` dep is resolved in priority order:
+ *   workspace-member sibling -> explicit `:path` -> fetched `:ref` dir
+ *   -> `spices/<name>`; then `:subdir`, a `src/` preference, and a
+ *   monorepo-sibling fallback when the resolved dir is absent.
+ * *out_dirs is a heap array of strdup'd dirs (*out_n entries); the caller
+ * frees each string and the array.  Shared by `tur run`, `tur test`, and
+ * `tur build <dir>` so all three resolve the include path identically. */
+static void resolve_include_dirs_from_manifest(const char *root,
+                                               const PkgManifest *m,
+                                               bool include_own_src,
+                                               const char ***out_dirs,
+                                               int *out_n) {
+    *out_dirs = NULL;
+    *out_n    = 0;
+
+    int cap = (include_own_src ? 1 : 0) + m->n_spices;
+    if (cap < 1) cap = 1;
+    const char **dirs = (const char **)malloc((size_t)cap * sizeof(char *));
+    if (!dirs) return;
+    int n = 0;
+
+    if (include_own_src) {
+        char own_src[4096];
+        snprintf(own_src, sizeof(own_src), "%s/src", root);
+        struct stat ss;
+        if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
+            dirs[n++] = strdup(own_src);
+    }
+
+    char spices_dir[4096];
+    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
+    for (int i = 0; i < m->n_spices; i++) {
+        const PkgSpice *s = &m->spices[i];
+        char dep_dir[4096];
+        /* LS4: a :spices entry that is a workspace sibling resolves to the
+         * sibling's on-disk dir, ignoring any :url/:ref declared for
+         * external publication. */
+        char *ws_path = s->path ? NULL
+                                : pkg_workspace_member_path(root, s->name);
+        if (ws_path) {
+            strncpy(dep_dir, ws_path, sizeof(dep_dir) - 1);
+            dep_dir[sizeof(dep_dir) - 1] = '\0';
+            free(ws_path);
+        } else if (s->path) {
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
+        } else if (s->ref) {
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                     spices_dir, s->name, s->ref);
+        } else {
+            snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+        }
+        if (s->subdir) {
+            char tmp[4096];
+            snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
+            strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
+            dep_dir[sizeof(dep_dir) - 1] = '\0';
+        }
+        char src_sub[4096];
+        snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
+        struct stat ss;
+        const char *chosen = NULL;
+        if (stat(src_sub, &ss) == 0 && S_ISDIR(ss.st_mode))
+            chosen = src_sub;
+        else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
+            chosen = dep_dir;
+
+        bool fallback_added = false;
+        if (!chosen && s->subdir) {
+            char ancestor[4096];
+            strncpy(ancestor, root, sizeof(ancestor) - 1);
+            ancestor[sizeof(ancestor) - 1] = '\0';
+            for (int up = 0; up < 4 && !fallback_added; up++) {
+                char *slash = strrchr(ancestor, '/');
+                if (!slash || slash == ancestor) break;
+                *slash = '\0';
+                char sib_src[4096];
+                snprintf(sib_src, sizeof(sib_src),
+                         "%s/%s/src", ancestor, s->subdir);
+                if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                    dirs[n++] = strdup(sib_src);
+                    fallback_added = true;
+                    break;
+                }
+                char sib_dir[4096];
+                snprintf(sib_dir, sizeof(sib_dir),
+                         "%s/%s", ancestor, s->subdir);
+                if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                    dirs[n++] = strdup(sib_dir);
+                    fallback_added = true;
+                    break;
+                }
+            }
+        }
+        if (fallback_added) continue;
+        if (chosen) dirs[n++] = strdup(chosen);
+    }
+
+    *out_dirs = dirs;
+    *out_n    = n;
+}
+
+/* Resolve a project's include search path by walking up from `dir` to find
+ * the enclosing build.tur, then delegating to
+ * resolve_include_dirs_from_manifest with the project's own `src/` included.
+ * No-op (leaves *out_n = 0) when there is no manifest.  Used by `tur test`
+ * and `tur build <dir>`. */
 static void resolve_project_include_dirs(const char *dir,
                                          const char ***out_dirs, int *out_n) {
     *out_dirs = NULL;
@@ -2164,85 +2266,11 @@ static void resolve_project_include_dirs(const char *dir,
         return;
     }
 
-    int cap = 1 + m.n_spices;
-    const char **dirs = (const char **)malloc((size_t)cap * sizeof(char *));
-    int n = 0;
-    if (dirs) {
-        /* Project's own src/, if it exists. */
-        {
-            char own_src[4096];
-            snprintf(own_src, sizeof(own_src), "%s/src", proj_root);
-            struct stat ss;
-            if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
-                dirs[n++] = strdup(own_src);
-        }
-        /* Each declared :spice's resolved src/.  Mirrors the convention used
-         * by `cmd_run`: spices/<name>-<ref>/(<subdir>/)src, falling back to
-         * the dep dir if `src/` is absent, with a monorepo-sibling fallback. */
-        char spices_dir[4096];
-        snprintf(spices_dir, sizeof(spices_dir), "%s/spices", proj_root);
-        for (int i = 0; i < m.n_spices; i++) {
-            const PkgSpice *s = &m.spices[i];
-            char dep_dir[4096];
-            if (s->path) {
-                snprintf(dep_dir, sizeof(dep_dir), "%s/%s", proj_root, s->path);
-            } else if (s->ref) {
-                snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                         spices_dir, s->name, s->ref);
-            } else {
-                snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
-            }
-            if (s->subdir) {
-                char tmp[4096];
-                snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
-                strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
-                dep_dir[sizeof(dep_dir) - 1] = '\0';
-            }
-            char src_sub[4096];
-            snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
-            struct stat ss;
-            const char *chosen = NULL;
-            if (stat(src_sub, &ss) == 0 && S_ISDIR(ss.st_mode))
-                chosen = src_sub;
-            else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
-                chosen = dep_dir;
+    resolve_include_dirs_from_manifest(proj_root, &m, /*include_own_src=*/true,
+                                       out_dirs, out_n);
 
-            bool fallback_added = false;
-            if (!chosen && s->subdir) {
-                char ancestor[4096];
-                strncpy(ancestor, proj_root, sizeof(ancestor) - 1);
-                ancestor[sizeof(ancestor) - 1] = '\0';
-                for (int up = 0; up < 4 && !fallback_added; up++) {
-                    char *slash = strrchr(ancestor, '/');
-                    if (!slash || slash == ancestor) break;
-                    *slash = '\0';
-                    char sib_src[4096];
-                    snprintf(sib_src, sizeof(sib_src),
-                             "%s/%s/src", ancestor, s->subdir);
-                    if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                        dirs[n++] = strdup(sib_src);
-                        fallback_added = true;
-                        break;
-                    }
-                    char sib_dir[4096];
-                    snprintf(sib_dir, sizeof(sib_dir),
-                             "%s/%s", ancestor, s->subdir);
-                    if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                        dirs[n++] = strdup(sib_dir);
-                        fallback_added = true;
-                        break;
-                    }
-                }
-            }
-            if (fallback_added) continue;
-            if (chosen) dirs[n++] = strdup(chosen);
-        }
-    }
     pkg_manifest_free(&m);
     free(proj_root);
-
-    *out_dirs = dirs;
-    *out_n    = n;
 }
 
 static int decode_exit_status(int status) {
@@ -2553,51 +2581,13 @@ static int cmd_run(int argc, char **argv) {
             }
         }
 
-        /* Build spice include-path array.
-         * Convention: spices/<name>-<ref>/src/ if it exists, else spices/<name>-<ref>/ */
-        int inc_cap = m.n_spices;
-        spice_inc_dirs = (const char **)malloc((size_t)inc_cap * sizeof(char *));
-        n_spice_inc_dirs = 0;
-        if (spice_inc_dirs) {
-            for (int i = 0; i < m.n_spices; i++) {
-                const PkgSpice *s = &m.spices[i];
-                char dep_dir[4096];
-                /* LS4: workspace-sibling entry -- resolve to the sibling's
-                 * directory via the workspace walk, ignoring any :url/:ref
-                 * the user happened to declare for external publication. */
-                char *ws_path = NULL;
-                if (!s->path)
-                    ws_path = pkg_workspace_member_path(root, s->name);
-                if (ws_path) {
-                    strncpy(dep_dir, ws_path, sizeof(dep_dir) - 1);
-                    dep_dir[sizeof(dep_dir) - 1] = '\0';
-                    free(ws_path);
-                } else if (s->path) {
-                    /* Local path dep: resolve relative to root */
-                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
-                } else if (s->ref) {
-                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                             spices_dir, s->name, s->ref);
-                } else {
-                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
-                             spices_dir, s->name);
-                }
-                /* For monorepo sub-packages, descend into the subdir */
-                if (s->subdir) {
-                    char tmp[4096];
-                    snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
-                    strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
-                    dep_dir[sizeof(dep_dir) - 1] = '\0';
-                }
-                /* Prefer dep_dir/src if it exists */
-                char src_sub[4096];
-                snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
-                struct stat _ss;
-                const char *chosen = (stat(src_sub, &_ss) == 0 && S_ISDIR(_ss.st_mode))
-                                     ? src_sub : dep_dir;
-                spice_inc_dirs[n_spice_inc_dirs++] = strdup(chosen);
-            }
-        }
+        /* Build the spice include-path array from the manifest via the
+         * shared resolver. `tur run` project mode does not add the project's
+         * own `src/` here -- the entry file lives inside `src/`, so the
+         * resolver already searches it -- whereas `tur test` / `tur build
+         * <dir>` request it (their inputs sit outside `src/`). */
+        resolve_include_dirs_from_manifest(root, &m, /*include_own_src=*/false,
+                                           &spice_inc_dirs, &n_spice_inc_dirs);
     }
 
     /* CMake dependency handling: generate and build if cmake-deps present. */

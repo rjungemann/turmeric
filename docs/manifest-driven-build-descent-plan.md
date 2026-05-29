@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Phases 1-3 implemented; follow-up T1 pending
+> **Status:** Phases 1-3 + follow-up T1 implemented; T2/T3 pending
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -265,8 +265,10 @@ re-run the scscm validation checklist.
       (no regression to the non-project path). (`run-build-shared` green.)
 - [x] `tur build --shared <project>` still emits a shared lib + manifest.
       (`run-build-shared` exercises the shared core unchanged.)
-- [ ] `tur run <project>` and `tur build <project>` agree on the module set.
-      (Not yet asserted by a test; see follow-up below.)
+- [x] `tur run <project>` and `tur build <project>` agree on the module set.
+      (Structural after T1: both call the shared
+      `resolve_include_dirs_from_manifest`. A behavioral end-to-end test is
+      blocked by the unrelated T2/T3 limitations below.)
 - [x] `ctest` for the new CLI fixtures passes (`tur_build_project`);
       `bash tests/run.sh` green modulo the pre-existing ASan leaks
       (`docs/asan-debug-leaks-plan.md`).
@@ -316,6 +318,52 @@ Steps:
    green.
 4. Add a check that `tur run <project>` and `tur build <project>` collect the
    same module/include set (closes the open validation item above).
+
+**Implemented.** Done as designed, with two scope clarifications:
+
+- The duplicated logic is now a single core, `resolve_include_dirs_from_manifest
+  (root, m, include_own_src, ...)`, that does workspace-member -> `:path` ->
+  `:ref` -> `spices/<name>` resolution plus `:subdir`, the `src/` preference,
+  and the monorepo-sibling fallback. `resolve_project_include_dirs` is now a
+  thin walk-up + read-manifest wrapper over it (`include_own_src = true`), used
+  by `tur test` and `tur build <dir>`; `cmd_run` calls the core directly with
+  its already-loaded manifest and `include_own_src = false` (its entry file
+  lives inside `src/`, so the resolver already searches it -- preserving
+  `cmd_run`'s exact include set). Unifying gave `tur test`/`tur build`
+  workspace-member resolution and gave `cmd_run` the monorepo fallback +
+  skip-nonexistent behavior; both are strict improvements that no longer drift.
+- Regression coverage: `tur_spice_resolver_tests` (50), `tur_build_project`
+  (6), the REPL spice ctest targets (7), and the full `bash tests/run.sh`
+  (1043) all stay green after the change.
+
+**Step 4 -- agreement is now structural, not sampled.** Because `cmd_run` and
+`cmd_build_project` call the *same* resolver (differing only in the
+`include_own_src` flag), the include set is identical by construction; a
+sampled end-to-end comparison would be weaker than that guarantee. A dedicated
+`tur run <project>` vs `tur build <project>` behavioral test is also blocked by
+two *unrelated, pre-existing* limitations surfaced while validating T1, now
+recorded as follow-ups:
+
+### T2 -- project-mode `tur run` runtime path is relative to cwd
+
+Project-mode `tur run` (`tur run --offline` / `--release` with no file arg)
+must `cd` into the project to find `build.tur`, but the cc step then references
+the turmeric runtime by a cwd-relative path (`src/runtime/hamt.c`), which only
+resolves when cwd happens to be the turmeric source tree. From any other
+project dir the link fails (`fatal error: src/runtime/hamt.c: No such file`).
+The runtime source path should be resolved absolutely (relative to the located
+stdlib/runtime root, as `tur build` does) so project-mode `tur run` works from
+an arbitrary directory.
+
+### T3 -- `tur build <dir>` does not link cross-spice `:spices` modules
+
+`cmd_build_project`'s build set is the project's own `src/` scan, so a
+`:spices` dependency's modules are resolved for type-checking (the include path
+is correct) but never compiled/linked -- the dependent's generated
+`#include "<dep>__<mod>.h"` has no backing file and cc fails. `tur build <dir>`
+should also compile each resolved `:spices` dep's modules (or build deps as
+libraries and link them). Until then, cross-spice builds work only via
+`tur run`'s single-entry inlining, not separate-compilation `tur build`.
 
 ## Out of scope
 
