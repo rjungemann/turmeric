@@ -1,7 +1,7 @@
 # Plan: De-flake `tur_repl_spice_watch` CI test
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-28
+> **Status:** Implemented (Options A + C)
+> **Last Updated:** 2026-05-29
 > **Type:** Test infrastructure / CI reliability
 
 ---
@@ -131,3 +131,25 @@ hardening of the watcher's change detection.
 
 Small for Options A + C (test-only, no compiler change).  Medium for Option D
 (watcher change-detection redesign).
+
+## Resolution (Implemented: Options A + C)
+
+`tests/turi/repl-spice-watch.sh` was reworked:
+
+- **Option A** -- a `wait_for <file> <pattern> <timeout>` helper polls the REPL
+  output log; the session now waits for the first `=> <n>` result (which also
+  guarantees the REPL has started and recorded its watch baseline) before
+  mutating the source, instead of a fixed `sleep 1`.  The second result + any
+  rebuild line are captured deterministically because the REPL flushes all
+  output before exiting on `:quit` (the script already `wait`s on the pid).
+- **Option C** -- `write_lib_newer` rewrites `src/lib.tur` and then guarantees
+  its mtime is strictly greater than the watcher's baseline (looping `touch`
+  until the whole-second mtime advances), so an edit landing in the same mtime
+  tick is never invisible on 1s-granularity filesystems (macOS APFS).  A
+  portable `mtime_of` reads the mtime via GNU `stat -c %Y` with a BSD
+  `stat -f %m` fallback (validated to be a pure integer).
+
+The test now passes deterministically (10/10 local repeats) and runs faster
+(~1.7s vs the previous fixed ~2s of sleeps).  Option D (content-hash change
+detection in the watcher itself) remains an optional future hardening and is
+not required for CI stability.

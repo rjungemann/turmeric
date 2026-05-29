@@ -52,6 +52,51 @@ write_lib() {
 EOF
 }
 
+# Portable file mtime in whole seconds.  GNU coreutils uses `stat -c %Y`;
+# BSD/macOS uses `stat -f %m`.  These flags are not interchangeable (`-f` on
+# GNU stat means "filesystem status" and would print garbage), so try GNU
+# first and only fall back to BSD when the result is not a pure integer.
+# Returns the empty string if neither form yields an integer.
+mtime_of() {
+    local m
+    m="$(stat -c %Y "$1" 2>/dev/null)"
+    case "$m" in ''|*[!0-9]*) m="$(stat -f %m "$1" 2>/dev/null)" ;; esac
+    case "$m" in ''|*[!0-9]*) m="" ;; esac
+    printf '%s' "$m"
+}
+
+# Block until $file contains a line matching the grep -E $pat, or $timeout
+# seconds elapse.  Returns 0 on match, 1 on timeout.  Replaces fixed sleeps so
+# the session advances on observed REPL output rather than wall-clock guesses
+# (de-flake plan, Option A -- see docs/upcoming/repl-spice-watch-flake-plan.md).
+wait_for() {
+    local file="$1" pat="$2" timeout="${3:-30}"
+    local ticks=0 max=$((timeout * 10))
+    while ! grep -Eq "$pat" "$file" 2>/dev/null; do
+        sleep 0.1
+        ticks=$((ticks + 1))
+        [ "$ticks" -ge "$max" ] && return 1
+    done
+    return 0
+}
+
+# Rewrite src/lib.tur and guarantee its mtime is strictly newer than the
+# watcher's last-seen baseline, even on 1s-granularity filesystems (macOS
+# APFS).  Without this, an edit landing in the same mtime tick as the original
+# is invisible to an mtime-based watcher (de-flake plan, Option C).
+write_lib_newer() {
+    local root="$1" body="$2"
+    local f="$root/src/lib.tur"
+    local base; base="$(mtime_of "$f")"
+    write_lib "$root" "$body"
+    local now; now="$(mtime_of "$f")"
+    while [ -n "$base" ] && [ -n "$now" ] && [ "$now" -le "$base" ]; do
+        sleep 0.3
+        touch "$f"
+        now="$(mtime_of "$f")"
+    done
+}
+
 # Drive a REPL session through a FIFO; mutate the source between the
 # two `(answer)` inputs. The function dumps the REPL output to stdout.
 run_edit_session() {
@@ -60,16 +105,23 @@ run_edit_session() {
     local out="$root/out.log"
     rm -f "$fifo"
     mkfifo "$fifo"
+    : > "$out"
     (cd "$root" && "$TUR_BIN" "$@" < "$fifo") >"$out" 2>&1 &
     local pid=$!
+    # Opening the FIFO for write blocks until the REPL opens it for read, so
+    # input 1 is never written before the REPL is listening.
     exec 3>"$fifo"
     printf '(answer)\n' >&3
-    sleep 1
-    write_lib "$root" 99
-    sleep 1
+    # Wait until the first eval has actually printed a result -- this also
+    # guarantees the REPL has started and recorded its watch baseline before
+    # we mutate the source.
+    wait_for "$out" '=> [0-9]' 30 || true
+    write_lib_newer "$root" 99
     printf '(answer)\n' >&3
     printf ':quit\n' >&3
     exec 3>&-
+    # The REPL flushes all output (including any rebuild + second result)
+    # before it exits on :quit, so the captured log is complete here.
     wait "$pid"
     rm -f "$fifo"
     cat "$out"
