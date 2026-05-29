@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Phase 1 implemented; Phase 2 + follow-ups pending
+> **Status:** Phases 1 & 2 implemented; Phase 3 (docs) + follow-ups pending
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -164,6 +164,29 @@ and parsing it has independent value (docs, `emit-cmake`, validation).
 This phase is *recommended* because the silently-ignored `:exports` map is a
 latent correctness gap, but Phase 1 does not strictly depend on it.
 
+**Implemented.** Decisions made during implementation:
+
+- `parse_exports` (`src/compiler/pkg.c`) handles the `F_MAP` form (captures
+  the module-name keys into `m.exports`; the per-module symbol vectors are not
+  stored) and delegates the legacy vector/string form to `parse_str_vec`.
+- The build set in `cmd_build_project` **remains the recursive `src/` scan**,
+  not the `:exports` list -- a project's internal, non-exported modules must
+  still compile. The parsed exports are used only to **validate**: each
+  declared export must have a backing source file (`src/<key>.tur`, or the
+  path itself for the legacy `.tur` form), and the build fails loudly with
+  `build.tur declares export '<m>' but no source file exists at ...` otherwise.
+- `tur emit-cmake` normalizes each `:exports` entry to a source path
+  (`src/<key>.tur` for a module name; used as-is when it already ends in
+  `.tur`). Previously the map form parsed to empty and `emit-cmake` fell
+  through to a shallow `src/` scan that missed nested `src/<pkg>/` layouts; now
+  it enumerates the declared modules correctly. The existing vector-form
+  `test-emit-cmake.sh` cases are unaffected (they end in `.tur`).
+- `tur add-cmake` round-trips `build.tur` through the lossy `pkg_manifest_write`
+  serializer. It already dropped the map-form `:exports` entirely (it parsed to
+  empty); it now rewrites it as a vector of module names. This is a pre-existing
+  lossy-rewrite limitation (it also drops `:bin`, comments, formatting), out of
+  scope here -- noted so it isn't mistaken for a new regression.
+
 ### Phase 3 -- Tests + docs
 
 1. **CLI tests.** Add a fixture/project under `tests/` that exercises
@@ -233,8 +256,10 @@ re-run the scscm validation checklist.
 - [x] `ctest` for the new CLI fixtures passes (`tur_build_project`);
       `bash tests/run.sh` green modulo the pre-existing ASan leaks
       (`docs/asan-debug-leaks-plan.md`).
-- [ ] (If Phase 2 done) `:exports` map keys populate `m.exports`; `emit-cmake`
-      output verified.
+- [x] (Phase 2) `:exports` map keys populate `m.exports`; a declared export
+      with no source file fails the build (`build-project-missing-export-fails`);
+      `emit-cmake` resolves module-name exports to `src/<key>.tur`
+      (`test-emit-cmake.sh` green, 15 passed).
 - [ ] After scscm Phase 2 lands: `tur build ../turmeric-spices/spices/scscm`
       exits 0.
 

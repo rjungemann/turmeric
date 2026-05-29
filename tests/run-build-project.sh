@@ -67,6 +67,27 @@ else
     fail "build-project-binary-exists" "expected $BIN to exist"
 fi
 
+# A module declared in :exports with no backing source file must fail loudly
+# (Phase 2: parsed :exports map keys are validated against on-disk sources).
+GHOST="$WORK/ghost"
+mkdir -p "$GHOST/src/app"
+cat > "$GHOST/build.tur" <<'EOF'
+(defpackage tur-ghost
+  :name    "tur-ghost"
+  :version "0.1.0"
+  :exports #{ "app/util" ["double-it"] "app/missing" ["nope"] })
+EOF
+cat > "$GHOST/src/app/util.tur" <<'EOF'
+(defmodule app/util (export double-it) (defn double-it [x :int] :int (* x 2)))
+EOF
+ghost_out=$(cd "$WORK" && "$TUR" build "$GHOST" -o "$WORK/ghostbin" 2>&1)
+ghost_rc=$?
+if [ $ghost_rc -ne 0 ] && echo "$ghost_out" | grep -q "declares export 'app/missing'"; then
+    pass "build-project-missing-export-fails"
+else
+    fail "build-project-missing-export-fails" "rc=$ghost_rc out=$ghost_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

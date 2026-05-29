@@ -295,6 +295,31 @@ static bool parse_str_vec(const Form *f, char ***out, int *n_out) {
     return true;
 }
 
+/* Parse the :exports field. Accepts either form:
+ *   - a map  #{ "mod/name" [sym ...] ... }  -- the canonical spice form; the
+ *     module-name keys are captured (the per-module symbol vectors are not
+ *     stored here -- consumers that need them re-read the manifest form).
+ *   - a vector ["src/lib.tur" ...] or a bare string -- legacy/path form,
+ *     delegated to parse_str_vec.
+ * Storing the keys lets the build driver validate declared exports against
+ * on-disk sources and lets `tur emit-cmake` enumerate the modules. */
+static bool parse_exports(const Form *f, char ***out, int *n_out) {
+    *out   = NULL;
+    *n_out = 0;
+    if (!f) return true;
+    if (f->tag != F_MAP) return parse_str_vec(f, out, n_out);
+
+    const FormList *fl = &f->as.list;
+    *out = (char **)malloc((fl->len / 2 + 1) * sizeof(char *));
+    if (!*out) return false;
+    for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
+        const Form *key = fl->items[i];
+        if (key->tag == F_STR)
+            (*out)[(*n_out)++] = ss_dup(key->as.s);
+    }
+    return true;
+}
+
 /* ================================================================== */
 /* pkg_manifest_read                                                    */
 /* ================================================================== */
@@ -403,7 +428,7 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "cmake-deps") == 0) {
             parse_cmake_deps(vf, out);
         } else if (strcmp(kw, "exports") == 0) {
-            parse_str_vec(vf, &out->exports, &out->n_exports);
+            parse_exports(vf, &out->exports, &out->n_exports);
         } else if (strcmp(kw, "members") == 0) {
             /* LS2: workspace member spice directories, relative to this
              * manifest. A non-empty list makes this manifest a workspace
@@ -3384,8 +3409,25 @@ int cmd_pkg_emit_cmake(int argc, char **argv) {
     bool   sources_heap = false;
 
     if (m.n_exports > 0) {
-        sources   = m.exports;
-        n_sources = m.n_exports;
+        /* :exports entries are either module names ("scscm/lexer", from the
+         * canonical map form) or source paths ("src/lib.tur", legacy vector
+         * form). Normalize both to a source path so the generated CMake
+         * references real files. */
+        sources      = (char **)malloc((size_t)m.n_exports * sizeof(char *));
+        sources_heap = true;
+        n_sources    = 0;
+        if (sources) {
+            for (int i = 0; i < m.n_exports; i++) {
+                const char *e = m.exports[i];
+                size_t el = strlen(e);
+                char buf[4096];
+                if (el >= 4 && strcmp(e + el - 4, ".tur") == 0)
+                    snprintf(buf, sizeof(buf), "%s", e);
+                else
+                    snprintf(buf, sizeof(buf), "src/%s.tur", e);
+                sources[n_sources++] = tur_strdup(buf);
+            }
+        }
     } else {
         sources       = collect_exports_from_src(".", &n_sources);
         sources_heap  = true;

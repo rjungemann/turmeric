@@ -3256,6 +3256,41 @@ static int cmd_build_project(const char *root, const char *out_path,
     char src_root[4096];
     snprintf(src_root, sizeof(src_root), "%s/src", root);
 
+    /* Validate that every module declared in the manifest's :exports has a
+     * backing source file. The build set itself stays the full src/ scan (so
+     * internal, non-exported modules still compile); this check only catches
+     * manifest/source drift -- a declared export with no file -- and fails
+     * loudly rather than silently shipping an incomplete library. */
+    {
+        char mpath[4096];
+        snprintf(mpath, sizeof(mpath), "%s/build.tur", root);
+        PkgManifest em;
+        if (pkg_manifest_read(mpath, &em)) {
+            int missing = 0;
+            for (int i = 0; i < em.n_exports; i++) {
+                const char *e = em.exports[i];
+                size_t el = strlen(e);
+                char cand[4096];
+                if (el >= 4 && strcmp(e + el - 4, ".tur") == 0)
+                    snprintf(cand, sizeof(cand), "%s/%s", root, e);
+                else
+                    snprintf(cand, sizeof(cand), "%s/%s.tur", src_root, e);
+                struct stat es;
+                if (stat(cand, &es) != 0 || !S_ISREG(es.st_mode)) {
+                    fprintf(stderr,
+                            "tur: build.tur declares export '%s' but no source "
+                            "file exists at '%s'\n", e, cand);
+                    missing++;
+                }
+            }
+            pkg_manifest_free(&em);
+            if (missing) {
+                free_tur_files(tur_files, n_files);
+                return 1;
+            }
+        }
+    }
+
     const char **proj_inc = NULL;
     int          n_proj_inc = 0;
     resolve_project_include_dirs(root, &proj_inc, &n_proj_inc);
