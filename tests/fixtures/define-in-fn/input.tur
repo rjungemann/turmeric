@@ -1,0 +1,7 @@
+(defn make-adder [base :int] :int
+  (let [f (fn [n :int] :int
+             (define offset base)
+             (+ n offset))]
+    (f 5)))
+
+(println (make-adder 10))

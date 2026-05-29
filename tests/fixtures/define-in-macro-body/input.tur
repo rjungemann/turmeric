@@ -1,0 +1,6 @@
+(defmacro with-double [name val body]
+  `(let [~name (* ~val 2)]
+     ~body))
+
+(with-double n 5
+  (println n))

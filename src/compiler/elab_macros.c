@@ -400,6 +400,13 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         return ct_value_form(form_list(env->elab->arena, f->span, items, f->as.list.len));
     }
     if (head->as.sym == env->elab->sym_do) {
+        uint32_t n = f->as.list.len - 1;
+        /* Internal defines: splice before evaluating. */
+        if (n > 0) {
+            Form *spliced = splice_internal_defines(env->elab,
+                                f->as.list.items + 1, n, f->span);
+            if (spliced) return ct_eval_form(env, spliced);
+        }
         CtValue out = ct_value_form(form_nil(env->elab->arena, f->span));
         for (uint32_t i = 1; i < f->as.list.len; i++) {
             out = ct_eval_form(env, f->as.list.items[i]);
@@ -435,6 +442,13 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
             CtValue init_v = ct_eval_form(inner, bindings->as.list.items[i + 1]);
             if (!*env->ok) return init_v;
             ct_env_bind(inner, name_f->as.sym, init_v);
+        }
+        uint32_t body_count = f->as.list.len - 2;
+        /* Internal defines in let body. */
+        if (body_count > 0) {
+            Form *spliced = splice_internal_defines(env->elab,
+                                f->as.list.items + 2, body_count, f->span);
+            if (spliced) return ct_eval_form(inner, spliced);
         }
         CtValue out = ct_value_form(form_nil(env->elab->arena, f->span));
         for (uint32_t i = 2; i < f->as.list.len; i++) {

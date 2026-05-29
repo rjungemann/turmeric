@@ -1396,23 +1396,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Track current function name for linting */
     e->current_fn_name = name_f->as.sym;
     if (fn_declared_unsafe) e->unsafe_depth++;
-    if (n_body == 1) {
-        body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) {
-            if (fn_declared_unsafe) e->unsafe_depth--;
-            e->fn_body_depth--;
-            e->n_sig_tyvars = saved_n_sig_tyvars;
-            /* Phase R6: Reset current function name */
-            e->current_fn_name = NULL;
-            e->scope = inner.parent;
-            scope_free(&inner);
-            return NULL;
-        }
-    } else {
-        Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
-        for (uint32_t i = 0; i < n_body; i++) {
-            items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) {
+    {
+        /* Internal defines: splice (define name init) into nested let forms. */
+        Form *spliced = splice_internal_defines(e,
+                            &call->as.list.items[body_start], n_body, call->span);
+        if (spliced) {
+            body = elab_form(e, spliced);
+            if (!body) {
+                if (fn_declared_unsafe) e->unsafe_depth--;
+                e->fn_body_depth--;
+                e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->current_fn_name = NULL;
+                e->scope = inner.parent;
+                scope_free(&inner);
+                return NULL;
+            }
+        } else if (n_body == 1) {
+            body = elab_form(e, call->as.list.items[body_start]);
+            if (!body) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
@@ -1422,19 +1423,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 scope_free(&inner);
                 return NULL;
             }
-        }
-        /* Phase R6: Warn on discarded result values in function bodies */
-        if (g_warn_unused_result) {
-            for (uint32_t i = 0; i < n_body - 1; i++) {
-                if (items[i]->type.kind == TY_PTR_VOID) {
-                    diag_emit(DIAG_WARNING, items[i]->span,
-                              "discarded result value of type ptr<void>; use ignore! to suppress this warning");
+        } else {
+            Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+            for (uint32_t i = 0; i < n_body; i++) {
+                items[i] = elab_form(e, call->as.list.items[body_start + i]);
+                if (!items[i]) {
+                    if (fn_declared_unsafe) e->unsafe_depth--;
+                    e->fn_body_depth--;
+                    e->n_sig_tyvars = saved_n_sig_tyvars;
+                    /* Phase R6: Reset current function name */
+                    e->current_fn_name = NULL;
+                    e->scope = inner.parent;
+                    scope_free(&inner);
+                    return NULL;
                 }
             }
+            /* Phase R6: Warn on discarded result values in function bodies */
+            if (g_warn_unused_result) {
+                for (uint32_t i = 0; i < n_body - 1; i++) {
+                    if (items[i]->type.kind == TY_PTR_VOID) {
+                        diag_emit(DIAG_WARNING, items[i]->span,
+                                  "discarded result value of type ptr<void>; use ignore! to suppress this warning");
+                    }
+                }
+            }
+            body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
+            body->as.do_.items = items;
+            body->as.do_.n = n_body;
         }
-        body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
-        body->as.do_.items = items;
-        body->as.do_.n = n_body;
     }
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
@@ -2181,21 +2197,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
     uint32_t n_body = call->as.list.len - body_start;
     e->fn_body_depth++;
     if (fn_declared_unsafe) e->unsafe_depth++;
-    if (n_body == 1) {
-        body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) {
-            if (fn_declared_unsafe) e->unsafe_depth--;
-            e->fn_body_depth--;
-            e->n_sig_tyvars = saved_n_sig_tyvars;
-            e->scope = inner.parent;
-            scope_free(&inner);
-            return NULL;
-        }
-    } else {
-        Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
-        for (uint32_t i = 0; i < n_body; i++) {
-            items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) {
+    {
+        /* Internal defines: splice (define name init) into nested let forms. */
+        Form *spliced = splice_internal_defines(e,
+                            &call->as.list.items[body_start], n_body, call->span);
+        if (spliced) {
+            body = elab_form(e, spliced);
+            if (!body) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
@@ -2203,10 +2211,33 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 scope_free(&inner);
                 return NULL;
             }
+        } else if (n_body == 1) {
+            body = elab_form(e, call->as.list.items[body_start]);
+            if (!body) {
+                if (fn_declared_unsafe) e->unsafe_depth--;
+                e->fn_body_depth--;
+                e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->scope = inner.parent;
+                scope_free(&inner);
+                return NULL;
+            }
+        } else {
+            Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+            for (uint32_t i = 0; i < n_body; i++) {
+                items[i] = elab_form(e, call->as.list.items[body_start + i]);
+                if (!items[i]) {
+                    if (fn_declared_unsafe) e->unsafe_depth--;
+                    e->fn_body_depth--;
+                    e->n_sig_tyvars = saved_n_sig_tyvars;
+                    e->scope = inner.parent;
+                    scope_free(&inner);
+                    return NULL;
+                }
+            }
+            body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
+            body->as.do_.items = items;
+            body->as.do_.n = n_body;
         }
-        body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
-        body->as.do_.items = items;
-        body->as.do_.n = n_body;
     }
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
