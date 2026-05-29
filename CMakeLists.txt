@@ -86,6 +86,7 @@ add_test(
   COMMAND bash tests/turi/repl-spice-reload.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+set_tests_properties(tur_repl_spice_reload PROPERTIES RUN_SERIAL TRUE)
 # RP6: integration test for `tur repl --watch`. Mutates source mid-
 # session and asserts the next call sees the new code (with --watch)
 # vs the old one (without). Also covers the no-changes silent path
