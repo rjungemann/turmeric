@@ -34,9 +34,9 @@
 
 (defn check [label :cstr source :cstr expected :cstr] #{Unsafe} :void
   (let [res (compile-text source)]
-    (if (err? res)
+    (if (lex-err? res)
       (print-fail label "(compile error)" expected)
-      (let [got (scscm-int-as-cstr (ok-val res))]
+      (let [got (scscm-int-as-cstr (lex-ok-val res))]
         (if (cstr-eq? got expected)
           (print-pass label)
           (print-fail label got expected))))))
@@ -45,22 +45,22 @@
 ;; ---- lexer / tokenizer tests ----
 
 (let [res (tokenize "(+ 1 2)")]
-  (if (ok? res)
+  (if (lex-ok? res)
     (print-pass "tokenize-basic")
     (print-fail "tokenize-basic" "(lex error)" "ok")))
 
 (let [res (tokenize "(defn my-fn [x y] (+ x y))")]
-  (if (ok? res)
+  (if (lex-ok? res)
     (print-pass "tokenize-defn")
     (print-fail "tokenize-defn" "(lex error)" "ok")))
 
 (let [res (tokenize "\"hello world\"")]
-  (if (ok? res)
+  (if (lex-ok? res)
     (print-pass "tokenize-string")
     (print-fail "tokenize-string" "(lex error)" "ok")))
 
 (let [res (tokenize "; comment\n(foo 1)")]
-  (if (ok? res)
+  (if (lex-ok? res)
     (print-pass "tokenize-comment")
     (print-fail "tokenize-comment" "(lex error)" "ok")))
 

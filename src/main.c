@@ -1053,10 +1053,11 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
         ecd_mod_names[i] = (char *)malloc(n + 1);
         memcpy(ecd_mod_names[i], base, n);
         ecd_mod_names[i][n] = '\0';
-        ecd_h_paths[i] = (char *)malloc(strlen(out_dir) + n + 4);
-        ecd_c_paths[i] = (char *)malloc(strlen(out_dir) + n + 4);
-        sprintf(ecd_h_paths[i], "%s/%s.h", out_dir, ecd_mod_names[i]);
-        sprintf(ecd_c_paths[i], "%s/%s.c", out_dir, ecd_mod_names[i]);
+        size_t path_sz = strlen(out_dir) + n + 4;
+        ecd_h_paths[i] = (char *)malloc(path_sz);
+        ecd_c_paths[i] = (char *)malloc(path_sz);
+        snprintf(ecd_h_paths[i], path_sz, "%s/%s.h", out_dir, ecd_mod_names[i]);
+        snprintf(ecd_c_paths[i], path_sz, "%s/%s.c", out_dir, ecd_mod_names[i]);
     }
 
     /* J7 Pass 1: compile all with no forced specs; collect borrow specs. */
