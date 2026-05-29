@@ -279,6 +279,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             if (!cur) continue;
             switch (cur->kind) {
                 case EX_LET:
+                case EX_LETREC:
                     for (uint32_t i = 0; i < cur->as.let_.n; i++) {
                         Binding *b = cur->as.let_.bindings[i].binding;
                         if (b) {
@@ -464,6 +465,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
         /* Traverse children (in reverse order for depth-first) */
         switch (cur->kind) {
             case EX_LET:
+            case EX_LETREC:
                 for (uint32_t i = cur->as.let_.n; i > 0; i--) {
                     stack[sp++] = cur->as.let_.bindings[i-1].init;
                 }
@@ -876,6 +878,7 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
         /* Recursively traverse sub-expressions */
         switch (cur->kind) {
             case EX_LET:
+            case EX_LETREC:
                 for (uint32_t i = cur->as.let_.n; i > 0; i--) {
                     stack[sp++] = cur->as.let_.bindings[i-1].init;
                 }
@@ -980,6 +983,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_def       = intern_cstr(st, "def");
     e->sym_define    = intern_cstr(st, "define");
     e->sym_let       = intern_cstr(st, "let");
+    e->sym_letrec    = intern_cstr(st, "letrec");
     e->sym_if        = intern_cstr(st, "if");
     e->sym_do        = intern_cstr(st, "do");
     e->sym_unsafe    = intern_cstr(st, "unsafe");
@@ -1426,6 +1430,7 @@ Binding *expr_closure_fn_binding(const Expr *expr) {
             if (!expr->as.call_.fn_binding) return NULL;
             return expr->as.call_.fn_binding->returns_closure_fn_binding;
         case EX_LET:
+        case EX_LETREC:
             return expr_closure_fn_binding(expr->as.let_.body);
         case EX_DO:
             for (int i = (int)expr->as.do_.n - 1; i >= 0; i--) {

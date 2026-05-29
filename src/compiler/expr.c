@@ -22,6 +22,7 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_FLOAT_LIT: buf_printf(b, "%g", e->as.f); break;
         case EX_CSTR_LIT: buf_putc(b, '"'); buf_write(b, e->as.s.p, e->as.s.len); buf_putc(b, '"'); break;
         case EX_VAR:      buf_write(b, e->as.var.binding->name->name, e->as.var.binding->name->len); break;
+        case EX_LETREC:
         case EX_LET:
             buf_puts(b, "(let [");
             for (uint32_t i = 0; i < e->as.let_.n; i++) {

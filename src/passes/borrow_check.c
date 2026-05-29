@@ -175,6 +175,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_var(ctx, e);
             
         case EX_LET:
+        case EX_LETREC:
             /* Check init expressions */
             for (uint32_t i = 0; i < e->as.let_.n; i++) {
                 if (!borrow_check_expr_recursive(ctx, e->as.let_.bindings[i].init)) {

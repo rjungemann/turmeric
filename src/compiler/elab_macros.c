@@ -457,6 +457,60 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         return out;
     }
+    /* Compile-time letrec: pre-bind all names, then elaborate inits, then body. */
+    if (head->as.sym == env->elab->sym_letrec) {
+        if (f->as.list.len < 3) {
+            *env->ok = false;
+            diag_emit(DIAG_ERROR, f->span, "compile-time letrec requires bindings and body");
+            return ct_value_form(form_nil(env->elab->arena, f->span));
+        }
+        Form *bindings = f->as.list.items[1];
+        if (bindings->tag != F_VEC && bindings->tag != F_LIST) {
+            *env->ok = false;
+            diag_emit(DIAG_ERROR, bindings->span,
+                      "compile-time letrec bindings must be a vector");
+            return ct_value_form(form_nil(env->elab->arena, f->span));
+        }
+        if ((bindings->as.list.len % 2) != 0) {
+            *env->ok = false;
+            diag_emit(DIAG_ERROR, bindings->span,
+                      "compile-time letrec requires an even number of binding forms");
+            return ct_value_form(form_nil(env->elab->arena, f->span));
+        }
+        CtEnv *inner = ct_env_new(env->elab, env, env->ok);
+        /* Pass A: pre-bind all names to nil so mutual references resolve. */
+        Form *nil_form = form_nil(env->elab->arena, f->span);
+        for (uint32_t i = 0; i < bindings->as.list.len; i += 2) {
+            Form *name_f = bindings->as.list.items[i];
+            if (name_f->tag != F_SYM) {
+                *env->ok = false;
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "compile-time letrec binding name must be a symbol");
+                return ct_value_form(nil_form);
+            }
+            ct_env_bind(inner, name_f->as.sym, ct_value_form(nil_form));
+        }
+        /* Pass B: elaborate inits and rebind. */
+        for (uint32_t i = 0; i < bindings->as.list.len; i += 2) {
+            Form *name_f = bindings->as.list.items[i];
+            CtValue init_v = ct_eval_form(inner, bindings->as.list.items[i + 1]);
+            if (!*env->ok) return init_v;
+            ct_env_bind(inner, name_f->as.sym, init_v);
+        }
+        /* Pass C: elaborate body. */
+        uint32_t body_count = f->as.list.len - 2;
+        if (body_count > 0) {
+            Form *spliced = splice_internal_defines(env->elab,
+                                f->as.list.items + 2, body_count, f->span);
+            if (spliced) return ct_eval_form(inner, spliced);
+        }
+        CtValue out2 = ct_value_form(form_nil(env->elab->arena, f->span));
+        for (uint32_t i = 2; i < f->as.list.len; i++) {
+            out2 = ct_eval_form(inner, f->as.list.items[i]);
+            if (!*env->ok) return out2;
+        }
+        return out2;
+    }
     if (head->as.sym == env->elab->sym_fn) {
         if (f->as.list.len < 3) {
             *env->ok = false;

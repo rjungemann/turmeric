@@ -1,0 +1,5 @@
+(defn main [] :int
+  (letrec [fact (fn [n :int] :int
+                  (if (= n 0) 1 (* n (fact (- n 1)))))]
+    (println (fact 5))
+    0))

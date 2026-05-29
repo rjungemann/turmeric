@@ -1,0 +1,5 @@
+(defn main [] :int
+  (let loop [x :int 3]
+    (if (= x 0)
+      0
+      (do (println x) (loop (- x 1))))))

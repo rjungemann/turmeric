@@ -189,6 +189,7 @@ static Binding *emit_expr_closure_fn_binding(const Expr *expr) {
             if (!expr->as.call_.fn_binding) return NULL;
             return expr->as.call_.fn_binding->returns_closure_fn_binding;
         case EX_LET:
+        case EX_LETREC:
             return emit_expr_closure_fn_binding(expr->as.let_.body);
         case EX_DO:
             for (int i = (int)expr->as.do_.n - 1; i >= 0; i--) {
@@ -361,6 +362,114 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
     
+    return nil_result ? atom_nil() : tmp;
+}
+
+/* emit_letrec_value -- EX_LETREC codegen.
+ *
+ * For fn-valued bindings marked is_global (no-capture static fns), the static
+ * function body is already emitted at file scope (via elab_register_file_def)
+ * and Pass 1 in emit_module.c emitted forward declarations for all of them.
+ * We must NOT declare a local variable with the same name as the static fn --
+ * that would create an uninitialized self-referencing fn-pointer (crash).
+ *
+ * For non-fn or non-global bindings, we fall through to emit_let_value. */
+static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* Check whether any binding needs the special letrec treatment. */
+    bool has_global_fn = false;
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (b->is_global && b->c_export_name && b->type.kind == TY_FN) {
+            has_global_fn = true;
+            break;
+        }
+    }
+    if (!has_global_fn) return emit_let_value(ctx, body, e);
+
+    /* At least one binding is a global fn -- handle the entire binding block
+     * ourselves so we can skip local-var declarations for those bindings. */
+    bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
+    char *tmp = NULL;
+    bool nil_result = (e->type.kind == TY_NIL);
+    if (!nil_result) {
+        tmp = fresh_tmp(ctx);
+        emit_temp_decl(ctx, body, e->type, tmp, NULL);
+    }
+
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "{\n");
+    ctx->indent += 4;
+
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (b->is_global && b->c_export_name && b->type.kind == TY_FN) {
+            /* This binding refers to a file-scope static function.
+             * Call emit_value anyway in case it has side-effects (unlikely for
+             * EX_VAR but keeps the logic consistent), then discard the result.
+             * Do NOT declare a local variable -- that would shadow the static fn
+             * with an uninitialized pointer and crash. */
+            char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
+            free(iv);
+            continue;
+        }
+        /* Normal binding -- mirror emit_let_value logic. */
+        char *bn = name_for_binding(ctx, b);
+        char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
+        indent_buf(body, ctx->indent);
+        if (b->type.kind == TY_FN) {
+            buf_printf(body, "%s (*%s)(",
+                       type_c_name(emit_type_from_kind(b->type.as.fn.result_kind)), bn);
+            for (uint8_t j = 0; j < b->type.as.fn.arity; j++) {
+                if (j > 0) buf_puts(body, ", ");
+                buf_printf(body, "%s",
+                           type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
+            }
+            buf_printf(body, ") = %s;\n", iv);
+        } else if (b->is_poly_fn) {
+            buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
+        } else {
+            const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
+                                     e->as.let_.bindings[i].init);
+            if (e->as.let_.bindings[i].binding)
+                e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
+                    type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
+                    strcmp(bind_c, "int64_t") != 0;
+            buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+        }
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "(void)%s;\n", bn);
+        free(bn);
+        free(iv);
+    }
+
+    if (body_has_return_or_throw) {
+        if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
+            char *bv = emit_value(ctx, body, e->as.let_.body);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s;\n", tmp, bv);
+            free(bv);
+        } else {
+            emit_stmt(ctx, body, e->as.let_.body);
+        }
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        return tmp ? tmp : atom_nil();
+    }
+
+    if (nil_result) {
+        emit_stmt(ctx, body, e->as.let_.body);
+    } else {
+        char *bv = emit_value(ctx, body, e->as.let_.body);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = %s;\n", tmp, bv);
+        free(bv);
+    }
+
+    ctx->indent -= 4;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+
     return nil_result ? atom_nil() : tmp;
 }
 
@@ -912,6 +1021,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return result;
         }
         case EX_LET:      return emit_let_value(ctx, body, e);
+        case EX_LETREC:   return emit_letrec_value(ctx, body, e);
         case EX_IF:       return emit_if_value(ctx, body, e);
         case EX_DO:       return emit_do_value(ctx, body, e);
         case EX_BUILTIN:  return emit_builtin(ctx, body, e);
