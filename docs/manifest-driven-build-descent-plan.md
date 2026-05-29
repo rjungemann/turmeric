@@ -1,0 +1,244 @@
+# Plan: Manifest-Driven `tur build <dir>` Descent
+
+> **Status:** Draft Plan
+> **Last Updated:** 2026-05-29
+> **Type:** CLI / build-system change (`tur` source, this repo)
+> **Related:**
+> - `docs/scscm-spice-import-refactor-plan.md` (Phase 1 step 1 is blocked on this)
+> - `src/main.c` -- `cmd_build_multi`, `collect_tur_files`, the `build` dispatch,
+>   and the project-mode resolution already implemented in `cmd_run` / the test runner
+> - `src/compiler/pkg.c` -- `pkg_manifest_read`, `parse_str_vec`,
+>   `collect_exports_from_src`
+> - `CLAUDE.md` ("Per-file Commands Inside a Spice", "Build System")
+
+---
+
+## Overview
+
+`tur build <dir>` does not understand spice projects. When pointed at a spice
+root it fails with a misleading error:
+
+```
+$ tur build ../turmeric-spices/spices/scscm
+build.tur:1:13: error [TUR-E0003]: unbound symbol 'tur-scscm'
+tur: failed to compile build.tur to header
+```
+
+This is **not** a malformed `build.tur` and **not** a `defpackage`
+regression. It reproduces identically for *every* spice (`ansi`, `math`,
+`json`, ...). The root cause is in the CLI:
+
+- `tur build <dir>` dispatches to `cmd_build_multi` (`src/main.c`).
+- `cmd_build_multi` calls `collect_tur_files`, a **non-recursive glob** of the
+  directory's top-level `*.tur` files.
+- That glob (a) does **not** read `build.tur`, (b) does **not** skip the
+  manifest, and (c) does **not** descend into `src/`.
+
+All 31 first-party spices keep their sources under `src/` (often nested one
+level deeper, e.g. `src/scscm/lexer.tur`) and have **zero** `.tur` files at the
+root. So the only file the glob finds is `build.tur` itself, which then gets
+compiled as ordinary source -- and `defpackage`'s package name (`tur-scscm`)
+reads as an unbound symbol.
+
+This plan makes `tur build <dir>` manifest-aware: when the directory contains a
+`build.tur`, read the manifest, resolve the project's own `src/` tree (plus
+each declared `:spices` dependency's `src/`) as the include search path, build
+the module set found under `src/`, and never feed the manifest to the compiler.
+This brings `tur build <dir>` in line with what `CLAUDE.md` already claims is
+true ("`tur build <dir>` and `tur run` (project mode) already configure
+themselves from `build.tur`") and with what `cmd_run` already does.
+
+## Motivation
+
+- **Unblocks the scscm refactor.** `docs/scscm-spice-import-refactor-plan.md`
+  Phase 1 step 1 ("make the spice build as a project") and its validation
+  checklist item `tur build <spice> exits 0` are impossible today without this
+  change. Editing `build.tur` cannot fix a CLI globbing bug.
+- **Fixes it for the whole ecosystem.** Every spice is affected, so the fix is
+  general, not scscm-specific.
+- **Consistency.** `tur run <dir>` and the test runner already resolve projects
+  from `build.tur`; `tur build <dir>` is the odd one out.
+
+## Current state
+
+### Dispatch path (the bug)
+
+`src/main.c`, `build` subcommand:
+
+```c
+if (is_directory(input)) {
+    rc = cmd_build_multi(input, out, shared, manifest_out);  // never looks at build.tur
+}
+```
+
+`cmd_build_multi` -> `collect_tur_files(dir)`:
+
+```c
+// non-recursive opendir loop; takes every *.tur, including build.tur
+while ((ent = readdir(d)) != NULL) {
+    if (ent->d_type != DT_REG) continue;
+    if (len >= 4 && strcmp(ent->d_name + len - 4, ".tur") == 0) { /* add */ }
+}
+```
+
+### What already exists and can be reused
+
+- **`pkg_manifest_read`** (`pkg.c`) parses `build.tur` into a `PkgManifest`
+  (`name`, `version`, `spices[]`/`n_spices`, `exports[]`/`n_exports`,
+  `reader_macros[]`, ...).
+- **Project-mode include resolution** is already implemented twice:
+  - `cmd_run` (`src/main.c`, project-mode branch): `find_project_root`,
+    `pkg_manifest_read`, then build `spice_inc_dirs` = own `src/` + each
+    `:spices` dep's resolved `src/` (with `:path` / `:ref` / `:subdir`
+    handling and a monorepo-sibling fallback).
+  - The test runner (`src/main.c`, the `passed`/`failed` loop) repeats the same
+    own-`src/` + per-dep-`src/` resolution block.
+- **`collect_exports_from_src`** (`pkg.c`): scans `src/` for `.tur` files when
+  `:exports` is absent. Used today by `cmd_pkg_emit_cmake`.
+
+### Two gaps that this plan must close
+
+1. **`:exports` map form is not parsed.** Every spice writes
+   `:exports #{ "scscm/lexer" [...syms...] ... }` -- an `F_MAP`. But
+   `parse_str_vec` only handles `F_STR` / `F_VEC` / `F_LIST` and silently
+   returns empty for an `F_MAP`. So `m.n_exports == 0` for *all* real spices;
+   the map is effectively ignored. Any descent that wants to drive off
+   `:exports` keys must first teach the parser to extract the map keys
+   (the module names, which map to `src/<key>.tur`).
+
+2. **`src/` scanning is shallow.** `collect_exports_from_src` does a single
+   `opendir("src")` with no recursion, so it misses nested layouts like
+   `src/scscm/*.tur`. A manifest-driven descent must recurse into `src/`.
+
+## Plan
+
+### Phase 1 -- Manifest-aware dispatch + recursive source collection
+
+1. **Detect a project in the `build` dispatch.** In `src/main.c`, before
+   calling `cmd_build_multi`, check for `<dir>/build.tur`. If present, route to
+   a new manifest-driven path (call it `cmd_build_project`); otherwise keep the
+   current bare-directory behavior (so non-project directories still work).
+2. **Add a recursive `src/` collector.** Either extend
+   `collect_exports_from_src` with a recursion flag or add
+   `collect_src_recursive(project_dir)`. It must:
+   - walk `<project>/src/` recursively, gathering `*.tur`;
+   - **exclude `build.tur`** and any lockfile (`tur.lock`) defensively;
+   - skip conventional non-source subtrees (`tests/`, `examples/`, anything the
+     existing project tooling already ignores -- confirm against `cmd_run` /
+     the test runner so the file set matches).
+3. **Reuse the include-path resolution.** Factor the own-`src/` + per-`:spices`
+   resolution that `cmd_run` and the test runner duplicate into a single helper
+   (e.g. `resolve_project_include_dirs(root, &m, &dirs, &n)`), then call it from
+   `cmd_build_project`. This avoids a third copy of that logic and keeps the
+   three commands consistent.
+4. **Build the collected module set** through the existing `cmd_build_multi`
+   machinery (two-pass ABI specialization, `compile_to_h`, link), but with:
+   - the recursively collected `src/` files as the module set,
+   - the resolved include dirs threaded into `compile_to_h` / `cmd_build`,
+   - reader-macros applied from the manifest (mirror
+     `resolve_manifest_reader_macros`, already used by `cmd_run`).
+
+Smallest viable version: steps 1, 2, and 4 with a recursive collector make
+`tur build <spice>` collect the right files. Step 3 is a refactor that prevents
+a third divergent copy of the include logic -- do it as part of this phase to
+keep the three entry points in sync.
+
+### Phase 2 -- Parse the `:exports` map (optional but recommended)
+
+The recursive `src/` scan is layout-driven and works without touching the
+parser. But the manifest's `:exports` map is the *authoritative* module list,
+and parsing it has independent value (docs, `emit-cmake`, validation).
+
+1. Teach `pkg.c` to parse the `F_MAP` form of `:exports`: extract the map
+   **keys** (module names like `"scscm/lexer"`) into `m.exports`, ignoring the
+   per-module symbol vectors (or storing them separately if useful later).
+2. Once keys are available, `cmd_build_project` can optionally prefer the
+   manifest's declared modules (`src/<key>.tur`) over a raw `src/` scan, which
+   lets the build fail loudly when a declared export is missing a file.
+3. Audit `cmd_pkg_emit_cmake`: it currently branches on `m.n_exports > 0` but
+   that branch is dead for map-form manifests (it always falls through to
+   `collect_exports_from_src`). Fixing the parser will activate it -- verify
+   the generated CMake still matches expectations, or keep emit-cmake on the
+   src-scan path explicitly.
+
+This phase is *recommended* because the silently-ignored `:exports` map is a
+latent correctness gap, but Phase 1 does not strictly depend on it.
+
+### Phase 3 -- Tests + docs
+
+1. **CLI tests.** Add a fixture/project under `tests/` that exercises
+   `tur build <dir>` against a small multi-module project living in `src/`
+   (and a nested `src/<pkg>/` variant to lock in the recursion). Assert exit 0
+   and that the manifest is not compiled as source. Mirror existing dedicated
+   runners in `CMakeLists.txt`.
+2. **Regression guard.** Add a case asserting `tur build <dir>` on a directory
+   that contains a stray `build.tur` does not try to compile the manifest.
+3. **Docs.** Update `CLAUDE.md` ("Build System" / "Per-file Commands") and the
+   spice-development guide to document that `tur build <spice-root>` is now
+   manifest-aware and descends into `src/`. Reference this plan.
+
+## Interaction with the scscm refactor
+
+This change is **necessary but not sufficient** for the scscm validation item
+`tur build ../turmeric-spices/spices/scscm exits 0`. Even with manifest-driven
+descent, the scscm build still fails at a deeper layer: `codegen.tur` uses
+`head` / `tail` (defined only in `lexer.tur`) without stubbing or importing
+them, and separate compilation does not resolve cross-file helpers. Those names
+are also not in `scscm/lexer`'s `:exports`. That layer is fixed by
+`docs/scscm-spice-import-refactor-plan.md` **Phase 2** (real `(import ...)` +
+expanded exports). So:
+
+- This plan unblocks scscm Phase 1 step 1 mechanically (no more
+  manifest-as-source error).
+- The scscm checklist item `tur build <spice> exits 0` only passes once both
+  this plan **and** scscm Phase 2 land.
+
+Recommend sequencing: land this CLI change first, then scscm Phase 2, then
+re-run the scscm validation checklist.
+
+## Risks
+
+1. **File-set drift between `build` / `run` / `test`.** Three commands resolve
+   "what files make up this project" with slightly different logic. If
+   `cmd_build_project` collects a different set than `cmd_run`, users get
+   confusing "works under run, fails under build" reports. Mitigation: the
+   Phase 1 step 3 refactor into one shared helper.
+2. **Sweeping up non-source `.tur` files.** Recursive `src/` collection might
+   pull in files that were never meant to be modules. Mitigation: scope
+   recursion to `src/` only, exclude known non-source subtrees, and confirm the
+   exclusion list against what `cmd_run` already honors.
+3. **`:exports` map parsing changes behavior elsewhere.** Activating
+   `m.n_exports` for map-form manifests changes the `cmd_pkg_emit_cmake`
+   branch that is currently dead. Mitigation: Phase 2 step 3 audit; gate behind
+   tests for `emit-cmake` output.
+4. **`--shared` / `--manifest` semantics.** The directory build also serves the
+   shared-library path (`--shared`, `--manifest <path>`). The manifest-driven
+   collector must preserve those (exported defns getting extern linkage, the
+   `exports.manifest` accumulation). Mitigation: route `cmd_build_project`
+   through the same `cmd_build_multi` core rather than reimplementing the link
+   step.
+
+## Validation checklist
+
+- [ ] `tur build <small-project-with-src>` exits 0 and produces the expected
+      artifact, without compiling `build.tur`.
+- [ ] `tur build <project-with-nested-src/<pkg>/>` exits 0 (recursion works).
+- [ ] `tur build <bare-dir-no-manifest>` behaves exactly as before
+      (no regression to the non-project path).
+- [ ] `tur build --shared <project>` still emits a shared lib + manifest.
+- [ ] `tur run <project>` and `tur build <project>` agree on the module set.
+- [ ] `ctest` for the new CLI fixtures passes; `bash tests/run.sh` is green.
+- [ ] (If Phase 2 done) `:exports` map keys populate `m.exports`; `emit-cmake`
+      output verified.
+- [ ] After scscm Phase 2 lands: `tur build ../turmeric-spices/spices/scscm`
+      exits 0.
+
+## Out of scope
+
+- The scscm stub-to-import migration itself (covered by
+  `docs/scscm-spice-import-refactor-plan.md`).
+- Cross-file helper resolution under separate compilation (solved by real
+  imports + exports, not by the build driver).
+- Workspace `:members` resolution (tracked in
+  `docs/local-spice-dev-workflow-plan.md`); the per-dep `:path` / `:ref`
+  resolution reused here is the existing mechanism.
