@@ -9,7 +9,6 @@
 ;; without requiring the user to import stdlib/typeclass.tur.
 ;; The full typeclass.tur (with all Clone primitive instances) is still
 ;; available on demand via (load "stdlib/typeclass.tur").
-
 ;;; Clone -- typeclass for deep copying a value.
 ;;;
 ;;; Parameters:
@@ -22,22 +21,17 @@
 ;;;   (clone 42)  ; => 42
 ;;;
 ;;; Since: Phase B1
-(defclass Clone [a]
-  (clone [x] :int))
-
+(defclass Clone [a] (clone [x] :int))
 ;;; Clone [int] -- Clone instance for int (trivial copy).
 ;;;
 ;;; Since: Phase B1
-(definstance Clone [int]
-  (clone [x] x))
 
+(definstance Clone [int] (clone [x] x))
 ;;; Clone [ref] -- deep-clone a raw ref<T> (TY_REF): allocates a new int64_t cell and copies the value.
 ;;;
 ;;; Since: Phase B1
-(definstance Clone [ref]
-  (clone [x] :int
-    ```c
-    /* x is void *; allocate a new int64_t cell and copy the stored value. */
+
+(definstance Clone [ref] (clone [x] :int ```c /* x is void *; allocate a new int64_t cell and copy the stored value. */
     int64_t *src = (int64_t *)x;
     int64_t *dst = (int64_t *)malloc(sizeof(int64_t));
     if (!dst) abort();

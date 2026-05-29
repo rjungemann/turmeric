@@ -6,17 +6,16 @@
 ;; Phase TC2-B: Typed Zipper[A]
 ;; 1D list zipper with typed focus and neighbor arrays.
 ;; Runtime layout: { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }
-
 ;;; Zipper -- parameterized 1D list zipper with element type A.
 ;;;
 ;;; Since: Phase TC2
-(defstruct Zipper [A]
-  (left      :ptr<void>)
-  (left-len  :int)
-  (focus     :int)
-  (right     :ptr<void>)
+(defstruct Zipper
+  [A]
+  (left :ptr<void>)
+  (left-len :int)
+  (focus :int)
+  (right :ptr<void>)
   (right-len :int))
-
 ;;; zipper-new -- create a Zipper[A] from left array, focus, and right array.
 ;;;
 ;;; Ownership: zipper-new does NOT take ownership of `left` / `right`. It
@@ -43,9 +42,20 @@
 ;;;     (zipper-free z))             ; frees the copies inside z
 ;;;
 ;;; Since: Phase TC2
-(defn zipper-new [left :ptr<void> left-len :int focus :int right :ptr<void> right-len :int] #{} :int
-  ```c
-  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
+
+(defn zipper-new [left
+                  :ptr<void>
+                  left-len
+                  :int
+                  focus
+                  :int
+                  right
+                  :ptr<void>
+                  right-len
+                  :int]
+  #{}
+  :int
+  ```c struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *z = malloc(sizeof(*z));
   z->left_len  = (size_t)left_len;
   z->right_len = (size_t)right_len;
   z->focus     = focus;
@@ -55,7 +65,6 @@
   if (z->right && right) memcpy(z->right, (int64_t*)(intptr_t)right, sizeof(int64_t) * z->right_len);
   return (int64_t)(intptr_t)z;
   ```)
-
 ;;; zipper-focus -- return the focused element of a Zipper[A].
 ;;;
 ;;; Parameters:
@@ -68,12 +77,13 @@
 ;;;   (zipper-focus z)  ; => focused element
 ;;;
 ;;; Since: Phase TC2
-(defn zipper-focus [z :int] #{} :int
-  ```c
-  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+
+(defn zipper-focus [z :int]
+  #{}
+  :int
+  ```c struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   return (int64_t)zip->focus;
   ```)
-
 ;;; zipper-move-left -- move the focus one step to the left; returns Option[Zipper[A]].
 ;;;
 ;;; Parameters:
@@ -86,9 +96,11 @@
 ;;;   (zipper-move-left z)  ; => some(z') or none
 ;;;
 ;;; Since: Phase TC2
-(defn zipper-move-left [z :int] #{} :int
-  ```c
-  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+
+(defn zipper-move-left [z :int]
+  #{}
+  :int
+  ```c struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   if (zip->left_len == 0) return 0;
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *nz = malloc(sizeof(*nz));
   nz->focus = zip->left[zip->left_len - 1];
@@ -104,7 +116,6 @@
   opt->value = (int64_t)(intptr_t)nz;
   return (int64_t)(intptr_t)opt;
   ```)
-
 ;;; zipper-move-right -- move the focus one step to the right; returns Option[Zipper[A]].
 ;;;
 ;;; Parameters:
@@ -117,9 +128,11 @@
 ;;;   (zipper-move-right z)  ; => some(z') or none
 ;;;
 ;;; Since: Phase TC2
-(defn zipper-move-right [z :int] #{} :int
-  ```c
-  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+
+(defn zipper-move-right [z :int]
+  #{}
+  :int
+  ```c struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   if (zip->right_len == 0) return 0;
   struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *nz = malloc(sizeof(*nz));
   nz->focus = zip->right[0];
@@ -135,7 +148,6 @@
   opt->value = (int64_t)(intptr_t)nz;
   return (int64_t)(intptr_t)opt;
   ```)
-
 ;;; zipper-free -- free a Zipper[A] and its neighbor arrays.
 ;;;
 ;;; Parameters:
@@ -145,9 +157,11 @@
 ;;;   (zipper-free z)
 ;;;
 ;;; Since: Phase TC2
-(defn zipper-free [z :int] #{} :void
-  ```c
-  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
+
+(defn zipper-free [z :int]
+  #{}
+  :void
+  ```c struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *zip = (void*)(intptr_t)z;
   if (zip->left)  free(zip->left);
   if (zip->right) free(zip->right);
   free(zip);

@@ -22,43 +22,39 @@
 ;; Implementation: delegates to tur_select_blocking (emitted preamble),
 ;; which does a fair xorshift32 non-blocking scan, then registers
 ;; TurSelectWaiter nodes on all channels and sleeps until one fires.
-
 ;; Select clause operation constants
 ;;; __select_op_recv -- internal constant: recv operation code (0).
 ;;;
 ;;; Since: Phase T19-D
 (defn __select_op_recv [] :int 0)
-
 ;;; __select_op_send -- internal constant: send operation code (1).
 ;;;
 ;;; Since: Phase T19-D
-(defn __select_op_send [] :int 1)
 
+(defn __select_op_send [] :int 1)
 ;; Select clause struct for the runtime
 ;; typedef struct { void *chan; int op; int64_t val; } SelectClause;
-
 ;; Allocate select clauses array
 ;;; __select_clauses_alloc -- allocate a zeroed SelectClause array of length n.
 ;;;
 ;;; Since: Phase T19-D
+
+
 (defn __select_clauses_alloc [n :int] :ptr<void>
-  ```c
-  typedef struct { void *chan; int op; int64_t val; } SelectClause;
+  ```c typedef struct { void *chan; int op; int64_t val; } SelectClause;
   SelectClause *arr = (SelectClause *)malloc((size_t)n * sizeof(SelectClause));
   if (!arr) { fprintf(stderr, "select: out of memory\n"); abort(); }
   memset(arr, 0, (size_t)n * sizeof(SelectClause));
   return (void *)arr;
   ```)
-
 ;; Free select clauses array
 ;;; __select_clauses_free -- free a SelectClause array allocated by __select_clauses_alloc.
 ;;;
 ;;; Since: Phase T19-D
-(defn __select_clauses_free [arr :ptr<void>] :nil
-  ```c
-  free(arr);
-  ```)
 
+(defn __select_clauses_free [arr :ptr<void>] :nil
+  ```c free(arr);
+  ```)
 ;; Execute select on clauses array
 ;; Returns: index of fired clause (0..n-1), or -1 for default
 ;; For recv clauses, the received value is stored in clauses[i].val
@@ -74,9 +70,9 @@
 ;;;   0..(n-1) index of the clause that fired, or -1 if the default arm fired.
 ;;;
 ;;; Since: Phase SEL1
+
 (defn __select_exec [clauses :ptr<void> n :int has_default :int] :int
-  ```c
-  /* Delegate to the waiter-based fair blocking select in the emitted preamble.
+  ```c /* Delegate to the waiter-based fair blocking select in the emitted preamble.
    * TurSelectClause and SelectClause share the same layout:
    *   { void *chan; int op; int64_t val; }
    * so a direct cast is safe. */

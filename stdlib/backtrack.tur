@@ -12,16 +12,12 @@
 ;; by capturing a local sentinel at every binding step.
 ;;
 ;; Cell layout:  struct { int64_t value; int64_t next; }
-
 ;;; -- Helpers ────────────────────────────────────────────────────────────────
-
 ;;; bt-nil -- return the empty backtrack list (null pointer sentinel).
 ;;;
 ;;; Returns:
 ;;;   0 (null pointer representing the empty list).
-(defn bt-nil [] :int
-  ```c return 0; ```)
-
+(defn bt-nil [] :int ```c return 0; ```)
 ;;; bt-cons -- prepend a value to a backtrack result list.
 ;;;
 ;;; Parameters:
@@ -30,16 +26,14 @@
 ;;;
 ;;; Returns:
 ;;;   Pointer to the new cell (:int).
+
 (defn bt-cons [v next] :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  ```c struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = v;
   cell->next = next;
   return (int64_t)(intptr_t)cell;
   ```)
-
 ;;; -- Core monad operations ──────────────────────────────────────────────────
-
 ;;; mzero -- the empty backtrack computation (no results).
 ;;;
 ;;; Returns:
@@ -48,9 +42,9 @@
 ;;; Example:
 ;;;   (mzero)  ; => 0
 ;; mzero — the empty backtrack computation
-(defn mzero [] :int
-  ```c return 0; ```)
 
+
+(defn mzero [] :int ```c return 0; ```)
 ;;; mreturn -- lift a single value into the backtrack monad.
 ;;;
 ;;; Parameters:
@@ -62,14 +56,13 @@
 ;;; Example:
 ;;;   (mreturn 42)  ; => list containing 42
 ;; mreturn x — singleton result
+
 (defn mreturn [x] :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  ```c struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = x;
   cell->next = 0;
   return (int64_t)(intptr_t)cell;
   ```)
-
 ;;; mplus -- concatenate (union) two backtrack result lists.
 ;;;
 ;;; Parameters:
@@ -82,9 +75,9 @@
 ;;; Example:
 ;;;   (mplus (mreturn 1) (mreturn 2))  ; => list [1, 2]
 ;; mplus xs ys — concat (union) of two result lists
+
 (defn mplus [xs ys] :int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
   if (!xc) return ys;
   Cell *head = NULL, *tail = NULL;
@@ -98,7 +91,6 @@
   if (tail) tail->next = ys;
   return (int64_t)(intptr_t)head;
   ```)
-
 ;;; mbind -- concatMap: apply fn to each result and concatenate all outputs.
 ;;;
 ;;; fn MUST be a fat closure (struct { int64_t __fn; ... }).
@@ -116,9 +108,9 @@
 ;; mbind ma fn — concatMap: apply fn to each element and concat all results.
 ;; fn MUST be a fat closure (struct { int64_t __fn; ... }).
 ;; Use backtrack-do which guarantees fat closures via forced capture.
+
 (defn mbind [ma fn] :int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
   if (!cell) return 0;
   int64_t *fat = (int64_t*)(intptr_t)fn;
@@ -145,9 +137,7 @@
   }
   return (int64_t)(intptr_t)result;
   ```)
-
 ;;; -- Run operations ─────────────────────────────────────────────────────────
-
 ;;; run-backtrack -- return all results from a backtrack computation (identity).
 ;;;
 ;;; Parameters:
@@ -159,8 +149,9 @@
 ;;; Example:
 ;;;   (run-backtrack (mreturn 1))  ; => list [1]
 ;; run-backtrack xs — return all results (identity; list monad is already eager)
-(defn run-backtrack [xs] :int xs)
 
+
+(defn run-backtrack [xs] :int xs)
 ;;; run-backtrack-depth -- return at most n results from a backtrack computation.
 ;;;
 ;;; Parameters:
@@ -173,9 +164,9 @@
 ;;; Example:
 ;;;   (run-backtrack-depth my-results 5)  ; => first 5 results
 ;; run-backtrack-depth xs n — take at most n results
+
 (defn run-backtrack-depth [xs n] :int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;
   int64_t count = 0;
   while (c && count < n) {
@@ -188,9 +179,7 @@
   }
   return (int64_t)(intptr_t)head;
   ```)
-
 ;;; -- Combinators ────────────────────────────────────────────────────────────
-
 ;;; choice -- identity combinator; xs is already a list of alternatives.
 ;;;
 ;;; Parameters:
@@ -199,8 +188,9 @@
 ;;; Returns:
 ;;;   xs unchanged (:int).
 ;; choice xs — identity; xs is already a list of alternatives
-(defn choice [xs] :int xs)
 
+
+(defn choice [xs] :int xs)
 ;;; guard -- succeed with a dummy value when pred is true, fail otherwise.
 ;;;
 ;;; Parameters:
@@ -212,9 +202,8 @@
 ;;; Example:
 ;;;   (guard (> x 0))  ; => mreturn 0 or mzero
 ;; guard pred — (mreturn 0) when pred is true, else mzero
-(defn guard [pred :bool] :int
-  (if pred (mreturn 0) (mzero)))
 
+(defn guard [pred :bool] :int (if pred (mreturn 0) (mzero)))
 ;;; fresh -- apply a fat closure to a fresh (unbound) logic variable.
 ;;;
 ;;; The fresh variable is represented by the sentinel INT64_MIN, which is
@@ -227,14 +216,13 @@
 ;;;
 ;;; Returns:
 ;;;   The result of applying f to the unbound sentinel (:int).
+
 (defn fresh [f] :int
-  ```c
-  int64_t *fat = (int64_t*)(intptr_t)f;
+  ```c int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t thunk = fat[0];
   int64_t unbound = INT64_MIN; /* sentinel: unbound logic variable, distinct from any valid value */
   return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, unbound);
   ```)
-
 ;;; once -- keep only the first result from a backtrack computation.
 ;;;
 ;;; Parameters:
@@ -246,16 +234,15 @@
 ;;; Example:
 ;;;   (once (mplus (mreturn 1) (mreturn 2)))  ; => list [1]
 ;; once xs — keep only the first result
+
 (defn once [xs] :int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)xs;
   if (!c) return 0;
   Cell *n = malloc(sizeof(Cell));
   n->value = c->value; n->next = 0;
   return (int64_t)(intptr_t)n;
   ```)
-
 ;;; interleave -- fair interleaving of two backtrack result lists.
 ;;;
 ;;; Parameters:
@@ -268,9 +255,9 @@
 ;;; Example:
 ;;;   (interleave (mreturn 1) (mreturn 2))  ; => list [1, 2] (interleaved)
 ;; interleave xs ys — fair interleaving of two result lists
+
 (defn interleave [xs ys] :int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *xc = (Cell*)(intptr_t)xs;
   Cell *yc = (Cell*)(intptr_t)ys;
   if (!xc) return ys;
@@ -294,9 +281,7 @@
   }
   return (int64_t)(intptr_t)head;
   ```)
-
 ;;; -- List utilities ─────────────────────────────────────────────────────────
-
 ;;; bt-length -- count the number of results in a backtrack result list.
 ;;;
 ;;; Parameters:
@@ -307,29 +292,28 @@
 ;;;
 ;;; Example:
 ;;;   (bt-length (mplus (mreturn 1) (mreturn 2)))  ; => 2
+
+
 (defn bt-length [xs] :int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   int64_t n = 0;
   Cell *c = (Cell*)(intptr_t)xs;
   while (c) { n++; c = (Cell*)(intptr_t)c->next; }
   return n;
   ```)
-
 ;;; bt-print -- print each value in a backtrack result list to stdout.
 ;;;
 ;;; Parameters:
 ;;;   xs -- a backtrack result list (:int)
+
 (defn bt-print [xs]
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
   Cell *c = (Cell*)(intptr_t)xs;
   while (c) {
       printf("%lld\n", (long long)c->value);
       c = (Cell*)(intptr_t)c->next;
   }
   ```)
-
 ;;; -- backtrack-do macro ─────────────────────────────────────────────────────
 ;;
 ;; Syntax (flat binding — variables and monadic values alternate):
@@ -352,22 +336,22 @@
 ;; Usage:
 ;;   (backtrack-do x (list 1 2 3) y (list 4 5) (mreturn (+ x y)))
 ;;   (backtrack-do x xs _ (guard (> x 2)) (mreturn x))
-
 ;;; __bt-do -- internal helper macro that expands backtrack-do bindings.
+
+
 (defmacro __bt-do [ctx un & forms]
   (if (empty? forms)
     (list mzero)
     (if (empty? (rest forms))
       (first forms)
-      (let [var (first forms)
-            ma  (second forms)
-            rest-forms (rest (rest forms))]
-        (list let `[~ctx 0]
-          (list mbind ma
-            (list fn `[~var]
-              (list let `[~un ~ctx]
-                (list __bt-do ~ctx ~un ~@rest-forms)))))))))
-
+      (let [var (first forms) ma (second forms) rest-forms (rest (rest forms))]
+        (list let
+          `[~ctx 0]
+          (list mbind
+            ma
+            (list fn
+              `[~var]
+              (list let `[~un ~ctx] (list __bt-do ~ctx ~un ~@rest-forms)))))))))
 ;;; backtrack-do -- monadic do-notation for the backtracking monad.
 ;;;
 ;;; Syntax: (backtrack-do var1 ma1 var2 ma2 ... body)
@@ -386,5 +370,5 @@
 ;;;   (backtrack-do x (mplus (mreturn 1) (mreturn 2))
 ;;;                 y (mplus (mreturn 10) (mreturn 20))
 ;;;                 (mreturn (+ x y)))  ; => list [11, 21, 12, 22]
-(defmacro backtrack-do [& forms]
-  (__bt-do btctx btunused ~@forms))
+
+(defmacro backtrack-do [& forms] (__bt-do btctx btunused ~@forms))

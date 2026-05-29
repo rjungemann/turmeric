@@ -9,14 +9,10 @@
 ;; Typed singly-linked list. List[A] = Option[Cons[A]].
 ;; At runtime, nil is 0 and a cons cell specializes head for concrete A while
 ;; the tail link remains the legacy int64_t carrier.
-
 ;;; Cons -- parameterized cons cell with typed head and tail.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Cons [A]
-  (head A)
-  (tail :int))
-
+(defstruct Cons [A] (head A) (tail :int))
 ;;; tcons -- prepend a value to a typed list.
 ;;;
 ;;; Parameters:
@@ -30,14 +26,15 @@
 ;;;   (tcons 1 (tcons 2 (tnil)))  ; => [1, 2]
 ;;;
 ;;; Since: Phase TC1
-(defn tcons [h :int t :int] #{} :int
-  ```c
-  struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
+
+(defn tcons [h :int t :int]
+  #{}
+  :int
+  ```c struct { int64_t head; int64_t tail; } *cell = malloc(sizeof(*cell));
   cell->head = h;
   cell->tail = t;
   return (int64_t)(intptr_t)cell;
   ```)
-
 ;;; tcons-of -- typed Cons[A] constructor with a typed head slot.
 ;;;
 ;;; Parameters:
@@ -53,9 +50,8 @@
 ;;;     (.head c))  ; => 1.5, read as a `double` field
 ;;;
 ;;; Since: Phase TS3
-(defn tcons-of [A] [h :A t :int] :(Cons A)
-  (make-struct Cons h t))
 
+(defn tcons-of [A] [h :A t :int] : (Cons A) (make-struct Cons h t))
 ;;; tnil -- return an empty typed list.
 ;;;
 ;;; Returns:
@@ -65,9 +61,8 @@
 ;;;   (tnil)  ; => empty list
 ;;;
 ;;; Since: Phase TC1
-(defn tnil [] :int
-  0)
 
+(defn tnil [] :int 0)
 ;;; tnil? -- check whether a typed list is empty.
 ;;;
 ;;; Parameters:
@@ -81,9 +76,8 @@
 ;;;   (tnil? (tcons 1 (tnil)))  ; => false
 ;;;
 ;;; Since: Phase TC1
-(defn tnil? [l :int] :bool
-  (= l 0))
 
+(defn tnil? [l :int] :bool (= l 0))
 ;;; thead -- return the head element of a non-empty typed list.
 ;;;
 ;;; Parameters:
@@ -97,9 +91,8 @@
 ;;;     (thead l))  ; => 42
 ;;;
 ;;; Since: Phase TC1
-(defn thead [A] [l :(Cons A)] :A
-  (.head l))
 
+(defn thead [A] [l : (Cons A)] :A (.head l))
 ;;; ttail -- return the tail carrier of a non-empty typed list.
 ;;;
 ;;; Parameters:
@@ -113,9 +106,8 @@
 ;;;     (ttail l))  ; => 0
 ;;;
 ;;; Since: Phase TC1
-(defn ttail [A] [l :(Cons A)] :int
-  (.tail l))
 
+(defn ttail [A] [l : (Cons A)] :int (.tail l))
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
 ;;; Parameters:
@@ -128,9 +120,11 @@
 ;;;   (list-length (list 1 2))  ; => 2
 ;;;
 ;;; Since: Phase TC1
-(defn list-length [l :int] #{} :int
-  ```c
-  struct __tur_cell_t { int64_t head; int64_t tail; };
+
+(defn list-length [l :int]
+  #{}
+  :int
+  ```c struct __tur_cell_t { int64_t head; int64_t tail; };
   struct __tur_cell_t *cell = (void*)(intptr_t)l;
   int64_t count = 0;
   while (cell) {
@@ -139,7 +133,6 @@
   }
   return count;
   ```)
-
 ;;; list-eq? -- compare two typed lists element-wise.
 ;;;
 ;;; Parameters:
@@ -154,9 +147,11 @@
 ;;;   (list-eq? (list 1) (list 1) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defn list-eq? [l1 :int l2 :int cmp-fn] #{} :bool
-  ```c
-  struct __tur_cons_t { int64_t head; int64_t tail; };
+
+(defn list-eq? [l1 :int l2 :int cmp-fn]
+  #{}
+  :bool
+  ```c struct __tur_cons_t { int64_t head; int64_t tail; };
   struct __tur_cons_t *a = (void*)(intptr_t)l1;
   struct __tur_cons_t *b = (void*)(intptr_t)l2;
   while (a && b) {
@@ -166,13 +161,11 @@
   }
   return (void*)a == (void*)b;
   ```)
-
 ;;; Eq [Cons] -- element-wise equality using the element type's Eq instance.
 ;; TC1-9: Phase PTC4 -- constrained Eq instance for List[A] (Cons cells).
 ;; Note: element comparison uses integer equality; correct for all primitive A.
-(definstance Eq [Cons] [(Eq A)]
-  (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
 
+(definstance Eq [Cons] [(Eq A)] (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
 ;;; __cons-fmap -- apply a typed thunk to every head element of a Cons list.
 ;;;
 ;;; Walks the cons chain, allocates a new cell for each node, and writes
@@ -188,9 +181,11 @@
 ;;;   A new Cons list with f applied to every head, or 0 for empty input.
 ;;;
 ;;; Since: Phase TS5
-(defn __cons-fmap [cell :int f :fn] #{Unsafe} :int
-  ```c
-  struct __tur_cons_t { int64_t head; int64_t tail; };
+
+(defn __cons-fmap [cell :int f :fn]
+  #{Unsafe}
+  :int
+  ```c struct __tur_cons_t { int64_t head; int64_t tail; };
   struct __tur_cons_t *c = (struct __tur_cons_t *)(intptr_t)cell;
   if (!c) return 0;
   int64_t *_fat = (int64_t*)(intptr_t)f;
@@ -208,8 +203,6 @@
   }
   return (int64_t)(intptr_t)head_node;
   ```)
-
-
 ;;; list -- construct a list from N values via nested tcons.
 ;;;
 ;;; Parameters:
@@ -235,11 +228,10 @@
 ;;;   ; Use tuple2 instead: (tuple2 1 "x")
 ;;;
 ;;; Since: List literal macro
-(defmacro list [& xs]
-  (if (empty? xs)
-    (list tnil)
-    (list tcons (first xs) (list list ~@(rest xs)))))
 
+
+(defmacro list [& xs]
+  (if (empty? xs) (list tnil) (list tcons (first xs) (list list ~@(rest xs)))))
 ;;; list* -- prepend values onto an existing list tail.
 ;;;
 ;;; Parameters:
@@ -260,25 +252,23 @@
 ;;;   (list* 1 2 (list 3 4))            ; => (tcons 1 (tcons 2 (tcons 3 (tcons 4 (tnil)))))
 ;;;
 ;;; Since: List literal macro
+
 (defmacro list* [& args]
   (if (empty? (rest args))
     (first args)
     (list tcons (first args) (list list* ~@(rest args)))))
-
 ;;; list-head -- head element of a non-empty carrier-level list.
+
 (defn list-head [l :int] :int
-  ```c
-  struct __tur_cell_t { int64_t head; int64_t tail; };
+  ```c struct __tur_cell_t { int64_t head; int64_t tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->head;
   ```)
-
 ;;; list-tail -- tail pointer of a non-empty carrier-level list.
+
 (defn list-tail [l :int] :int
-  ```c
-  struct __tur_cell_t { int64_t head; int64_t tail; };
+  ```c struct __tur_cell_t { int64_t head; int64_t tail; };
   return ((struct __tur_cell_t *)(intptr_t)l)->tail;
   ```)
-
 ;;; list-concat -- concatenate two lists.
 ;;;
 ;;; Parameters:
@@ -300,7 +290,6 @@
 ;;;   (list-concat (list 1 2) (list 3 4))    ; => (list 1 2 3 4)
 ;;;
 ;;; Since: List literal macro
+
 (defn list-concat [l1 :int l2 :int] :int
-  (if (tnil? l1)
-    l2
-    (tcons (list-head l1) (list-concat (list-tail l1) l2))))
+  (if (tnil? l1) l2 (tcons (list-head l1) (list-concat (list-tail l1) l2))))

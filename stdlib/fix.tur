@@ -12,14 +12,11 @@
 ;; Values are heap-allocated and represented as int64_t pointers.
 ;;
 ;; Phase RF2
-
 ;;; Fix -- the fixed-point type of a functor.
 ;;;
 ;;; Fix f is the least fixed point of the functor f, i.e. Fix f ~= f (Fix f).
 ;;; The single constructor Roll wraps one layer of f.
-(defdata Fix [^f]
-  (Roll :int))
-
+(defdata Fix [^f] (Roll :int))
 ;;; roll -- wrap one layer of f into a Fix value.
 ;;;
 ;;; Parameters:
@@ -32,9 +29,8 @@
 ;;;   (roll my-layer)  ; => (Roll my-layer)
 ;;;
 ;;; Since: Phase RF2
-(defn roll [layer :int] #{} :int
-  (Roll layer))
 
+(defn roll [layer :int] #{} :int (Roll layer))
 ;;; unroll -- unwrap one layer of Fix to expose the inner functor value.
 ;;;
 ;;; Parameters:
@@ -47,10 +43,8 @@
 ;;;   (unroll (roll x))  ; => x
 ;;;
 ;;; Since: Phase RF2
-(defn unroll [fix :int] #{} :int
-  (match fix
-    (Roll inner) inner))
 
+(defn unroll [fix :int] #{} :int (match fix (Roll inner) inner))
 ;;; cata -- catamorphism: fold a Fix value using an F-algebra.
 ;;;
 ;;; A catamorphism (or "fold") collapses a Fix-encoded recursive structure by
@@ -68,14 +62,15 @@
 ;;;
 ;;; Since: Phase RF2
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
-(defn cata [alg :fn fix :int] #{Unsafe} :int
-  ```c
-  int64_t layer = unroll(fix);
+
+(defn cata [alg :fn fix :int]
+  #{Unsafe}
+  :int
+  ```c int64_t layer = unroll(fix);
   int64_t *_fat = (int64_t*)(intptr_t)alg;
   tur_poly_fn_t _alg = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
   return _alg.fn(_alg.env, layer);
   ```)
-
 ;;; ana -- anamorphism: unfold a seed value into a Fix value using a co-algebra.
 ;;;
 ;;; Parameters:
@@ -90,9 +85,11 @@
 ;;;
 ;;; Since: Phase RF2
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
-(defn ana [coalg :fn seed :int] #{Unsafe} :int
-  ```c
-  int64_t *_fat = (int64_t*)(intptr_t)coalg;
+
+(defn ana [coalg :fn seed :int]
+  #{Unsafe}
+  :int
+  ```c int64_t *_fat = (int64_t*)(intptr_t)coalg;
   tur_poly_fn_t _coalg = { (void*)_fat, (int64_t(*)(void*,int64_t))(intptr_t)_fat[0] };
   int64_t layer = _coalg.fn(_coalg.env, seed);
   return roll(layer);

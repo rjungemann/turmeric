@@ -12,7 +12,6 @@
 ;; API:
 ;;   async-read-stdin   [buf-size]  -> bytes-read (int)
 ;;   async-write-stdout [data len]  -> bytes-written (int)
-
 ;; Read up to buf-size bytes from stdin (non-blocking).
 ;; Parks the fiber on EAGAIN if running under a scheduler.
 ;; The read data is stored in fiber-local (key 0xA51C5D10) -- retrieve
@@ -29,9 +28,10 @@
 ;;;   (async-read-stdin 1024)  ; => bytes-read count (0 on EOF)
 ;;;
 ;;; Since: Phase T24
-(defn async-read-stdin [buf-size :int] #{Unsafe} :int
-  ```c
-  /* Set stdin non-blocking */
+(defn async-read-stdin [buf-size :int]
+  #{Unsafe}
+  :int
+  ```c /* Set stdin non-blocking */
   int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
   fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
   char *buf = (char *)malloc((size_t)buf_size);
@@ -58,7 +58,6 @@
     return -1;
   }
   ```)
-
 ;; Retrieve the stdin read buffer after async-read-stdin.
 ;;; async-stdin-buf -- retrieve the buffer pointer from the last async-read-stdin call.
 ;;;
@@ -69,12 +68,13 @@
 ;;;   (async-stdin-buf)  ; => buf-ptr
 ;;;
 ;;; Since: Phase T24
-(defn async-stdin-buf [] #{Unsafe} :ptr<void>
-  ```c
-  if (!tur_current_fiber) return NULL;
+
+(defn async-stdin-buf []
+  #{Unsafe}
+  :ptr<void>
+  ```c if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C5D10);
   ```)
-
 ;; Retrieve the number of bytes from the last async-read-stdin.
 ;;; async-stdin-len -- retrieve the byte count from the last async-read-stdin call.
 ;;;
@@ -85,12 +85,13 @@
 ;;;   (async-stdin-len)  ; => byte count from last async-read-stdin
 ;;;
 ;;; Since: Phase T24
-(defn async-stdin-len [] #{Unsafe} :int
-  ```c
-  if (!tur_current_fiber) return 0;
+
+(defn async-stdin-len []
+  #{Unsafe}
+  :int
+  ```c if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51C5D11);
   ```)
-
 ;; Write len bytes from data to stdout (non-blocking).
 ;; Parks the fiber on EAGAIN if running under a scheduler.
 ;; Returns total bytes written, or -1 on error.
@@ -107,9 +108,11 @@
 ;;;   (async-write-stdout "hello\n" 6)  ; => total bytes written (6 here)
 ;;;
 ;;; Since: Phase T24
-(defn async-write-stdout [data :cstr len :int] #{Unsafe} :int
-  ```c
-  /* Set stdout non-blocking */
+
+(defn async-write-stdout [data :cstr len :int]
+  #{Unsafe}
+  :int
+  ```c /* Set stdout non-blocking */
   int flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
   fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK);
   int64_t total = 0;

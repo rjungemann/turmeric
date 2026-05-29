@@ -7,7 +7,6 @@
 ;;
 ;; All functions forward to libc/libm and require no capabilities beyond
 ;; the implicit Unsafe of their inline-C bodies.
-
 ;;; sqrt -- square root of a float (double precision).
 ;;;
 ;;; Parameters:
@@ -21,11 +20,9 @@
 ;;;
 ;;; Since: Phase B1
 (defn sqrt [x :float] :float
-  ```c
-  double sqrt(double);
+  ```c double sqrt(double);
   return sqrt(x);
   ```)
-
 ;;; fabs -- absolute value of a float.
 ;;;
 ;;; Parameters:
@@ -38,12 +35,11 @@
 ;;;   (fabs -3.5)  ; => 3.5
 ;;;
 ;;; Since: Phase B1
+
 (defn fabs [x :float] :float
-  ```c
-  double fabs(double);
+  ```c double fabs(double);
   return fabs(x);
   ```)
-
 ;;; floor -- largest integer not greater than x.
 ;;;
 ;;; Parameters:
@@ -56,12 +52,11 @@
 ;;;   (floor 3.7)  ; => 3
 ;;;
 ;;; Since: Phase B1
+
 (defn floor [x :float] :float
-  ```c
-  double floor(double);
+  ```c double floor(double);
   return floor(x);
   ```)
-
 ;;; ceil -- smallest integer not less than x.
 ;;;
 ;;; Parameters:
@@ -74,12 +69,11 @@
 ;;;   (ceil 3.2)  ; => 4
 ;;;
 ;;; Since: Phase B1
+
 (defn ceil [x :float] :float
-  ```c
-  double ceil(double);
+  ```c double ceil(double);
   return ceil(x);
   ```)
-
 ;;; pow -- x raised to the power y.
 ;;;
 ;;; Parameters:
@@ -93,12 +87,11 @@
 ;;;   (pow 2.0 10.0)  ; => 1024
 ;;;
 ;;; Since: Phase B1
+
 (defn pow [x :float y :float] :float
-  ```c
-  double pow(double, double);
+  ```c double pow(double, double);
   return pow(x, y);
   ```)
-
 ;;; int->float -- convert an integer to a float via numeric cast.
 ;;;
 ;;; Parameters:
@@ -111,11 +104,10 @@
 ;;;   (int->float 42)  ; => 42
 ;;;
 ;;; Since: Phase B1
-(defn int->float [n :int] :float
-  ```c
-  return (double)n;
-  ```)
 
+(defn int->float [n :int] :float
+  ```c return (double)n;
+  ```)
 ;;; float->int -- truncate a float to an integer.
 ;;;
 ;;; Parameters:
@@ -128,11 +120,10 @@
 ;;;   (float->int 3.9)  ; => 3
 ;;;
 ;;; Since: Phase B1
-(defn float->int [x :float] :int
-  ```c
-  return (int64_t)x;
-  ```)
 
+(defn float->int [x :float] :int
+  ```c return (int64_t)x;
+  ```)
 ;;; printf-float6 -- print a float to stdout with 6 decimal places followed by a
 ;;; newline; mirrors the output format of the C benchmarks.
 ;;;
@@ -140,10 +131,10 @@
 ;;;   x -- float value to print
 ;;;
 ;;; Since: Phase B1
-(defn printf-float6 [x :float] :nil
-  ```c
-  printf("%.6f\n", x);
-  ```)
 
+(defn printf-float6 [x :float] :nil
+  ```c printf("%.6f\n", x);
+  ```)
 ;;; PI -- mathematical constant pi.
-(def PI 3.14159265358979323846)
+
+(def PI 3.14159)

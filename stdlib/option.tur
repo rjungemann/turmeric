@@ -7,14 +7,10 @@
 ;; Phase TC1-D: Typed Option[A]
 ;; First-class parameterized optional value type.
 ;; Runtime layout specializes the payload slot for concrete A.
-
 ;;; Option -- parameterized optional value containing either some A or none.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Option [A]
-  (is-some :bool)
-  (value   A))
-
+(defstruct Option [A] (is-some :bool) (value A))
 ;;; some -- wrap a value of type A in a some Option[A].
 ;;;
 ;;; Parameters:
@@ -27,14 +23,15 @@
 ;;;   (some 42)  ; => some(42)
 ;;;
 ;;; Since: Phase TC1
-(defn some [x :int] #{} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+
+(defn some [x :int]
+  #{}
+  :int
+  ```c struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
   opt->value = x;
   return (int64_t)(intptr_t)opt;
   ```)
-
 ;;; none -- return the none Option[A] (NULL).
 ;;;
 ;;; Returns:
@@ -44,11 +41,12 @@
 ;;;   (none)  ; => none
 ;;;
 ;;; Since: Phase TC1
-(defn none [] #{} :int
-  ```c
-  return 0;
-  ```)
 
+(defn none []
+  #{}
+  :int
+  ```c return 0;
+  ```)
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:
@@ -62,12 +60,13 @@
 ;;;   (some? (none))    ; => false
 ;;;
 ;;; Since: Phase TC1
-(defn some? [o :int] #{} :bool
-  ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+
+(defn some? [o :int]
+  #{}
+  :bool
+  ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   return opt != NULL && opt->is_some;
   ```)
-
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
 ;;; Parameters:
@@ -81,9 +80,8 @@
 ;;;     (unwrap o))  ; => 7
 ;;;
 ;;; Since: Phase TC1
-(defn unwrap [A] [o :(Option A)] :A
-  (.value o))
 
+(defn unwrap [A] [o : (Option A)] :A (.value o))
 ;;; unwrap-or -- extract the value or return a default.
 ;;;
 ;;; Parameters:
@@ -98,13 +96,14 @@
 ;;;   (unwrap-or (some 7) 99) ; => 7
 ;;;
 ;;; Since: Phase TC1
-(defn unwrap-or [o :int dflt :int] #{} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+
+(defn unwrap-or [o :int dflt :int]
+  #{}
+  :int
+  ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return dflt;
   return (int64_t)opt->value;
   ```)
-
 ;;; option-free -- free a heap-allocated Option[A].
 ;;;
 ;;; Parameters:
@@ -114,11 +113,12 @@
 ;;;   (option-free my-opt)
 ;;;
 ;;; Since: Phase TC1
-(defn option-free [o :int] #{} :void
-  ```c
-  if (o) free((void*)(intptr_t)o);
-  ```)
 
+(defn option-free [o :int]
+  #{}
+  :void
+  ```c if (o) free((void*)(intptr_t)o);
+  ```)
 ;;; option-map -- apply a function to the contained value if some.
 ;;;
 ;;; Parameters:
@@ -132,16 +132,17 @@
 ;;;   (option-map (some 3) (fn [x] (* x 2)))  ; => some(6)
 ;;;
 ;;; Since: Phase TC1
-(defn option-map [o :int f] #{} :int
-  ```c
-  struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+
+(defn option-map [o :int f]
+  #{}
+  :int
+  ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
   if (!opt || !opt->is_some) return 0;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
   r->value = ((int64_t(*)(int64_t))(intptr_t)f)(opt->value);
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; option-eq? -- compare two Option[A] values using a comparator.
 ;;;
 ;;; Parameters:
@@ -156,9 +157,11 @@
 ;;;   (option-eq? (some 1) (some 1) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defn option-eq? [o1 :int o2 :int cmp-fn] #{} :bool
-  ```c
-  struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
+
+(defn option-eq? [o1 :int o2 :int cmp-fn]
+  #{}
+  :bool
+  ```c struct { bool is_some; int64_t value; } *a = (void*)(intptr_t)o1;
   struct { bool is_some; int64_t value; } *b = (void*)(intptr_t)o2;
   bool a_some = a && a->is_some;
   bool b_some = b && b->is_some;
@@ -166,9 +169,9 @@
   if (a_some != b_some)   return false;
   return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
   ```)
-
 ;;; Eq [Option] -- equality using the inner type's Eq instance.
 ;; TC1-17: Phase PTC4 -- constrained Eq instance for Option[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
+
 (definstance Eq [Option] [(Eq A)]
   (eq? [x y] (option-eq? x y (fn [a b] (= a b)))))

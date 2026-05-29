@@ -7,13 +7,10 @@
 ;; Persistent set backed by the HAMT. A must satisfy Hash[A] and Eq[A].
 ;; Elements are stored as HAMT keys; values are always 1 (sentinel).
 ;; Runtime layout: struct { void *hamt; }
-
 ;;; Set -- parameterized persistent set with element type A.
 ;;;
 ;;; Since: Phase TC2
-(defstruct Set [A]
-  (hamt :ptr<void>))
-
+(defstruct Set [A] (hamt :ptr<void>))
 ;;; set-new -- create a new empty Set[A].
 ;;;
 ;;; Returns:
@@ -23,13 +20,14 @@
 ;;;   (set-new)  ; => empty Set
 ;;;
 ;;; Since: Phase TC2
-(defn set-new [] #{} :int
-  ```c
-  struct { void *hamt; } *s = malloc(sizeof(*s));
+
+(defn set-new []
+  #{}
+  :int
+  ```c struct { void *hamt; } *s = malloc(sizeof(*s));
   s->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; set-add -- add element x to the set; returns a new set.
 ;;;
 ;;; Parameters:
@@ -44,15 +42,16 @@
 ;;;   (set-add my-set (hash 42) 42)  ; => set with 42
 ;;;
 ;;; Since: Phase TC2
-(defn set-add [s :int h :int x :int] #{} :int
-  ```c
-  struct { void *hamt; } *set = (void*)(intptr_t)s;
+
+(defn set-add [s :int h :int x :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_set(set->hamt, h, (void*)(intptr_t)x, (void*)1);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; set-remove -- remove element x from the set; returns a new set.
 ;;;
 ;;; Parameters:
@@ -67,15 +66,16 @@
 ;;;   (set-remove my-set (hash 42) 42)  ; => set without 42
 ;;;
 ;;; Since: Phase TC2
-(defn set-remove [s :int h :int x :int] #{} :int
-  ```c
-  struct { void *hamt; } *set = (void*)(intptr_t)s;
+
+(defn set-remove [s :int h :int x :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   void *new_hamt = tur_hamt_del(set->hamt, h, (void*)(intptr_t)x);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; set-member? -- check whether element x is in the set.
 ;;;
 ;;; Parameters:
@@ -90,12 +90,13 @@
 ;;;   (set-member? my-set (hash 42) 42)  ; => true
 ;;;
 ;;; Since: Phase TC2
-(defn set-member? [s :int h :int x :int] #{} :bool
-  ```c
-  struct { void *hamt; } *set = (void*)(intptr_t)s;
+
+(defn set-member? [s :int h :int x :int]
+  #{}
+  :bool
+  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_has(set->hamt, h, (void*)(intptr_t)x);
   ```)
-
 ;;; set-count -- return the number of elements in the set.
 ;;;
 ;;; Parameters:
@@ -108,12 +109,13 @@
 ;;;   (set-count my-set)  ; => 3
 ;;;
 ;;; Since: Phase TC2
-(defn set-count [s :int] #{} :int
-  ```c
-  struct { void *hamt; } *set = (void*)(intptr_t)s;
+
+(defn set-count [s :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *set = (void*)(intptr_t)s;
   return tur_hamt_count(set->hamt);
   ```)
-
 ;;; set-union -- compute the union of two sets.
 ;;;
 ;;; Parameters:
@@ -127,16 +129,17 @@
 ;;;   (set-union set-a set-b)  ; => union set
 ;;;
 ;;; Since: Phase TC2
-(defn set-union [a :int b :int] #{} :int
-  ```c
-  struct { void *hamt; } *sa = (void*)(intptr_t)a;
+
+(defn set-union [a :int b :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(sa->hamt, sb->hamt);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; set-intersect -- compute the intersection of two sets.
 ;;;
 ;;; Parameters:
@@ -150,9 +153,11 @@
 ;;;   (set-intersect set-a set-b)  ; => intersection set
 ;;;
 ;;; Since: Phase TC2
-(defn set-intersect [a :int b :int] #{} :int
-  ```c
-  struct { void *hamt; } *sa = (void*)(intptr_t)a;
+
+(defn set-intersect [a :int b :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
@@ -170,7 +175,6 @@
   r->hamt = result;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; set-diff -- compute set difference a \ b (elements in a but not b).
 ;;;
 ;;; Parameters:
@@ -184,9 +188,11 @@
 ;;;   (set-diff set-a set-b)  ; => difference set
 ;;;
 ;;; Since: Phase TC2
-(defn set-diff [a :int b :int] #{} :int
-  ```c
-  struct { void *hamt; } *sa = (void*)(intptr_t)a;
+
+(defn set-diff [a :int b :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   void *result = tur_hamt_new();
   uint64_t iter_buf[32];
@@ -204,7 +210,6 @@
   r->hamt = result;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; set-eq? -- compare two sets for equality.
 ;;;
 ;;; Parameters:
@@ -218,9 +223,11 @@
 ;;;   (set-eq? set-a set-b)  ; => true
 ;;;
 ;;; Since: Phase TC2
-(defn set-eq? [a :int b :int] #{} :bool
-  ```c
-  struct { void *hamt; } *sa = (void*)(intptr_t)a;
+
+(defn set-eq? [a :int b :int]
+  #{}
+  :bool
+  ```c struct { void *hamt; } *sa = (void*)(intptr_t)a;
   struct { void *hamt; } *sb = (void*)(intptr_t)b;
   if (tur_hamt_count(sa->hamt) != tur_hamt_count(sb->hamt)) return false;
   uint64_t iter_buf[32];
@@ -237,7 +244,6 @@
   tur_hamt_iter_free((void*)iter_buf);
   return true;
   ```)
-
 ;;; set-eq-cmp? -- structural equality with a user-supplied element
 ;;; comparator.  Use this variant when the element type is not
 ;;; primitive (e.g. Set[Vec[int]]) because the hash-based set-eq?
@@ -254,9 +260,11 @@
 ;;;   has at least one structurally-equal counterpart in `b` per cmp-fn.
 ;;;
 ;;; Since: Phase F3-5 (cross-plan-followups)
-(defn set-eq-cmp? [a :int b :int cmp-fn] #{} :bool
-  ```c
-  /* O(n*m) comparison: iterate a's elements, scan b for a structural
+
+(defn set-eq-cmp? [a :int b :int cmp-fn]
+  #{}
+  :bool
+  ```c /* O(n*m) comparison: iterate a's elements, scan b for a structural
    * match per element.  Bigger constant than set-eq?'s hash lookup
    * but correct for arbitrarily-structured element types.  Used by
    * the F3-5 dispatcher synthesis for Set[T] where T is a TY_APP. */
@@ -291,7 +299,6 @@
   tur_hamt_iter_free((void*)iter_a);
   return true;
   ```)
-
 ;;; set-free -- free the Set wrapper struct.
 ;;;
 ;;; Parameters:
@@ -301,13 +308,14 @@
 ;;;   (set-free my-set)
 ;;;
 ;;; Since: Phase TC2
-(defn set-free [s :int] #{} :void
-  ```c
-  free((void*)(intptr_t)s);
-  ```)
 
+(defn set-free [s :int]
+  #{}
+  :void
+  ```c free((void*)(intptr_t)s);
+  ```)
 ;;; Eq [Set] -- membership equality using the HAMT structure.
 ;; TC2-15: Phase PTC4 -- constrained Eq instance for Set[A].
 ;; Constraint (Eq A) ensures elements are comparable; HAMT uses hash-based lookup.
-(definstance Eq [Set] [(Eq A)]
-  (eq? [x y] (set-eq? x y)))
+
+(definstance Eq [Set] [(Eq A)] (eq? [x y] (set-eq? x y)))

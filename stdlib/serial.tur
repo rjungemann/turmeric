@@ -7,18 +7,20 @@
 ;;
 ;; Defines the Serializable typeclass and primitive/container instances.
 ;; Implementation uses inline C since the methods operate on raw bytes.
+(extern-c malloc [^int size] :ptr<void>)
 
-(extern-c malloc  [^int size]          :ptr<void>)
-(extern-c free    [^ptr<void> p]       :void)
-(extern-c memcpy  [^ptr<void> dst ^ptr<void> src ^int n] :ptr<void>)
-(extern-c memcmp  [^ptr<void> a ^ptr<void> b ^int n] :int)
-(extern-c strlen  [^cstr s]            :int)
-(extern-c exit    [^int code]          :void)
+(extern-c free [^ptr<void> p] :void)
 
+(extern-c memcpy [^ptr<void> dst ^ptr<void> src ^int n] :ptr<void>)
+
+(extern-c memcmp [^ptr<void> a ^ptr<void> b ^int n] :int)
+
+(extern-c strlen [^cstr s] :int)
+
+(extern-c exit [^int code] :void)
 ;; ---------------------------------------------------------------------------
 ;; bytes -- a length-prefixed heap buffer: { int64 len; uint8_t data[]; }
 ;; ---------------------------------------------------------------------------
-
 ;; Allocate a fresh bytes value of `n` bytes (zeroed).
 ;;; bytes-alloc -- allocate a zeroed length-prefixed byte buffer of n bytes.
 ;;;
@@ -32,15 +34,15 @@
 ;;;   (def b (bytes-alloc 16))  ; => 16-byte zeroed buffer
 ;;;
 ;;; Since: Phase 21
+
+
 (defn bytes-alloc [n :int] :ptr<void>
-  ```c
-  int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
+  ```c int64_t *buf = malloc(sizeof(int64_t) + (size_t)n);
   if (!buf) { fprintf(stderr, "bytes-alloc: out of memory\n"); exit(1); }
   buf[0] = (int64_t)n;
   memset(buf + 1, 0, (size_t)n);
   return buf;
   ```)
-
 ;; Return the length of a bytes value.
 ;;; bytes-len -- return the number of data bytes stored in a bytes value.
 ;;;
@@ -51,12 +53,11 @@
 ;;;   The data length as :int (0 for null pointer).
 ;;;
 ;;; Since: Phase 21
+
 (defn bytes-len [b :ptr<void>] :int
-  ```c
-  if (!b) return 0;
+  ```c if (!b) return 0;
   return (int64_t)(((int64_t*)b)[0]);
   ```)
-
 ;; Return a pointer to the raw data inside a bytes value.
 ;;; bytes-data -- return a raw pointer to the data region of a bytes value (past the length prefix).
 ;;;
@@ -67,12 +68,11 @@
 ;;;   :ptr<void> to the first data byte, or NULL for a null pointer.
 ;;;
 ;;; Since: Phase 21
+
 (defn bytes-data [b :ptr<void>] :ptr<void>
-  ```c
-  if (!b) return NULL;
+  ```c if (!b) return NULL;
   return (void*)((int64_t*)b + 1);
   ```)
-
 ;; Free a bytes value.
 ;;; bytes-free -- free a bytes value allocated by bytes-alloc or serialize.
 ;;;
@@ -80,11 +80,10 @@
 ;;;   b -- bytes pointer to free
 ;;;
 ;;; Since: Phase 21
-(defn bytes-free [b :ptr<void>] :void
-  ```c
-  free(b);
-  ```)
 
+(defn bytes-free [b :ptr<void>] :void
+  ```c free(b);
+  ```)
 ;; Concatenate two bytes values into a new one.
 ;;; bytes-concat -- concatenate two bytes values into a new heap-allocated bytes value.
 ;;;
@@ -99,9 +98,9 @@
 ;;;   (bytes-concat ba bb)  ; => new bytes with ba then bb
 ;;;
 ;;; Since: Phase 21
+
 (defn bytes-concat [a :ptr<void> b :ptr<void>] :ptr<void>
-  ```c
-  int64_t la = a ? ((int64_t*)a)[0] : 0;
+  ```c int64_t la = a ? ((int64_t*)a)[0] : 0;
   int64_t lb = b ? ((int64_t*)b)[0] : 0;
   int64_t total = la + lb;
   int64_t *out = malloc(sizeof(int64_t) + (size_t)total);
@@ -112,7 +111,6 @@
   if (lb > 0) memcpy(dst + la, (int64_t*)b + 1, (size_t)lb);
   return out;
   ```)
-
 ;; ---------------------------------------------------------------------------
 ;; Serializable typeclass
 ;;
@@ -122,7 +120,6 @@
 ;;                                Result support is deferred until Result is
 ;;                                a first-class generic type in the compiler)
 ;; ---------------------------------------------------------------------------
-
 ;;; Serializable -- typeclass for types that can be marshalled to/from bytes.
 ;;;
 ;;; Methods:
@@ -130,23 +127,22 @@
 ;;;   deserialize [b :ptr<void>] -- unmarshal from bytes; panics on malformed input
 ;;;
 ;;; Since: Phase 21
-(defclass Serializable [a]
-  (serialize   [x] :ptr<void>)
-  (deserialize [b :ptr<void>] :int))
 
+
+(defclass Serializable [a]
+  (serialize [x] :ptr<void>)
+  (deserialize [b :ptr<void>] :int))
 ;; ---------------------------------------------------------------------------
 ;; Primitive instances
 ;; Each instance packs its value as little-endian bytes, prefixed by length.
 ;; ---------------------------------------------------------------------------
-
 ;; int (int64) -- 8 bytes little-endian
 ;;; Serializable [int] -- serialize/deserialize int64 as 8 little-endian bytes.
 ;;;
 ;;; Since: Phase 21
-(definstance Serializable [int]
-  (serialize [x]
-    ```c
-    int64_t *buf = malloc(sizeof(int64_t) + 8);
+
+
+(definstance Serializable [int] (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
     if (!buf) { fprintf(stderr, "serialize int: oom\n"); exit(1); }
     buf[0] = 8;
     uint8_t *p = (uint8_t*)(buf + 1);
@@ -161,9 +157,7 @@
     p[7] = (uint8_t)((v >> 56) & 0xff);
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 8) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 8) {
       fprintf(stderr, "deserialize int: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -178,36 +172,28 @@
       | ((int64_t)p[7] << 56);
     return v;
     ```))
-
 ;; bool -- 1 byte (0 or 1)
 ;;; Serializable [bool] -- serialize/deserialize bool as a single byte (0 = false, 1 = true).
 ;;;
 ;;; Since: Phase 21
-(definstance Serializable [bool]
-  (serialize [x]
-    ```c
-    int64_t *buf = malloc(sizeof(int64_t) + 1);
+
+(definstance Serializable [bool] (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 1);
     if (!buf) { fprintf(stderr, "serialize bool: oom\n"); exit(1); }
     buf[0] = 1;
     ((uint8_t*)(buf + 1))[0] = x ? 1 : 0;
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 1) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 1) {
       fprintf(stderr, "deserialize bool: short buffer\n"); exit(1);
     }
     return (int64_t)(((uint8_t*)((int64_t*)b + 1))[0] != 0);
     ```))
-
 ;; float64 (double) -- 8 bytes IEEE 754 little-endian
 ;;; Serializable [float] -- serialize/deserialize float64 as 8 bytes IEEE 754 little-endian.
 ;;;
 ;;; Since: Phase 21
-(definstance Serializable [float]
-  (serialize [x]
-    ```c
-    int64_t *buf = malloc(sizeof(int64_t) + 8);
+
+(definstance Serializable [float] (serialize [x] ```c int64_t *buf = malloc(sizeof(int64_t) + 8);
     if (!buf) { fprintf(stderr, "serialize float: oom\n"); exit(1); }
     buf[0] = 8;
     double dv = *(double*)&x;
@@ -224,9 +210,7 @@
     p[7] = (uint8_t)((bits >> 56) & 0xff);
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 8) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 8) {
       fprintf(stderr, "deserialize float: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -243,15 +227,12 @@
     memcpy(&dv, &bits, 8);
     return *(int64_t*)&dv;
     ```))
-
 ;; cstr -- length-prefixed UTF-8 string (4-byte little-endian length + bytes)
 ;;; Serializable [cstr] -- serialize/deserialize a cstr as a 4-byte LE length prefix followed by UTF-8 bytes.
 ;;;
 ;;; Since: Phase 21
-(definstance Serializable [cstr]
-  (serialize [x]
-    ```c
-    const char *s = (const char*)x;
+
+(definstance Serializable [cstr] (serialize [x] ```c const char *s = (const char*)x;
     int64_t slen = s ? (int64_t)strlen(s) : 0;
     int64_t total = 4 + slen;          /* 4-byte length prefix */
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
@@ -265,9 +246,7 @@
     if (slen > 0) memcpy(p + 4, s, (size_t)slen);
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 4) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 4) {
       fprintf(stderr, "deserialize cstr: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -285,15 +264,12 @@
     out[slen] = '\0';
     return (int64_t)(uintptr_t)out;
     ```))
-
 ;; bytes (ptr<void>) -- prefix with 8-byte length, then raw data
 ;;; Serializable [ptr<void>] -- serialize/deserialize a bytes value as an 8-byte LE length followed by raw data.
 ;;;
 ;;; Since: Phase 21
-(definstance Serializable [ptr<void>]
-  (serialize [x]
-    ```c
-    int64_t *inner = (int64_t*)x;
+
+(definstance Serializable [ptr<void>] (serialize [x] ```c int64_t *inner = (int64_t*)x;
     int64_t dlen = inner ? inner[0] : 0;
     int64_t total = 8 + dlen;
     int64_t *buf = malloc(sizeof(int64_t) + (size_t)total);
@@ -311,9 +287,7 @@
     if (dlen > 0) memcpy(p + 8, (uint8_t*)(inner + 1), (size_t)dlen);
     return buf;
     ```)
-  (deserialize [b]
-    ```c
-    if (!b || ((int64_t*)b)[0] < 8) {
+  (deserialize [b] ```c if (!b || ((int64_t*)b)[0] < 8) {
       fprintf(stderr, "deserialize bytes: short buffer\n"); exit(1);
     }
     uint8_t *p = (uint8_t*)((int64_t*)b + 1);
@@ -335,19 +309,23 @@
     if (dlen > 0) memcpy(out + 1, p + 8, (size_t)dlen);
     return (int64_t)(uintptr_t)out;
     ```))
-
 ;; ---------------------------------------------------------------------------
 ;; File I/O helpers (cont-to-file / cont-from-file)
 ;; These operate on opaque bytes values returned by serial-cont->bytes.
 ;; ---------------------------------------------------------------------------
 
-(extern-c fopen  [^cstr path ^cstr mode] :ptr<void>)
-(extern-c fclose [^ptr<void> f]          :int)
-(extern-c fwrite [^ptr<void> buf ^int size ^int n ^ptr<void> f] :int)
-(extern-c fread  [^ptr<void> buf ^int size ^int n ^ptr<void> f] :int)
-(extern-c fseek  [^ptr<void> f ^int off ^int whence] :int)
-(extern-c ftell  [^ptr<void> f] :int)
 
+(extern-c fopen [^cstr path ^cstr mode] :ptr<void>)
+
+(extern-c fclose [^ptr<void> f] :int)
+
+(extern-c fwrite [^ptr<void> buf ^int size ^int n ^ptr<void> f] :int)
+
+(extern-c fread [^ptr<void> buf ^int size ^int n ^ptr<void> f] :int)
+
+(extern-c fseek [^ptr<void> f ^int off ^int whence] :int)
+
+(extern-c ftell [^ptr<void> f] :int)
 ;; Write a serialized continuation to a file.
 ;; Returns 1 on success, 0 on failure.
 ;;; cont-to-file -- write a serialised continuation bytes value to a file.
@@ -363,9 +341,9 @@
 ;;;   (cont-to-file k-bytes "/tmp/checkpoint.bin")  ; => 1
 ;;;
 ;;; Since: Phase 21
+
 (defn cont-to-file [b :ptr<void> path :cstr] :int
-  ```c
-  if (!b) return 0;
+  ```c if (!b) return 0;
   FILE *f = fopen((const char*)path, "wb");
   if (!f) return 0;
   int64_t len = ((int64_t*)b)[0];
@@ -375,7 +353,6 @@
   fclose(f);
   return (written == 8 + len) ? 1 : 0;
   ```)
-
 ;; Read a serialized continuation from a file.
 ;; Returns a bytes ptr<void> on success, NULL on failure.
 ;;; cont-from-file -- read a serialised continuation bytes value from a file.
@@ -390,9 +367,9 @@
 ;;;   (def k-bytes (cont-from-file "/tmp/checkpoint.bin"))
 ;;;
 ;;; Since: Phase 21
+
 (defn cont-from-file [path :cstr] :ptr<void>
-  ```c
-  FILE *f = fopen((const char*)path, "rb");
+  ```c FILE *f = fopen((const char*)path, "rb");
   if (!f) return NULL;
   int64_t len = 0;
   if ((int64_t)fread(&len, 1, 8, f) != 8 || len < 0) { fclose(f); return NULL; }

@@ -8,16 +8,14 @@
 ;;
 ;; Capability types are ordinary structs with function pointer fields.
 ;; They enable zero-cost dependency injection and mocking.
-
 ;; ============================================================================
 ;; FileSystem capability
 ;; ============================================================================
-
 ;; Type definition for FileSystem capability
 ;; All functions return int for error codes (0 = success, non-zero = error)
 (extern-c malloc [^ptr size] :ptr)
-(extern-c free [^ptr p] :void)
 
+(extern-c free [^ptr p] :void)
 ;; FileSystem capability struct:
 ;;   read_file: (path: cstr, buf: ptr, buf_len: int, out_len: ptr) -> int
 ;;   write_file: (path: cstr, data: ptr, data_len: int) -> int
@@ -26,9 +24,9 @@
 ;;; FileSystem-type -- return NULL; declares the FileSystem struct typedef for inline C blocks.
 ;;;
 ;;; Since: Phase 16
+
 (defn FileSystem-type []
-  ```c
-  typedef struct FileSystem FileSystem;
+  ```c typedef struct FileSystem FileSystem;
   struct FileSystem {
       int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
       int (*write_file)(const char* path, const unsigned char* data, int data_len);
@@ -37,7 +35,6 @@
   };
   return NULL;
   ```)
-
 ;; Constructor for FileSystem
 ;;; make-FileSystem -- construct a FileSystem capability from four function pointers.
 ;;;
@@ -54,9 +51,9 @@
 ;;;   (def fs (make-FileSystem my-read my-write my-delete my-list))
 ;;;
 ;;; Since: Phase 16
+
 (defn make-FileSystem [read_fn write_fn delete_fn list_fn]
-  ```c
-  typedef struct FileSystem FileSystem;
+  ```c typedef struct FileSystem FileSystem;
   FileSystem* fs = (FileSystem*)malloc(sizeof(FileSystem));
   fs->read_file = (int (*)(const char*, unsigned char*, int, int*))read_fn;
   fs->write_file = (int (*)(const char*, const unsigned char*, int))write_fn;
@@ -64,7 +61,6 @@
   fs->list = (int (*)(const char*, char**, int, int*))list_fn;
   return (void*)fs;
   ```)
-
 ;; Free a FileSystem capability
 ;;; FileSystem-free -- free a FileSystem capability allocated by make-FileSystem.
 ;;;
@@ -72,15 +68,13 @@
 ;;;   fs -- FileSystem pointer from make-FileSystem
 ;;;
 ;;; Since: Phase 16
-(defn FileSystem-free [fs]
-  ```c
-  free(fs);
-  ```)
 
+(defn FileSystem-free [fs]
+  ```c free(fs);
+  ```)
 ;; ============================================================================
 ;; Logger capability
 ;; ============================================================================
-
 ;; Logger capability struct:
 ;;   debug: (msg: cstr) -> void
 ;;   info: (msg: cstr) -> void
@@ -89,9 +83,10 @@
 ;;; Logger-type -- return NULL; declares the Logger struct typedef for inline C blocks.
 ;;;
 ;;; Since: Phase 16
+
+
 (defn Logger-type []
-  ```c
-  typedef struct Logger Logger;
+  ```c typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
       void (*info)(const char* msg);
@@ -100,7 +95,6 @@
   };
   return NULL;
   ```)
-
 ;;; make-Logger -- construct a Logger capability from four function pointers (debug/info/warn/error).
 ;;;
 ;;; Parameters:
@@ -113,9 +107,9 @@
 ;;;   A heap-allocated Logger capability pointer; free with Logger-free.
 ;;;
 ;;; Since: Phase 16
+
 (defn make-Logger [debug_fn info_fn warn_fn error_fn]
-  ```c
-  typedef struct Logger Logger;
+  ```c typedef struct Logger Logger;
   Logger* logger = (Logger*)malloc(sizeof(Logger));
   logger->debug = (void (*)(const char*))debug_fn;
   logger->info = (void (*)(const char*))info_fn;
@@ -123,38 +117,35 @@
   logger->error = (void (*)(const char*))error_fn;
   return (void*)logger;
   ```)
-
 ;;; Logger-free -- free a Logger capability allocated by make-Logger.
 ;;;
 ;;; Parameters:
 ;;;   log -- Logger pointer from make-Logger
 ;;;
 ;;; Since: Phase 16
-(defn Logger-free [log]
-  ```c
-  free(log);
-  ```)
 
+(defn Logger-free [log]
+  ```c free(log);
+  ```)
 ;; ============================================================================
 ;; Random capability
 ;; ============================================================================
-
 ;; Random capability struct:
 ;;   next-int: (min: int, max: int) -> int
 ;;   next-float: () -> int (scaled to 0-10000, divide by 10000.0 for float)
 ;;; Random-type -- return NULL; declares the Random struct typedef for inline C blocks.
 ;;;
 ;;; Since: Phase 16
+
+
 (defn Random-type []
-  ```c
-  typedef struct Random Random;
+  ```c typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
       int (*next_float)(void);
   };
   return NULL;
   ```)
-
 ;;; make-Random -- construct a Random capability from two function pointers.
 ;;;
 ;;; Parameters:
@@ -165,46 +156,43 @@
 ;;;   A heap-allocated Random capability pointer; free with Random-free.
 ;;;
 ;;; Since: Phase 16
+
 (defn make-Random [next_int_fn next_float_fn]
-  ```c
-  typedef struct Random Random;
+  ```c typedef struct Random Random;
   Random* rng = (Random*)malloc(sizeof(Random));
   rng->next_int = (int (*)(int, int))next_int_fn;
   rng->next_float = (int (*)(void))next_float_fn;
   return (void*)rng;
   ```)
-
 ;;; Random-free -- free a Random capability allocated by make-Random.
 ;;;
 ;;; Parameters:
 ;;;   rng -- Random pointer from make-Random
 ;;;
 ;;; Since: Phase 16
-(defn Random-free [rng]
-  ```c
-  free(rng);
-  ```)
 
+(defn Random-free [rng]
+  ```c free(rng);
+  ```)
 ;; ============================================================================
 ;; Time capability
 ;; ============================================================================
-
 ;; Time capability struct:
 ;;   now: () -> int (milliseconds since epoch)
 ;;   sleep: (ms: int) -> void
 ;;; Time-type -- return NULL; declares the Time struct typedef for inline C blocks.
 ;;;
 ;;; Since: Phase 16
+
+
 (defn Time-type []
-  ```c
-  typedef struct Time Time;
+  ```c typedef struct Time Time;
   struct Time {
       int (*now)(void);
       void (*sleep)(int ms);
   };
   return NULL;
   ```)
-
 ;;; make-Time -- construct a Time capability from two function pointers.
 ;;;
 ;;; Parameters:
@@ -215,30 +203,27 @@
 ;;;   A heap-allocated Time capability pointer; free with Time-free.
 ;;;
 ;;; Since: Phase 16
+
 (defn make-Time [now_fn sleep_fn]
-  ```c
-  typedef struct Time Time;
+  ```c typedef struct Time Time;
   Time* time = (Time*)malloc(sizeof(Time));
   time->now = (int (*)(void))now_fn;
   time->sleep = (void (*)(int))sleep_fn;
   return (void*)time;
   ```)
-
 ;;; Time-free -- free a Time capability allocated by make-Time.
 ;;;
 ;;; Parameters:
 ;;;   t -- Time pointer from make-Time
 ;;;
 ;;; Since: Phase 16
-(defn Time-free [t]
-  ```c
-  free(t);
-  ```)
 
+(defn Time-free [t]
+  ```c free(t);
+  ```)
 ;; ============================================================================
 ;; Convenience macros
 ;; ============================================================================
-
 ;; with-capability macro: threads a capability through all calls in body
 ;; Usage: (with-capability [fs (Real-FileSystem)] (fs-read fs "file.txt"))
 ;;; with-capability -- bind cap_expr to binding and evaluate body with that capability in scope.
@@ -252,9 +237,10 @@
 ;;;   (with-capability [fs (make-FileSystem ...)] (fs-read fs "data.txt"))
 ;;;
 ;;; Since: Phase 16
+
+
 (defmacro with-capability [binding cap_expr body]
   `(let [~binding ~cap_expr] ~body))
-
 ;; default-capability: returns the default implementation for a capability type
 ;; For now, this just returns NULL - users should provide their own defaults
 ;;; default-capability -- return the default implementation for a capability type (currently always nil).
@@ -263,13 +249,11 @@
 ;;;   type_name -- symbolic name of the capability type (unused in v1)
 ;;;
 ;;; Since: Phase 16
-(defn default-capability [type_name]
-  nil)
 
+(defn default-capability [type_name] nil)
 ;; ============================================================================
 ;; Helper functions for using capabilities
 ;; ============================================================================
-
 ;; Call read_file on a FileSystem capability
 ;;; fs-read -- call read_file on a FileSystem capability.
 ;;;
@@ -283,14 +267,14 @@
 ;;;   0 on success, non-zero on error (as returned by the underlying read_file fn).
 ;;;
 ;;; Since: Phase 16
+
+
 (defn fs-read [fs path buf buf_len]
-  ```c
-  typedef struct FileSystem FileSystem;
+  ```c typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   int out_len;
   return f->read_file(path, (unsigned char*)buf, buf_len, &out_len);
   ```)
-
 ;; Call write_file on a FileSystem capability
 ;;; fs-write -- call write_file on a FileSystem capability.
 ;;;
@@ -304,13 +288,12 @@
 ;;;   0 on success, non-zero on error.
 ;;;
 ;;; Since: Phase 16
+
 (defn fs-write [fs path data data_len]
-  ```c
-  typedef struct FileSystem FileSystem;
+  ```c typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   return f->write_file(path, (const unsigned char*)data, data_len);
   ```)
-
 ;; Call delete on a FileSystem capability
 ;;; fs-delete -- call delete on a FileSystem capability.
 ;;;
@@ -322,13 +305,12 @@
 ;;;   0 on success, non-zero on error.
 ;;;
 ;;; Since: Phase 16
+
 (defn fs-delete [fs path]
-  ```c
-  typedef struct FileSystem FileSystem;
+  ```c typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   return f->delete(path);
   ```)
-
 ;; Call list on a FileSystem capability
 ;;; fs-list -- call list on a FileSystem capability.
 ;;;
@@ -342,14 +324,13 @@
 ;;;   Number of entries found, or negative on error.
 ;;;
 ;;; Since: Phase 16
+
 (defn fs-list [fs path entries max_entries]
-  ```c
-  typedef struct FileSystem FileSystem;
+  ```c typedef struct FileSystem FileSystem;
   FileSystem* f = (FileSystem*)fs;
   int out_count;
   return f->list(path, (char**)entries, max_entries, &out_count);
   ```)
-
 ;; Call debug on a Logger capability
 ;;; log-debug -- emit a debug-level log message via a Logger capability.
 ;;;
@@ -358,13 +339,12 @@
 ;;;   msg -- message string to log
 ;;;
 ;;; Since: Phase 16
+
 (defn log-debug [log msg]
-  ```c
-  typedef struct Logger Logger;
+  ```c typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->debug(msg);
   ```)
-
 ;; Call info on a Logger capability
 ;;; log-info -- emit an info-level log message via a Logger capability.
 ;;;
@@ -373,13 +353,12 @@
 ;;;   msg -- message string to log
 ;;;
 ;;; Since: Phase 16
+
 (defn log-info [log msg]
-  ```c
-  typedef struct Logger Logger;
+  ```c typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->info(msg);
   ```)
-
 ;; Call warn on a Logger capability
 ;;; log-warn -- emit a warning-level log message via a Logger capability.
 ;;;
@@ -388,13 +367,12 @@
 ;;;   msg -- message string to log
 ;;;
 ;;; Since: Phase 16
+
 (defn log-warn [log msg]
-  ```c
-  typedef struct Logger Logger;
+  ```c typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->warn(msg);
   ```)
-
 ;; Call error on a Logger capability
 ;;; log-error -- emit an error-level log message via a Logger capability.
 ;;;
@@ -403,13 +381,12 @@
 ;;;   msg -- message string to log
 ;;;
 ;;; Since: Phase 16
+
 (defn log-error [log msg]
-  ```c
-  typedef struct Logger Logger;
+  ```c typedef struct Logger Logger;
   Logger* l = (Logger*)log;
   l->error(msg);
   ```)
-
 ;; Call next-int on a Random capability
 ;;; rng-next-int -- return a random integer in [min, max] from a Random capability.
 ;;;
@@ -422,13 +399,12 @@
 ;;;   A random integer in [min, max].
 ;;;
 ;;; Since: Phase 16
+
 (defn rng-next-int [rng min max]
-  ```c
-  typedef struct Random Random;
+  ```c typedef struct Random Random;
   Random* r = (Random*)rng;
   return r->next_int(min, max);
   ```)
-
 ;; Call next-float on a Random capability
 ;; Returns value in range [0, 10000) - caller should divide by 10000.0
 ;;; rng-next-float -- return a random pseudo-float in [0, 10000) from a Random capability.
@@ -440,13 +416,12 @@
 ;;;   Integer in [0, 10000); divide by 10000.0 to get a float in [0.0, 1.0).
 ;;;
 ;;; Since: Phase 16
+
 (defn rng-next-float [rng]
-  ```c
-  typedef struct Random Random;
+  ```c typedef struct Random Random;
   Random* r = (Random*)rng;
   return r->next_float();
   ```)
-
 ;; Call now on a Time capability
 ;;; time-now -- return the current time in milliseconds since epoch from a Time capability.
 ;;;
@@ -457,13 +432,12 @@
 ;;;   Current time as an integer (milliseconds since epoch).
 ;;;
 ;;; Since: Phase 16
+
 (defn time-now [t]
-  ```c
-  typedef struct Time Time;
+  ```c typedef struct Time Time;
   Time* time = (Time*)t;
   return time->now();
   ```)
-
 ;; Call sleep on a Time capability
 ;;; time-sleep -- sleep for ms milliseconds via a Time capability.
 ;;;
@@ -472,9 +446,9 @@
 ;;;   ms -- duration in milliseconds
 ;;;
 ;;; Since: Phase 16
+
 (defn time-sleep [t ms]
-  ```c
-  typedef struct Time Time;
+  ```c typedef struct Time Time;
   Time* time = (Time*)t;
   time->sleep(ms);
   ```)

@@ -9,11 +9,7 @@
 ;; The type parameter a is unused in constructor field types (phantom).
 ;; True compile-time length safety is deferred to a future dependent-types phase.
 ;; Renamed from Vec to GVec (KB-023) to avoid shadowing stdlib/vec.tur's Vec struct.
-
-(defgadt GVec [a]
-  (GVNil : (GVec int))
-  (GVCons int (GVec int) : (GVec int)))
-
+(defgadt GVec [a] (GVNil : (GVec int)) (GVCons int (GVec int) : (GVec int)))
 ;;; gvec-nil -- construct an empty GVec.
 ;;;
 ;;; Returns:
@@ -23,9 +19,8 @@
 ;;;   (gvec-nil)  ; => GVNil
 ;;;
 ;;; Since: Phase G4
-(defn gvec-nil [] :GVec
-  (GVNil))
 
+(defn gvec-nil [] :GVec (GVNil))
 ;;; gvec-cons -- prepend an integer element to a GVec.
 ;;;
 ;;; Parameters:
@@ -39,9 +34,8 @@
 ;;;   (gvec-cons 1 (gvec-nil))  ; => GVCons(1, GVNil)
 ;;;
 ;;; Since: Phase G4
-(defn gvec-cons [x :int v :GVec] :GVec
-  (GVCons x v))
 
+(defn gvec-cons [x :int v :GVec] :GVec (GVCons x v))
 ;;; gvec-len -- compute the length of a GVec.
 ;;;
 ;;; Parameters:
@@ -54,11 +48,9 @@
 ;;;   (gvec-len (gvec-cons 1 (gvec-cons 2 (gvec-nil))))  ; => 2
 ;;;
 ;;; Since: Phase G4
-(defn gvec-len [v :GVec] :int
-  (match v
-    (GVNil)       0
-    (GVCons _ t) (+ 1 (gvec-len t))))
 
+(defn gvec-len [v :GVec] :int
+  (match v (GVNil) 0 (GVCons _ t) (+ 1 (gvec-len t))))
 ;;; gvec-sum -- sum all elements of a GVec.
 ;;;
 ;;; Parameters:
@@ -71,11 +63,9 @@
 ;;;   (gvec-sum (gvec-cons 1 (gvec-cons 2 (gvec-cons 3 (gvec-nil)))))  ; => 6
 ;;;
 ;;; Since: Phase G4
-(defn gvec-sum [v :GVec] :int
-  (match v
-    (GVNil)       0
-    (GVCons x t) (+ x (gvec-sum t))))
 
+(defn gvec-sum [v :GVec] :int
+  (match v (GVNil) 0 (GVCons x t) (+ x (gvec-sum t))))
 ;;; gvec-head-or -- return the first element or a default if empty.
 ;;;
 ;;; Parameters:
@@ -90,11 +80,9 @@
 ;;;   (gvec-head-or 99 (gvec-cons 5 (gvec-nil)))        ; => 5
 ;;;
 ;;; Since: Phase G4
-(defn gvec-head-or [dflt :int v :GVec] :int
-  (match v
-    (GVNil)      dflt
-    (GVCons x _) x))
 
+(defn gvec-head-or [dflt :int v :GVec] :int
+  (match v (GVNil) dflt (GVCons x _) x))
 ;;; gvec-tail -- return all elements after the first.
 ;;;
 ;;; Parameters:
@@ -108,15 +96,12 @@
 ;;;   (gvec-tail (gvec-nil))                                ; => GVNil
 ;;;
 ;;; Since: Phase G4
-(defn gvec-tail [v :GVec] :GVec
-  (match v
-    (GVNil)       (GVNil)
-    (GVCons _ t) t))
 
+(defn gvec-tail [v :GVec] :GVec (match v (GVNil) (GVNil) (GVCons _ t) t))
 ;;; __gvec-call-fn1 -- apply a ptr<void> closure to one int argument.
 ;; Internal helper for gvmap; dispatches through the fat-closure ABI.
-(defn __gvec-call-fn1 [f :ptr<void> x :int] :int (f x))
 
+(defn __gvec-call-fn1 [f :ptr<void> x :int] :int (f x))
 ;;; gvmap -- apply an int->int function to every element of a GVec.
 ;;;
 ;;; Parameters:
@@ -131,11 +116,13 @@
 ;;;   (gvec-sum (gvmap (mul 2) (gvec-cons 1 (gvec-cons 2 (gvec-nil)))))  ; => 6
 ;;;
 ;;; Since: Phase G4
+
 (defn gvmap [f :ptr<void> v] :GVec
   (match v
-    (GVNil)       (GVNil)
-    (GVCons x t) (GVCons (__gvec-call-fn1 f x) (gvmap f t))))
-
+    (GVNil)
+    (GVNil)
+    (GVCons x t)
+    (GVCons (__gvec-call-fn1 f x) (gvmap f t))))
 ;;; gvzip-with -- combine two GVecs element-wise using a binary int->int->int function.
 ;;;
 ;;; Parameters:
@@ -159,9 +146,14 @@
 ;; plain non-capturing function (e.g. `add`) is passed.  The typed fn parameter
 ;; wraps any callee into a tur_poly_fn_t, so `(f x y)` dispatches correctly via
 ;; fn.fn(fn.env, x, y) for both bare functions and capturing closures.
-(defn gvzip-with [f :(fn [int int] :int) v1 v2] :GVec
+
+(defn gvzip-with [f : (fn [int int] :int) v1 v2] :GVec
   (match v1
-    (GVNil)        (GVNil)
-    (GVCons x t1) (match v2
-                    (GVNil)        (GVNil)
-                    (GVCons y t2) (GVCons (f x y) (gvzip-with f t1 t2)))))
+    (GVNil)
+    (GVNil)
+    (GVCons x t1)
+    (match v2
+      (GVNil)
+      (GVNil)
+      (GVCons y t2)
+      (GVCons (f x y) (gvzip-with f t1 t2)))))

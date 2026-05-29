@@ -18,13 +18,10 @@
 ;; All consumers that iterate integers load stdlib/seq/core.tur.  The file
 ;; does NOT auto-load seq; fixtures that need seq/from-range must load
 ;; stdlib/seq/core.tur (or any seq layer) before or after this file.
-
 (load "stdlib/seq/core.tur")
-
 ;; -------------------------------------------------------------------
 ;; RangeBound allocation and accessors (inline-C)
 ;; -------------------------------------------------------------------
-
 ;;; range-bound-new -- allocate a RangeBound with given inclusivity and value.
 ;;;
 ;;; Parameters:
@@ -35,51 +32,46 @@
 ;;;   int64_t pointer to a heap RangeBound.
 ;;;
 ;;; Since: LZ4
+
+
 (defn range-bound-new [inclusive :int value :int] :int
-  ```c
-  struct { bool is_inclusive; int64_t value; } *b = malloc(sizeof(*b));
+  ```c struct { bool is_inclusive; int64_t value; } *b = malloc(sizeof(*b));
   b->is_inclusive = (bool)inclusive;
   b->value = value;
   return (int64_t)(intptr_t)b;
   ```)
-
 ;;; range-bound-inclusive? -- true if the bound is inclusive.
 ;;;
 ;;; Parameters:
 ;;;   b -- int64_t pointer to a RangeBound (must not be 0)
 ;;;
 ;;; Since: LZ4
-(defn range-bound-inclusive? [b :int] :bool
-  ```c
-  return ((struct { bool is_inclusive; int64_t value; } *)(intptr_t)b)->is_inclusive;
-  ```)
 
+(defn range-bound-inclusive? [b :int] :bool
+  ```c return ((struct { bool is_inclusive; int64_t value; } *)(intptr_t)b)->is_inclusive;
+  ```)
 ;;; range-bound-value -- return the endpoint value of a bound.
 ;;;
 ;;; Parameters:
 ;;;   b -- int64_t pointer to a RangeBound (must not be 0)
 ;;;
 ;;; Since: LZ4
-(defn range-bound-value [b :int] :int
-  ```c
-  return ((struct { bool is_inclusive; int64_t value; } *)(intptr_t)b)->value;
-  ```)
 
+(defn range-bound-value [b :int] :int
+  ```c return ((struct { bool is_inclusive; int64_t value; } *)(intptr_t)b)->value;
+  ```)
 ;;; range-bound-flip -- return a new bound with the same value but flipped inclusivity.
 ;;;
 ;;; Parameters:
 ;;;   b -- int64_t pointer to a RangeBound (must not be 0)
 ;;;
 ;;; Since: LZ4
-(defn range-bound-flip [b :int] :int
-  (range-bound-new
-    (if (range-bound-inclusive? b) 0 1)
-    (range-bound-value b)))
 
+(defn range-bound-flip [b :int] :int
+  (range-bound-new (if (range-bound-inclusive? b) 0 1) (range-bound-value b)))
 ;; -------------------------------------------------------------------
 ;; Range allocation and accessors (inline-C)
 ;; -------------------------------------------------------------------
-
 ;;; range-new -- allocate a Range from lower and upper bound pointers.
 ;;;
 ;;; Parameters:
@@ -90,62 +82,56 @@
 ;;;   int64_t pointer to a heap Range.
 ;;;
 ;;; Since: LZ4
+
+
 (defn range-new [lower :int upper :int] :int
-  ```c
-  struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
+  ```c struct { int64_t lower; int64_t upper; } *r = malloc(sizeof(*r));
   r->lower = lower;
   r->upper = upper;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; range-lower -- return the lower bound pointer (0 = unbounded).
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn range-lower [r :int] :int
-  ```c
-  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
-  ```)
 
+(defn range-lower [r :int] :int
+  ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->lower;
+  ```)
 ;;; range-upper -- return the upper bound pointer (0 = unbounded).
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn range-upper [r :int] :int
-  ```c
-  return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
-  ```)
 
+(defn range-upper [r :int] :int
+  ```c return ((struct { int64_t lower; int64_t upper; } *)(intptr_t)r)->upper;
+  ```)
 ;; Typed abort helpers -- each returns :int so they can be used in if-branches.
+
 (defn range-abort-not-connected [] :int
-  ```c
-  fprintf(stderr, "range-intersection: ranges are not connected\n");
+  ```c fprintf(stderr, "range-intersection: ranges are not connected\n");
   abort();
   return 0;
   ```)
 
 (defn range-abort-connected [] :int
-  ```c
-  fprintf(stderr, "range-gap: ranges are connected (no gap exists)\n");
+  ```c fprintf(stderr, "range-gap: ranges are connected (no gap exists)\n");
   abort();
   return 0;
   ```)
 
 (defn range-abort-unbounded-lower [] :int
-  ```c
-  fprintf(stderr, "seq/from-range: lower bound must be present\n");
+  ```c fprintf(stderr, "seq/from-range: lower bound must be present\n");
   abort();
   return 0;
   ```)
-
 ;; -------------------------------------------------------------------
 ;; Constructors
 ;; -------------------------------------------------------------------
-
 ;;; closed-range -- [lo, hi] both endpoints inclusive.
 ;;;
 ;;; Parameters:
@@ -159,9 +145,10 @@
 ;;;   (closed-range 1 5)  ; => [1, 5]
 ;;;
 ;;; Since: LZ4
+
+
 (defn closed-range [lo :int hi :int] :int
   (range-new (range-bound-new 1 lo) (range-bound-new 1 hi)))
-
 ;;; open-range -- (lo, hi) both endpoints exclusive.
 ;;;
 ;;; Parameters:
@@ -175,9 +162,9 @@
 ;;;   (open-range 1 5)  ; => (1, 5)
 ;;;
 ;;; Since: LZ4
+
 (defn open-range [lo :int hi :int] :int
   (range-new (range-bound-new 0 lo) (range-bound-new 0 hi)))
-
 ;;; closed-open-range -- [lo, hi) inclusive lower, exclusive upper.
 ;;;
 ;;; Parameters:
@@ -191,9 +178,9 @@
 ;;;   (closed-open-range 1 5)  ; => [1, 5)
 ;;;
 ;;; Since: LZ4
+
 (defn closed-open-range [lo :int hi :int] :int
   (range-new (range-bound-new 1 lo) (range-bound-new 0 hi)))
-
 ;;; open-closed-range -- (lo, hi] exclusive lower, inclusive upper.
 ;;;
 ;;; Parameters:
@@ -207,9 +194,9 @@
 ;;;   (open-closed-range 1 5)  ; => (1, 5]
 ;;;
 ;;; Since: LZ4
+
 (defn open-closed-range [lo :int hi :int] :int
   (range-new (range-bound-new 0 lo) (range-bound-new 1 hi)))
-
 ;;; at-least-range -- [lo, +inf) inclusive lower, unbounded above.
 ;;;
 ;;; Parameters:
@@ -222,9 +209,8 @@
 ;;;   (at-least-range 5)  ; => [5, +inf)
 ;;;
 ;;; Since: LZ4
-(defn at-least-range [lo :int] :int
-  (range-new (range-bound-new 1 lo) 0))
 
+(defn at-least-range [lo :int] :int (range-new (range-bound-new 1 lo) 0))
 ;;; greater-than-range -- (lo, +inf) exclusive lower, unbounded above.
 ;;;
 ;;; Parameters:
@@ -237,9 +223,8 @@
 ;;;   (greater-than-range 5)  ; => (5, +inf)
 ;;;
 ;;; Since: LZ4
-(defn greater-than-range [lo :int] :int
-  (range-new (range-bound-new 0 lo) 0))
 
+(defn greater-than-range [lo :int] :int (range-new (range-bound-new 0 lo) 0))
 ;;; at-most-range -- (-inf, hi] unbounded below, inclusive upper.
 ;;;
 ;;; Parameters:
@@ -252,9 +237,8 @@
 ;;;   (at-most-range 5)  ; => (-inf, 5]
 ;;;
 ;;; Since: LZ4
-(defn at-most-range [hi :int] :int
-  (range-new 0 (range-bound-new 1 hi)))
 
+(defn at-most-range [hi :int] :int (range-new 0 (range-bound-new 1 hi)))
 ;;; less-than-range -- (-inf, hi) unbounded below, exclusive upper.
 ;;;
 ;;; Parameters:
@@ -267,9 +251,8 @@
 ;;;   (less-than-range 5)  ; => (-inf, 5)
 ;;;
 ;;; Since: LZ4
-(defn less-than-range [hi :int] :int
-  (range-new 0 (range-bound-new 0 hi)))
 
+(defn less-than-range [hi :int] :int (range-new 0 (range-bound-new 0 hi)))
 ;;; singleton-range -- [v, v] a range containing exactly one value.
 ;;;
 ;;; Parameters:
@@ -282,9 +265,9 @@
 ;;;   (singleton-range 3)  ; => [3, 3]
 ;;;
 ;;; Since: LZ4
+
 (defn singleton-range [v :int] :int
   (range-new (range-bound-new 1 v) (range-bound-new 1 v)))
-
 ;;; unbounded-range -- (-inf, +inf) no bounds at all.
 ;;;
 ;;; Returns:
@@ -294,66 +277,61 @@
 ;;;   (unbounded-range)  ; => (-inf, +inf)
 ;;;
 ;;; Since: LZ4
-(defn unbounded-range [] :int
-  (range-new 0 0))
 
+(defn unbounded-range [] :int (range-new 0 0))
 ;; -------------------------------------------------------------------
 ;; Internal comparison helpers
 ;; -------------------------------------------------------------------
-
 ;; range-val-in-lower? -- true if v satisfies the lower bound b.
 ;; b == 0 means unbounded (always satisfied).
+
+
 (defn range-val-in-lower? [b :int v :int] :bool
   (if (= b 0)
     true
     (if (range-bound-inclusive? b)
       (>= v (range-bound-value b))
       (> v (range-bound-value b)))))
-
 ;; range-val-in-upper? -- true if v satisfies the upper bound b.
 ;; b == 0 means unbounded (always satisfied).
+
 (defn range-val-in-upper? [b :int v :int] :bool
   (if (= b 0)
     true
     (if (range-bound-inclusive? b)
       (<= v (range-bound-value b))
       (< v (range-bound-value b)))))
-
 ;; range-bound-strictly-before? -- true if upper bound u ends before lower bound l starts.
 ;; Used for range-overlaps?: if u strictly before l, ranges don't share any value.
 ;; u == 0 (unbounded above) or l == 0 (unbounded below): never strictly before.
+
 (defn range-bound-strictly-before? [u :int l :int] :bool
   (if (or (= u 0) (= l 0))
     false
-    (let [uv (range-bound-value u)
-          lv (range-bound-value l)]
+    (let [uv (range-bound-value u) lv (range-bound-value l)]
       (if (< uv lv)
         true
         (if (= uv lv)
-          (or (not (range-bound-inclusive? u))
-              (not (range-bound-inclusive? l)))
+          (or (not (range-bound-inclusive? u)) (not (range-bound-inclusive? l)))
           false)))))
-
 ;; range-bound-has-gap? -- true if a gap exists between upper bound u and lower bound l.
 ;; Gap means u and l are so far apart that their ranges cannot form a contiguous interval.
 ;; Differs from strictly-before: touching [1,3) and [3,5] has no gap but strictly-before.
 ;; u == 0 or l == 0: no gap.
+
 (defn range-bound-has-gap? [u :int l :int] :bool
   (if (or (= u 0) (= l 0))
     false
-    (let [uv (range-bound-value u)
-          lv (range-bound-value l)]
+    (let [uv (range-bound-value u) lv (range-bound-value l)]
       (if (< uv lv)
         true
         (if (= uv lv)
           (and (not (range-bound-inclusive? u))
-               (not (range-bound-inclusive? l)))
+            (not (range-bound-inclusive? l)))
           false)))))
-
 ;; -------------------------------------------------------------------
 ;; Predicates
 ;; -------------------------------------------------------------------
-
 ;;; range-contains? -- true if value v falls within range r.
 ;;;
 ;;; Parameters:
@@ -368,10 +346,11 @@
 ;;;   (range-contains? (open-range 1 5) 1)    ; => false
 ;;;
 ;;; Since: LZ4
+
+
 (defn range-contains? [r :int v :int] :bool
   (and (range-val-in-lower? (range-lower r) v)
-       (range-val-in-upper? (range-upper r) v)))
-
+    (range-val-in-upper? (range-upper r) v)))
 ;;; range-encloses? -- true if every value in other is also in r.
 ;;;
 ;;; Parameters:
@@ -386,42 +365,41 @@
 ;;;   (range-encloses? (closed-range 0 10) (closed-range 2 8))  ; => true
 ;;;
 ;;; Since: LZ4
-(defn range-encloses? [r :int other :int] :bool
-  (let [rl (range-lower r)
-        ru (range-upper r)
-        ol (range-lower other)
-        ou (range-upper other)]
-    ;; r encloses other iff:
-    ;;   r's lower <= other's lower (r starts at or before other)
-    ;;   r's upper >= other's upper (r ends at or after other)
-    (let [lower-ok
-            (if (= rl 0)
-              true  ; r is unbounded below
-              (if (= ol 0)
-                false  ; other unbounded below but r is bounded
-                (let [rv (range-bound-value rl)
-                      ov (range-bound-value ol)]
-                  (if (< rv ov)
-                    true
-                    (if (= rv ov)
-                      (or (range-bound-inclusive? rl)
-                          (not (range-bound-inclusive? ol)))
-                      false)))))
-          upper-ok
-            (if (= ru 0)
-              true  ; r is unbounded above
-              (if (= ou 0)
-                false  ; other unbounded above but r is bounded
-                (let [rv (range-bound-value ru)
-                      ov (range-bound-value ou)]
-                  (if (> rv ov)
-                    true
-                    (if (= rv ov)
-                      (or (range-bound-inclusive? ru)
-                          (not (range-bound-inclusive? ou)))
-                      false)))))]
-      (and lower-ok upper-ok))))
 
+(defn range-encloses? [r :int other :int] :bool
+  (let [rl
+        (range-lower r)
+        ru
+        (range-upper r)
+        ol
+        (range-lower other)
+        ou
+        (range-upper other)]
+    (let [lower-ok
+          (if (= rl 0)
+            true
+            (if (= ol 0)
+              false
+              (let [rv (range-bound-value rl) ov (range-bound-value ol)]
+                (if (< rv ov)
+                  true
+                  (if (= rv ov)
+                    (or (range-bound-inclusive? rl)
+                      (not (range-bound-inclusive? ol)))
+                    false)))))
+          upper-ok
+          (if (= ru 0)
+            true
+            (if (= ou 0)
+              false
+              (let [rv (range-bound-value ru) ov (range-bound-value ou)]
+                (if (> rv ov)
+                  true
+                  (if (= rv ov)
+                    (or (range-bound-inclusive? ru)
+                      (not (range-bound-inclusive? ou)))
+                    false)))))]
+      (and lower-ok upper-ok))))
 ;;; range-connected? -- true if no gap exists between r1 and r2.
 ;;;
 ;;; Two ranges are connected if their union forms a contiguous interval
@@ -439,10 +417,10 @@
 ;;;   (range-connected? (less-than-range 3) (greater-than-range 3))  ; => false
 ;;;
 ;;; Since: LZ4
+
 (defn range-connected? [r1 :int r2 :int] :bool
   (and (not (range-bound-has-gap? (range-upper r1) (range-lower r2)))
-       (not (range-bound-has-gap? (range-upper r2) (range-lower r1)))))
-
+    (not (range-bound-has-gap? (range-upper r2) (range-lower r1)))))
 ;;; range-overlaps? -- true if r1 and r2 share at least one common value.
 ;;;
 ;;; Stronger than range-connected?: touching ranges like [1,3) and [3,5] are
@@ -460,56 +438,51 @@
 ;;;   (range-overlaps? (closed-open-range 1 3) (closed-range 3 5))  ; => false
 ;;;
 ;;; Since: LZ4
+
 (defn range-overlaps? [r1 :int r2 :int] :bool
   (and (not (range-bound-strictly-before? (range-upper r1) (range-lower r2)))
-       (not (range-bound-strictly-before? (range-upper r2) (range-lower r1)))))
-
+    (not (range-bound-strictly-before? (range-upper r2) (range-lower r1)))))
 ;;; bounded-range? -- true if both endpoints are present.
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn bounded-range? [r :int] :bool
-  (and (not (= (range-lower r) 0))
-       (not (= (range-upper r) 0))))
 
+(defn bounded-range? [r :int] :bool
+  (and (not (= (range-lower r) 0)) (not (= (range-upper r) 0))))
 ;;; bounded-above? -- true if r has an upper bound.
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn bounded-above? [r :int] :bool
-  (not (= (range-upper r) 0)))
 
+(defn bounded-above? [r :int] :bool (not (= (range-upper r) 0)))
 ;;; bounded-below? -- true if r has a lower bound.
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn bounded-below? [r :int] :bool
-  (not (= (range-lower r) 0)))
 
+(defn bounded-below? [r :int] :bool (not (= (range-lower r) 0)))
 ;;; unbounded-above? -- true if r has no upper bound.
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn unbounded-above? [r :int] :bool
-  (= (range-upper r) 0))
 
+(defn unbounded-above? [r :int] :bool (= (range-upper r) 0))
 ;;; unbounded-below? -- true if r has no lower bound.
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn unbounded-below? [r :int] :bool
-  (= (range-lower r) 0))
 
+(defn unbounded-below? [r :int] :bool (= (range-lower r) 0))
 ;;; singleton-range? -- true if r contains exactly one value.
 ;;;
 ;;; A range is a singleton when both bounds are present, equal, and inclusive.
@@ -518,15 +491,14 @@
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
+
 (defn singleton-range? [r :int] :bool
-  (let [lo (range-lower r)
-        hi (range-upper r)]
+  (let [lo (range-lower r) hi (range-upper r)]
     (if (or (= lo 0) (= hi 0))
       false
       (and (range-bound-inclusive? lo)
-           (range-bound-inclusive? hi)
-           (= (range-bound-value lo) (range-bound-value hi))))))
-
+        (range-bound-inclusive? hi)
+        (= (range-bound-value lo) (range-bound-value hi))))))
 ;;; empty-range? -- true if r contains no values.
 ;;;
 ;;; A bounded range is empty when the lower bound is strictly past the upper bound,
@@ -536,93 +508,81 @@
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
+
 (defn empty-range? [r :int] :bool
-  (let [lo (range-lower r)
-        hi (range-upper r)]
+  (let [lo (range-lower r) hi (range-upper r)]
     (if (or (= lo 0) (= hi 0))
-      false  ; unbounded ranges are never empty
-      (let [lv (range-bound-value lo)
-            hv (range-bound-value hi)]
+      false
+      (let [lv (range-bound-value lo) hv (range-bound-value hi)]
         (if (> lv hv)
           true
           (if (= lv hv)
             (or (not (range-bound-inclusive? lo))
-                (not (range-bound-inclusive? hi)))
+              (not (range-bound-inclusive? hi)))
             false))))))
-
 ;;; nonempty-range? -- true if r contains at least one value.
 ;;;
 ;;; Parameters:
 ;;;   r -- int64_t pointer to a Range
 ;;;
 ;;; Since: LZ4
-(defn nonempty-range? [r :int] :bool
-  (not (empty-range? r)))
 
+(defn nonempty-range? [r :int] :bool (not (empty-range? r)))
 ;; -------------------------------------------------------------------
 ;; Internal bound selection helpers for set operations
 ;; -------------------------------------------------------------------
-
 ;; range-lower-min -- return the less-restrictive of two lower bounds (for span).
 ;; Unbounded (0) is less restrictive than any bound.
+
+
 (defn range-lower-min [b1 :int b2 :int] :int
-  (if (= b1 0) 0
-    (if (= b2 0) 0
-      (let [v1 (range-bound-value b1)
-            v2 (range-bound-value b2)]
+  (if (= b1 0)
+    0
+    (if (= b2 0)
+      0
+      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
         (if (< v1 v2)
           b1
-          (if (> v1 v2)
-            b2
-            ;; equal values -- prefer inclusive (less restrictive lower)
-            (if (range-bound-inclusive? b1) b1 b2)))))))
-
+          (if (> v1 v2) b2 (if (range-bound-inclusive? b1) b1 b2)))))))
 ;; range-upper-max -- return the less-restrictive of two upper bounds (for span).
 ;; Unbounded (0) is less restrictive than any bound.
+
 (defn range-upper-max [b1 :int b2 :int] :int
-  (if (= b1 0) 0
-    (if (= b2 0) 0
-      (let [v1 (range-bound-value b1)
-            v2 (range-bound-value b2)]
+  (if (= b1 0)
+    0
+    (if (= b2 0)
+      0
+      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
         (if (> v1 v2)
           b1
-          (if (< v1 v2)
-            b2
-            ;; equal values -- prefer inclusive (less restrictive upper)
-            (if (range-bound-inclusive? b1) b1 b2)))))))
-
+          (if (< v1 v2) b2 (if (range-bound-inclusive? b1) b1 b2)))))))
 ;; range-lower-max -- return the more-restrictive of two lower bounds (for intersection).
 ;; Unbounded (0) defers to the other bound.
+
 (defn range-lower-max [b1 :int b2 :int] :int
-  (if (= b1 0) b2
-    (if (= b2 0) b1
-      (let [v1 (range-bound-value b1)
-            v2 (range-bound-value b2)]
+  (if (= b1 0)
+    b2
+    (if (= b2 0)
+      b1
+      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
         (if (> v1 v2)
           b1
-          (if (< v1 v2)
-            b2
-            ;; equal values -- prefer exclusive (more restrictive lower)
-            (if (not (range-bound-inclusive? b1)) b1 b2)))))))
-
+          (if (< v1 v2) b2 (if (not (range-bound-inclusive? b1)) b1 b2)))))))
 ;; range-upper-min -- return the more-restrictive of two upper bounds (for intersection).
 ;; Unbounded (0) defers to the other bound.
+
 (defn range-upper-min [b1 :int b2 :int] :int
-  (if (= b1 0) b2
-    (if (= b2 0) b1
-      (let [v1 (range-bound-value b1)
-            v2 (range-bound-value b2)]
+  (if (= b1 0)
+    b2
+    (if (= b2 0)
+      b1
+      (let [v1 (range-bound-value b1) v2 (range-bound-value b2)]
         (if (< v1 v2)
           b1
-          (if (> v1 v2)
-            b2
-            ;; equal values -- prefer exclusive (more restrictive upper)
-            (if (not (range-bound-inclusive? b1)) b1 b2)))))))
-
+          (if (> v1 v2) b2 (if (not (range-bound-inclusive? b1)) b1 b2)))))))
 ;; -------------------------------------------------------------------
 ;; Set operations
 ;; -------------------------------------------------------------------
-
 ;;; range-span -- smallest range enclosing both r1 and r2 (convex hull).
 ;;;
 ;;; Parameters:
@@ -637,11 +597,11 @@
 ;;;   (range-span (closed-range 1 3) (closed-range 5 8))  ; => [1, 8]
 ;;;
 ;;; Since: LZ4
-(defn range-span [r1 :int r2 :int] :int
-  (range-new
-    (range-lower-min (range-lower r1) (range-lower r2))
-    (range-upper-max (range-upper r1) (range-upper r2))))
 
+
+(defn range-span [r1 :int r2 :int] :int
+  (range-new (range-lower-min (range-lower r1) (range-lower r2))
+    (range-upper-max (range-upper r1) (range-upper r2))))
 ;;; range-intersection -- largest range enclosed by both r1 and r2.
 ;;;
 ;;; The ranges must be connected (overlapping or touching); if they are not
@@ -658,13 +618,12 @@
 ;;;   (range-intersection (closed-range 1 5) (closed-range 3 8))  ; => [3, 5]
 ;;;
 ;;; Since: LZ4
+
 (defn range-intersection [r1 :int r2 :int] :int
   (if (not (range-connected? r1 r2))
     (range-abort-not-connected)
-    (range-new
-      (range-lower-max (range-lower r1) (range-lower r2))
+    (range-new (range-lower-max (range-lower r1) (range-lower r2))
       (range-upper-min (range-upper r1) (range-upper r2)))))
-
 ;;; range-gap -- largest range lying strictly between r1 and r2.
 ;;;
 ;;; The ranges must NOT be connected (a gap must exist); if they are
@@ -684,25 +643,26 @@
 ;;;   (range-gap (closed-open-range 1 3) (open-range 3 8)) ; => [3, 3]
 ;;;
 ;;; Since: LZ4
+
 (defn range-gap [r1 :int r2 :int] :int
   (if (range-connected? r1 r2)
     (range-abort-connected)
-    ;; Determine which range ends first to find the gap bounds.
-    ;; The gap lower = flip(first-range upper), gap upper = flip(second-range lower).
-    (let [u1 (range-upper r1)
-          l2 (range-lower r2)
-          u2 (range-upper r2)
-          l1 (range-lower r1)
-          ;; r1 ends before r2 if r1's upper is before r2's lower
-          r1-first (range-bound-has-gap? u1 l2)]
+    (let [u1
+          (range-upper r1)
+          l2
+          (range-lower r2)
+          u2
+          (range-upper r2)
+          l1
+          (range-lower r1)
+          r1-first
+          (range-bound-has-gap? u1 l2)]
       (if r1-first
         (range-new (range-bound-flip u1) (range-bound-flip l2))
         (range-new (range-bound-flip u2) (range-bound-flip l1))))))
-
 ;; -------------------------------------------------------------------
 ;; Seq integration -- integer ranges only
 ;; -------------------------------------------------------------------
-
 ;;; seq/from-range -- convert a bounded integer Range to a lazy Seq.
 ;;;
 ;;; The lower bound must be present (range must not be unbounded below).
@@ -719,28 +679,31 @@
 ;;;   (seq-for-each println (seq/from-range (open-range 1 5)))    ; => 2 3 4
 ;;;
 ;;; Since: LZ4
+
+
 (defn seq/from-range [r :int] :int
   (let [lo (range-lower r)]
     (if (= lo 0)
       (range-abort-unbounded-lower)
-      (let [start (if (range-bound-inclusive? lo)
-                    (range-bound-value lo)
-                    (+ (range-bound-value lo) 1))
-            hi    (range-upper r)
-            hb    (not (= hi 0))
-            he    (if hb
-                     (if (range-bound-inclusive? hi)
-                       (range-bound-value hi)
-                       (- (range-bound-value hi) 1))
-                     0)]
+      (let [start
+            (if (range-bound-inclusive? lo)
+              (range-bound-value lo)
+              (+ (range-bound-value lo) 1))
+            hi
+            (range-upper r)
+            hb
+            (not (= hi 0))
+            he
+            (if hb
+              (if (range-bound-inclusive? hi)
+                (range-bound-value hi)
+                (- (range-bound-value hi) 1))
+              0)]
         (seq-new (fn []
                    (let [s start b hb e he]
                      (gen []
                        (let [^mut i s]
-                         (while (if b (<= i e) true)
-                           (yield i)
-                           (set! i (+ i 1))))))))))))
-
+                         (while (if b (<= i e) true) (yield i) (set! i (+ i 1))))))))))))
 ;;; seq/from-range-step -- convert a bounded integer Range to a Seq with a custom step.
 ;;;
 ;;; The lower bound must be present.  Positive step iterates upward; negative step
@@ -759,30 +722,33 @@
 ;;;   ; => 0 2 4 6 8
 ;;;
 ;;; Since: LZ4
+
 (defn seq/from-range-step [step :int r :int] :int
   (let [lo (range-lower r)]
     (if (= lo 0)
       (range-abort-unbounded-lower)
-      (let [start (if (range-bound-inclusive? lo)
-                    (range-bound-value lo)
-                    (if (> step 0)
-                      (+ (range-bound-value lo) 1)
-                      (- (range-bound-value lo) 1)))
-            hi    (range-upper r)
-            hb    (not (= hi 0))
-            he    (if hb
-                     (if (range-bound-inclusive? hi)
-                       (range-bound-value hi)
-                       (if (> step 0)
-                         (- (range-bound-value hi) 1)
-                         (+ (range-bound-value hi) 1)))
-                     0)]
+      (let [start
+            (if (range-bound-inclusive? lo)
+              (range-bound-value lo)
+              (if (> step 0)
+                (+ (range-bound-value lo) 1)
+                (- (range-bound-value lo) 1)))
+            hi
+            (range-upper r)
+            hb
+            (not (= hi 0))
+            he
+            (if hb
+              (if (range-bound-inclusive? hi)
+                (range-bound-value hi)
+                (if (> step 0)
+                  (- (range-bound-value hi) 1)
+                  (+ (range-bound-value hi) 1)))
+              0)]
         (seq-new (fn []
                    (let [s start st step b hb e he]
                      (gen []
                        (let [^mut i s]
-                         (while (if b
-                                  (if (> st 0) (<= i e) (>= i e))
-                                  true)
+                         (while (if b (if (> st 0) (<= i e) (>= i e)) true)
                            (yield i)
                            (set! i (+ i st))))))))))))

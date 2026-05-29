@@ -24,7 +24,6 @@
 ;; Note: (thread-spawn (fn [] ...)) is the elaborator-level Send-safety gate
 ;; (Phase T19-B).  thread-spawn-fn is the runtime entry point for calling
 ;; pthread_create with an explicit function pointer.
-
 ;;; thread-spawn-fn -- spawn a new OS thread calling fn-ptr with arg.
 ;;;
 ;;; Parameters:
@@ -38,9 +37,10 @@
 ;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ptr<void>
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
+(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>]
+  #{Unsafe}
+  :ptr<void>
+  ```c TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
   if (!state) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
   pthread_mutex_init(&state->cancel_mutex, NULL);
   pthread_cond_init(&state->cancel_cond, NULL);
@@ -61,7 +61,6 @@
   }
   return (void *)h;
   ```)
-
 ;;; thread-join -- wait for a thread to finish and free its handle.
 ;;;
 ;;; Parameters:
@@ -71,16 +70,17 @@
 ;;;   (thread-join t)
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-join [t :ptr<void>] #{Unsafe} :nil
-  ```c
-  TurThreadHandle *h = (TurThreadHandle *)t;
+
+(defn thread-join [t :ptr<void>]
+  #{Unsafe}
+  :nil
+  ```c TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_join(h->tid, NULL);
   pthread_mutex_destroy(&h->state->cancel_mutex);
   pthread_cond_destroy(&h->state->cancel_cond);
   free(h->state);
   free(h);
   ```)
-
 ;;; thread-detach -- detach a thread (it cleans up itself on exit) and free the handle.
 ;;;
 ;;; Parameters:
@@ -90,16 +90,17 @@
 ;;;   (thread-detach t)
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-detach [t :ptr<void>] #{Unsafe} :nil
-  ```c
-  TurThreadHandle *h = (TurThreadHandle *)t;
+
+(defn thread-detach [t :ptr<void>]
+  #{Unsafe}
+  :nil
+  ```c TurThreadHandle *h = (TurThreadHandle *)t;
   pthread_detach(h->tid);
   /* state ownership: the thread still holds tur_current_thread_state pointing to
    * state; free only the handle struct. state is freed when the thread exits or
    * leaked (detached threads are fire-and-forget). */
   free(h);
   ```)
-
 ;;; thread-id -- return an integer identifier for the calling OS thread.
 ;;;
 ;;; Returns:
@@ -109,13 +110,13 @@
 ;;;   (thread-id)  ; => int
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-id [] #{Unsafe} :int
-  ```c
-  return (int64_t)(uintptr_t)pthread_self();
+
+(defn thread-id []
+  #{Unsafe}
+  :int
+  ```c return (int64_t)(uintptr_t)pthread_self();
   ```)
-
 ;; ---- TC0-TC2: Cooperative thread cancellation ----
-
 ;;; cancel-thread -- request cooperative cancellation of a thread handle.
 ;;;
 ;;; Parameters:
@@ -130,15 +131,17 @@
 ;;;     (thread-join t))
 ;;;
 ;;; Since: Phase TC0
-(defn cancel-thread [t :ptr<void>] #{Unsafe} :void
-  ```c
-  TurThreadHandle *h = (TurThreadHandle *)t;
+
+
+(defn cancel-thread [t :ptr<void>]
+  #{Unsafe}
+  :void
+  ```c TurThreadHandle *h = (TurThreadHandle *)t;
   __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
   pthread_mutex_lock(&h->state->cancel_mutex);
   pthread_cond_broadcast(&h->state->cancel_cond);
   pthread_mutex_unlock(&h->state->cancel_mutex);
   ```)
-
 ;;; cancelled? -- return true if the current thread has been cancelled.
 ;;;
 ;;; Returns:
@@ -148,11 +151,12 @@
 ;;;   (when (cancelled?) (cleanup-and-return))
 ;;;
 ;;; Since: Phase TC0
-(defn cancelled? [] #{Unsafe} :bool
-  ```c
-  return tur_thread_cancel_requested() != 0;
-  ```)
 
+(defn cancelled? []
+  #{Unsafe}
+  :bool
+  ```c return tur_thread_cancel_requested() != 0;
+  ```)
 ;;; with-cancel-guard -- run a body closure; on cancellation, run cleanup and return nil.
 ;;;
 ;;; When the body or any blocking operation inside it (chan-recv, chan-send, select)
@@ -174,9 +178,11 @@
 ;;;         (process v))))
 ;;;
 ;;; Since: Phase TC1
-(defn with-cancel-guard [cleanup :ptr<void> body :ptr<void>] #{Unsafe} :nil
-  ```c
-  /* Save previous cancel jmpbuf state (supports nested guards) */
+
+(defn with-cancel-guard [cleanup :ptr<void> body :ptr<void>]
+  #{Unsafe}
+  :nil
+  ```c /* Save previous cancel jmpbuf state (supports nested guards) */
   int prev_valid = tur_cancel_jmpbuf_valid;
   jmp_buf prev_buf;
   if (prev_valid) memcpy(&prev_buf, &tur_cancel_jmpbuf, sizeof(jmp_buf));
@@ -198,15 +204,15 @@
       cleanup_thunk(cleanup_clos, 0);
   }
   ```)
-
 ;;; __yield-point-impl -- internal: check cancel and exit if cancelled.
-(defn __yield-point-impl [] #{Unsafe} :void
-  ```c
-  if (tur_thread_cancel_requested()) {
+
+(defn __yield-point-impl []
+  #{Unsafe}
+  :void
+  ```c if (tur_thread_cancel_requested()) {
       tur_thread_do_cancel();
   }
   ```)
-
 ;;; yield-point -- check for a pending cancellation and exit if one is set.
 ;;;
 ;;; Call this inside any CPU-bound loop that must respond to cancel-thread.
@@ -225,5 +231,5 @@
 ;;;         (set! i (+ i 1)))))
 ;;;
 ;;; Since: Phase TC2
-(defmacro yield-point []
-  (list '__yield-point-impl))
+
+(defmacro yield-point [] (list '__yield-point-impl))

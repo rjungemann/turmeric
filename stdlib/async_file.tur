@@ -15,7 +15,6 @@
 ;;   async-file-read  [fd buf-size]   -> bytes-read (int), 0 on EOF, -1 on error
 ;;   async-file-write [fd data len]   -> bytes-written (int), -1 on error
 ;;   async-file-close [fd]            -> 0 on success, -1 on error
-
 ;; Open a file with O_NONBLOCK set.
 ;; flags: 0 = O_RDONLY, 1 = O_WRONLY|O_CREAT|O_TRUNC, 2 = O_RDWR
 ;;; async-file-open -- open a file with O_NONBLOCK and return its file descriptor.
@@ -31,9 +30,10 @@
 ;;;   (async-file-open "/tmp/out.txt" 1)  ; => 5
 ;;;
 ;;; Since: Phase T24
-(defn async-file-open [path :cstr flags :int] #{Unsafe} :int
-  ```c
-  int oflags;
+(defn async-file-open [path :cstr flags :int]
+  #{Unsafe}
+  :int
+  ```c int oflags;
   switch ((int)flags) {
     case 1:  oflags = O_WRONLY | O_CREAT | O_TRUNC; break;
     case 2:  oflags = O_RDWR; break;
@@ -42,7 +42,6 @@
   int fd = open(path, oflags | O_NONBLOCK, 0644);
   return (int64_t)fd;
   ```)
-
 ;; Read up to buf-size bytes from fd.
 ;; Returns number of bytes read, 0 on EOF, -1 on error.
 ;; If running under a scheduler, parks the fiber on EAGAIN.
@@ -59,9 +58,11 @@
 ;;;   (async-file-read fd 4096)  ; => 128
 ;;;
 ;;; Since: Phase T24
-(defn async-file-read [fd :int buf-size :int] #{Unsafe} :int
-  ```c
-  char *buf = (char *)malloc((size_t)buf_size);
+
+(defn async-file-read [fd :int buf-size :int]
+  #{Unsafe}
+  :int
+  ```c char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
   while (1) {
     ssize_t n = read((int)fd, buf, (size_t)buf_size);
@@ -86,7 +87,6 @@
     return -1;
   }
   ```)
-
 ;; Write len bytes from data to fd.
 ;; If running under a scheduler, parks the fiber on EAGAIN.
 ;;; async-file-write -- write len bytes from data to a non-blocking file descriptor.
@@ -103,9 +103,11 @@
 ;;;   (async-file-write fd "hello" 5)  ; => 5
 ;;;
 ;;; Since: Phase T24
-(defn async-file-write [fd :int data :cstr len :int] #{Unsafe} :int
-  ```c
-  int64_t total = 0;
+
+(defn async-file-write [fd :int data :cstr len :int]
+  #{Unsafe}
+  :int
+  ```c int64_t total = 0;
   while (total < len) {
     ssize_t n = write((int)fd, data + total, (size_t)(len - total));
     if (n >= 0) {
@@ -125,7 +127,6 @@
   }
   return total;
   ```)
-
 ;; Close a file descriptor.
 ;;; async-file-close -- close a file descriptor and unregister it from IO polling.
 ;;;
@@ -139,12 +140,13 @@
 ;;;   (async-file-close fd)  ; => 0
 ;;;
 ;;; Since: Phase T24
-(defn async-file-close [fd :int] #{Unsafe} :int
-  ```c
-  tur_io_unregister((int)fd);
+
+(defn async-file-close [fd :int]
+  #{Unsafe}
+  :int
+  ```c tur_io_unregister((int)fd);
   return (int64_t)close((int)fd);
   ```)
-
 ;; Retrieve the internal read buffer pointer after async-file-read.
 ;; Returns a pointer to the buffer (caller must free).
 ;;; async-file-read-buf -- retrieve the buffer pointer from the last async-file-read call.
@@ -156,12 +158,13 @@
 ;;;   (async-file-read-buf)  ; => buf-ptr
 ;;;
 ;;; Since: Phase T24
-(defn async-file-read-buf [] #{Unsafe} :ptr<void>
-  ```c
-  if (!tur_current_fiber) return NULL;
+
+(defn async-file-read-buf []
+  #{Unsafe}
+  :ptr<void>
+  ```c if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51CF11E);
   ```)
-
 ;; Retrieve the number of bytes from the last async-file-read.
 ;;; async-file-read-len -- retrieve the byte count from the last async-file-read call.
 ;;;
@@ -172,8 +175,10 @@
 ;;;   (async-file-read-len)  ; => 128
 ;;;
 ;;; Since: Phase T24
-(defn async-file-read-len [] #{Unsafe} :int
-  ```c
-  if (!tur_current_fiber) return 0;
+
+(defn async-file-read-len []
+  #{Unsafe}
+  :int
+  ```c if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51CF11F);
   ```)

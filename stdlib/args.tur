@@ -22,7 +22,6 @@
 ;;   cons    [0]=value_cstr  [1]=next_cons     (Turmeric *args* layout)
 ;;
 ;; NULL / absent values are stored as 0.
-
 ;;; args/spec-new -- create a new empty argument specification.
 ;;;
 ;;; Returns:
@@ -34,11 +33,9 @@
 ;;;
 ;;; Since: Phase A1
 (defn args/spec-new [] :int
-  ```c
-  int64_t *s = calloc(4, sizeof(int64_t));
+  ```c int64_t *s = calloc(4, sizeof(int64_t));
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; args/spec-prog -- set the program name displayed in help text.
 ;;;
 ;;; Parameters:
@@ -52,13 +49,12 @@
 ;;;   (args/spec-prog spec "mytool")
 ;;;
 ;;; Since: Phase A1
+
 (defn args/spec-prog [spec :int name :cstr] :int
-  ```c
-  int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c int64_t *s = (int64_t*)(intptr_t)spec;
   s[3] = (int64_t)(intptr_t)name;
   return spec;
   ```)
-
 ;;; args/spec-flag -- register a boolean flag in the arg spec.
 ;;;
 ;;; Parameters:
@@ -72,16 +68,15 @@
 ;;;   (args/spec-flag spec "--verbose")
 ;;;
 ;;; Since: Phase A1
+
 (defn args/spec-flag [spec :int name :cstr] :int
-  ```c
-  int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(2 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = s[0];
   s[0] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
-
 ;;; args/spec-option -- register a named option in the arg spec.
 ;;;
 ;;; Parameters:
@@ -98,9 +93,9 @@
 ;;;   (args/spec-option spec "--count" "int" "1")
 ;;;
 ;;; Since: Phase A1
+
 (defn args/spec-option [spec :int name :cstr type :cstr dflt :int] :int
-  ```c
-  int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(4 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = (int64_t)(intptr_t)type;
@@ -109,7 +104,6 @@
   s[1] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
-
 ;;; args/spec-subcommand -- register a nested subcommand.
 ;;;
 ;;; Parameters:
@@ -126,9 +120,9 @@
 ;;;     (args/spec-subcommand spec "build" sub))
 ;;;
 ;;; Since: Phase A1
+
 (defn args/spec-subcommand [spec :int name :cstr sub-spec :int] :int
-  ```c
-  int64_t *s = (int64_t*)(intptr_t)spec;
+  ```c int64_t *s = (int64_t*)(intptr_t)spec;
   int64_t *cell = malloc(3 * sizeof(int64_t));
   cell[0] = (int64_t)(intptr_t)name;
   cell[1] = (int64_t)sub_spec;
@@ -136,7 +130,6 @@
   s[2] = (int64_t)(intptr_t)cell;
   return spec;
   ```)
-
 ;;; args/parse -- parse a Turmeric *args* cons list against an arg spec.
 ;;;
 ;;; Accepts both --key=value (preferred) and --key value forms for options.
@@ -157,9 +150,9 @@
 ;;;   (let [res (args/parse spec *args*)] ...)
 ;;;
 ;;; Since: Phase A1
+
 (defn args/parse [spec :int argv :int] :int
-  ```c
-  /* --- linearise the *args* cons list into a char* array --- */
+  ```c /* --- linearise the *args* cons list into a char* array --- */
   int argc_l = 0;
   int64_t tmp = argv;
   while (tmp) { argc_l++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -363,7 +356,6 @@
   if (argv_l) free(argv_l);
   return res_stk[0];
   ```)
-
 ;;; args/has? -- check whether a key is present in the result.
 ;;;
 ;;; Parameters:
@@ -377,9 +369,9 @@
 ;;;   (args/has? res "verbose")  ; => true if --verbose was passed
 ;;;
 ;;; Since: Phase A1
+
 (defn args/has? [result :int key :cstr] :bool
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
@@ -388,7 +380,6 @@
   }
   return false;
   ```)
-
 ;;; args/get-str -- look up a string value in the result.
 ;;;
 ;;; Parameters:
@@ -402,9 +393,9 @@
 ;;;   (args/get-str res "input")  ; => "file.txt"
 ;;;
 ;;; Since: Phase A1
+
 (defn args/get-str [result :int key :cstr] :cstr
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
@@ -413,7 +404,6 @@
   }
   return 0;
   ```)
-
 ;;; args/get-int -- look up an integer value in the result.
 ;;;
 ;;; Parameters:
@@ -427,9 +417,9 @@
 ;;;   (args/get-int res "count")  ; => 5
 ;;;
 ;;; Since: Phase A1
+
 (defn args/get-int [result :int key :cstr] :int
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
@@ -438,7 +428,6 @@
   }
   return 0;
   ```)
-
 ;;; args/get-bool -- look up a boolean flag value in the result.
 ;;;
 ;;; Parameters:
@@ -452,9 +441,9 @@
 ;;;   (args/get-bool res "verbose")  ; => true if --verbose was passed
 ;;;
 ;;; Since: Phase A1
+
 (defn args/get-bool [result :int key :cstr] :bool
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   int64_t *e   = (int64_t*)(intptr_t)res[0];
   while (e) {
     if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0) {
@@ -466,7 +455,6 @@
   }
   return false;
   ```)
-
 ;;; args/subcommand -- return the matched subcommand name, or 0 if none.
 ;;;
 ;;; Parameters:
@@ -479,12 +467,11 @@
 ;;;   (args/subcommand res)  ; => "build"
 ;;;
 ;;; Since: Phase A1
+
 (defn args/subcommand [result :int] :cstr
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[2];
   ```)
-
 ;;; args/sub-result -- return the result from subcommand parsing, or 0 if none.
 ;;;
 ;;; Parameters:
@@ -497,12 +484,11 @@
 ;;;   (let [sub (args/sub-result res)] (args/get-bool sub "release"))
 ;;;
 ;;; Since: Phase A1
+
 (defn args/sub-result [result :int] :int
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   return res[3];
   ```)
-
 ;;; args/positional -- return the positional arg cons list from the result.
 ;;;
 ;;; The list is in reverse order (last positional arg is the head).
@@ -517,12 +503,11 @@
 ;;;   (args/positional res)  ; => cons list
 ;;;
 ;;; Since: Phase A1
+
 (defn args/positional [result :int] :int
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   return res[1];
   ```)
-
 ;;; args/error? -- check whether parsing produced an error.
 ;;;
 ;;; Parameters:
@@ -535,12 +520,11 @@
 ;;;   (args/error? res)  ; => true if an unknown flag was passed
 ;;;
 ;;; Since: Phase A1
+
 (defn args/error? [result :int] :bool
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   return res[4] != 0;
   ```)
-
 ;;; args/error-msg -- return the parse error message, or 0 if no error.
 ;;;
 ;;; Parameters:
@@ -553,12 +537,11 @@
 ;;;   (args/error-msg res)  ; => "required option --input not provided"
 ;;;
 ;;; Since: Phase A1
+
 (defn args/error-msg [result :int] :cstr
-  ```c
-  int64_t *res = (int64_t*)(intptr_t)result;
+  ```c int64_t *res = (int64_t*)(intptr_t)result;
   return (const char*)(intptr_t)res[5];
   ```)
-
 ;;; args/print-help -- print usage information to stdout.
 ;;;
 ;;; Parameters:
@@ -568,9 +551,9 @@
 ;;;   (args/print-help spec)
 ;;;
 ;;; Since: Phase A1
+
 (defn args/print-help [spec :int] :void
-  ```c
-  int64_t *sp = (int64_t*)(intptr_t)spec;
+  ```c int64_t *sp = (int64_t*)(intptr_t)spec;
   const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
   printf("Usage: %s [options]", prog);
   if (sp[2]) printf(" <subcommand>");
@@ -603,7 +586,6 @@
     }
   }
   ```)
-
 ;;; args/spec-free -- free a spec created by args/spec-new.
 ;;;
 ;;; Does not free sub-specs registered via args/spec-subcommand;
@@ -616,9 +598,9 @@
 ;;;   (args/spec-free spec)
 ;;;
 ;;; Since: Phase A1
+
 (defn args/spec-free [spec :int] :void
-  ```c
-  int64_t *sp = (int64_t*)(intptr_t)spec;
+  ```c int64_t *sp = (int64_t*)(intptr_t)spec;
   int64_t *fl = (int64_t*)(intptr_t)sp[0];
   while (fl) { int64_t *nx = (int64_t*)(intptr_t)fl[1]; free(fl); fl = nx; }
   int64_t *opt = (int64_t*)(intptr_t)sp[1];
@@ -627,7 +609,6 @@
   while (sub) { int64_t *nx = (int64_t*)(intptr_t)sub[2]; free(sub); sub = nx; }
   free(sp);
   ```)
-
 ;;; args/result-free -- free a result created by args/parse (including sub-results).
 ;;;
 ;;; Parameters:
@@ -637,9 +618,9 @@
 ;;;   (args/result-free result)
 ;;;
 ;;; Since: Phase A1
+
 (defn args/result-free [result :int] :void
-  ```c
-  int64_t cur = result;
+  ```c int64_t cur = result;
   while (cur) {
     int64_t *res = (int64_t*)(intptr_t)cur;
     int64_t sub  = res[3];

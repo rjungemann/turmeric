@@ -6,13 +6,15 @@
 ;; Phase 16: Real Time implementation
 ;;
 ;; Implementation of Time capability using platform time functions
-
 (extern-c time [^ptr] :ptr)
-(extern-c clock [^] :int)
-(extern-c nanosleep [^ptr ^ptr] :int)
-(extern-c malloc [^ptr size] :ptr)
-(extern-c free [^ptr p] :void)
 
+(extern-c clock [^] :int)
+
+(extern-c nanosleep [^ptr ^ptr] :int)
+
+(extern-c malloc [^ptr size] :ptr)
+
+(extern-c free [^ptr p] :void)
 ;;; Real-Time -- create a wall-clock Time capability backed by libc time().
 ;;;
 ;;; Returns:
@@ -28,9 +30,9 @@
 ;;; Since: Phase 16
 ;; Real-Time implementation
 ;; Uses libc time() and nanosleep()
+
 (defn Real-Time []
-  ```c
-  /* Define the Time struct */
+  ```c /* Define the Time struct */
   typedef struct Time Time;
   struct Time {
       int (*now)(void);
@@ -67,7 +69,6 @@
   time->sleep = time_sleep;
   return (void*)time;
   ```)
-
 ;;; Real-Time-free -- release a Time capability created by Real-Time.
 ;;;
 ;;; Parameters:
@@ -75,15 +76,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Real-Time
-(defn Real-Time-free [t]
-  ```c
-  free(t);
-  ```)
 
+(defn Real-Time-free [t]
+  ```c free(t);
+  ```)
 ;; ============================================================================
 ;; High-resolution Time implementation
 ;; ============================================================================
-
 ;;; HighRes-Time -- create a CPU-clock Time capability backed by clock().
 ;;;
 ;;; Returns:
@@ -99,9 +98,10 @@
 ;;; Since: Phase 16
 ;; HighRes-Time implementation - uses clock() for higher precision
 ;; Note: clock() may not be suitable for wall-clock time, but works for timing
+
+
 (defn HighRes-Time []
-  ```c
-  typedef struct Time Time;
+  ```c typedef struct Time Time;
   struct Time {
       int (*now)(void);
       void (*sleep)(int ms);
@@ -135,7 +135,6 @@
   time->sleep = hires_sleep;
   return (void*)time;
   ```)
-
 ;;; HighRes-Time-free -- release a Time capability created by HighRes-Time.
 ;;;
 ;;; Parameters:
@@ -143,15 +142,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a HighRes-Time
-(defn HighRes-Time-free [t]
-  ```c
-  free(t);
-  ```)
 
+(defn HighRes-Time-free [t]
+  ```c free(t);
+  ```)
 ;; ============================================================================
 ;; Mock Time implementation (for testing)
 ;; ============================================================================
-
 ;;; Mock-Time -- create a controllable Time capability for testing.
 ;;;
 ;;; Returns:
@@ -167,9 +164,10 @@
 ;;; Since: Phase 16
 ;; Mock-Time implementation - time can be controlled manually
 ;; Useful for testing time-dependent code
+
+
 (defn Mock-Time []
-  ```c
-  /* Define the Time struct */
+  ```c /* Define the Time struct */
   typedef struct MockTime MockTime;
   struct MockTime {
       int (*now)(void);
@@ -200,7 +198,6 @@
   time->sleep = mock_sleep;
   return (void*)time;
   ```)
-
 ;;; Mock-Time-free -- release a Time capability created by Mock-Time.
 ;;;
 ;;; Parameters:
@@ -208,11 +205,10 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Mock-Time
-(defn Mock-Time-free [t]
-  ```c
-  free(t);
-  ```)
 
+(defn Mock-Time-free [t]
+  ```c free(t);
+  ```)
 ;;; mock-time-set -- set the current time on a Mock-Time instance.
 ;;;
 ;;; Parameters:
@@ -225,13 +221,12 @@
 ;;; Since: Phase 16
 ;; Set mock time to a specific value (in milliseconds)
 ;; Note: This modifies the global mock time state
+
 (defn mock-time-set [t new_time]
-  ```c
-  typedef struct MockTime MockTime;
+  ```c typedef struct MockTime MockTime;
   MockTime* mock_time = (MockTime*)t;
   mock_time->current_time = new_time;
   ```)
-
 ;;; mock-time-get -- read the current time from a Mock-Time instance.
 ;;;
 ;;; Parameters:
@@ -245,17 +240,15 @@
 ;;;
 ;;; Since: Phase 16
 ;; Get current mock time
+
 (defn mock-time-get [t]
-  ```c
-  typedef struct MockTime MockTime;
+  ```c typedef struct MockTime MockTime;
   MockTime* mock_time = (MockTime*)t;
   return mock_time->current_time;
   ```)
-
 ;; ============================================================================
 ;; Helper functions for direct time operations
 ;; ============================================================================
-
 ;;; get-time-ms -- return the current wall-clock time in milliseconds since epoch.
 ;;;
 ;;; Returns:
@@ -266,12 +259,12 @@
 ;;;
 ;;; Since: Phase 16
 ;; Get current time in milliseconds since epoch
+
+
 (defn get-time-ms []
-  ```c
-  time_t now = time(NULL);
+  ```c time_t now = time(NULL);
   return (int)(now * 1000);
   ```)
-
 ;;; sleep-ms -- suspend execution for a given number of milliseconds.
 ;;;
 ;;; Parameters:
@@ -282,9 +275,9 @@
 ;;;
 ;;; Since: Phase 16
 ;; Sleep for specified milliseconds
+
 (defn sleep-ms [ms]
-  ```c
-  if (ms <= 0) return;
+  ```c if (ms <= 0) return;
   long seconds = ms / 1000;
   long nanoseconds = (ms % 1000) * 1000000;
   struct timespec req = {.tv_sec = seconds, .tv_nsec = nanoseconds};
@@ -293,7 +286,6 @@
       req = rem;
   }
   ```)
-
 ;;; get-cpu-time -- return the current process CPU time in milliseconds.
 ;;;
 ;;; Returns:
@@ -305,8 +297,8 @@
 ;;;
 ;;; Since: Phase 16
 ;; Get CPU time in milliseconds
+
 (defn get-cpu-time []
-  ```c
-  clock_t now = clock();
+  ```c clock_t now = clock();
   return (int)(now * 1000 / CLOCKS_PER_SEC);
   ```)

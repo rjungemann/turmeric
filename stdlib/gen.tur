@@ -6,7 +6,6 @@
 ;; stdlib/gen.tur -- Generator standard library (GF2)
 ;; Helpers and macros for consuming and composing generators.
 ;; Auto-loaded by the compiler alongside stdlib/macros.tur.
-
 ;;; gen-some? -- test whether a gen-next result contains a value.
 ;;;
 ;;; Parameters:
@@ -22,10 +21,8 @@
 ;;;
 ;;; Since: GF2
 (defn gen-some? [p :ptr<void>] :bool
-  ```c
-  return p != NULL;
+  ```c return p != NULL;
   ```)
-
 ;;; gen-unwrap -- extract the int64_t value from a gen-next pointer.
 ;;;
 ;;; Parameters:
@@ -38,11 +35,10 @@
 ;;;   (gen-unwrap (gen-next g))  ; => yielded int value
 ;;;
 ;;; Since: GF2
-(defn gen-unwrap [p :ptr<void>] :int
-  ```c
-  return *(int64_t *)p;
-  ```)
 
+(defn gen-unwrap [p :ptr<void>] :int
+  ```c return *(int64_t *)p;
+  ```)
 ;;; gen-none -- return a null generator result representing no value.
 ;;;
 ;;; Returns:
@@ -52,15 +48,13 @@
 ;;;   (gen-none)  ; => NULL
 ;;;
 ;;; Since: GF2
-(defn gen-none [] :ptr<void>
-  ```c
-  return NULL;
-  ```)
 
+(defn gen-none [] :ptr<void>
+  ```c return NULL;
+  ```)
 ;; --- Growable array helpers used by gen-collect ---
 ;; Internal layout: int64_t[3] = { len, cap, data_ptr }
 ;; All four helpers are exported so callers can iterate collected arrays.
-
 ;;; gen-arr-new -- allocate an empty array for use with gen-collect.
 ;;;
 ;;; Returns:
@@ -70,13 +64,13 @@
 ;;;   (let [a (gen-arr-new)] ...)
 ;;;
 ;;; Since: GF2
+
+
 (defn gen-arr-new [] :int
-  ```c
-  int64_t *h = (int64_t *)malloc(3 * sizeof(int64_t));
+  ```c int64_t *h = (int64_t *)malloc(3 * sizeof(int64_t));
   h[0] = 0; h[1] = 0; h[2] = 0;
   return (int64_t)(intptr_t)h;
   ```)
-
 ;;; gen-arr-push! -- append val to the end of a gen-arr array.
 ;;;
 ;;; Parameters:
@@ -87,9 +81,9 @@
 ;;;   (gen-arr-push! my-arr 42)
 ;;;
 ;;; Since: GF2
+
 (defn gen-arr-push! [a val] :nil
-  ```c
-  int64_t *h = (int64_t *)(intptr_t)a;
+  ```c int64_t *h = (int64_t *)(intptr_t)a;
   if (h[0] >= h[1]) {
     int64_t nc = h[1] ? h[1] * 2 : 4;
     int64_t *nd = (int64_t *)malloc((size_t)nc * sizeof(int64_t));
@@ -103,7 +97,6 @@
   int64_t *data = (int64_t *)(intptr_t)h[2];
   data[h[0]++] = val;
   ```)
-
 ;;; gen-arr-len -- return the number of elements in a gen-arr array.
 ;;;
 ;;; Parameters:
@@ -116,12 +109,11 @@
 ;;;   (gen-arr-len my-arr)  ; => 3
 ;;;
 ;;; Since: GF2
+
 (defn gen-arr-len [a] :int
-  ```c
-  int64_t *h = (int64_t *)(intptr_t)a;
+  ```c int64_t *h = (int64_t *)(intptr_t)a;
   return h[0];
   ```)
-
 ;;; gen-arr-get -- return the element at index i in a gen-arr array.
 ;;;
 ;;; Parameters:
@@ -135,13 +127,12 @@
 ;;;   (gen-arr-get my-arr 0)  ; => first element
 ;;;
 ;;; Since: GF2
+
 (defn gen-arr-get [a i] :int
-  ```c
-  int64_t *h = (int64_t *)(intptr_t)a;
+  ```c int64_t *h = (int64_t *)(intptr_t)a;
   int64_t *data = (int64_t *)(intptr_t)h[2];
   return data[i];
   ```)
-
 ;;; gen-collect -- materialise all yielded values into a gen-arr array.
 ;;;
 ;;; Parameters:
@@ -156,17 +147,19 @@
 ;;;     (println (gen-arr-len arr)))
 ;;;
 ;;; Since: GF2
+
 (defmacro gen-collect [g]
-  (let [gv  (gensym gv)
-        res (gensym res)
-        it  (gensym it)]
-    (list let (vec gv g res (list gen-arr-new))
-      (list while (list not (list gen-done? gv))
-        (list let (vec it (list gen-next gv))
-          (list when (list gen-some? it)
+  (let [gv (gensym gv) res (gensym res) it (gensym it)]
+    (list let
+      (vec gv g res (list gen-arr-new))
+      (list while
+        (list not (list gen-done? gv))
+        (list let
+          (vec it (list gen-next gv))
+          (list when
+            (list gen-some? it)
             (list gen-arr-push! res (list gen-unwrap it)))))
       res)))
-
 ;;; gen-for-each -- call f with every value yielded by a generator.
 ;;;
 ;;; Parameters:
@@ -177,15 +170,16 @@
 ;;;   (gen-for-each println my-gen)
 ;;;
 ;;; Since: GF2
-(defmacro gen-for-each [f g]
-  (let [gv (gensym gv)
-        it (gensym it)]
-    (list let (vec gv g)
-      (list while (list not (list gen-done? gv))
-        (list let (vec it (list gen-next gv))
-          (list when (list gen-some? it)
-            (list f (list gen-unwrap it))))))))
 
+(defmacro gen-for-each [f g]
+  (let [gv (gensym gv) it (gensym it)]
+    (list let
+      (vec gv g)
+      (list while
+        (list not (list gen-done? gv))
+        (list let
+          (vec it (list gen-next gv))
+          (list when (list gen-some? it) (list f (list gen-unwrap it))))))))
 ;;; gen-nth -- return the nth (0-indexed) yielded value, or gen-none.
 ;;;
 ;;; Parameters:
@@ -202,17 +196,16 @@
 ;;;     (when (gen-some? v) (println (gen-unwrap v))))
 ;;;
 ;;; Since: GF2
+
 (defmacro gen-nth [n g]
-  (let [gv (gensym gv)
-        i  (gensym i)]
-    (list let (vec gv g ^mut i 0)
-      (list while (list and (list not (list gen-done? gv)) (list < i n))
+  (let [gv (gensym gv) i (gensym i)]
+    (list let
+      (vec gv g ^mut i 0)
+      (list while
+        (list and (list not (list gen-done? gv)) (list < i n))
         (list gen-next gv)
         (list set! i (list + i 1)))
-      (list if (list gen-done? gv)
-        (list gen-none)
-        (list gen-next gv)))))
-
+      (list if (list gen-done? gv) (list gen-none) (list gen-next gv)))))
 ;;; yield* -- re-yield every value from an inner generator.
 ;;;
 ;;; Parameters:
@@ -224,11 +217,13 @@
 ;;;     (yield 99))
 ;;;
 ;;; Since: GF2
+
 (defmacro yield* [inner]
-  (let [gv (gensym gv)
-        v  (gensym v)]
-    (list let (vec gv inner)
-      (list while (list not (list gen-done? gv))
-        (list let (vec v (list gen-next gv))
-          (list when (list gen-some? v)
-            (list yield (list gen-unwrap v))))))))
+  (let [gv (gensym gv) v (gensym v)]
+    (list let
+      (vec gv inner)
+      (list while
+        (list not (list gen-done? gv))
+        (list let
+          (vec v (list gen-next gv))
+          (list when (list gen-some? v) (list yield (list gen-unwrap v))))))))

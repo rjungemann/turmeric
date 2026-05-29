@@ -8,11 +8,9 @@
 ;; Defines Socket as a move-only struct wrapping an integer file descriptor.
 ;; Future versions will upgrade Socket to lref<Socket> once FileHandle,
 ;; Socket, and MutexGuard are all defined and the LT4 annotation pass is done.
-
 ;; ============================================================================
 ;; LT4: Socket -- resource-safe socket handle (move-only)
 ;; ============================================================================
-
 ;;; Socket -- a linear (exactly-once) wrapper around a POSIX socket fd.
 ;;;
 ;;; Wrapping the raw fd in a named struct prevents accidental duplication.
@@ -22,7 +20,6 @@
 ;;;
 ;;; Since: LT4
 (defstruct Socket :linear [fd :int])
-
 ;;; socket-fd -- return the raw file descriptor from a Socket.
 ;;;
 ;;; Parameters:
@@ -35,11 +32,10 @@
 ;;;   (socket-fd my-socket)  ; => 5
 ;;;
 ;;; Since: LT4
-(defn socket-fd [s : Socket] :int
-  ```c
-  return s.fd;
-  ```)
 
+(defn socket-fd [s : Socket] :int
+  ```c return s.fd;
+  ```)
 ;;; socket-valid? -- return true if the Socket wraps a non-negative fd.
 ;;;
 ;;; Parameters:
@@ -52,11 +48,10 @@
 ;;;   (socket-valid? my-socket)  ; => true
 ;;;
 ;;; Since: LT4
-(defn socket-valid? [s : Socket] :bool
-  ```c
-  return s.fd >= 0;
-  ```)
 
+(defn socket-valid? [s : Socket] :bool
+  ```c return s.fd >= 0;
+  ```)
 ;;; socket-close -- close a Socket and release the underlying fd.
 ;;;
 ;;; Parameters:
@@ -69,8 +64,8 @@
 ;;;   (socket-close my-socket)  ; => 0
 ;;;
 ;;; Since: LT4
+
 (defn socket-close [s : Socket] :int
-  ```c
-  if (s.fd < 0) return -1;
+  ```c if (s.fd < 0) return -1;
   return close(s.fd);
   ```)

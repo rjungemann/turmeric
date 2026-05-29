@@ -9,487 +9,271 @@
 ;; Phase M7: Wrapped in (defmodule tur/macros ...). The auto-loader treats
 ;; modules under the `tur/` namespace as implicitly imported, so the macros
 ;; below remain visible globally just like in pre-module code.
-
 (defmodule tur/macros
-  (export cond when unless must! must-msg! ignore! do-m for doc as->
-          curry with-resource must-use
-          derive-show derive-show-body__ derive-show-rest__
-          derive-debug derive-debug-body__ derive-debug-rest__
-          derive-display derive-display-body__ derive-display-rest__)
-
-;;; cond -- variadic conditional branching via nested if chains.
-;;;
-;;; Parameters:
-;;;   & clauses -- alternating test/expression pairs, with optional :else at end
-;;;
-;;; Returns:
-;;;   The expression corresponding to the first truthy test, or the :else
-;;;   expression if present, or nil if no clause matches.
-;;;
-;;; Example:
-;;;   (cond (> x 0) :pos (< x 0) :neg :else :zero)  ; => :pos/:neg/:zero
-;;;
-;;; Since: Phase 7
-(defmacro cond [& clauses]
-  (if (empty? clauses)
-    nil
-    (if (= (first clauses) :else)
-      (second clauses)
-      (list if (first clauses) (second clauses)
-            (list cond ~@(rest (rest clauses)))))))
-
-;;; when -- evaluate body only if test is truthy.
-;;;
-;;; Parameters:
-;;;   test -- the condition to evaluate
-;;;   body -- expression to evaluate when test is truthy
-;;;
-;;; Returns:
-;;;   The value of body if test is truthy, otherwise nil.
-;;;
-;;; Example:
-;;;   (when (> x 0) (print "positive"))  ; => prints if x > 0
-;;;
-;;; Since: Phase 7
-(defmacro when [test body]
-  (if test (do body)))
-
-;;; unless -- evaluate body only if test is falsy.
-;;;
-;;; Parameters:
-;;;   test -- the condition to evaluate
-;;;   body -- expression to evaluate when test is falsy
-;;;
-;;; Returns:
-;;;   The value of body if test is falsy, otherwise nil.
-;;;
-;;; Example:
-;;;   (unless (= x 0) (/ 1 x))  ; => evaluates only when x is non-zero
-;;;
-;;; Since: Phase 7
-(defmacro unless [test body]
-  (if test nil (do body)))
-
-;;; must! -- unwrap an option or result value, panicking if absent.
-;;;
-;;; Parameters:
-;;;   expr -- an option or result expression to unwrap
-;;;
-;;; Returns:
-;;;   The unwrapped inner value.
-;;;
-;;; Example:
-;;;   (must! (option-some 42))  ; => 42
-;;;
-;;; Since: Phase R4
-(defmacro must! [expr]
-  (option-must expr))
-
-;;; must-msg! -- unwrap an option or result value with a custom panic message.
-;;;
-;;; Parameters:
-;;;   expr -- an option or result expression to unwrap
-;;;   msg  -- the message to panic with if the value is absent
-;;;
-;;; Returns:
-;;;   The unwrapped inner value.
-;;;
-;;; Example:
-;;;   (must-msg! (option-some 42) "expected a value")  ; => 42
-;;;
-;;; Since: Phase R4
-(defmacro must-msg! [expr msg]
-  (option-expect expr msg))
-
-;;; ignore! -- explicitly discard a result value.
-;;;
-;;; Parameters:
-;;;   expr -- the expression whose value should be discarded
-;;;
-;;; Returns:
-;;;   nil
-;;;
-;;; Example:
-;;;   (ignore! (some-fn-with-result))  ; => nil
-;;;
-;;; Since: Phase R6
-(defmacro ignore! [expr]
-  (do expr nil))
-
-;;; do-m -- monadic do-notation using .bind dispatch.
-;;;
-;;; Parameters:
-;;;   & forms -- alternating variable/monadic-action pairs followed by a body;
-;;;              the last form is the body expression
-;;;
-;;; Returns:
-;;;   A nested .bind chain that threads variable bindings through monadic actions,
-;;;   ending with the body expression.
-;;;
-;;; Example:
-;;;   (do-m x (option-some 5) y (option-some 3) (option-some (+ x y)))
-;;;   ; => (.bind (option-some 5) (fn [x] (.bind (option-some 3) (fn [y] (option-some (+ x y))))))
-;;;
-;;; Since: Phase HKT H6
-(defmacro do-m [& forms]
-  (if (empty? forms)
-    nil
-    (if (empty? (rest forms))
-      (first forms)
-      (list .bind (second forms) (list fn `[~(first forms)] (list do-m ~@(rest (rest forms))))))))
-
-;;; for -- monadic comprehension with optional guards.
-;;;
-;;; Parameters:
-;;;   binding-vec -- flat vector of alternating var/collection pairs,
-;;;                  with optional :when guard clauses interspersed
-;;;   & body      -- the body expression(s) to lift into the monad
-;;;
-;;; Returns:
-;;;   A nested .bind/.pure chain that iterates over the collections,
-;;;   filters via :when guards, and lifts the body into the monad.
-;;;
-;;; Example:
-;;;   (for [x coll] (* x 2))
-;;;   ; => (.bind coll (fn [x] (.pure (* x 2))))
-;;;
-;;;   (for [x coll :when (> x 0) y other] (+ x y))
-;;;   ; => (.bind coll (fn [x] (if (> x 0) (.bind other (fn [y] (.pure (+ x y)))) (.empty x))))
-;;;
-;;; Since: Phase HKT H7
-(defmacro for [binding-vec & body]
-  (if (empty? binding-vec)
-    ;; No bindings: wrap body in pure
-    (list .pure (list do ~@body))
-    (let [first-b (first binding-vec)
-          rest-bv  (rest binding-vec)]
-      (if (= first-b :when)
-        ;; :when guard at the head of the binding vector
-        (let [pred (first rest-bv)
-              more (rest rest-bv)]
-          (if (empty? more)
-            (list if pred (list .pure (list do ~@body)) (list .empty 0))
-            (list if pred (list for (list ~@more) ~@body) (list .empty 0))))
-        ;; var/coll pair -- var is first-b, coll is next element
-        (let [var  first-b
-              coll (first rest-bv)
-              more (rest rest-bv)]
-          (if (empty? more)
-            ;; Last binding: .bind coll (fn [var] (.pure body))
-            (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
-            ;; More bindings remain -- check if next is :when
-            (let [next-first (first more)
-                  next-rest  (rest more)]
-              (if (= next-first :when)
-                ;; Inline :when -- use var as type witness for .empty dispatch
-                (let [pred  (first next-rest)
-                      after (rest next-rest)]
-                  (if (empty? after)
-                    (list .bind coll (list fn `[~var]
-                      (list if pred (list .pure (list do ~@body)) (list .empty var))))
-                    (list .bind coll (list fn `[~var]
-                      (list if pred (list for (list ~@after) ~@body) (list .empty var))))))
-                ;; More var/coll bindings remain
-                (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
-
-;;; curry -- convert a 2-argument function to its curried form.
-;;;
-;;; Parameters:
-;;;   f -- a 2-argument function
-;;;
-;;; Returns:
-;;;   A 1-argument function that, given its first argument, returns a
-;;;   1-argument function that applies f to both.
-;;;
-;;; Example:
-;;;   (defn add [a b] :int (+ a b))
-;;;   (let [add1 ((curry add) 1)]
-;;;     (add1 41))  ; => 42
-;;;
-;;; Since: CY3
-(defmacro curry [f]
-  `(fn [a] (fn [b] (~f a b))))
-
-;;; doc -- print documentation for a function, macro, or struct at the REPL.
-;;;
-;;; Parameters:
-;;;   name -- symbol whose documentation to display
-;;;
-;;; Returns:
-;;;   Prints the doc string to stdout; returns nil.
-;;;
-;;; Example:
-;;;   (doc cons)    ; prints: cons -- prepend a value to a list. ...
-;;;   (doc when)    ; prints: when -- evaluate body only if test is truthy. ...
-;;;
-;;; Since: Phase D1 (auto-docs)
-(defmacro doc [name]
-  (let [entry (doc-lookup name)]
-    (if (not (= entry 0))
-      (println entry)
-      (println "No documentation found."))))
-
-;;; with-resource -- bind and safely consume a resource within a scope.
-;;;
-;;; Parameters:
-;;;   binding -- a two-element vector [name init] where init produces the resource
-;;;   & body  -- expressions forming the scope in which the resource is available
-;;;
-;;; Returns:
-;;;   The value of the last body expression.
-;;;
-;;; Example:
-;;;   ;; Under -Xsubstructural, r is inferred as linear (must be consumed):
-;;;   (with-resource [r (ref 42)]
-;;;     (println @r)
-;;;     (drop! r))
-;;;
-;;;   ;; With explicit ^linear annotation:
-;;;   (with-resource [^linear fh (open-file "data.txt")]
-;;;     (close-file fh))
-;;;
-;;; Since: ST3
-(defmacro with-resource [binding & body]
-  (let [bname (first binding)
-        binit (second binding)]
-    (list let `[~bname ~binit] (list do ~@body))))
-
-;;; must-use -- wrap a value to enforce that it is used at least once.
-;;;
-;;; Parameters:
-;;;   expr -- the expression whose value must be used
-;;;
-;;; Returns:
-;;;   The value of expr, annotated as ^relevant (must-use under -Xsubstructural).
-;;;
-;;; Example:
-;;;   ;; Under -Xsubstructural, the result must be observed before scope exit:
-;;;   (let [r (must-use (acquire-resource))]
-;;;     (process r)
-;;;     (process r))  ; OK -- ^relevant allows duplication
-;;;
-;;;   ;; Dropping without use is an error:
-;;;   (let [r (must-use (acquire-resource))]
-;;;     0)            ; ERROR TUR-E0151: relevant value dropped without use
-;;;
-;;; Since: ST3
-(defmacro must-use [expr]
-  (list let (vec (quote ^relevant) (quote __must_use_val) expr) __must_use_val))
-
-;;; as-> -- thread a value through a pipeline of transformations, naming it at each step.
-;;;
-;;; Parameters:
-;;;   expr -- the initial value
-;;;   name -- the symbol to bind to the threaded value
-;;;   & forms -- alternating transformation/name pairs; the last form is the final expression
-;;;
-;;; Returns:
-;;;   The result of the final expression after threading through all transformations.
-;;;
-;;; Example:
-;;;   (as-> 42 x
-;;;     (* x 2) y
-;;;     (+ y 10))  ; => 94
-;;;
-;;; Since: Phase M8
-(defmacro as-> [expr name & forms]
-  (if (empty? forms)
-    expr
-    (let [next-form (first forms)
-          next-name (if (< (count forms) 2) name (second forms))
-          remaining-forms (if (< (count forms) 2) (rest forms) (rest (rest forms)))]
-      `(let [~next-name ~next-form]
-         (as-> ~next-name ~next-name ~@remaining-forms)))))
-
-;;; dot -- transform (. thing method args...) into (.method thing args...).
-;;;
-;;; Parameters:
-;;;   thing  -- the object or value on which the method is called
-;;;   method -- the method name
-;;;   & args -- arguments to pass to the method
-;;;
-;;; Returns:
-;;;   The transformed expression (.method thing args...).
-;;;
-;;; Example:
-;;;   (. my-vec push 42)  ; => (.push my-vec 42)
-;;;
-;;; Since: Phase M8
-(defmacro dot [thing method & args]
-  (cons (list '. method) (cons thing args)))
-
-;;; derive-show-rest__ -- internal helper; generates trailing str-concat chain for derive-show.
-(defmacro derive-show-rest__ [& fields]
-  (if (empty? fields)
-    " }"
-    (let [field (first fields)
-          rest-fields (rest fields)
-          is-vec (vec? field)
-          label (if is-vec (first field) (symbol-name field))
-          accessor-sym (if is-vec (second field) field)
-          accessor-form (if is-vec
-                          (list accessor-sym __p)
-                          (list (dot-sym accessor-sym) __p))
-          prefix (str-append ", " label " = ")]
-      (list str-concat prefix
-        (list str-concat
-          (list .show accessor-form)
-          (list derive-show-rest__ ~@rest-fields))))))
-
-;;; derive-show-body__ -- internal helper; generates the full show body expression for derive-show.
-(defmacro derive-show-body__ [TypeName & fields]
-  (let [type-str (symbol-name TypeName)]
+  (export cond
+    when
+    unless
+    must!
+    must-msg!
+    ignore!
+    do-m
+    for
+    doc
+    as->
+    curry
+    with-resource
+    must-use
+    derive-show
+    derive-show-body__
+    derive-show-rest__
+    derive-debug
+    derive-debug-body__
+    derive-debug-rest__
+    derive-display
+    derive-display-body__
+    derive-display-rest__)
+  (defmacro cond [& clauses]
+    (if (empty? clauses)
+      nil
+      (if (= (first clauses) :else)
+        (second clauses)
+        (list if
+          (first clauses)
+          (second clauses)
+          (list cond ~@(rest (rest clauses)))))))
+  (defmacro when [test body] (if test (do body)))
+  (defmacro unless [test body] (if test nil (do body)))
+  (defmacro must! [expr] (option-must expr))
+  (defmacro must-msg! [expr msg] (option-expect expr msg))
+  (defmacro ignore! [expr] (do expr nil))
+  (defmacro do-m [& forms]
+    (if (empty? forms)
+      nil
+      (if (empty? (rest forms))
+        (first forms)
+        (list .bind
+          (second forms)
+          (list fn `[~(first forms)] (list do-m ~@(rest (rest forms))))))))
+  (defmacro for [binding-vec & body]
+    (if (empty? binding-vec)
+      (list .pure (list do ~@body))
+      (let [first-b (first binding-vec) rest-bv (rest binding-vec)]
+        (if (= first-b :when)
+          (let [pred (first rest-bv) more (rest rest-bv)]
+            (if (empty? more)
+              (list if pred (list .pure (list do ~@body)) (list .empty 0))
+              (list if pred (list for (list ~@more) ~@body) (list .empty 0))))
+          (let [var first-b coll (first rest-bv) more (rest rest-bv)]
+            (if (empty? more)
+              (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
+              (let [next-first (first more) next-rest (rest more)]
+                (if (= next-first :when)
+                  (let [pred (first next-rest) after (rest next-rest)]
+                    (if (empty? after)
+                      (list .bind
+                        coll
+                        (list fn
+                          `[~var]
+                          (list if
+                            pred
+                            (list .pure (list do ~@body))
+                            (list .empty var))))
+                      (list .bind
+                        coll
+                        (list fn
+                          `[~var]
+                          (list if
+                            pred
+                            (list for (list ~@after) ~@body)
+                            (list .empty var))))))
+                  (list .bind
+                    coll
+                    (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
+  (defmacro curry [f] `(fn [a] (fn [b] (~f a b))))
+  (defmacro doc [name]
+    (let [entry (doc-lookup name)]
+      (if (not (= entry 0)) (println entry) (println "No documentation found."))))
+  (defmacro with-resource [binding & body]
+    (let [bname (first binding) binit (second binding)]
+      (list let `[~bname ~binit] (list do ~@body))))
+  (defmacro must-use [expr]
+    (list let
+      (vec (quote ^relevant) (quote __must_use_val) expr)
+      __must_use_val))
+  (defmacro as-> [expr name & forms]
+    (if (empty? forms)
+      expr
+      (let [next-form
+            (first forms)
+            next-name
+            (if (< (count forms) 2) name (second forms))
+            remaining-forms
+            (if (< (count forms) 2) (rest forms) (rest (rest forms)))]
+        `(let [~next-name ~next-form]
+           (as-> ~next-name ~next-name ~@remaining-forms)))))
+  (defmacro dot [thing method & args] (cons (list '. method) (cons thing args)))
+  (defmacro derive-show-rest__ [& fields]
     (if (empty? fields)
-      (str-append type-str " { }")
-      (let [field (first fields)
-            rest-fields (rest fields)
-            is-vec (vec? field)
-            label (if is-vec (first field) (symbol-name field))
-            accessor-sym (if is-vec (second field) field)
-            accessor-form (if is-vec
-                            (list accessor-sym __p)
-                            (list (dot-sym accessor-sym) __p))
-            first-prefix (str-append type-str " { " label " = ")]
-        (list str-concat first-prefix
+      " }"
+      (let [field
+            (first fields)
+            rest-fields
+            (rest fields)
+            is-vec
+            (vec? field)
+            label
+            (if is-vec (first field) (symbol-name field))
+            accessor-sym
+            (if is-vec (second field) field)
+            accessor-form
+            (if is-vec
+              (list accessor-sym __p)
+              (list (dot-sym accessor-sym) __p))
+            prefix
+            (str-append ", " label " = ")]
+        (list str-concat
+          prefix
           (list str-concat
             (list .show accessor-form)
-            (list derive-show-rest__ ~@rest-fields)))))))
-
-;;; derive-show -- generate a Show instance for a struct.
-;;;
-;;; Parameters:
-;;;   TypeName -- the struct type name (symbol)
-;;;   fields   -- bare symbols or [label accessor] pairs; each bare symbol x
-;;;               uses label "x" and accessor (.x struct); each [label .accessor]
-;;;               pair uses the given label string and accessor symbol.
-;;;
-;;; Returns:
-;;;   A definstance Show form for TypeName.
-;;;
-;;; Example:
-;;;   (derive-show Point x y)
-;;;   ; (show (make-struct Point 3 4)) => "Point { x = 3, y = 4 }"
-;;;
-;;;   (derive-show MyStruct name [alias .internal])
-;;;   ; uses (.name s) as "name", (.internal s) as "alias"
-;;;
-;;; Since: SI2
-(defmacro derive-show [TypeName & fields]
-  (list definstance Show (vec TypeName)
-    (list show (vec __p) :cstr
-      (list derive-show-body__ TypeName ~@fields))))
-
-;;; derive-debug-rest__ -- internal helper; generates trailing str-concat chain for derive-debug.
-(defmacro derive-debug-rest__ [& fields]
-  (if (empty? fields)
-    ")"
-    (let [field (first fields)
-          rest-fields (rest fields)
-          is-vec (vec? field)
-          label (if is-vec (first field) (symbol-name field))
-          accessor-sym (if is-vec (second field) field)
-          accessor-form (if is-vec
-                          (list accessor-sym __p)
-                          (list (dot-sym accessor-sym) __p))
-          field-prefix (str-append " (" label " ")]
-      (list str-concat field-prefix
-        (list str-concat
-          (list .debug accessor-form)
-          (list str-concat ")"
-            (list derive-debug-rest__ ~@rest-fields)))))))
-
-;;; derive-debug-body__ -- internal helper; generates the full debug body expression for derive-debug.
-(defmacro derive-debug-body__ [TypeName & fields]
-  (let [type-str (symbol-name TypeName)]
+            (list derive-show-rest__ ~@rest-fields))))))
+  (defmacro derive-show-body__ [TypeName & fields]
+    (let [type-str (symbol-name TypeName)]
+      (if (empty? fields)
+        (str-append type-str " { }")
+        (let [field
+              (first fields)
+              rest-fields
+              (rest fields)
+              is-vec
+              (vec? field)
+              label
+              (if is-vec (first field) (symbol-name field))
+              accessor-sym
+              (if is-vec (second field) field)
+              accessor-form
+              (if is-vec
+                (list accessor-sym __p)
+                (list (dot-sym accessor-sym) __p))
+              first-prefix
+              (str-append type-str " { " label " = ")]
+          (list str-concat
+            first-prefix
+            (list str-concat
+              (list .show accessor-form)
+              (list derive-show-rest__ ~@rest-fields)))))))
+  (defmacro derive-show [TypeName & fields]
+    (list definstance
+      Show
+      (vec TypeName)
+      (list show (vec __p) :cstr (list derive-show-body__ TypeName ~@fields))))
+  (defmacro derive-debug-rest__ [& fields]
     (if (empty? fields)
-      (str-append "(" type-str ")")
-      (let [field (first fields)
-            rest-fields (rest fields)
-            is-vec (vec? field)
-            label (if is-vec (first field) (symbol-name field))
-            accessor-sym (if is-vec (second field) field)
-            accessor-form (if is-vec
-                            (list accessor-sym __p)
-                            (list (dot-sym accessor-sym) __p))
-            first-prefix (str-append "(" type-str " (" label " ")]
-        (list str-concat first-prefix
+      ")"
+      (let [field
+            (first fields)
+            rest-fields
+            (rest fields)
+            is-vec
+            (vec? field)
+            label
+            (if is-vec (first field) (symbol-name field))
+            accessor-sym
+            (if is-vec (second field) field)
+            accessor-form
+            (if is-vec
+              (list accessor-sym __p)
+              (list (dot-sym accessor-sym) __p))
+            field-prefix
+            (str-append " (" label " ")]
+        (list str-concat
+          field-prefix
           (list str-concat
             (list .debug accessor-form)
-            (list str-concat ")"
-              (list derive-debug-rest__ ~@rest-fields))))))))
-
-;;; derive-debug -- generate a Debug instance for a struct.
-;;;
-;;; Parameters:
-;;;   TypeName -- the struct type name (symbol)
-;;;   fields   -- bare symbols or [label accessor] pairs (same syntax as derive-show)
-;;;
-;;; Returns:
-;;;   A definstance Debug form for TypeName.
-;;;
-;;; Example:
-;;;   (derive-debug Point x y)
-;;;   ; (debug (make-struct Point 3 4)) => "(Point (x 3) (y 4))"
-;;;
-;;; Since: SI3
-(defmacro derive-debug [TypeName & fields]
-  (list definstance Debug (vec TypeName)
-    (list debug (vec __p) :cstr
-      (list derive-debug-body__ TypeName ~@fields))))
-
-;;; derive-display-rest__ -- internal helper; generates trailing str-concat chain for derive-display.
-(defmacro derive-display-rest__ [& fields]
-  (if (empty? fields)
-    " }"
-    (let [field (first fields)
-          rest-fields (rest fields)
-          is-vec (vec? field)
-          label (if is-vec (first field) (symbol-name field))
-          accessor-sym (if is-vec (second field) field)
-          accessor-form (if is-vec
-                          (list accessor-sym __p)
-                          (list (dot-sym accessor-sym) __p))
-          prefix (str-append ", " label " = ")]
-      (list str-concat prefix
-        (list str-concat
-          (list .display accessor-form)
-          (list derive-display-rest__ ~@rest-fields))))))
-
-;;; derive-display-body__ -- internal helper; generates the full display body expression for derive-display.
-(defmacro derive-display-body__ [TypeName & fields]
-  (let [type-str (symbol-name TypeName)]
+            (list str-concat ")" (list derive-debug-rest__ ~@rest-fields)))))))
+  (defmacro derive-debug-body__ [TypeName & fields]
+    (let [type-str (symbol-name TypeName)]
+      (if (empty? fields)
+        (str-append "(" type-str ")")
+        (let [field
+              (first fields)
+              rest-fields
+              (rest fields)
+              is-vec
+              (vec? field)
+              label
+              (if is-vec (first field) (symbol-name field))
+              accessor-sym
+              (if is-vec (second field) field)
+              accessor-form
+              (if is-vec
+                (list accessor-sym __p)
+                (list (dot-sym accessor-sym) __p))
+              first-prefix
+              (str-append "(" type-str " (" label " ")]
+          (list str-concat
+            first-prefix
+            (list str-concat
+              (list .debug accessor-form)
+              (list str-concat ")" (list derive-debug-rest__ ~@rest-fields))))))))
+  (defmacro derive-debug [TypeName & fields]
+    (list definstance
+      Debug
+      (vec TypeName)
+      (list debug (vec __p) :cstr (list derive-debug-body__ TypeName ~@fields))))
+  (defmacro derive-display-rest__ [& fields]
     (if (empty? fields)
-      (str-append type-str " { }")
-      (let [field (first fields)
-            rest-fields (rest fields)
-            is-vec (vec? field)
-            label (if is-vec (first field) (symbol-name field))
-            accessor-sym (if is-vec (second field) field)
-            accessor-form (if is-vec
-                            (list accessor-sym __p)
-                            (list (dot-sym accessor-sym) __p))
-            first-prefix (str-append type-str " { " label " = ")]
-        (list str-concat first-prefix
+      " }"
+      (let [field
+            (first fields)
+            rest-fields
+            (rest fields)
+            is-vec
+            (vec? field)
+            label
+            (if is-vec (first field) (symbol-name field))
+            accessor-sym
+            (if is-vec (second field) field)
+            accessor-form
+            (if is-vec
+              (list accessor-sym __p)
+              (list (dot-sym accessor-sym) __p))
+            prefix
+            (str-append ", " label " = ")]
+        (list str-concat
+          prefix
           (list str-concat
             (list .display accessor-form)
-            (list derive-display-rest__ ~@rest-fields)))))))
-
-;;; derive-display -- generate a Display instance for a struct.
-;;;
-;;; Parameters:
-;;;   TypeName -- the struct type name (symbol)
-;;;   fields   -- bare symbols or [label accessor] pairs (same syntax as derive-show)
-;;;
-;;; Returns:
-;;;   A definstance Display form for TypeName.
-;;;
-;;; Example:
-;;;   (derive-display Point x y)
-;;;   ; (display (make-struct Point 3 4)) => "Point { x = 3, y = 4 }"
-;;;
-;;; Since: SI3
-(defmacro derive-display [TypeName & fields]
-  (list definstance Display (vec TypeName)
-    (list display (vec __p) :cstr
-      (list derive-display-body__ TypeName ~@fields))))
-)
+            (list derive-display-rest__ ~@rest-fields))))))
+  (defmacro derive-display-body__ [TypeName & fields]
+    (let [type-str (symbol-name TypeName)]
+      (if (empty? fields)
+        (str-append type-str " { }")
+        (let [field
+              (first fields)
+              rest-fields
+              (rest fields)
+              is-vec
+              (vec? field)
+              label
+              (if is-vec (first field) (symbol-name field))
+              accessor-sym
+              (if is-vec (second field) field)
+              accessor-form
+              (if is-vec
+                (list accessor-sym __p)
+                (list (dot-sym accessor-sym) __p))
+              first-prefix
+              (str-append type-str " { " label " = ")]
+          (list str-concat
+            first-prefix
+            (list str-concat
+              (list .display accessor-form)
+              (list derive-display-rest__ ~@rest-fields)))))))
+  (defmacro derive-display [TypeName & fields]
+    (list definstance
+      Display
+      (vec TypeName)
+      (list display
+        (vec __p)
+        :cstr
+        (list derive-display-body__ TypeName ~@fields)))))

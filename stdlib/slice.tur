@@ -6,14 +6,10 @@
 ;; Phase TC1-C: Typed Slice[A]
 ;; Borrowed, bounds-checked view into a contiguous region of A elements.
 ;; Runtime layout identical to slice.tur (int64_t array pointer + length).
-
 ;;; Slice -- parameterized view into a contiguous array of A.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Slice [A]
-  (ptr :ptr<void>)
-  (len :int))
-
+(defstruct Slice [A] (ptr :ptr<void>) (len :int))
 ;;; slice-new -- create a Slice[A] view over an existing int64_t array.
 ;;;
 ;;; Parameters:
@@ -27,14 +23,15 @@
 ;;;   (slice-new arr 4)  ; => slice of first 4 elements
 ;;;
 ;;; Since: Phase TC1
-(defn slice-new [data :ptr<void> length :int] #{} :int
-  ```c
-  struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
+
+(defn slice-new [data :ptr<void> length :int]
+  #{}
+  :int
+  ```c struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
   s->p = (int64_t*)(intptr_t)data;
   s->len = (size_t)length;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; slice-len -- return the number of elements in a Slice[A].
 ;;;
 ;;; Parameters:
@@ -47,12 +44,13 @@
 ;;;   (slice-len s)  ; => 4
 ;;;
 ;;; Since: Phase TC1
-(defn slice-len [s :int] #{} :int
-  ```c
-  struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
+
+(defn slice-len [s :int]
+  #{}
+  :int
+  ```c struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   return (int)slice->len;
   ```)
-
 ;;; slice-get -- bounds-checked element access.
 ;;;
 ;;; Parameters:
@@ -66,15 +64,16 @@
 ;;;   (slice-get s 0)  ; => first element
 ;;;
 ;;; Since: Phase TC1
-(defn slice-get [s :int i :int] #{} :int
-  ```c
-  struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
+
+(defn slice-get [s :int i :int]
+  #{}
+  :int
+  ```c struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   if (i >= 0 && (size_t)i < slice->len) return (int64_t)slice->p[i];
   fprintf(stderr, "tslice index out of bounds\n");
   exit(1);
   return 0;
   ```)
-
 ;;; slice-free -- free the Slice[A] header (does NOT free the underlying data).
 ;;;
 ;;; Parameters:
@@ -84,11 +83,12 @@
 ;;;   (slice-free s)
 ;;;
 ;;; Since: Phase TC1
-(defn slice-free [s :int] #{} :void
-  ```c
-  free((void*)(intptr_t)s);
-  ```)
 
+(defn slice-free [s :int]
+  #{}
+  :void
+  ```c free((void*)(intptr_t)s);
+  ```)
 ;;; slice-eq? -- compare two Slice[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
@@ -103,9 +103,11 @@
 ;;;   (slice-eq? sa sb (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defn slice-eq? [s1 :int s2 :int cmp-fn] #{} :bool
-  ```c
-  struct { int64_t *p; size_t len; } *a = (void*)(intptr_t)s1;
+
+(defn slice-eq? [s1 :int s2 :int cmp-fn]
+  #{}
+  :bool
+  ```c struct { int64_t *p; size_t len; } *a = (void*)(intptr_t)s1;
   struct { int64_t *p; size_t len; } *b = (void*)(intptr_t)s2;
   if (a->len != b->len) return false;
   for (size_t i = 0; i < a->len; i++) {

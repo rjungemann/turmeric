@@ -14,7 +14,6 @@
 ;;   *current-module*  :cstr  -- module name for structured logging (default "")
 ;;
 ;; Requires: -Xdynamic-vars flag.
-
 ;;; *log-level* -- logging verbosity threshold.
 ;;;
 ;;; Convention: 0 = verbose/debug, 1 = info (default), 2 = warn, 3 = error.
@@ -26,7 +25,6 @@
 ;;;
 ;;; Since: DV4
 (defdynamic *log-level* :int 1)
-
 ;;; *locale* -- BCP-47 locale tag used by formatting and i18n functions.
 ;;;
 ;;; Example:
@@ -34,8 +32,8 @@
 ;;;     (format-currency 1234))  ; uses French number formatting
 ;;;
 ;;; Since: DV4
-(defdynamic *locale* :cstr "en-US")
 
+(defdynamic *locale* :cstr "en-US")
 ;;; *random-seed* -- seed for the per-thread RNG.
 ;;;
 ;;; 0 (the default) means the RNG should use system entropy (e.g. /dev/urandom).
@@ -46,8 +44,8 @@
 ;;;     (random-int 100))  ; reproducible random number
 ;;;
 ;;; Since: DV4
-(defdynamic *random-seed* :int 0)
 
+(defdynamic *random-seed* :int 0)
 ;;; *current-module* -- module name tag for structured log output.
 ;;;
 ;;; Set by a module's preamble so that log lines include the module name
@@ -58,8 +56,8 @@
 ;;;     (log-info "token validated"))  ; log line shows "auth: token validated"
 ;;;
 ;;; Since: DV4
-(defdynamic *current-module* :cstr "")
 
+(defdynamic *current-module* :cstr "")
 ;;; spawn-conveying -- spawn a thread that inherits the current binding frame.
 ;;;
 ;;; Parameters:
@@ -74,7 +72,9 @@
 ;;;       (thread-join t)))
 ;;;
 ;;; Since: DV3
-(defn spawn-conveying [f :ptr<void>] #{Unsafe} :ptr<void>
-  ```c
-  return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
+
+(defn spawn-conveying [f :ptr<void>]
+  #{Unsafe}
+  :ptr<void>
+  ```c return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
   ```)

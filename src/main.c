@@ -3009,6 +3009,402 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
     return rc;
 }
 
+/* ---------------------------------------------------------------------------
+ * tur fmt -- formatter with directory walking and in-place writes
+ * ---------------------------------------------------------------------------
+ *
+ * Modes:
+ *   default (no --check/--diff/--stdout/--stdin):
+ *     format files in-place; print names of changed files to stderr
+ *   --check / --dry-run:
+ *     exit 1 if any file would change; print names to stderr
+ *   --diff:
+ *     print unified diff for each file that would change; exit 1 if any
+ *   --stdout <file>:
+ *     format one file and write to stdout; do not modify the file
+ *   --stdin [--lang <lang>]:
+ *     read from stdin, format, write to stdout
+ *
+ * Exit codes: 0=ok, 1=would-change (--check) or I/O error, 2=CLI/parse error
+ */
+
+/* Directories to skip when walking */
+static bool fmt_skip_dir(const char *name) {
+    return strcmp(name, "build")          == 0
+        || strcmp(name, ".git")           == 0
+        || strcmp(name, ".tur-cache")     == 0
+        || strcmp(name, ".turnb-cache")   == 0
+        || strcmp(name, ".tur-repl-cache")== 0;
+}
+
+static bool fmt_is_tur_file(const char *name) {
+    size_t n = strlen(name);
+    if (n >= 4 && strcmp(name + n - 4, ".tur") == 0) return true;
+    if (n >= 9 && strcmp(name + n - 9, ".tursweet") == 0) return true;
+    return false;
+}
+
+
+/* Core: read src, parse, format, return formatted Buf.
+ * Returns 0 on success with *out populated, -1 on error. */
+static int fmt_format_source(const char *path_label, const char *src, size_t len,
+                              ReaderType rtype, Buf *out) {
+    SourceFile file = {0};
+    file.path        = path_label;
+    file.src         = src;
+    file.len         = len;
+    file.file_id     = 0;
+    file.reader_type = rtype;
+    diag_register_file(&file);
+    diag_reset();
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    ReaderMacroRegistry rmreg;
+    reader_macros_init(&rmreg, &arena);
+    rmreg.strict = true;
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&arena, &st, &file, &rmreg, &nforms);
+
+    int rc = 0;
+    if (!forms || diag_had_error()) {
+        rc = -1;
+    } else {
+        FmtOptions opts = {0};
+        opts.indent_width = 2;
+        opts.line_width   = 80;
+        opts.src          = src;
+        opts.src_len      = len;
+        buf_init(out);
+        if (fmt_print(out, forms, nforms, opts) != 0) {
+            fprintf(stderr, "tur fmt: internal error formatting %s\n", path_label);
+            buf_free(out);
+            rc = -1;
+        }
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    return rc;
+}
+
+typedef enum {
+    FMT_MODE_INPLACE,
+    FMT_MODE_CHECK,
+    FMT_MODE_DIFF,
+    FMT_MODE_STDOUT,
+} FmtMode;
+
+/* Process one file. Returns 0=unchanged, 1=changed/would-change, -1=error. */
+static int fmt_process_file(const char *path, ReaderType force_lang,
+                             FmtMode mode) {
+    char  *src = NULL;
+    size_t len = 0;
+    if (read_entire_file(path, &src, &len) != 0) return -1;
+
+    ReaderType rtype = reader_type_from_extension(path);
+
+    Buf out;
+    int rc = fmt_format_source(path, src, len, rtype, &out);
+    if (rc != 0) { free(src); return -1; }
+
+    bool changed = (out.len != len) || (memcmp(out.data, src, len) != 0);
+
+    if (!changed) {
+        free(src);
+        buf_free(&out);
+        return 0;
+    }
+
+    /* File would change */
+    switch (mode) {
+        case FMT_MODE_CHECK:
+            fprintf(stderr, "tur fmt: %s\n", path);
+            free(src);
+            buf_free(&out);
+            return 1;
+
+        case FMT_MODE_DIFF: {
+            char orig_tmp[] = "/tmp/tur-fmt-orig-XXXXXX";
+            char new_tmp[]  = "/tmp/tur-fmt-new-XXXXXX";
+            int ofd = mkstemp(orig_tmp);
+            if (ofd >= 0) {
+                ssize_t _w1 = write(ofd, src, len); (void)_w1;
+                close(ofd);
+            }
+            free(src);
+            int nfd = mkstemp(new_tmp);
+            if (nfd >= 0) {
+                ssize_t _w2 = write(nfd, out.data, out.len); (void)_w2;
+                close(nfd);
+            }
+            char diff_cmd[8192];
+            snprintf(diff_cmd, sizeof(diff_cmd),
+                     "diff -u -L '%s' -L '%s' '%s' '%s'",
+                     path, path, orig_tmp, new_tmp);
+            int diff_rc = system(diff_cmd);
+            unlink(orig_tmp);
+            unlink(new_tmp);
+            buf_free(&out);
+            return (diff_rc != 0) ? 1 : 0;
+        }
+
+        case FMT_MODE_STDOUT:
+            free(src);
+            buf_to_file(&out, stdout);
+            buf_free(&out);
+            return 0;
+
+        case FMT_MODE_INPLACE:
+            free(src);
+            if (buf_to_path(&out, path) != 0) {
+                fprintf(stderr, "tur fmt: cannot write '%s': %s\n",
+                        path, strerror(errno));
+                buf_free(&out);
+                return -1;
+            }
+            fprintf(stderr, "tur fmt: reformatted %s\n", path);
+            buf_free(&out);
+            return 1;
+    }
+    free(src);
+    buf_free(&out);
+    return 0;
+}
+
+/* Walk a directory, processing all .tur/.tursweet files.
+ * Returns count of changed files, or -1 if an error occurred. */
+static int fmt_walk(const char *path, ReaderType force_lang, FmtMode mode,
+                    int *err_count) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "tur fmt: cannot stat '%s': %s\n", path, strerror(errno));
+        (*err_count)++;
+        return 0;
+    }
+
+    int changed = 0;
+
+    if (S_ISREG(st.st_mode)) {
+        if (!fmt_is_tur_file(path)) return 0;
+        int r = fmt_process_file(path, force_lang, mode);
+        if (r < 0) (*err_count)++;
+        else if (r > 0) changed++;
+        return changed;
+    }
+
+    if (!S_ISDIR(st.st_mode)) return 0;
+
+    DIR *d = opendir(path);
+    if (!d) {
+        fprintf(stderr, "tur fmt: cannot open dir '%s': %s\n", path, strerror(errno));
+        (*err_count)++;
+        return 0;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue; /* skip hidden (incl. .git) */
+        if (fmt_skip_dir(ent->d_name)) continue;
+
+        char child[4096];
+        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+
+        if (ent->d_type == DT_DIR) {
+            changed += fmt_walk(child, force_lang, mode, err_count);
+        } else if (ent->d_type == DT_REG && fmt_is_tur_file(ent->d_name)) {
+            int r = fmt_process_file(child, force_lang, mode);
+            if (r < 0) (*err_count)++;
+            else if (r > 0) changed++;
+        } else if (ent->d_type == DT_UNKNOWN) {
+            struct stat cs;
+            if (stat(child, &cs) == 0) {
+                if (S_ISDIR(cs.st_mode))
+                    changed += fmt_walk(child, force_lang, mode, err_count);
+                else if (S_ISREG(cs.st_mode) && fmt_is_tur_file(ent->d_name)) {
+                    int r = fmt_process_file(child, force_lang, mode);
+                    if (r < 0) (*err_count)++;
+                    else if (r > 0) changed++;
+                }
+            }
+        }
+    }
+    closedir(d);
+    return changed;
+}
+
+static int usage_fmt(void) {
+    fprintf(stderr,
+        "usage:\n"
+        "  tur fmt [paths...]                   format .tur/.tursweet files in place\n"
+        "  tur fmt --check [paths...]           exit 1 if any file would change\n"
+        "  tur fmt --dry-run [paths...]         alias for --check\n"
+        "  tur fmt --diff [paths...]            print unified diff of changes\n"
+        "  tur fmt --stdout <file>              format file and print to stdout\n"
+        "  tur fmt --stdin [--lang <dialect>]   format stdin and print to stdout\n"
+        "\n"
+        "  Paths may be files or directories.  Defaults to current directory.\n"
+        "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
+        "\n"
+        "  Dialects for --lang:  turmeric (default)  tursweet  curly-infix  neoteric\n"
+        "\n"
+        "Exit codes:\n"
+        "  0   all files already formatted (or successfully written)\n"
+        "  1   --check: at least one file would change; or I/O error\n"
+        "  2   CLI / parse error\n"
+        "\n"
+        "Try 'tur --help' for global options.\n");
+    return 0;
+}
+
+static int cmd_fmt(int argc, char **argv) {
+    bool check_only   = false;
+    bool diff_mode    = false;
+    bool stdin_mode   = false;
+    const char *stdout_file = NULL;
+    ReaderType  force_lang  = READER_TURMERIC;
+    bool        lang_set    = false;
+
+    /* Collect non-flag arguments as paths */
+    char **paths  = NULL;
+    int    npaths = 0, cap_paths = 0;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+            return usage_fmt();
+
+        if (strcmp(argv[i], "--check") == 0 || strcmp(argv[i], "--dry-run") == 0) {
+            check_only = true;
+        } else if (strcmp(argv[i], "--diff") == 0) {
+            diff_mode = true;
+        } else if (strcmp(argv[i], "--stdin") == 0) {
+            stdin_mode = true;
+        } else if (strcmp(argv[i], "--stdout") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "tur fmt: --stdout requires a file argument\n");
+                return 2;
+            }
+            stdout_file = argv[++i];
+        } else if (strcmp(argv[i], "--lang") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "tur fmt: --lang requires a dialect argument\n");
+                return 2;
+            }
+            const char *lang = argv[++i];
+            if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
+                force_lang = READER_TURMERIC;
+            } else if (strcmp(lang, "tursweet") == 0 || strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0) {
+                force_lang = READER_SWEET;
+            } else if (strcmp(lang, "curly-infix") == 0) {
+                force_lang = READER_CURLY_INFIX;
+            } else if (strcmp(lang, "neoteric") == 0) {
+                force_lang = READER_NEOTERIC;
+            } else {
+                fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
+                return 2;
+            }
+            lang_set = true;
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "tur fmt: unknown flag '%s'\n", argv[i]);
+            return 2;
+        } else {
+            if (npaths >= cap_paths) {
+                cap_paths = cap_paths ? cap_paths * 2 : 8;
+                paths = (char **)realloc(paths, (size_t)cap_paths * sizeof(char *));
+                if (!paths) { fprintf(stderr, "tur: oom\n"); return 1; }
+            }
+            paths[npaths++] = argv[i];
+        }
+    }
+
+    /* Validate flag combinations */
+    if ((check_only && diff_mode) || (check_only && stdin_mode) ||
+        (diff_mode  && stdin_mode)) {
+        fprintf(stderr, "tur fmt: incompatible flags\n");
+        free(paths);
+        return 2;
+    }
+    if (stdout_file && (check_only || diff_mode || stdin_mode || npaths > 0)) {
+        fprintf(stderr, "tur fmt: --stdout cannot be combined with other modes or paths\n");
+        free(paths);
+        return 2;
+    }
+    if (lang_set && !stdin_mode && !stdout_file) {
+        fprintf(stderr, "tur fmt: --lang is only meaningful with --stdin or --stdout\n");
+        free(paths);
+        return 2;
+    }
+
+    /* --stdin mode: read from stdin, format, write to stdout */
+    if (stdin_mode) {
+        size_t cap = 4096;
+        char *src = (char *)malloc(cap);
+        if (!src) { fprintf(stderr, "tur: oom\n"); free(paths); return 1; }
+        size_t len = 0;
+        int c;
+        while ((c = fgetc(stdin)) != EOF) {
+            if (len + 1 >= cap) {
+                cap *= 2;
+                char *tmp = (char *)realloc(src, cap);
+                if (!tmp) { free(src); fprintf(stderr, "tur: oom\n"); free(paths); return 1; }
+                src = tmp;
+            }
+            src[len++] = (char)c;
+        }
+        src[len] = '\0';
+
+        Buf out;
+        int rc = fmt_format_source("<stdin>", src, len, force_lang, &out);
+        free(src);
+        free(paths);
+        if (rc != 0) return 1;
+        buf_to_file(&out, stdout);
+        buf_free(&out);
+        return 0;
+    }
+
+    /* --stdout <file> mode: format one file, write to stdout */
+    if (stdout_file) {
+        char *src = NULL; size_t len = 0;
+        if (read_entire_file(stdout_file, &src, &len) != 0) { free(paths); return 1; }
+        ReaderType rtype = lang_set ? force_lang : reader_type_from_extension(stdout_file);
+        Buf out;
+        int rc = fmt_format_source(stdout_file, src, len, rtype, &out);
+        free(src);
+        free(paths);
+        if (rc != 0) return 1;
+        buf_to_file(&out, stdout);
+        buf_free(&out);
+        return 0;
+    }
+
+    /* Default to cwd when no paths given */
+    if (npaths == 0) {
+        paths = (char **)realloc(paths, sizeof(char *));
+        paths[0] = ".";
+        npaths = 1;
+    }
+
+    FmtMode mode = check_only ? FMT_MODE_CHECK
+                 : diff_mode  ? FMT_MODE_DIFF
+                 :              FMT_MODE_INPLACE;
+
+    int changed = 0, errors = 0;
+    for (int i = 0; i < npaths; i++)
+        changed += fmt_walk(paths[i], force_lang, mode, &errors);
+
+    free(paths);
+
+    if (errors > 0) return 1;
+    if (changed > 0 && check_only) return 1;
+    if (changed > 0 && diff_mode)  return 1;
+    return 0;
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env);
 
 /* Phase S0: tur repl — interactive read-eval-print loop. */
@@ -5233,7 +5629,7 @@ static void list_external_subcommands(void) {
 
     static const char *const builtins[] = {
         "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
-        "eval", "doc", "explain", "test", "check", "format",
+        "eval", "doc", "explain", "test", "check", "format", "fmt",
         "init", "add", "add-cmake", "fetch",
         "install", "uninstall", "list", "upgrade",
         NULL,
@@ -5336,6 +5732,7 @@ static int usage(void) {
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "  tur format [--check|--diff] [file.tur]   format source (stdin if no file given)\n"
+        "  tur fmt [--check|--diff|--dry-run] [paths...]  format in place with dir walking\n"
         "\n"
         "package management (Spice, Phase PKG-1):\n"
         "  tur init [--bin|--lib] <name>     create a new project\n"
@@ -6527,6 +6924,8 @@ int main(int argc, char **argv) {
         if (check_only && diff_mode) return usage_format();
         return cmd_format(fmt_input, check_only, diff_mode);
     }
+    if (strcmp(cmd, "fmt") == 0)
+        return cmd_fmt(argc, argv);
     if (strcmp(cmd, "test") == 0) {
         if (argc == 3 && (strcmp(argv[2], "--help") == 0 || strcmp(argv[2], "-h") == 0))
             return usage_test();

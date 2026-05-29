@@ -6,7 +6,6 @@
 ;;; Since: Phase B1
 ;; Str type for Turmeric
 ;; UTF-8 string as a borrowed view (pointer + length)
-
 ;;; str-from-cstr -- create a str view from a NUL-terminated C string.
 ;;;
 ;;; Parameters:
@@ -20,15 +19,13 @@
 ;;;   (str-from-cstr "hello")  ; => <str ptr>
 ;; Create a str from a C string (NUL-terminated)
 (defn str-from-cstr [cstr]
-  ```c
-  const char *s = (const char*)cstr;
+  ```c const char *s = (const char*)cstr;
   size_t len = strlen(s);
   struct { const char *p; size_t len; } *str = malloc(sizeof(*str));
   str->p = s;
   str->len = len;
   return str;
   ```)
-
 ;;; str-len -- return the length of a str in bytes.
 ;;;
 ;;; Parameters:
@@ -40,12 +37,11 @@
 ;;; Example:
 ;;;   (str-len (str-from-cstr "hello"))  ; => 5
 ;; Get string length in bytes
+
 (defn str-len [s] :int
-  ```c
-  struct { const char *p; size_t len; } *str = (void*)s;
+  ```c struct { const char *p; size_t len; } *str = (void*)s;
   return (int)str->len;
   ```)
-
 ;;; str-eq? -- check whether two str values have identical byte contents.
 ;;;
 ;;; Parameters:
@@ -60,15 +56,14 @@
 ;;;
 ;;; Since: Phase E1
 ;; Check if two strings are equal
+
 (defn str-eq? [s1 s2] :bool
-  ```c
-  struct { const char *p; size_t len; } *a = (void*)s1;
+  ```c struct { const char *p; size_t len; } *a = (void*)s1;
   struct { const char *p; size_t len; } *b = (void*)s2;
   if (a == NULL || b == NULL) return a == b;
   if (a->len != b->len) return false;
   return memcmp(a->p, b->p, a->len) == 0;
   ```)
-
 ;;; str-free -- free the str struct (does not free the underlying string data).
 ;;;
 ;;; Parameters:
@@ -77,12 +72,11 @@
 ;;; Example:
 ;;;   (str-free my-str)
 ;; Free the str struct (does NOT free the underlying string data)
+
 (defn str-free [s]
-  ```c
-  free(s);
+  ```c free(s);
   return 0;
   ```)
-
 ;;; str-concat -- concatenate two NUL-terminated strings into a new heap buffer.
 ;;;
 ;;; Parameters:
@@ -97,9 +91,9 @@
 ;;;   (str-concat "Hello, " "world")  ; => "Hello, world"
 ;;;
 ;;; Since: Phase B1
+
 (defn str-concat [a :cstr b :cstr] :cstr
-  ```c
-  const char *sa = (const char*)a;
+  ```c const char *sa = (const char*)a;
   const char *sb = (const char*)b;
   size_t la = strlen(sa), lb = strlen(sb);
   char *out = malloc(la + lb + 1);
@@ -108,12 +102,10 @@
   out[la + lb] = '\0';
   return (int64_t)(intptr_t)out;
   ```)
-
 ;;; Eq [str] -- eq? delegates to str-eq? for byte-level string equality.
 ;; Phase E1: Eq instance for str -- wires eq? to str-eq?
-(definstance Eq [str]
-  (eq? [x y] (str-eq? x y)))
 
+(definstance Eq [str] (eq? [x y] (str-eq? x y)))
 ;;; str->int -- parse a NUL-terminated :cstr to int64 (decimal).
 ;;;
 ;;; Parameters:
@@ -126,11 +118,10 @@
 ;;;   (str->int "42")  ; => 42
 ;;;
 ;;; Since: Phase B1
-(defn str->int [s :cstr] :int
-  ```c
-  return s ? (int64_t)atoll((const char *)(intptr_t)s) : 0;
-  ```)
 
+(defn str->int [s :cstr] :int
+  ```c return s ? (int64_t)atoll((const char *)(intptr_t)s) : 0;
+  ```)
 ;;; cstr->parse-int -- parse a raw int (cstr pointer stored as int64) to int64.
 ;;;
 ;;; Parameters:
@@ -143,8 +134,8 @@
 ;;;   (cstr->parse-int some-int-ptr)  ; => parsed int
 ;;;
 ;;; Since: Phase B1
+
 (defn cstr->parse-int [s :int] :int
-  ```c
-  const char *cs = (const char *)(intptr_t)s;
+  ```c const char *cs = (const char *)(intptr_t)s;
   return cs ? (int64_t)atoll(cs) : 0;
   ```)

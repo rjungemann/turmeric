@@ -8,7 +8,6 @@
 ;; Higher-level wrappers around sys/stat.h, dirent.h, fnmatch.h, and
 ;; standard libc file functions.  These complement the low-level I/O
 ;; primitives in io.tur.
-
 ;;; fs/stat -- return file metadata for a path.
 ;;;
 ;;; Parameters:
@@ -24,8 +23,7 @@
 ;;;
 ;;; Since: Phase B2
 (defn fs/stat [path :cstr] :int
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return 0;
   int64_t *info = malloc(3 * sizeof(int64_t));
@@ -34,7 +32,6 @@
   info[2] = (int64_t)st.st_mode;
   return (int64_t)(intptr_t)info;
   ```)
-
 ;;; fs/stat-free -- free the stat result returned by fs/stat.
 ;;;
 ;;; Parameters:
@@ -44,11 +41,10 @@
 ;;;   (fs/stat-free s)
 ;;;
 ;;; Since: Phase B2
-(defn fs/stat-free [s :int] :void
-  ```c
-  if (s) free((void*)(intptr_t)s);
-  ```)
 
+(defn fs/stat-free [s :int] :void
+  ```c if (s) free((void*)(intptr_t)s);
+  ```)
 ;;; fs/stat-size -- extract file size from a stat result.
 ;;;
 ;;; Parameters:
@@ -61,11 +57,10 @@
 ;;;   (fs/stat-size (fs/stat "/etc/hosts"))  ; => 221
 ;;;
 ;;; Since: Phase B2
-(defn fs/stat-size [s :int] :int
-  ```c
-  return ((int64_t*)(intptr_t)s)[0];
-  ```)
 
+(defn fs/stat-size [s :int] :int
+  ```c return ((int64_t*)(intptr_t)s)[0];
+  ```)
 ;;; fs/stat-mtime -- extract modification time from a stat result.
 ;;;
 ;;; Parameters:
@@ -78,11 +73,10 @@
 ;;;   (fs/stat-mtime (fs/stat "/etc/hosts"))
 ;;;
 ;;; Since: Phase B2
-(defn fs/stat-mtime [s :int] :int
-  ```c
-  return ((int64_t*)(intptr_t)s)[1];
-  ```)
 
+(defn fs/stat-mtime [s :int] :int
+  ```c return ((int64_t*)(intptr_t)s)[1];
+  ```)
 ;;; fs/stat-mode -- extract file mode bits from a stat result.
 ;;;
 ;;; Parameters:
@@ -95,11 +89,10 @@
 ;;;   (fs/stat-mode (fs/stat "/etc/hosts"))  ; => 33188
 ;;;
 ;;; Since: Phase B2
-(defn fs/stat-mode [s :int] :int
-  ```c
-  return ((int64_t*)(intptr_t)s)[2];
-  ```)
 
+(defn fs/stat-mode [s :int] :int
+  ```c return ((int64_t*)(intptr_t)s)[2];
+  ```)
 ;;; fs/exists? -- test whether a path exists.
 ;;;
 ;;; Parameters:
@@ -112,13 +105,12 @@
 ;;;   (fs/exists? "/etc/hosts")  ; => true
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/exists? [path :cstr] :bool
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   struct stat st;
   return stat(path, &st) == 0;
   ```)
-
 ;;; fs/file? -- test whether a path is a regular file.
 ;;;
 ;;; Parameters:
@@ -131,14 +123,13 @@
 ;;;   (fs/file? "/etc/hosts")  ; => true
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/file? [path :cstr] :bool
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return false;
   return S_ISREG(st.st_mode);
   ```)
-
 ;;; fs/dir? -- test whether a path is a directory.
 ;;;
 ;;; Parameters:
@@ -151,14 +142,13 @@
 ;;;   (fs/dir? "/tmp")  ; => true
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/dir? [path :cstr] :bool
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   struct stat st;
   if (stat(path, &st) != 0) return false;
   return S_ISDIR(st.st_mode);
   ```)
-
 ;;; fs/mkdir -- create a directory with mode 0755.
 ;;;
 ;;; Parameters:
@@ -171,12 +161,11 @@
 ;;;   (fs/mkdir "/tmp/mydir")  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/mkdir [path :cstr] :int
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   return (int64_t)mkdir(path, 0755);
   ```)
-
 ;;; fs/mkdirp -- create a directory and all missing parent directories.
 ;;;
 ;;; Parameters:
@@ -190,9 +179,9 @@
 ;;;   (fs/mkdirp "/tmp/a/b/c")  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/mkdirp [path :cstr] :int
-  ```c
-  #include <sys/stat.h>
+  ```c #include <sys/stat.h>
   #include <errno.h>
   char *p = strdup(path);
   int ret = 0;
@@ -207,7 +196,6 @@
   free(p);
   return ret;
   ```)
-
 ;;; fs/rmdir -- remove an empty directory.
 ;;;
 ;;; Parameters:
@@ -220,11 +208,10 @@
 ;;;   (fs/rmdir "/tmp/mydir")  ; => 0
 ;;;
 ;;; Since: Phase B2
-(defn fs/rmdir [path :cstr] :int
-  ```c
-  return (int64_t)rmdir(path);
-  ```)
 
+(defn fs/rmdir [path :cstr] :int
+  ```c return (int64_t)rmdir(path);
+  ```)
 ;;; fs/rm -- remove a regular file.
 ;;;
 ;;; Parameters:
@@ -237,11 +224,10 @@
 ;;;   (fs/rm "/tmp/tmpfile.txt")  ; => 0
 ;;;
 ;;; Since: Phase B2
-(defn fs/rm [path :cstr] :int
-  ```c
-  return (int64_t)unlink(path);
-  ```)
 
+(defn fs/rm [path :cstr] :int
+  ```c return (int64_t)unlink(path);
+  ```)
 ;;; fs/rename -- rename or move a file.
 ;;;
 ;;; Parameters:
@@ -255,11 +241,10 @@
 ;;;   (fs/rename "/tmp/a.txt" "/tmp/b.txt")  ; => 0
 ;;;
 ;;; Since: Phase B2
-(defn fs/rename [src :cstr dst :cstr] :int
-  ```c
-  return (int64_t)rename(src, dst);
-  ```)
 
+(defn fs/rename [src :cstr dst :cstr] :int
+  ```c return (int64_t)rename(src, dst);
+  ```)
 ;;; fs/copy -- copy a file from src to dst using a read/write loop.
 ;;;
 ;;; Parameters:
@@ -273,9 +258,9 @@
 ;;;   (fs/copy "/etc/hosts" "/tmp/hosts.bak")  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/copy [src :cstr dst :cstr] :int
-  ```c
-  FILE *in = fopen(src, "rb");
+  ```c FILE *in = fopen(src, "rb");
   if (!in) return -1;
   FILE *out = fopen(dst, "wb");
   if (!out) { fclose(in); return -1; }
@@ -289,7 +274,6 @@
   fclose(out);
   return ret;
   ```)
-
 ;;; fs/glob -- list directory entries matching a fnmatch(3) pattern.
 ;;;
 ;;; Parameters:
@@ -305,9 +289,9 @@
 ;;;   (fs/glob "/tmp" "*.txt")  ; => cons list of paths
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/glob [dir :cstr pattern :cstr] :int
-  ```c
-  #include <dirent.h>
+  ```c #include <dirent.h>
   #include <fnmatch.h>
   DIR *d = opendir(dir);
   if (!d) return 0;
@@ -331,7 +315,6 @@
   closedir(d);
   return head;
   ```)
-
 ;;; fs/glob-free -- free a cons list of paths returned by fs/glob.
 ;;;
 ;;; Parameters:
@@ -341,9 +324,9 @@
 ;;;   (fs/glob-free my-list)
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/glob-free [lst :int] :void
-  ```c
-  int64_t cur = lst;
+  ```c int64_t cur = lst;
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
     free((void*)(intptr_t)cell[0]);
@@ -352,7 +335,6 @@
     cur = next;
   }
   ```)
-
 ;;; fs/tmpfile -- create a unique temporary file via mkstemp(3).
 ;;;
 ;;; Returns:
@@ -364,9 +346,9 @@
 ;;;   (let [t (fs/tmpfile)] (fs/tmpfile-path t))
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/tmpfile [] :int
-  ```c
-  char *tmpl = strdup("/tmp/tur_XXXXXX");
+  ```c char *tmpl = strdup("/tmp/tur_XXXXXX");
   int fd = mkstemp(tmpl);
   if (fd < 0) { free(tmpl); return 0; }
   int64_t *pair = malloc(2 * sizeof(int64_t));
@@ -374,7 +356,6 @@
   pair[1] = (int64_t)fd;
   return (int64_t)(intptr_t)pair;
   ```)
-
 ;;; fs/tmpfile-path -- extract the path from an fs/tmpfile pair.
 ;;;
 ;;; Parameters:
@@ -387,11 +368,10 @@
 ;;;   (fs/tmpfile-path my-tmp)  ; => "/tmp/tur_aB3xYz"
 ;;;
 ;;; Since: Phase B2
-(defn fs/tmpfile-path [t :int] :cstr
-  ```c
-  return (const char*)(intptr_t)((int64_t*)(intptr_t)t)[0];
-  ```)
 
+(defn fs/tmpfile-path [t :int] :cstr
+  ```c return (const char*)(intptr_t)((int64_t*)(intptr_t)t)[0];
+  ```)
 ;;; fs/tmpfile-fd -- extract the file descriptor from an fs/tmpfile pair.
 ;;;
 ;;; Parameters:
@@ -404,11 +384,10 @@
 ;;;   (fs/tmpfile-fd my-tmp)  ; => 5
 ;;;
 ;;; Since: Phase B2
-(defn fs/tmpfile-fd [t :int] :int
-  ```c
-  return ((int64_t*)(intptr_t)t)[1];
-  ```)
 
+(defn fs/tmpfile-fd [t :int] :int
+  ```c return ((int64_t*)(intptr_t)t)[1];
+  ```)
 ;;; fs/tmpfile-free -- close the fd and free the tmpfile pair.
 ;;;
 ;;; Parameters:
@@ -418,16 +397,15 @@
 ;;;   (fs/tmpfile-free my-tmp)
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/tmpfile-free [t :int] :void
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   if (!t) return;
   int64_t *pair = (int64_t*)(intptr_t)t;
   close((int)pair[1]);
   free((void*)(intptr_t)pair[0]);
   free(pair);
   ```)
-
 ;;; fs/read-text -- read an entire file into a NUL-terminated heap buffer.
 ;;;
 ;;; Parameters:
@@ -441,9 +419,9 @@
 ;;;   (fs/read-text "/etc/hostname")  ; => "myhost\n"
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/read-text [path :cstr] :cstr
-  ```c
-  FILE *f = fopen(path, "rb");
+  ```c FILE *f = fopen(path, "rb");
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
   long size = ftell(f);
@@ -454,7 +432,6 @@
   buf[n] = '\0';
   return buf;
   ```)
-
 ;;; fs/write-text -- write a NUL-terminated string to a file.
 ;;;
 ;;; Parameters:
@@ -468,9 +445,9 @@
 ;;;   (fs/write-text "/tmp/out.txt" "hello\n")  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn fs/write-text [path :cstr content :cstr] :int
-  ```c
-  FILE *f = fopen(path, "wb");
+  ```c FILE *f = fopen(path, "wb");
   if (!f) return -1;
   size_t len = strlen(content);
   size_t n = fwrite(content, 1, len, f);

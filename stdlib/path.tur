@@ -7,7 +7,6 @@
 ;;
 ;; No syscalls; all functions operate on NUL-terminated cstr values and
 ;; return freshly allocated cstr values that the caller must free.
-
 ;;; path/join -- join two path segments with a single slash separator.
 ;;;
 ;;; Parameters:
@@ -23,8 +22,7 @@
 ;;;
 ;;; Since: Phase B2
 (defn path/join [base :cstr segment :cstr] :cstr
-  ```c
-  size_t blen = strlen(base);
+  ```c size_t blen = strlen(base);
   size_t slen = strlen(segment);
   int add_sep = (blen > 0 && base[blen - 1] != '/') ? 1 : 0;
   char *out = malloc(blen + add_sep + slen + 1);
@@ -33,7 +31,6 @@
   memcpy(out + blen + add_sep, segment, slen + 1);
   return out;
   ```)
-
 ;;; path/basename -- return the last path component.
 ;;;
 ;;; Parameters:
@@ -47,13 +44,12 @@
 ;;;   (path/basename "/foo/bar.txt")  ; => "bar.txt"
 ;;;
 ;;; Since: Phase B2
+
 (defn path/basename [p :cstr] :cstr
-  ```c
-  const char *last = strrchr(p, '/');
+  ```c const char *last = strrchr(p, '/');
   const char *name = last ? last + 1 : p;
   return strdup(name);
   ```)
-
 ;;; path/dirname -- return the parent directory component.
 ;;;
 ;;; Parameters:
@@ -67,9 +63,9 @@
 ;;;   (path/dirname "/foo/bar.txt")  ; => "/foo"
 ;;;
 ;;; Since: Phase B2
+
 (defn path/dirname [p :cstr] :cstr
-  ```c
-  const char *last = strrchr(p, '/');
+  ```c const char *last = strrchr(p, '/');
   if (!last) return strdup(".");
   if (last == p) return strdup("/");
   size_t len = (size_t)(last - p);
@@ -78,7 +74,6 @@
   out[len] = '\0';
   return out;
   ```)
-
 ;;; path/extension -- return the file extension including the leading dot.
 ;;;
 ;;; Parameters:
@@ -93,15 +88,14 @@
 ;;;   (path/extension "/foo/bar")      ; => ""
 ;;;
 ;;; Since: Phase B2
+
 (defn path/extension [p :cstr] :cstr
-  ```c
-  const char *base = strrchr(p, '/');
+  ```c const char *base = strrchr(p, '/');
   base = base ? base + 1 : p;
   const char *dot = strrchr(base, '.');
   if (!dot || dot == base) return strdup("");
   return strdup(dot);
   ```)
-
 ;;; path/stem -- return the filename without its extension.
 ;;;
 ;;; Parameters:
@@ -116,9 +110,9 @@
 ;;;   (path/stem "/foo/bar")      ; => "bar"
 ;;;
 ;;; Since: Phase B2
+
 (defn path/stem [p :cstr] :cstr
-  ```c
-  const char *base = strrchr(p, '/');
+  ```c const char *base = strrchr(p, '/');
   base = base ? base + 1 : p;
   const char *dot = strrchr(base, '.');
   if (!dot || dot == base) return strdup(base);
@@ -128,7 +122,6 @@
   out[len] = '\0';
   return out;
   ```)
-
 ;;; path/absolute? -- test whether a path is absolute (starts with '/').
 ;;;
 ;;; Parameters:
@@ -142,11 +135,10 @@
 ;;;   (path/absolute? "relative")  ; => false
 ;;;
 ;;; Since: Phase B2
-(defn path/absolute? [p :cstr] :bool
-  ```c
-  return p != NULL && p[0] == '/';
-  ```)
 
+(defn path/absolute? [p :cstr] :bool
+  ```c return p != NULL && p[0] == '/';
+  ```)
 ;;; path/normalize -- collapse redundant '.' and '..' segments in a path.
 ;;;
 ;;; Resolves single-dot and double-dot components without consulting the
@@ -162,9 +154,9 @@
 ;;;   (path/normalize "/foo/../bar/./baz")  ; => "/bar/baz"
 ;;;
 ;;; Since: Phase B2
+
 (defn path/normalize [p :cstr] :cstr
-  ```c
-  size_t plen = strlen(p);
+  ```c size_t plen = strlen(p);
   char *work = malloc(plen + 2);
   memcpy(work, p, plen + 1);
   int is_abs = (work[0] == '/');

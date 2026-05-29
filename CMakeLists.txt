@@ -30,6 +30,11 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 add_test(
+  NAME tur_fmt_tests
+  COMMAND bash tests/run-fmt.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
   NAME tur_span_tests
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"

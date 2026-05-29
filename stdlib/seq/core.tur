@@ -9,23 +9,20 @@
 ;;   so that seq-iter can use the uniform fat-closure calling convention.
 ;;
 ;; Load gen.tur before this file to access gen-arr helpers used by seq-collect.
-
 (load "stdlib/gen.tur")
-
 ;; -------------------------------------------------------------------
 ;; Seq struct
 ;; -------------------------------------------------------------------
-
 ;;; Seq -- a lazy sequence backed by a generator-producing thunk.
 ;;;
 ;;; The mk field holds a fat closure (int64_t) that, when called,
 ;;; returns a fresh void* generator.  Always create with seq-new.
-(defstruct Seq [mk :int])
 
+
+(defstruct Seq [mk :int])
 ;; -------------------------------------------------------------------
 ;; Internal allocation and invocation
 ;; -------------------------------------------------------------------
-
 ;;; seq-new -- allocate a heap Seq wrapping a fat closure mk.
 ;;;
 ;;; Parameters:
@@ -38,13 +35,13 @@
 ;;;   (seq-new (fn [] (gen [] (yield 1))))
 ;;;
 ;;; Since: LZ0
+
+
 (defn seq-new [mk :int] :int
-  ```c
-  int64_t *s = (int64_t *)malloc(sizeof(int64_t));
+  ```c int64_t *s = (int64_t *)malloc(sizeof(int64_t));
   s[0] = mk;
   return (int64_t)(intptr_t)s;
   ```)
-
 ;;; seq-iter -- invoke the Seq factory to obtain a fresh generator.
 ;;;
 ;;; Parameters:
@@ -57,18 +54,16 @@
 ;;;   (let [g (seq-iter my-seq)] ...)
 ;;;
 ;;; Since: LZ0
+
 (defn seq-iter [s :int] :ptr<void>
-  ```c
-  int64_t mk = ((int64_t *)(intptr_t)s)[0];
+  ```c int64_t mk = ((int64_t *)(intptr_t)s)[0];
   int64_t *fat = (int64_t *)(intptr_t)mk;
   int64_t fn_ptr = fat[0];
   return ((void *(*)(void *))(intptr_t)fn_ptr)((void *)fat);
   ```)
-
 ;; -------------------------------------------------------------------
 ;; Generator driver helpers (operate on void* generator pointers)
 ;; -------------------------------------------------------------------
-
 ;;; seq-gen-done -- test whether a void* generator has been exhausted.
 ;;;
 ;;; Parameters:
@@ -81,12 +76,12 @@
 ;;;   (seq-gen-done g)  ; => false while values remain
 ;;;
 ;;; Since: LZ0
+
+
 (defn seq-gen-done [g :ptr<void>] :bool
-  ```c
-  typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
+  ```c typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
   return ((__seq_gen_hdr_t *)g)->__state == -1;
   ```)
-
 ;;; seq-gen-next -- advance a void* generator and return the next yield pointer.
 ;;;
 ;;; Parameters:
@@ -101,12 +96,11 @@
 ;;;     (when (seq-val-some? v) (println (seq-val-unwrap v))))
 ;;;
 ;;; Since: LZ0
+
 (defn seq-gen-next [g :ptr<void>] :ptr<void>
-  ```c
-  typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
+  ```c typedef struct { int32_t __state; void *(*__next_fn)(void *); } __seq_gen_hdr_t;
   return ((__seq_gen_hdr_t *)g)->__next_fn(g);
   ```)
-
 ;;; seq-val-some? -- test whether a yield pointer is non-NULL.
 ;;;
 ;;; Parameters:
@@ -119,11 +113,10 @@
 ;;;   (seq-val-some? (seq-gen-next g))  ; => true while values remain
 ;;;
 ;;; Since: LZ0
-(defn seq-val-some? [v :ptr<void>] :bool
-  ```c
-  return v != NULL;
-  ```)
 
+(defn seq-val-some? [v :ptr<void>] :bool
+  ```c return v != NULL;
+  ```)
 ;;; seq-val-unwrap -- extract the int64_t value from a yield pointer.
 ;;;
 ;;; Parameters:
@@ -136,15 +129,13 @@
 ;;;   (seq-val-unwrap v)  ; => yielded integer
 ;;;
 ;;; Since: LZ0
-(defn seq-val-unwrap [v :ptr<void>] :int
-  ```c
-  return *(int64_t *)v;
-  ```)
 
+(defn seq-val-unwrap [v :ptr<void>] :int
+  ```c return *(int64_t *)v;
+  ```)
 ;; -------------------------------------------------------------------
 ;; Core sequence adapters
 ;; -------------------------------------------------------------------
-
 ;;; seq-of -- construct a single-element Seq.
 ;;;
 ;;; Parameters:
@@ -157,11 +148,9 @@
 ;;;   (let [s (seq-of 42)] ...)  ; yields 42 then done
 ;;;
 ;;; Since: LZ0
-(defn seq-of [v :int] :int
-  (seq-new (fn []
-             (gen []
-               (yield v)))))
 
+
+(defn seq-of [v :int] :int (seq-new (fn [] (gen [] (yield v)))))
 ;;; empty-seq -- construct a Seq that yields no values.
 ;;;
 ;;; Returns:
@@ -171,51 +160,43 @@
 ;;;   (let [s (empty-seq)] (seq-gen-done (seq-iter s)))  ; => true
 ;;;
 ;;; Since: LZ0
+
 (defn empty-seq [] :int
   (let [_d 0]
-    (seq-new (fn []
-               (let [_ignore _d]
-                 (gen []
-                   (while false (yield 0))))))))
-
+    (seq-new (fn [] (let [_ignore _d] (gen [] (while false (yield 0))))))))
 ;; --- Vec helpers (no #{Unsafe} so usable inside gen bodies) ---
-
 ;;; seq-vec-len -- return the length of a vec without #{Unsafe}.
 ;;; seq-vec-get -- return element at index i in a vec without #{Unsafe}.
+
+
 (defn seq-vec-len [v :int] :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
   return (int64_t)vec->len;
   ```)
 
 (defn seq-vec-get [v :int i :int] :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void *)(intptr_t)v;
   return vec->data[i];
   ```)
-
 ;; --- List helpers (no #{Unsafe} so usable inside gen bodies) ---
-
 ;;; seq-list-nil? -- test whether a list is empty (NULL).
 ;;; seq-list-head -- return the value of the first Cons cell.
 ;;; seq-list-tail -- return the next pointer of the first Cons cell.
+
+
 (defn seq-list-nil? [lst :int] :bool
-  ```c
-  return lst == 0;
+  ```c return lst == 0;
   ```)
 
 (defn seq-list-head [lst :int] :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)lst;
+  ```c struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)lst;
   return cell->value;
   ```)
 
 (defn seq-list-tail [lst :int] :int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)lst;
+  ```c struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)lst;
   return cell->next;
   ```)
-
 ;;; seq-from-vec -- construct a Seq that yields all elements of a vec.
 ;;;
 ;;; Parameters:
@@ -231,6 +212,7 @@
 ;;;     (let [s (seq-from-vec v)] ...))
 ;;;
 ;;; Since: LZ0
+
 (defn seq-from-vec [v :int] :int
   (seq-new (fn []
              (let [^mut i 0]
@@ -238,7 +220,6 @@
                  (while (< i (seq-vec-len v))
                    (yield (seq-vec-get v i))
                    (set! i (+ i 1))))))))
-
 ;;; seq-from-list -- construct a Seq that yields all elements of a linked list.
 ;;;
 ;;; Parameters:
@@ -252,6 +233,7 @@
 ;;;     (let [s (seq-from-list lst)] ...))
 ;;;
 ;;; Since: LZ0
+
 (defn seq-from-list [l :int] :int
   (seq-new (fn []
              (let [^mut node l]
@@ -259,11 +241,9 @@
                  (while (not (seq-list-nil? node))
                    (yield (seq-list-head node))
                    (set! node (seq-list-tail node))))))))
-
 ;; -------------------------------------------------------------------
 ;; Iteration macros
 ;; -------------------------------------------------------------------
-
 ;;; seq-for-each -- call f with every value yielded by a Seq.
 ;;;
 ;;; Parameters:
@@ -274,16 +254,17 @@
 ;;;   (seq-for-each println my-seq)
 ;;;
 ;;; Since: LZ0
-(defmacro seq-for-each [f s]
-  (let [sv (gensym sv)
-        gv (gensym gv)
-        it (gensym it)]
-    (list let (vec sv s gv (list seq-iter sv))
-      (list while (list not (list seq-gen-done gv))
-        (list let (vec it (list seq-gen-next gv))
-          (list when (list seq-val-some? it)
-            (list f (list seq-val-unwrap it))))))))
 
+
+(defmacro seq-for-each [f s]
+  (let [sv (gensym sv) gv (gensym gv) it (gensym it)]
+    (list let
+      (vec sv s gv (list seq-iter sv))
+      (list while
+        (list not (list seq-gen-done gv))
+        (list let
+          (vec it (list seq-gen-next gv))
+          (list when (list seq-val-some? it) (list f (list seq-val-unwrap it))))))))
 ;;; seq-collect -- materialise all values of a Seq into a gen-arr array.
 ;;;
 ;;; Parameters:
@@ -298,14 +279,16 @@
 ;;;     (println (gen-arr-len arr)))
 ;;;
 ;;; Since: LZ0
+
 (defmacro seq-collect [s]
-  (let [sv  (gensym sv)
-        gv  (gensym gv)
-        res (gensym res)
-        it  (gensym it)]
-    (list let (vec sv s gv (list seq-iter sv) res (list gen-arr-new))
-      (list while (list not (list seq-gen-done gv))
-        (list let (vec it (list seq-gen-next gv))
-          (list when (list seq-val-some? it)
+  (let [sv (gensym sv) gv (gensym gv) res (gensym res) it (gensym it)]
+    (list let
+      (vec sv s gv (list seq-iter sv) res (list gen-arr-new))
+      (list while
+        (list not (list seq-gen-done gv))
+        (list let
+          (vec it (list seq-gen-next gv))
+          (list when
+            (list seq-val-some? it)
             (list gen-arr-push! res (list seq-val-unwrap it)))))
       res)))

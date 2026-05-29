@@ -18,7 +18,6 @@
 ;;
 ;; The scheduler uses work-stealing: each thread has its own deque of fibers.
 ;; When a thread runs out of work, it steals from other threads' deques.
-
 ;; Create a new multi-threaded scheduler with n_threads worker threads
 ;;; scheduler-mt-new -- create a new multi-threaded work-stealing scheduler.
 ;;;
@@ -33,12 +32,10 @@
 ;;;
 ;;; Since: Phase T23
 (defn scheduler-mt-new [n_threads :int] :ptr<void>
-  ```c
-  TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
+  ```c TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
   if (!s) { fprintf(stderr, "scheduler-mt-new: oom\n"); abort(); }
   return (void *)s;
   ```)
-
 ;; Free the scheduler (must be called after all threads have finished)
 ;;; scheduler-mt-free -- free a multi-threaded scheduler after all threads have finished.
 ;;;
@@ -49,11 +46,10 @@
 ;;;   (scheduler-mt-free sched)
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-free [sched :ptr<void>] :nil
-  ```c
-  tur_scheduler_mt_free((TurSchedulerMT *)sched);
-  ```)
 
+(defn scheduler-mt-free [sched :ptr<void>] :nil
+  ```c tur_scheduler_mt_free((TurSchedulerMT *)sched);
+  ```)
 ;; Spawn a fiber on the scheduler
 ;;; scheduler-mt-spawn -- add a fiber to the multi-threaded scheduler's work queue.
 ;;;
@@ -65,11 +61,10 @@
 ;;;   (scheduler-mt-spawn sched my-fiber)
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-spawn [sched :ptr<void> fiber :ptr<void>] :nil
-  ```c
-  tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
-  ```)
 
+(defn scheduler-mt-spawn [sched :ptr<void> fiber :ptr<void>] :nil
+  ```c tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
+  ```)
 ;; Run the scheduler on the current thread
 ;;; scheduler-mt-run -- run the multi-threaded scheduler on the calling thread.
 ;;;
@@ -80,11 +75,10 @@
 ;;;   (scheduler-mt-run sched)
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-run [sched :ptr<void>] :nil
-  ```c
-  tur_scheduler_mt_run((TurSchedulerMT *)sched);
-  ```)
 
+(defn scheduler-mt-run [sched :ptr<void>] :nil
+  ```c tur_scheduler_mt_run((TurSchedulerMT *)sched);
+  ```)
 ;; Get the current thread's ID (unique per OS thread)
 ;;; scheduler-mt-thread-id -- return the unique integer ID of the current OS thread.
 ;;;
@@ -95,11 +89,10 @@
 ;;;   (scheduler-mt-thread-id)  ; => non-deterministic thread ID
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-thread-id [] :int
-  ```c
-  return (int64_t)tur_scheduler_mt_thread_id();
-  ```)
 
+(defn scheduler-mt-thread-id [] :int
+  ```c return (int64_t)tur_scheduler_mt_thread_id();
+  ```)
 ;; Set the current scheduler for this thread (for testing)
 ;;; scheduler-mt-set-current -- set the active scheduler for the current thread.
 ;;;
@@ -110,11 +103,10 @@
 ;;;   (scheduler-mt-set-current sched)
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-set-current [sched :ptr<void>] :nil
-  ```c
-  tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
-  ```)
 
+(defn scheduler-mt-set-current [sched :ptr<void>] :nil
+  ```c tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
+  ```)
 ;; Get the current scheduler for this thread
 ;;; scheduler-mt-current -- return the scheduler currently associated with this thread.
 ;;;
@@ -125,11 +117,10 @@
 ;;;   (scheduler-mt-current)  ; => sched-ptr
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-current [] :ptr<void>
-  ```c
-  return (void *)tur_scheduler_mt_current();
-  ```)
 
+(defn scheduler-mt-current [] :ptr<void>
+  ```c return (void *)tur_scheduler_mt_current();
+  ```)
 ;; Yield the current fiber to allow other fibers to run
 ;;; scheduler-mt-yield -- yield the current fiber so other fibers may be scheduled.
 ;;;
@@ -137,11 +128,10 @@
 ;;;   (scheduler-mt-yield)
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-yield [] :nil
-  ```c
-  tur_scheduler_mt_yield();
-  ```)
 
+(defn scheduler-mt-yield [] :nil
+  ```c tur_scheduler_mt_yield();
+  ```)
 ;; Park the current fiber until explicitly unparked
 ;;; scheduler-mt-park -- park the current fiber until another fiber calls scheduler-mt-unpark.
 ;;;
@@ -149,11 +139,10 @@
 ;;;   (scheduler-mt-park)
 ;;;
 ;;; Since: Phase T23
-(defn scheduler-mt-park [] :nil
-  ```c
-  tur_scheduler_mt_park();
-  ```)
 
+(defn scheduler-mt-park [] :nil
+  ```c tur_scheduler_mt_park();
+  ```)
 ;; Unpark a specific fiber
 ;;; scheduler-mt-unpark -- unpark a previously parked fiber, making it eligible to run.
 ;;;
@@ -164,7 +153,7 @@
 ;;;   (scheduler-mt-unpark other-fiber)
 ;;;
 ;;; Since: Phase T23
+
 (defn scheduler-mt-unpark [fiber :ptr<void>] :nil
-  ```c
-  tur_scheduler_mt_unpark((FiberBlock *)fiber);
+  ```c tur_scheduler_mt_unpark((FiberBlock *)fiber);
   ```)

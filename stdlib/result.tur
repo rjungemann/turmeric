@@ -7,15 +7,10 @@
 ;; Phase TC1-E: Typed Result[A B]
 ;; ok value of type A, err value of type B.
 ;; Runtime layout specializes ok/err payload fields for concrete A/B.
-
 ;;; Result -- parameterized result type with ok type A and err type B.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Result [A B]
-  (is-ok   :bool)
-  (ok-val  A)
-  (err-val B))
-
+(defstruct Result [A B] (is-ok :bool) (ok-val A) (err-val B))
 ;;; ok -- wrap a success value of type A in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -28,15 +23,16 @@
 ;;;   (ok 42)  ; => ok(42)
 ;;;
 ;;; Since: Phase TC1
-(defn ok [x :int] #{} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+
+(defn ok [x :int]
+  #{}
+  :int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = true;
   r->ok_val = x;
   r->err_val = 0;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -49,15 +45,16 @@
 ;;;   (err 404)  ; => err(404)
 ;;;
 ;;; Since: Phase TC1
-(defn err [e :int] #{} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+
+(defn err [e :int]
+  #{}
+  :int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
   r->is_ok = false;
   r->ok_val = 0;
   r->err_val = e;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
@@ -71,12 +68,13 @@
 ;;;   (ok? (err 0))  ; => false
 ;;;
 ;;; Since: Phase TC1
-(defn ok? [r :int] #{} :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+
+(defn ok? [r :int]
+  #{}
+  :bool
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return res && res->is_ok;
   ```)
-
 ;;; err? -- check whether a Result[A B] is err.
 ;;;
 ;;; Parameters:
@@ -89,12 +87,13 @@
 ;;;   (err? (err 1))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defn err? [r :int] #{} :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+
+(defn err? [r :int]
+  #{}
+  :bool
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   return !res || !res->is_ok;
   ```)
-
 ;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
 ;;; Parameters:
@@ -108,9 +107,8 @@
 ;;;     (ok-val r))  ; => 7
 ;;;
 ;;; Since: Phase TC1
-(defn ok-val [A B] [r :(Result A B)] :A
-  (.ok-val r))
 
+(defn ok-val [A B] [r : (Result A B)] :A (.ok-val r))
 ;;; err-val -- extract the error value from a typed Result[A B].
 ;;;
 ;;; Parameters:
@@ -124,9 +122,8 @@
 ;;;     (err-val r))  ; => "boom"
 ;;;
 ;;; Since: Phase TC1
-(defn err-val [A B] [r :(Result A B)] :B
-  (.err-val r))
 
+(defn err-val [A B] [r : (Result A B)] :B (.err-val r))
 ;;; result-free -- free a heap-allocated Result[A B].
 ;;;
 ;;; Parameters:
@@ -136,11 +133,12 @@
 ;;;   (result-free my-result)
 ;;;
 ;;; Since: Phase TC1
-(defn result-free [r :int] #{} :void
-  ```c
-  if (r) free((void*)(intptr_t)r);
-  ```)
 
+(defn result-free [r :int]
+  #{}
+  :void
+  ```c if (r) free((void*)(intptr_t)r);
+  ```)
 ;;; result-map -- apply a function to the ok value if ok.
 ;;;
 ;;; Parameters:
@@ -157,9 +155,11 @@
 ;;;   (result-map (err 5) (fn [x] (* x 2))) ; => err(5)
 ;;;
 ;;; Since: Phase TC1
-(defn result-map [r :int f] #{} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+
+(defn result-map [r :int f]
+  #{}
+  :int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
   if (!res) return 0;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
   out->is_ok = res->is_ok;
@@ -172,7 +172,6 @@
   }
   return (int64_t)(intptr_t)out;
   ```)
-
 ;;; result-eq? -- compare two Result[A B] values.
 ;;;
 ;;; Parameters:
@@ -188,9 +187,11 @@
 ;;;   (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defn result-eq? [r1 :int r2 :int ok-cmp err-cmp] #{} :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
+
+(defn result-eq? [r1 :int r2 :int ok-cmp err-cmp]
+  #{}
+  :bool
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a = (void*)(intptr_t)r1;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b = (void*)(intptr_t)r2;
   if (!a && !b) return true;
   if (!a || !b) return false;
@@ -200,23 +201,25 @@
   else
       return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
   ```)
-
 ;;; __tur-q-is-err? -- ? operator helper; checks if a Result value is an error.
-(defn __tur-q-is-err? [r :ptr<void>] #{} :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
+
+(defn __tur-q-is-err? [r :ptr<void>]
+  #{}
+  :bool
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
   return !res || !res->is_ok;
   ```)
-
 ;;; __tur-q-ok-val -- ? operator helper; extracts the ok payload from a Result value.
-(defn __tur-q-ok-val [r :ptr<void>] #{} :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
+
+(defn __tur-q-ok-val [r :ptr<void>]
+  #{}
+  :int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = r;
   return res ? res->ok_val : 0;
   ```)
-
 ;;; Eq [Result] -- equality using the ok and err types' Eq instances.
 ;; TC1-22: Phase PTC4 -- constrained Eq instance for Result[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
+
 (definstance Eq [Result] [(Eq A) (Eq B)]
   (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

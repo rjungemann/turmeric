@@ -16,7 +16,6 @@
 ;;   rwlock-try-wrlock  [rw :ptr<void>]       -- bool
 ;;   rwlock-unlock      [rw :ptr<void>]       -- nil
 ;;   rwlock-free        [rw :ptr<void>]       -- nil
-
 ;;; rwlock-new -- allocate and initialise a new POSIX read-write lock.
 ;;;
 ;;; Returns:
@@ -27,13 +26,11 @@
 ;;;
 ;;; Since: Phase T19-C
 (defn rwlock-new [] :ptr<void>
-  ```c
-  pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
+  ```c pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
   if (!rw) { fprintf(stderr, "rwlock-new: out of memory\n"); abort(); }
   pthread_rwlock_init(rw, NULL);
   return (void *)rw;
   ```)
-
 ;;; rwlock-rdlock -- acquire a shared read lock, blocking until available.
 ;;;
 ;;; Parameters:
@@ -43,11 +40,10 @@
 ;;;   (rwlock-rdlock rw)
 ;;;
 ;;; Since: Phase T19-C
-(defn rwlock-rdlock [rw :ptr<void>] :nil
-  ```c
-  pthread_rwlock_rdlock((pthread_rwlock_t *)rw);
-  ```)
 
+(defn rwlock-rdlock [rw :ptr<void>] :nil
+  ```c pthread_rwlock_rdlock((pthread_rwlock_t *)rw);
+  ```)
 ;;; rwlock-wrlock -- acquire an exclusive write lock, blocking until available.
 ;;;
 ;;; Parameters:
@@ -57,11 +53,10 @@
 ;;;   (rwlock-wrlock rw)
 ;;;
 ;;; Since: Phase T19-C
-(defn rwlock-wrlock [rw :ptr<void>] :nil
-  ```c
-  pthread_rwlock_wrlock((pthread_rwlock_t *)rw);
-  ```)
 
+(defn rwlock-wrlock [rw :ptr<void>] :nil
+  ```c pthread_rwlock_wrlock((pthread_rwlock_t *)rw);
+  ```)
 ;;; rwlock-try-rdlock -- attempt to acquire a shared read lock without blocking.
 ;;;
 ;;; Parameters:
@@ -74,11 +69,10 @@
 ;;;   (if (rwlock-try-rdlock rw) ...)  ; => bool
 ;;;
 ;;; Since: Phase T19-C
-(defn rwlock-try-rdlock [rw :ptr<void>] :bool
-  ```c
-  return pthread_rwlock_tryrdlock((pthread_rwlock_t *)rw) == 0;
-  ```)
 
+(defn rwlock-try-rdlock [rw :ptr<void>] :bool
+  ```c return pthread_rwlock_tryrdlock((pthread_rwlock_t *)rw) == 0;
+  ```)
 ;;; rwlock-try-wrlock -- attempt to acquire an exclusive write lock without blocking.
 ;;;
 ;;; Parameters:
@@ -91,11 +85,10 @@
 ;;;   (if (rwlock-try-wrlock rw) ...)  ; => bool
 ;;;
 ;;; Since: Phase T19-C
-(defn rwlock-try-wrlock [rw :ptr<void>] :bool
-  ```c
-  return pthread_rwlock_trywrlock((pthread_rwlock_t *)rw) == 0;
-  ```)
 
+(defn rwlock-try-wrlock [rw :ptr<void>] :bool
+  ```c return pthread_rwlock_trywrlock((pthread_rwlock_t *)rw) == 0;
+  ```)
 ;;; rwlock-unlock -- release a previously acquired read or write lock.
 ;;;
 ;;; Parameters:
@@ -105,11 +98,10 @@
 ;;;   (rwlock-unlock rw)
 ;;;
 ;;; Since: Phase T19-C
-(defn rwlock-unlock [rw :ptr<void>] :nil
-  ```c
-  pthread_rwlock_unlock((pthread_rwlock_t *)rw);
-  ```)
 
+(defn rwlock-unlock [rw :ptr<void>] :nil
+  ```c pthread_rwlock_unlock((pthread_rwlock_t *)rw);
+  ```)
 ;;; rwlock-free -- destroy the read-write lock and release its memory.
 ;;;
 ;;; Parameters:
@@ -119,8 +111,8 @@
 ;;;   (rwlock-free rw)
 ;;;
 ;;; Since: Phase T19-C
+
 (defn rwlock-free [rw :ptr<void>] :nil
-  ```c
-  pthread_rwlock_destroy((pthread_rwlock_t *)rw);
+  ```c pthread_rwlock_destroy((pthread_rwlock_t *)rw);
   free(rw);
   ```)

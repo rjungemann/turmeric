@@ -6,20 +6,13 @@
 ;; Phase G3: Type equality witnesses
 ; The Equal GADT witnesses type equality: (Equal a a) has one constructor Refl.
 ; Matching on Refl in a GADT arm refines the type variable a.
-
-(defgadt Equal [a b]
-  (Refl : (Equal a a)))
-
+(defgadt Equal [a b] (Refl : (Equal a a)))
 ; Symmetry: if a = a then a = a (trivially via Refl)
-(defn equal-sym [eq :Equal] :Equal
-  (match eq
-    (Refl) (Refl)))
 
+(defn equal-sym [eq :Equal] :Equal (match eq (Refl) (Refl)))
 ; Transitivity: if a = a and a = a then a = a (trivially via Refl)
-(defn equal-trans [eq1 :Equal eq2 :Equal] :Equal
-  (match eq1
-    (Refl) eq2))
 
+(defn equal-trans [eq1 :Equal eq2 :Equal] :Equal (match eq1 (Refl) eq2))
 ;;; equal-cong -- congruence: if a = b then (f a) = (f b) for any f : * -> *.
 ;;;
 ;;; Parameters:
@@ -32,6 +25,6 @@
 ;;;   (equal-cong Refl)  ; => Refl
 ;;;
 ;;; Since: Phase G4 (requires HKT)
+
 (defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b))
-  (match eq
-    (Refl) (Refl)))
+  (match eq (Refl) (Refl)))

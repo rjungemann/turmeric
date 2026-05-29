@@ -6,13 +6,15 @@
 ;; Phase 16: Real Random implementation
 ;;
 ;; Implementation of Random capability using platform RNG
-
 (extern-c rand [^] :int)
-(extern-c srand [^int] :void)
-(extern-c time [^ptr] :ptr)
-(extern-c malloc [^ptr size] :ptr)
-(extern-c free [^ptr p] :void)
 
+(extern-c srand [^int] :void)
+
+(extern-c time [^ptr] :ptr)
+
+(extern-c malloc [^ptr size] :ptr)
+
+(extern-c free [^ptr p] :void)
 ;;; Real-Random -- create a Random capability backed by libc rand().
 ;;;
 ;;; Returns:
@@ -29,9 +31,9 @@
 ;;; Since: Phase 16
 ;; Real-Random implementation
 ;; Uses libc rand() function
+
 (defn Real-Random []
-  ```c
-  /* Define the Random struct */
+  ```c /* Define the Random struct */
   typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
@@ -72,7 +74,6 @@
   rng->next_float = random_next_float;
   return (void*)rng;
   ```)
-
 ;;; Real-Random-free -- release a Random capability created by Real-Random.
 ;;;
 ;;; Parameters:
@@ -80,15 +81,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Real-Random
-(defn Real-Random-free [rng]
-  ```c
-  free(rng);
-  ```)
 
+(defn Real-Random-free [rng]
+  ```c free(rng);
+  ```)
 ;; ============================================================================
 ;; Seeded Random implementation
 ;; ============================================================================
-
 ;;; Seeded-Random -- create a deterministic Random capability from a fixed seed.
 ;;;
 ;;; Parameters:
@@ -105,9 +104,10 @@
 ;;; Since: Phase 16
 ;; Seeded-Random implementation - uses a fixed seed for reproducibility
 ;; Useful for testing
+
+
 (defn Seeded-Random [seed]
-  ```c
-  typedef struct Random Random;
+  ```c typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
       int (*next_float)(void);
@@ -134,7 +134,6 @@
   rng->next_float = seeded_next_float;
   return (void*)rng;
   ```)
-
 ;;; Seeded-Random-free -- release a Random capability created by Seeded-Random.
 ;;;
 ;;; Parameters:
@@ -142,15 +141,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Seeded-Random
-(defn Seeded-Random-free [rng]
-  ```c
-  free(rng);
-  ```)
 
+(defn Seeded-Random-free [rng]
+  ```c free(rng);
+  ```)
 ;; ============================================================================
 ;; Helper functions for direct random number generation
 ;; ============================================================================
-
 ;;; rand-int -- return a random integer in the inclusive range [min, max].
 ;;;
 ;;; Parameters:
@@ -166,9 +163,10 @@
 ;;;
 ;;; Since: Phase 16
 ;; Get a random integer in range [min, max]
+
+
 (defn rand-int [min max]
-  ```c
-  static int seeded = 0;
+  ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;
@@ -177,7 +175,6 @@
   int value = rand() % range;
   return min + value;
   ```)
-
 ;;; rand-float -- return a random integer scaled to represent [0, 1).
 ;;;
 ;;; Returns:
@@ -190,16 +187,15 @@
 ;;; Since: Phase 16
 ;; Get a random float in range [0, 1)
 ;; Returns value scaled by 10000 (divide by 10000.0 to get actual float)
+
 (defn rand-float []
-  ```c
-  static int seeded = 0;
+  ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;
   }
   return rand() % 10000;
   ```)
-
 ;;; rand-die -- roll an n-sided die, returning a value in [1, sides].
 ;;;
 ;;; Parameters:
@@ -213,16 +209,15 @@
 ;;;
 ;;; Since: Phase 16
 ;; Roll a die with n sides (1 to n)
+
 (defn rand-die [sides]
-  ```c
-  static int seeded = 0;
+  ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;
   }
   return 1 + (rand() % sides);
   ```)
-
 ;;; rand-bool -- return a random boolean value.
 ;;;
 ;;; Returns:
@@ -233,9 +228,9 @@
 ;;;
 ;;; Since: Phase 16
 ;; Random boolean (true or false)
+
 (defn rand-bool []
-  ```c
-  static int seeded = 0;
+  ```c static int seeded = 0;
   if (!seeded) {
       srand((unsigned int)time(NULL));
       seeded = 1;

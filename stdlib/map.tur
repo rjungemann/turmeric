@@ -7,15 +7,11 @@
 ;; K must satisfy Hash[K] and Eq[K].
 ;; Backed by the persistent HAMT (stdlib/hamt.tur).
 ;; At runtime, a Map[K V] is a heap-allocated wrapper around a HAMT ptr<void>.
-
 ;; Internal C layout: struct { void *hamt; }
-
 ;;; Map -- parameterized persistent map with key type K and value type V.
 ;;;
 ;;; Since: Phase TM0
-(defstruct Map [K V]
-  (hamt :ptr<void>))
-
+(defstruct Map [K V] (hamt :ptr<void>))
 ;;; map-new -- create a new empty typed map.
 ;;;
 ;;; Returns:
@@ -25,28 +21,31 @@
 ;;;   (map-new)  ; => empty Map
 ;;;
 ;;; Since: Phase TM0
-(defn map-new [] #{} :int
-  ```c
-  struct { void *hamt; } *m = malloc(sizeof(*m));
+
+(defn map-new []
+  #{}
+  :int
+  ```c struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)m;
   ```)
-
 ;;; map-hamt -- internal accessor for the HAMT backing store.
-(defn map-hamt [m :int] #{} :ptr<void>
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-hamt [m :int]
+  #{}
+  :ptr<void>
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   return map->hamt;
   ```)
-
 ;;; map-wrap -- internal constructor from a HAMT pointer.
-(defn map-wrap [h :ptr<void>] #{} :int
-  ```c
-  struct { void *hamt; } *m = malloc(sizeof(*m));
+
+(defn map-wrap [h :ptr<void>]
+  #{}
+  :int
+  ```c struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = (void*)(intptr_t)h;
   return (int64_t)(intptr_t)m;
   ```)
-
 ;;; map-assoc -- insert or update a key/value pair; returns a new map.
 ;;;
 ;;; Parameters:
@@ -61,15 +60,16 @@
 ;;;   (map-assoc my-map 1 100)  ; => updated map
 ;;;
 ;;; Since: Phase TM0
-(defn map-assoc [m :int key :int val :int] #{} :int
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-assoc [m :int key :int val :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   void *new_hamt = tur_hamt_set(map->hamt, (int64_t)key, (void*)(intptr_t)key, (void*)(intptr_t)val);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; map-assoc-h -- insert or update with an explicit hash; returns a new map.
 ;;;
 ;;; Parameters:
@@ -85,15 +85,16 @@
 ;;;   (map-assoc-h my-map (hash k) k v)  ; => updated map
 ;;;
 ;;; Since: Phase TM0
-(defn map-assoc-h [m :int h :int key :int val :int] #{} :int
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-assoc-h [m :int h :int key :int val :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   void *new_hamt = tur_hamt_set(map->hamt, h, (void*)(intptr_t)key, (void*)(intptr_t)val);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; map-dissoc -- remove a key from the map; returns a new map.
 ;;;
 ;;; Parameters:
@@ -108,15 +109,16 @@
 ;;;   (map-dissoc my-map (hash k) k)  ; => map without k
 ;;;
 ;;; Since: Phase TM0
-(defn map-dissoc [m :int h :int key :int] #{} :int
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-dissoc [m :int h :int key :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   void *new_hamt = tur_hamt_del(map->hamt, h, (void*)(intptr_t)key);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; map-get -- look up a key; returns the value or 0 if absent.
 ;;;
 ;;; Parameters:
@@ -131,12 +133,13 @@
 ;;;   (map-get my-map (hash k) k)  ; => value or 0
 ;;;
 ;;; Since: Phase TM0
-(defn map-get [m :int h :int key :int] #{} :int
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-get [m :int h :int key :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get(map->hamt, h, (void*)(intptr_t)key);
   ```)
-
 ;;; map-has? -- check whether a key exists in the map.
 ;;;
 ;;; Parameters:
@@ -151,12 +154,13 @@
 ;;;   (map-has? my-map (hash k) k)  ; => true or false
 ;;;
 ;;; Since: Phase TM0
-(defn map-has? [m :int h :int key :int] #{} :bool
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-has? [m :int h :int key :int]
+  #{}
+  :bool
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   return tur_hamt_has(map->hamt, h, (void*)(intptr_t)key);
   ```)
-
 ;;; map-count -- return the number of entries in the map.
 ;;;
 ;;; Parameters:
@@ -169,12 +173,13 @@
 ;;;   (map-count my-map)  ; => 3
 ;;;
 ;;; Since: Phase TM0
-(defn map-count [m :int] #{} :int
-  ```c
-  struct { void *hamt; } *map = (void*)(intptr_t)m;
+
+(defn map-count [m :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   return tur_hamt_count(map->hamt);
   ```)
-
 ;;; map-merge -- merge two maps; values from b win on key collision.
 ;;;
 ;;; Parameters:
@@ -188,16 +193,17 @@
 ;;;   (map-merge map-a map-b)  ; => merged map
 ;;;
 ;;; Since: Phase TM0
-(defn map-merge [a :int b :int] #{} :int
-  ```c
-  struct { void *hamt; } *ma = (void*)(intptr_t)a;
+
+(defn map-merge [a :int b :int]
+  #{}
+  :int
+  ```c struct { void *hamt; } *ma = (void*)(intptr_t)a;
   struct { void *hamt; } *mb = (void*)(intptr_t)b;
   void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
   struct { void *hamt; } *r = malloc(sizeof(*r));
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-
 ;;; map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).
 ;;;
 ;;; Parameters:
@@ -207,11 +213,12 @@
 ;;;   (map-free my-map)
 ;;;
 ;;; Since: Phase TM0
-(defn map-free [m :int] #{} :void
-  ```c
-  free((void*)(intptr_t)m);
-  ```)
 
+(defn map-free [m :int]
+  #{}
+  :void
+  ```c free((void*)(intptr_t)m);
+  ```)
 ;;; map-eq? -- compare two maps for structural equality using a value comparator.
 ;;;
 ;;; Parameters:
@@ -226,9 +233,11 @@
 ;;;   (map-eq? ma mb (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TM0
-(defn map-eq? [m1 :int m2 :int val-cmp] #{} :bool
-  ```c
-  struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
+
+(defn map-eq? [m1 :int m2 :int val-cmp]
+  #{}
+  :bool
+  ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
   uint64_t iter_buf[32];
@@ -246,10 +255,10 @@
   tur_hamt_iter_free((void*)iter_buf);
   return true;
   ```)
-
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
 ;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
 ;; Constraints: (Eq K) ensures keys are comparable; (Eq V) uses integer equality.
 ;; Note: element comparison uses integer equality; correct for all primitive K/V.
+
 (definstance Eq [Map] [(Eq K) (Eq V)]
   (eq? [x y] (map-eq? x y (fn [a b] (= a b)))))

@@ -10,14 +10,10 @@
 ;;;
 ;;; Since: Phase TP1 (Tuple2); Phase TP2 (Tuple3..Tuple5); Phase TP3 (Tuple6..Tuple8)
 ;; tuple.tur -- TupleN structs, constructors and accessors.
-
 ;;; Tuple2 -- two-element tuple with element types A, B.
 ;;;
 ;;; Since: Phase TP1
-(defstruct Tuple2 [A B]
-  (e1 A)
-  (e2 B))
-
+(defstruct Tuple2 [A B] (e1 A) (e2 B))
 ;;; tuple2 -- construct a Tuple2[A B].
 ;;;
 ;;; Parameters:
@@ -31,9 +27,8 @@
 ;;;   (tuple2 1 "hi")  ; => Tuple2(1, "hi")
 ;;;
 ;;; Since: Phase TP1
-(defn tuple2 [A B] [a :A b :B] :(Tuple2 A B)
-  (make-struct Tuple2 a b))
 
+(defn tuple2 [A B] [a :A b :B] : (Tuple2 A B) (make-struct Tuple2 a b))
 ;;; tuple2-1st -- first element of a Tuple2[A B].
 ;;;
 ;;; Parameters:
@@ -46,9 +41,8 @@
 ;;;   (tuple2-1st (tuple2 10 20))  ; => 10
 ;;;
 ;;; Since: Phase TP1
-(defn tuple2-1st [A B] [t :(Tuple2 A B)] :A
-  (.e1 t))
 
+(defn tuple2-1st [A B] [t : (Tuple2 A B)] :A (.e1 t))
 ;;; tuple2-2nd -- second element of a Tuple2[A B].
 ;;;
 ;;; Parameters:
@@ -61,17 +55,13 @@
 ;;;   (tuple2-2nd (tuple2 10 20))  ; => 20
 ;;;
 ;;; Since: Phase TP1
-(defn tuple2-2nd [A B] [t :(Tuple2 A B)] :B
-  (.e2 t))
 
+(defn tuple2-2nd [A B] [t : (Tuple2 A B)] :B (.e2 t))
 ;;; Tuple3 -- three-element tuple with element types A, B, C.
 ;;;
 ;;; Since: Phase TP2
-(defstruct Tuple3 [A B C]
-  (e1 A)
-  (e2 B)
-  (e3 C))
 
+(defstruct Tuple3 [A B C] (e1 A) (e2 B) (e3 C))
 ;;; tuple3 -- construct a Tuple3[A B C].
 ;;;
 ;;; Parameters:
@@ -86,36 +76,31 @@
 ;;;   (tuple3 1 "hi" 3.14)  ; => Tuple3(1, "hi", 3.14)
 ;;;
 ;;; Since: Phase TP2
-(defn tuple3 [A B C] [a :A b :B c :C] :(Tuple3 A B C)
-  (make-struct Tuple3 a b c))
 
+(defn tuple3 [A B C]
+  [a :A b :B c :C]
+  : (Tuple3 A B C)
+  (make-struct Tuple3 a b c))
 ;;; tuple3-1st -- first element of a Tuple3[A B C].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple3-1st [A B C] [t :(Tuple3 A B C)] :A
-  (.e1 t))
 
+(defn tuple3-1st [A B C] [t : (Tuple3 A B C)] :A (.e1 t))
 ;;; tuple3-2nd -- second element of a Tuple3[A B C].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple3-2nd [A B C] [t :(Tuple3 A B C)] :B
-  (.e2 t))
 
+(defn tuple3-2nd [A B C] [t : (Tuple3 A B C)] :B (.e2 t))
 ;;; tuple3-3rd -- third element of a Tuple3[A B C].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple3-3rd [A B C] [t :(Tuple3 A B C)] :C
-  (.e3 t))
 
+(defn tuple3-3rd [A B C] [t : (Tuple3 A B C)] :C (.e3 t))
 ;;; Tuple4 -- four-element tuple with element types A, B, C, D.
 ;;;
 ;;; Since: Phase TP2
-(defstruct Tuple4 [A B C D]
-  (e1 A)
-  (e2 B)
-  (e3 C)
-  (e4 D))
 
+(defstruct Tuple4 [A B C D] (e1 A) (e2 B) (e3 C) (e4 D))
 ;;; tuple4 -- construct a Tuple4[A B C D].
 ;;;
 ;;; Parameters:
@@ -131,43 +116,36 @@
 ;;;   (tuple4 1 "hi" 3.14 #t)  ; => Tuple4(1, "hi", 3.14, #t)
 ;;;
 ;;; Since: Phase TP2
-(defn tuple4 [A B C D] [a :A b :B c :C d :D] :(Tuple4 A B C D)
-  (make-struct Tuple4 a b c d))
 
+(defn tuple4 [A B C D]
+  [a :A b :B c :C d :D]
+  : (Tuple4 A B C D)
+  (make-struct Tuple4 a b c d))
 ;;; tuple4-1st -- first element of a Tuple4[A B C D].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple4-1st [A B C D] [t :(Tuple4 A B C D)] :A
-  (.e1 t))
 
+(defn tuple4-1st [A B C D] [t : (Tuple4 A B C D)] :A (.e1 t))
 ;;; tuple4-2nd -- second element of a Tuple4[A B C D].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple4-2nd [A B C D] [t :(Tuple4 A B C D)] :B
-  (.e2 t))
 
+(defn tuple4-2nd [A B C D] [t : (Tuple4 A B C D)] :B (.e2 t))
 ;;; tuple4-3rd -- third element of a Tuple4[A B C D].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple4-3rd [A B C D] [t :(Tuple4 A B C D)] :C
-  (.e3 t))
 
+(defn tuple4-3rd [A B C D] [t : (Tuple4 A B C D)] :C (.e3 t))
 ;;; tuple4-4th -- fourth element of a Tuple4[A B C D].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple4-4th [A B C D] [t :(Tuple4 A B C D)] :D
-  (.e4 t))
 
+(defn tuple4-4th [A B C D] [t : (Tuple4 A B C D)] :D (.e4 t))
 ;;; Tuple5 -- five-element tuple with element types A, B, C, D, E.
 ;;;
 ;;; Since: Phase TP2
-(defstruct Tuple5 [A B C D E]
-  (e1 A)
-  (e2 B)
-  (e3 C)
-  (e4 D)
-  (e5 E))
 
+(defstruct Tuple5 [A B C D E] (e1 A) (e2 B) (e3 C) (e4 D) (e5 E))
 ;;; tuple5 -- construct a Tuple5[A B C D E].
 ;;;
 ;;; Parameters:
@@ -184,50 +162,41 @@
 ;;;   (tuple5 1 "hi" 3.14 #t :ok)  ; => Tuple5(1, "hi", 3.14, #t, :ok)
 ;;;
 ;;; Since: Phase TP2
-(defn tuple5 [A B C D E] [a :A b :B c :C d :D e :E] :(Tuple5 A B C D E)
-  (make-struct Tuple5 a b c d e))
 
+(defn tuple5 [A B C D E]
+  [a :A b :B c :C d :D e :E]
+  : (Tuple5 A B C D E)
+  (make-struct Tuple5 a b c d e))
 ;;; tuple5-1st -- first element of a Tuple5[A B C D E].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple5-1st [A B C D E] [t :(Tuple5 A B C D E)] :A
-  (.e1 t))
 
+(defn tuple5-1st [A B C D E] [t : (Tuple5 A B C D E)] :A (.e1 t))
 ;;; tuple5-2nd -- second element of a Tuple5[A B C D E].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple5-2nd [A B C D E] [t :(Tuple5 A B C D E)] :B
-  (.e2 t))
 
+(defn tuple5-2nd [A B C D E] [t : (Tuple5 A B C D E)] :B (.e2 t))
 ;;; tuple5-3rd -- third element of a Tuple5[A B C D E].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple5-3rd [A B C D E] [t :(Tuple5 A B C D E)] :C
-  (.e3 t))
 
+(defn tuple5-3rd [A B C D E] [t : (Tuple5 A B C D E)] :C (.e3 t))
 ;;; tuple5-4th -- fourth element of a Tuple5[A B C D E].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple5-4th [A B C D E] [t :(Tuple5 A B C D E)] :D
-  (.e4 t))
 
+(defn tuple5-4th [A B C D E] [t : (Tuple5 A B C D E)] :D (.e4 t))
 ;;; tuple5-5th -- fifth element of a Tuple5[A B C D E].
 ;;;
 ;;; Since: Phase TP2
-(defn tuple5-5th [A B C D E] [t :(Tuple5 A B C D E)] :E
-  (.e5 t))
 
+(defn tuple5-5th [A B C D E] [t : (Tuple5 A B C D E)] :E (.e5 t))
 ;;; Tuple6 -- six-element tuple with element types A, B, C, D, E, F.
 ;;;
 ;;; Since: Phase TP3
-(defstruct Tuple6 [A B C D E F]
-  (e1 A)
-  (e2 B)
-  (e3 C)
-  (e4 D)
-  (e5 E)
-  (e6 F))
 
+(defstruct Tuple6 [A B C D E F] (e1 A) (e2 B) (e3 C) (e4 D) (e5 E) (e6 F))
 ;;; tuple6 -- construct a Tuple6[A B C D E F].
 ;;;
 ;;; Parameters:
@@ -245,49 +214,47 @@
 ;;;   (tuple6 1 "hi" 3.14 #t :ok 99)  ; => Tuple6(1, "hi", 3.14, #t, :ok, 99)
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6 [A B C D E F] [a :A b :B c :C d :D e :E f :F] :(Tuple6 A B C D E F)
-  (make-struct Tuple6 a b c d e f))
 
+(defn tuple6 [A B C D E F]
+  [a :A b :B c :C d :D e :E f :F]
+  : (Tuple6 A B C D E F)
+  (make-struct Tuple6 a b c d e f))
 ;;; tuple6-1st -- first element of a Tuple6[A B C D E F].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6-1st [A B C D E F] [t :(Tuple6 A B C D E F)] :A
-  (.e1 t))
 
+(defn tuple6-1st [A B C D E F] [t : (Tuple6 A B C D E F)] :A (.e1 t))
 ;;; tuple6-2nd -- second element of a Tuple6[A B C D E F].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6-2nd [A B C D E F] [t :(Tuple6 A B C D E F)] :B
-  (.e2 t))
 
+(defn tuple6-2nd [A B C D E F] [t : (Tuple6 A B C D E F)] :B (.e2 t))
 ;;; tuple6-3rd -- third element of a Tuple6[A B C D E F].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6-3rd [A B C D E F] [t :(Tuple6 A B C D E F)] :C
-  (.e3 t))
 
+(defn tuple6-3rd [A B C D E F] [t : (Tuple6 A B C D E F)] :C (.e3 t))
 ;;; tuple6-4th -- fourth element of a Tuple6[A B C D E F].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6-4th [A B C D E F] [t :(Tuple6 A B C D E F)] :D
-  (.e4 t))
 
+(defn tuple6-4th [A B C D E F] [t : (Tuple6 A B C D E F)] :D (.e4 t))
 ;;; tuple6-5th -- fifth element of a Tuple6[A B C D E F].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6-5th [A B C D E F] [t :(Tuple6 A B C D E F)] :E
-  (.e5 t))
 
+(defn tuple6-5th [A B C D E F] [t : (Tuple6 A B C D E F)] :E (.e5 t))
 ;;; tuple6-6th -- sixth element of a Tuple6[A B C D E F].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple6-6th [A B C D E F] [t :(Tuple6 A B C D E F)] :F
-  (.e6 t))
 
+(defn tuple6-6th [A B C D E F] [t : (Tuple6 A B C D E F)] :F (.e6 t))
 ;;; Tuple7 -- seven-element tuple with element types A, B, C, D, E, F, G.
 ;;;
 ;;; Since: Phase TP3
-(defstruct Tuple7 [A B C D E F G]
+
+(defstruct Tuple7
+  [A B C D E F G]
   (e1 A)
   (e2 B)
   (e3 C)
@@ -295,7 +262,6 @@
   (e5 E)
   (e6 F)
   (e7 G))
-
 ;;; tuple7 -- construct a Tuple7[A B C D E F G].
 ;;;
 ;;; Parameters:
@@ -314,55 +280,52 @@
 ;;;   (tuple7 1 2 3 4 5 6 7)  ; => Tuple7(1, 2, 3, 4, 5, 6, 7)
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7 [A B C D E F G] [a :A b :B c :C d :D e :E f :F g :G] :(Tuple7 A B C D E F G)
-  (make-struct Tuple7 a b c d e f g))
 
+(defn tuple7 [A B C D E F G]
+  [a :A b :B c :C d :D e :E f :F g :G]
+  : (Tuple7 A B C D E F G)
+  (make-struct Tuple7 a b c d e f g))
 ;;; tuple7-1st -- first element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-1st [A B C D E F G] [t :(Tuple7 A B C D E F G)] :A
-  (.e1 t))
 
+(defn tuple7-1st [A B C D E F G] [t : (Tuple7 A B C D E F G)] :A (.e1 t))
 ;;; tuple7-2nd -- second element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-2nd [A B C D E F G] [t :(Tuple7 A B C D E F G)] :B
-  (.e2 t))
 
+(defn tuple7-2nd [A B C D E F G] [t : (Tuple7 A B C D E F G)] :B (.e2 t))
 ;;; tuple7-3rd -- third element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-3rd [A B C D E F G] [t :(Tuple7 A B C D E F G)] :C
-  (.e3 t))
 
+(defn tuple7-3rd [A B C D E F G] [t : (Tuple7 A B C D E F G)] :C (.e3 t))
 ;;; tuple7-4th -- fourth element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-4th [A B C D E F G] [t :(Tuple7 A B C D E F G)] :D
-  (.e4 t))
 
+(defn tuple7-4th [A B C D E F G] [t : (Tuple7 A B C D E F G)] :D (.e4 t))
 ;;; tuple7-5th -- fifth element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-5th [A B C D E F G] [t :(Tuple7 A B C D E F G)] :E
-  (.e5 t))
 
+(defn tuple7-5th [A B C D E F G] [t : (Tuple7 A B C D E F G)] :E (.e5 t))
 ;;; tuple7-6th -- sixth element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-6th [A B C D E F G] [t :(Tuple7 A B C D E F G)] :F
-  (.e6 t))
 
+(defn tuple7-6th [A B C D E F G] [t : (Tuple7 A B C D E F G)] :F (.e6 t))
 ;;; tuple7-7th -- seventh element of a Tuple7[A B C D E F G].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple7-7th [A B C D E F G] [t :(Tuple7 A B C D E F G)] :G
-  (.e7 t))
 
+(defn tuple7-7th [A B C D E F G] [t : (Tuple7 A B C D E F G)] :G (.e7 t))
 ;;; Tuple8 -- eight-element tuple with element types A, B, C, D, E, F, G, H.
 ;;;
 ;;; Since: Phase TP3
-(defstruct Tuple8 [A B C D E F G H]
+
+(defstruct Tuple8
+  [A B C D E F G H]
   (e1 A)
   (e2 B)
   (e3 C)
@@ -371,7 +334,6 @@
   (e6 F)
   (e7 G)
   (e8 H))
-
 ;;; tuple8 -- construct a Tuple8[A B C D E F G H].
 ;;;
 ;;; Parameters:
@@ -391,59 +353,52 @@
 ;;;   (tuple8 1 2 3 4 5 6 7 8)  ; => Tuple8(1, 2, 3, 4, 5, 6, 7, 8)
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8 [A B C D E F G H] [a :A b :B c :C d :D e :E f :F g :G h :H] :(Tuple8 A B C D E F G H)
-  (make-struct Tuple8 a b c d e f g h))
 
+(defn tuple8 [A B C D E F G H]
+  [a :A b :B c :C d :D e :E f :F g :G h :H]
+  : (Tuple8 A B C D E F G H)
+  (make-struct Tuple8 a b c d e f g h))
 ;;; tuple8-1st -- first element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-1st [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :A
-  (.e1 t))
 
+(defn tuple8-1st [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :A (.e1 t))
 ;;; tuple8-2nd -- second element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-2nd [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :B
-  (.e2 t))
 
+(defn tuple8-2nd [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :B (.e2 t))
 ;;; tuple8-3rd -- third element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-3rd [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :C
-  (.e3 t))
 
+(defn tuple8-3rd [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :C (.e3 t))
 ;;; tuple8-4th -- fourth element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-4th [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :D
-  (.e4 t))
 
+(defn tuple8-4th [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :D (.e4 t))
 ;;; tuple8-5th -- fifth element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-5th [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :E
-  (.e5 t))
 
+(defn tuple8-5th [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :E (.e5 t))
 ;;; tuple8-6th -- sixth element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-6th [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :F
-  (.e6 t))
 
+(defn tuple8-6th [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :F (.e6 t))
 ;;; tuple8-7th -- seventh element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-7th [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :G
-  (.e7 t))
 
+(defn tuple8-7th [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :G (.e7 t))
 ;;; tuple8-8th -- eighth element of a Tuple8[A B C D E F G H].
 ;;;
 ;;; Since: Phase TP3
-(defn tuple8-8th [A B C D E F G H] [t :(Tuple8 A B C D E F G H)] :H
-  (.e8 t))
 
+(defn tuple8-8th [A B C D E F G H] [t : (Tuple8 A B C D E F G H)] :H (.e8 t))
 ;; ── Equality ───────────────────────────────────────────────────────────────
-
 ;;; tuple2-eq? -- compare two Tuple2 values element-wise using supplied
 ;;; comparators.  Mirrors stdlib/pair.tur's pair-eq? macro.
 ;;;
@@ -461,11 +416,10 @@
 ;;;               (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TP2
-(defmacro tuple2-eq? [t1 t2 e1-cmp e2-cmp]
-  `(if (~e1-cmp (.e1 ~t1) (.e1 ~t2))
-     (~e2-cmp (.e2 ~t1) (.e2 ~t2))
-     false))
 
+
+(defmacro tuple2-eq? [t1 t2 e1-cmp e2-cmp]
+  `(if (~e1-cmp (.e1 ~t1) (.e1 ~t2)) (~e2-cmp (.e2 ~t1) (.e2 ~t2)) false))
 ;;; tuple2-eq-carrier? -- legacy carrier-ABI helper used inside Tuple2's Eq
 ;;; instance.  Mirrors stdlib/pair.tur's pair-eq-carrier?; subject to the
 ;;; same pre-existing typeclass-dispatch-on-parametric-struct issue that
@@ -473,9 +427,11 @@
 ;;; for direct comparisons.
 ;;;
 ;;; Since: Phase TP2
-(defn tuple2-eq-carrier? [t1 :int t2 :int e1-cmp e2-cmp] #{} :bool
-  ```c
-  struct { int64_t e1; int64_t e2; } *a = (void*)(intptr_t)t1;
+
+(defn tuple2-eq-carrier? [t1 :int t2 :int e1-cmp e2-cmp]
+  #{}
+  :bool
+  ```c struct { int64_t e1; int64_t e2; } *a = (void*)(intptr_t)t1;
   struct { int64_t e1; int64_t e2; } *b = (void*)(intptr_t)t2;
   if (!a && !b) return true;
   if (!a || !b) return false;
@@ -483,11 +439,11 @@
   bool e2_eq = ((bool(*)(int64_t, int64_t))(intptr_t)e2_cmp)(a->e2, b->e2);
   return e1_eq && e2_eq;
   ```)
-
 ;;; Eq [Tuple2] -- element-wise equality.  At parity with Eq [Pair]: shares
 ;;; the pre-existing typeclass-dispatch-on-parametric-struct issue, so
 ;;; reach for tuple2-eq? above for working call-site equality.
 ;;;
 ;;; Since: Phase TP2
+
 (definstance Eq [Tuple2] [(Eq A) (Eq B)]
   (eq? [x y] (tuple2-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

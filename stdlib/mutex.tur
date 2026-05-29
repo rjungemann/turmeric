@@ -14,7 +14,6 @@
 ;;   mutex-unlock       [m :ptr<void>]        -- nil
 ;;   mutex-try-lock     [m :ptr<void>]        -- bool   (true = acquired)
 ;;   mutex-free         [m :ptr<void>]        -- nil
-
 ;;; mutex-new -- allocate and initialise a new POSIX mutex.
 ;;;
 ;;; Returns:
@@ -25,13 +24,11 @@
 ;;;
 ;;; Since: Phase T19-C
 (defn mutex-new [] :ptr<void>
-  ```c
-  pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  ```c pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
   if (!m) { fprintf(stderr, "mutex-new: out of memory\n"); abort(); }
   pthread_mutex_init(m, NULL);
   return (void *)m;
   ```)
-
 ;;; mutex-lock -- acquire the mutex, blocking until it is available.
 ;;;
 ;;; Parameters:
@@ -41,11 +38,10 @@
 ;;;   (mutex-lock m)
 ;;;
 ;;; Since: Phase T19-C
-(defn mutex-lock [m :ptr<void>] :nil
-  ```c
-  pthread_mutex_lock((pthread_mutex_t *)m);
-  ```)
 
+(defn mutex-lock [m :ptr<void>] :nil
+  ```c pthread_mutex_lock((pthread_mutex_t *)m);
+  ```)
 ;;; mutex-unlock -- release the mutex.
 ;;;
 ;;; Parameters:
@@ -55,11 +51,10 @@
 ;;;   (mutex-unlock m)
 ;;;
 ;;; Since: Phase T19-C
-(defn mutex-unlock [m :ptr<void>] :nil
-  ```c
-  pthread_mutex_unlock((pthread_mutex_t *)m);
-  ```)
 
+(defn mutex-unlock [m :ptr<void>] :nil
+  ```c pthread_mutex_unlock((pthread_mutex_t *)m);
+  ```)
 ;;; mutex-try-lock -- attempt to acquire the mutex without blocking.
 ;;;
 ;;; Parameters:
@@ -72,11 +67,10 @@
 ;;;   (if (mutex-try-lock m) ...)  ; => bool
 ;;;
 ;;; Since: Phase T19-C
-(defn mutex-try-lock [m :ptr<void>] :bool
-  ```c
-  return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
-  ```)
 
+(defn mutex-try-lock [m :ptr<void>] :bool
+  ```c return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
+  ```)
 ;;; mutex-free -- destroy the mutex and release its memory.
 ;;;
 ;;; Parameters:
@@ -86,8 +80,8 @@
 ;;;   (mutex-free m)
 ;;;
 ;;; Since: Phase T19-C
+
 (defn mutex-free [m :ptr<void>] :nil
-  ```c
-  pthread_mutex_destroy((pthread_mutex_t *)m);
+  ```c pthread_mutex_destroy((pthread_mutex_t *)m);
   free(m);
   ```)

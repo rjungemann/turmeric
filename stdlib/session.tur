@@ -16,7 +16,6 @@
 ;;   pubsub  -- publish-subscribe subscriber loop
 ;;
 ;; Since: SS4
-
 ;; ---------------------------------------------------------------------------
 ;; echo -- trivial echo protocol
 ;;
@@ -28,7 +27,6 @@
 ;; The client uses choose-left to send one int and recv the echo, or
 ;; choose-right to end the conversation.
 ;; ---------------------------------------------------------------------------
-
 ;;; echo-server-loop -- serve the echo protocol until the client closes.
 ;;;
 ;;; Parameters:
@@ -42,15 +40,15 @@
 ;;;   (spawn (fn [] (echo-server-loop server-end)))
 ;;;
 ;;; Since: SS4
-(defn echo-server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+(defn echo-server-loop [^linear
+                        ch
+                        : (Session (Rec self
+                                     (Branch (Recv int (Send int self)) Close)))] :nil
   (match (offer ch)
     (Left ch)
-      (let [[n ch] (recv ch)]
-        (let [ch (send ch n)]
-          (echo-server-loop ch)))
+    (let [[n ch] (recv ch)] (let [ch (send ch n)] (echo-server-loop ch)))
     (Right ch)
-      (close ch)))
-
+    (close ch)))
 ;;; echo-client-call -- send one integer and receive the echo.
 ;;;
 ;;; Parameters:
@@ -72,18 +70,20 @@
 ;; :[(int (Session ...))] tuple annotation is not a supported type form).  The
 ;; return type is left to inference -- it is exactly the recv-pair the body
 ;; yields and that callers destructure with (let [[r ch] (echo-client-call ...)]).
-(defn echo-client-call [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) val :int]
-  (let [ch (choose-left ch)]
-    (let [ch (send ch val)]
-      (recv ch))))
 
+(defn echo-client-call [^linear
+                        ch
+                        : (Session (Rec self
+                                     (Choose (Send int (Recv int self)) Close)))
+                        val
+                        :int]
+  (let [ch (choose-left ch)] (let [ch (send ch val)] (recv ch))))
 ;; ---------------------------------------------------------------------------
 ;; rpc -- generic single-shot request/response
 ;;
 ;; RPC protocol (client view): Send req (Recv resp Close)
 ;; The client sends a request, receives a response, and closes.
 ;; ---------------------------------------------------------------------------
-
 ;;; rpc-call -- perform a single RPC: send request, receive response, close.
 ;;;
 ;;; Parameters:
@@ -99,12 +99,10 @@
 ;;;     (println resp))   ; => 42 (if server doubles the value)
 ;;;
 ;;; Since: SS4
-(defn rpc-call [^linear ch :(Session (Send int (Recv int Close))) req :int] :int
-  (let [ch (send ch req)]
-    (let [[resp ch] (recv ch)]
-      (close ch)
-      resp)))
 
+
+(defn rpc-call [^linear ch : (Session (Send int (Recv int Close))) req :int] :int
+  (let [ch (send ch req)] (let [[resp ch] (recv ch)] (close ch) resp)))
 ;; ---------------------------------------------------------------------------
 ;; pubsub -- publish-subscribe protocol template
 ;;
@@ -114,7 +112,6 @@
 ;; channel; if Left (another message is coming) recv and recurse; if Right
 ;; the topic has closed, close the channel and stop.
 ;; ---------------------------------------------------------------------------
-
 ;;; pubsub-recv-loop -- receive messages from a topic until it closes.
 ;;;
 ;;; Parameters:
@@ -129,21 +126,28 @@
 ;;;   (pubsub-recv-loop sub-ch (fn [msg] (println msg)))
 ;;;
 ;;; Since: SS4
-(defn pubsub-recv-loop [^linear ch :(Session (Recv int (Rec self (Branch (Recv int self) Close)))) handler :(-> int nil)] :nil
-  (let [[msg ch] (recv ch)]
-    (handler msg)
-    (pubsub-recv-loop-inner ch handler)))
 
+
+(defn pubsub-recv-loop [^linear
+                        ch
+                        : (Session (Recv int
+                                     (Rec self (Branch (Recv int self) Close))))
+                        handler
+                        : (-> int nil)] :nil
+  (let [[msg ch] (recv ch)] (handler msg) (pubsub-recv-loop-inner ch handler)))
 ;;; pubsub-recv-loop-inner -- inner recursive loop after initial recv.
-(defn pubsub-recv-loop-inner [^linear ch :(Session (Rec self (Branch (Recv int self) Close))) handler :(-> int nil)] :nil
+
+(defn pubsub-recv-loop-inner [^linear
+                              ch
+                              : (Session (Rec self
+                                           (Branch (Recv int self) Close)))
+                              handler
+                              : (-> int nil)] :nil
   (match (offer ch)
     (Left ch)
-      (let [[msg ch] (recv ch)]
-        (handler msg)
-        (pubsub-recv-loop-inner ch handler))
+    (let [[msg ch] (recv ch)] (handler msg) (pubsub-recv-loop-inner ch handler))
     (Right ch)
-      (close ch)))
-
+    (close ch)))
 ;; ---------------------------------------------------------------------------
 ;; Multi-party session patterns (SS8)
 ;;

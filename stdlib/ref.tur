@@ -6,12 +6,10 @@
 ;; Ref (Reference) type for Turmeric
 ;; Heap-allocated container with independent ownership
 ;; Phase B1: Clone trait infrastructure
-
 ;;; Ref -- heap-allocated single-value container with independent ownership.
 ;;;
 ;;; Since: Phase B1
 (defstruct Ref [value :int])
-
 ;; Create a new Ref from a value (takes ownership of the pointer)
 ;; The caller is responsible for ensuring the value is heap-allocated
 ;; if it needs to outlive the Ref.
@@ -27,13 +25,12 @@
 ;;;   (def r (ref-new 42))  ; => handle to Ref{42}
 ;;;
 ;;; Since: Phase B1
+
 (defn ref-new [value] :int
-  ```c
-  struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
+  ```c struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
   ref->value = value;
   return (int64_t)(intptr_t)ref;
   ```)
-
 ;; Get the contained value from a Ref
 ;;; ref-get -- read the value stored in a Ref cell.
 ;;;
@@ -47,16 +44,15 @@
 ;;;   (ref-get (ref-new 99))  ; => 99
 ;;;
 ;;; Since: Phase B1
+
 (defn ref-get [r] :int
-  ```c
-  struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
+  ```c struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
   if (!ref) {
     fprintf(stderr, "ref-get: null ref\n");
     exit(1);
   }
   return ref->value;
   ```)
-
 ;; Free a Ref (does NOT free the contained value - shallow free)
 ;;; ref-free -- free the Ref cell (shallow; does not free the contained value).
 ;;;
@@ -64,11 +60,10 @@
 ;;;   r -- opaque Ref handle returned by ref-new
 ;;;
 ;;; Since: Phase B1
-(defn ref-free [r]
-  ```c
-  free((void*)(intptr_t)r);
-  ```)
 
+(defn ref-free [r]
+  ```c free((void*)(intptr_t)r);
+  ```)
 ;; Phase B1: Clone instance for Ref
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
 ;; Deep clone: allocates a new Ref struct on the heap with a copy of the contained
@@ -77,10 +72,8 @@
 ;;; Clone [Ref] -- deep-clone a Ref struct: allocates a new Ref with an independent copy of the value.
 ;;;
 ;;; Since: Phase B1
-(definstance Clone [Ref]
-  (clone [x] :int
-    ```c
-    struct { int64_t value; } *dst = malloc(sizeof(Ref));
+
+(definstance Clone [Ref] (clone [x] :int ```c struct { int64_t value; } *dst = malloc(sizeof(Ref));
     dst->value = x.value;
     return (int64_t)(intptr_t)dst;
     ```))

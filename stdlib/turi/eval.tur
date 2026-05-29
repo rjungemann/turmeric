@@ -17,253 +17,75 @@
 ;; The TuriEnv handle is opaque (:ptr<void>).
 ;; Eval results are boxed TuriValue pointers (:ptr<void>).
 ;; Always call eval-free on the result and Env/free on the env when done.
-
 (defmodule turi/eval
   (export turi-eval-autolink-hint
-          Env/new Env/new-sandboxed Env/free
-          eval eval-file eval! eval-free
-          eval-ok? eval-err? eval-err-msg
-          eval-as-int eval-as-bool eval-as-cstr eval-tag)
-
-  ;; Autolink + include hints consumed by cmd_build in src/main.c.
-  ;; __tur_autolink__: appends -lturi and the src/ include paths so the
-  ;;   generated C can resolve turi/eval.h and the headers it pulls in
-  ;;   (diag.h in compiler/, arena.h/buf.h in runtime/).
-  ;; __tur_include__: injects file-level #include before the generated C.
-
-  ;;; turi-eval-autolink-hint -- emit build hints for the libturi linker and headers.
-  ;;;
-  ;;; Returns:
-  ;;;   0 (side-effect: injects -lturi and turi/eval.h into the build).
-  ;;;
-  ;;; Since: Phase S2
-  (defn turi-eval-autolink-hint [] :int
-    ```c
-    /* __tur_autolink__: -lturi -Isrc -Isrc/compiler -Isrc/runtime */
+    Env/new
+    Env/new-sandboxed
+    Env/free
+    eval
+    eval-file
+    eval!
+    eval-free
+    eval-ok?
+    eval-err?
+    eval-err-msg
+    eval-as-int
+    eval-as-bool
+    eval-as-cstr
+    eval-tag)
+  (defn turi-eval-autolink-hint [] :int ```c /* __tur_autolink__: -lturi -Isrc -Isrc/compiler -Isrc/runtime */
     /* __tur_include__: #include "turi/eval.h" */
     /* __tur_include__: #include "turi/env.h" */
     return 0;
     ```)
-
-  ;;; Env/new -- create a new unrestricted evaluation environment.
-  ;;;
-  ;;; Returns:
-  ;;;   Opaque TuriEnv handle as ptr<void>.
-  ;;;
-  ;;; Example:
-  ;;;   (let [env (Env/new)] ... (Env/free env))
-  ;;;
-  ;;; Since: Phase S2
-  (defn Env/new [] :ptr<void>
-    ```c
-    return (void *)turi_env_new();
+  (defn Env/new [] :ptr<void> ```c return (void *)turi_env_new();
     ```)
-
-  ;;; Env/new-sandboxed -- create a sandboxed environment with I/O and FFI disabled.
-  ;;;
-  ;;; Returns:
-  ;;;   Opaque TuriEnv handle as ptr<void>.
-  ;;;
-  ;;; Since: Phase S2
-  (defn Env/new-sandboxed [] :ptr<void>
-    ```c
-    return (void *)turi_env_new_sandboxed();
+  (defn Env/new-sandboxed [] :ptr<void> ```c return (void *)turi_env_new_sandboxed();
     ```)
-
-  ;;; Env/free -- free all resources owned by an environment.
-  ;;;
-  ;;; Parameters:
-  ;;;   env -- TuriEnv handle returned by Env/new or Env/new-sandboxed
-  ;;;
-  ;;; Since: Phase S2
-  (defn Env/free [env :ptr<void>] :void
-    ```c
-    turi_env_free((TuriEnv *)env);
+  (defn Env/free [env :ptr<void>] :void ```c turi_env_free((TuriEnv *)env);
     ```)
-
-  ;;; eval -- evaluate a Turmeric source string and return a boxed result.
-  ;;;
-  ;;; Parameters:
-  ;;;   env -- TuriEnv evaluation environment
-  ;;;   src -- Turmeric source code string
-  ;;;
-  ;;; Returns:
-  ;;;   Boxed TuriValue as ptr<void>; free with eval-free when done.
-  ;;;
-  ;;; Example:
-  ;;;   (eval env "(+ 40 2)")
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval [env :ptr<void> src :cstr] :ptr<void>
-    ```c
-    TuriValue v = turi_eval((TuriEnv *)env, src);
+  (defn eval [env :ptr<void> src :cstr] :ptr<void> ```c TuriValue v = turi_eval((TuriEnv *)env, src);
     TuriValue *p = malloc(sizeof(TuriValue));
     *p = v;
     return (void *)p;
     ```)
-
-  ;;; eval-file -- evaluate a file's contents in the given environment.
-  ;;;
-  ;;; Parameters:
-  ;;;   env  -- TuriEnv evaluation environment
-  ;;;   path -- path to the .tur file to evaluate
-  ;;;
-  ;;; Returns:
-  ;;;   Boxed TuriValue as ptr<void>; free with eval-free when done.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-file [env :ptr<void> path :cstr] :ptr<void>
-    ```c
-    TuriValue v = turi_eval_file((TuriEnv *)env, path);
+  (defn eval-file [env :ptr<void> path :cstr] :ptr<void> ```c TuriValue v = turi_eval_file((TuriEnv *)env, path);
     TuriValue *p = malloc(sizeof(TuriValue));
     *p = v;
     return (void *)p;
     ```)
-
-  ;;; eval! -- evaluate a source string and panic on error.
-  ;;;
-  ;;; Parameters:
-  ;;;   env -- TuriEnv evaluation environment
-  ;;;   src -- Turmeric source code string
-  ;;;
-  ;;; Returns:
-  ;;;   Boxed TuriValue as ptr<void>; free with eval-free when done.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval! [env :ptr<void> src :cstr] :ptr<void>
-    ```c
-    TuriValue v = turi_eval((TuriEnv *)env, src);
+  (defn eval! [env :ptr<void> src :cstr] :ptr<void> ```c TuriValue v = turi_eval((TuriEnv *)env, src);
     if (v.tag == TURI_ERROR) { tur_panic_abort(v.as_error ? v.as_error : "eval error"); }
     TuriValue *p = malloc(sizeof(TuriValue));
     *p = v;
     return (void *)p;
     ```)
-
-  ;;; eval-free -- free a boxed TuriValue returned by eval or eval-file.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- ptr<void> previously returned by eval, eval-file, or eval!
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-free [result :ptr<void>] :void
-    ```c
-    free(result);
+  (defn eval-free [result :ptr<void>] :void ```c free(result);
     ```)
-
-  ;;; eval-ok? -- return true if the eval result is not an error.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue
-  ;;;
-  ;;; Returns:
-  ;;;   true if the result has a non-error tag.
-  ;;;
-  ;;; Example:
-  ;;;   (when (eval-ok? r) (eval-as-int r))
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-ok? [result :ptr<void>] :bool
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-ok? [result :ptr<void>] :bool ```c TuriValue *p = (TuriValue *)result;
     return p != NULL && p->tag != TURI_ERROR;
     ```)
-
-  ;;; eval-err? -- return true if the eval result is an error.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue
-  ;;;
-  ;;; Returns:
-  ;;;   true if the result has the TURI_ERROR tag or is NULL.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-err? [result :ptr<void>] :bool
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-err? [result :ptr<void>] :bool ```c TuriValue *p = (TuriValue *)result;
     return p == NULL || p->tag == TURI_ERROR;
     ```)
-
-  ;;; eval-err-msg -- extract the error message from an error result.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue (should satisfy eval-err?)
-  ;;;
-  ;;; Returns:
-  ;;;   Error message string, or "<not-an-error>" if result is not an error.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-err-msg [result :ptr<void>] :cstr
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-err-msg [result :ptr<void>] :cstr ```c TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_ERROR) return "<not-an-error>";
     return p->as_error ? p->as_error : "<unknown error>";
     ```)
-
-  ;;; eval-as-int -- extract the integer value from a TURI_INT result.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue with TURI_INT tag
-  ;;;
-  ;;; Returns:
-  ;;;   Integer value, or 0 if result is not TURI_INT.
-  ;;;
-  ;;; Example:
-  ;;;   (eval-as-int (eval env "(+ 40 2)"))  ; => 42
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-as-int [result :ptr<void>] :int
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-as-int [result :ptr<void>] :int ```c TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_INT) return 0;
     return p->as_int;
     ```)
-
-  ;;; eval-as-bool -- extract the boolean value from a TURI_BOOL result.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue with TURI_BOOL tag
-  ;;;
-  ;;; Returns:
-  ;;;   Boolean value, or false if result is not TURI_BOOL.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-as-bool [result :ptr<void>] :bool
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-as-bool [result :ptr<void>] :bool ```c TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_BOOL) return false;
     return p->as_bool;
     ```)
-
-  ;;; eval-as-cstr -- extract the string value from a TURI_CSTR result.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue with TURI_CSTR tag
-  ;;;
-  ;;; Returns:
-  ;;;   C string value, or "" if result is not TURI_CSTR.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-as-cstr [result :ptr<void>] :cstr
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-as-cstr [result :ptr<void>] :cstr ```c TuriValue *p = (TuriValue *)result;
     if (p == NULL || p->tag != TURI_CSTR) return "";
     return p->as_cstr ? p->as_cstr : "";
     ```)
-
-  ;;; eval-tag -- return the numeric tag of a TuriValue result.
-  ;;;
-  ;;; Parameters:
-  ;;;   result -- boxed TuriValue
-  ;;;
-  ;;; Returns:
-  ;;;   Integer tag: 0=nil 1=bool 2=int 3=float 4=cstr 5=closure 6=error.
-  ;;;
-  ;;; Since: Phase S2
-  (defn eval-tag [result :ptr<void>] :int
-    ```c
-    TuriValue *p = (TuriValue *)result;
+  (defn eval-tag [result :ptr<void>] :int ```c TuriValue *p = (TuriValue *)result;
     if (p == NULL) return 0;
     return (int64_t)p->tag;
-    ```)
-
-) ;; end defmodule turi/eval
+    ```))
+;; end defmodule turi/eval
