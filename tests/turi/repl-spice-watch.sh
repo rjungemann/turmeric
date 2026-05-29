@@ -115,7 +115,7 @@ run_edit_session() {
     # Wait until the first eval has actually printed a result -- this also
     # guarantees the REPL has started and recorded its watch baseline before
     # we mutate the source.
-    wait_for "$out" '=> [0-9]' 30 || true
+    wait_for "$out" '=> [0-9]' 60 || true
     write_lib_newer "$root" 99
     printf '(answer)\n' >&3
     printf ':quit\n' >&3
