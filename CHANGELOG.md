@@ -2,6 +2,20 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.1] -- 2026-05-28
+
+### Fixed
+
+- **`tur --help` missing package commands** -- `tur install`, `tur uninstall`,
+  `tur list`, and `tur upgrade` were dispatched correctly but absent from the
+  help output; they now appear under the "package management" section.
+
+### Docs
+
+- **`tur/hash` API reference** -- docstrings for `hash-int` and all
+  sized-integer variants (`hash-int8`/16/32/64, `hash-uint8`/16/32/64)
+  added to the stdlib API reference and web REPL doc lookup.
+
 ## [0.14.0] -- 2026-05-28
 
 ### Added
