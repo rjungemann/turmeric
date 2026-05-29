@@ -2,6 +2,16 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.2] -- 2026-05-28
+
+### Fixed
+
+- **`tur install` spice dependency resolution** -- `tur install` now fetches each
+  `:spices` dep declared in `build.tur` into the global spice cache and adds their
+  `src/` directories as `-I` paths when building binaries; previously, spices with
+  transitive deps (e.g. `tur-notebook` depending on `ansi` and `png`) failed to
+  build with "module not found" errors.
+
 ## [0.14.1] -- 2026-05-28
 
 ### Fixed

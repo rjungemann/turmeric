@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.14.1` -- fixes `tur install`/`uninstall`/`list`/`upgrade` missing from `tur --help`; adds `tur/hash` docstrings to the API reference.
+**Latest release:** `v0.14.2` -- fixes `tur install` failing to build spices that declare `:spices` dependencies.
 
 ## What
 
