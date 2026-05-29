@@ -476,10 +476,3 @@ for C/CMake dependency details.
 | Interactive REPL with `:type`, `:doc`, history | ✅ |
 | WebAssembly playground | ✅ |
 
-## Status
-
-**v0.12.0** -- The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), dynamic vars (DV0–DV4), and sized types (SZ0–SZ1).
-
-New in this release: the old typed-stdlib `t*` module names were retired in favor of canonical module names such as `vec.tur`, `map.tur`, `option.tur`, `result.tur`, `pair.tur`, `list.tur`, `grid.tur`, `zipper.tur`, `set.tur`, and `mutmap.tur`; compiler preloads and synthesized equality helpers were updated to match; and the docs tree was cleaned up by archiving the typed-prefix plan and promoting several roadmap docs out of `docs/upcoming/`.
-
-See [docs/advanced-type-system-feasibility-plan.md](docs/advanced-type-system-feasibility-plan.md) for the type system roadmap and [docs/guides/](docs/guides/) for user guides.
