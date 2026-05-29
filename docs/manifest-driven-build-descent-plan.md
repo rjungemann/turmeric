@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Phases 1-3 + follow-up T1 implemented; T2/T3 pending
+> **Status:** Phases 1-3 + follow-ups T1/T2 implemented; T3 pending
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -267,8 +267,10 @@ re-run the scscm validation checklist.
       (`run-build-shared` exercises the shared core unchanged.)
 - [x] `tur run <project>` and `tur build <project>` agree on the module set.
       (Structural after T1: both call the shared
-      `resolve_include_dirs_from_manifest`. A behavioral end-to-end test is
-      blocked by the unrelated T2/T3 limitations below.)
+      `resolve_include_dirs_from_manifest`. T2 (below) is now fixed, so
+      same-project `tur run` from an arbitrary cwd links; a full behavioral
+      `run` vs `build` comparison is still blocked by the unrelated T3
+      cross-spice-link limitation below.)
 - [x] `ctest` for the new CLI fixtures passes (`tur_build_project`);
       `bash tests/run.sh` green modulo the pre-existing ASan leaks
       (`docs/asan-debug-leaks-plan.md`).
@@ -354,6 +356,31 @@ project dir the link fails (`fatal error: src/runtime/hamt.c: No such file`).
 The runtime source path should be resolved absolutely (relative to the located
 stdlib/runtime root, as `tur build` does) so project-mode `tur run` works from
 an arbitrary directory.
+
+**Implemented.** The fix is in `cmd_build` (`src/main.c`), the shared final
+compile/link step that both `tur run` and `tur build` route through, so it
+covers every entry point at once:
+
+- `resolve_turmeric_root` derives the turmeric source root (the directory that
+  holds both `stdlib/` and `src/runtime/`) as the parent of the already-located
+  stdlib root from `resolve_stdlib_root`. This works for the dev layout
+  (`<root>/stdlib`) and the prefix-installed layout
+  (`<prefix>/share/turmeric/stdlib`), and falls back to `.` (legacy
+  cwd-relative behavior) when only the bare `"stdlib"` fallback is available.
+- `rewrite_autolink_relative_paths` rewrites each `__tur_autolink__` flag token
+  so a relative path -- a bare path like `src/runtime/hamt.c`, or the argument
+  of `-I` / `-L` like `-Isrc/runtime` -- is anchored at that root. Absolute
+  paths and non-path flags (`-l`, `-f`, `-D`, ...) pass through unchanged. This
+  is applied to the collected autolink flags just before the cc command is
+  assembled; the pre-existing `-lturi` SDK block still prepends its own absolute
+  `-I/-L` flags, so the rewrite is harmless redundancy there and the actual fix
+  for the bare-source-file (`hamt.c`) case.
+- Regression coverage: `run-project-resolves-runtime-from-foreign-cwd` in
+  `tests/run-build-project.sh` (the `tur_build_project` ctest target) builds a
+  hamt-using project via `tur run --offline` from a scratch cwd, in both
+  explicit-file and walk-up project modes, asserting the
+  `src/runtime/hamt.c: No such file` failure no longer occurs. The test fails
+  against the pre-fix binary.
 
 ### T3 -- `tur build <dir>` does not link cross-spice `:spices` modules
 

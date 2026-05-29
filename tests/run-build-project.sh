@@ -110,6 +110,38 @@ else
     fail "build-project-flat-skips-manifest" "rc=$flat_rc out=$flat_out"
 fi
 
+# T2: project-mode `tur run` from an arbitrary cwd must resolve the turmeric
+# runtime sources (e.g. src/runtime/hamt.c, pulled in by the hamt autolink
+# marker) absolutely, not relative to cwd.  Before T2 this failed with
+# `src/runtime/hamt.c: No such file` whenever cwd was not the turmeric tree.
+HAMT="$WORK/hamtproj"
+mkdir -p "$HAMT/src"
+cat > "$HAMT/build.tur" <<'EOF'
+(defpackage tur-hamtproj
+  :name    "tur-hamtproj"
+  :version "0.1.0")
+EOF
+# hamt/new + hamt/count force the src/runtime/hamt.c autolink marker; an empty
+# map has count 0, so a clean exit code proves the runtime linked and ran.
+cat > "$HAMT/src/main.tur" <<'EOF'
+(defn main [] :int
+  (let [m (hamt/new)]
+    (hamt/count m)))
+EOF
+hamt_out=$(cd "$WORK" && "$TUR" run --offline "$HAMT/src/main.tur" 2>&1)
+hamt_rc=$?
+# Reproduce the exact T2 entry point too: project mode with no file arg,
+# discovered by walking up from cwd inside the project.
+hamt_proj_out=$(cd "$HAMT" && "$TUR" run --offline 2>&1)
+hamt_proj_rc=$?
+if [ $hamt_rc -eq 0 ] && [ $hamt_proj_rc -eq 0 ] \
+   && ! echo "$hamt_out$hamt_proj_out" | grep -q "src/runtime/hamt.c: No such file"; then
+    pass "run-project-resolves-runtime-from-foreign-cwd"
+else
+    fail "run-project-resolves-runtime-from-foreign-cwd" \
+        "file-mode rc=$hamt_rc proj-mode rc=$hamt_proj_rc out=$hamt_out$hamt_proj_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

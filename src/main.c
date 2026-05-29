@@ -1255,6 +1255,60 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 
+/* T2: resolve the turmeric source root -- the directory that holds both
+ * `stdlib/` and `src/runtime/`.  It is the parent of the located stdlib
+ * root (`<root>/stdlib` in the dev layout, `<prefix>/share/turmeric/stdlib`
+ * when prefix-installed; in both, `src/runtime/` lives beside `stdlib/`).
+ * Writes the path into `out` and returns it.  Falls back to "." when the
+ * stdlib root could not be resolved to an absolute path (preserving the
+ * legacy cwd-relative behavior). */
+static const char *resolve_turmeric_root(char *out, size_t cap) {
+    const char *sdir = resolve_stdlib_root();  /* e.g. "<root>/stdlib" or "stdlib" */
+    snprintf(out, cap, "%s", sdir);
+    char *slash = strrchr(out, '/');
+    if (slash && slash != out) { *slash = '\0'; return out; }
+    if (slash == out) { out[1] = '\0'; return out; }  /* "/stdlib" -> "/" */
+    snprintf(out, cap, ".");  /* bare "stdlib" -> cwd-relative, as before */
+    return out;
+}
+
+/* T2: stdlib `__tur_autolink__` markers embed turmeric-tree-relative paths
+ * (e.g. `src/runtime/hamt.c -Isrc/runtime` from stdlib/hamt.tur).  Those
+ * only resolve when cwd is the turmeric source root -- true for `tur install`
+ * driven dev builds, but NOT for project-mode `tur run` from an arbitrary
+ * project directory, where cc fails with `src/runtime/hamt.c: No such file`.
+ * Rewrite each whitespace-separated token in `flags` so that relative paths
+ * (a bare path, or the argument of `-I` / `-L`) are anchored at `root`.
+ * Absolute paths and non-path flags (`-l`, `-f`, `-D`, ...) pass through
+ * unchanged.  The rewritten flags are appended to `out` (no trailing NUL). */
+static void rewrite_autolink_relative_paths(const char *flags,
+                                             const char *root, Buf *out) {
+    const char *p = flags;
+    bool first = true;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *tok = p;
+        while (*p && *p != ' ') p++;
+        size_t len = (size_t)(p - tok);
+        if (!first) buf_putc(out, ' ');
+        first = false;
+        if (len > 2 && tok[0] == '-' && (tok[1] == 'I' || tok[1] == 'L') &&
+            tok[2] != '/') {
+            /* -I<rel> / -L<rel>: anchor the path part at root. */
+            buf_write(out, tok, 2);
+            buf_printf(out, "%s/", root);
+            buf_write(out, tok + 2, len - 2);
+        } else if (tok[0] != '-' && tok[0] != '/') {
+            /* bare relative path (source file or lib): anchor it at root. */
+            buf_printf(out, "%s/", root);
+            buf_write(out, tok, len);
+        } else {
+            buf_write(out, tok, len);
+        }
+    }
+}
+
 /* Build a deterministic path for the intermediate generated-C file so that
  * ccache can cache repeated compilations of the same .tur source.
  * Maps the input path to /tmp/tur-build/<sanitized>.c where non-alphanumeric
@@ -1530,6 +1584,26 @@ static int cmd_build(const char *input, const char *out_path,
                 }
             }
             cf = lf_end;
+        }
+    }
+
+    /* T2: anchor any turmeric-tree-relative autolink paths (e.g.
+     * `src/runtime/hamt.c -Isrc/runtime`) at the located turmeric root so
+     * the cc step resolves the runtime sources regardless of cwd.  Without
+     * this, project-mode `tur run` from an arbitrary directory fails with
+     * `src/runtime/hamt.c: No such file`.  The -lturi SDK block above
+     * already prepends absolute -I/-L flags; rewriting the trailing relative
+     * ones is harmless redundancy there and the fix for the hamt.c case. */
+    if (autolink.len > 1) {
+        char tur_root[4096];
+        resolve_turmeric_root(tur_root, sizeof(tur_root));
+        if (tur_root[0] && strcmp(tur_root, ".") != 0) {
+            Buf rewritten;
+            buf_init(&rewritten);
+            rewrite_autolink_relative_paths(autolink.data, tur_root, &rewritten);
+            buf_putc(&rewritten, '\0');
+            buf_free(&autolink);
+            autolink = rewritten;
         }
     }
 
