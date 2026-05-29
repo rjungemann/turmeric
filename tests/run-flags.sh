@@ -13,6 +13,16 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# This harness exercises the tree-walking turi/eval interpreter (the eval-*
+# cases below), which intentionally never frees its closures or registered
+# natives -- they live for the process lifetime. LeakSanitizer (enabled with
+# ASan on Linux) would otherwise flag that design choice as a leak. Default to
+# detect_leaks=0 to mirror the ctest policy (tur_flags_tests) so a direct
+# `bash tests/run-flags.sh` does not surprise contributors; opt back in with
+# ASAN_OPTIONS=detect_leaks=1 bash tests/run-flags.sh. See
+# docs/asan-debug-leaks-plan.md.
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+
 TUR="./build/tur"
 PASS=0
 FAIL=0

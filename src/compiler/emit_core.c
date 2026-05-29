@@ -41,6 +41,18 @@ Type emit_type_from_kind(TypeKind k) {
     return t;
 }
 
+/* ASan/LSan plan (Option C): allocate transient Type scratch from the emit
+ * pass's arena when one is available, falling back to malloc otherwise. The
+ * arena is bulk-freed at the end of emit_program / emit_implementation, so
+ * these nodes are no longer leaked (they are reachable via the arena until
+ * the compile finishes, which is exactly their lifetime). */
+static void *emit_type_scratch(EmitCtx *ctx, size_t size) {
+    if (ctx && ctx->type_arena) return arena_alloc(ctx->type_arena, size);
+    void *p = malloc(size);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return p;
+}
+
 static bool emit_find_abi_binding(const EmitAbiSpecialization *spec,
                                   const char *name, uint8_t *out_idx) {
     if (!spec || !name) return false;
@@ -69,9 +81,8 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
             Type fn = emit_resolve_type(ctx, *t.as.app.fn);
             Type arg = emit_resolve_type(ctx, *t.as.app.arg);
             Type out = t;
-            out.as.app.fn = (Type *)malloc(sizeof(Type));
-            out.as.app.arg = (Type *)malloc(sizeof(Type));
-            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            out.as.app.fn = (Type *)emit_type_scratch(ctx, sizeof(Type));
+            out.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
             *out.as.app.fn = fn;
             *out.as.app.arg = arg;
             return out;
@@ -79,12 +90,10 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
         case TY_UNION: {
             Type out = t;
             if (t.as.union_.n_members == 0 || !t.as.union_.members) return out;
-            Type **members = (Type **)malloc(t.as.union_.n_members * sizeof(Type *));
-            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            Type **members = (Type **)emit_type_scratch(ctx, t.as.union_.n_members * sizeof(Type *));
             out.as.union_.members = members;
             for (uint8_t i = 0; i < t.as.union_.n_members; i++) {
-                members[i] = (Type *)malloc(sizeof(Type));
-                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
+                members[i] = (Type *)emit_type_scratch(ctx, sizeof(Type));
                 *members[i] = emit_resolve_type(ctx, *t.as.union_.members[i]);
             }
             return out;
@@ -92,12 +101,10 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
         case TY_INTERSECTION: {
             Type out = t;
             if (t.as.intersection_.n_members == 0 || !t.as.intersection_.members) return out;
-            Type **members = (Type **)malloc(t.as.intersection_.n_members * sizeof(Type *));
-            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            Type **members = (Type **)emit_type_scratch(ctx, t.as.intersection_.n_members * sizeof(Type *));
             out.as.intersection_.members = members;
             for (uint8_t i = 0; i < t.as.intersection_.n_members; i++) {
-                members[i] = (Type *)malloc(sizeof(Type));
-                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
+                members[i] = (Type *)emit_type_scratch(ctx, sizeof(Type));
                 *members[i] = emit_resolve_type(ctx, *t.as.intersection_.members[i]);
             }
             return out;

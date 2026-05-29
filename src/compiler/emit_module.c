@@ -155,8 +155,21 @@ static bool emit_abi_find_type_binding(const AbiTypeBinding *bindings, uint8_t n
     return false;
 }
 
+/* ASan/LSan plan (Option C): same arena-backed scratch policy as
+ * emit_type_scratch in emit_core.c. The instantiated Type nodes feed the
+ * EmitAbiSpecialization records, which live for the whole emit pass; the
+ * arena is bulk-freed when the pass finishes. NULL arena falls back to malloc
+ * (process-lifetime), matching the prior behavior. */
+static void *emit_abi_type_scratch(Arena *arena, size_t size) {
+    if (arena) return arena_alloc(arena, size);
+    void *p = malloc(size);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return p;
+}
+
 static Type emit_abi_instantiate_type(const Type *t,
-                                      const AbiTypeBinding *bindings, uint8_t n_bindings) {
+                                      const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                      Arena *arena) {
     if (!t) return emit_type_from_kind(TY_UNKNOWN);
     switch (t->kind) {
         case TY_TYVAR: {
@@ -169,12 +182,11 @@ static Type emit_abi_instantiate_type(const Type *t,
         }
         case TY_APP: {
             if (!t->as.app.fn || !t->as.app.arg) return *t;
-            Type fn = emit_abi_instantiate_type(t->as.app.fn, bindings, n_bindings);
-            Type arg = emit_abi_instantiate_type(t->as.app.arg, bindings, n_bindings);
+            Type fn = emit_abi_instantiate_type(t->as.app.fn, bindings, n_bindings, arena);
+            Type arg = emit_abi_instantiate_type(t->as.app.arg, bindings, n_bindings, arena);
             Type out = *t;
-            out.as.app.fn = (Type *)malloc(sizeof(Type));
-            out.as.app.arg = (Type *)malloc(sizeof(Type));
-            if (!out.as.app.fn || !out.as.app.arg) { fprintf(stderr, "tur: oom\n"); abort(); }
+            out.as.app.fn = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+            out.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
             *out.as.app.fn = fn;
             *out.as.app.arg = arg;
             return out;
@@ -182,26 +194,22 @@ static Type emit_abi_instantiate_type(const Type *t,
         case TY_UNION: {
             Type out = *t;
             if (t->as.union_.n_members == 0 || !t->as.union_.members) return out;
-            Type **members = (Type **)malloc(t->as.union_.n_members * sizeof(Type *));
-            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            Type **members = (Type **)emit_abi_type_scratch(arena, t->as.union_.n_members * sizeof(Type *));
             out.as.union_.members = members;
             for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
-                members[i] = (Type *)malloc(sizeof(Type));
-                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
-                *members[i] = emit_abi_instantiate_type(t->as.union_.members[i], bindings, n_bindings);
+                members[i] = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *members[i] = emit_abi_instantiate_type(t->as.union_.members[i], bindings, n_bindings, arena);
             }
             return out;
         }
         case TY_INTERSECTION: {
             Type out = *t;
             if (t->as.intersection_.n_members == 0 || !t->as.intersection_.members) return out;
-            Type **members = (Type **)malloc(t->as.intersection_.n_members * sizeof(Type *));
-            if (!members) { fprintf(stderr, "tur: oom\n"); abort(); }
+            Type **members = (Type **)emit_abi_type_scratch(arena, t->as.intersection_.n_members * sizeof(Type *));
             out.as.intersection_.members = members;
             for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
-                members[i] = (Type *)malloc(sizeof(Type));
-                if (!members[i]) { fprintf(stderr, "tur: oom\n"); abort(); }
-                *members[i] = emit_abi_instantiate_type(t->as.intersection_.members[i], bindings, n_bindings);
+                members[i] = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *members[i] = emit_abi_instantiate_type(t->as.intersection_.members[i], bindings, n_bindings, arena);
             }
             return out;
         }
@@ -328,7 +336,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 : &fd->params[i]->type;
             Type generic_arg = expected_full ? *expected_full : fd->param_types[i];
             arg_types[i] = expected_full
-                ? emit_abi_instantiate_type(expected_full, bindings, n_bindings)
+                ? emit_abi_instantiate_type(expected_full, bindings, n_bindings, ctx->type_arena)
                 : fd->param_types[i];
             if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
                 abi_changes = true;
@@ -345,7 +353,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 ? fn_binding->type.as.fn.arg_full_types[i] : NULL;
             if (expected_full) {
                 Type generic_arg = *expected_full;
-                arg_types[i] = emit_abi_instantiate_type(expected_full, bindings, n_bindings);
+                arg_types[i] = emit_abi_instantiate_type(expected_full, bindings, n_bindings, ctx->type_arena);
                 if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
                     abi_changes = true;
                 }
@@ -895,6 +903,10 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
+    /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
+     * freed in bulk at the end of this function. */
+    Arena type_arena; arena_init(&type_arena, 0);
+    ctx.type_arena = &type_arena;
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
@@ -3987,6 +3999,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
+    arena_free(&type_arena);
     return 0;
 }
 
@@ -4201,6 +4214,10 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         EmitCtx hdr_ctx;
         memset(&hdr_ctx, 0, sizeof(hdr_ctx));
         hdr_ctx.separate_compilation = true;
+        /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
+         * freed in bulk before this block returns. */
+        Arena hdr_type_arena; arena_init(&hdr_type_arena, 0);
+        hdr_ctx.type_arena = &hdr_type_arena;
         emit_abi_scan_program(&hdr_ctx, h_items, h_n_items);
 
         /* J6: Inject forced specs (borrow specs from other modules pointing here). */
@@ -4281,6 +4298,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         free(hdr_ctx.specialized_call_exprs);
         free(hdr_ctx.specialized_call_names);
         free(hdr_ctx.carrier_call_bindings);
+        arena_free(&hdr_type_arena);
         if (n_decls > 0) buf_putc(out, '\n');
     }
 
@@ -4438,6 +4456,10 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.pending_defer_thunks = NULL;
     ctx.defer_captures = NULL;
     ctx.n_defer_captures = 0;
+    /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
+     * freed in bulk at the end of this function. */
+    Arena type_arena2; arena_init(&type_arena2, 0);
+    ctx.type_arena = &type_arena2;
 
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
@@ -4731,5 +4753,6 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
+    arena_free(&type_arena2);
     return 0;
 }

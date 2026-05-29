@@ -257,12 +257,21 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
 )
 
 # LeakSanitizer ships enabled with ASan on Linux but is absent on macOS, so the
-# Debug/ASan CI run on Ubuntu would otherwise fail: the tree-walking turi/eval
-# interpreter intentionally does not free closures (they live for the process
-# lifetime). Disable leak detection so the test run still catches real memory
-# errors (use-after-free, out-of-bounds) without flagging that design choice.
-# tur_eval_import sets ASAN_OPTIONS via its own ENVIRONMENT above.
-set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+# Debug/ASan CI run on Ubuntu would otherwise fail on a deliberate design
+# choice: the tree-walking turi/eval interpreter intentionally does not free
+# its closures or registered-native environment entries (they live for the
+# process lifetime -- see turi_env_register_native / eval_expr_impl). Disable
+# leak detection for the targets that exercise the interpreter so the test run
+# still catches real memory errors (use-after-free, out-of-bounds) without
+# flagging that choice.
+#
+# The compiler/codegen path used to leak too: emit_resolve_type and
+# emit_abi_instantiate_type cloned transient Type nodes for ABI specialization
+# that were never freed. Those are now arena-managed and bulk-freed at the end
+# of each emit pass (see EmitCtx.type_arena), so the pure compiler-path targets
+# below run WITH leak detection ON as a regression guard. tur_eval_import sets
+# ASAN_OPTIONS via its own ENVIRONMENT above.
+set_tests_properties(tur_flags_tests
                      tur_install_tests
                      turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_basic
