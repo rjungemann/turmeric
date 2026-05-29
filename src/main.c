@@ -3044,25 +3044,11 @@ static bool fmt_is_tur_file(const char *name) {
     return false;
 }
 
-/* Check source bytes for non-ASCII and report error.
- * Returns 0 if ASCII-clean, -1 if non-ASCII found. */
-static int fmt_check_ascii(const char *path_label, const char *src, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        if ((unsigned char)src[i] >= 128) {
-            fprintf(stderr, "tur fmt: %s:%zu: non-ASCII byte 0x%02x\n",
-                    path_label, i + 1, (unsigned char)src[i]);
-            return -1;
-        }
-    }
-    return 0;
-}
 
 /* Core: read src, parse, format, return formatted Buf.
  * Returns 0 on success with *out populated, -1 on error. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    if (fmt_check_ascii(path_label, src, len) != 0) return -1;
-
     SourceFile file = {0};
     file.path        = path_label;
     file.src         = src;

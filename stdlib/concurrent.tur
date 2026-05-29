@@ -8,11 +8,9 @@
 ;; Defines MutexGuard as a move-only struct wrapping a pthread_mutex_t pointer.
 ;; Future versions will upgrade MutexGuard to lref<MutexGuard> once the LT4
 ;; annotation pass over all three resource types is complete.
-
 ;; ============================================================================
 ;; LT4: MutexGuard -- move-only RAII wrapper for a held mutex lock
 ;; ============================================================================
-
 ;;; MutexGuard -- a linear (exactly-once) RAII wrapper for a held mutex lock.
 ;;;
 ;;; Holding a MutexGuard means the mutex is currently locked by this thread.
@@ -22,7 +20,6 @@
 ;;;
 ;;; Since: LT4
 (defstruct MutexGuard :linear [mutex :ptr<void>])
-
 ;;; mutex-guard-lock -- lock a mutex and return a MutexGuard RAII token.
 ;;;
 ;;; Parameters:
@@ -35,14 +32,13 @@
 ;;;   (let [guard (mutex-guard-lock my-mutex)] ...)
 ;;;
 ;;; Since: LT4
+
 (defn mutex-guard-lock [mutex] :MutexGuard
-  ```c
-  pthread_mutex_lock((pthread_mutex_t*)mutex);
+  ```c pthread_mutex_lock((pthread_mutex_t*)mutex);
   MutexGuard g;
   g.mutex = mutex;
   return g;
   ```)
-
 ;;; mutex-guard-unlock -- release the mutex held by a MutexGuard.
 ;;;
 ;;; Parameters:
@@ -55,12 +51,11 @@
 ;;;   (mutex-guard-unlock guard)  ; => 0
 ;;;
 ;;; Since: LT4
+
 (defn mutex-guard-unlock [guard : MutexGuard] :int
-  ```c
-  if (!guard.mutex) return -1;
+  ```c if (!guard.mutex) return -1;
   return pthread_mutex_unlock((pthread_mutex_t*)guard.mutex);
   ```)
-
 ;;; mutex-guard-valid? -- return true if the MutexGuard holds a non-NULL mutex.
 ;;;
 ;;; Parameters:
@@ -73,7 +68,7 @@
 ;;;   (mutex-guard-valid? guard)  ; => true
 ;;;
 ;;; Since: LT4
+
 (defn mutex-guard-valid? [guard : MutexGuard] :bool
-  ```c
-  return guard.mutex != NULL;
+  ```c return guard.mutex != NULL;
   ```)

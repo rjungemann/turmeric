@@ -21,9 +21,7 @@
 ;;   sem-acquire     [s :ptr<void>]                  -> nil  (blocks when 0)
 ;;   sem-release     [s :ptr<void>]                  -> nil
 ;;   sem-free        [s :ptr<void>]                  -> nil
-
 ;; ---- Once ----
-
 ;;; once-flag-new -- allocate and initialise a pthread_once_t flag on the heap.
 ;;;
 ;;; Returns:
@@ -34,14 +32,12 @@
 ;;;
 ;;; Since: Phase T19-C
 (defn once-flag-new [] :ptr<void>
-  ```c
-  pthread_once_t *o = (pthread_once_t *)malloc(sizeof(pthread_once_t));
+  ```c pthread_once_t *o = (pthread_once_t *)malloc(sizeof(pthread_once_t));
   if (!o) { fprintf(stderr, "once-flag-new: out of memory\n"); abort(); }
   pthread_once_t init = PTHREAD_ONCE_INIT;
   memmove(o, &init, sizeof(pthread_once_t));
   return (void *)o;
   ```)
-
 ;;; once-call -- call init-fn exactly once for the lifetime of flag, regardless of concurrency.
 ;;;
 ;;; Parameters:
@@ -49,24 +45,21 @@
 ;;;   init-fn -- zero-argument C function pointer to invoke at most once
 ;;;
 ;;; Since: Phase T19-C
-(defn once-call [flag :ptr<void> init-fn :ptr<void>] :nil
-  ```c
-  pthread_once((pthread_once_t *)flag, (void (*)(void))init_fn);
-  ```)
 
+(defn once-call [flag :ptr<void> init-fn :ptr<void>] :nil
+  ```c pthread_once((pthread_once_t *)flag, (void (*)(void))init_fn);
+  ```)
 ;;; once-flag-free -- free a once-flag allocated by once-flag-new.
 ;;;
 ;;; Parameters:
 ;;;   flag -- once-flag pointer from once-flag-new
 ;;;
 ;;; Since: Phase T19-C
+
 (defn once-flag-free [flag :ptr<void>] :nil
-  ```c
-  free(flag);
+  ```c free(flag);
   ```)
-
 ;; ---- Semaphore ----
-
 ;;; sem-new -- allocate a counting semaphore initialised to initial.
 ;;;
 ;;; Parameters:
@@ -79,9 +72,10 @@
 ;;;   (def s (sem-new 1))  ; binary semaphore (mutex-like)
 ;;;
 ;;; Since: Phase T19-C
+
+
 (defn sem-new [initial :int] :ptr<void>
-  ```c
-  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *s = (SemBlock *)malloc(sizeof(SemBlock));
   if (!s) { fprintf(stderr, "sem-new: out of memory\n"); abort(); }
   pthread_mutex_init(&s->lock, NULL);
@@ -89,16 +83,15 @@
   s->count = (int64_t)initial;
   return (void *)s;
   ```)
-
 ;;; sem-acquire -- decrement the semaphore; blocks until count > 0.
 ;;;
 ;;; Parameters:
 ;;;   s -- semaphore pointer from sem-new
 ;;;
 ;;; Since: Phase T19-C
+
 (defn sem-acquire [s :ptr<void>] :nil
-  ```c
-  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
   pthread_mutex_lock(&sb->lock);
   while (sb->count <= 0)
@@ -106,32 +99,30 @@
   sb->count--;
   pthread_mutex_unlock(&sb->lock);
   ```)
-
 ;;; sem-release -- increment the semaphore and wake one blocked acquirer.
 ;;;
 ;;; Parameters:
 ;;;   s -- semaphore pointer from sem-new
 ;;;
 ;;; Since: Phase T19-C
+
 (defn sem-release [s :ptr<void>] :nil
-  ```c
-  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
   pthread_mutex_lock(&sb->lock);
   sb->count++;
   pthread_cond_signal(&sb->avail);
   pthread_mutex_unlock(&sb->lock);
   ```)
-
 ;;; sem-free -- destroy and free a semaphore allocated by sem-new.
 ;;;
 ;;; Parameters:
 ;;;   s -- semaphore pointer from sem-new
 ;;;
 ;;; Since: Phase T19-C
+
 (defn sem-free [s :ptr<void>] :nil
-  ```c
-  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  ```c typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
   SemBlock *sb = (SemBlock *)s;
   pthread_mutex_destroy(&sb->lock);
   pthread_cond_destroy(&sb->avail);

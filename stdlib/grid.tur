@@ -6,17 +6,16 @@
 ;; Phase TC2-A: Typed Grid[A]
 ;; 2D row-major grid parameterized over element type A.
 ;; Runtime layout: { int64_t *data; int width; int height; int cx; int cy; }
-
 ;;; Grid -- parameterized 2D grid with element type A.
 ;;;
 ;;; Since: Phase TC2
-(defstruct Grid [A]
-  (data   :ptr<void>)
-  (width  :int)
+(defstruct Grid
+  [A]
+  (data :ptr<void>)
+  (width :int)
   (height :int)
-  (cx     :int)
-  (cy     :int))
-
+  (cx :int)
+  (cy :int))
 ;;; grid-new -- create a new zero-filled Grid[A].
 ;;;
 ;;; Parameters:
@@ -30,9 +29,11 @@
 ;;;   (grid-new 8 8)  ; => 8x8 grid
 ;;;
 ;;; Since: Phase TC2
-(defn grid-new [width :int height :int] #{} :int
-  ```c
-  struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
+
+(defn grid-new [width :int height :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; int width; int height; int cx; int cy; } *g = malloc(sizeof(*g));
   g->width  = (int)width;
   g->height = (int)height;
   g->cx = 0;
@@ -40,7 +41,6 @@
   g->data = calloc((size_t)(width * height), sizeof(int64_t));
   return (int64_t)(intptr_t)g;
   ```)
-
 ;;; grid-get -- return the element at (x, y).
 ;;;
 ;;; Parameters:
@@ -55,12 +55,13 @@
 ;;;   (grid-get g 0 0)  ; => element at (0,0)
 ;;;
 ;;; Since: Phase TC2
-(defn grid-get [g :int x :int y :int] #{} :int
-  ```c
-  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+
+(defn grid-get [g :int x :int y :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   ```)
-
 ;;; grid-set! -- set the element at (x, y).
 ;;;
 ;;; Parameters:
@@ -73,12 +74,13 @@
 ;;;   (grid-set! g 0 0 1)
 ;;;
 ;;; Since: Phase TC2
-(defn grid-set! [g :int x :int y :int v :int] #{} :void
-  ```c
-  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+
+(defn grid-set! [g :int x :int y :int v :int]
+  #{}
+  :void
+  ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   grid->data[(size_t)(y * grid->width + x)] = v;
   ```)
-
 ;;; grid-width -- return the width of a Grid[A].
 ;;;
 ;;; Parameters:
@@ -91,12 +93,13 @@
 ;;;   (grid-width g)  ; => 8
 ;;;
 ;;; Since: Phase TC2
-(defn grid-width [g :int] #{} :int
-  ```c
-  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+
+(defn grid-width [g :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->width;
   ```)
-
 ;;; grid-height -- return the height of a Grid[A].
 ;;;
 ;;; Parameters:
@@ -109,12 +112,13 @@
 ;;;   (grid-height g)  ; => 8
 ;;;
 ;;; Since: Phase TC2
-(defn grid-height [g :int] #{} :int
-  ```c
-  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+
+(defn grid-height [g :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   return (int64_t)grid->height;
   ```)
-
 ;;; grid-free -- free a Grid[A] and its data buffer.
 ;;;
 ;;; Parameters:
@@ -124,9 +128,11 @@
 ;;;   (grid-free g)
 ;;;
 ;;; Since: Phase TC2
-(defn grid-free [g :int] #{} :void
-  ```c
-  struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
+
+(defn grid-free [g :int]
+  #{}
+  :void
+  ```c struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (grid->data) free(grid->data);
   free(grid);
   ```)

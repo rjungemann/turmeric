@@ -28,7 +28,6 @@
 ;; once SizedVec is parameterised over element type, the macros below
 ;; carry over unchanged because the element type lives in the body, not
 ;; in the existential binder.
-
 ;;; vec-of-sized -- wrap a SizedVec into a Vec, hiding the size index.
 ;;;
 ;;; Implements the `pack` half of the SizedVec <-> Vec round-trip.
@@ -49,7 +48,6 @@
 ;;; Since: Phase EX2-4
 (defmacro vec-of-sized [sv]
   (list pack sv (list exists [n] (list SizedVec n int))))
-
 ;;; open-vec -- bind the hidden size index and the underlying SizedVec.
 ;;;
 ;;; Expands to a native `open` whose binder vector is [n-name sv-name].
@@ -75,5 +73,6 @@
 ;;;     (sized-vec-len sv))   ; => 1
 ;;;
 ;;; Since: Phase EX2-4
+
 (defmacro open-vec [vec-expr n-name sv-name & body]
   (cons open (cons vec-expr (cons (vec n-name sv-name) body))))

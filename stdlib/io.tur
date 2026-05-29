@@ -6,19 +6,27 @@
 ;; Phase 16: Real FileSystem implementation
 ;;
 ;; Implementation of FileSystem capability using libc functions
-
 (extern-c fopen [^cstr ^cstr] :ptr)
-(extern-c fclose [^ptr] :int)
-(extern-c fread [^ptr ^int ^int ^ptr] :int)
-(extern-c fwrite [^ptr ^int ^int ^ptr] :int)
-(extern-c remove [^cstr] :int)
-(extern-c readdir [^ptr] :ptr)
-(extern-c opendir [^cstr] :ptr)
-(extern-c closedir [^ptr] :int)
-(extern-c malloc [^ptr size] :ptr)
-(extern-c free [^ptr p] :void)
-(extern-c memset [^ptr ^int ^int] :ptr)
 
+(extern-c fclose [^ptr] :int)
+
+(extern-c fread [^ptr ^int ^int ^ptr] :int)
+
+(extern-c fwrite [^ptr ^int ^int ^ptr] :int)
+
+(extern-c remove [^cstr] :int)
+
+(extern-c readdir [^ptr] :ptr)
+
+(extern-c opendir [^cstr] :ptr)
+
+(extern-c closedir [^ptr] :int)
+
+(extern-c malloc [^ptr size] :ptr)
+
+(extern-c free [^ptr p] :void)
+
+(extern-c memset [^ptr ^int ^int] :ptr)
 ;;; file-size -- return the byte size of an already-open file.
 ;;;
 ;;; Parameters:
@@ -30,16 +38,15 @@
 ;;; Example:
 ;;;   (file-size my-file-ptr)  ; => 1024
 ;; Helper function to get file size
+
 (defn file-size [f]
-  ```c
-  FILE* file = (FILE*)f;
+  ```c FILE* file = (FILE*)f;
   long pos = ftell(file);
   fseek(file, 0, SEEK_END);
   long size = ftell(file);
   fseek(file, pos, SEEK_SET);
   return (int)size;
   ```)
-
 ;;; Real-FileSystem -- create a FileSystem capability backed by libc.
 ;;;
 ;;; Returns:
@@ -53,9 +60,9 @@
 ;;; Since: Phase 16
 ;; Real-FileSystem implementation
 ;; Returns a FileSystem capability struct with libc-based implementations
+
 (defn Real-FileSystem []
-  ```c
-  /* Define the FileSystem struct */
+  ```c /* Define the FileSystem struct */
   typedef struct FileSystem FileSystem;
   struct FileSystem {
       int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
@@ -118,7 +125,6 @@
   fs->list = fs_list;
   return (void*)fs;
   ```)
-
 ;;; Real-FileSystem-free -- release a FileSystem capability created by Real-FileSystem.
 ;;;
 ;;; Parameters:
@@ -126,15 +132,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Real-FileSystem
-(defn Real-FileSystem-free [fs]
-  ```c
-  free(fs);
-  ```)
 
+(defn Real-FileSystem-free [fs]
+  ```c free(fs);
+  ```)
 ;; ============================================================================
 ;; Additional I/O helper functions
 ;; ============================================================================
-
 ;;; read-file -- read an entire file into a newly allocated buffer.
 ;;;
 ;;; Parameters:
@@ -151,9 +155,10 @@
 ;; Read entire file into a buffer (allocated with malloc)
 ;; Returns buffer pointer (caller must free) or NULL on error
 ;; Sets out_len to the number of bytes read
+
+
 (defn read-file [path]
-  ```c
-  FILE* f = fopen(path, "rb");
+  ```c FILE* f = fopen(path, "rb");
   if (!f) return NULL;
   fseek(f, 0, SEEK_END);
   long size = ftell(f);
@@ -165,7 +170,6 @@
   buf[size] = '\0';
   return (void*)buf;
   ```)
-
 ;;; write-file -- write a byte buffer to a file, overwriting any existing content.
 ;;;
 ;;; Parameters:
@@ -182,15 +186,14 @@
 ;;; Since: Phase 16
 ;; Write data to a file
 ;; Returns 0 on success, non-zero on error
+
 (defn write-file [path data len]
-  ```c
-  FILE* f = fopen(path, "wb");
+  ```c FILE* f = fopen(path, "wb");
   if (!f) return -1;
   size_t n = fwrite(data, 1, len, f);
   fclose(f);
   return (n == (size_t)len) ? 0 : -1;
   ```)
-
 ;;; file-exists? -- test whether a file is accessible for reading.
 ;;;
 ;;; Parameters:
@@ -204,13 +207,12 @@
 ;;;
 ;;; Since: Phase 16
 ;; Check if file exists
+
 (defn file-exists? [path]
-  ```c
-  FILE* f = fopen(path, "rb");
+  ```c FILE* f = fopen(path, "rb");
   if (f) { fclose(f); return 1; }
   return 0;
   ```)
-
 ;;; list-dir -- list all non-hidden entries in a directory.
 ;;;
 ;;; Parameters:
@@ -227,9 +229,9 @@
 ;;; Since: Phase 16
 ;; Get current directory listing
 ;; Returns array of strings (NULL-terminated), caller must free each string and the array
+
 (defn list-dir [path]
-  ```c
-  DIR* d = opendir(path);
+  ```c DIR* d = opendir(path);
   if (!d) return NULL;
 
   /* Count entries first */
@@ -254,7 +256,6 @@
   closedir(d);
   return (void*)entries;
   ```)
-
 ;;; free-dir-listing -- free a directory listing returned by list-dir.
 ;;;
 ;;; Parameters:
@@ -262,20 +263,18 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free directory listing returned by list-dir
+
 (defn free-dir-listing [entries]
-  ```c
-  if (!entries) return;
+  ```c if (!entries) return;
   char** e = (char**)entries;
   for (int i = 0; e[i]; i++) {
       free(e[i]);
   }
   free(e);
   ```)
-
 ;; ============================================================================
 ;; LT4: FileHandle -- resource-safe file handle (move-only)
 ;; ============================================================================
-
 ;;; FileHandle -- a linear (exactly-once) wrapper around a FILE* pointer.
 ;;;
 ;;; Wrapping FILE* in a named struct enforces that file handles are not
@@ -284,8 +283,9 @@
 ;;; the compiler emits TUR-E0100 if a linear value is silently dropped.
 ;;;
 ;;; Since: LT4
-(defstruct FileHandle :linear [ptr :ptr<void>])
 
+
+(defstruct FileHandle :linear [ptr :ptr<void>])
 ;;; file-open -- open a file and return a move-only FileHandle.
 ;;;
 ;;; Parameters:
@@ -300,13 +300,12 @@
 ;;;   (let [fh (file-open "/etc/hostname" "rb")] ...)
 ;;;
 ;;; Since: LT4
+
 (defn file-open [path mode] :FileHandle
-  ```c
-  FileHandle fh;
+  ```c FileHandle fh;
   fh.ptr = (void*)fopen(path, mode);
   return fh;
   ```)
-
 ;;; file-handle-ok? -- return true if the FileHandle is valid (non-NULL).
 ;;;
 ;;; Parameters:
@@ -319,11 +318,10 @@
 ;;;   (file-handle-ok? (file-open "/etc/hostname" "rb"))  ; => true
 ;;;
 ;;; Since: LT4
-(defn file-handle-ok? [fh : FileHandle] :bool
-  ```c
-  return fh.ptr != NULL;
-  ```)
 
+(defn file-handle-ok? [fh : FileHandle] :bool
+  ```c return fh.ptr != NULL;
+  ```)
 ;;; file-read -- read up to len bytes from fh into buf.
 ;;;
 ;;; Parameters:
@@ -338,12 +336,11 @@
 ;;;   (file-read fh buf 1024)  ; => 512
 ;;;
 ;;; Since: LT4
-(defn file-read [fh : FileHandle  buf  len] :int
-  ```c
-  if (!fh.ptr) return -1;
+
+(defn file-read [fh : FileHandle buf len] :int
+  ```c if (!fh.ptr) return -1;
   return (int)fread(buf, 1, len, (FILE*)fh.ptr);
   ```)
-
 ;;; file-close -- close a FileHandle and release the underlying FILE*.
 ;;;
 ;;; Parameters:
@@ -356,8 +353,8 @@
 ;;;   (file-close fh)  ; => 0
 ;;;
 ;;; Since: LT4
+
 (defn file-close [fh : FileHandle] :int
-  ```c
-  if (!fh.ptr) return -1;
+  ```c if (!fh.ptr) return -1;
   return fclose((FILE*)fh.ptr);
   ```)

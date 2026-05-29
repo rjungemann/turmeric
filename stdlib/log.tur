@@ -6,15 +6,19 @@
 ;; Phase 16: Real Logger implementation
 ;;
 ;; Implementation of Logger capability using stderr/stdout
-
 (extern-c fprintf [^ptr ^cstr] :int)
-(extern-c stderr [^] :ptr)
-(extern-c stdout [^] :ptr)
-(extern-c time [^ptr] :ptr)
-(extern-c ctime [^ptr] :cstr)
-(extern-c malloc [^ptr size] :ptr)
-(extern-c free [^ptr p] :void)
 
+(extern-c stderr [^] :ptr)
+
+(extern-c stdout [^] :ptr)
+
+(extern-c time [^ptr] :ptr)
+
+(extern-c ctime [^ptr] :cstr)
+
+(extern-c malloc [^ptr size] :ptr)
+
+(extern-c free [^ptr p] :void)
 ;;; Real-Logger -- create a timestamped Logger capability writing to stdout/stderr.
 ;;;
 ;;; Returns:
@@ -29,9 +33,11 @@
 ;;; Since: Phase 16
 ;; Real-Logger implementation
 ;; Writes to stderr with timestamps
-(defn Real-Logger [] #{Unsafe} :int
-  ```c
-  /* Define the Logger struct */
+
+(defn Real-Logger []
+  #{Unsafe}
+  :int
+  ```c /* Define the Logger struct */
   typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
@@ -90,7 +96,6 @@
   logger->error = logger_error;
   return (void*)logger;
   ```)
-
 ;;; Real-Logger-free -- release a Logger capability created by Real-Logger.
 ;;;
 ;;; Parameters:
@@ -98,15 +103,15 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Real-Logger
-(defn Real-Logger-free [log] #{Unsafe} :nil
-  ```c
-  free(log);
-  ```)
 
+(defn Real-Logger-free [log]
+  #{Unsafe}
+  :nil
+  ```c free(log);
+  ```)
 ;; ============================================================================
 ;; Simple logger without timestamps (faster)
 ;; ============================================================================
-
 ;;; Simple-Logger -- create a lightweight Logger capability without timestamps.
 ;;;
 ;;; Returns:
@@ -120,9 +125,12 @@
 ;;;
 ;;; Since: Phase 16
 ;; Simple-Logger implementation - no timestamps, just writes to stderr/stdout
-(defn Simple-Logger [] #{Unsafe} :int
-  ```c
-  typedef struct Logger Logger;
+
+
+(defn Simple-Logger []
+  #{Unsafe}
+  :int
+  ```c typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
       void (*info)(const char* msg);
@@ -162,7 +170,6 @@
   logger->error = simple_error;
   return (void*)logger;
   ```)
-
 ;;; Simple-Logger-free -- release a Logger capability created by Simple-Logger.
 ;;;
 ;;; Parameters:
@@ -170,15 +177,15 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Simple-Logger
-(defn Simple-Logger-free [log] #{Unsafe} :nil
-  ```c
-  free(log);
-  ```)
 
+(defn Simple-Logger-free [log]
+  #{Unsafe}
+  :nil
+  ```c free(log);
+  ```)
 ;; ============================================================================
 ;; Null logger (silent)
 ;; ============================================================================
-
 ;;; Null-Logger -- create a silent Logger capability that discards all messages.
 ;;;
 ;;; Returns:
@@ -191,9 +198,12 @@
 ;;;
 ;;; Since: Phase 16
 ;; Null-Logger implementation - discards all messages
-(defn Null-Logger [] #{Unsafe} :int
-  ```c
-  typedef struct Logger Logger;
+
+
+(defn Null-Logger []
+  #{Unsafe}
+  :int
+  ```c typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
       void (*info)(const char* msg);
@@ -212,7 +222,6 @@
   logger->error = null_log;
   return (void*)logger;
   ```)
-
 ;;; Null-Logger-free -- release a Logger capability created by Null-Logger.
 ;;;
 ;;; Parameters:
@@ -220,15 +229,15 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Null-Logger
-(defn Null-Logger-free [log] #{Unsafe} :nil
-  ```c
-  free(log);
-  ```)
 
+(defn Null-Logger-free [log]
+  #{Unsafe}
+  :nil
+  ```c free(log);
+  ```)
 ;; ============================================================================
 ;; Helper functions for direct logging (without capabilities)
 ;; ============================================================================
-
 ;;; log-debug-direct -- write a DEBUG message directly to stdout.
 ;;;
 ;;; Parameters:
@@ -240,12 +249,14 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log a debug message
-(defn log-debug-direct [msg] #{Unsafe} :nil
-  ```c
-  fprintf(stdout, "[DEBUG] %s\n", msg);
+
+
+(defn log-debug-direct [msg]
+  #{Unsafe}
+  :nil
+  ```c fprintf(stdout, "[DEBUG] %s\n", msg);
   fflush(stdout);
   ```)
-
 ;;; log-info-direct -- write an INFO message directly to stdout.
 ;;;
 ;;; Parameters:
@@ -257,12 +268,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log an info message
-(defn log-info-direct [msg] #{Unsafe} :nil
-  ```c
-  fprintf(stdout, "[INFO] %s\n", msg);
+
+(defn log-info-direct [msg]
+  #{Unsafe}
+  :nil
+  ```c fprintf(stdout, "[INFO] %s\n", msg);
   fflush(stdout);
   ```)
-
 ;;; log-warn-direct -- write a WARN message directly to stderr.
 ;;;
 ;;; Parameters:
@@ -274,12 +286,13 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log a warning message
-(defn log-warn-direct [msg] #{Unsafe} :nil
-  ```c
-  fprintf(stderr, "[WARN] %s\n", msg);
+
+(defn log-warn-direct [msg]
+  #{Unsafe}
+  :nil
+  ```c fprintf(stderr, "[WARN] %s\n", msg);
   fflush(stderr);
   ```)
-
 ;;; log-error-direct -- write an ERROR message directly to stderr.
 ;;;
 ;;; Parameters:
@@ -291,8 +304,10 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log an error message
-(defn log-error-direct [msg] #{Unsafe} :nil
-  ```c
-  fprintf(stderr, "[ERROR] %s\n", msg);
+
+(defn log-error-direct [msg]
+  #{Unsafe}
+  :nil
+  ```c fprintf(stderr, "[ERROR] %s\n", msg);
   fflush(stderr);
   ```)

@@ -7,7 +7,6 @@
 ;;
 ;; Self-contained implementations; no external crypto libraries required.
 ;; SHA-256 follows FIPS 180-4.  MD5 follows RFC 1321.
-
 ;;; digest/sha256 -- compute the SHA-256 digest of a byte buffer.
 ;;;
 ;;; Parameters:
@@ -23,8 +22,7 @@
 ;;;
 ;;; Since: Phase B2
 (defn digest/sha256 [data :int len :int] :int
-  ```c
-  #include <stdint.h>
+  ```c #include <stdint.h>
   static void sha256_transform(uint32_t st[8], const uint8_t *blk) {
     static const uint32_t K[64] = {
       0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
@@ -77,7 +75,6 @@
   for (int j=0;j<32;j++) v->data[j] = (int64_t)digest[j];
   return (int64_t)(intptr_t)v;
   ```)
-
 ;;; digest/sha256-hex -- compute the SHA-256 digest as a lowercase hex string.
 ;;;
 ;;; Parameters:
@@ -92,9 +89,9 @@
 ;;;   (digest/sha256-hex buf 4)  ; => "9f86d081..."
 ;;;
 ;;; Since: Phase B2
+
 (defn digest/sha256-hex [data :int len :int] :cstr
-  ```c
-  #include <stdint.h>
+  ```c #include <stdint.h>
   static void sha256_transform_h(uint32_t st[8], const uint8_t *blk) {
     static const uint32_t K[64] = {
       0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
@@ -147,7 +144,6 @@
   out[64]='\0';
   return out;
   ```)
-
 ;;; digest/md5 -- compute the MD5 digest of a byte buffer.
 ;;;
 ;;; Parameters:
@@ -162,9 +158,9 @@
 ;;;   (digest/md5 buf 16)  ; => vec of 16 byte ints
 ;;;
 ;;; Since: Phase B2
+
 (defn digest/md5 [data :int len :int] :int
-  ```c
-  #include <stdint.h>
+  ```c #include <stdint.h>
   #define MD5_ROTL(x,n) (((x)<<(n))|((x)>>(32-(n))))
   static void md5_transform(uint32_t st[4], const uint8_t *blk) {
     static const uint32_t T[64] = {
@@ -219,7 +215,6 @@
   for (int j=0;j<16;j++) v->data[j] = (int64_t)digest[j];
   return (int64_t)(intptr_t)v;
   ```)
-
 ;;; digest/md5-hex -- compute the MD5 digest as a lowercase hex string.
 ;;;
 ;;; Parameters:
@@ -234,9 +229,9 @@
 ;;;   (digest/md5-hex buf 4)  ; => "93b885ad..."
 ;;;
 ;;; Since: Phase B2
+
 (defn digest/md5-hex [data :int len :int] :cstr
-  ```c
-  #include <stdint.h>
+  ```c #include <stdint.h>
   #define MD5_ROTL2(x,n) (((x)<<(n))|((x)>>(32-(n))))
   static void md5_transform_h(uint32_t st[4], const uint8_t *blk) {
     static const uint32_t T[64] = {
@@ -291,7 +286,6 @@
   out[32]='\0';
   return out;
   ```)
-
 ;;; digest/bytes-free -- free a digest byte vec returned by digest/sha256 or digest/md5.
 ;;;
 ;;; Parameters:
@@ -301,9 +295,9 @@
 ;;;   (digest/bytes-free my-digest)
 ;;;
 ;;; Since: Phase B2
+
 (defn digest/bytes-free [v :int] :void
-  ```c
-  if (!v) return;
+  ```c if (!v) return;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   free(vec->data);
   free(vec);

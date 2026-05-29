@@ -1,10 +1,7 @@
 ;; AUTO-GENERATED -- do not edit. Run: just docs
 (defmodule tur/docstrings
   (export doc-lookup doc-verified?)
-
-(defn doc-lookup [name :cstr] :cstr
-  ```c
-  static const struct { const char *key; const char *val; } entries[] = {
+  (defn doc-lookup [name :cstr] :cstr ```c static const struct { const char *key; const char *val; } entries[] = {
     {"args/spec-new", "args/spec-new -- create a new empty argument specification.\n\nReturns:\n  Opaque pointer (as :int) to an empty arg spec.\n    Free with args/spec-free when done.\n\nExample:\n  (let [spec (args/spec-new)] ...)\n\nSince: Phase A1"},
     {"args/spec-prog", "args/spec-prog -- set the program name displayed in help text.\n\nParameters:\n  spec -- arg spec pointer from args/spec-new\n  name -- program name cstr\n\nReturns:\n  The same spec pointer (mutated in place).\n\nExample:\n  (args/spec-prog spec \"mytool\")\n\nSince: Phase A1"},
     {"args/spec-flag", "args/spec-flag -- register a boolean flag in the arg spec.\n\nParameters:\n  spec -- arg spec pointer\n  name -- flag name including dashes (e.g., \"--verbose\")\n\nReturns:\n  The same spec pointer (mutated in place).\n\nExample:\n  (args/spec-flag spec \"--verbose\")\n\nSince: Phase A1"},
@@ -1175,10 +1172,7 @@
   }
   return 0;
   ```)
-
-(defn doc-verified? [name :cstr] :bool
-  ```c
-  static const char *verified[] = {
+  (defn doc-verified? [name :cstr] :bool ```c static const char *verified[] = {
     NULL
   };
   const char *n = (const char*)(intptr_t)name;
@@ -1187,6 +1181,4 @@
     if (strcmp(verified[__i], n) == 0) return 1;
   }
   return 0;
-  ```)
-
-)
+  ```))

@@ -9,7 +9,6 @@
 ;;;
 ;;; Since: Phase C
 ;; hash.tur -- canonical integer hashing.
-
 ;;; hash-int -- hash a 64-bit signed integer via splitmix64 finalizer.
 ;;;
 ;;; Parameters:
@@ -23,8 +22,7 @@
 ;;;
 ;;; Since: Phase C
 (defn hash-int [n :int] :int
-  ```c
-  uint64_t h = (uint64_t)n;
+  ```c uint64_t h = (uint64_t)n;
   h ^= h >> 30;
   h *= 0xbf58476d1ce4e5b9ULL;
   h ^= h >> 27;
@@ -32,7 +30,6 @@
   h ^= h >> 31;
   return (int64_t)h;
   ```)
-
 ;;; hash-int8 -- hash an int8; equals (hash-int (as int n)) via sign-extension.
 ;;;
 ;;; Parameters:
@@ -45,9 +42,8 @@
 ;;;   (= (hash-int8 42i8) (hash-int 42))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-int8 [n :int8] :int
-  (hash-int (as int n)))
 
+(defn hash-int8 [n :int8] :int (hash-int (as int n)))
 ;;; hash-int16 -- hash an int16; equals (hash-int (as int n)) via sign-extension.
 ;;;
 ;;; Parameters:
@@ -60,9 +56,8 @@
 ;;;   (= (hash-int16 1000i16) (hash-int 1000))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-int16 [n :int16] :int
-  (hash-int (as int n)))
 
+(defn hash-int16 [n :int16] :int (hash-int (as int n)))
 ;;; hash-int32 -- hash an int32; equals (hash-int (as int n)) via sign-extension.
 ;;;
 ;;; Parameters:
@@ -75,9 +70,8 @@
 ;;;   (= (hash-int32 100000i32) (hash-int 100000))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-int32 [n :int32] :int
-  (hash-int (as int n)))
 
+(defn hash-int32 [n :int32] :int (hash-int (as int n)))
 ;;; hash-int64 -- hash an int64; identical to hash-int.
 ;;;
 ;;; Parameters:
@@ -90,9 +84,8 @@
 ;;;   (= (hash-int64 42i64) (hash-int 42))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-int64 [n :int64] :int
-  (hash-int (as int n)))
 
+(defn hash-int64 [n :int64] :int (hash-int (as int n)))
 ;;; hash-uint8 -- hash a uint8 via zero-extension to :int.
 ;;;
 ;;; A uint8 value of 0xFF (255) produces a different hash than :int -1,
@@ -108,9 +101,8 @@
 ;;;   (not= (hash-uint8 255u8) (hash-int -1))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-uint8 [n :uint8] :int
-  (hash-int (as int n)))
 
+(defn hash-uint8 [n :uint8] :int (hash-int (as int n)))
 ;;; hash-uint16 -- hash a uint16 via zero-extension to :int.
 ;;;
 ;;; Parameters:
@@ -123,9 +115,8 @@
 ;;;   (= (hash-uint16 1000u16) (hash-int 1000))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-uint16 [n :uint16] :int
-  (hash-int (as int n)))
 
+(defn hash-uint16 [n :uint16] :int (hash-int (as int n)))
 ;;; hash-uint32 -- hash a uint32 via zero-extension to :int.
 ;;;
 ;;; Parameters:
@@ -138,9 +129,8 @@
 ;;;   (= (hash-uint32 1000u32) (hash-int 1000))  ; => true
 ;;;
 ;;; Since: Phase C
-(defn hash-uint32 [n :uint32] :int
-  (hash-int (as int n)))
 
+(defn hash-uint32 [n :uint32] :int (hash-int (as int n)))
 ;;; hash-uint64 -- hash a uint64 by reinterpreting as :int then hashing.
 ;;;
 ;;; Parameters:
@@ -153,5 +143,5 @@
 ;;;   (hash-uint64 0u64)  ; => same as (hash-int 0)
 ;;;
 ;;; Since: Phase C
-(defn hash-uint64 [n :uint64] :int
-  (hash-int (as int n)))
+
+(defn hash-uint64 [n :uint64] :int (hash-int (as int n)))

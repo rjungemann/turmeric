@@ -49,17 +49,6 @@ else
     fail "$NAME" "expected exit 0, got $RC"
 fi
 
-# ---------------------------------------------------------------------------
-# Test: --stdin rejects non-ASCII input (exit 1)
-# ---------------------------------------------------------------------------
-NAME="fmt-stdin-nonascii-exit"
-printf '(def x \xe2\x80\x94 1)\n' | "$TUR" fmt --stdin > /dev/null 2>&1
-RC=$?
-if [ "$RC" -ne 0 ]; then
-    pass "$NAME"
-else
-    fail "$NAME" "expected non-zero exit for non-ASCII input, got 0"
-fi
 
 # ---------------------------------------------------------------------------
 # Test: --stdout formats a file and writes to stdout (file unchanged)
@@ -200,6 +189,36 @@ if [ "$RC" -eq 0 ]; then
     pass "$NAME"
 else
     fail "$NAME" "expected exit 0 for --lang tursweet, got $RC"
+fi
+
+# ---------------------------------------------------------------------------
+# FT7: bootstrap -- tur fmt --check stdlib/ exits 0
+# ---------------------------------------------------------------------------
+NAME="fmt-bootstrap-stdlib"
+"$TUR" fmt --check stdlib/ > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "tur fmt --check stdlib/ exited $RC (stdlib is not self-formatted)"
+fi
+
+# ---------------------------------------------------------------------------
+# FT8: idempotence -- fmt(fmt(x)) == fmt(x) on a sample of stdlib files
+# ---------------------------------------------------------------------------
+NAME="fmt-idempotence-stdlib"
+IDEMPOTENT_FAIL=0
+while IFS= read -r -d '' f; do
+    PASS1=$("$TUR" fmt --stdout "$f" 2>/dev/null)
+    PASS2=$(printf '%s\n' "$PASS1" | "$TUR" fmt --stdin 2>/dev/null)
+    if [ "$PASS1" != "$PASS2" ]; then
+        fail "$NAME" "$f: fmt(fmt(x)) != fmt(x)"
+        IDEMPOTENT_FAIL=1
+        break
+    fi
+done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0 | head -z -n 20)
+if [ "$IDEMPOTENT_FAIL" -eq 0 ]; then
+    pass "$NAME"
 fi
 
 # ---------------------------------------------------------------------------

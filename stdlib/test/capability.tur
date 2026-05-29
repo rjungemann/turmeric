@@ -2,22 +2,24 @@
 ;; 
 ;; Mock implementations for testing - these allow tests to verify behavior
 ;; without touching the filesystem, network, etc.
-
 (extern-c malloc [^ptr size] :ptr)
-(extern-c free [^ptr p] :void)
-(extern-c strcmp [^cstr ^cstr] :int)
-(extern-c strcpy [^cstr ^cstr] :cstr)
-(extern-c strlen [^cstr] :int)
 
+(extern-c free [^ptr p] :void)
+
+(extern-c strcmp [^cstr ^cstr] :int)
+
+(extern-c strcpy [^cstr ^cstr] :cstr)
+
+(extern-c strlen [^cstr] :int)
 ;; ============================================================================
 ;; Test-FileSystem implementation
 ;; In-memory filesystem for testing
 ;; ============================================================================
-
 ;; Opaque type for in-memory file
+
+
 (defn InMemoryFile-type []
-  ```c
-  typedef struct InMemoryFile InMemoryFile;
+  ```c typedef struct InMemoryFile InMemoryFile;
   struct InMemoryFile {
       char* name;
       unsigned char* data;
@@ -26,11 +28,10 @@
   };
   return NULL;
   ```)
-
 ;; Opaque type for in-memory filesystem
+
 (defn InMemoryFS-type []
-  ```c
-  typedef struct InMemoryFS InMemoryFS;
+  ```c typedef struct InMemoryFS InMemoryFS;
   struct InMemoryFS {
       InMemoryFile* files;
       char** last_listing;
@@ -38,11 +39,10 @@
   };
   return NULL;
   ```)
-
 ;; Test-FileSystem implementation
+
 (defn Test-FileSystem []
-  ```c
-  /* Define the FileSystem struct */
+  ```c /* Define the FileSystem struct */
   typedef struct FileSystem FileSystem;
   struct FileSystem {
       int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
@@ -180,17 +180,15 @@
   fs->list = testfs_list;
   return (void*)fs;
   ```)
-
 ;; Free a Test-FileSystem
-(defn Test-FileSystem-free [fs]
-  ```c
-  free(fs);
-  ```)
 
+(defn Test-FileSystem-free [fs]
+  ```c free(fs);
+  ```)
 ;; Clear all files from the test filesystem
+
 (defn testfs-clear []
-  ```c
-  typedef struct InMemoryFile InMemoryFile;
+  ```c typedef struct InMemoryFile InMemoryFile;
   InMemoryFile* f = global_fs.files;
   while (f) {
       InMemoryFile* next = f->next;
@@ -201,11 +199,10 @@
   }
   global_fs.files = NULL;
   ```)
-
 ;; Check if a file exists in the test filesystem
+
 (defn testfs-exists? [path]
-  ```c
-  typedef struct InMemoryFile InMemoryFile;
+  ```c typedef struct InMemoryFile InMemoryFile;
   InMemoryFile* f = global_fs.files;
   while (f) {
       if (strcmp(f->name, path) == 0) {
@@ -215,11 +212,10 @@
   }
   return 0;
   ```)
-
 ;; Get file contents from test filesystem
+
 (defn testfs-get-contents [path]
-  ```c
-  typedef struct InMemoryFile InMemoryFile;
+  ```c typedef struct InMemoryFile InMemoryFile;
   InMemoryFile* f = global_fs.files;
   while (f) {
       if (strcmp(f->name, path) == 0) {
@@ -233,16 +229,15 @@
   }
   return NULL;
   ```)
-
 ;; ============================================================================
 ;; Test-Logger implementation
 ;; Captures log messages for verification
 ;; ============================================================================
-
 ;; Opaque type for captured log messages
+
+
 (defn CapturedLogs-type []
-  ```c
-  typedef struct CapturedLog CapturedLog;
+  ```c typedef struct CapturedLog CapturedLog;
   struct CapturedLog {
       char* level;
       char* message;
@@ -250,22 +245,20 @@
   };
   return NULL;
   ```)
-
 ;; Opaque type for test logger state
+
 (defn TestLoggerState-type []
-  ```c
-  typedef struct TestLoggerState TestLoggerState;
+  ```c typedef struct TestLoggerState TestLoggerState;
   struct TestLoggerState {
       CapturedLog* logs;
       CapturedLog* last;
   };
   return NULL;
   ```)
-
 ;; Test-Logger implementation
+
 (defn Test-Logger []
-  ```c
-  /* Define the Logger struct */
+  ```c /* Define the Logger struct */
   typedef struct Logger Logger;
   struct Logger {
       void (*debug)(const char* msg);
@@ -334,17 +327,15 @@
   logger->error = test_logger_error;
   return (void*)logger;
   ```)
-
 ;; Free a Test-Logger
-(defn Test-Logger-free [log]
-  ```c
-  free(log);
-  ```)
 
+(defn Test-Logger-free [log]
+  ```c free(log);
+  ```)
 ;; Clear all captured logs
+
 (defn testlog-clear []
-  ```c
-  typedef struct CapturedLog CapturedLog;
+  ```c typedef struct CapturedLog CapturedLog;
   CapturedLog* log = global_logger_state.logs;
   while (log) {
       CapturedLog* next = log->next;
@@ -356,11 +347,10 @@
   global_logger_state.logs = NULL;
   global_logger_state.last = NULL;
   ```)
-
 ;; Get the number of captured logs
+
 (defn testlog-count []
-  ```c
-  typedef struct CapturedLog CapturedLog;
+  ```c typedef struct CapturedLog CapturedLog;
   CapturedLog* log = global_logger_state.logs;
   int count = 0;
   while (log) {
@@ -369,11 +359,10 @@
   }
   return count;
   ```)
-
 ;; Check if a log message was captured (by level and message)
+
 (defn testlog-has? [level msg]
-  ```c
-  typedef struct CapturedLog CapturedLog;
+  ```c typedef struct CapturedLog CapturedLog;
   CapturedLog* log = global_logger_state.logs;
   while (log) {
       if (strcmp(log->level, level) == 0 && strcmp(log->message, msg) == 0) {
@@ -383,16 +372,15 @@
   }
   return 0;
   ```)
-
 ;; ============================================================================
 ;; Test-Random implementation
 ;; Deterministic RNG with fixed seed
 ;; ============================================================================
-
 ;; Test-Random implementation - deterministic for testing
+
+
 (defn Test-Random []
-  ```c
-  /* Define the Random struct */
+  ```c /* Define the Random struct */
   typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
@@ -426,28 +414,25 @@
   rng->next_float = test_next_float;
   return (void*)rng;
   ```)
-
 ;; Free a Test-Random
+
 (defn Test-Random-free [rng]
-  ```c
-  free(rng);
+  ```c free(rng);
   ```)
-
 ;; Reset the test RNG to initial state
-(defn testrng-reset []
-  ```c
-  test_state = 42;
-  ```)
 
+(defn testrng-reset []
+  ```c test_state = 42;
+  ```)
 ;; ============================================================================
 ;; Test-Time implementation
 ;; Mock clock that can be controlled manually
 ;; ============================================================================
-
 ;; Test-Time implementation - manually controlled clock
+
+
 (defn Test-Time []
-  ```c
-  /* Define the Time struct */
+  ```c /* Define the Time struct */
   typedef struct Time Time;
   struct Time {
       int (*now)(void);
@@ -473,28 +458,24 @@
   time->sleep = test_sleep;
   return (void*)time;
   ```)
-
 ;; Free a Test-Time
-(defn Test-Time-free [t]
-  ```c
-  free(t);
-  ```)
 
+(defn Test-Time-free [t]
+  ```c free(t);
+  ```)
 ;; Set the mock time value
+
 (defn testtime-set [t new_time]
-  ```c
-  /* Update global mock time */
+  ```c /* Update global mock time */
   mock_time_value = new_time;
   ```)
-
 ;; Get the current mock time value
-(defn testtime-get [t]
-  ```c
-  return mock_time_value;
-  ```)
 
+(defn testtime-get [t]
+  ```c return mock_time_value;
+  ```)
 ;; Reset mock time to 0
+
 (defn testtime-reset []
-  ```c
-  mock_time_value = 0;
+  ```c mock_time_value = 0;
   ```)

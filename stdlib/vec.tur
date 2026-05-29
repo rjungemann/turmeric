@@ -6,15 +6,10 @@
 ;; Phase TC1-A: Typed Vec[A]
 ;; Parameterized growable array. Runtime layout identical to vec.tur.
 ;; Type parameter A is tracked by the type-checker at call sites only.
-
 ;;; Vec -- parameterized growable array with element type A.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Vec [A]
-  (data :ptr<void>)
-  (len  :int)
-  (cap  :int))
-
+(defstruct Vec [A] (data :ptr<void>) (len :int) (cap :int))
 ;;; vec-new -- allocate a new empty Vec[A].
 ;;;
 ;;; Returns:
@@ -24,15 +19,16 @@
 ;;;   (vec-new)  ; => empty Vec
 ;;;
 ;;; Since: Phase TC1
-(defn vec-new [] #{} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+
+(defn vec-new []
+  #{}
+  :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
   v->len = 0;
   v->cap = 0;
   return (int64_t)(intptr_t)v;
   ```)
-
 ;;; vec-len -- return the number of elements in a Vec[A].
 ;;;
 ;;; Parameters:
@@ -45,12 +41,13 @@
 ;;;   (vec-len my-vec)  ; => 3
 ;;;
 ;;; Since: Phase TC1
-(defn vec-len [v :int] #{} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+
+(defn vec-len [v :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
-
 ;;; vec-get -- return the element at index i (bounds-checked).
 ;;;
 ;;; Parameters:
@@ -64,15 +61,16 @@
 ;;;   (vec-get my-vec 0)  ; => first element
 ;;;
 ;;; Since: Phase TC1
-(defn vec-get [v :int i :int] #{} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+
+(defn vec-get [v :int i :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
   exit(1);
   return 0;
   ```)
-
 ;;; vec-push! -- append an element to the Vec[A].
 ;;;
 ;;; Parameters:
@@ -83,9 +81,11 @@
 ;;;   (vec-push! my-vec 42)
 ;;;
 ;;; Since: Phase TC1
-(defn vec-push! [v :int val :int] #{} :nil
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+
+(defn vec-push! [v :int val :int]
+  #{}
+  :nil
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
     size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
     int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
@@ -96,7 +96,6 @@
   }
   vec->data[vec->len++] = val;
   ```)
-
 ;;; vec-pop! -- remove and return the last element of a Vec[A].
 ;;;
 ;;; Parameters:
@@ -109,13 +108,14 @@
 ;;;   (vec-pop! my-vec)  ; => last element
 ;;;
 ;;; Since: Phase TC1
-(defn vec-pop! [v :int] #{} :int
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+
+(defn vec-pop! [v :int]
+  #{}
+  :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
   ```)
-
 ;;; vec-set! -- overwrite the element at index i.
 ;;;
 ;;; Parameters:
@@ -127,14 +127,15 @@
 ;;;   (vec-set! my-vec 0 99)
 ;;;
 ;;; Since: Phase TC1
-(defn vec-set! [v :int i :int val :int] #{} :void
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+
+(defn vec-set! [v :int i :int val :int]
+  #{}
+  :void
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) { vec->data[i] = val; return; }
   fprintf(stderr, "vec-set! index out of bounds\n");
   exit(1);
   ```)
-
 ;;; vec-free -- free a Vec[A] and its data buffer.
 ;;;
 ;;; Parameters:
@@ -144,24 +145,23 @@
 ;;;   (vec-free my-vec)
 ;;;
 ;;; Since: Phase TC1
-(defn vec-free [v :int] #{} :void
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+
+(defn vec-free [v :int]
+  #{}
+  :void
+  ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->data) free(vec->data);
   free(vec);
   ```)
-
 ;;; vec-push-each__ -- internal helper for the vec-of macro.
 ;;;
 ;;; Expands a sequence of pushes onto `v` followed by `v` itself as the
 ;;; final value. Recursive: each step emits `(do (vec-push! v x) ...)`.
+
 (defmacro vec-push-each__ [v & xs]
   (if (empty? xs)
     v
-    (list do
-      (list vec-push! v (first xs))
-      (list vec-push-each__ v ~@(rest xs)))))
-
+    (list do (list vec-push! v (first xs)) (list vec-push-each__ v ~@(rest xs)))))
 ;;; vec-of -- variadic Vec[A] literal.
 ;;;
 ;;; Parameters:
@@ -181,11 +181,11 @@
 ;;;   (vec-of 1 2 3)  ; => Vec containing 1, 2, 3
 ;;;
 ;;; Since: Phase 2 cons-in-docs cleanup
+
 (defmacro vec-of [& xs]
   (if (empty? xs)
     (list vec-new)
     (list let `[__v (vec-new)] (list vec-push-each__ __v ~@xs))))
-
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
@@ -200,9 +200,11 @@
 ;;;   (vec-eq? va vb (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defn vec-eq? [v1 :int v2 :int cmp-fn] #{} :bool
-  ```c
-  struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
+
+(defn vec-eq? [v1 :int v2 :int cmp-fn]
+  #{}
+  :bool
+  ```c struct { int64_t *data; size_t len; size_t cap; } *a = (void*)(intptr_t)v1;
   struct { int64_t *data; size_t len; size_t cap; } *b = (void*)(intptr_t)v2;
   if (a->len != b->len) return false;
   for (size_t i = 0; i < a->len; i++) {
@@ -211,9 +213,8 @@
   }
   return true;
   ```)
-
 ;;; Eq [Vec] -- element-wise equality using the element type's Eq instance.
 ;; TC1-5: Phase PTC4 -- constrained Eq instance for Vec[A].
 ;; Note: element comparison uses integer equality; correct for all primitive A.
-(definstance Eq [Vec] [(Eq A)]
-  (eq? [x y] (vec-eq? x y (fn [a b] (= a b)))))
+
+(definstance Eq [Vec] [(Eq A)] (eq? [x y] (vec-eq? x y (fn [a b] (= a b)))))

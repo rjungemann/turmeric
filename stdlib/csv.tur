@@ -8,7 +8,6 @@
 ;; Handles quoted fields (double-quote), embedded commas, embedded quotes
 ;; (doubled as ""), and embedded newlines within quoted fields.
 ;; Depends on: str.tur (cstr ops), vec.tur layout, fs.tur for file helpers.
-
 ;;; csv/parse-row-with-delim -- parse one delimiter-separated line into a vec of field cstrs.
 ;;;
 ;;; Handles RFC 4180-style quoting: fields may be optionally enclosed in
@@ -32,8 +31,7 @@
 ;;;
 ;;; Since: Phase D2
 (defn csv/parse-row-with-delim [line :cstr delim :int] :int
-  ```c
-  /* Validate delimiter */
+  ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
@@ -82,7 +80,6 @@
   }
   return (int64_t)(intptr_t)v;
   ```)
-
 ;;; csv/parse-row -- parse one CSV line into a vec of field cstrs.
 ;;;
 ;;; Handles RFC 4180 quoting: fields may be optionally enclosed in
@@ -101,11 +98,10 @@
 ;;;   (csv/parse-row "a,\"b,c\",d")  ; => vec ["a", "b,c", "d"]
 ;;;
 ;;; Since: Phase B2
-(defn csv/parse-row [line :cstr] :int
-  ```c
-  return csv_parse_row_with_delim(line, 44);
-  ```)
 
+(defn csv/parse-row [line :cstr] :int
+  ```c return csv_parse_row_with_delim(line, 44);
+  ```)
 ;;; csv/row-free -- free a row vec and all its field strings.
 ;;;
 ;;; Parameters:
@@ -115,15 +111,14 @@
 ;;;   (csv/row-free my-row)
 ;;;
 ;;; Since: Phase B2
+
 (defn csv/row-free [v :int] :void
-  ```c
-  if (!v) return;
+  ```c if (!v) return;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
   free(vec->data);
   free(vec);
   ```)
-
 ;;; csv/parse-with-delim -- parse a multi-line delimiter-separated string into a cons list of row vecs.
 ;;;
 ;;; Parameters:
@@ -141,9 +136,9 @@
 ;;;   (csv/parse-with-delim "bad" 0)  ; => 0
 ;;;
 ;;; Since: Phase D2
+
 (defn csv/parse-with-delim [s :cstr delim :int] :int
-  ```c
-  /* Validate delimiter */
+  ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   const char *p = s;
@@ -198,7 +193,6 @@
   }
   return head;
   ```)
-
 ;;; csv/parse -- parse a multi-line CSV string into a cons list of row vecs.
 ;;;
 ;;; Parameters:
@@ -212,11 +206,10 @@
 ;;;   (csv/parse "a,b\n1,2\n")  ; => cons of two row vecs
 ;;;
 ;;; Since: Phase B2
-(defn csv/parse [s :cstr] :int
-  ```c
-  return csv_parse_with_delim(s, 44);
-  ```)
 
+(defn csv/parse [s :cstr] :int
+  ```c return csv_parse_with_delim(s, 44);
+  ```)
 ;;; csv/free -- free a cons list of rows returned by csv/parse.
 ;;;
 ;;; Parameters:
@@ -226,9 +219,9 @@
 ;;;   (csv/free my-csv)
 ;;;
 ;;; Since: Phase B2
+
 (defn csv/free [lst :int] :void
-  ```c
-  int64_t cur = lst;
+  ```c int64_t cur = lst;
   while (cur) {
     int64_t *cell = (int64_t*)(intptr_t)cur;
     int64_t vptr  = cell[0];
@@ -243,7 +236,6 @@
     cur = next;
   }
   ```)
-
 ;;; csv/emit-row-with-delim -- serialize a vec of field cstrs to a delimiter-separated line cstr.
 ;;;
 ;;; Fields containing delimiter, double-quotes, or newlines are enclosed in
@@ -264,9 +256,9 @@
 ;;;   (csv/emit-row-with-delim (csv/parse-row "a,b") 0)  ; => 0
 ;;;
 ;;; Since: Phase D2
+
 (defn csv/emit-row-with-delim [v :int delim :int] :cstr
-  ```c
-  /* Validate delimiter */
+  ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -302,7 +294,6 @@
   out[pos] = '\0';
   return out;
   ```)
-
 ;;; csv/emit-row -- serialize a vec of field cstrs to a CSV line cstr.
 ;;;
 ;;; Fields containing commas, double-quotes, or newlines are enclosed in
@@ -319,11 +310,10 @@
 ;;;   (csv/emit-row my-vec)  ; => "a,\"b,c\",d"
 ;;;
 ;;; Since: Phase B2
-(defn csv/emit-row [v :int] :cstr
-  ```c
-  return csv_emit_row_with_delim(v, 44);
-  ```)
 
+(defn csv/emit-row [v :int] :cstr
+  ```c return csv_emit_row_with_delim(v, 44);
+  ```)
 ;;; csv/emit-with-delim -- serialize a cons list of row vecs to a full delimiter-separated string.
 ;;;
 ;;; Parameters:
@@ -341,9 +331,9 @@
 ;;;   (csv/emit-with-delim (csv/parse "a,b\n") 0)  ; => 0
 ;;;
 ;;; Since: Phase D2
+
 (defn csv/emit-with-delim [rows :int delim :int] :cstr
-  ```c
-  /* Validate delimiter */
+  ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   size_t out_cap = 256, pos = 0;
@@ -383,7 +373,6 @@
   out[pos]='\0';
   return out;
   ```)
-
 ;;; csv/emit -- serialize a cons list of row vecs to a full CSV string.
 ;;;
 ;;; Parameters:
@@ -397,11 +386,10 @@
 ;;;   (csv/emit my-rows)  ; => "a,b\n1,2\n"
 ;;;
 ;;; Since: Phase B2
-(defn csv/emit [rows :int] :cstr
-  ```c
-  return csv_emit_with_delim(rows, 44);
-  ```)
 
+(defn csv/emit [rows :int] :cstr
+  ```c return csv_emit_with_delim(rows, 44);
+  ```)
 ;;; csv/read-file-with-delim -- read a delimiter-separated file and parse it into a cons list of row vecs.
 ;;;
 ;;; Parameters:
@@ -418,9 +406,9 @@
 ;;;   (csv/read-file-with-delim "/etc/hosts" 0)  ; => 0
 ;;;
 ;;; Since: Phase D2
+
 (defn csv/read-file-with-delim [path :cstr delim :int] :int
-  ```c
-  /* Validate delimiter */
+  ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return 0;
   char sep = (char)delim;
   FILE *f = fopen(path, "rb");
@@ -468,7 +456,6 @@
   free(buf);
   return head;
   ```)
-
 ;;; csv/read-file -- read a CSV file and parse it into a cons list of row vecs.
 ;;;
 ;;; Parameters:
@@ -482,11 +469,10 @@
 ;;;   (csv/read-file "data.csv")  ; => cons list of rows
 ;;;
 ;;; Since: Phase B2
-(defn csv/read-file [path :cstr] :int
-  ```c
-  return csv_read_file_with_delim(path, 44);
-  ```)
 
+(defn csv/read-file [path :cstr] :int
+  ```c return csv_read_file_with_delim(path, 44);
+  ```)
 ;;; csv/write-file-with-delim -- serialize a cons list of row vecs to a delimiter-separated file.
 ;;;
 ;;; Parameters:
@@ -503,9 +489,9 @@
 ;;;   (csv/write-file-with-delim "/dev/null" (csv/parse "a") 0)  ; => -1
 ;;;
 ;;; Since: Phase D2
+
 (defn csv/write-file-with-delim [path :cstr rows :int delim :int] :int
-  ```c
-  /* Validate delimiter */
+  ```c /* Validate delimiter */
   if (delim == 0 || delim == '"' || delim == '\n' || delim == '\r') return -1;
   char sep = (char)delim;
   FILE *f = fopen(path, "wb");
@@ -536,7 +522,6 @@
   fclose(f);
   return 0;
   ```)
-
 ;;; csv/write-file -- serialize a cons list of row vecs to a CSV file.
 ;;;
 ;;; Parameters:
@@ -550,7 +535,7 @@
 ;;;   (csv/write-file "out.csv" my-rows)  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn csv/write-file [path :cstr rows :int] :int
-  ```c
-  return csv_write_file_with_delim(path, rows, 44);
+  ```c return csv_write_file_with_delim(path, rows, 44);
   ```)

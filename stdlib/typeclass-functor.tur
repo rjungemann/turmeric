@@ -9,7 +9,6 @@
 ;; without requiring the user to import stdlib/typeclass.tur.
 ;; The full typeclass.tur (with all typeclasses) is still available on demand
 ;; via (load "stdlib/typeclass.tur").
-
 ;;; Functor -- typeclass for mapping over a container.
 ;;;
 ;;; fmap applies a typed fat-closure to all values inside the container
@@ -17,5 +16,4 @@
 ;;; capturing closures can be passed directly.
 ;;;
 ;;; Since: Phase CCL
-(defclass Functor [^f]
-  (fmap [container [fn :fn]] :int))
+(defclass Functor [^f] (fmap [container [fn :fn]] :int))

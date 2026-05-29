@@ -15,7 +15,6 @@
 ;;   async-socket-send    [fd data len]   -> bytes-sent
 ;;   async-socket-recv    [fd buf-size]   -> bytes-read
 ;;   async-socket-close   [fd]            -> nil
-
 ;; Create a listening TCP socket on the given port.
 ;; Returns the listen fd, or -1 on error.
 ;;; async-socket-listen -- create a non-blocking TCP listening socket on the given port.
@@ -31,9 +30,10 @@
 ;;;   (async-socket-listen 8080 128)  ; => 4
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-listen [port :int backlog :int] #{Unsafe} :int
-  ```c
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+(defn async-socket-listen [port :int backlog :int]
+  #{Unsafe}
+  :int
+  ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int opt = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -55,7 +55,6 @@
   }
   return (int64_t)fd;
   ```)
-
 ;; Accept a connection on the listen fd.
 ;; Parks the current fiber until a connection arrives.
 ;; Returns the client fd, or -1 on error.
@@ -71,9 +70,11 @@
 ;;;   (async-socket-accept listen-fd)  ; => 7
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-accept [listen-fd :int] #{Unsafe} :int
-  ```c
-  while (1) {
+
+(defn async-socket-accept [listen-fd :int]
+  #{Unsafe}
+  :int
+  ```c while (1) {
     int cfd = accept((int)listen_fd, NULL, NULL);
     if (cfd >= 0) {
       /* Set client socket non-blocking */
@@ -93,7 +94,6 @@
     return -1;
   }
   ```)
-
 ;; Connect to a TCP server at host:port.
 ;; host should be an IPv4 address string (e.g. "127.0.0.1").
 ;; Parks the fiber until the connection completes.
@@ -111,9 +111,11 @@
 ;;;   (async-socket-connect "127.0.0.1" 8080)  ; => 5
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-connect [host :cstr port :int] #{Unsafe} :int
-  ```c
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+(defn async-socket-connect [host :cstr port :int]
+  #{Unsafe}
+  :int
+  ```c int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int flags = fcntl(fd, F_GETFL, 0);
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -140,7 +142,6 @@
   close(fd);
   return -1;
   ```)
-
 ;; Send data on a connected socket.
 ;; Parks the fiber on EAGAIN.
 ;; Returns bytes sent, or -1 on error.
@@ -158,9 +159,11 @@
 ;;;   (async-socket-send fd "GET / HTTP/1.0\r\n" 16)  ; => 16
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-send [fd :int data :cstr len :int] #{Unsafe} :int
-  ```c
-  int64_t total = 0;
+
+(defn async-socket-send [fd :int data :cstr len :int]
+  #{Unsafe}
+  :int
+  ```c int64_t total = 0;
   while (total < len) {
     ssize_t n = send((int)fd, data + total, (size_t)(len - total), 0);
     if (n >= 0) {
@@ -180,7 +183,6 @@
   }
   return total;
   ```)
-
 ;; Receive data from a connected socket.
 ;; Parks the fiber on EAGAIN.
 ;; Returns bytes received, 0 on close, -1 on error.
@@ -199,9 +201,11 @@
 ;;;   (async-socket-recv fd 4096)  ; => 256
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-recv [fd :int buf-size :int] #{Unsafe} :int
-  ```c
-  char *buf = (char *)malloc((size_t)buf_size);
+
+(defn async-socket-recv [fd :int buf-size :int]
+  #{Unsafe}
+  :int
+  ```c char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
   while (1) {
     ssize_t n = recv((int)fd, buf, (size_t)buf_size, 0);
@@ -225,7 +229,6 @@
     return -1;
   }
   ```)
-
 ;; Retrieve the receive buffer pointer after async-socket-recv.
 ;;; async-socket-recv-buf -- retrieve the buffer pointer from the last async-socket-recv call.
 ;;;
@@ -236,12 +239,13 @@
 ;;;   (async-socket-recv-buf)  ; => buf-ptr
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-recv-buf [] #{Unsafe} :ptr<void>
-  ```c
-  if (!tur_current_fiber) return NULL;
+
+(defn async-socket-recv-buf []
+  #{Unsafe}
+  :ptr<void>
+  ```c if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C50C0);
   ```)
-
 ;; Retrieve the number of bytes from the last async-socket-recv.
 ;;; async-socket-recv-len -- retrieve the byte count from the last async-socket-recv call.
 ;;;
@@ -252,12 +256,13 @@
 ;;;   (async-socket-recv-len)  ; => 256
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-recv-len [] #{Unsafe} :int
-  ```c
-  if (!tur_current_fiber) return 0;
+
+(defn async-socket-recv-len []
+  #{Unsafe}
+  :int
+  ```c if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51C50C1);
   ```)
-
 ;; Close a socket and unregister it from IO polling.
 ;;; async-socket-close -- close a socket and unregister it from IO polling.
 ;;;
@@ -268,8 +273,10 @@
 ;;;   (async-socket-close fd)
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-close [fd :int] #{Unsafe} :nil
-  ```c
-  tur_io_unregister((int)fd);
+
+(defn async-socket-close [fd :int]
+  #{Unsafe}
+  :nil
+  ```c tur_io_unregister((int)fd);
   close((int)fd);
   ```)

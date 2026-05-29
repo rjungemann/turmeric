@@ -21,7 +21,6 @@
 ;; The Show typeclass must be in scope at the call site because the
 ;; existential constraint syntax `(Show a)` resolves the typeclass name
 ;; during elaboration.
-
 ;;; showable -- pack a value as a Show-constrained existential.
 ;;;
 ;;; Parameters:
@@ -37,9 +36,7 @@
 ;;;     ; => packed existential; opening it with show-it prints "42".
 ;;;
 ;;; Since: Phase EX1f
-(defmacro showable [x]
-  (list pack x (list exists [a] [(list Show a)] a)))
-
+(defmacro showable [x] (list pack x (list exists [a] [(list Show a)] a)))
 ;;; show-it -- open a Show-constrained existential and call .show on
 ;;; the inner value.
 ;;;
@@ -55,5 +52,5 @@
 ;;;   (show-it (showable true)) ; => "true"  (requires Show [bool])
 ;;;
 ;;; Since: Phase EX1f
-(defmacro show-it [s]
-  (list open s [a v] (list (quote .show) v)))
+
+(defmacro show-it [s] (list open s [a v] (list (quote .show) v)))

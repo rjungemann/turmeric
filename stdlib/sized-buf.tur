@@ -21,9 +21,7 @@
 ;; (or on the caller's stack when used via sized-buf-with-stack).
 ;;
 ;; This file requires stdlib/sized.tur (for the Size type) to be loaded first.
-
 ;; ===== Heap-allocated SizedBuf =====
-
 ;;; sized-buf-new -- allocate a heap SizedBuf of n elements (uninitialized).
 ;;;
 ;;; Parameters:
@@ -36,14 +34,14 @@
 ;;;   (let [b (sized-buf-new 4)] ...)
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-new [n] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
+(defn sized-buf-new [n]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
   b->len  = n;
   b->data = n > 0 ? (int64_t *)malloc((size_t)n * sizeof(int64_t)) : NULL;
   return (int64_t)(intptr_t)b;
   ```)
-
 ;;; sized-buf-new-zeroed -- allocate a heap SizedBuf of n elements, all zero.
 ;;;
 ;;; Parameters:
@@ -56,14 +54,15 @@
 ;;;   (let [b (sized-buf-new-zeroed 4)] ...)
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-new-zeroed [n] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
+
+(defn sized-buf-new-zeroed [n]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *b = malloc(sizeof(*b));
   b->len  = n;
   b->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
   return (int64_t)(intptr_t)b;
   ```)
-
 ;;; sized-buf-free -- free a heap-allocated SizedBuf and its data.
 ;;;
 ;;; Do NOT call on a stack SizedBuf (from sized-buf-with-stack); those are
@@ -79,16 +78,15 @@
 ;;;   (sized-buf-free b)
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-free [b] #{Unsafe} :nil
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+(defn sized-buf-free [b]
+  #{Unsafe}
+  :nil
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->data) free(buf->data);
   free(buf);
   ```)
-
-
 ;; ===== Accessors =====
-
 ;;; sized-buf-len -- return the number of elements in a SizedBuf.
 ;;;
 ;;; Parameters:
@@ -101,12 +99,14 @@
 ;;;   (sized-buf-len (sized-buf-new 8))  ; => 8
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-len [b] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+
+(defn sized-buf-len [b]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   return (int)buf->len;
   ```)
-
 ;;; sized-buf-get -- bounds-checked element read; aborts on out-of-range index.
 ;;;
 ;;; Parameters:
@@ -120,15 +120,16 @@
 ;;;   (sized-buf-get b 0)  ; => first element
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-get [b i] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+(defn sized-buf-get [b i]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) return buf->data[i];
   fprintf(stderr, "sized-buf-get: index out of bounds\n");
   exit(1);
   return 0;
   ```)
-
 ;;; sized-buf-set! -- bounds-checked element write; aborts on out-of-range index.
 ;;;
 ;;; Modifies the element in place and returns the same buffer pointer so
@@ -146,17 +147,17 @@
 ;;;   (sized-buf-set! b 0 42)
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-set! [b i v] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+(defn sized-buf-set! [b i v]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) { buf->data[i] = v; return b; }
   fprintf(stderr, "sized-buf-set!: index out of bounds\n");
   exit(1);
   return b;
   ```)
-
 ;; ===== Bulk operations =====
-
 ;;; sized-buf-fill! -- set every element to v; returns the same buffer.
 ;;;
 ;;; Parameters:
@@ -170,13 +171,15 @@
 ;;;   (sized-buf-fill! b 0)  ; zero-fill
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-fill! [b v] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+
+(defn sized-buf-fill! [b v]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   for (int64_t i = 0; i < buf->len; i++) buf->data[i] = v;
   return b;
   ```)
-
 ;;; sized-buf-copy! -- copy all elements from src into dst via memcpy.
 ;;;
 ;;; Both buffers must have the same length; aborts if they differ.
@@ -192,9 +195,11 @@
 ;;;   (sized-buf-copy! dst src)
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-copy! [dst src] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *d = (void*)(intptr_t)dst;
+
+(defn sized-buf-copy! [dst src]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *d = (void*)(intptr_t)dst;
   struct { int64_t len; int64_t *data; } *s = (void*)(intptr_t)src;
   if (d->len != s->len) {
     fprintf(stderr, "sized-buf-copy!: length mismatch (%lld vs %lld)\n",
@@ -204,7 +209,6 @@
   memcpy(d->data, s->data, (size_t)d->len * sizeof(int64_t));
   return dst;
   ```)
-
 ;;; sized-buf-sum -- sum all elements of a SizedBuf.
 ;;;
 ;;; Parameters:
@@ -217,14 +221,15 @@
 ;;;   (sized-buf-sum b)  ; => sum of elements
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-sum [b] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+(defn sized-buf-sum [b]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   int64_t s = 0;
   for (int64_t i = 0; i < buf->len; i++) s += buf->data[i];
   return s;
   ```)
-
 ;;; sized-buf-min -- minimum element of a non-empty SizedBuf; aborts if empty.
 ;;;
 ;;; Parameters:
@@ -237,15 +242,16 @@
 ;;;   (sized-buf-min b)  ; => smallest element
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-min [b] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+(defn sized-buf-min [b]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->len == 0) { fprintf(stderr, "sized-buf-min: empty buffer\n"); exit(1); }
   int64_t m = buf->data[0];
   for (int64_t i = 1; i < buf->len; i++) if (buf->data[i] < m) m = buf->data[i];
   return m;
   ```)
-
 ;;; sized-buf-max -- maximum element of a non-empty SizedBuf; aborts if empty.
 ;;;
 ;;; Parameters:
@@ -258,17 +264,17 @@
 ;;;   (sized-buf-max b)  ; => largest element
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-max [b] #{Unsafe} :int
-  ```c
-  struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
+
+(defn sized-buf-max [b]
+  #{Unsafe}
+  :int
+  ```c struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (buf->len == 0) { fprintf(stderr, "sized-buf-max: empty buffer\n"); exit(1); }
   int64_t m = buf->data[0];
   for (int64_t i = 1; i < buf->len; i++) if (buf->data[i] > m) m = buf->data[i];
   return m;
   ```)
-
 ;; ===== Size integration =====
-
 ;;; sized-buf-size -- return the length of a SizedBuf as a Size expression.
 ;;;
 ;;; Parameters:
@@ -281,11 +287,10 @@
 ;;;   (size-eval (sized-buf-size b))  ; => length of b
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-size [b] #{Unsafe} :Size
-  (Static (sized-buf-len b)))
 
+
+(defn sized-buf-size [b] #{Unsafe} :Size (Static (sized-buf-len b)))
 ;; ===== Stack allocation =====
-
 ;;; sized-buf-with-stack -- scoped computation over a stack-allocated buffer.
 ;;;
 ;;; Allocates n int64_t elements on the current stack frame via alloca,
@@ -313,9 +318,12 @@
 ;;;   (sized-buf-with-stack 3 sum-init-buf)  ; => 60
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-with-stack [n f] #{Unsafe} :int
-  ```c
-  /* alloca: data lives on THIS function's stack frame.
+
+
+(defn sized-buf-with-stack [n f]
+  #{Unsafe}
+  :int
+  ```c /* alloca: data lives on THIS function's stack frame.
      The buffer is only valid while this function is executing.
      f must not store the buffer pointer beyond its own return. */
   int64_t *stack_data = alloca((size_t)n * sizeof(int64_t));
@@ -324,15 +332,13 @@
   int64_t buf_ptr = (int64_t)(intptr_t)&stack_buf;
   return ((int64_t(*)(int64_t))(intptr_t)f)(buf_ptr);
   ```)
-
 ;; ===== Allocation dispatch =====
-
 ;; Buffers with n <= SIZED_BUF_STACK_THRESHOLD elements use stack allocation
 ;; inside sized-buf-compute; larger buffers fall back to heap.
 ;; This threshold mirrors a typical L1 cache line budget.
-(defn __sized-buf-stack-threshold [] :int
-  ```c return 64; ```)
 
+
+(defn __sized-buf-stack-threshold [] :int ```c return 64; ```)
 ;;; sized-buf-compute -- compute a result from a buffer, choosing stack or heap.
 ;;;
 ;;; When n <= 64 (SIZED_BUF_STACK_THRESHOLD) a stack buffer is used;
@@ -350,9 +356,11 @@
 ;;;   (sized-buf-compute 5)  ; => 10  (0+1+2+3+4)
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-compute [n] #{Unsafe} :int
-  ```c
-  int64_t threshold = 64;
+
+(defn sized-buf-compute [n]
+  #{Unsafe}
+  :int
+  ```c int64_t threshold = 64;
   int64_t result = 0;
   if (n <= threshold) {
     /* Stack allocation: no malloc/free overhead */
@@ -368,9 +376,7 @@
   }
   return result;
   ```)
-
 ;; ===== Conversion from SizedVec =====
-
 ;;; sized-buf-from-sized-vec -- convert a SizedVec (linked list) to a SizedBuf (flat array).
 ;;;
 ;;; Traverses the linked list once to count elements, allocates a flat buffer,
@@ -387,9 +393,12 @@
 ;;;     (println (sized-buf-sum b)))  ; => 60
 ;;;
 ;;; Since: Phase SZ2
-(defn sized-buf-from-sized-vec [v] #{Unsafe} :int
-  ```c
-  /* SizedVec GADT node layout (from generated C):
+
+
+(defn sized-buf-from-sized-vec [v]
+  #{Unsafe}
+  :int
+  ```c /* SizedVec GADT node layout (from generated C):
        struct { int tag; union {
          struct {} SVNil;
          struct { int64_t _0; int64_t _1; } SVCons;

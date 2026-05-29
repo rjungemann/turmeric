@@ -7,14 +7,10 @@
 ;; Phase TC1-F: Typed Pair[A B]
 ;; Generic two-element tuple with typed first and second elements.
 ;; Runtime layout specializes fst/snd for concrete A/B.
-
 ;;; Pair -- parameterized two-element tuple with element types A and B.
 ;;;
 ;;; Since: Phase TC1
-(defstruct Pair [A B]
-  (fst A)
-  (snd B))
-
+(defstruct Pair [A B] (fst A) (snd B))
 ;;; pair -- construct a Pair[A B].
 ;;;
 ;;; Parameters:
@@ -28,9 +24,8 @@
 ;;;   (pair 1 2)  ; => (1, 2)
 ;;;
 ;;; Since: Phase TC1
-(defn pair [A B] [a :A b :B] :(Pair A B)
-  (make-struct Pair a b))
 
+(defn pair [A B] [a :A b :B] : (Pair A B) (make-struct Pair a b))
 ;;; pair-fst -- return the first element of a Pair[A B].
 ;;;
 ;;; Parameters:
@@ -43,9 +38,8 @@
 ;;;   (pair-fst (pair 10 20))  ; => 10
 ;;;
 ;;; Since: Phase TC1
-(defn pair-fst [A B] [p :(Pair A B)] :A
-  (.fst p))
 
+(defn pair-fst [A B] [p : (Pair A B)] :A (.fst p))
 ;;; pair-snd -- return the second element of a Pair[A B].
 ;;;
 ;;; Parameters:
@@ -58,9 +52,8 @@
 ;;;   (pair-snd (pair 10 20))  ; => 20
 ;;;
 ;;; Since: Phase TC1
-(defn pair-snd [A B] [p :(Pair A B)] :B
-  (.snd p))
 
+(defn pair-snd [A B] [p : (Pair A B)] :B (.snd p))
 ;;; pair-free -- compatibility no-op for Pair[A B] values.
 ;;;
 ;;; Parameters:
@@ -70,11 +63,13 @@
 ;;;   (pair-free my-pair)
 ;;;
 ;;; Since: Phase TC1
-(defn pair-free [A B] [p :(Pair A B)] #{} :void
-  ```c
-  (void)p;
-  ```)
 
+(defn pair-free [A B]
+  [p : (Pair A B)]
+  #{}
+  :void
+  ```c (void)p;
+  ```)
 ;;; pair-eq? -- compare two Pair[A B] values element-wise.
 ;;;
 ;;; Parameters:
@@ -90,15 +85,15 @@
 ;;;   (pair-eq? (pair 1 2) (pair 1 2) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase TC1
-(defmacro pair-eq? [p1 p2 fst-cmp snd-cmp]
-  `(if (~fst-cmp (.fst ~p1) (.fst ~p2))
-     (~snd-cmp (.snd ~p1) (.snd ~p2))
-     false))
 
+(defmacro pair-eq? [p1 p2 fst-cmp snd-cmp]
+  `(if (~fst-cmp (.fst ~p1) (.fst ~p2)) (~snd-cmp (.snd ~p1) (.snd ~p2)) false))
 ;;; pair-eq-carrier? -- legacy carrier-ABI helper used inside Pair's Eq instance.
-(defn pair-eq-carrier? [p1 :int p2 :int fst-cmp snd-cmp] #{} :bool
-  ```c
-  struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
+
+(defn pair-eq-carrier? [p1 :int p2 :int fst-cmp snd-cmp]
+  #{}
+  :bool
+  ```c struct { int64_t fst; int64_t snd; } *a = (void*)(intptr_t)p1;
   struct { int64_t fst; int64_t snd; } *b = (void*)(intptr_t)p2;
   if (!a && !b) return true;
   if (!a || !b) return false;
@@ -106,9 +101,9 @@
   bool snd_eq = ((bool(*)(int64_t, int64_t))(intptr_t)snd_cmp)(a->snd, b->snd);
   return fst_eq && snd_eq;
   ```)
-
 ;;; Eq [Pair] -- element-wise equality using each component's Eq instance.
 ;; TC1-25: Phase PTC4 -- constrained Eq instance for Pair[A B].
 ;; Note: element comparison uses integer equality; correct for all primitive A/B.
+
 (definstance Eq [Pair] [(Eq A) (Eq B)]
   (eq? [x y] (pair-eq-carrier? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))

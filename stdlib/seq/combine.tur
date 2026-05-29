@@ -5,13 +5,10 @@
 ;; seq/call-fn2 and bool-fn1 helpers.
 ;;
 ;; Fat-closure constraint: callbacks (zip-with's f) must be capturing closures.
-
 (load "stdlib/seq/transform.tur")
-
 ;; -------------------------------------------------------------------
 ;; Pair allocation helper (combine.tur-local)
 ;; -------------------------------------------------------------------
-
 ;;; seq-make-pair -- allocate a heap Tuple2 { e1, e2 } (legacy name kept
 ;;; for backward compatibility with existing seq combinators).
 ;;;
@@ -23,17 +20,16 @@
 ;;;   int64_t pointer to a heap Tuple2 { int64_t e1; int64_t e2; } struct.
 ;;;
 ;;; Since: LZ3
+
+
 (defn seq-make-pair [a :int b :int] :int
-  ```c
-  Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
+  ```c Tuple2 *p = (Tuple2 *)malloc(sizeof(Tuple2));
   p->e1 = a; p->e2 = b;
   return (int64_t)(intptr_t)p;
   ```)
-
 ;; -------------------------------------------------------------------
 ;; Combinators
 ;; -------------------------------------------------------------------
-
 ;;; seq/concat -- yield all elements of s1 followed by all elements of s2.
 ;;;
 ;;; Parameters:
@@ -48,20 +44,18 @@
 ;;;   ; => 0 1 2 10 11
 ;;;
 ;;; Since: LZ3
+
+
 (defn seq/concat [s1 :int s2 :int] :int
   (seq-new (fn []
-             (let [g1 (seq-iter s1)
-                   g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
                  (while (not (seq-gen-done g1))
                    (let [va (seq-gen-next g1)]
-                     (when (seq-val-some? va)
-                       (yield (seq-val-unwrap va)))))
+                     (when (seq-val-some? va) (yield (seq-val-unwrap va)))))
                  (while (not (seq-gen-done g2))
                    (let [vb (seq-gen-next g2)]
-                     (when (seq-val-some? vb)
-                       (yield (seq-val-unwrap vb))))))))))
-
+                     (when (seq-val-some? vb) (yield (seq-val-unwrap vb))))))))))
 ;;; seq/chain -- yield all elements of each inner Seq in a Seq of Seqs.
 ;;;
 ;;; Parameters:
@@ -76,9 +70,8 @@
 ;;;   ; => 1 2
 ;;;
 ;;; Since: LZ3
-(defn seq/chain [s :int] :int
-  (seq/flatten s))
 
+(defn seq/chain [s :int] :int (seq/flatten s))
 ;;; seq/zip -- pair corresponding elements from two Seqs; stops at the shorter.
 ;;;
 ;;; Parameters:
@@ -94,18 +87,16 @@
 ;;;   (seq-for-each (fn [p] (let [_d p] (println (seq-pair-first p)))) (seq/zip s1 s2))
 ;;;
 ;;; Since: LZ3
+
 (defn seq/zip [s1 :int s2 :int] :int
   (seq-new (fn []
-             (let [g1 (seq-iter s1)
-                   g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
                  (while (and (not (seq-gen-done g1)) (not (seq-gen-done g2)))
-                   (let [v1 (seq-gen-next g1)
-                         v2 (seq-gen-next g2)]
+                   (let [v1 (seq-gen-next g1) v2 (seq-gen-next g2)]
                      (when (and (seq-val-some? v1) (seq-val-some? v2))
                        (yield (seq-make-pair (seq-val-unwrap v1)
-                                             (seq-val-unwrap v2)))))))))))
-
+                                (seq-val-unwrap v2)))))))))))
 ;;; seq/zip-with -- combine corresponding elements from two Seqs using f.
 ;;;
 ;;; Parameters:
@@ -122,19 +113,17 @@
 ;;;   ; => 10 12 14
 ;;;
 ;;; Since: LZ3
+
 (defn seq/zip-with [f :int s1 :int s2 :int] :int
   (seq-new (fn []
-             (let [g1 (seq-iter s1)
-                   g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
                  (while (and (not (seq-gen-done g1)) (not (seq-gen-done g2)))
-                   (let [v1 (seq-gen-next g1)
-                         v2 (seq-gen-next g2)]
+                   (let [v1 (seq-gen-next g1) v2 (seq-gen-next g2)]
                      (when (and (seq-val-some? v1) (seq-val-some? v2))
                        (yield (seq-call-fn2 f
-                                            (seq-val-unwrap v1)
-                                            (seq-val-unwrap v2)))))))))))
-
+                                (seq-val-unwrap v1)
+                                (seq-val-unwrap v2)))))))))))
 ;;; seq/interleave -- alternate elements from s1 and s2; stops when either ends.
 ;;;
 ;;; Parameters:
@@ -150,17 +139,15 @@
 ;;;   ; => 0 10 1 11 2 12
 ;;;
 ;;; Since: LZ3
+
 (defn seq/interleave [s1 :int s2 :int] :int
   (seq-new (fn []
-             (let [g1 (seq-iter s1)
-                   g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
                  (while (and (not (seq-gen-done g1)) (not (seq-gen-done g2)))
-                   (let [v1 (seq-gen-next g1)
-                         v2 (seq-gen-next g2)]
+                   (let [v1 (seq-gen-next g1) v2 (seq-gen-next g2)]
                      (if (and (seq-val-some? v1) (seq-val-some? v2))
-                       (let [a (seq-val-unwrap v1)
-                             b (seq-val-unwrap v2)]
+                       (let [a (seq-val-unwrap v1) b (seq-val-unwrap v2)]
                          (yield a)
                          (yield b))
                        (return)))))))))

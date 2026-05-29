@@ -11,7 +11,6 @@
 ;;
 ;; An "atomic" value is represented as a :ptr<void> pointing to a
 ;; heap-allocated int64_t cell.
-
 ;;; atomic-new -- allocate a heap-based atomic int64 cell initialised to init.
 ;;;
 ;;; Parameters:
@@ -25,13 +24,11 @@
 ;;;
 ;;; Since: Phase T19
 (defn atomic-new [init :int] :ptr<void>
-  ```c
-  int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+  ```c int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
   if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
   __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
   return (void *)cell;
   ```)
-
 ;;; atomic-load -- atomically read the current value of the cell.
 ;;;
 ;;; Parameters:
@@ -44,12 +41,11 @@
 ;;;   (atomic-load a)  ; => 0
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-load [p :ptr<void>] :int
-  ```c
-  int64_t *cell = (int64_t *)p;
+  ```c int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_load_n(cell, __ATOMIC_SEQ_CST);
   ```)
-
 ;;; atomic-store! -- atomically write v into the cell.
 ;;;
 ;;; Parameters:
@@ -57,12 +53,11 @@
 ;;;   v -- new value to store
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-store! [p :ptr<void> v :int] :nil
-  ```c
-  int64_t *cell = (int64_t *)p;
+  ```c int64_t *cell = (int64_t *)p;
   __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
   ```)
-
 ;;; atomic-add! -- atomically add delta and return the old value.
 ;;;
 ;;; Parameters:
@@ -76,12 +71,11 @@
 ;;;   (atomic-add! a 5)  ; => old value; cell now holds old+5
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-add! [p :ptr<void> delta :int] :int
-  ```c
-  int64_t *cell = (int64_t *)p;
+  ```c int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
-
 ;;; atomic-sub! -- atomically subtract delta and return the old value.
 ;;;
 ;;; Parameters:
@@ -92,12 +86,11 @@
 ;;;   The value of the cell before the subtraction.
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-sub! [p :ptr<void> delta :int] :int
-  ```c
-  int64_t *cell = (int64_t *)p;
+  ```c int64_t *cell = (int64_t *)p;
   return (int64_t)__atomic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
   ```)
-
 ;;; atomic-swap! -- atomically replace the cell value with new-val and return the old value.
 ;;;
 ;;; Parameters:
@@ -111,13 +104,12 @@
 ;;;   (atomic-swap! a 99)  ; => old value; cell now holds 99
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-swap! [p :ptr<void> new-val :int] :int
-  ```c
-  int64_t *cell = (int64_t *)p;
+  ```c int64_t *cell = (int64_t *)p;
   int64_t tmp = (int64_t)new_val;
   return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
   ```)
-
 ;;; atomic-cas! -- compare-and-swap: if cell == expected, set to desired and return true.
 ;;;
 ;;; Parameters:
@@ -132,22 +124,21 @@
 ;;;   (atomic-cas! a 0 1)  ; => true when cell held 0; cell now holds 1
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-cas! [p :ptr<void> expected :int desired :int] :bool
-  ```c
-  int64_t *cell = (int64_t *)p;
+  ```c int64_t *cell = (int64_t *)p;
   int64_t exp_v = (int64_t)expected;
   int64_t des_v = (int64_t)desired;
   return (int64_t)__atomic_compare_exchange_n(
       cell, &exp_v, des_v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
   ```)
-
 ;;; atomic-free -- free an atomic cell allocated by atomic-new.
 ;;;
 ;;; Parameters:
 ;;;   p -- atomic cell pointer from atomic-new
 ;;;
 ;;; Since: Phase T19
+
 (defn atomic-free [p :ptr<void>] :nil
-  ```c
-  free(p);
+  ```c free(p);
   ```)

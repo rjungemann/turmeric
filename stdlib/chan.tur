@@ -27,9 +27,7 @@
 ;;   async-chan-try-recv  [ch :ptr<void>]               -- int   (INT64_MIN = empty)
 ;;   async-chan-count     [ch :ptr<void>]               -- int   (current item count)
 ;;   async-chan-free      [ch :ptr<void>]               -- nil
-
 ;; ---- Chan (synchronous blocking) ----
-
 ;;; chan-new -- allocate a new synchronous blocking channel with the given capacity.
 ;;;
 ;;; Parameters:
@@ -43,8 +41,7 @@
 ;;;
 ;;; Since: Phase T19-C
 (defn chan-new [cap :int] :ptr<void>
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  not_full;
       pthread_cond_t  not_empty;
@@ -67,7 +64,6 @@
   ch->recv_waiters = NULL; ch->send_waiters = NULL;
   return (void *)ch;
   ```)
-
 ;;; chan-send -- send a value into a synchronous channel, blocking when full.
 ;;;
 ;;; Parameters:
@@ -78,9 +74,9 @@
 ;;;   (chan-send ch 42)
 ;;;
 ;;; Since: Phase T19-C
+
 (defn chan-send [ch :ptr<void> val :int] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -105,7 +101,6 @@
   tur_waiter_signal_one(c->recv_waiters);
   pthread_mutex_unlock(&c->lock);
   ```)
-
 ;;; chan-recv -- receive a value from a synchronous channel, blocking when empty.
 ;;;
 ;;; Parameters:
@@ -118,9 +113,9 @@
 ;;;   (let [v (chan-recv ch)] ...)  ; => int
 ;;;
 ;;; Since: Phase T19-C
+
 (defn chan-recv [ch :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -146,7 +141,6 @@
   pthread_mutex_unlock(&c->lock);
   return v;
   ```)
-
 ;;; chan-free -- destroy a synchronous channel and release all associated memory.
 ;;;
 ;;; Parameters:
@@ -156,9 +150,9 @@
 ;;;   (chan-free ch)
 ;;;
 ;;; Since: Phase T19-C
+
 (defn chan-free [ch :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -170,10 +164,8 @@
   free(c->buf);
   free(c);
   ```)
-
 ;; ---- AsyncChan (buffered with try variants) ----
 ;; Same underlying struct as Chan; same constructor logic.
-
 ;;; async-chan-new -- allocate a new async buffered channel with the given capacity.
 ;;;
 ;;; Parameters:
@@ -186,9 +178,10 @@
 ;;;   (let [ch (async-chan-new 16)] ...)  ; => ptr<void>
 ;;;
 ;;; Since: Phase T19-D
+
+
 (defn async-chan-new [cap :int] :ptr<void>
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t  not_full;
       pthread_cond_t  not_empty;
@@ -211,7 +204,6 @@
   ch->recv_waiters = NULL; ch->send_waiters = NULL;
   return (void *)ch;
   ```)
-
 ;;; async-chan-send -- send a value into an async channel, blocking when full.
 ;;;
 ;;; Parameters:
@@ -222,9 +214,9 @@
 ;;;   (async-chan-send ch 99)
 ;;;
 ;;; Since: Phase T19-D
+
 (defn async-chan-send [ch :ptr<void> val :int] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -249,7 +241,6 @@
   tur_waiter_signal_one(c->recv_waiters);
   pthread_mutex_unlock(&c->lock);
   ```)
-
 ;;; async-chan-recv -- receive a value from an async channel, blocking when empty.
 ;;;
 ;;; Parameters:
@@ -262,9 +253,9 @@
 ;;;   (let [v (async-chan-recv ch)] ...)  ; => int
 ;;;
 ;;; Since: Phase T19-D
+
 (defn async-chan-recv [ch :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -290,7 +281,6 @@
   pthread_mutex_unlock(&c->lock);
   return v;
   ```)
-
 ;;; async-chan-try-send -- attempt to send a value without blocking.
 ;;;
 ;;; Parameters:
@@ -304,9 +294,9 @@
 ;;;   (if (async-chan-try-send ch 7) ...)  ; => bool
 ;;;
 ;;; Since: Phase T19-D
+
 (defn async-chan-try-send [ch :ptr<void> val :int] :bool
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -325,7 +315,6 @@
   pthread_mutex_unlock(&c->lock);
   return 1; /* sent */
   ```)
-
 ;; async-chan-try-recv: returns INT64_MIN when the channel is empty.
 ;; Callers should compare the result with INT64_MIN to detect "no item".
 ;;; async-chan-try-recv -- attempt to receive a value without blocking.
@@ -340,9 +329,9 @@
 ;;;   (let [v (async-chan-try-recv ch)] ...)  ; => int (INT64_MIN = empty)
 ;;;
 ;;; Since: Phase T19-D
+
 (defn async-chan-try-recv [ch :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -361,7 +350,6 @@
   pthread_mutex_unlock(&c->lock);
   return v;
   ```)
-
 ;;; async-chan-count -- return the number of items currently in an async channel.
 ;;;
 ;;; Parameters:
@@ -374,9 +362,9 @@
 ;;;   (async-chan-count ch)  ; => int
 ;;;
 ;;; Since: Phase T19-D
+
 (defn async-chan-count [ch :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;
@@ -387,7 +375,6 @@
   pthread_mutex_unlock(&c->lock);
   return n;
   ```)
-
 ;;; async-chan-free -- destroy an async channel and release all associated memory.
 ;;;
 ;;; Parameters:
@@ -397,9 +384,9 @@
 ;;;   (async-chan-free ch)
 ;;;
 ;;; Since: Phase T19-D
+
 (defn async-chan-free [ch :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
       void *recv_waiters; void *send_waiters;

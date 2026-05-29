@@ -4,7 +4,6 @@
 ;;;
 ;;; Since: Phase B1
 ;; Test runner for Turmeric
-
 ;; Assert equality (both args must be int for now)
 ;;; assert -- assert that expected equals actual; print a failure message and return false if not.
 ;;;
@@ -26,7 +25,6 @@
       (println "but got")
       (println actual)
       false)))
-
 ;; Assert a condition is true.
 ;; Current compiler limits function argument kinds to int in signatures,
 ;; so test helpers use 1=true / 0=false convention for now.
@@ -40,13 +38,9 @@
 ;;;
 ;;; Example:
 ;;;   (assert-true (= 1 1))  ; => true
-(defn assert-true [x] :bool
-  (if (= x 1)
-    true
-    (do
-      (println "Assertion failed: expected true")
-      false)))
 
+(defn assert-true [x] :bool
+  (if (= x 1) true (do (println "Assertion failed: expected true") false)))
 ;; Assert a condition is false (0=false convention)
 ;;; assert-false -- assert that x is falsy (0); print a failure message and return false if not.
 ;;;
@@ -58,13 +52,9 @@
 ;;;
 ;;; Example:
 ;;;   (assert-false (= 1 2))  ; => true
-(defn assert-false [x] :bool
-  (if (= x 1)
-    (do
-      (println "Assertion failed: expected false")
-      false)
-    true))
 
+(defn assert-false [x] :bool
+  (if (= x 1) (do (println "Assertion failed: expected false") false) true))
 ;; Assert a value is nil.
 ;; Current function-signature limits treat args as int in this path,
 ;; so nil convention is represented as 0 for now.
@@ -78,13 +68,9 @@
 ;;;
 ;;; Example:
 ;;;   (assert-nil (no-op))  ; => true when no-op returns 0
-(defn assert-nil [x] :bool
-  (if (= x 0)
-    true
-    (do
-      (println "Assertion failed: expected nil")
-      false)))
 
+(defn assert-nil [x] :bool
+  (if (= x 0) true (do (println "Assertion failed: expected nil") false)))
 ;; Assert that invoking the callback throws an error.
 ;; `thunk` must be a no-arg callback bridged through ptr<void>.
 ;;; assert-error -- assert that calling thunk raises an error; return false if it does not.
@@ -97,19 +83,11 @@
 ;;;
 ;;; Example:
 ;;;   (assert-error (fn [] (error "boom")))  ; => true
-(defn assert-error [thunk :ptr<void>] :bool
-  (if (= (try
-           (do
-             (thunk)
-             0)
-           (catch [e]
-             1))
-         1)
-    true
-    (do
-      (println "Assertion failed: expected error")
-      false)))
 
+(defn assert-error [thunk :ptr<void>] :bool
+  (if (= (try (do (thunk) 0) (catch [e] 1)) 1)
+    true
+    (do (println "Assertion failed: expected error") false)))
 ;; Run a single test result and print marker output.
 ;; Returns 1 on pass, 0 on fail.
 ;; `test-fn` is passed as an opaque callback pointer and invoked in-body.
@@ -124,16 +102,9 @@
 ;;;
 ;;; Example:
 ;;;   (run-test "my test" (fn [] (assert 1 1)))  ; => 1
-(defn run-test [name :cstr test-fn :ptr<void>] :int
-  (if (= (test-fn) 1)
-    (do
-      (println ".")
-      1)
-    (do
-      (println "F")
-      (println name)
-      0)))
 
+(defn run-test [name :cstr test-fn :ptr<void>] :int
+  (if (= (test-fn) 1) (do (println ".") 1) (do (println "F") (println name) 0)))
 ;; Register a named test callback for later execution via run-tests!.
 ;; Returns nonzero on success.
 ;;; register-test -- register a named test callback with the runtime for later batch execution.
@@ -144,23 +115,21 @@
 ;;;
 ;;; Returns:
 ;;;   Non-zero on successful registration.
+
 (defn register-test [name :cstr test-fn :ptr<void>] :int
-  ```c
-  extern int64_t tur_test_register(const char *name, void *test_fn);
+  ```c extern int64_t tur_test_register(const char *name, void *test_fn);
   return (int)tur_test_register((const char *)name, (void *)test_fn);
   ```)
-
 ;; Run all registered tests and return exit code
 ;;; run-tests! -- run all tests registered with register-test and return a process exit code.
 ;;;
 ;;; Returns:
 ;;;   0 if all tests passed, non-zero if any failed.
+
 (defn run-tests! [] :int
-  ```c
-  extern int64_t tur_test_run_all(void);
+  ```c extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)
-
 ;; Convenience macro: register a named test with multiple body expressions.
 ;; Usage: (deftest "my-test" (assert-true ...) (assert-false ...) ...)
 ;; Expands to: (register-test "my-test" (fn [] body... 1))
@@ -173,5 +142,5 @@
 ;;;
 ;;; Example:
 ;;;   (deftest "addition" (assert 4 (+ 2 2)))
-(defmacro deftest [test-name & body]
-  (register-test test-name (fn [] ~@body 1)))
+
+(defmacro deftest [test-name & body] (register-test test-name (fn [] ~@body 1)))

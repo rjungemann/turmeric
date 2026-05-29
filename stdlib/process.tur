@@ -7,7 +7,6 @@
 ;;
 ;; Wrappers around unistd.h / sys/wait.h primitives.
 ;; process/capture uses popen(3) for capturing stdout.
-
 ;;; process/pid -- return the current process ID.
 ;;;
 ;;; Returns:
@@ -18,11 +17,9 @@
 ;;;
 ;;; Since: Phase B2
 (defn process/pid [] :int
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   return (int64_t)getpid();
   ```)
-
 ;;; process/ppid -- return the parent process ID.
 ;;;
 ;;; Returns:
@@ -32,12 +29,11 @@
 ;;;   (process/ppid)  ; => 1
 ;;;
 ;;; Since: Phase B2
+
 (defn process/ppid [] :int
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   return (int64_t)getppid();
   ```)
-
 ;;; process/exit -- terminate the process with the given exit code.
 ;;;
 ;;; Parameters:
@@ -47,11 +43,10 @@
 ;;;   (process/exit 0)
 ;;;
 ;;; Since: Phase B2
-(defn process/exit [code :int] :void
-  ```c
-  exit((int)code);
-  ```)
 
+(defn process/exit [code :int] :void
+  ```c exit((int)code);
+  ```)
 ;;; process/exec -- replace the current process image with a new program.
 ;;;
 ;;; Linearises the Turmeric cons list argv into a NULL-terminated char**
@@ -68,9 +63,9 @@
 ;;;   (process/exec "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))
 ;;;
 ;;; Since: Phase B2
+
 (defn process/exec [path :cstr argv :int] :int
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -86,7 +81,6 @@
   free(args);
   return -1;
   ```)
-
 ;;; process/spawn -- fork and exec a new child process.
 ;;;
 ;;; Parameters:
@@ -101,9 +95,9 @@
 ;;;     (process/wait pid))
 ;;;
 ;;; Since: Phase B2
+
 (defn process/spawn [path :cstr argv :int] :int
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -121,7 +115,6 @@
   free(args);
   return (int64_t)pid;
   ```)
-
 ;;; process/wait -- wait for a child process to exit.
 ;;;
 ;;; Parameters:
@@ -134,15 +127,14 @@
 ;;;   (process/wait child-pid)  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn process/wait [pid :int] :int
-  ```c
-  #include <sys/wait.h>
+  ```c #include <sys/wait.h>
   int status = 0;
   if (waitpid((pid_t)pid, &status, 0) < 0) return -1;
   if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
   return -1;
   ```)
-
 ;;; process/run -- spawn a child process and wait for it to finish.
 ;;;
 ;;; Parameters:
@@ -158,9 +150,9 @@
 ;;;   (process/run "/bin/ls" (cons "/bin/ls" 0))
 ;;;
 ;;; Since: Phase B2
+
 (defn process/run [path :cstr argv :int] :int
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   #include <sys/wait.h>
   int argc = 0;
   int64_t tmp = argv;
@@ -189,7 +181,6 @@
   _RUN_RESULT(true, (int64_t)code, 0);
   #undef _RUN_RESULT
   ```)
-
 ;;; process/capture -- run a command and capture its stdout as a string.
 ;;;
 ;;; Uses popen(3) internally; argument values are single-quote wrapped
@@ -208,9 +199,9 @@
 ;;;   (process/capture "/bin/echo" (cons "/bin/echo" (cons "hi" 0)))
 ;;;
 ;;; Since: Phase B2
+
 (defn process/capture [path :cstr argv :int] :int
-  ```c
-  int argc = 0;
+  ```c int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
   char **args = (char**)malloc((argc + 1) * sizeof(char*));
@@ -257,7 +248,6 @@
   _CAP_RESULT(true, (int64_t)(intptr_t)buf, 0);
   #undef _CAP_RESULT
   ```)
-
 ;;; process/cwd -- return the current working directory.
 ;;;
 ;;; Returns:
@@ -268,14 +258,13 @@
 ;;;   (process/cwd)  ; => "/home/user/project"
 ;;;
 ;;; Since: Phase B2
+
 (defn process/cwd [] :cstr
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   char *buf = malloc(4096);
   if (!getcwd(buf, 4096)) { free(buf); return NULL; }
   return buf;
   ```)
-
 ;;; process/chdir -- change the current working directory.
 ;;;
 ;;; Parameters:
@@ -288,8 +277,8 @@
 ;;;   (process/chdir "/tmp")  ; => 0
 ;;;
 ;;; Since: Phase B2
+
 (defn process/chdir [path :cstr] :int
-  ```c
-  #include <unistd.h>
+  ```c #include <unistd.h>
   return (int64_t)chdir(path);
   ```)
