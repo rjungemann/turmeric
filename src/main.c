@@ -59,6 +59,8 @@
 #include "turi/repl.h"
 /* Phase PKG-1: Spice package manager */
 #include "pkg.h"
+/* RN0-RN7: Justfile-compatible task runner */
+#include "justrun.h"
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 /* LSP server */
@@ -6112,12 +6114,38 @@ int main(int argc, char **argv) {
         return rc;
     }
     if (strcmp(cmd, "run") == 0) {
+        /* Disambiguate: if the first non-flag argument ends in .tur or
+         * .tursweet, use the classic compile-and-run path; if --release /
+         * -I flags appear (compile-only flags), also use classic path.
+         * Otherwise dispatch to the Justfile task runner (RN0-RN7). */
+        bool use_classic = false;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--") == 0) break;
-            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
-                return usage_run();
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                /* Default help to the task runner; it documents both modes. */
+                return usage_justrun();
+            }
+            if (strcmp(argv[i], "--release") == 0 ||
+                strcmp(argv[i], "--offline") == 0  ||
+                strncmp(argv[i], "-I", 2) == 0) {
+                use_classic = true;
+                break;
+            }
+            if (argv[i][0] != '-' || strcmp(argv[i], "-") == 0) {
+                /* Check if it looks like a .tur file path */
+                const char *a = argv[i];
+                size_t an = strlen(a);
+                if ((an > 4  && strcmp(a + an - 4,  ".tur")      == 0) ||
+                    (an > 9  && strcmp(a + an - 9,  ".tursweet") == 0) ||
+                    strcmp(a, "-") == 0) {
+                    use_classic = true;
+                }
+                break;
+            }
         }
-        return cmd_run(argc, argv);
+        if (use_classic)
+            return cmd_run(argc, argv);
+        return cmd_justrun(argc, argv);
     }
     if (strcmp(cmd, "repl") == 0) {
         /* Phase S0: interactive REPL.

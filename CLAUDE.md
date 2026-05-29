@@ -17,16 +17,21 @@ the file -- the interpreter will override them with stdlib natives automatically
 
 ## Build System
 
-The project uses `just` (not `make`). Common targets:
+The project uses Justfile recipes via `tur run` (or upstream `just` if
+installed). The recipe names are the same; only the invocation form differs.
 
 ```sh
-just build       # debug build
-just test        # build + run tests
-just release     # release build
-just docs        # generate API documentation
+tur run build    # debug build   (also: just build)
+tur run test     # build + run tests
+tur run release  # release build
+just docs        # generate API documentation  (tur fmt not yet installed)
 just wasm        # build WebAssembly module (runs docs first)
 just web-dev     # run web dev server
 ```
+
+For the main turmeric repo's own build you still need CMake (via `just
+configure`). `tur run` is for spice development. See
+[docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
 
 ## Spice Repository Layout
 
