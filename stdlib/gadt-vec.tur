@@ -153,7 +153,13 @@
 ;;;               (gvec-cons 10 (gvec-cons 20 (gvec-nil)))))  ; => 33
 ;;;
 ;;; Since: Phase G4
-(defn gvzip-with [f :ptr<void> v1 v2] :GVec
+;; KB-034: f is declared :(fn [int int] :int), not :ptr<void>.  A two-argument
+;; call through a raw :ptr<void> value assumes a fat-closure layout and
+;; dereferences the pointer as a function-pointer table, which segfaults when a
+;; plain non-capturing function (e.g. `add`) is passed.  The typed fn parameter
+;; wraps any callee into a tur_poly_fn_t, so `(f x y)` dispatches correctly via
+;; fn.fn(fn.env, x, y) for both bare functions and capturing closures.
+(defn gvzip-with [f :(fn [int int] :int) v1 v2] :GVec
   (match v1
     (GVNil)        (GVNil)
     (GVCons x t1) (match v2

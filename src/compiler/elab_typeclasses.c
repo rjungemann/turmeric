@@ -7,6 +7,66 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     uint32_t *out_body_start);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
 
+/* KB-030: designated home file (basename) for a built-in primitive type that
+ * has no StructDef of its own (e.g. `str`, `rc`).  The orphan-instance check
+ * credits a user struct to its defining module via origin_file_id; built-ins
+ * have no def and so were always flagged orphan.  This table gives each such
+ * built-in a home stdlib file, so an instance declared in that file (e.g.
+ * `(definstance Eq [str] ...)` in stdlib/str.tur) is treated as non-orphan,
+ * mirroring the ownership rule for user types.  Returns NULL for names that
+ * are not registered built-ins. */
+static const char *builtin_type_home_basename(const char *type_name) {
+    if (!type_name) return NULL;
+    if (strcmp(type_name, "str")  == 0) return "str.tur";
+    if (strcmp(type_name, "rc")   == 0) return "rc.tur";
+    if (strcmp(type_name, "weak") == 0) return "rc.tur";
+    return NULL;
+}
+
+/* KB-030/KB-027: as above, but keyed on a resolved built-in TypeKind.  Some
+ * built-ins resolve to a dedicated TypeKind rather than an opaque-struct name,
+ * so they carry no type_arg_syms entry; map those kinds to their home file
+ * directly.  Two families:
+ *   - rc<T>/weak<T> are data types with their own module -> rc.tur;
+ *   - the bare scalar primitives (int, bool, cstr, the sized numeric kinds)
+ *     have no data module of their own, so their canonical typeclass instances
+ *     live in the comprehensive typeclass module -> typeclass.tur.  This lets
+ *     typeclass.tur host `Clone [int]`, `Clone [uint8]`, ... without tripping
+ *     the orphan check (Clone is declared in typeclass-clone.tur).
+ * Returns NULL for kinds with no fixed home. */
+static const char *builtin_kind_home_basename(TypeKind k) {
+    switch (k) {
+        case TY_RC:
+        case TY_WEAK:
+            return "rc.tur";
+        case TY_INT:
+        case TY_BOOL:
+        case TY_CSTR:
+        case TY_FLOAT:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_INT64:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+            return "typeclass.tur";
+        default:
+            return NULL;
+    }
+}
+
+/* Return the final path component of `path` (the basename), or `path` itself
+ * when it contains no '/'.  NULL-safe. */
+static const char *tc_path_basename(const char *path) {
+    if (!path) return NULL;
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
 /* F3-5 (cross-plan-followups): convert a runtime Type back to its
  * source-form representation so the dispatcher can synthesise inline
  * ascription forms.  Supports only the kinds the dispatch synthesis
@@ -1869,11 +1929,28 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         /* The typeclass is from a different file.
          * Check if any struct type-arg was defined here. */
         bool owns_a_type_arg = false;
+        const char *cur_basename =
+            tc_path_basename(diag_file_path(call->span.file_id));
         for (uint8_t i = 0; i < n_type_args && !owns_a_type_arg; i++) {
             if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def) {
                 if (type_args[i].as.struct_.def->origin_file_id == call->span.file_id) {
                     owns_a_type_arg = true;
                 }
+                continue;
+            }
+            /* KB-030: a built-in primitive type (str, rc, ...) has no StructDef,
+             * so it can never match origin_file_id.  Credit it to its designated
+             * home file instead, so primitive instances can live in the natural
+             * module without tripping the orphan check.  The home is found
+             * either from the resolved TypeKind (rc/weak -> TY_RC/TY_WEAK) or,
+             * for opaque-struct names with no dedicated kind (str), from the
+             * recorded type-arg symbol. */
+            const char *home = builtin_kind_home_basename(type_args[i].kind);
+            if (!home && type_arg_syms && type_arg_syms[i]) {
+                home = builtin_type_home_basename(type_arg_syms[i]->name);
+            }
+            if (home && cur_basename && strcmp(cur_basename, home) == 0) {
+                owns_a_type_arg = true;
             }
         }
         if (!owns_a_type_arg) {

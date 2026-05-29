@@ -9,21 +9,25 @@ The historical bug log (with the full list of already-fixed entries) lives
 at [../archive/history/known-bugs.md](../archive/history/known-bugs.md).
 
 All items below were re-verified against the build at the time this plan was
-written; the affected fixtures fail under `tests/run.sh` (run with
+written; the affected fixtures originally failed under `tests/run.sh` (run with
 `ASAN_OPTIONS=detect_leaks=0`, matching CI).
+
+**Status: all items are now resolved (DONE).**  Each section below records the
+implemented resolution, and the whole `tests/run-stdlib-checks.sh` allowlist
+(including `typeclass.tur`) now passes.
 
 ## Status overview
 
 | ID | Title | Severity | Effort |
 |----|-------|----------|--------|
-| KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances | High | Large |
+| KB-021 | Typeclass dispatch ABI mismatch for struct-typed instances -- DONE | High | Large |
 | KB-022 | GADT HKT constraint unification (`equal-cong`) -- DONE | Low | Medium |
 | KB-025 | GADT skolem-escape check missing -- DONE | Medium | Medium |
 | KB-026 | Implicit-tyvar acceptance suppresses intended diagnostics -- DONE | Medium | Medium |
-| KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) | Low | Medium |
-| KB-029 | `stdlib/session.tur` tuple return-type syntax | Low | Medium |
-| KB-030 | Orphan-instance checker rejects instances on built-ins | Medium | Medium |
-| KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults | Medium | Medium |
+| KB-027 | `stdlib/rc.tur` Functor on `ptr<void>` (kind error) -- DONE | Low | Medium |
+| KB-029 | `stdlib/session.tur` tuple return-type syntax -- DONE | Low | Medium |
+| KB-030 | Orphan-instance checker rejects instances on built-ins -- DONE | Medium | Medium |
+| KB-034 | Calling a `:ptr<void>` value with 2+ args segfaults -- DONE | Medium | Medium |
 
 ---
 
@@ -77,6 +81,44 @@ snapshots.
 ### Effort
 
 Large -- touches the dispatch ABI contract; needs careful snapshot review.
+
+### Resolution (DONE)
+
+Carrier-ABI types (`TY_APP`, `TY_ADT`, parametric structs) have two coexisting
+C representations: the `int64_t` carrier (a heap-pointer handle returned by
+carrier-ABI stdlib functions like `(vec-new)` / `(some x)`) and a by-value
+concrete struct (a struct constructor literal, or an ABI-specialized clone
+returning the concrete type, e.g. `(tuple2 a b)`).  Function signatures and
+dictionary dispatch use the carrier, but value-position `let` bindings declared
+the concrete struct -- so an ascribed `(:: (vec-new) (Vec int))` local became a
+by-value `Vec__int` while `vec-push!` and `.eq?` dispatch expected the carrier,
+producing "incompatible type for argument 1 of `vec_push_` / `ok_` /
+`result_eq_`".
+
+The fix standardises on a single shared arbiter, `type_uses_carrier_abi`, that
+both the declaration path and the dispatch callsites consult:
+
+- A `let` binding now declares the C representation its initialiser actually
+  yields (`emit_binding_repr_c_name`): the `int64_t` carrier for a
+  carrier-returning call or carrier var, the concrete struct for a struct
+  literal, a by-value var, or an ABI-specialized concrete result.
+- The dictionary-dispatch callsites bridge concrete->carrier only for genuinely
+  by-value producers (struct literals, by-value vars/params, concrete ABI-spec
+  results), tracked via a new `Binding.emit_byvalue_carrier_abi` flag set at each
+  declaration site; an already-carrier value passes through unbridged.
+- Type ascription to a carrier-ABI target keeps the carrier representation
+  instead of dereferencing it into a by-value copy.
+- The ABI-spec lookup is factored into `find_matched_abi_spec`, reused by both
+  the call emit path and the binding-representation decision.
+
+Also fixed a latent typo in two affected fixtures (`some?`/`ok?` predicates used
+where the `some`/`ok` constructors were intended); the prior build failure had
+masked it.
+
+Verified: all eight fixtures (`ptc4-basic`, `vec-eq-ascribed`,
+`vec-eq-ascribed-multi`, `map-of-tvec-eq`, `option-of-tvec-eq`,
+`result-of-typed-eq`, `set-of-tvec-eq`, `vec-of-tvec-eq`) pass under
+`tests/run.sh`.
 
 ---
 
@@ -322,6 +364,45 @@ list -- but only after resolving its Functor/Applicative/Monad overlap with
 
 Medium -- stdlib redesign of the Rc type constructor.
 
+### Resolution (DONE)
+
+Resolved by dispatching on the built-in `rc<T>` type constructor instead of
+`ptr<void>`, building on the KB-030 orphan-checker change:
+
+1. **Dispatch on `rc`, not `ptr<void>` (`stdlib/rc.tur`)** -- `Functor`,
+   `Foldable`, and `Clone` instances now target the built-in `rc` constructor.
+   `rc` resolves to `TY_RC`, which the kind system treats as kind `* -> *`, so
+   the `Functor`/`Foldable` instances are well-kinded (no more "expects kind
+   '* -> *', but 'ptr<void>' has kind '*'").  The redundant `ptr<void>` mirror
+   of the `Clone` instance (and its `__clone_rc_shallow` / `__foldable_rc_*`
+   helpers) was removed; the `Foldable` bodies now inline the same C the
+   `Functor` instance uses.
+2. **`TY_RC`/`TY_WEAK` kind (`kind_check.c`)** -- `type_effective_kind` now
+   reports `KIND_ARROW` for `TY_RC`/`TY_WEAK` so the secondary (belt-and-
+   suspenders) kind validation agrees with the elab-time check that these are
+   type constructors.  The bottom-up kind inference additionally skips the
+   `STAR -> ARROW` promotion for `rc`/`weak` args, so a `STAR`-declared class
+   used as a concrete carrier handle (`Clone [rc]`) is not mistakenly lifted to
+   higher kind.
+3. **Local `Foldable` class stub (`stdlib/rc.tur`)** -- `Foldable` is not
+   auto-loaded (unlike `Functor`/`Clone`), so rc.tur declares the class locally
+   with the same signature as `stdlib/typeclass.tur` (accepted by the
+   idempotent-redefinition rule).  This keeps rc.tur standalone-checkable
+   without a global auto-load that would have changed the `Foldable` ownership
+   seen by existing HKT fixtures.
+4. **Orphan ownership** -- with KB-030's built-in-home registry extended to map
+   `TY_RC`/`TY_WEAK` (and the `rc`/`weak` names) to `rc.tur`, all three
+   instances are credited to their home module.
+
+`stdlib/rc.tur` now type-checks standalone and was added to
+`tests/run-stdlib-checks.sh` (29 passed).  The full `tests/run.sh` (1025) and
+`tests/run-turi.sh` suites remain green.
+
+Note: `stdlib/docstrings.tur` (auto-generated) still carries stale entries for
+the removed helpers; it was already drifted from the current stdlib, so a full
+`just docs` regeneration is left as separate housekeeping rather than mixing
+unrelated doc churn into this fix.
+
 ---
 
 ## KB-029 -- `stdlib/session.tur` tuple return-type syntax
@@ -355,6 +436,24 @@ change and lets `stdlib/session.tur` join `tests/run-stdlib-checks.sh`.
 ### Effort
 
 Medium -- (a) is a parser/elaborator feature; (b) is a contained stdlib edit.
+
+### Resolution (DONE)
+
+Took the contained-stdlib path, slightly refined.  The single offending
+signature was `echo-client-call`, whose body is `(recv ch)` -- and `(recv ch)`
+returns the *internal* session recv-pair (`TY_SESSION_RECV_PAIR`,
+`[echoed-int, updated-Session]`), which is destructured specially by
+`(let [[v ch] (recv ch)] ...)` and has no surface type syntax.  Neither a
+`TupleN` lowering (option a) nor a named-tuple struct (option b) matches what
+the body actually yields, so the return-type annotation was simply dropped and
+left to inference: the inferred type is precisely the recv-pair the body
+produces and that callers already destructure.  The behaviour-documenting
+docstring is unchanged.
+
+`stdlib/session.tur` now checks clean under `-Xsessions` and was added to
+`tests/run-stdlib-checks.sh` (30 passed).  No compiler change was required; the
+`:[(...)]` parser gap noted in the original plan remains an unimplemented
+feature but is no longer on any stdlib file's path.
 
 ---
 
@@ -403,6 +502,48 @@ risks load-order issues, so the checker change is preferred.
 
 Medium -- orphan checker change plus a built-in-home registry.
 
+### Resolution (DONE)
+
+Implemented the preferred path (a built-in-home registry consulted by the
+orphan checker) plus the kind-inference fix that the change exposed:
+
+1. **Built-in-home registry (`elab_typeclasses.c`)** -- a built-in primitive
+   that resolves to an opaque `TY_STRUCT` (`def == NULL`, e.g. `str`, `rc`,
+   `weak`) has no `origin_file_id`, so it could never satisfy the existing
+   ownership rule.  `builtin_type_home_basename` maps each such name to its
+   designated home stdlib file (`str -> str.tur`, `rc`/`weak -> rc.tur`), and
+   the orphan check now also credits a type arg whose built-in home basename
+   matches the current file's basename (via `diag_file_path` +
+   `tc_path_basename`).  `(definstance Eq [str] ...)` in `stdlib/str.tur` is
+   therefore no longer flagged orphan.
+
+2. **Kind-inference fix (`kind_check.c`, `kind_infer_from_instances`)** --
+   removing the orphan error unmasked a latent problem: an opaque struct
+   reference reports `type_effective_kind == KIND_ARROW` (the right answer for
+   a genuine HKT constructor like `option`/`vec`, validated separately against
+   an explicit `^f`), which the bottom-up inference used to *promote* a
+   STAR-declared class such as `Eq [a]` to `* -> *` -- breaking every concrete
+   `Eq [int]` / `Eq [bool]` instance.  The inference now skips the STAR->ARROW
+   upgrade for opaque-struct args; real constructor args (`TY_APP`, `TY_REC`)
+   still drive inference, and the explicit-`^f` validation path is unchanged.
+
+`stdlib/str.tur` now type-checks standalone and was added to
+`tests/run-stdlib-checks.sh`.  The full `tests/run.sh` (1025) and
+`tests/run-turi.sh` suites remain green.
+
+Follow-up folded in: `stdlib/typeclass.tur` previously still failed its
+standalone check because of orphan `Clone [int]` / `Clone [bool]` / `Clone
+[cstr]` (and the sized-numeric) instances.  These primitives resolve to
+concrete `TY_*` kinds with no `type_arg_syms` entry, so they are handled by the
+kind-keyed `builtin_kind_home_basename` table instead: the bare scalar
+primitives (`int`, `bool`, `cstr`, and the sized numeric kinds) home to
+`typeclass.tur`, the comprehensive typeclass module where their canonical
+instances live (data types such as `rc`/`weak` continue to home to their own
+module).  The mapping is consulted only in the orphan-check fallback and is
+purely permissive, so it credits these instances in `typeclass.tur` without
+relaxing the check anywhere else.  The full `tests/run-stdlib-checks.sh`
+allowlist now passes.
+
 ---
 
 ## KB-034 -- Calling a `:ptr<void>` value with 2+ args segfaults
@@ -443,3 +584,25 @@ the slots to `:fn` is the safer, type-checked fix.
 
 Medium -- per-combinator signature change, or a codegen discrimination in the
 `:ptr<void>` call path.
+
+### Resolution (DONE)
+
+Took the recommended per-combinator signature change (the safer, type-checked
+path).  `gvzip-with` in `stdlib/gadt-vec.tur` now declares its callback as
+`[f :(fn [int int] :int)]` instead of `[f :ptr<void>]`.  A typed `fn`
+parameter is lowered to a `tur_poly_fn_t` and any callee -- a bare
+non-capturing function (`add`) or a capturing closure -- is wrapped into that
+fat-closure layout, so `(f x y)` dispatches via `fn.fn(fn.env, x, y)` instead
+of the `:ptr<void>` path that blindly dereferences the value as a
+function-pointer table and crashed on a raw code address.
+
+The `gadt-stdlib-vec-stdlib` fixture (which previously documented gvzip-with as
+"not yet supported") now exercises `(gvzip-with add [1 2] [10 20])` and asserts
+the sum `33`, locking in the fix as a regression test.
+
+The underlying codegen path (`emit_expr.c`, `TY_PTR_VOID` N-arg call) still
+assumes a fat-closure layout for `n >= 1`; calling a *raw* function directly
+through a `:ptr<void>` value remains unsafe by construction in v1.  The
+longer-term codegen discrimination (detect a raw-function `:ptr<void>` and emit
+a direct call) is left as a future enhancement -- using a typed `fn` parameter
+is the type-checked way to express a multi-argument callback.
