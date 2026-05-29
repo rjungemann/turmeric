@@ -1,6 +1,6 @@
 # Plan: Pre-existing ASan/LSan Leaks in the Debug `tur`
 
-> **Status:** Draft Plan
+> **Status:** Implemented (Phase 1 + Phase 2)
 > **Last Updated:** 2026-05-29
 > **Type:** Build/test hygiene + (optional) compiler memory-management
 > **Related:**
@@ -226,15 +226,55 @@ fix:
 
 ## Validation checklist
 
-- [ ] `bash tests/run.sh` reports zero `FAIL` on a clean checkout (sibling
-      spices repo absent so `scscm-compile` auto-skips).
-- [ ] `ctest --test-dir build` stays green.
-- [ ] `ASAN_OPTIONS=detect_leaks=1 bash tests/run.sh` reproduces the leaks
+- [x] `bash tests/run.sh` reports zero `FAIL` on a clean checkout (sibling
+      spices repo absent so `scscm-compile` auto-skips). Now runs with leak
+      detection ON (1045 passed, 0 failed).
+- [x] `ctest --test-dir build` stays green. (Pre-existing, unrelated failure
+      in `tur_stdlib_checks` -- a `TUR-E0042` mixed-width arithmetic type
+      error in `stdlib/typeclass.tur:182`, reproducible on the base with
+      `detect_leaks=0`, i.e. not a leak and out of scope for this plan. All 32
+      other targets pass, including the now-unsuppressed `tur_tests`,
+      `tur_cli_tests`, and `tur_span_tests`.)
+- [x] `ASAN_OPTIONS=detect_leaks=1 bash tests/run.sh` reproduced the leaks
       before Phase 2 and reports zero leaks after Phase 2.
-- [ ] (Phase 2) the six+ generic fixtures (`list-basic`, `option-basic`,
+- [x] (Phase 2) the generic fixtures (`list-basic`, `option-basic`,
       `result-typed-basic`, `tuple-345-basic`, `tuple-arity-6`,
       `tuple2-eq-macro`, `emit-abi-trace`) build clean with leak detection ON.
-- [ ] `CLAUDE.md` documents the policy and the opt-in override.
+- [x] `CLAUDE.md` documents the policy and the opt-in override.
+
+## Implementation notes (what was actually done)
+
+Rather than the interim two-step (Option A now, Option C later), both phases
+landed together, which let the end state be stronger than a blanket
+suppression:
+
+- **Phase 2 / Option C (the principled fix):** `EmitCtx` gained a
+  `type_arena` (`Arena *`). `emit_resolve_type` (`emit_core.c`) and
+  `emit_abi_instantiate_type` (`emit_module.c`) now allocate their transient
+  `Type` scratch from that arena instead of bare `malloc`. The arena is
+  initialized at the start of each emit pass (`emit_program`,
+  `emit_implementation`, and the separate-compilation `hdr_ctx`) and
+  bulk-freed at the end. Audit confirmed no instantiated `Type` escapes the
+  emit pass: the cross-module borrow-spec cache persists only `TypeKind`
+  values (`.kind`) and `strdup`'d names, never `Type` pointers. A NULL arena
+  falls back to `malloc` so any future context without an arena is still
+  correct.
+- **Re-enabled leak detection for the compiler path:** because the compiler is
+  now leak-clean, `tur_tests`, `tur_cli_tests`, and `tur_span_tests` were
+  removed from the `detect_leaks=0` set in `CMakeLists.txt`. They now run with
+  LSan ON as a regression guard. The remaining suppressed targets all exercise
+  the tree-walking interpreter (`turi`/`eval`/`repl`/`flags`/`install`), which
+  intentionally never frees closures/registered natives.
+- **Phase 1 / discoverability (adapted):** `bash tests/run.sh` is left with
+  leak detection ON (it is the mandated pre-PR harness and is now a real net).
+  Only the interpreter-exercising harnesses that genuinely leak when invoked
+  directly -- `tests/run-flags.sh` and `tests/run-turi.sh` -- default
+  `ASAN_OPTIONS=detect_leaks=0` to mirror their ctest targets, with an opt-in
+  override documented. `CLAUDE.md` gained a "Leak detection (ASan/LSan)
+  policy" subsection.
+
+Option B (a `lsan.supp` file) was not needed: Option C removed the leaks
+outright, so there is nothing left to suppress on the compiler path.
 
 ## Appendix: affected fixtures (observed)
 

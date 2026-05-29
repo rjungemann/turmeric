@@ -24,6 +24,19 @@ it or open a PR with failing fixtures.
 
 **Before opening any PR**, run `bash tests/run.sh` and confirm zero `FAIL` lines.
 
+### Leak detection (ASan/LSan) policy
+
+The Debug build compiles `tur` with `-fsanitize=address,undefined`; on Linux
+ASan ships LeakSanitizer enabled. The compiler/codegen path is leak-clean, so
+`bash tests/run.sh` runs **with leak detection ON** -- a genuine leak in the
+`tur build`/`emit-c` path will fail the suite (this is intended; do not
+suppress it). The tree-walking turi/eval **interpreter** intentionally never
+frees its closures/registered natives (process-lifetime), so the harnesses
+that exercise it (`run-turi.sh`, `run-flags.sh`) and their ctest targets
+default to `ASAN_OPTIONS=detect_leaks=0`. Override with
+`ASAN_OPTIONS=detect_leaks=1 bash tests/<harness>.sh` to opt back in. See
+[docs/asan-debug-leaks-plan.md](docs/asan-debug-leaks-plan.md).
+
 ## CLI Argument Parsing -- STRICT RULE
 
 Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is

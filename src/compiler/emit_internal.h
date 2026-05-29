@@ -12,6 +12,7 @@
 
 #include "emit.h"
 
+#include "arena.h"
 #include "builtins.h"
 #include "cps.h"
 #include "rc.h"
@@ -133,6 +134,15 @@ typedef struct EmitCtx {
      * expr_is_pbp_param checks this to decide whether a receiver uses -> . */
     Binding     *pbp_param_ptrs[16]; /* MAX_FN_ARITY */
     uint8_t      n_pbp_params;
+    /* ASan/LSan plan (Option C): arena for the transient Type nodes that
+     * emit_resolve_type / emit_abi_instantiate_type clone while resolving
+     * generic type variables to concrete types for ABI specialization. These
+     * nodes live for the whole emit pass (specs reference them) and are
+     * released in bulk when the pass finishes -- replacing the previous
+     * never-freed mallocs that LeakSanitizer flagged. NULL falls back to
+     * malloc (process-lifetime), preserving the old behavior for any context
+     * that does not own an arena. */
+    Arena       *type_arena;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */

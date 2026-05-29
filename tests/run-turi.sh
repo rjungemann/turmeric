@@ -21,6 +21,15 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# This harness runs every fixture through the tree-walking turi/eval
+# interpreter, which intentionally never frees its closures or registered
+# natives (they live for the process lifetime). LeakSanitizer (enabled with
+# ASan on Linux) would otherwise flag that design choice as a leak. Default to
+# detect_leaks=0 to mirror the ctest policy (turi_fixture_tests); opt back in
+# with ASAN_OPTIONS=detect_leaks=1 bash tests/run-turi.sh. See
+# docs/asan-debug-leaks-plan.md.
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'just build' first" >&2; exit 2; }
 
