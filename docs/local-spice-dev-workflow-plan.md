@@ -340,6 +340,17 @@ Both ship in LS6 of this plan; neither is deferred.
     `spices/notebook/spices/watch-main` (delete the symlink, drop the
     stub `tur.lock` row, switch the dep declaration over to `:path`
     or rely on workspace resolution).
+    - **Blocker for the "rely on workspace resolution" option:**
+      `spices/watch/build.tur` currently declares `:name "tur-watch"`,
+      but `spices/notebook/build.tur` declares the dep as `"watch"`.
+      Workspace resolution (LS2/LS4) matches sibling members by their
+      manifest `:name` (with a basename fallback only when `:name` is
+      absent), so it does not bridge this mismatch. Before LS7 can
+      drop the workaround, either rename the watch member to
+      `:name "watch"` (preferred -- the bin/module names already use
+      `watch/...`), or have notebook's dep entry use `"tur-watch"`,
+      or switch notebook to a `:path "../watch"` declaration (which
+      bypasses the name match entirely).
 
 - [ ] **LS8** -- Migration sweep: any spice that currently leans on a
   URL dep purely for in-workspace access (none today, but watch
