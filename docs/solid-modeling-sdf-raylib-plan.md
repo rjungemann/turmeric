@@ -857,7 +857,7 @@ Need to track objectId through the entire pipeline.
 ## References
 
 1. [Modeling with Distance Functions](http://iquilezles.org/www/articles/distfunctions/distfunctions.htm) - Inigo Quilez SDF cookbook
-2. [Dual Contouring of Hermite Data](http://graphics.cs.ucdavis.edu/~joaman/Dec03/Asuitabledefinitionof.pdf) - Original dual contouring paper
+2. [Dual Contouring of Hermite Data](https://www.cs.rice.edu/~jwarren/papers/dualcontour.pdf) - Original dual contouring paper
 3. [raylib](https://www.raylib.com/) - Simple and easy-to-use library for game development
 4. [libfive Scheme API](https://libfive.com/stdlib/) - Reference for CSG operations
 5. [Computer Graphics StackExchange - SDF to Mesh](https://computergraphics.stackexchange.com/a/7516) - Multi-pass GLSL approach

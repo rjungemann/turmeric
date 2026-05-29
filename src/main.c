@@ -1288,6 +1288,75 @@ static int cmd_build(const char *input, const char *out_path,
         }
     }
 
+    /* If the autolink flags include -lturi, locate the turmeric SDK and
+     * prepend absolute -I/-L paths so the build succeeds regardless of the
+     * working directory.  This is required for prefix-installed builds
+     * (e.g. Homebrew) where `tur install` cannot anchor to the source tree
+     * and the relative -Lbuild/src / -Isrc in __tur_autolink__ won't resolve.
+     *
+     * Resolution order:
+     *   1. $TUR_SDK_ROOT (explicit override)
+     *   2. Walk up from exe looking for share/turmeric/src/turi/eval.h
+     *      (prefix/Homebrew installed layout written by the formula)
+     *
+     * For dev builds the cwd is already set to the turmeric root by
+     * `tur install`, so the relative paths already work; the extra absolute
+     * flags are harmless redundancy in that case. */
+    if (autolink.len > 0 && strstr(autolink.data, "-lturi")) {
+        char sdk_root[4096] = "";
+        const char *sdk_env = getenv("TUR_SDK_ROOT");
+        if (sdk_env && *sdk_env) {
+            snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
+        } else {
+            char exe_buf[4096] = "";
+            if (get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
+                char dir[4096];
+                dir_of_path(exe_buf, dir, sizeof(dir));
+                for (int d = 0; d < 8; d++) {
+                    char probe[4096];
+                    struct stat sdk_st;
+                    snprintf(probe, sizeof(probe),
+                             "%s/share/turmeric/src/turi/eval.h", dir);
+                    if (stat(probe, &sdk_st) == 0 && S_ISREG(sdk_st.st_mode)) {
+                        snprintf(sdk_root, sizeof(sdk_root),
+                                 "%s/share/turmeric", dir);
+                        break;
+                    }
+                    char *sl = strrchr(dir, '/');
+                    if (!sl || sl == dir) break;
+                    *sl = '\0';
+                }
+            }
+        }
+        if (sdk_root[0]) {
+            Buf sdk_flags;
+            buf_init(&sdk_flags);
+            buf_printf(&sdk_flags, "-I%s/src -I%s/src/compiler -I%s/src/runtime",
+                       sdk_root, sdk_root, sdk_root);
+            struct stat sdk_lib_st;
+            char lib_probe[4096];
+            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libturi.a", sdk_root);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&sdk_flags, " -L%s/lib", sdk_root);
+            snprintf(lib_probe, sizeof(lib_probe), "%s/build/src/libturi.a", sdk_root);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&sdk_flags, " -L%s/build/src", sdk_root);
+            /* Prepend SDK flags so absolute paths take priority over the relative
+             * -Lbuild/src and -Isrc entries that follow in the autolink block. */
+            Buf new_al;
+            buf_init(&new_al);
+            buf_write(&new_al, sdk_flags.data, sdk_flags.len);
+            buf_free(&sdk_flags);
+            buf_putc(&new_al, ' ');
+            /* autolink has a '\0' terminator counted in len; copy content only. */
+            if (autolink.len > 1)
+                buf_write(&new_al, autolink.data, autolink.len - 1);
+            buf_putc(&new_al, '\0');
+            buf_free(&autolink);
+            autolink = new_al;
+        }
+    }
+
     /* If the autolink flags include -lturi, check whether the installed
      * libturi.a was compiled with AddressSanitizer (common in debug builds).
      * When it was, propagate -fsanitize=address,undefined so the linker can

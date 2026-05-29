@@ -7,7 +7,7 @@
   ],
   "repository": {
     "turmeric-block": {
-      "begin": "(^|\\G)(\\s*)(```+|~~~+)\\s*(turmeric|tur)\\b[^\\n]*$",
+      "begin": "(^|\\G)(\\s*)(```+|~~~+)\\s*(turmeric|tur|tursweet|sweet-exp)\\b[^\\n]*$",
       "end": "(^|\\G)(\\2)(\\3)\\s*$",
       "beginCaptures": {
         "4": { "name": "fenced_code.block.language.turmeric" }
