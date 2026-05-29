@@ -2,6 +2,19 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.5] -- 2026-05-28
+
+### Fixed
+
+- **`tur uninstall` rejected names from older `tur list` output** -- prior
+  `tur list` rendered entries as `name-version` with no separator (e.g.
+  `tur-notebook-0.1.0`), so users copying that string into `tur uninstall`
+  got "is not installed". Uninstall now falls back to splitting on a
+  trailing `-<digit>...` suffix and matching against the recorded version.
+- **`tur list` separates name and version with a space** -- kebab-cased
+  package names like `tur-notebook` are no longer visually fused with
+  their version (`tur-notebook 0.1.0` instead of `tur-notebook-0.1.0`).
+
 ## [0.14.4] -- 2026-05-28
 
 ### Fixed

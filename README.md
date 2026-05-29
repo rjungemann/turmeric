@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.14.4` -- fixes `*args*` being empty in user-defined `main` (broke spice CLI parsing) and improves `tur install` git-fetch error messages.
+**Latest release:** `v0.14.5` -- fixes `tur uninstall` rejecting `name-version` strings copied from `tur list`, and reformats `tur list` to use a space between name and version.
 
 ## What
 
