@@ -55,6 +55,9 @@ typedef struct EmitAbiSpecialization {
     uint8_t n_args;
     Type result_type;
     char *clone_name;
+    /* J3: when true the clone is emitted with external (not static) linkage
+     * and its forward decl omits 'static'.  False in whole-program mode. */
+    bool external_linkage;
 } EmitAbiSpecialization;
 
 typedef struct EmitCtx {
@@ -122,6 +125,9 @@ typedef struct EmitCtx {
     uint32_t        cap_carrier_call_bindings;
     const EmitAbiSpecialization *current_abi_specialization;
     const char  *fn_name_override;
+    /* J3: when true, the clone body being emitted via fn_name_override gets
+     * external (not static) linkage -- set alongside fn_name_override. */
+    bool         fn_name_override_external;
     /* Phase D: pass-by-ptr param bindings for the current function.
      * Populated by emit_fn_def before body emission; cleared after.
      * expr_is_pbp_param checks this to decide whether a receiver uses -> . */

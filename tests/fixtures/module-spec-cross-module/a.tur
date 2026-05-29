@@ -1,0 +1,11 @@
+;;; module-spec-cross-module/a.tur -- owns generic function `double-it`.
+;;; J6 verification: when b.tur calls (double-it 4.0), cmd_build_multi
+;;; two-pass forces a.tur to emit the clone body even without local call sites.
+
+(defmodule a
+  (export double-it)
+  (defn double-it [T] [x :T] :T
+    ```c
+    __TUR_TY_T__ v = x;
+    return (__TUR_TY_T__)(v + v);
+    ```))

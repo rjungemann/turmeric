@@ -1,0 +1,9 @@
+;;; module-spec-cache-reuse/a.tur -- generic function owner.
+
+(defmodule a
+  (export triple)
+  (defn triple [T] [x :T] :T
+    ```c
+    __TUR_TY_T__ v = x;
+    return (__TUR_TY_T__)(v + v + v);
+    ```))

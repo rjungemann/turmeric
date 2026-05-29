@@ -290,32 +290,69 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     }
 
     const Expr *fn_expr = emit_abi_find_fn_expr(items, n_items, fn_binding);
-    if (!fn_expr || !fn_expr->as.fn_def_.fn) return;
-    FnDef *fd = fn_expr->as.fn_def_.fn;
-    if (fd->closure || !fd->body) return;
-    /* Phase G: inline-C bodies only opt in to ABI specialization when they
-     * contain __TUR_TY_<NAME>__ template markers. Without the template, the
-     * body's C signature is hand-rolled (e.g. typedef'd as int64_t) and the
-     * specialized parameter widths would mismatch the inline code; fall back
-     * to the carrier path. */
-    if (fd->body->kind == EX_INLINE_C &&
-        !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c)) {
+    /* J4: When fn_expr is NULL in separate-compilation mode, the generic is
+     * defined in an imported module.  The caller (borrower) still rewrites its
+     * call site to the clone name; the clone body is emitted by the owner. */
+    bool borrow_path = false;
+    FnDef *fd = NULL;
+    if (!fn_expr) {
+        if (!ctx->separate_compilation) return;
+        borrow_path = true;
+    } else if (!fn_expr->as.fn_def_.fn) {
         return;
+    } else {
+        fd = fn_expr->as.fn_def_.fn;
+        if (fd->closure || !fd->body) return;
+        /* Phase G: inline-C bodies only opt in to ABI specialization when they
+         * contain __TUR_TY_<NAME>__ template markers. Without the template, the
+         * body's C signature is hand-rolled (e.g. typedef'd as int64_t) and the
+         * specialized parameter widths would mismatch the inline code; fall back
+         * to the carrier path. */
+        if (fd->body->kind == EX_INLINE_C &&
+            !inline_c_has_ty_template(fd->body->as.inline_c_.inline_c)) {
+            return;
+        }
     }
 
     bool abi_changes = false;
     Type arg_types[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < fd->n_params; i++) {
-        const Type *expected_full = (fn_binding->type.as.fn.arg_full_types &&
-                                     fn_binding->type.as.fn.arg_full_types[i])
-            ? fn_binding->type.as.fn.arg_full_types[i]
-            : &fd->params[i]->type;
-        Type generic_arg = expected_full ? *expected_full : fd->param_types[i];
-        arg_types[i] = expected_full
-            ? emit_abi_instantiate_type(expected_full, bindings, n_bindings)
-            : fd->param_types[i];
-        if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
-            abi_changes = true;
+    uint8_t n_spec_args;
+
+    if (!borrow_path) {
+        /* Owned path: derive arg types from FnDef (same logic as before). */
+        n_spec_args = fd->n_params;
+        for (uint8_t i = 0; i < n_spec_args; i++) {
+            const Type *expected_full = (fn_binding->type.as.fn.arg_full_types &&
+                                         fn_binding->type.as.fn.arg_full_types[i])
+                ? fn_binding->type.as.fn.arg_full_types[i]
+                : &fd->params[i]->type;
+            Type generic_arg = expected_full ? *expected_full : fd->param_types[i];
+            arg_types[i] = expected_full
+                ? emit_abi_instantiate_type(expected_full, bindings, n_bindings)
+                : fd->param_types[i];
+            if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
+                abi_changes = true;
+            }
+        }
+    } else {
+        /* J4: Borrow path: derive arg types from fn_binding's type info.
+         * The generic's FnDef is not in this module's items; we use the
+         * binding's full-type information (set by elab) to compute the same
+         * clone name that the owning module will produce. */
+        n_spec_args = fn_binding->type.as.fn.arity;
+        for (uint8_t i = 0; i < n_spec_args; i++) {
+            const Type *expected_full = fn_binding->type.as.fn.arg_full_types
+                ? fn_binding->type.as.fn.arg_full_types[i] : NULL;
+            if (expected_full) {
+                Type generic_arg = *expected_full;
+                arg_types[i] = emit_abi_instantiate_type(expected_full, bindings, n_bindings);
+                if (strcmp(type_c_name(generic_arg), type_c_name(arg_types[i])) != 0) {
+                    abi_changes = true;
+                }
+            } else {
+                /* Monomorphic arg -- no ABI change; use the concrete kind. */
+                arg_types[i] = emit_type_from_kind(fn_binding->type.as.fn.arg_kinds[i]);
+            }
         }
     }
 
@@ -326,16 +363,19 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
     }
-    if (!abi_changes) return;
+    if (!abi_changes) {
+        if (!borrow_path) emit_abi_note_carrier_call(ctx, fn_binding);
+        return;
+    }
 
     for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
         EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
-        if (spec->binding != fn_binding || spec->n_args != fd->n_params ||
+        if (spec->binding != fn_binding || spec->n_args != n_spec_args ||
             !type_eq(spec->result_type, result_type)) {
             continue;
         }
         bool args_match = true;
-        for (uint8_t ai = 0; ai < fd->n_params; ai++) {
+        for (uint8_t ai = 0; ai < n_spec_args; ai++) {
             if (!type_eq(spec->arg_types[ai], arg_types[ai])) {
                 args_match = false;
                 break;
@@ -359,15 +399,18 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];
     memset(spec, 0, sizeof(*spec));
     spec->call_expr = call;
-    spec->fn_expr = fn_expr;
-    spec->fn = fd;
+    spec->fn_expr = fn_expr;  /* NULL for borrow specs */
+    spec->fn = fd;            /* NULL for borrow specs */
     spec->binding = fn_binding;
     spec->n_bindings = n_bindings;
     for (uint8_t i = 0; i < n_bindings; i++) spec->bindings[i] = bindings[i];
-    spec->n_args = fd->n_params;
-    for (uint8_t i = 0; i < fd->n_params; i++) spec->arg_types[i] = arg_types[i];
+    spec->n_args = n_spec_args;
+    for (uint8_t i = 0; i < n_spec_args; i++) spec->arg_types[i] = arg_types[i];
     spec->result_type = result_type;
-    spec->clone_name = emit_abi_clone_name(fn_binding, result_type, arg_types, fd->n_params);
+    spec->clone_name = emit_abi_clone_name(fn_binding, result_type, arg_types, n_spec_args);
+    /* external_linkage is set later by the caller (emit_implementation) for
+     * separate-compilation builds; left false here so whole-program builds
+     * continue to emit static clones. */
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
 }
 
@@ -742,9 +785,21 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
     return !emit_abi_has_carrier_call(ctx, e->as.fn_def_.fn->binding);
 }
 
+/* J1: Scan all items for ABI-specialization opportunities. */
+static void emit_abi_scan_program(EmitCtx *ctx, const Expr **items, uint32_t n_items) {
+    for (uint32_t i = 0; i < n_items; i++) {
+        emit_abi_scan_expr(ctx, items[i], items, n_items);
+    }
+}
+
+/* J3: Forward-declare a specialization clone.
+ * Whole-program mode (external_linkage=false): emits 'static <ret> <clone>(...);'
+ * Separate-compilation mode (external_linkage=true): omits 'static' so the
+ * definition in the owning .c gets external linkage.
+ * Borrow specs (fn==NULL) are skipped; they get their decl from the owner's header. */
 static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     if (!spec || !spec->fn) return;
-    buf_puts(out, "static ");
+    if (!spec->external_linkage) buf_puts(out, "static ");
     buf_puts(out, type_c_name(spec->result_type));
     buf_printf(out, " %s(", spec->clone_name);
     for (uint8_t i = 0; i < spec->n_args; i++) {
@@ -848,9 +903,8 @@ int emit_program(Buf *out, const Expr *program) {
     uint32_t n_items;
     const Expr **items = flatten_program_items(program, &n_items);
 
-    for (uint32_t i = 0; i < n_items; i++) {
-        emit_abi_scan_expr(&ctx, items[i], items, n_items);
-    }
+    /* J1: ABI specialization scan (extracted into emit_abi_scan_program). */
+    emit_abi_scan_program(&ctx, items, n_items);
 
     /* Phase I: --emit-abi-trace -- report the resolved ABI path per call site. */
     if (g_emit_abi_trace) {
@@ -3927,8 +3981,10 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     free(ctx.env_struct_names);
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
+    /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
     return 0;
@@ -4045,7 +4101,9 @@ int emit_exports_manifest(Buf *out, const Expr *program) {
 /* Emit a C header file for a module. Contains declarations (not definitions).
  * When separate_compilation is true (Phase M3): only exported functions are
  * declared, and #includes for each imported module's header are emitted. */
-int emit_header(Buf *out, const char *module_name, const Expr *program, bool separate_compilation) {
+int emit_header(Buf *out, const char *module_name, const Expr *program,
+                bool separate_compilation,
+                const ForcedAbiSpec *forced, uint32_t n_forced) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_header: expected EX_PROGRAM\n");
         return -1;
@@ -4126,6 +4184,98 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
     type_codegen_emit_adt_apps(out);
     type_codegen_emit_fn_ptr_typedefs(out);
 
+    /* J4: In separate-compilation mode, emit extern declarations for any
+     * ABI-specialization clones that this module owns (i.e. the generic FnDef
+     * is defined here).  Importing modules include this header and thereby pick
+     * up the decls without needing their own extern bookkeeping.
+     * J5/J6: Also emit decls for forced specs from the cross-module cache. */
+    if (separate_compilation) {
+        EmitCtx hdr_ctx;
+        memset(&hdr_ctx, 0, sizeof(hdr_ctx));
+        hdr_ctx.separate_compilation = true;
+        emit_abi_scan_program(&hdr_ctx, h_items, h_n_items);
+
+        /* J6: Inject forced specs (borrow specs from other modules pointing here). */
+        for (uint32_t fi = 0; fi < n_forced; fi++) {
+            const ForcedAbiSpec *fs = &forced[fi];
+            /* Check if we already have this clone from local call sites. */
+            bool already = false;
+            for (uint32_t si = 0; si < hdr_ctx.n_abi_specializations; si++) {
+                if (strcmp(hdr_ctx.abi_specializations[si].clone_name, fs->clone_name) == 0) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already) continue;
+            /* Find the binding and fn_expr in this module's items. */
+            Binding *b = NULL;
+            const Expr *fn_expr = NULL;
+            for (uint32_t ii = 0; ii < h_n_items; ii++) {
+                if (h_items[ii]->kind != EX_FN_DEF) continue;
+                FnDef *fd2 = h_items[ii]->as.fn_def_.fn;
+                if (!fd2 || !fd2->binding || !fd2->binding->name) continue;
+                if (strcmp(fd2->binding->name->name, fs->fn_symbol) == 0) {
+                    b = fd2->binding;
+                    fn_expr = h_items[ii];
+                    break;
+                }
+            }
+            if (!b || !fn_expr || !fn_expr->as.fn_def_.fn) continue;
+            /* Build arg_types[] and result_type from TypeKind values. */
+            Type arg_types[16];
+            for (uint8_t ai = 0; ai < fs->n_args; ai++)
+                arg_types[ai] = emit_type_from_kind(fs->arg_kinds[ai]);
+            Type result_type = emit_type_from_kind(fs->result_kind);
+            /* Grow hdr_ctx.abi_specializations and add spec. */
+            if (hdr_ctx.n_abi_specializations >= hdr_ctx.cap_abi_specializations) {
+                uint32_t nc = hdr_ctx.cap_abi_specializations ? hdr_ctx.cap_abi_specializations * 2 : 4;
+                EmitAbiSpecialization *ns = (EmitAbiSpecialization *)realloc(
+                    hdr_ctx.abi_specializations, nc * sizeof(EmitAbiSpecialization));
+                if (!ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+                hdr_ctx.abi_specializations = ns;
+                hdr_ctx.cap_abi_specializations = nc;
+            }
+            EmitAbiSpecialization *sp = &hdr_ctx.abi_specializations[hdr_ctx.n_abi_specializations++];
+            memset(sp, 0, sizeof(*sp));
+            sp->fn_expr = fn_expr;
+            sp->fn = fn_expr->as.fn_def_.fn;
+            sp->binding = b;
+            sp->n_args = fs->n_args;
+            sp->result_type = result_type;
+            for (uint8_t ai = 0; ai < fs->n_args; ai++) sp->arg_types[ai] = arg_types[ai];
+            sp->clone_name = strdup(fs->clone_name);
+            sp->external_linkage = true;
+        }
+
+        uint32_t n_decls = 0;
+        for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
+            if (!spec->fn) continue; /* skip borrow specs */
+            buf_puts(out, type_c_name(spec->result_type));
+            buf_printf(out, " %s(", spec->clone_name);
+            for (uint8_t j = 0; j < spec->n_args; j++) {
+                if (j > 0) buf_puts(out, ", ");
+                if (spec->fn->params[j]->is_poly_fn) {
+                    buf_puts(out, "tur_poly_fn_t");
+                } else if (spec->fn->param_types[j].kind == TY_FN) {
+                    buf_puts(out, "int64_t");
+                } else {
+                    buf_puts(out, type_c_name(spec->arg_types[j]));
+                }
+            }
+            buf_puts(out, ");\n");
+            n_decls++;
+        }
+        /* Free all clone_names (both owned and borrow specs). */
+        for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++)
+            free(hdr_ctx.abi_specializations[i].clone_name);
+        free(hdr_ctx.abi_specializations);
+        free(hdr_ctx.specialized_call_exprs);
+        free(hdr_ctx.specialized_call_names);
+        free(hdr_ctx.carrier_call_bindings);
+        if (n_decls > 0) buf_putc(out, '\n');
+    }
+
     for (uint32_t i = 0; i < h_n_items; i++) {
         const Expr *e = h_items[i];
         if (e->kind == EX_FN_DEF) {
@@ -4205,7 +4355,10 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
 /* Emit a C implementation file for a module. Contains definitions.
  * When separate_compilation is true (Phase M3): #includes imported modules'
  * headers instead of emitting their code inline. */
-int emit_implementation(Buf *out, const char *module_name, const Expr *program, bool separate_compilation) {
+int emit_implementation(Buf *out, const char *module_name, const Expr *program,
+                        bool separate_compilation,
+                        const ForcedAbiSpec *forced, uint32_t n_forced,
+                        BorrowSpecInfo **out_borrow_specs, uint32_t *out_n_borrow_specs) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_implementation: expected EX_PROGRAM\n");
         return -1;
@@ -4269,7 +4422,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
+    ctx.fn_name_override_external = false;  /* J3 */
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
+    /* Phase 4 v1: frame/defer tracking (not initialized above; zero them here). */
+    ctx.frame_var = NULL;
+    ctx.in_scope_with_defers = false;
+    ctx.pending_defer_thunks = NULL;
+    ctx.defer_captures = NULL;
+    ctx.n_defer_captures = 0;
 
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
@@ -4281,6 +4441,122 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
 
     uint32_t impl_n_items;
     const Expr **impl_items = flatten_program_items(program, &impl_n_items);
+
+    /* J1/J2: ABI specialization scan (populates ctx.abi_specializations). */
+    emit_abi_scan_program(&ctx, impl_items, impl_n_items);
+
+    /* J2: Phase I parity -- emit ABI trace for the impl path. */
+    if (g_emit_abi_trace) {
+        for (uint32_t i = 0; i < impl_n_items; i++) {
+            emit_abi_trace_expr(&ctx, impl_items[i]);
+        }
+    }
+
+    /* J3/J4: In separate-compilation mode, every spec whose FnDef lives in
+     * this module (fn_expr != NULL) is an owned spec: emit with external
+     * linkage so other TUs can link to it.  Borrow specs (fn_expr == NULL)
+     * just need the call-site rewrite; their body comes from the owner. */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+            if (ctx.abi_specializations[i].fn_expr != NULL)
+                ctx.abi_specializations[i].external_linkage = true;
+        }
+    }
+
+    /* J6: Inject forced specs -- clones that borrower modules need and that
+     * this module must own (emit body + extern decl) even without local call
+     * sites at the concrete type. */
+    for (uint32_t fi = 0; fi < n_forced; fi++) {
+        const ForcedAbiSpec *fs = &forced[fi];
+        /* Dedup: skip if already found via a local call site. */
+        bool already = false;
+        for (uint32_t si = 0; si < ctx.n_abi_specializations; si++) {
+            if (strcmp(ctx.abi_specializations[si].clone_name, fs->clone_name) == 0) {
+                already = true;
+                break;
+            }
+        }
+        if (already) continue;
+        /* Find binding and fn_expr in this module's items. */
+        Binding *b = NULL;
+        const Expr *fn_expr2 = NULL;
+        for (uint32_t ii = 0; ii < impl_n_items; ii++) {
+            if (impl_items[ii]->kind != EX_FN_DEF) continue;
+            FnDef *fd2 = impl_items[ii]->as.fn_def_.fn;
+            if (!fd2 || !fd2->binding || !fd2->binding->name) continue;
+            if (strcmp(fd2->binding->name->name, fs->fn_symbol) == 0) {
+                b = fd2->binding;
+                fn_expr2 = impl_items[ii];
+                break;
+            }
+        }
+        if (!b || !fn_expr2 || !fn_expr2->as.fn_def_.fn) continue;
+        FnDef *fd2 = fn_expr2->as.fn_def_.fn;
+        if (fd2->closure || !fd2->body) continue;
+        /* Build spec. */
+        if (ctx.n_abi_specializations >= ctx.cap_abi_specializations) {
+            uint32_t nc = ctx.cap_abi_specializations ? ctx.cap_abi_specializations * 2 : 4;
+            EmitAbiSpecialization *ns = (EmitAbiSpecialization *)realloc(
+                ctx.abi_specializations, nc * sizeof(EmitAbiSpecialization));
+            if (!ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+            ctx.abi_specializations = ns;
+            ctx.cap_abi_specializations = nc;
+        }
+        EmitAbiSpecialization *sp = &ctx.abi_specializations[ctx.n_abi_specializations++];
+        memset(sp, 0, sizeof(*sp));
+        sp->fn_expr = fn_expr2;
+        sp->fn = fd2;
+        sp->binding = b;
+        sp->n_args = fs->n_args;
+        sp->result_type = emit_type_from_kind(fs->result_kind);
+        for (uint8_t ai = 0; ai < fs->n_args; ai++)
+            sp->arg_types[ai] = emit_type_from_kind(fs->arg_kinds[ai]);
+        sp->clone_name = strdup(fs->clone_name);
+        sp->external_linkage = true;
+        /* No call-site rewrite needed (no local call site). */
+    }
+
+    /* J6: Collect borrow specs for output (so cmd_build_multi can determine
+     * which owner modules need forced recompilation). */
+    if (out_borrow_specs && out_n_borrow_specs) {
+        uint32_t nb = 0;
+        for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+            if (!ctx.abi_specializations[i].fn_expr) nb++;
+        }
+        if (nb > 0) {
+            BorrowSpecInfo *bs = (BorrowSpecInfo *)malloc(nb * sizeof(BorrowSpecInfo));
+            if (!bs) { fprintf(stderr, "tur: oom\n"); abort(); }
+            uint32_t bi = 0;
+            for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+                const EmitAbiSpecialization *spec = &ctx.abi_specializations[i];
+                if (spec->fn_expr) continue;
+                BorrowSpecInfo *bsi = &bs[bi++];
+                bsi->clone_name = strdup(spec->clone_name);
+                /* strdup owning_module and fn_symbol: the arena is freed when
+                 * compile_to_implementation returns, so the Symbol* pointers
+                 * would become dangling without a copy. */
+                bsi->owning_module = (spec->binding && spec->binding->defining_module_name)
+                    ? strdup(spec->binding->defining_module_name->name) : NULL;
+                bsi->fn_symbol = (spec->binding && spec->binding->name)
+                    ? strdup(spec->binding->name->name) : NULL;
+                bsi->result_kind = spec->result_type.kind;
+                bsi->n_args = spec->n_args;
+                for (uint8_t ai = 0; ai < spec->n_args; ai++)
+                    bsi->arg_kinds[ai] = spec->arg_types[ai].kind;
+            }
+            *out_borrow_specs = bs;
+            *out_n_borrow_specs = nb;
+        } else {
+            *out_borrow_specs = NULL;
+            *out_n_borrow_specs = 0;
+        }
+    }
+
+    /* J2: Clone forward declarations (emitted before function definitions). */
+    Buf impl_fwd_decls; buf_init(&impl_fwd_decls);
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+        emit_abi_forward_decl(&impl_fwd_decls, &ctx.abi_specializations[i]);
+    }
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -4362,6 +4638,19 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     }
     free(impl_items);
 
+    /* J2: Emit clone bodies for owned specs (borrow specs have fn==NULL; skip
+     * them -- the owner module's TU provides the definition). */
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
+        if (!ctx.abi_specializations[i].fn_expr) continue;
+        ctx.current_abi_specialization = &ctx.abi_specializations[i];
+        ctx.fn_name_override = ctx.abi_specializations[i].clone_name;
+        ctx.fn_name_override_external = ctx.abi_specializations[i].external_linkage;
+        emit_fn_def(&ctx, &file, ctx.abi_specializations[i].fn_expr);
+        ctx.fn_name_override = NULL;
+        ctx.fn_name_override_external = false;
+        ctx.current_abi_specialization = NULL;
+    }
+
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
     if (n_module_defers > 0) {
         buf_puts(&file, "\n/* Phase M5: module-level defers */\n");
@@ -4396,6 +4685,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
      * each module is compiled independently and the user is responsible for
      * providing exactly one explicit main() across all modules. */
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
+    /* J2: Clone forward decls precede function definitions. */
+    if (impl_fwd_decls.len) { buf_write(out, impl_fwd_decls.data, impl_fwd_decls.len); buf_putc(out, '\n'); }
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
@@ -4421,12 +4712,15 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
 
     buf_free(&file);
     buf_free(&body);
+    buf_free(&impl_fwd_decls);
     buf_free(&thunk_typedefs2);
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     free(ctx.env_struct_names);
+    for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
+    /* specialized_call_names entries alias spec->clone_name; freed above. */
     free(ctx.specialized_call_names);
     free(ctx.carrier_call_bindings);
     return 0;

@@ -94,8 +94,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * fn_name is already the mangled name; main is never module-prefixed. */
     bool is_main = (strcmp(fn_name, "main") == 0);
     /* Phase M3: In separate compilation mode, exported functions get extern
-     * linkage (no static) so they can be called from other compilation units. */
+     * linkage (no static) so they can be called from other compilation units.
+     * J3: ABI-specialization clone bodies emitted with external_linkage also
+     * drop 'static' so they are visible to borrower TUs at link time. */
     bool needs_static = !is_main &&
+        !ctx->fn_name_override_external &&
         !(ctx->separate_compilation && fd->binding->is_exported);
     if (needs_static) {
         buf_printf(file, "static ");
