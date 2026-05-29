@@ -181,8 +181,10 @@ main thread
   server-stop(server)                -- signals stop; joins listener
 ```
 
-This is intentionally simple. A thread-pool variant is out of scope for
-the initial milestone.
+A bounded thread pool is included in the initial milestone (see Phase 2,
+H6/H7): the listener hands accepted sockets to a fixed-size pool of worker
+threads via a `Mutex<Queue<socket>>`. Thread-per-connection is kept as a
+fallback config (`:mode :spawn`) but `:mode :pool :size N` is the default.
 
 ### API
 
@@ -332,9 +334,16 @@ Patterns are matched in declaration order; first match wins.
 | `put!` | PUT | `(put! "/items/:id" handler)` |
 | `delete!` | DELETE | `(delete! "/items/:id" handler)` |
 | `any!` | any | `(any! "/catch-all" handler)` |
+| `serve-static!` | GET | `(serve-static! "/assets" "./public")` |
 
 Each returns a `Route` value. `turist` collects routes, builds a dispatch
 table, starts `tur-httpd`, and routes incoming requests.
+
+`serve-static!` is a route that matches `GET <url-prefix>/*`. It strips
+the prefix, joins onto `fs-root`, rejects any resolved path that escapes
+`fs-root` (path-traversal guard), and serves the file with a `Content-Type`
+inferred from the extension via a small built-in mime table. A miss falls
+through to the next route, so dynamic routes can shadow static paths.
 
 ### Handler Helpers
 
@@ -409,6 +418,7 @@ tur-turist/
       param.tur      -- param, capture; query-string parser
       helpers.tur    -- text, html, json-body, redirect, status
       middleware.tur -- use!, Middleware type, middleware chain
+      static.tur     -- serve-static!; mime table; path-traversal guard
       template.tur   -- render-template (conditional on tur-template dep)
   tests/
     fixtures/
@@ -417,6 +427,7 @@ tur-turist/
       query-param/   -- GET /search?q=foo; param "q"
       middleware/    -- logging middleware short-circuit
       post-echo/     -- POST body round-trip
+      static-files/  -- serve-static!; mime detection; path-traversal rejection
       template/      -- render-template integration (requires.spices)
 ```
 
@@ -447,6 +458,7 @@ tur-turist/
     "turist/param"      ["param" "capture"]
     "turist/helpers"    ["text" "html" "json-body" "redirect" "status"]
     "turist/middleware" ["use!"]
+    "turist/static"     ["serve-static!"]
     "turist/template"   ["render-template"]
   })
 ```
@@ -477,9 +489,10 @@ tur-turist/
 | H3 | `request.tur`: `Request` struct; public accessors |
 | H4 | `response.tur`: `Response` struct; constructors + modifier functions |
 | H5 | `write.tur`: inline-C response serializer |
-| H6 | `server.tur`: POSIX `socket`/`bind`/`listen`/`accept` loop in a background thread; worker-per-connection |
-| H7 | Fixture tests: echo, headers, post-body (using `tur-http` client for assertions) |
-| H8 | Docstrings + `just docs` |
+| H6 | `server.tur`: POSIX `socket`/`bind`/`listen`/`accept` loop in a background thread; worker dispatch trait |
+| H7 | `pool.tur`: bounded thread pool (`Mutex<Queue<socket>>` + N worker threads); selectable via `:mode :pool :size N` (default) or `:mode :spawn` (thread-per-conn fallback) |
+| H8 | Fixture tests: echo, headers, post-body (using `tur-http` client for assertions); include a concurrent-load fixture that saturates the pool |
+| H9 | Docstrings + `just docs` |
 
 ### Phase 3 -- `tur-turist` (routing + middleware)
 
@@ -492,9 +505,10 @@ tur-turist/
 | S5 | `helpers.tur`: `text`, `html`, `json-body`, `redirect`, `status` |
 | S6 | `middleware.tur`: `use!`, middleware chain runner |
 | S7 | `app.tur`: `turist` entry point -- collects routes + middleware, starts `tur-httpd` |
-| S8 | `template.tur`: `render-template` wrapper (compile-time optional dep) |
-| S9 | Fixture tests: hello-world, path-capture, query-param, middleware, post-echo, template |
-| S10 | Docstrings + `just docs` |
+| S8 | `static.tur`: `serve-static!`; mime table; path-traversal guard (reject `..` and symlink escapes) |
+| S9 | `template.tur`: `render-template` wrapper (compile-time optional dep) |
+| S10 | Fixture tests: hello-world, path-capture, query-param, middleware, post-echo, static-files, template |
+| S11 | Docstrings + `just docs` |
 
 ---
 
@@ -540,13 +554,31 @@ A complete application using all three spices:
 
 - **`tur-httpd` keep-alive:** HTTP/1.1 persistent connections are out of scope
   for the initial milestone. Responses always include `Connection: close`.
-- **`tur-template` eval mode:** A future `render-eval` variant could evaluate
-  `<% %>` blocks as real Turmeric expressions (using the `eval` API). This is
-  intentionally deferred -- the sandboxed DSL approach is safer and simpler.
-- **`tur-turist` async handlers:** All handlers are synchronous. An async
-  variant that returns `future<Response>` is a natural follow-on once
-  `tur-httpd` gains a thread-pool mode.
-- **Content negotiation:** `tur-turist` does not inspect `Accept` headers.
-  Handlers must call the correct response helper themselves.
-- **Static file serving:** A `serve-static!` route helper is a common need;
-  deferred to a follow-on milestone.
+  The worker loop is structured around a `handle-connection` function so
+  keep-alive (a request loop guarded by an idle timeout and the client's
+  `Connection:` header) can be added later without an API break. The pool
+  worker contract -- "take a socket, return when done" -- does not change.
+- **`tur-template` eval mode:** Resolved -- `tur-template` will never gain a
+  real-eval mode. The DSL stays sandboxed so the safety boundary is explicit.
+  If real-eval is ever needed, it ships as a separate spice
+  (`tur-template-eval`) rather than a flag on this one, so users opt in to
+  the unsafe surface deliberately.
+- **`tur-turist` async handlers:** v0.1 handlers are synchronous
+  (`Request -> Response`). Async handlers are a planned v0.2 goal:
+  `Request -> future<Response>`, dispatched on top of a per-connection
+  reactor in `tur-httpd`. We accept that v0.1 handlers may need a small
+  lift (wrapping in `future-pure` or similar) when v0.2 lands -- the API
+  break is bounded and documented up front rather than designed around.
+- **Content negotiation:** Resolved -- v0.1 does not inspect `Accept`
+  headers. Handlers call the correct response helper themselves; users who
+  need negotiation can read the header via `req-header` and dispatch. If a
+  `respond-with` pattern emerges from real use it can land in v0.2 without
+  an API break.
+- **Static file serving:** Resolved -- `serve-static!` ships in v0.1.
+  Signature: `(serve-static! url-prefix fs-root)`. The helper strips
+  `url-prefix` from the request path, rejects any resolved path that
+  escapes `fs-root` (path-traversal guard against `..` segments and
+  symlink escapes), reads the file, and serves it with a `Content-Type`
+  inferred from the extension (a small built-in mime table). Falls
+  through to the next route on 404 so dynamic routes can shadow static
+  paths.

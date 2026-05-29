@@ -7,12 +7,19 @@
 >
 > **Prerequisites:** Phases A--I of the unboxing/monomorphization plan
 > (all landed). In particular the `EmitAbiSpecialization` machinery
-> (`src/compiler/emit_module.c:257-353`) and the `--emit-abi-trace`
+> (`src/compiler/emit_module.c:276-372`) and the `--emit-abi-trace`
 > classifier (`emit_module.c:439-509`).
 >
 > **Type:** Compiler / Codegen / Build driver
 >
-> **Last updated:** 2026-05-28
+> **Last updated:** 2026-05-29
+>
+> **Status verification (2026-05-29):** Re-grounded against the
+> current tree. The plan's premise still holds: whole-program builds
+> dedupe specializations; separate-compilation builds still never
+> call `emit_abi_scan_expr` and never emit clones. No `.tur-abi-cache/`
+> exists, no `module-spec-*` fixtures exist, no Phase J work has begun.
+> Line numbers below have been refreshed to match HEAD.
 
 ---
 
@@ -28,24 +35,25 @@ That premise does **not** hold in the current codebase. Two facts make
 Phase J a two-part job rather than a pure caching add-on:
 
 1. **Whole-program builds already dedupe.** The single-file /
-   whole-program path `emit_program` (`emit_module.c:700`) flattens
+   whole-program path `emit_program` (`emit_module.c:763`) flattens
    every imported module into one translation unit
-   (`flatten_program_items`, `emit_module.c:783`) and then dedupes
+   (`flatten_program_items`, `emit_module.c:849`) and then dedupes
    specializations by `(binding, n_args, result_type, arg_types)`
-   before adding a new clone (`emit_module.c:312-329`). The `binding`
+   before adding a new clone (`emit_module.c:331-348`). The `binding`
    is the one global `Binding*` for the generic def regardless of which
    module's call site triggered it, so the same generic called at the
    same type from two modules yields exactly **one** clone. No
    duplication, nothing to cache.
 
 2. **Separate-compilation builds never specialize at all.** The
-   per-module path `emit_implementation` (`emit_module.c:4138`), used by
+   per-module path `emit_implementation` (`emit_module.c:4208`), used by
    directory / multi-file builds (`compile_to_implementation` ->
    `emit_implementation`, driven by `cmd_build_multi` in
-   `src/main.c:2334-2389`) and by `tur emit-c --output-dir`, **never
-   calls `emit_abi_scan_expr`** and **never emits any clone**. It
+   `src/main.c:2357+`) and by `tur emit-c --output-dir`
+   (`cmd_emit_c_to_dir`, `src/main.c:1012`), **never calls
+   `emit_abi_scan_expr`** and **never emits any clone**. It
    initializes the ABI-specialization fields to empty
-   (`emit_module.c:4190-4198`) and leaves them empty. Every generic call
+   (`emit_module.c:4260-4271`) and leaves them empty. Every generic call
    in a multi-module build therefore takes the carrier (`int64_t`) ABI.
 
 So the cross-module duplication Phase J wants to eliminate cannot occur
@@ -69,47 +77,47 @@ clones. Part 2 is the small, originally-scoped optimization on top.
 
 ### Specialization machinery (whole-program only)
 
-- `emit_abi_register_call` (`emit_module.c:257`) -- per `EX_CALL`,
+- `emit_abi_register_call` (`emit_module.c:276`) -- per `EX_CALL`,
   instantiates the generic signature against the call's
   `abi_bindings`, decides whether the C ABI changes
   (`strcmp(type_c_name(generic), type_c_name(concrete)) != 0`,
-  `emit_module.c:298,307`), dedupes against existing specializations
-  (`:312-329`), and otherwise appends a new `EmitAbiSpecialization`
-  (`:340-352`).
+  `emit_module.c:317`), dedupes against existing specializations
+  (`:331-348`), and otherwise appends a new `EmitAbiSpecialization`
+  (`:359-371`).
 - Guards that currently *exclude* a call from specialization
-  (`:268-285`): indirect calls (`fn_expr` set), non-`TY_FN` bindings,
+  (`:279-290`): indirect calls (`fn_expr` set), non-`TY_FN` bindings,
   **non-global bindings**, **closures** (`closure_fn_binding`),
   closure-bodied defns (`fd->closure`), bodiless defns, and inline-C
   bodies without a `__TUR_TY_<NAME>__` template marker.
 - `emit_abi_clone_name` (`:223`) -- builds the globally-unique mangled
   name `"<fn>__spec__<resultC>_<arg0C>_..."`.
-- Forward decls: `emit_abi_forward_decl` (`:682`) writes
-  `static <ret> <clone>(...);`.
-- Definitions: the loop at `emit_module.c:1341-1347` re-emits each
+- Forward decls: `emit_abi_forward_decl` (`:745`) writes
+  `static <ret> <clone>(...);` (`static ` written at `:747`).
+- Definitions: the clone body loop in `emit_program` re-emits each
   clone's `FnDef` body via `emit_fn_def` with
   `ctx.fn_name_override = clone_name` and
   `ctx.current_abi_specialization = spec`.
 - **Linkage:** clones are emitted **`static`** today
-  (`emit_abi_forward_decl:684`, and `emit_fn_def`'s `static ` prefix at
-  `emit_module.c:1181-1182` for non-exported fns). File-local linkage is
-  correct in whole-program mode (one TU) but is exactly what blocks
-  cross-TU sharing.
+  (`emit_abi_forward_decl`, and `emit_fn_def`'s `static ` prefix for
+  non-exported fns). File-local linkage is correct in whole-program
+  mode (one TU) but is exactly what blocks cross-TU sharing.
 - Call-site rewrite: `specialized_call_exprs` / `specialized_call_names`
-  (`emit_internal.h:113-116`) map a call `Expr*` to its clone name;
+  (`emit_internal.h:113-114`) map a call `Expr*` to its clone name;
   `emit_call_name` consults it so the call emits `clone(...)` instead of
   the carrier callee.
 
 ### Separate compilation (per-module)
 
-- `emit_header` (`emit_module.c:3978`) emits exported decls; exported
-  defns/fns get external linkage, non-exported stay `static`
-  (`:3944`, `:4030-4115`).
-- `emit_implementation` (`emit_module.c:4138`) emits `#include
+- `emit_header` (`emit_module.c:4048`) emits exported decls; exported
+  defns/fns get external linkage at `:4138-4141`, non-exported stay
+  `static`.
+- `emit_implementation` (`emit_module.c:4208`) emits `#include
   "<mod>.h"`, then each module's defs/fns. Exported defs get extern
-  linkage (`:4250-4254`); functions go through `emit_fn_def`.
+  linkage; functions go through `emit_fn_def`.
 - No `emit_abi_scan_expr`, no clone forward-decls, no clone bodies, no
-  `--emit-abi-trace` hook on this path.
-- `cmd_build_multi` (`src/main.c` ~`:2334`) compiles each `.tur` to its
+  `--emit-abi-trace` hook on this path. (Grep confirms zero `emit_abi*`
+  calls inside `emit_implementation`'s body.)
+- `cmd_build_multi` (`src/main.c:2357`) compiles each `.tur` to its
   own `.h`+`.c` independently, then links all `.c` together. All module
   object files end up in one link, so a symbol defined in module A is
   resolvable from module B at link time (key enabler for Part 2).
@@ -151,9 +159,9 @@ Extract the three whole-program steps into reusable helpers that both
 already-flattened `items`:
 
 - `emit_abi_scan_program(ctx, items, n_items)` -- the loop at
-  `emit_module.c:785-787`.
-- clone forward-decl loop -- `emit_module.c:1235-1237`.
-- clone body loop -- `emit_module.c:1341-1347`.
+  `emit_module.c:851-853`.
+- clone forward-decl loop (currently inside `emit_program`).
+- clone body loop (currently inside `emit_program`).
 
 No behavior change for whole-program mode; this is a pure refactor to
 remove copy-paste before wiring the second caller.
@@ -165,11 +173,10 @@ green.
 ### J2. Run the scan in `emit_implementation`
 
 Call `emit_abi_scan_program` after `impl_items` is flattened
-(`emit_module.c:4210`), emit clone forward decls into the file buffer
-before the function definitions, and emit clone bodies after Pass 1
-(after `emit_module.c:4281`). Also wire the `--emit-abi-trace` hook here
-(mirror `emit_module.c:790-794`) so the flag works for multi-module
-builds.
+(`emit_module.c:4283`), emit clone forward decls into the file buffer
+before the function definitions, and emit clone bodies after Pass 1.
+Also wire the `--emit-abi-trace` hook here (mirror
+`emit_module.c:856-860`) so the flag works for multi-module builds.
 
 **Subtlety -- per-module `items` visibility.** `emit_abi_find_fn_expr`
 (`emit_module.c:213`) locates the generic `FnDef` by scanning the
@@ -191,13 +198,12 @@ Clones that may be referenced from another TU must not be `static`.
 Introduce a per-spec `bool external_linkage` on `EmitAbiSpecialization`
 (default false to preserve whole-program behavior). When set:
 
-- `emit_abi_forward_decl` (`emit_module.c:682`) drops the `static `
+- `emit_abi_forward_decl` (`emit_module.c:745`) drops the `static `
   prefix and instead emits the decl into the **header** (so importers
   pick it up via `#include`), or into the impl as a plain extern.
-- the clone body loop (`emit_module.c:1341`) emits a non-`static`
-  definition. This requires `emit_fn_def` to honor a "force external"
-  signal for the override name -- add an `EmitCtx` flag set alongside
-  `fn_name_override`.
+- the clone body loop emits a non-`static` definition. This requires
+  `emit_fn_def` to honor a "force external" signal for the override
+  name -- add an `EmitCtx` flag set alongside `fn_name_override`.
 
 Whole-program mode never sets `external_linkage`, so clones stay
 `static` there and nothing regresses.
@@ -226,10 +232,10 @@ call to a generic it imports:
   decl for the clone.
 
 The cleanest delivery is to have the owning module emit the clone's
-forward decl into **its header** (`emit_header`), gated on
-`external_linkage`. Then any importer already `#include`s that header
-(`emit_module.c:4001-4013`) and the decl arrives for free. Borrow then
-needs no per-caller extern bookkeeping -- only "don't emit the body."
+forward decl into **its header** (`emit_header`, `emit_module.c:4048`),
+gated on `external_linkage`. Then any importer already `#include`s that
+header and the decl arrives for free. Borrow then needs no per-caller
+extern bookkeeping -- only "don't emit the body."
 
 ### J5. The `.tur-abi-cache/` directory
 
@@ -239,7 +245,7 @@ deterministic and cheap:
 - **Location:** `<build-root>/.tur-abi-cache/`. Created on first write;
   append the directory to `.gitignore` on first creation if a
   `.gitignore` exists (mirror `.tur-repl-cache` behavior in
-  `src/spice_loader.c`).
+  `src/turi/spice_loader.c`).
 - **Index format:** one line per clone, tab-separated:
   `<clone_name>\t<owning_module>\t<source_hash>`. `clone_name` is the
   unique key (it already encodes `fn` + `type_args`). `owning_module` is
@@ -250,7 +256,7 @@ deterministic and cheap:
 
 ### J6. Cache consultation during the build
 
-In `cmd_build_multi` (`src/main.c:2334`), thread a shared
+In `cmd_build_multi` (`src/main.c:2357`), thread a shared
 `AbiCacheCtx*` through the per-module `compile_to_implementation` calls
 (new optional parameter, NULL elsewhere). For each spec a module would
 own:
@@ -271,8 +277,8 @@ an optimization; a cold/empty cache must always produce a correct build.
 
 ### J7. `tur emit-c --output-dir` parity
 
-The same cache plumbing applies to `cmd_emit_c_multi`
-(`src/main.c:1010+`). Lower priority than `build`, but should share the
+The same cache plumbing applies to `cmd_emit_c_to_dir`
+(`src/main.c:1012`). Lower priority than `build`, but should share the
 J5/J6 code so the two multi-file entry points behave identically.
 
 ---
