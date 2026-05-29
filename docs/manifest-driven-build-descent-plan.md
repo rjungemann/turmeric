@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Phases 1-3 + follow-ups T1/T2 implemented; T3 pending
+> **Status:** Phases 1-3 + follow-ups T1/T2/T3 implemented
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -267,10 +267,10 @@ re-run the scscm validation checklist.
       (`run-build-shared` exercises the shared core unchanged.)
 - [x] `tur run <project>` and `tur build <project>` agree on the module set.
       (Structural after T1: both call the shared
-      `resolve_include_dirs_from_manifest`. T2 (below) is now fixed, so
-      same-project `tur run` from an arbitrary cwd links; a full behavioral
-      `run` vs `build` comparison is still blocked by the unrelated T3
-      cross-spice-link limitation below.)
+      `resolve_include_dirs_from_manifest`. T2 and T3 (below) are now fixed, so
+      both same-project (`tur run` from an arbitrary cwd) and cross-spice
+      (`:spices` dep modules linked under `tur build <dir>`) cases hold
+      behaviorally; `build-project-links-cross-spice-dep` exercises the latter.)
 - [x] `ctest` for the new CLI fixtures passes (`tur_build_project`);
       `bash tests/run.sh` green modulo the pre-existing ASan leaks
       (`docs/asan-debug-leaks-plan.md`).
@@ -391,6 +391,43 @@ is correct) but never compiled/linked -- the dependent's generated
 should also compile each resolved `:spices` dep's modules (or build deps as
 libraries and link them). Until then, cross-spice builds work only via
 `tur run`'s single-entry inlining, not separate-compilation `tur build`.
+
+**Implemented.** `cmd_build_project` (`src/main.c`) now folds each resolved
+`:spices` dependency's modules into the build set so the dependent links under
+separate compilation:
+
+- After collecting the project's own `src/` modules, it re-resolves the
+  dependency `src/` dirs via `resolve_include_dirs_from_manifest(root, m,
+  include_own_src=false, ...)` (the same resolver `tur run`/`tur test` use --
+  workspace member -> `:path` -> `:ref` -> `spices/<name>`, with `:subdir`,
+  `src/` preference, and the monorepo-sibling fallback), then
+  `collect_tur_recursive`s each dep dir.
+- `cmd_build_multi_files` gained a per-file module-name-root array
+  (`file_src_roots`).  A dep module is named relative to its *own* dep `src/`
+  (e.g. `<dep>/src/sib/api.tur` -> module `sib/api` -> `sib__api.h`), which is
+  exactly the header the importer's generated `#include` references; project
+  modules keep using the single project `src_root`.
+- Module-name collisions are de-duplicated (the build keeps the project's own
+  module, or the first dep to define a given qualified name), so adding deps
+  cannot silently shadow a project module or emit duplicate `.c` files.
+- Gated to executable builds (`!shared`): a `--shared` `.so` links its
+  dependencies separately and must not absorb their modules or accumulate their
+  exported defns into the library's `exports.manifest`.
+- Scope: direct `:spices` deps only.  Transitive deps-of-deps are not pulled in
+  (the resolved include/build set covers this project's direct dependencies);
+  a dep that itself imports a third spice would still need that spice on the
+  build's include path.  No autolink-marker scanning is added to the multi-file
+  link path -- that remains a separate pre-existing limitation of
+  `cmd_build_multi_files`, unrelated to cross-spice linking.
+- Regression coverage: `build-project-links-cross-spice-dep` in
+  `tests/run-build-project.sh` builds a `consumer` project that imports
+  `sib/api` from a `:path`-linked `sib` spice via `tur build <dir>`, asserts
+  exit 0 and a runnable binary that returns the dep's value (42).  The test
+  fails against the pre-fix binary (`sib__api.h: No such file`).
+
+With T3 in place, the previously-deferred validation item -- `tur run
+<project>` and `tur build <project>` agreeing on the module set -- holds
+behaviorally for cross-spice projects too, not just structurally.
 
 ## Out of scope
 

@@ -2889,6 +2889,7 @@ static char *derive_module_name(const char *file, const char *src_root) {
 
 static int cmd_build_multi_files(char **tur_files, int n_files,
                                  const char *dir, const char *src_root,
+                                 const char **file_src_roots,
                                  const char *out_path,
                                  bool shared, const char *manifest_path,
                                  const char **inc, int n_inc) {
@@ -2923,7 +2924,13 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * (e.g. "app/util") and the generated files are named by its mangled form
      * ("app__util.h") so cross-module `#include "app__util.h"` resolves. */
     for (int i = 0; i < n_files; i++) {
-        mod_names[i] = derive_module_name(tur_files[i], src_root);
+        /* T3: cross-spice dep modules are named relative to their own dep
+         * src/ (via file_src_roots[i]) so e.g. sib/api maps to sib__api.h,
+         * matching the importer's generated `#include "sib__api.h"`.  Project
+         * modules fall back to the single src_root. */
+        const char *sr = (file_src_roots && file_src_roots[i])
+                             ? file_src_roots[i] : src_root;
+        mod_names[i] = derive_module_name(tur_files[i], sr);
         char mangled[512];
         mangle_mod_basename(mod_names[i], mangled, sizeof(mangled));
         size_t mlen = strlen(mangled);
@@ -3289,8 +3296,8 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
         free_tur_files(tur_files, n_files);
         return 1;
     }
-    return cmd_build_multi_files(tur_files, n_files, dir, NULL, out_path, shared,
-                                 manifest_path, NULL, 0);
+    return cmd_build_multi_files(tur_files, n_files, dir, NULL, NULL, out_path,
+                                 shared, manifest_path, NULL, 0);
 }
 
 /* Manifest-driven project build: `tur build <dir>` where <dir>/build.tur
@@ -3375,9 +3382,98 @@ static int cmd_build_project(const char *root, const char *out_path,
         for (int i = 0; i < n_proj_inc; i++) inc[n_user_inc + i] = proj_inc[i];
     }
 
-    int rc = cmd_build_multi_files(tur_files, n_files, root, src_root, out_path,
-                                   shared, manifest_path, inc, n_inc);
+    /* T3: pull each resolved :spices dep's modules into the build set so a
+     * cross-spice `(import dep/mod)` links under separate compilation.  The
+     * include path (proj_inc) already lets the importer type-check against the
+     * dep's source, but without also compiling+linking the dep's modules the
+     * generated `#include "dep__mod.h"` has no backing file and cc fails.
+     *
+     * Dep modules are named relative to their own dep `src/` (via the per-file
+     * src-root array) so e.g. `sib/api` maps to `sib__api.h`, matching the
+     * importer's emitted include.  A dep module whose qualified name collides
+     * with one already in the set (a project module, or an earlier dep) is
+     * skipped, keeping the project's own copy.
+     *
+     * Skipped in shared-library mode: a `.so` links its deps separately and
+     * must not absorb their modules or accumulate their exports into the
+     * library's manifest.  Transitive deps-of-deps are out of scope (the
+     * resolved include path only covers this project's direct `:spices`). */
+    char       **all_files = tur_files;  /* realloc'd as dep modules append */
+    int          n_all     = n_files;
+    int          cap_all   = n_files;
+    const char **all_roots = (const char **)malloc(
+        (size_t)(cap_all > 0 ? cap_all : 1) * sizeof(char *));
+    const char **dep_dirs  = NULL;
+    int          n_dep_dirs = 0;
+    if (!all_roots) {
+        fprintf(stderr, "tur: oom\n");
+        free(inc);
+        for (int i = 0; i < n_proj_inc; i++) free((char *)proj_inc[i]);
+        free(proj_inc);
+        free_tur_files(tur_files, n_files);
+        return 2;
+    }
+    for (int i = 0; i < n_files; i++) all_roots[i] = src_root;
 
+    if (!shared) {
+        char mpath[4096];
+        snprintf(mpath, sizeof(mpath), "%s/build.tur", root);
+        PkgManifest dm;
+        if (pkg_manifest_read(mpath, &dm)) {
+            resolve_include_dirs_from_manifest(root, &dm, /*include_own_src=*/false,
+                                               &dep_dirs, &n_dep_dirs);
+            pkg_manifest_free(&dm);
+        }
+
+        /* seen-set of qualified module names already in the build set, seeded
+         * with the project's own modules so dep modules can't shadow them. */
+        int    n_seen = 0, cap_seen = n_files > 0 ? n_files : 1;
+        char **seen = (char **)malloc((size_t)cap_seen * sizeof(char *));
+        if (seen) {
+            for (int i = 0; i < n_files; i++)
+                seen[n_seen++] = derive_module_name(tur_files[i], src_root);
+        }
+
+        for (int k = 0; seen && k < n_dep_dirs; k++) {
+            char **df = NULL; int dn = 0, dc = 0;
+            collect_tur_recursive(dep_dirs[k], &df, &dn, &dc);
+            qsort(df, (size_t)dn, sizeof(char *), compare_cstr_ptrs);
+            for (int j = 0; j < dn; j++) {
+                char *mn = derive_module_name(df[j], dep_dirs[k]);
+                bool dup = false;
+                for (int s = 0; s < n_seen; s++)
+                    if (strcmp(seen[s], mn) == 0) { dup = true; break; }
+                if (dup) { free(mn); free(df[j]); continue; }
+                if (n_seen >= cap_seen) {
+                    cap_seen *= 2;
+                    char **ns = (char **)realloc(seen, (size_t)cap_seen * sizeof(char *));
+                    if (!ns) { free(mn); free(df[j]); continue; }
+                    seen = ns;
+                }
+                seen[n_seen++] = mn;
+                if (n_all >= cap_all) {
+                    cap_all = cap_all > 0 ? cap_all * 2 : 8;
+                    all_files = (char **)realloc(all_files,
+                                                 (size_t)cap_all * sizeof(char *));
+                    all_roots = (const char **)realloc(all_roots,
+                                                 (size_t)cap_all * sizeof(char *));
+                }
+                all_files[n_all]  = df[j];        /* transfer ownership */
+                all_roots[n_all]  = dep_dirs[k];  /* borrowed until build returns */
+                n_all++;
+            }
+            free(df);  /* shell only; strings transferred or freed above */
+        }
+        for (int s = 0; s < n_seen; s++) free(seen[s]);
+        free(seen);
+    }
+
+    int rc = cmd_build_multi_files(all_files, n_all, root, src_root, all_roots,
+                                   out_path, shared, manifest_path, inc, n_inc);
+
+    free(all_roots);
+    for (int k = 0; k < n_dep_dirs; k++) free((char *)dep_dirs[k]);
+    free(dep_dirs);
     free(inc);
     for (int i = 0; i < n_proj_inc; i++) free((char *)proj_inc[i]);
     free(proj_inc);
