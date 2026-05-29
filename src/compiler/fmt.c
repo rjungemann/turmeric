@@ -18,7 +18,7 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <stdarg.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -96,26 +96,35 @@ static const char *lit_suffix_str(LiteralSuffix suf) {
     }
 }
 
-/* Render an F_INT / F_FLOAT literal, preserving its type suffix. For floats,
- * "%g" alone turns 0.0 into "0" -- which would re-parse as an int -- so append
+/* Render an F_INT / F_FLOAT literal, preserving its type suffix and full
+ * value. For floats, plain "%g" defaults to 6 significant digits -- which
+ * silently truncated high-precision literals (e.g. PI 3.14159265358979323846
+ * -> 3.14159) -- so search for the shortest "%.*g" precision that strtod
+ * recovers exactly (17 sig figs always round-trips an IEEE-754 double).
+ * "%g" also turns 0.0 into "0", which would re-parse as an int, so append
  * ".0" when the formatted value carries no '.', exponent, or inf/nan marker. */
 static void fmt_num_literal(Buf *b, const Form *f) {
     if (f->tag == F_FLOAT) {
+        double v = f->as.f;
         char tmp[64];
-        int n = snprintf(tmp, sizeof(tmp), "%g", f->as.f);
-        if (n < 0) { buf_puts(b, "0.0"); }
-        else {
-            bool floaty = false;
-            for (int i = 0; i < n; i++) {
-                char c = tmp[i];
-                if (c == '.' || c == 'e' || c == 'E' || c == 'n' || c == 'i') {
-                    floaty = true;
-                    break;
-                }
-            }
-            buf_write(b, tmp, (size_t)n);
-            if (!floaty) buf_puts(b, ".0");
+        int n = -1;
+        for (int prec = 1; prec <= 17; prec++) {
+            n = snprintf(tmp, sizeof(tmp), "%.*g", prec, v);
+            if (n > 0 && (size_t)n < sizeof(tmp) && strtod(tmp, NULL) == v) break;
         }
+        if (n < 0 || (size_t)n >= sizeof(tmp)) {
+            n = snprintf(tmp, sizeof(tmp), "%.17g", v);
+        }
+        bool floaty = false;
+        for (int i = 0; i < n; i++) {
+            char c = tmp[i];
+            if (c == '.' || c == 'e' || c == 'E' || c == 'n' || c == 'i') {
+                floaty = true;
+                break;
+            }
+        }
+        buf_write(b, tmp, (size_t)n);
+        if (!floaty) buf_puts(b, ".0");
     } else {
         buf_printf(b, "%lld", (long long)f->as.i);
     }
