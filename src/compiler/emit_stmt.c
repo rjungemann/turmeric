@@ -452,13 +452,23 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(ctx->file, "%s", sanitized_method_name);
                 buf_puts(ctx->file, ")(");
                 
-                /* Parameter types — Phase HRT3: use tur_poly_fn_t for poly fn params */
+                /* Parameter types — Phase HRT3: use tur_poly_fn_t for poly fn params.
+                 * Mirror emit_fns.c: pass_by_ptr structs use const T* in the slot typedef
+                 * so it matches the actual by-pointer function signature. */
+                bool body_is_inline_c = (method_impl->body
+                                         && method_impl->body->kind == EX_INLINE_C);
                 for (uint8_t j = 0; j < method_impl->n_params; j++) {
                     if (j > 0) buf_puts(ctx->file, ", ");
                     if (method_impl->params && method_impl->params[j]->is_poly_fn) {
                         buf_puts(ctx->file, "tur_poly_fn_t");
                     } else {
-                        buf_printf(ctx->file, "%s", type_c_name(method_impl->param_types[j]));
+                        Type pt = method_impl->param_types[j];
+                        if (!method_impl->closure && !body_is_inline_c
+                            && type_struct_pass_by_ptr(pt)) {
+                            buf_printf(ctx->file, "const %s *", type_c_name(pt));
+                        } else {
+                            buf_printf(ctx->file, "%s", type_c_name(pt));
+                        }
                     }
                 }
                 buf_puts(ctx->file, ");\n");
