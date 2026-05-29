@@ -1,3 +1,9 @@
+---
+title: tur-stats Guide
+category: Data & Libraries
+description: Statistics spice for Turmeric -- descriptive stats, probability distributions, hypothesis tests, OLS regression, and resampling on dataframes
+---
+
 # tur-stats Guide
 
 `tur-stats` is the official statistics spice for Turmeric. It provides

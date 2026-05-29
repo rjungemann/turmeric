@@ -1,3 +1,9 @@
+---
+title: Bibliography
+category: Reference
+description: Academic papers, theses, and technical references cited across Turmeric design documents and guides
+---
+
 # Bibliography
 
 Academic papers, theses, and technical references cited across the Turmeric

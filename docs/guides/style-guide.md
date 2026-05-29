@@ -1,3 +1,9 @@
+---
+title: Turmeric Style Guide
+category: Reference
+description: Canonical idioms and formatting conventions for Turmeric code -- function arity, indentation, naming, and inline-C style
+---
+
 # Turmeric Style Guide
 
 > **Status:** Living document -- updated as idioms are established.
