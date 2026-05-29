@@ -2068,6 +2068,183 @@ static int compare_cstr_ptrs(const void *a, const void *b) {
     return strcmp(*sa, *sb);
 }
 
+/* Recursively collect `*.tur` files under `dir` into a growing array.
+ * Skips the package manifest (`build.tur`) and any dotfile entry (so
+ * `.git/`, `.tur-cache/`, `.tur-abi-cache/`, etc. are not descended into).
+ * Paths are heap-allocated; the array is freed via free_tur_files. */
+static void collect_tur_recursive(const char *dir,
+                                  char ***files, int *n, int *cap) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue; /* ., .., and dot subtrees */
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            collect_tur_recursive(path, files, n, cap);
+        } else if (S_ISREG(st.st_mode)) {
+            size_t len = strlen(ent->d_name);
+            if (len < 4 || strcmp(ent->d_name + len - 4, ".tur") != 0) continue;
+            if (strcmp(ent->d_name, "build.tur") == 0) continue; /* manifest */
+            if (*n >= *cap) {
+                *cap = *cap ? *cap * 2 : 8;
+                *files = (char **)realloc(*files, (size_t)*cap * sizeof(char *));
+            }
+            (*files)[(*n)++] = strdup(path);
+        }
+    }
+    closedir(d);
+}
+
+/* Collect a spice/library project's module files for a directory build.
+ * Prefers a recursive walk of `<root>/src` (the conventional layout used by
+ * every first-party spice, including nested `src/<pkg>/` trees); when there
+ * is no `src/`, falls back to a shallow scan of `root` with the manifest
+ * filtered out.  Heap array; free via free_tur_files. */
+static char **collect_project_src_files(const char *root, int *n_out) {
+    *n_out = 0;
+    char **files = NULL;
+    int n = 0, cap = 0;
+
+    char src_dir[4096];
+    snprintf(src_dir, sizeof(src_dir), "%s/src", root);
+    struct stat st;
+    if (stat(src_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+        collect_tur_recursive(src_dir, &files, &n, &cap);
+    } else {
+        /* No src/ tree: shallow scan of the root, skipping build.tur. */
+        int rn = 0;
+        char **raw = collect_tur_files(root, &rn);
+        for (int i = 0; i < rn; i++) {
+            if (strcmp(basename_of(raw[i]), "build.tur") == 0) {
+                free(raw[i]);
+                continue;
+            }
+            if (n >= cap) {
+                cap = cap ? cap * 2 : 8;
+                files = (char **)realloc(files, (size_t)cap * sizeof(char *));
+            }
+            files[n++] = raw[i];
+        }
+        free(raw);
+    }
+    *n_out = n;
+    return files;
+}
+
+/* Resolve a project's include search path from its build.tur:
+ *   - the project's own `src/` directory (so intra-spice imports resolve);
+ *   - each declared `:spices` dependency's resolved `src/` (with :path / :ref
+ *     / :subdir handling and the monorepo-sibling fallback).
+ * Walks up from `dir` to find the enclosing build.tur.  On return *out_dirs
+ * is a heap array of strdup'd directories (*out_n entries); the caller frees
+ * each string and the array.  No-op (leaves *out_n = 0) when there is no
+ * manifest.  Mirrors the resolution used by `tur run` / the test runner. */
+static void resolve_project_include_dirs(const char *dir,
+                                         const char ***out_dirs, int *out_n) {
+    *out_dirs = NULL;
+    *out_n    = 0;
+
+    char abs_dir[4096];
+    if (!realpath(dir, abs_dir)) {
+        strncpy(abs_dir, dir, sizeof(abs_dir) - 1);
+        abs_dir[sizeof(abs_dir) - 1] = '\0';
+    }
+    char *proj_root = find_project_root(abs_dir);
+    if (!proj_root) return;
+
+    char manifest_path[4096];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/build.tur", proj_root);
+    PkgManifest m;
+    if (!pkg_manifest_read(manifest_path, &m)) {
+        free(proj_root);
+        return;
+    }
+
+    int cap = 1 + m.n_spices;
+    const char **dirs = (const char **)malloc((size_t)cap * sizeof(char *));
+    int n = 0;
+    if (dirs) {
+        /* Project's own src/, if it exists. */
+        {
+            char own_src[4096];
+            snprintf(own_src, sizeof(own_src), "%s/src", proj_root);
+            struct stat ss;
+            if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
+                dirs[n++] = strdup(own_src);
+        }
+        /* Each declared :spice's resolved src/.  Mirrors the convention used
+         * by `cmd_run`: spices/<name>-<ref>/(<subdir>/)src, falling back to
+         * the dep dir if `src/` is absent, with a monorepo-sibling fallback. */
+        char spices_dir[4096];
+        snprintf(spices_dir, sizeof(spices_dir), "%s/spices", proj_root);
+        for (int i = 0; i < m.n_spices; i++) {
+            const PkgSpice *s = &m.spices[i];
+            char dep_dir[4096];
+            if (s->path) {
+                snprintf(dep_dir, sizeof(dep_dir), "%s/%s", proj_root, s->path);
+            } else if (s->ref) {
+                snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                         spices_dir, s->name, s->ref);
+            } else {
+                snprintf(dep_dir, sizeof(dep_dir), "%s/%s", spices_dir, s->name);
+            }
+            if (s->subdir) {
+                char tmp[4096];
+                snprintf(tmp, sizeof(tmp), "%s/%s", dep_dir, s->subdir);
+                strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
+                dep_dir[sizeof(dep_dir) - 1] = '\0';
+            }
+            char src_sub[4096];
+            snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
+            struct stat ss;
+            const char *chosen = NULL;
+            if (stat(src_sub, &ss) == 0 && S_ISDIR(ss.st_mode))
+                chosen = src_sub;
+            else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
+                chosen = dep_dir;
+
+            bool fallback_added = false;
+            if (!chosen && s->subdir) {
+                char ancestor[4096];
+                strncpy(ancestor, proj_root, sizeof(ancestor) - 1);
+                ancestor[sizeof(ancestor) - 1] = '\0';
+                for (int up = 0; up < 4 && !fallback_added; up++) {
+                    char *slash = strrchr(ancestor, '/');
+                    if (!slash || slash == ancestor) break;
+                    *slash = '\0';
+                    char sib_src[4096];
+                    snprintf(sib_src, sizeof(sib_src),
+                             "%s/%s/src", ancestor, s->subdir);
+                    if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                        dirs[n++] = strdup(sib_src);
+                        fallback_added = true;
+                        break;
+                    }
+                    char sib_dir[4096];
+                    snprintf(sib_dir, sizeof(sib_dir),
+                             "%s/%s", ancestor, s->subdir);
+                    if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
+                        dirs[n++] = strdup(sib_dir);
+                        fallback_added = true;
+                        break;
+                    }
+                }
+            }
+            if (fallback_added) continue;
+            if (chosen) dirs[n++] = strdup(chosen);
+        }
+    }
+    pkg_manifest_free(&m);
+    free(proj_root);
+
+    *out_dirs = dirs;
+    *out_n    = n;
+}
+
 static int decode_exit_status(int status) {
     if (status == -1) return 127;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -2510,117 +2687,7 @@ static int cmd_test(const char *dir) {
      */
     const char **spice_inc_dirs = NULL;
     int          n_spice_inc_dirs = 0;
-    {
-        /* find_project_root only walks up from the given path, so it never
-         * finds a build.tur sitting in the current working directory when
-         * `dir` is a relative subpath like "tests/plutovg".  Resolve to an
-         * absolute path first. */
-        char abs_dir[4096];
-        if (!realpath(dir, abs_dir)) {
-            strncpy(abs_dir, dir, sizeof(abs_dir) - 1);
-            abs_dir[sizeof(abs_dir) - 1] = '\0';
-        }
-        char *proj_root = find_project_root(abs_dir);
-        if (proj_root) {
-            char manifest_path[4096];
-            snprintf(manifest_path, sizeof(manifest_path),
-                     "%s/build.tur", proj_root);
-            PkgManifest m;
-            if (pkg_manifest_read(manifest_path, &m)) {
-                /* Capacity: own src + one entry per :spice. */
-                int cap = 1 + m.n_spices;
-                spice_inc_dirs = (const char **)malloc((size_t)cap * sizeof(char *));
-                if (spice_inc_dirs) {
-                    /* Project's own src/, if it exists. */
-                    {
-                        char own_src[4096];
-                        snprintf(own_src, sizeof(own_src), "%s/src", proj_root);
-                        struct stat ss;
-                        if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
-                            spice_inc_dirs[n_spice_inc_dirs++] = strdup(own_src);
-                    }
-                    /* Each declared :spice's resolved src/.  Mirrors the
-                     * convention used by `cmd_run`: spices/<name>-<ref>/
-                     * (optionally /<subdir>) /src, falling back to the
-                     * dep dir if `src/` is absent. */
-                    char spices_dir[4096];
-                    snprintf(spices_dir, sizeof(spices_dir),
-                             "%s/spices", proj_root);
-                    for (int i = 0; i < m.n_spices; i++) {
-                        const PkgSpice *s = &m.spices[i];
-                        char dep_dir[4096];
-                        if (s->path) {
-                            snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
-                                     proj_root, s->path);
-                        } else if (s->ref) {
-                            snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                                     spices_dir, s->name, s->ref);
-                        } else {
-                            snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
-                                     spices_dir, s->name);
-                        }
-                        if (s->subdir) {
-                            char tmp[4096];
-                            snprintf(tmp, sizeof(tmp), "%s/%s",
-                                     dep_dir, s->subdir);
-                            strncpy(dep_dir, tmp, sizeof(dep_dir) - 1);
-                            dep_dir[sizeof(dep_dir) - 1] = '\0';
-                        }
-                        char src_sub[4096];
-                        snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
-                        struct stat ss;
-                        const char *chosen = NULL;
-                        if (stat(src_sub, &ss) == 0 && S_ISDIR(ss.st_mode))
-                            chosen = src_sub;
-                        else if (stat(dep_dir, &ss) == 0 && S_ISDIR(ss.st_mode))
-                            chosen = dep_dir;
-
-                        /* Monorepo fallback: when the fetched copy is
-                         * absent (e.g. optional spice never cloned) but a
-                         * workspace ancestor contains the `:subdir` as a
-                         * sibling member, use that instead.  We walk up to
-                         * three directory levels to handle the
-                         * `turmeric-spices/spices/<this>` -> `:subdir
-                         * "spices/test"` -> `turmeric-spices/spices/test`
-                         * shape used by the first-party spices repo. */
-                        bool fallback_added = false;
-                        if (!chosen && s->subdir) {
-                            char ancestor[4096];
-                            strncpy(ancestor, proj_root, sizeof(ancestor) - 1);
-                            ancestor[sizeof(ancestor) - 1] = '\0';
-                            for (int up = 0; up < 4 && !fallback_added; up++) {
-                                char *slash = strrchr(ancestor, '/');
-                                if (!slash || slash == ancestor) break;
-                                *slash = '\0';
-                                char sib_src[4096];
-                                snprintf(sib_src, sizeof(sib_src),
-                                         "%s/%s/src", ancestor, s->subdir);
-                                if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                                    spice_inc_dirs[n_spice_inc_dirs++] = strdup(sib_src);
-                                    fallback_added = true;
-                                    break;
-                                }
-                                char sib_dir[4096];
-                                snprintf(sib_dir, sizeof(sib_dir),
-                                         "%s/%s", ancestor, s->subdir);
-                                if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                                    spice_inc_dirs[n_spice_inc_dirs++] = strdup(sib_dir);
-                                    fallback_added = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (fallback_added) continue;
-
-                        if (chosen)
-                            spice_inc_dirs[n_spice_inc_dirs++] = strdup(chosen);
-                    }
-                }
-                pkg_manifest_free(&m);
-            }
-            free(proj_root);
-        }
-    }
+    resolve_project_include_dirs(dir, &spice_inc_dirs, &n_spice_inc_dirs);
 
     int passed = 0;
     int failed = 0;
@@ -2705,16 +2772,62 @@ static int cmd_test(const char *dir) {
  * RP1: `manifest_path` overrides the default exports.manifest location
  * (`<out_path>.manifest`). NULL means use the default. Ignored unless
  * `shared` is true. */
-static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
-                           const char *manifest_path) {
-    int n_files;
-    char **tur_files = collect_tur_files(dir, &n_files);
-    if (!tur_files || n_files == 0) {
-        fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
-        free_tur_files(tur_files, n_files);
-        return 1;
+/* Core multi-file build.  Takes ownership of `tur_files` (frees via
+ * free_tur_files) and compiles every file to .h/.c, links them (plus a
+ * generated _main.c in executable mode), and writes the ABI cache under
+ * `dir`.  `inc`/`n_inc` are include search dirs threaded into every
+ * compile_to_h / compile_to_implementation call so cross-module imports
+ * resolve; they are borrowed (not freed here). */
+/* Mangle a module name for use as a C header/impl base name, matching the
+ * compiler's sanitize_module_name / mangle_module_name: '/' -> "__",
+ * '-' -> '_', other non-identifier chars -> '_'. */
+static void mangle_mod_basename(const char *name, char *out, size_t cap) {
+    size_t k = 0;
+    for (size_t i = 0; name[i] && k + 2 < cap; i++) {
+        char c = name[i];
+        if (c == '/') { out[k++] = '_'; out[k++] = '_'; }
+        else if (c == '-') { out[k++] = '_'; }
+        else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '_') { out[k++] = c; }
+        else { out[k++] = '_'; }
     }
+    out[k] = '\0';
+}
 
+/* Derive a module name for one source file.  When `src_root` is non-NULL and
+ * the file lives under it, the qualified path relative to src_root (minus
+ * `.tur`) is used -- e.g. <root>/src + src/app/util.tur -> "app/util" -- which
+ * matches the conventional `(defmodule app/util ...)` name so cross-module
+ * imports and the generated header filenames line up.  Otherwise the bare
+ * filename basename (minus `.tur`) is used. */
+static char *derive_module_name(const char *file, const char *src_root) {
+    if (src_root && *src_root) {
+        size_t rlen = strlen(src_root);
+        if (strncmp(file, src_root, rlen) == 0) {
+            const char *rel = file + rlen;
+            while (*rel == '/') rel++;
+            size_t len = strlen(rel);
+            if (len >= 4 && strcmp(rel + len - 4, ".tur") == 0) len -= 4;
+            char *m = (char *)malloc(len + 1);
+            memcpy(m, rel, len);
+            m[len] = '\0';
+            return m;
+        }
+    }
+    const char *base = basename_of(file);
+    size_t len = strlen(base);
+    if (len >= 4 && strcmp(base + len - 4, ".tur") == 0) len -= 4;
+    char *m = (char *)malloc(len + 1);
+    memcpy(m, base, len);
+    m[len] = '\0';
+    return m;
+}
+
+static int cmd_build_multi_files(char **tur_files, int n_files,
+                                 const char *dir, const char *src_root,
+                                 const char *out_path,
+                                 bool shared, const char *manifest_path,
+                                 const char **inc, int n_inc) {
     char chosen_out[1024];
     if (!out_path) {
         if (shared) {
@@ -2741,16 +2854,19 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
     buf_init(&manifest);
     Buf *manifest_ptr = shared ? &manifest : NULL;
 
-    /* Generate module names (basename without .tur) */
+    /* Generate module names + the .h/.c basenames they map to.  In project
+     * mode (src_root set) the module name is the qualified path under src/
+     * (e.g. "app/util") and the generated files are named by its mangled form
+     * ("app__util.h") so cross-module `#include "app__util.h"` resolves. */
     for (int i = 0; i < n_files; i++) {
-        const char *base = basename_of(tur_files[i]);
-        size_t len = strlen(base);
-        h_files[i] = (char *)malloc(len + 4);
-        c_files[i] = (char *)malloc(len + 4);
-        mod_names[i] = (char *)malloc(len);
-        snprintf(h_files[i], len + 4, "%.*s.h", (int)(len - 4), base);
-        snprintf(c_files[i], len + 4, "%.*s.c", (int)(len - 4), base);
-        snprintf(mod_names[i], len, "%.*s", (int)(len - 4), base);
+        mod_names[i] = derive_module_name(tur_files[i], src_root);
+        char mangled[512];
+        mangle_mod_basename(mod_names[i], mangled, sizeof(mangled));
+        size_t mlen = strlen(mangled);
+        h_files[i] = (char *)malloc(mlen + 3);
+        c_files[i] = (char *)malloc(mlen + 3);
+        snprintf(h_files[i], mlen + 3, "%s.h", mangled);
+        snprintf(c_files[i], mlen + 3, "%s.c", mangled);
     }
 
     /* J6: Two-pass ABI specialization.
@@ -2767,7 +2883,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
 
         Buf h_out;
         buf_init(&h_out);
-        if (compile_to_h(tur_files[i], &h_out, mod_names[i], NULL, 0,
+        if (compile_to_h(tur_files[i], &h_out, mod_names[i], inc, n_inc,
                          (const char **)rm_p, rm_n, NULL, 0) != 0) {
             fprintf(stderr, "tur: failed to compile %s to header\n", tur_files[i]);
             buf_free(&h_out);
@@ -2793,7 +2909,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
         Buf c_out;
         buf_init(&c_out);
         if (compile_to_implementation(tur_files[i], &c_out, mod_names[i],
-                                      NULL, 0,
+                                      inc, n_inc,
                                       (const char **)rm_p, rm_n,
                                       manifest_ptr,
                                       NULL, 0,
@@ -2873,7 +2989,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
 
         Buf h_out;
         buf_init(&h_out);
-        if (compile_to_h(tur_files[i], &h_out, mod_names[i], NULL, 0,
+        if (compile_to_h(tur_files[i], &h_out, mod_names[i], inc, n_inc,
                          (const char **)rm_p, rm_n,
                          forced_for[i], n_forced_for[i]) != 0) {
             fprintf(stderr, "tur: failed to recompile %s to header (pass 2)\n", tur_files[i]);
@@ -2902,7 +3018,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
         Buf c_out;
         buf_init(&c_out);
         if (compile_to_implementation(tur_files[i], &c_out, mod_names[i],
-                                      NULL, 0,
+                                      inc, n_inc,
                                       (const char **)rm_p, rm_n,
                                       manifest_ptr,
                                       forced_for[i], n_forced_for[i],
@@ -3096,6 +3212,77 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
     }
     buf_free(&manifest);
     return 0;
+}
+
+/* Bare-directory build: glob the directory's top-level .tur files and build
+ * them.  Used for ad-hoc multi-file directories with no build.tur manifest. */
+static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
+                           const char *manifest_path) {
+    int n_files;
+    char **tur_files = collect_tur_files(dir, &n_files);
+    if (!tur_files || n_files == 0) {
+        fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
+        free_tur_files(tur_files, n_files);
+        return 1;
+    }
+    return cmd_build_multi_files(tur_files, n_files, dir, NULL, out_path, shared,
+                                 manifest_path, NULL, 0);
+}
+
+/* Manifest-driven project build: `tur build <dir>` where <dir>/build.tur
+ * exists.  Collects the project's module files (recursively under `src/`),
+ * resolves the include search path from the manifest (own src/ + each
+ * `:spices` dep's src/), merges in any user `-I` dirs (which take priority),
+ * and builds the whole module set.  Mirrors the project resolution `tur run`
+ * and the test runner already perform. */
+static int cmd_build_project(const char *root, const char *out_path,
+                             bool shared, const char *manifest_path,
+                             const char **user_inc, int n_user_inc) {
+    int n_files = 0;
+    char **tur_files = collect_project_src_files(root, &n_files);
+    if (!tur_files || n_files == 0) {
+        fprintf(stderr,
+                "tur: no .tur source files found under '%s/src' (or '%s')\n",
+                root, root);
+        free_tur_files(tur_files, n_files);
+        return 1;
+    }
+    /* Deterministic order so generated artifacts and the ABI cache are
+     * reproducible across runs. */
+    qsort(tur_files, (size_t)n_files, sizeof(char *), compare_cstr_ptrs);
+
+    /* src_root used to derive qualified module names ("app/util") from file
+     * paths; matches the prefix collect_project_src_files builds paths from. */
+    char src_root[4096];
+    snprintf(src_root, sizeof(src_root), "%s/src", root);
+
+    const char **proj_inc = NULL;
+    int          n_proj_inc = 0;
+    resolve_project_include_dirs(root, &proj_inc, &n_proj_inc);
+
+    /* Merge user -I dirs (priority, first) with project-inferred dirs. */
+    int n_inc = n_user_inc + n_proj_inc;
+    const char **inc = NULL;
+    if (n_inc > 0) {
+        inc = (const char **)malloc((size_t)n_inc * sizeof(char *));
+        if (!inc) {
+            fprintf(stderr, "tur: oom\n");
+            for (int i = 0; i < n_proj_inc; i++) free((char *)proj_inc[i]);
+            free(proj_inc);
+            free_tur_files(tur_files, n_files);
+            return 2;
+        }
+        for (int i = 0; i < n_user_inc; i++) inc[i] = user_inc[i];
+        for (int i = 0; i < n_proj_inc; i++) inc[n_user_inc + i] = proj_inc[i];
+    }
+
+    int rc = cmd_build_multi_files(tur_files, n_files, root, src_root, out_path,
+                                   shared, manifest_path, inc, n_inc);
+
+    free(inc);
+    for (int i = 0; i < n_proj_inc; i++) free((char *)proj_inc[i]);
+    free(proj_inc);
+    return rc;
 }
 
 static int is_directory(const char *path) {
@@ -7023,7 +7210,20 @@ int main(int argc, char **argv) {
         /* Check if input is a directory - use multi-file build */
         int rc;
         if (is_directory(input)) {
-            rc = cmd_build_multi(input, out, shared, manifest_out);
+            /* Manifest-driven project build when the directory carries a
+             * build.tur: read the manifest, descend into src/, and resolve
+             * the include path (own src/ + each :spices dep). Otherwise fall
+             * back to the bare-directory glob. */
+            char proj_manifest[4096];
+            snprintf(proj_manifest, sizeof(proj_manifest),
+                     "%s/build.tur", input);
+            struct stat mst;
+            if (stat(proj_manifest, &mst) == 0 && S_ISREG(mst.st_mode)) {
+                rc = cmd_build_project(input, out, shared, manifest_out,
+                                       (const char **)build_inc, n_build_inc);
+            } else {
+                rc = cmd_build_multi(input, out, shared, manifest_out);
+            }
         } else {
             /* RM4: auto-discover the spice manifest containing `input` so
              * `:reader-macros [...]` entries apply when building a single

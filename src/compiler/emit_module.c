@@ -3992,14 +3992,22 @@ int emit_program(Buf *out, const Expr *program) {
 
 /* ------------ Phase 2: Multi-file support ------------ */
 
-/* Sanitize a module name for use in C header guards (single underscore for / and -). */
+/* Sanitize a module name for use in C header guards and the module's own
+ * self-include ('/' -> "__", '-' -> '_'). */
 static void sanitize_module_name(char *out, const char *name, size_t cap) {
+    /* Must agree with mangle_module_name (emit_core.c): '/' -> "__" so the
+     * header guard and the module's self-include line up with the mangled
+     * names dependents use in their cross-module #includes and symbol
+     * prefixes.  Single-segment names (no '/') are unaffected. */
     size_t k = 0;
-    for (size_t i = 0; name[i] && k < cap - 1; i++) {
+    for (size_t i = 0; name[i] && k + 2 < cap; i++) {
         char c = name[i];
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '/') {
-            out[k++] = (c == '-' || c == '/') ? '_' : c;
+        if (c == '/') {
+            out[k++] = '_';
+            out[k++] = '_';
+        } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                   (c >= '0' && c <= '9') || c == '_' || c == '-') {
+            out[k++] = (c == '-') ? '_' : c;
         }
     }
     out[k] = '\0';

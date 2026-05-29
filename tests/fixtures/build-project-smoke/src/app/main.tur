@@ -1,0 +1,8 @@
+;; app/main -- entry module; imports a sibling module under src/.
+
+(defmodule app/main
+  (import app/util :refer [double-it])
+
+  (defn main [] :int
+    ;; 21 doubled = 42; the process exit code is the observable.
+    (double-it 21)))
