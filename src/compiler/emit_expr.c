@@ -1738,11 +1738,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Phase P3: TY_INT (int64_t) arg passed to a TY_PTR_VOID (void*) param
                  * requires (void*)(intptr_t) coercion. Occurs when persistent-map
                  * lowering passes a map handle (int64_t) to hamt/count etc. */
-                if (!needs_fn_cast && e->as.call_.args[i]->type.kind == TY_INT &&
-                    fn_binding->type.kind == TY_FN) {
+                if (!needs_fn_cast && fn_binding->type.kind == TY_FN) {
                     uint8_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (uint32_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
-                    if (fn_binding->type.as.fn.arg_kinds[param_idx] == TY_PTR_VOID) {
+                    TypeKind _pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    /* Bridge int64_t carrier to pointer when callee param is a pointer
+                     * type (TY_PTR_VOID, TY_RC, TY_REF, TY_WEAK).  Check the stripped
+                     * emit_arg type (after EX_ASCRIBE removal) since the outer type
+                     * may have been promoted to the concrete type by the elaborator. */
+                    bool _emit_is_int = (emit_arg && (emit_arg->type.kind == TY_INT
+                                                      || emit_arg->type.kind == TY_EXISTS
+                                                      || emit_arg->type.kind == TY_FORALL));
+                    bool _arg_is_int = (e->as.call_.args[i]->type.kind == TY_INT
+                                        || e->as.call_.args[i]->type.kind == TY_EXISTS
+                                        || e->as.call_.args[i]->type.kind == TY_FORALL);
+                    if ((_emit_is_int || _arg_is_int) &&
+                        (_pk == TY_PTR_VOID || _pk == TY_RC || _pk == TY_REF || _pk == TY_WEAK)) {
                         needs_fn_cast = true;
                         cast_to_void_ptr = true;
                     }
@@ -1756,10 +1767,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (pk == TY_INT || pk == TY_STRUCT) {
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
-                    } else if (pk == TY_PTR_VOID) {
-                        /* Param is void * — cast to void * via intptr_t, not int64_t.
-                         * Needed when a TY_FN (stored as int64_t) is passed as void *;
-                         * harmless no-op when a TY_PTR_VOID (already void *) is passed. */
+                    } else if (pk == TY_PTR_VOID || pk == TY_RC
+                               || pk == TY_REF || pk == TY_WEAK) {
+                        /* Param is a pointer type — cast to void * via intptr_t.
+                         * Needed when a TY_FN/int64_t carrier is passed to a pointer param. */
                         needs_fn_cast = true;
                         cast_to_void_ptr = true;
                     } else if (pk == TY_FN) {
@@ -2151,7 +2162,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *inner = emit_value(ctx, body, e->as.rc_count_.expr);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = rc_strong_count(%s);\n", tmp, inner);
+            /* Bridge int64_t carrier (e.g. existential/forall field) to RcControlBlock*. */
+            TypeKind inner_kind = e->as.rc_count_.expr->type.kind;
+            bool inner_needs_bridge = (inner_kind == TY_INT || inner_kind == TY_EXISTS
+                                       || inner_kind == TY_FORALL);
+            if (inner_needs_bridge) {
+                buf_printf(body, "int64_t %s = rc_strong_count((RcControlBlock *)(intptr_t)(%s));\n",
+                           tmp, inner);
+            } else {
+                buf_printf(body, "int64_t %s = rc_strong_count(%s);\n", tmp, inner);
+            }
             free(inner);
             return tmp;
         }
@@ -2883,7 +2903,23 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
                     }
                 } else {
-                    buf_printf(&lit, ".%s = %s", mfn, fv);
+                    /* Bridge when a pointer-typed value is assigned to an int64_t
+                     * carrier field (e.g. packed existential into :exists field). */
+                    TypeKind vek = e->as.make_struct_.field_values[i]->type.kind;
+                    bool val_is_c_ptr = (vek == TY_PTR_VOID || vek == TY_RC
+                                         || vek == TY_REF || vek == TY_WEAK
+                                         || vek == TY_EXISTS || vek == TY_FORALL);
+                    bool field_is_c_ptr = (def->fields[i].kind == TY_PTR_VOID
+                                           || def->fields[i].kind == TY_RC
+                                           || def->fields[i].kind == TY_WEAK
+                                           || def->fields[i].kind == TY_REF
+                                           || def->fields[i].kind == TY_LREF
+                                           || def->fields[i].kind == TY_CSTR);
+                    if (val_is_c_ptr && !field_is_c_ptr) {
+                        buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
+                    } else {
+                        buf_printf(&lit, ".%s = %s", mfn, fv);
+                    }
                 }
                 free(mfn);
                 free(fv);
@@ -3101,7 +3137,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         rec_tmp, cb_tmp);
                 }
                 indent_buf(body, ctx->indent);
-                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
+                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL
+                    || vk == TY_RC || vk == TY_REF || vk == TY_WEAK) {
                     buf_printf(body, "%s->value = (int64_t)(intptr_t)(%s);\n",
                                rec_tmp, val);
                 } else {
@@ -3173,8 +3210,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 && e->as.exists_open_.packed->type.as.forall_.is_linear;
             indent_buf(body, ctx->indent);
             TypeKind vk = e->as.exists_open_.var_binding->type.kind;
+            bool vk_is_ptr = (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL
+                              || vk == TY_FN || vk == TY_RC || vk == TY_REF || vk == TY_WEAK);
             if (packed_is_linear_record) {
-                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+                if (vk_is_ptr) {
                     buf_printf(body,
                         "void *%s = (void *)(intptr_t)((tur_existential_t *)(%s))->value;\n",
                         var_name, packed_val);
@@ -3184,7 +3223,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         var_name, packed_val);
                 }
             } else if (packed_is_record) {
-                if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+                if (vk_is_ptr) {
                     buf_printf(body,
                         "void *%s = (void *)(intptr_t)((tur_existential_t *)((RcControlBlock *)(%s))->value)->value;\n",
                         var_name, packed_val);
@@ -3193,7 +3232,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         "int64_t %s = ((tur_existential_t *)((RcControlBlock *)(%s))->value)->value;\n",
                         var_name, packed_val);
                 }
-            } else if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+            } else if (vk_is_ptr) {
                 buf_printf(body, "void *%s = (void *)(%s);\n", var_name, packed_val);
             } else {
                 /* Unbox scalar via intptr_t */

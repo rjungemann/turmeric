@@ -40,18 +40,7 @@ fi
 # Override with TUR_CC_FLAGS="-O1 -std=c99" for faster (but less safe) builds.
 # NOTE: -O0 causes SIGTRAP on Apple Silicon; -O1 exposes latent UB in some
 #       emitted functions missing a return path — keep -O2 for safety.
-#
-# Clang (notably macOS Xcode 15+) promotes the int<->pointer carrier-ABI
-# conversions the codegen relies on (rc/exists payloads, dictionary method
-# slots) from warnings to default-on errors, which fails the build on macOS.
-# GCC keeps them as warnings and does not recognise the Clang-only
-# -Wincompatible-function-pointer-types spelling (it would error on the unknown
-# option), so add the downgrades only when the C compiler is Clang.
-_tur_warn_downgrade=""
-if "${CC:-cc}" --version 2>/dev/null | grep -qi clang; then
-    _tur_warn_downgrade=" -Wno-error=int-conversion -Wno-error=incompatible-function-pointer-types"
-fi
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing${_tur_warn_downgrade} -Lbuild/src}"
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -Lbuild/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.

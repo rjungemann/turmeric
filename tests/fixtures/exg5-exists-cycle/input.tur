@@ -30,7 +30,7 @@
 ;; installed by the set! below.
 (defn null-rc-s [] :ptr<void>
   ```c
-  return (int64_t)(intptr_t)NULL;
+  return NULL;
   ```)
 
 (defn main [] :int
