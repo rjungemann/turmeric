@@ -2,6 +2,20 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.14.4] -- 2026-05-28
+
+### Fixed
+
+- **`*args*` empty in user-defined `main`** -- a user-defined zero-arg
+  `main` now receives `(argc, argv)` at the C level and populates
+  `g_tur_args` from the process argv before user code runs, matching the
+  synthesized-main path. Previously `*args*` was always empty in
+  user-main programs (which broke spice CLI parsing).
+- **`tur install` git fetch errors include cache path + hint** -- when
+  `pkg_git_fetch` fails on a previously-cloned cache directory, the
+  error now reports the destination path and suggests `git -C ... status`
+  / `rm -rf ...` to inspect or discard the dirty cache.
+
 ## [0.14.3] -- 2026-05-28
 
 ### Fixed

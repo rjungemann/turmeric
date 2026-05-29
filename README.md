@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.14.3` -- fixes SDK path resolution for globally-installed builds (e.g. Homebrew) and corrects the VSCode Markdown injection grammar.
+**Latest release:** `v0.14.4` -- fixes `*args*` being empty in user-defined `main` (broke spice CLI parsing) and improves `tur install` git-fetch error messages.
 
 ## What
 
