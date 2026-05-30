@@ -606,6 +606,9 @@ typedef struct Elab {
     const Symbol     *sym_gen_done;     /* "gen-done?" */
     /* CF5 (control-flow-completeness-plan): set true while elaborating a match arm body. */
     bool              in_match_arm;
+    /* CF6 (control-flow-completeness-plan): set true while elaborating an inline async closure body.
+     * Used by elab_await to check that bindings in scope are Send. */
+    bool              in_async_body;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */

@@ -126,6 +126,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
+        /* CF6: async Send-across-await */
+        case TUR_E0022_AWAIT_LIVE_NOT_SEND:              return "TUR-E0022";
         /* Phase B: mixed-width numeric arithmetic */
         case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
@@ -223,6 +225,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
+    if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
     if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     /* ET3: handler typing errors */

@@ -6,7 +6,7 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF5 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF6 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
 > lowering shipped; CF2: `shift`/`shift0` result typing replaces the
 > `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
@@ -15,7 +15,9 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 > [first-class-handlers-plan.md](first-class-handlers-plan.md); CF4:
 > `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`);
 > CF5: `yield`-in-`match` (`TUR-E0702`) and recursive-generator (`TUR-E0703`)
-> are hard compile errors with diagnostic guidance); CF6 next. Companion to
+> are hard compile errors with diagnostic guidance; CF6: non-Send bindings
+> live across `await` in inline async closures rejected (`TUR-E0022`));
+> CF7 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -454,6 +456,39 @@ or scope the async surface down to the checked subset.
 - **CF6.5** Document the rule and any conservative rejections in
   `async-await-guide.md`. *Done when:* the guide states the Send-across-await
   rule.
+
+### CF6 outcome (complete -- 2026-05-30)
+
+The send-across-await soundness hole is closed for inline `async` closures.
+
+- **Obligation and scope (CF6.1, CF6.2)** -- Disposition: **conservative
+  liveness** (option a). Any binding in scope at an `(await ...)` point within
+  an inline `(async (fn [] ...))` closure is treated as live and must be Send.
+  False-positive cost: programs where a non-Send binding is in scope but not
+  used after the await are rejected. This is sound and implementable without
+  liveness analysis; precise liveness requires the post-1.0 CPS pass. Scope
+  limitation: applies only to inline closures; pre-defined functions passed to
+  `(async fn)` were compiled without async context and are not re-checked here.
+
+- **Implementation (CF6.3)** -- `TUR_E0022_AWAIT_LIVE_NOT_SEND` added to
+  `diag.{h,c}`. `bool in_async_body` added to `Elab`
+  (`src/compiler/elab_internal.h`). `elab_async`
+  (`src/compiler/elab_concurrent.c`) saves and sets `in_async_body = true`
+  around the closure elaboration; `elab_await` checks the flag and walks
+  `e->scope` outward, emitting `TUR-E0022` for each non-Send binding. The
+  existing capture-level check at the `async` boundary (`TUR-E0010`) is
+  unchanged and remains as a complementary first line of defense.
+
+- **Fixtures (CF6.4)** -- `tests/fixtures/errors/await-live-not-send`
+  (expect-error, `TUR-E0022`; `rc<int>` held across await). The
+  existing async fixtures (`async-await-basic`, `async-await-channel`, etc.)
+  serve as the passing regression suite and are all unaffected (they use only
+  Send types inside async bodies).
+
+- **Docs (CF6.5)** -- `docs/guides/async-await-guide.md` gains a "Send
+  Requirements for Async Bodies" section covering the Send-across-await rule,
+  the table of non-Send types, the conservative approximation, a workaround,
+  and the inline-closure scope limitation.
 
 ---
 

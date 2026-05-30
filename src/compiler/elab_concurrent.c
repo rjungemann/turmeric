@@ -55,7 +55,12 @@ Expr *elab_async(Elab *e, const Form *call) {
                   "(async fn-expr) requires exactly one argument");
         return NULL;
     }
+    /* CF6: mark that we are elaborating an async body so elab_await can check
+     * Send for all bindings in scope at each await point. */
+    bool saved_in_async_body = e->in_async_body;
+    e->in_async_body = true;
     Expr *fn_expr = elab_form(e, call->as.list.items[1]);
+    e->in_async_body = saved_in_async_body;
     if (!fn_expr) return NULL;
     
     /* AW-012 / AW-011B-1: Send-check for async closures.
@@ -110,6 +115,30 @@ Expr *elab_await(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span,
                   "(await fut) requires exactly one argument");
         return NULL;
+    }
+    /* CF6 (TUR-E0022): conservative Send-across-await check.
+     * When inside an inline async closure, every binding currently in scope is
+     * treated as live across this await.  Any non-Send binding is a soundness
+     * hole: the fiber may resume on a different OS thread, racing with e.g. the
+     * rc<T> refcount.  This check applies to inline closures only; pre-defined
+     * functions passed to (async fn) are not re-elaborated here. */
+    if (e->in_async_body) {
+        bool had_error = false;
+        for (Scope *sc = e->scope; sc != NULL; sc = sc->parent) {
+            for (uint32_t i = 0; i < sc->n; i++) {
+                Binding *b = sc->bindings[i];
+                if (!type_is_send(b->type)) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0022_AWAIT_LIVE_NOT_SEND,
+                        "binding `%s` of type `%s` is not Send and may be live "
+                        "across this await point; all bindings in scope at an "
+                        "await must be Send (1.0 conservative check)",
+                        b->name->name, type_name(b->type));
+                    had_error = true;
+                }
+            }
+        }
+        if (had_error) return NULL;
     }
     Expr *fut_expr = elab_form(e, call->as.list.items[1]);
     if (!fut_expr) return NULL;

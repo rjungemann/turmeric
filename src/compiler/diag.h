@@ -47,6 +47,8 @@ typedef enum DiagCode {
     TUR_E0020_AMBIGUOUS_DISPATCH,                 /* .method on int64_t receiver matches multiple instances */
     /* ER5: module effect visibility (PR5-1) */
     TUR_E0021_PRIVATE_EFFECT,                     /* effect is private to its defining module */
+    /* CF6 (control-flow-completeness-plan): async Send-across-await soundness */
+    TUR_E0022_AWAIT_LIVE_NOT_SEND,                /* non-Send binding in scope at await in async body */
     /* Phase B: mixed-width numeric arithmetic (no implicit coercion) */
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
