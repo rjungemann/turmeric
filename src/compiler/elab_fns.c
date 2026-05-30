@@ -337,6 +337,24 @@ static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
             }
             return true;
         }
+        case EX_CALL: {
+            /* LS4: inter-procedural borrow escape.  A call that returns a
+             * lifetime-tied borrow (&'a T) yields a borrow of whatever the
+             * tied argument borrows.  Follow the escape check into that
+             * argument: if it ultimately borrows a caller-local, the returned
+             * borrow dangles just as a direct (& local) would.  The callee's
+             * result_borrow_arg names the parameter the return is tied to. */
+            const Binding *cb = tail->as.call_.fn_binding;
+            if (cb && cb->type.kind == TY_FN) {
+                int8_t bi = cb->type.as.fn.result_borrow_arg;
+                if (bi >= 0 && (uint32_t)bi < tail->as.call_.n_args
+                        && tail->as.call_.args) {
+                    return check_no_borrow_escape(tail->as.call_.args[bi],
+                                                  fn_local_depth, fn_name);
+                }
+            }
+            return true;
+        }
         default:
             return true;
     }
@@ -1893,6 +1911,37 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * type instead of falling back to an unknown/void C type. */
     if (return_borrow_type && !fn_type.as.fn.result_full_type) {
         fn_type.as.fn.result_full_type = return_borrow_type;
+    }
+    /* LS4: precompute which parameter the borrow return is tied to so call
+     * sites can check inter-procedural borrow escape.  A returned &'a T aliases
+     * the argument bound to the param sharing lifetime 'a; an elided borrow
+     * return follows the elision rules (the receiver-style first borrow param,
+     * which also covers the single-borrow-param case). */
+    if (return_borrow_type) {
+        int8_t tied = -1;
+        LifetimeId rlid = (return_borrow_type->n_lifetimes > 0)
+                        ? return_borrow_type->lifetimes[0] : LIFETIME_NONE;
+        if (rlid != LIFETIME_NONE) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                if ((params[i]->type.kind == TY_REF_IMMUT
+                     || params[i]->type.kind == TY_REF_MUT)
+                        && params[i]->type.n_lifetimes > 0
+                        && params[i]->type.lifetimes[0] == rlid) {
+                    tied = (int8_t)i;
+                    break;
+                }
+            }
+        }
+        if (tied < 0) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                if (params[i]->type.kind == TY_REF_IMMUT
+                        || params[i]->type.kind == TY_REF_MUT) {
+                    tied = (int8_t)i;
+                    break;
+                }
+            }
+        }
+        fn_type.as.fn.result_borrow_arg = tied;
     }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
