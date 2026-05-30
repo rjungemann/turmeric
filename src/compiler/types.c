@@ -2,6 +2,7 @@
 #include "typeclass.h"  /* Phase 15 */
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
+#include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,11 +66,26 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_CLONEABLE_CONT) {
         return a.as.cont.returns == b.as.cont.returns;
     }
-    /* ET3: Handler types */
+    /* ET3/FH4.1: Handler types -- equal when they handle the same effect *set*
+     * (compared by name, order-insensitive) and agree on value/result kinds. */
     if (a.kind == TY_HANDLER) {
-        return a.as.handler_.effect_name == b.as.handler_.effect_name
-            && a.as.handler_.value_kind == b.as.handler_.value_kind
-            && a.as.handler_.result_kind == b.as.handler_.result_kind;
+        bool rows_eq;
+        if (a.as.handler_.handled_row || b.as.handler_.handled_row) {
+            rows_eq = effect_row_name_set_eq(a.as.handler_.handled_row,
+                                             b.as.handler_.handled_row);
+        } else {
+            rows_eq = (a.as.handler_.effect_name == b.as.handler_.effect_name);
+        }
+        /* TY_UNKNOWN value/result kinds act as wildcards: a composed handler's
+         * value summary is unconstrained (FH4.1), so it matches any concrete
+         * kind on the other side. */
+        bool vk_ok = a.as.handler_.value_kind == b.as.handler_.value_kind
+                  || a.as.handler_.value_kind == TY_UNKNOWN
+                  || b.as.handler_.value_kind == TY_UNKNOWN;
+        bool rk_ok = a.as.handler_.result_kind == b.as.handler_.result_kind
+                  || a.as.handler_.result_kind == TY_UNKNOWN
+                  || b.as.handler_.result_kind == TY_UNKNOWN;
+        return rows_eq && vk_ok && rk_ok;
     }
     /* Phase 11: Struct types - identity by StructDef pointer */
     if (a.kind == TY_STRUCT) {
@@ -1186,12 +1202,17 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
-        /* ET3: Handler type — "handler<Effect, ValueType, ResultType>" */
+        /* ET3/FH4.1: Handler type — "handler<EffectSet, ValueType, ResultType>".
+         * EffectSet is the handled row ("A | B" for multi-effect); falls back to
+         * the single effect_name for legacy types. */
         case TY_HANDLER: {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, "handler<");
-            buf_puts(&tmp, t.as.handler_.effect_name ? t.as.handler_.effect_name : "?");
+            if (t.as.handler_.handled_row)
+                effect_row_format_names(&tmp, t.as.handler_.handled_row);
+            else
+                buf_puts(&tmp, t.as.handler_.effect_name ? t.as.handler_.effect_name : "?");
             buf_puts(&tmp, ", ");
             buf_puts(&tmp, type_name(type_from_kind(t.as.handler_.value_kind)));
             buf_puts(&tmp, ", ");
@@ -2499,9 +2520,21 @@ bool type_is_subtype(Type sub, Type super_) {
     }
     if (sub.kind == super_.kind) {
         if (sub.kind == TY_HANDLER) {
-            if (sub.as.handler_.effect_name != super_.as.handler_.effect_name) return false;
-            return sub.as.handler_.value_kind == super_.as.handler_.value_kind
-                && sub.as.handler_.result_kind == super_.as.handler_.result_kind;
+            /* FH4.1: same handled effect *set* (by name) + matching kinds.
+             * (Variance is left as equality for v1, per the plan.) */
+            bool rows_eq;
+            if (sub.as.handler_.handled_row || super_.as.handler_.handled_row)
+                rows_eq = effect_row_name_set_eq(sub.as.handler_.handled_row,
+                                                 super_.as.handler_.handled_row);
+            else
+                rows_eq = (sub.as.handler_.effect_name == super_.as.handler_.effect_name);
+            bool vk_ok = sub.as.handler_.value_kind == super_.as.handler_.value_kind
+                      || sub.as.handler_.value_kind == TY_UNKNOWN
+                      || super_.as.handler_.value_kind == TY_UNKNOWN;
+            bool rk_ok = sub.as.handler_.result_kind == super_.as.handler_.result_kind
+                      || sub.as.handler_.result_kind == TY_UNKNOWN
+                      || super_.as.handler_.result_kind == TY_UNKNOWN;
+            return rows_eq && vk_ok && rk_ok;
         }
         return type_eq(sub, super_);
     }

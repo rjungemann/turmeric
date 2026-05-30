@@ -517,8 +517,31 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Form *eff_f = form->as.list.items[1];
             Form *val_f = form->as.list.items[2];
             Form *res_f = form->as.list.items[3];
-            if (eff_f->tag != F_SYM) {
-                diag_emit(DIAG_ERROR, eff_f->span, "(handler E V R): effect name must be a symbol");
+            /* FH4.1: the effect position is either a single effect symbol
+             * (single-effect handler, source-compatible) or a #{E1 E2 ...}
+             * effect-row map (multi-effect / composed handler).  Either way the
+             * handled set is stored as an ERK_UNRESOLVED name-set row. */
+            const char *single_name = NULL;
+            EffectRow *handled_row = NULL;
+            if (eff_f->tag == F_SYM) {
+                single_name = eff_f->as.sym->name;
+                const Symbol *one[1] = { eff_f->as.sym };
+                handled_row = effect_row_unresolved(e->arena, one, 1);
+            } else if (eff_f->tag == F_MAP) {
+                uint8_t n_sym = (uint8_t)eff_f->as.list.len;
+                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
+                uint8_t n_valid = 0;
+                for (uint32_t j = 0; j < eff_f->as.list.len; j++) {
+                    Form *item = eff_f->as.list.items[j];
+                    if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
+                }
+                handled_row = effect_row_unresolved(e->arena, syms, n_valid);
+                if (n_valid == 1) single_name = syms[0]->name;  /* still single */
+            } else {
+                diag_emit(DIAG_ERROR, eff_f->span,
+                          "(handler E V R): effect position must be an effect name "
+                          "or a #{E1 E2 ...} effect set");
                 return NULL;
             }
             Type *val_t = type_expr_from_form(e, val_f, rec_name, type_params, type_param_kinds, n_type_params);
@@ -529,7 +552,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             t->kind = TY_HANDLER;
             t->copy_kind = CK_COPY;
             t->hkt_kind = KIND_STAR;
-            t->as.handler_.effect_name = eff_f->as.sym->name;
+            t->as.handler_.effect_name = single_name;  /* NULL for multi-effect */
+            t->as.handler_.handled_row = handled_row;
             t->as.handler_.value_kind = val_t->kind;
             t->as.handler_.result_kind = res_t->kind;
             return t;

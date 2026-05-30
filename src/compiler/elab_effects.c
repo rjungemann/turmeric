@@ -1252,6 +1252,11 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     htype.copy_kind = CK_COPY;
     htype.hkt_kind = KIND_STAR;
     htype.as.handler_.effect_name = cases[0].effect_name->name;
+    {
+        /* FH4.1: single-element handled row (unresolved name-set). */
+        const Symbol *one[1] = { cases[0].effect_name };
+        htype.as.handler_.handled_row = effect_row_unresolved(e->arena, one, 1);
+    }
     htype.as.handler_.value_kind  = (eff && eff->constructor->n_params > 0)
         ? eff->constructor->param_types[0] : TY_INT;
     htype.as.handler_.result_kind = cases[0].body->type.kind;
@@ -1335,8 +1340,27 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* ET3: Handlers must handle different effects (TUR-E0251) */
-    if (h1->type.as.handler_.effect_name != NULL
+    /* FH4.1: handlers must handle disjoint effect *sets* (TUR-E0251).  Compare
+     * the handled rows by name so the check also covers composed (multi-effect)
+     * handlers, not just the single effect_name. */
+    {
+        const Symbol *n1[32]; uint8_t c1 = 0;
+        const Symbol *n2[32]; uint8_t c2 = 0;
+        effect_row_collect_names(h1->type.as.handler_.handled_row, n1, &c1, 32);
+        effect_row_collect_names(h2->type.as.handler_.handled_row, n2, &c2, 32);
+        for (uint8_t i = 0; i < c1; i++)
+            for (uint8_t j = 0; j < c2; j++)
+                if (n1[i] == n2[j]) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0251_HANDLER_OVERLAP,
+                        "composed handlers both handle effect '%s'; overlapping "
+                        "effects are not allowed", n1[i]->name);
+                    return NULL;
+                }
+    }
+    /* Fallback for legacy types without a handled_row: compare effect_name. */
+    if ((!h1->type.as.handler_.handled_row || !h2->type.as.handler_.handled_row)
+        && h1->type.as.handler_.effect_name != NULL
         && h2->type.as.handler_.effect_name != NULL
         && h1->type.as.handler_.effect_name == h2->type.as.handler_.effect_name) {
         diag_emit_with_code(DIAG_ERROR, call->span,
@@ -1370,6 +1394,9 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
     ctype.copy_kind = CK_COPY;
     ctype.hkt_kind = KIND_STAR;
     ctype.as.handler_.effect_name = NULL;   /* composed: multi-effect row */
+    /* FH4.1: the composed handled set is the union of the two rows. */
+    ctype.as.handler_.handled_row = effect_row_union(e->arena,
+        h1->type.as.handler_.handled_row, h2->type.as.handler_.handled_row);
     ctype.as.handler_.value_kind  = TY_UNKNOWN;
     ctype.as.handler_.result_kind = (h1->type.as.handler_.result_kind != TY_UNKNOWN)
         ? h1->type.as.handler_.result_kind : h2->type.as.handler_.result_kind;

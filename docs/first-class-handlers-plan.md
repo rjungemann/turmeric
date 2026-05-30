@@ -6,11 +6,12 @@ description: Phased plan to give effect handlers a first-class runtime represent
 
 # First-Class Effect Handlers -- Implementation Plan
 
-> **Status:** **Implemented** (FH0-FH7), with FH4.1 (a full `EffectRow` inside
-> the `TY_HANDLER` *type*) deferred -- see the FH4 note. Handler values now have
-> a runtime representation (an effect-keyed dispatch table); they can be
-> created (`(handler ...)`), applied (`(with-handler hv body)`), and composed
-> (`(compose-handlers h1 h2)`). The CF3 `TUR-E0704` gate has been removed.
+> **Status:** **Implemented** (FH0-FH7, including FH4.1). Handler values have a
+> runtime representation (an effect-keyed dispatch table); they can be created
+> (`(handler ...)`), applied (`(with-handler hv body)`), and composed
+> (`(compose-handlers h1 h2)`), and the `TY_HANDLER` type now carries the
+> handled effect *set* (single- or multi-effect via `#{...}`). The CF3
+> `TUR-E0704` gate has been removed.
 >
 > Follow-up to
 > [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md)
@@ -187,9 +188,19 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## Phase FH4 -- `TY_HANDLER` effect-row generalization
 
-> **Status:** FH4.2 **done**; FH4.1 **deferred** (see note).
+> **Status:** FH4.1 and FH4.2 **done**.
 >
-> FH4.2 is implemented: `effect_check`'s `collect_effects_in_expr` now treats
+> FH4.1: `TY_HANDLER` now carries a `handled_row` (an `EffectRow` stored as an
+> `ERK_UNRESOLVED` name-set, built at parse time -- no `Effect*` resolution
+> needed). `(handler E V R)` accepts either a single effect symbol or a
+> `#{E1 E2 ...}` effect set; `effect_row_collect_names` /
+> `effect_row_name_set_eq` / `effect_row_format_names` (in `effect.c`) back the
+> updated `type_eq`, `type_name` ("handler<A | B, V, R>"), and subtyping in
+> `types.c` (`TY_UNKNOWN` value/result kinds act as wildcards so a composed
+> handler round-trips through a typed parameter). `compose-handlers` sets the
+> unioned `handled_row` and rejects overlap by name-set intersection.
+>
+> FH4.2: `effect_check`'s `collect_effects_in_expr` treats
 > `(with-handler hv body)` like `(handle ...)` -- it discharges the handler's
 > effect(s) from the body's row (`remove_handler_effects`, which recurses
 > structurally into handler literals and compositions) and propagates leftover
@@ -199,13 +210,11 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 > the plan's reference to `TUR-E0253` predates the unified row-mismatch
 > reporting that `handle` itself uses.
 >
-> FH4.1 (storing a multi-effect `EffectRow` *in* the `TY_HANDLER` type) is
-> deferred: it is a broad, invasive change to `type_eq`/`type_name`/subtyping
-> and the type parser, and is not needed for v1 -- single-effect handler values
-> carry their one `effect_name`, and composition is handled by structural
-> introspection at the row-collection and codegen sites rather than via the
-> type. Revisit when a composed handler must round-trip through a typed
-> parameter with full effect-set precision.
+> *Note:* one call-site arg-checker path compares handler arguments by kind
+> only (it falls back to `type_from_kind` when a function's full parameter types
+> aren't threaded through), so it does not yet exercise the row-precise
+> `type_eq`; that is pre-existing plumbing, independent of the type-level FH4.1
+> operations, which are correct.
 
 - **FH4.1** Extend `TY_HANDLER` to carry an `EffectRow` (handled set) rather
   than a single `effect_name`, keeping the single-effect constructor as a

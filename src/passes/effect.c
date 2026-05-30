@@ -293,6 +293,74 @@ void effect_row_print(Buf *b, EffectRow *row) {
     }
 }
 
+/* FH4.1: collect the effect *names* of a row into `out` (deduplicated), used to
+ * compare/print handler handled-sets without needing resolved Effect* pointers.
+ * Handles UNRESOLVED (symbolic names), CONCRETE (resolved effects), VAR, and
+ * UNION (recursively).  `cap` bounds the output array. */
+void effect_row_collect_names(EffectRow *row, const Symbol **out,
+                              uint8_t *n, uint8_t cap) {
+    if (!row || !out || !n) return;
+    switch (row->kind) {
+        case ERK_EMPTY:
+            break;
+        case ERK_UNRESOLVED:
+            for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+                const Symbol *s = row->as.unresolved.sym_names[i];
+                bool dup = false;
+                for (uint8_t j = 0; j < *n; j++) if (out[j] == s) { dup = true; break; }
+                if (!dup && *n < cap) out[(*n)++] = s;
+            }
+            break;
+        case ERK_CONCRETE:
+            for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+                const Symbol *s = row->as.concrete.effects[i]->name;
+                bool dup = false;
+                for (uint8_t j = 0; j < *n; j++) if (out[j] == s) { dup = true; break; }
+                if (!dup && *n < cap) out[(*n)++] = s;
+            }
+            break;
+        case ERK_VAR: {
+            const Symbol *s = row->as.var.var_name;
+            bool dup = false;
+            for (uint8_t j = 0; j < *n; j++) if (out[j] == s) { dup = true; break; }
+            if (!dup && *n < cap) out[(*n)++] = s;
+            break;
+        }
+        case ERK_UNION:
+            effect_row_collect_names(row->as.union_.left, out, n, cap);
+            effect_row_collect_names(row->as.union_.right, out, n, cap);
+            break;
+    }
+}
+
+/* FH4.1: true if two rows denote the same *set* of effect names (order-
+ * insensitive).  NULL rows compare equal to each other and to empty rows. */
+bool effect_row_name_set_eq(EffectRow *a, EffectRow *b) {
+    const Symbol *an[32]; uint8_t na = 0;
+    const Symbol *bn[32]; uint8_t nb = 0;
+    effect_row_collect_names(a, an, &na, 32);
+    effect_row_collect_names(b, bn, &nb, 32);
+    if (na != nb) return false;
+    for (uint8_t i = 0; i < na; i++) {
+        bool found = false;
+        for (uint8_t j = 0; j < nb; j++) if (an[i] == bn[j]) { found = true; break; }
+        if (!found) return false;
+    }
+    return true;
+}
+
+/* FH4.1: append a row's effect names to `b`, separated by " | " (no braces);
+ * used to render handler<...> type names. */
+void effect_row_format_names(Buf *b, EffectRow *row) {
+    const Symbol *names[32]; uint8_t n = 0;
+    effect_row_collect_names(row, names, &n, 32);
+    if (n == 0) { buf_puts(b, "?"); return; }
+    for (uint8_t i = 0; i < n; i++) {
+        if (i > 0) buf_puts(b, " | ");
+        buf_puts(b, names[i]->name);
+    }
+}
+
 /* Effect environment - global registry of effects */
 EffectEnv *effect_env_new(Arena *a) {
     EffectEnv *env = arena_alloc(a, sizeof(EffectEnv));

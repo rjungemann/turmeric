@@ -1,0 +1,17 @@
+;; FH4.1: a multi-effect handler *type* -- (handler #{Ask Tell} int int) -- as a
+;; function parameter, receiving a composed handler value over both effects.
+;; Exercises (handler ...) row parsing, TY_HANDLER type_eq across the effect set
+;; (the composed value's unconstrained value-kind matches via the wildcard rule),
+;; and application of a handler bound to a variable.
+(defeffect Ask [] :int)
+(defeffect Tell [s :cstr] :nil)
+(defn run-with [h :(handler #{Ask Tell} int int)] :int
+  (with-handler h
+    (do (perform (Tell "hi")) (+ (perform (Ask)) 1))))
+(defn main [] :int
+  (let [r (run-with
+            (compose-handlers
+              (handler (Ask [] k) (resume k 41))
+              (handler (Tell [s] k) (do (println s) (resume k nil)))))]
+    (println r))
+  0)
