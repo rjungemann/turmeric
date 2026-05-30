@@ -101,6 +101,28 @@ static void tur_set_free(tur_set_t *s) { if (s) { free(s->items); free(s); } }
 typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
 /* ET3: algebraic effect handler runtime type */
 typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tur_handler_t;
+/* FH1: first-class handler dispatch-table entry */
+typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;
+/* FH1: first-class handler value -- effect-keyed dispatch table */
+typedef struct { tur_handler_entry_t *entries; int n_entries; uint8_t owns_env; } tur_handler_table_t;
+static tur_handler_table_t *tur_handler_table_new(int n) {
+    tur_handler_table_t *t = (tur_handler_table_t *)calloc(1, sizeof(tur_handler_table_t));
+    t->entries = (tur_handler_entry_t *)calloc((size_t)(n > 0 ? n : 1), sizeof(tur_handler_entry_t));
+    t->n_entries = n; t->owns_env = 1; return t;
+}
+static tur_handler_table_t *tur_handler_table_concat(tur_handler_table_t *a, tur_handler_table_t *b) {
+    int na = a ? a->n_entries : 0, nb = b ? b->n_entries : 0;
+    tur_handler_table_t *t = tur_handler_table_new(na + nb);
+    t->owns_env = 0;
+    for (int i = 0; i < na; i++) t->entries[i] = a->entries[i];
+    for (int i = 0; i < nb; i++) t->entries[na + i] = b->entries[i];
+    return t;
+}
+static void tur_handler_table_free(tur_handler_table_t *t) {
+    if (!t) return;
+    if (t->owns_env) { for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env); }
+    free(t->entries); free(t);
+}
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})

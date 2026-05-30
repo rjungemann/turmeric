@@ -1645,6 +1645,52 @@ int emit_program(Buf *out, const Expr *program) {
      * The dispatch function receives: env, n_args, value, continuation-as-int64_t. */
     buf_puts(out, "/* ET3: algebraic effect handler runtime type */\n");
     buf_puts(out, "typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tur_handler_t;\n");
+    /* FH1: first-class handler value -- an effect-keyed dispatch table.
+     * Generalizes tur_handler_t from one function to an array of per-effect
+     * entries.  A single-effect handler literal yields a one-entry table;
+     * compose-handlers concatenates two tables (FH5).  Each entry carries the
+     * handled effect name (interned C-string literal), the generated case
+     * function (same signature as tur_handler_t.fn), its captured-env pointer,
+     * and the continuation discipline (cont_kind: matches CopyKind ordinals --
+     * 0=unique/affine, 1=copy, 2=linear, 3=multishot).
+     *
+     * Lifetime (FH1.2): a handler value may outlive the scope that created it,
+     * so both the entries array and each entry's env are heap-allocated.  The
+     * table struct itself is heap-allocated and owns the entries array; each
+     * env is owned by its entry.  tur_handler_table_free drops the whole table
+     * (envs, array, then the struct).  Composition produces a fresh table that
+     * borrows the source entries' fn/eff_name (static) but takes ownership of
+     * copies of the env pointers via the table that created them; to keep
+     * ownership unambiguous and ASan/LSan-clean, a composed table does not
+     * double-free shared envs -- it is the application site (with-handler) that
+     * frees, and only the outermost owner frees.  See
+     * docs/first-class-handlers-semantics.md (FH1.2 invariant). */
+    buf_puts(out, "/* FH1: first-class handler dispatch-table entry */\n");
+    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;\n");
+    buf_puts(out, "/* FH1: first-class handler value -- effect-keyed dispatch table */\n");
+    buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; uint8_t owns_env; } tur_handler_table_t;\n");
+    buf_puts(out, "static tur_handler_table_t *tur_handler_table_new(int n) {\n");
+    buf_puts(out, "    tur_handler_table_t *t = (tur_handler_table_t *)calloc(1, sizeof(tur_handler_table_t));\n");
+    buf_puts(out, "    t->entries = (tur_handler_entry_t *)calloc((size_t)(n > 0 ? n : 1), sizeof(tur_handler_entry_t));\n");
+    buf_puts(out, "    t->n_entries = n; t->owns_env = 1; return t;\n");
+    buf_puts(out, "}\n");
+    /* FH5: concatenate two tables (h1's entries first; h1 is the outer handler
+     * per FH0.1).  The result borrows the source entries verbatim and does NOT
+     * own their envs (owns_env = 0) so freeing the composed table never double-
+     * frees an env still owned by h1/h2. */
+    buf_puts(out, "static tur_handler_table_t *tur_handler_table_concat(tur_handler_table_t *a, tur_handler_table_t *b) {\n");
+    buf_puts(out, "    int na = a ? a->n_entries : 0, nb = b ? b->n_entries : 0;\n");
+    buf_puts(out, "    tur_handler_table_t *t = tur_handler_table_new(na + nb);\n");
+    buf_puts(out, "    t->owns_env = 0;\n");
+    buf_puts(out, "    for (int i = 0; i < na; i++) t->entries[i] = a->entries[i];\n");
+    buf_puts(out, "    for (int i = 0; i < nb; i++) t->entries[na + i] = b->entries[i];\n");
+    buf_puts(out, "    return t;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_handler_table_free(tur_handler_table_t *t) {\n");
+    buf_puts(out, "    if (!t) return;\n");
+    buf_puts(out, "    if (t->owns_env) { for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env); }\n");
+    buf_puts(out, "    free(t->entries); free(t);\n");
+    buf_puts(out, "}\n");
     /* IT4: Tagged union runtime representation.
      * tur_tagged_t carries a discriminant tag and a 64-bit payload.
      * Used for (A | B) union types and the 'any' top type. */
