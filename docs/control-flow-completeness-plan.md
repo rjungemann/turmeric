@@ -6,7 +6,8 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Not started. Companion to
+> **Status:** Phase CF0 complete (disposition ratified + diagnostics
+> namespace reserved + at-risk fixtures inventoried); CF1 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -71,6 +72,13 @@ Non-goals (deferred to post-1.0, tracked in the audit):
 | CF6 | 6 | Scope down | Async Send-across-await soundness |
 | CF7 | 7, 8 | Implement / tighten | Cloneable deep clone + capture precision |
 
+> **Ratified 2026-05-30 (CF0.1).** This disposition table is the single
+> source of truth for the 1.0 control-flow milestone; the per-item
+> dispositions above are accepted with no overrides. `compose-handlers`
+> (CF3) is **implemented**, not removed; `call/cc`/`escape` (CF4) are
+> **gated**, not implemented. The 1.0 milestone tracks this plan via the
+> [Exit criteria for 1.0](#exit-criteria-for-10-control-flow) section below.
+
 ---
 
 ## Phase CF0 -- Disposition decision and tracking
@@ -91,6 +99,70 @@ the changelog have a single source of truth.
   `compose-handlers` fixture, if any). *Done when:* each is tagged in this doc
   as "will convert to expect-error" (CF4/CF3) so the suite stays green across
   the transition.
+
+### CF0.1 outcome -- ratified dispositions
+
+The disposition table under [Phase ordering at a glance](#phase-ordering-at-a-glance)
+is ratified as written (2026-05-30). No maintainer overrides were taken: the two
+items that carried an open implement-vs-remove question are both resolved toward
+**implement/gate**, not removal --
+
+- **CF3 (`compose-handlers`)** -- implement real composition (already recorded
+  in the CF3 header as the 2026-05-30 decision).
+- **CF4 (`call/cc`/`escape`)** -- gate behind `-Xcallcc`; ungated use is a hard
+  compile error. Real capture stays post-1.0 (CPS).
+
+### CF0.2 outcome -- gated control-flow features and their diagnostics
+
+Every form that 1.0 turns off (rather than implements) gets a stable diagnostic
+code in a reserved **`E07xx` "gated / unsupported control-flow"** band, so CF4
+and CF5 emit consistent, greppable messages. The `E07xx` band is currently
+unused (existing control-flow codes live in `E0016`-`E0019`, the `E025x`
+handler band, and the `E050x` multishot band); reserving a fresh band keeps the
+"this feature is gated for 1.0" class self-contained.
+
+The experimental opt-in flag follows the existing `-X<feature>` convention in
+`src/main.c` (`wk_apply_flags`), defaults **off**, and gates only CF4:
+
+| Form | Phase | Gating | Diagnostic code | Wording (ungated) |
+|---|---|---|---|---|
+| `call/cc` | CF4 | `-Xcallcc` (default off) | `TUR-E0700` | `'call/cc' has no real continuation capture yet (unsound) and is gated; pass -Xcallcc to experiment. Real capture requires the post-1.0 CPS pass.` |
+| `escape` | CF4 | `-Xcallcc` (default off) | `TUR-E0701` | `'escape' has no real early-exit semantics yet (unsound) and is gated; pass -Xcallcc to experiment. Real capture requires the post-1.0 CPS pass.` |
+| `yield` / `yield*` inside a `match` arm | CF5 | always rejected | `TUR-E0702` | `'yield' is not supported inside a 'match' arm (1.0 limitation); this requires the post-1.0 CPS pass.` |
+| `yield` / `yield*` inside a recursive generator | CF5 | always rejected | `TUR-E0703` | `'yield' is not supported inside a recursive generator (1.0 limitation); this requires the post-1.0 CPS pass.` |
+
+`-Xcallcc` help text (CF4.1): `enable experimental call/cc / escape -- no real
+capture yet (unsound); requires the post-1.0 CPS pass`.
+
+Notes:
+
+- CF5 diagnostics (`E0702`/`E0703`) are *always-on* rejections, not flag-gated:
+  there is no experimental path for unsupported `yield` placement, since
+  mis-lowering would be silently wrong.
+- These four codes are reserved here so the enum additions in
+  `src/compiler/diag.h` / `diag.c` (CF4, CF5) do not collide and so the
+  changelog can reference them before the code lands.
+
+### CF0.3 outcome -- at-risk fixture inventory
+
+These fixtures currently PASS only because they never exercise the gated stub
+(`call/cc`/`escape` desugar to identity / dummy `0`). Each is tagged with its
+transition so the suite stays green across CF3/CF4/CF5:
+
+| Fixture | Exercises | Transition | Phase |
+|---|---|---|---|
+| `tests/fixtures/continuation-callcc` | `call/cc` identity desugar | move behind `-Xcallcc`; add ungated expect-error (`TUR-E0700`) sibling | CF4.3 |
+| `tests/fixtures/continuation-escape` | `escape` dummy-`0` desugar | move behind `-Xcallcc`; add ungated expect-error (`TUR-E0701`) sibling | CF4.3 |
+| `tests/fixtures/continuation-escape-fn` | `escape` over a fn arg | move behind `-Xcallcc` | CF4.3 |
+
+`compose-handlers` (CF3) needs **no** expect-error conversion: it is being
+implemented, not gated. The only fixtures referencing it today are
+`tests/fixtures/effect-handler-type` (uses it in a doc comment / type position,
+not as the nil-returning call) and `tests/fixtures/errors/effect-handler-overlap`
+(already an expect-error for `TUR-E0251` overlap). The runtime-composition
+fixtures land fresh in CF3.2/CF3.3. The `tests/fixtures/effect-handler-compose`
+fixture composes via **nested `handle`**, not `compose-handlers`, so it is
+unaffected.
 
 ---
 
