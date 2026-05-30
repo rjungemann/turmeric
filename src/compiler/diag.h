@@ -116,6 +116,11 @@ typedef enum DiagCode {
     TUR_E0605_DYNVAR_SET_IN_ATOMIC,      /* set! on dynamic var inside an atomically block */
     /* DV0: Dynamic var naming warning */
     TUR_W0600_DYNVAR_NO_EARMUFFS,        /* defdynamic name does not use *earmuffs* convention */
+    /* CF3/CF4 (control-flow-completeness-plan): gated / unsupported control-flow.
+     * E07xx band reserved in Phase CF0; see docs/control-flow-completeness-plan.md. */
+    TUR_E0700_CALLCC_GATED,              /* call/cc has no real capture yet (unsound); gated behind -Xcallcc */
+    TUR_E0701_ESCAPE_GATED,              /* escape has no real early-exit yet (unsound); gated behind -Xcallcc */
+    TUR_E0704_HANDLER_COMPOSE_UNIMPL,    /* first-class handler composition (compose-handlers) not yet implemented (gated) */
 } DiagCode;
 
 typedef enum DiagLevel {

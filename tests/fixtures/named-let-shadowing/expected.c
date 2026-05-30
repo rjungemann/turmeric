@@ -2687,16 +2687,15 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
 };
 
 static int64_t __fn_690(int64_t x) {
-        int64_t __t0;
+        __tur_tailcall:;
         if (((x) == (INT64_C(0)))) {
-            __t0 = INT64_C(0);
+            return INT64_C(0);
         } else {
             printf("%lld\n", (long long)(x));
-            int64_t __t1;
-            __t1 = __fn_690(((x) - (INT64_C(1))));
-            __t0 = __t1;
+            int64_t __t0 = ((x) - (INT64_C(1)));
+            x = __t0;
+            goto __tur_tailcall;
         }
-        return __t0;
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -3331,13 +3330,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t2;
+        int64_t __t1;
         if (tnil_(l1)) {
-            __t2 = l2;
+            __t1 = l2;
         } else {
-            __t2 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t1 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t2;
+        return __t1;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -3812,11 +3811,11 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        int64_t __t3;
+        int64_t __t2;
         {
-            __t3 = __fn_690(INT64_C(3));
+            __t2 = __fn_690(INT64_C(3));
         }
-        return (int)__t3;
+        return (int)__t2;
 }
 
 

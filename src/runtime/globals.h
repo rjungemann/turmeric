@@ -79,6 +79,12 @@ extern bool g_sessions_enabled;
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 extern bool g_dynvar_enabled;
 
+/* CF4 (control-flow-completeness-plan): -Xcallcc flag — unlock the experimental
+ * (unsound, no real capture) call/cc / escape desugar.  Default off; ungated
+ * call/cc / escape raise TUR-E0700 / TUR-E0701.  Real capture needs the
+ * post-1.0 CPS pass. */
+extern bool g_callcc_enabled;
+
 /* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
 extern bool g_interpret_mode;
 

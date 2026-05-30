@@ -59,6 +59,32 @@ Continuations in Turmeric are **one-shot**: calling `(resume k v)` consumes `k`,
 - **Dynamic dispatch** -- The closest matching handler in the call stack handles the effect.
 - **Composable** -- Handlers can chain; inner handlers shadow outer ones for the same effect.
 
+### Composing Handlers
+
+Compose handlers for different effects by **nesting `handle` forms** -- the
+inner handler runs inside the outer one, and each effect is routed to the
+handler that declares it:
+
+```turmeric
+(defeffect Log [msg :cstr] :nil)
+(defeffect Counter [] :int)
+
+(handle
+  (handle
+    (do (perform (Log "tick")) (+ (perform (Counter)) 1))
+    (Counter [] k) (resume k 41))
+  (Log [msg] k) (do (println msg) (resume k nil)))
+;; prints "tick", evaluates to 42
+```
+
+> **`compose-handlers` is gated (`TUR-E0704`).** A first-class
+> `(compose-handlers h1 h2)` over handler *values* is **not yet implemented** --
+> handler values currently have no runtime representation (the `(handler E V R)`
+> annotation is type-level only), so `compose-handlers` raises a compile error
+> rather than silently doing nothing. Use nested `handle` (above) to compose
+> effects today. The implementation is specified in
+> [first-class-handlers-plan.md](../first-class-handlers-plan.md).
+
 ## Common Use Cases
 
 ### Direct-Style Async

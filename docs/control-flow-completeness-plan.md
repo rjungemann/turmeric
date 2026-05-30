@@ -6,7 +6,15 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Not started. Companion to
+> **Status:** Phases CF0-CF4 complete (CF0: disposition ratified + diagnostics
+> namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
+> lowering shipped; CF2: `shift`/`shift0` result typing replaces the
+> `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
+> after discovering handler values have no runtime representation -- real
+> implementation tracked in
+> [first-class-handlers-plan.md](first-class-handlers-plan.md); CF4:
+> `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`));
+> CF5 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -65,11 +73,18 @@ Non-goals (deferred to post-1.0, tracked in the audit):
 | CF0 | -- | Decision + tracking | Records implement/lower/gate per item before code moves |
 | CF1 | 5 | Lower | Self-tail-call TCO; independent, high user value |
 | CF2 | 3 | Implement | `shift`/`shift0` result typing; small, unblocks clean diagnostics |
-| CF3 | 2 | Implement | `compose-handlers` semantics |
+| CF3 | 2 | ~~Implement~~ -> Gate | `compose-handlers` gated (`TUR-E0704`); real impl deferred to [first-class-handlers-plan.md](first-class-handlers-plan.md) |
 | CF4 | 1 | Gate (`-Xcallcc`) | `call/cc`/`escape` real capture is post-1.0 |
 | CF5 | 4 | Gate-off-and-document | Generator `yield`-in-`match` / recursion limits |
 | CF6 | 6 | Scope down | Async Send-across-await soundness |
 | CF7 | 7, 8 | Implement / tighten | Cloneable deep clone + capture precision |
+
+> **Ratified 2026-05-30 (CF0.1).** This disposition table is the single
+> source of truth for the 1.0 control-flow milestone; the per-item
+> dispositions above are accepted with no overrides. `compose-handlers`
+> (CF3) is **implemented**, not removed; `call/cc`/`escape` (CF4) are
+> **gated**, not implemented. The 1.0 milestone tracks this plan via the
+> [Exit criteria for 1.0](#exit-criteria-for-10-control-flow) section below.
 
 ---
 
@@ -91,6 +106,73 @@ the changelog have a single source of truth.
   `compose-handlers` fixture, if any). *Done when:* each is tagged in this doc
   as "will convert to expect-error" (CF4/CF3) so the suite stays green across
   the transition.
+
+### CF0.1 outcome -- ratified dispositions
+
+The disposition table under [Phase ordering at a glance](#phase-ordering-at-a-glance)
+is ratified as written (2026-05-30). No maintainer overrides were taken: the two
+items that carried an open implement-vs-remove question are both resolved toward
+**implement/gate**, not removal --
+
+- **CF3 (`compose-handlers`)** -- implement real composition (already recorded
+  in the CF3 header as the 2026-05-30 decision).
+- **CF4 (`call/cc`/`escape`)** -- gate behind `-Xcallcc`; ungated use is a hard
+  compile error. Real capture stays post-1.0 (CPS).
+
+### CF0.2 outcome -- gated control-flow features and their diagnostics
+
+Every form that 1.0 turns off (rather than implements) gets a stable diagnostic
+code in a reserved **`E07xx` "gated / unsupported control-flow"** band, so CF4
+and CF5 emit consistent, greppable messages. The `E07xx` band is currently
+unused (existing control-flow codes live in `E0016`-`E0019`, the `E025x`
+handler band, and the `E050x` multishot band); reserving a fresh band keeps the
+"this feature is gated for 1.0" class self-contained.
+
+The experimental opt-in flag follows the existing `-X<feature>` convention in
+`src/main.c` (`wk_apply_flags`), defaults **off**, and gates only CF4:
+
+| Form | Phase | Gating | Diagnostic code | Wording (ungated) |
+|---|---|---|---|---|
+| `call/cc` | CF4 | `-Xcallcc` (default off) | `TUR-E0700` | `'call/cc' has no real continuation capture yet (unsound) and is gated; pass -Xcallcc to experiment. Real capture requires the post-1.0 CPS pass.` |
+| `escape` | CF4 | `-Xcallcc` (default off) | `TUR-E0701` | `'escape' has no real early-exit semantics yet (unsound) and is gated; pass -Xcallcc to experiment. Real capture requires the post-1.0 CPS pass.` |
+| `yield` / `yield*` inside a `match` arm | CF5 | always rejected | `TUR-E0702` | `'yield' is not supported inside a 'match' arm (1.0 limitation); this requires the post-1.0 CPS pass.` |
+| `yield` / `yield*` inside a recursive generator | CF5 | always rejected | `TUR-E0703` | `'yield' is not supported inside a recursive generator (1.0 limitation); this requires the post-1.0 CPS pass.` |
+| `compose-handlers` (first-class handler composition) | CF3 | always rejected | `TUR-E0704` | `compose-handlers: first-class handler composition is not yet implemented and is gated for now` (help points at `docs/first-class-handlers-plan.md`) |
+
+`-Xcallcc` help text (CF4.1): `enable experimental call/cc / escape -- no real
+capture yet (unsound); requires the post-1.0 CPS pass`.
+
+Notes:
+
+- CF5 diagnostics (`E0702`/`E0703`) and the CF3 `compose-handlers` gate
+  (`E0704`) are *always-on* rejections, not flag-gated: there is no experimental
+  path, since the underlying feature has no correct lowering yet. The CF4 codes
+  (`E0700`/`E0701`) are unlocked by `-Xcallcc`.
+- **Implemented:** `E0700`/`E0701` (CF4), `E0704` (CF3). **Still reserved:**
+  `E0702`/`E0703` (CF5) so the enum additions in `src/compiler/diag.h` /
+  `diag.c` do not collide and the changelog can reference them before the code
+  lands.
+
+### CF0.3 outcome -- at-risk fixture inventory
+
+These fixtures currently PASS only because they never exercise the gated stub
+(`call/cc`/`escape` desugar to identity / dummy `0`). Each is tagged with its
+transition so the suite stays green across CF3/CF4/CF5:
+
+| Fixture | Exercises | Transition | Phase |
+|---|---|---|---|
+| `tests/fixtures/continuation-callcc` | `call/cc` identity desugar | move behind `-Xcallcc`; add ungated expect-error (`TUR-E0700`) sibling | CF4.3 |
+| `tests/fixtures/continuation-escape` | `escape` dummy-`0` desugar | move behind `-Xcallcc`; add ungated expect-error (`TUR-E0701`) sibling | CF4.3 |
+| `tests/fixtures/continuation-escape-fn` | `escape` over a fn arg | move behind `-Xcallcc` | CF4.3 |
+
+`compose-handlers` (CF3) needs **no** expect-error conversion: it is being
+implemented, not gated. The only fixtures referencing it today are
+`tests/fixtures/effect-handler-type` (uses it in a doc comment / type position,
+not as the nil-returning call) and `tests/fixtures/errors/effect-handler-overlap`
+(already an expect-error for `TUR-E0251` overlap). The runtime-composition
+fixtures land fresh in CF3.2/CF3.3. The `tests/fixtures/effect-handler-compose`
+fixture composes via **nested `handle`**, not `compose-handlers`, so it is
+unaffected.
 
 ---
 
@@ -120,6 +202,43 @@ trampolining stay post-1.0.
   general tail calls remain post-1.0) in `generators-guide.md`/relevant guide
   and link this phase. *Done when:* the guide states the guarantee precisely.
 
+### CF1 outcome (complete -- 2026-05-30)
+
+Self-tail-call -> loop lowering ships in the C emitter. A self-recursive call in
+tail position is rewritten to a backedge: argument values are evaluated into
+temporaries, the C parameter variables are reassigned, and control jumps to a
+`__tur_tailcall:` label at the top of the function body. A 10,000,000-iteration
+countdown that previously overflowed the C stack now completes.
+
+- **Tail-position predicate / analysis (CF1.1, CF1.2)** -- `tco_mark` in
+  `src/compiler/emit_fns.c` walks tail positions through `if`, `do`, and
+  `let`/`letrec` (`cond`/`when` macro-expand to `if` before the IR), marking the
+  new `Expr.as.call_.is_tail_self_call` flag (`src/compiler/expr.h`) on direct,
+  arity-matching self-calls. Self-identity is by resolved C name, so the
+  named-let desugar (`(let loop ...)` -> `letrec` -> static fn) is recognized
+  even though the loop binding and the `fn`'s own binding are distinct objects.
+  Non-tail recursion (e.g. `(+ n (f ...))`) is never marked.
+- **Lowering (CF1.3)** -- `emit_tail` emits the backedge; gated to value-
+  returning, non-`main`, non-closure functions whose parameters are simple
+  scalars (pass-by-pointer struct / fn-typed / poly-fn / carrier-ABI params are
+  excluded so the backedge temporary's C type is unambiguous). Functions with no
+  self-tail-call are emitted exactly as before (no snapshot churn).
+- **Fixtures (CF1.4)** -- `tests/fixtures/tco-self-tail-deep` (10M-iteration
+  countdown, asserts stdout + the lowered codegen) and
+  `tests/fixtures/tco-non-tail-unchanged` (non-tail `sum-to`; snapshot has no
+  `__tur_tailcall`, locking in "non-tail recursion is unchanged"). The existing
+  `named-let-loop` / `named-let-shadowing` snapshots were regenerated to the
+  lowered form; `letrec-self-recursive` (factorial, non-tail) is unchanged.
+- **Docs (CF1.5)** -- `docs/guides/performance-guide.md` gains a "Self-tail-call
+  optimization" subsection stating the guarantee and its boundary (self-tail
+  only; mutual/general/`match`-arm tail calls deferred to the post-1.0 CPS
+  pass), and the Fibonacci example now uses the lowered named-let form.
+
+> **Residual (documented):** tail calls inside `match` arms and mutual/general
+> tail calls are compiled as ordinary recursive calls (correct, not stack-
+> optimized) -- consistent with the "self-tail only" boundary and the post-1.0
+> CPS deferral.
+
 ---
 
 ## Phase CF2 -- `shift` / `shift0` result typing (audit item 3)
@@ -139,26 +258,74 @@ cannot silently mistype.
   answer types (ok), mismatched answer types (error), and `shift0`'s
   distinct delimiter behavior. *Done when:* fixtures pass and are snapshotted.
 
+### CF2 outcome (complete -- 2026-05-30)
+
+The `body->type` placeholder is replaced with the receiver's result type.
+
+- **Typing rule (CF2.1)** -- v1 semantics evaluate `(shift f body)` to
+  `(f body)`, so for `f : A -> B` and `body : A` the expression `(shift f body)`
+  has type `B` (the receiver's *codomain*), and `body` must have type `A` (the
+  receiver's *domain*). `shift0` shares the identical local rule (it differs from
+  `shift` only in runtime delimiter behavior). `(reset body)` keeps the body's
+  type (the answer type) -- already correct.
+- **Implementation (CF2.2)** -- `shift_fn_domain_codomain` /
+  `shift_result_type` in `src/compiler/elab_effects.c` recover `A` and `B` from
+  the receiver's `TY_FN` (handling the captured-closure case, where the env
+  occupies parameter 0 and the value parameter is at index 1). The `EX_SHIFT` /
+  `EX_SHIFT0` node type is set to `B`; a body whose type is not `A` is rejected
+  with `TUR-E0001` and a precise span. When the receiver's type is not
+  statically known (or its codomain is unresolved) the prior `body->type`
+  behavior is preserved, so nothing regresses. This fixes a latent codegen bug:
+  the emitter declares `<e->type> result = k(body);`, which was mis-typed
+  whenever the receiver's codomain differed from `body`'s type.
+- **Fixtures (CF2.3)** -- `tests/fixtures/shift-result-typing` (codomain != domain
+  giving a `:bool` result, plus a matching-answer-type case) and
+  `tests/fixtures/shift0-result-typing` (expect-ok), and
+  `tests/fixtures/errors/shift-body-type-mismatch` (expect-error, `TUR-E0001`).
+  The existing `continuation-basic` / `continuation-advanced` snapshots are
+  unchanged (their receivers are `int -> int`, where the placeholder coincided).
+
 ---
 
 ## Phase CF3 -- `compose-handlers` (audit item 2)
 
-`compose-handlers` currently elaborates to a nil placeholder ("runtime
-semantics TBD"). **Decision (2026-05-30): implement real composition for
-1.0.**
+`compose-handlers` elaborated to a nil placeholder ("runtime semantics TBD").
+**Decision (2026-05-30, revised): gate, do not implement, for now.** The
+original ratified disposition was "implement real composition for 1.0", but
+implementation reconnaissance found that handler *values* have **no runtime
+representation at all** -- `(handler E V R)` is only a type annotation, no form
+*creates* or *applies* a handler value, and `compose-handlers` had never
+actually run. "Real composition" therefore means building first-class effect
+handlers (creation + application + composition) from scratch, which is a
+substantial, fiber-level feature whose pre/post-1.0 placement is undecided. For
+1.0 the placeholder is replaced with a loud gate, and the implementation is
+specified separately.
 
-- **CF3.1** Specify composition semantics: handler order, effect-row union,
-  and resume/discontinue behavior of the composed handler. *Done when:* a
-  one-paragraph operational spec exists with at least two worked examples.
-- **CF3.2** Replace the nil placeholder with an elaboration that produces the
-  composed handler per the spec. *Done when:* a fixture composing two effect
-  handlers produces the spec's expected stdout.
-- **CF3.3** Fixtures: compose two independent effects; compose with an
-  overlapping effect (define the precedence outcome from CF3.1). *Done when:*
-  both run green and are snapshotted.
-- **CF3.4** Update `effects-system-guide.md` to document the composition
-  semantics (no silent-nil description remains). *Done when:* the guide
-  reflects the shipped behavior.
+- **CF3.1** ~~Specify composition semantics in this phase.~~ Moved to the
+  dedicated plan: [first-class-handlers-plan.md](first-class-handlers-plan.md)
+  Phase FH0 carries the full operational spec (precedence, effect-row union,
+  continuation discipline).
+- **CF3.2** **(done -- gated)** Replace the nil placeholder with a hard
+  diagnostic `TUR-E0704` (`elab_compose_handlers`, `src/compiler/elab_effects.c`).
+  The static checks before it still fire first: handler-value typing, and the
+  same-effect overlap `TUR-E0251`. *Done.*
+- **CF3.3** **(done)** Fixtures: `tests/fixtures/errors/compose-handlers-gated`
+  (two disjoint effects -> `TUR-E0704`, expect-error). The existing
+  `tests/fixtures/errors/effect-handler-overlap` (overlap -> `TUR-E0251`) and
+  `tests/fixtures/effect-handler-type` (handler-typed params, no
+  `compose-handlers` call) are unchanged. *Done.*
+- **CF3.4** **(done)** `effects-system-guide.md` documents that
+  `compose-handlers` is gated (no silent-nil description remains) and links the
+  first-class-handlers plan. *Done.*
+
+### CF3 outcome (complete -- 2026-05-30)
+
+`compose-handlers` is gated with `TUR-E0704` instead of returning a silent nil,
+closing audit item 2 for 1.0 (the stub no longer "runs only because it is never
+exercised"). The real feature is fully specified in
+[first-class-handlers-plan.md](first-class-handlers-plan.md) (FH0-FH7), whose
+FH5.3 removes this gate when implemented. The pre/post-1.0 decision for that
+work is explicitly deferred.
 
 ---
 
@@ -185,6 +352,29 @@ user the integer `0` as a "continuation".
 - **CF4.4** Document `call/cc`/`escape` status and the `-Xcallcc` flag in the
   relevant guide, linking the control-flow audit's post-1.0 CPS entry. *Done
   when:* docs state the flag and that capture is unsound until CPS lands.
+
+### CF4 outcome (complete -- 2026-05-30)
+
+`call/cc` and `escape` are gated behind `-Xcallcc` (default off); `call/cc*`
+(the real cloneable construct) is untouched.
+
+- **Flag (CF4.1)** -- `g_callcc_enabled` (`src/runtime/globals.{h,c}`), parsed
+  by both the CLI argv loop and `wk_apply_flags` in `src/main.c`; help text:
+  `enable experimental call/cc / escape -- no real capture yet (unsound);
+  requires the post-1.0 CPS pass`.
+- **Gate (CF4.2)** -- ungated, `elab_call_cc` / `elab_escape`
+  (`src/compiler/elab_effects.c`) raise `TUR-E0700` / `TUR-E0701` (added to
+  `diag.{h,c}`) with the CF0.2 wording; with `-Xcallcc` the prior v1 desugar is
+  emitted unchanged. The interpreter shares the same elaboration path, so the
+  gate applies to `tur run` and the turi harness identically.
+- **Fixtures (CF4.3)** -- `continuation-callcc` / `continuation-escape` /
+  `continuation-escape-fn` each gain a `flags` file (`-Xcallcc`) and pass
+  unchanged under both `run.sh` and `run-turi.sh`; new expect-error fixtures
+  `errors/callcc-gated` (`TUR-E0700`) and `errors/escape-gated` (`TUR-E0701`)
+  cover the ungated case.
+- **Docs (CF4.4)** -- `compiler-flags-guide.md` gains an `-Xcallcc` quick-
+  reference row and a detail section stating the desugar is unsound (no real
+  capture) until the post-1.0 CPS pass, and that `call/cc*` is not gated.
 
 ---
 

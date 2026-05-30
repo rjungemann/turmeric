@@ -132,6 +132,11 @@ const char *diag_code_to_string(DiagCode code) {
         /* ET3: handler typing errors */
         case TUR_E0251_HANDLER_OVERLAP:                  return "TUR-E0251";
         case TUR_E0252_HANDLER_RESULT_MISMATCH:          return "TUR-E0252";
+        /* CF4: gated call/cc / escape */
+        case TUR_E0700_CALLCC_GATED:                     return "TUR-E0700";
+        case TUR_E0701_ESCAPE_GATED:                     return "TUR-E0701";
+        /* CF3: gated first-class handler composition */
+        case TUR_E0704_HANDLER_COMPOSE_UNIMPL:           return "TUR-E0704";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -220,6 +225,11 @@ DiagCode diag_code_from_string(const char *s) {
     /* ET3: handler typing errors */
     if (strcmp(s, "TUR-E0251") == 0) return TUR_E0251_HANDLER_OVERLAP;
     if (strcmp(s, "TUR-E0252") == 0) return TUR_E0252_HANDLER_RESULT_MISMATCH;
+    /* CF4: gated call/cc / escape */
+    if (strcmp(s, "TUR-E0700") == 0) return TUR_E0700_CALLCC_GATED;
+    if (strcmp(s, "TUR-E0701") == 0) return TUR_E0701_ESCAPE_GATED;
+    /* CF3: gated first-class handler composition */
+    if (strcmp(s, "TUR-E0704") == 0) return TUR_E0704_HANDLER_COMPOSE_UNIMPL;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;

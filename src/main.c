@@ -4200,6 +4200,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "-Xcontracts")         == 0) g_contracts_enabled        = true;
         else if (strcmp(tok, "-Xsessions")          == 0) { g_sessions_enabled = true; g_substructural_enabled = true; g_linear_enabled = true; }
         else if (strcmp(tok, "-Xdynamic-vars")      == 0) g_dynvar_enabled           = true;
+        else if (strcmp(tok, "-Xcallcc")            == 0) g_callcc_enabled           = true;
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
@@ -6388,7 +6389,8 @@ static int usage(void) {
         "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n"
         "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
         "  --keep-contracts                 retain contract checks in release builds (CT3)\n"
-        "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n");
+        "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n"
+        "  -Xcallcc                         enable experimental call/cc / escape -- no real capture yet (unsound); requires the post-1.0 CPS pass\n");
     list_external_subcommands();
     return 64;
 }
@@ -7102,6 +7104,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xdynamic-vars") == 0) {
             /* DV0: enable dynamic var syntax and checking */
             g_dynvar_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xcallcc") == 0) {
+            /* CF4: unlock the experimental (unsound) call/cc / escape desugar */
+            g_callcc_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

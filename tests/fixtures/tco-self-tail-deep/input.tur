@@ -1,0 +1,20 @@
+;; CF1: self-tail-call optimization (audit item 5).
+;;
+;; A self-recursive call in tail position is lowered to an iterative backedge
+;; (a `__tur_tailcall:` label + parameter reassignment + goto), so iteration
+;; count no longer drives C-stack depth.  This countdown runs 10,000,000
+;; iterations: without TCO it overflows the stack; with TCO it completes and
+;; prints the accumulated sum.
+;;
+;; Covers tail position reached through `if` (the canonical named-let / loop
+;; shape).  `count-down` is a plain self-recursive defn whose recursive call
+;; sits in the `if` else-branch -- the lowered form is in expected.c.
+
+(defn count-down [n :int acc :int] :int
+  (if (= n 0)
+    acc
+    (count-down (- n 1) (+ acc 1))))
+
+(defn main [] :int
+  (println (count-down 10000000 0))
+  0)

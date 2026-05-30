@@ -1,6 +1,235 @@
 /* emit_fns.c -- function-definition C emission (emit_fn_def). */
 #include "emit_internal.h"
 
+/* ============================================================================
+ * CF1: Self-tail-call optimization (self-TCO).
+ *
+ * A self-recursive call in tail position is lowered to a backedge: the argument
+ * values are evaluated into temporaries, the C parameter variables are
+ * reassigned, and control jumps to a `__tur_tailcall:` label at the top of the
+ * function body -- turning `(let loop [...] ... (loop ...))` and equivalent
+ * self-recursive `defn`s into an iterative loop that does not grow the C stack.
+ *
+ * Scope (1.0): self-tail-calls only, reached through `if`, `do`, and `let`/
+ * `letrec` (which is where the named-let idiom and `cond`/`when` -- macro-
+ * expanded to `if` -- put them).  Mutual/general tail calls and tail calls
+ * inside `match` arms remain ordinary recursive calls; they are correct, just
+ * not stack-optimized.  See docs/guides/generators-guide.md and
+ * docs/control-flow-completeness-plan.md (Phase CF1).
+ * ========================================================================== */
+
+/* The declared C type of parameter `i`, matching the function signature's
+ * default (non-pbp, non-poly) path. */
+static Type tco_param_type(const Expr *fn_e, FnDef *fd, uint8_t i) {
+    if (fn_e->type.kind == TY_FN && fn_e->type.as.fn.arg_full_types &&
+        fn_e->type.as.fn.arg_full_types[i])
+        return *fn_e->type.as.fn.arg_full_types[i];
+    return fd->param_types[i];
+}
+
+/* A function is TCO-eligible only if every parameter is a plain scalar we can
+ * reassign with `p = tmp;`.  Pass-by-pointer structs, poly-fn, fn-typed, and
+ * carrier-ABI parameters are excluded so the backedge temporary's C type is
+ * unambiguous. */
+static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
+    if (fd->is_variadic || fd->closure) return false;
+    for (uint8_t i = 0; i < fd->n_params; i++) {
+        if (fd->params[i]->is_poly_fn) return false;
+        Type pty = tco_param_type(fn_e, fd, i);
+        if (pty.kind == TY_FN) return false;
+        Type rpty = emit_resolve_type(ctx, pty);
+        if (type_struct_pass_by_ptr(rpty)) return false;
+        if (type_uses_carrier_abi(rpty)) return false;
+    }
+    return true;
+}
+
+/* True if `call` is a direct, arity-matching self-call of the function being
+ * emitted (whose C name is `fn_cname`).  Identity is by resolved C name, not
+ * Binding pointer: named-let desugars `(let loop ...)` to a `letrec` whose loop
+ * binding (the call's target) is a *different* Binding object than the
+ * anonymous `fn`'s own FnDef binding, yet both mangle to the same C function
+ * name (e.g. __fn_691). */
+static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) {
+    if (!call || call->kind != EX_CALL) return false;
+    if (!call->as.call_.fn_binding) return false;     /* must be a direct call */
+    if (call->as.call_.fn_expr) return false;          /* indirect field call */
+    if (call->as.call_.dict_arg) return false;         /* typeclass dispatch */
+    if (call->as.call_.is_poly_call) return false;     /* rank-2 poly call */
+    if (call->as.call_.n_args != fd->n_params) return false;
+    if (call->as.call_.fn_binding == fd->binding) return true;  /* fast path */
+    char *cn = raw_name_for_binding(call->as.call_.fn_binding);
+    bool same = fn_cname && cn && strcmp(cn, fn_cname) == 0;
+    free(cn);
+    return same;
+}
+
+/* A let/letrec is tail-transparent for TCO only if every binding is a plain
+ * scalar we can declare with `T name = init;`.  fn-typed (incl. letrec global
+ * fns), poly-fn, and carrier-ABI bindings force the whole let onto the default
+ * (emit_value + return) path. */
+static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (!b) return false;
+        if (b->type.kind == TY_FN || b->is_poly_fn) return false;
+        if (type_uses_carrier_abi(emit_resolve_type(ctx, b->type))) return false;
+    }
+    return true;
+}
+
+/* Mark self-tail-calls in tail position, recursing through if/do/let/letrec.
+ * This mirrors emit_tail's structural recursion exactly so that "marked >= 1"
+ * predicts whether emit_tail will emit a backedge (and thus whether the
+ * `__tur_tailcall:` label is used).  Returns the number of calls marked. */
+static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e) {
+    if (!e) return 0;
+    switch (e->kind) {
+        case EX_CALL:
+            if (tco_is_self_call(fd, fn_cname, e)) {
+                e->as.call_.is_tail_self_call = true;
+                return 1;
+            }
+            return 0;
+        case EX_IF: {
+            if (!e->as.if_.else_or_null) return 0;  /* default path; no recursion */
+            int n = tco_mark(ctx, fd, fn_cname, e->as.if_.then_);
+            n += tco_mark(ctx, fd, fn_cname, e->as.if_.else_or_null);
+            return n;
+        }
+        case EX_DO: {
+            if (e->as.do_.n == 0) return 0;
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (e->as.do_.items[i]->kind == EX_DEFER) return 0; /* defers break tail */
+            return tco_mark(ctx, fd, fn_cname, e->as.do_.items[e->as.do_.n - 1]);
+        }
+        case EX_LET:
+        case EX_LETREC:
+            if (!tco_let_simple(ctx, e)) return 0;
+            return tco_mark(ctx, fd, fn_cname, e->as.let_.body);
+        default:
+            return 0;
+    }
+}
+
+/* Forward decl: tail-position emitter (mutually recursive). */
+static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
+                      const Expr *e, TypeKind result_kind, bool is_main);
+
+/* Emit a self-tail-call as a backedge: evaluate all args into temporaries
+ * first (so argument expressions still see the *old* parameter values, which
+ * matters for reorderings/swaps), reassign the C parameter variables, then
+ * `goto __tur_tailcall;`. */
+static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
+                               FnDef *fd, const Expr *call) {
+    uint8_t n = fd->n_params;
+    char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
+    for (uint8_t i = 0; i < n; i++) {
+        char *av = emit_value(ctx, body, call->as.call_.args[i]);
+        char *t = fresh_tmp(ctx);
+        Type pty = tco_param_type(fn_e, fd, i);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, pty), t, av);
+        tmps[i] = t;
+        free(av);
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        char *pn = raw_name_for_binding(fd->params[i]);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = %s;\n", pn, tmps[i]);
+        free(pn);
+        free(tmps[i]);
+    }
+    free(tmps);
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "goto __tur_tailcall;\n");
+}
+
+/* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
+ * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
+static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
+                      const Expr *e, TypeKind result_kind, bool is_main) {
+    switch (e->kind) {
+        case EX_CALL:
+            if (e->as.call_.is_tail_self_call) {
+                emit_tail_backedge(ctx, body, fn_e, fd, e);
+                return;
+            }
+            break;  /* non-self call -> default return path */
+        case EX_IF:
+            if (e->as.if_.else_or_null) {
+                char *cond = emit_value(ctx, body, e->as.if_.cond);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "if (%s) {\n", cond);
+                free(cond);
+                ctx->indent += 4;
+                emit_tail(ctx, body, fn_e, fd, e->as.if_.then_, result_kind, is_main);
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "} else {\n");
+                ctx->indent += 4;
+                emit_tail(ctx, body, fn_e, fd, e->as.if_.else_or_null, result_kind, is_main);
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+                return;
+            }
+            break;
+        case EX_DO: {
+            bool has_defer = false;
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (e->as.do_.items[i]->kind == EX_DEFER) { has_defer = true; break; }
+            if (!has_defer && e->as.do_.n > 0) {
+                for (uint32_t i = 0; i + 1 < e->as.do_.n; i++)
+                    emit_stmt(ctx, body, e->as.do_.items[i]);
+                emit_tail(ctx, body, fn_e, fd, e->as.do_.items[e->as.do_.n - 1],
+                          result_kind, is_main);
+                return;
+            }
+            break;
+        }
+        case EX_LET:
+        case EX_LETREC:
+            if (tco_let_simple(ctx, e)) {
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "{\n");
+                ctx->indent += 4;
+                for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                    const Binding *b = e->as.let_.bindings[i].binding;
+                    char *bn = name_for_binding(ctx, b);
+                    char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, b->type), bn, iv);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "(void)%s;\n", bn);
+                    free(bn);
+                    free(iv);
+                }
+                emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+                return;
+            }
+            break;
+        default:
+            break;
+    }
+
+    /* Default: emit as a value and return it. */
+    char *v = emit_value(ctx, body, e);
+    indent_buf(body, ctx->indent);
+    if (e->type.kind == TY_NIL) {
+        free(v);
+        v = strdup(result_kind == TY_BOOL ? "false" : "0");
+    }
+    if (is_main && result_kind == TY_INT)
+        buf_printf(body, "return (int)%s;\n", v);
+    else
+        buf_printf(body, "return %s;\n", v);
+    free(v);
+}
+
 /* ------------ Phase 2: function emission ------------ */
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
@@ -278,6 +507,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * fall-through value is returned. */
     bool body_diverges = expr_tail_diverges(fd->body);
 
+    /* CF1: detect self-tail-calls so a value-returning, simple-parameter
+     * function can be emitted as an iterative loop instead of self-recursion.
+     * Excludes main and ABI-specialization clones (distinct parameter ABI). */
+    bool tco_eligible = !body_diverges && fd->body->kind != EX_INLINE_C &&
+        !(result_kind == TY_NIL && !is_main) && !is_main && !use_abi_spec &&
+        tco_params_simple(ctx, e, fd) && tco_mark(ctx, fd, fn_name, fd->body) > 0;
+
     if (body_diverges) {
         /* Body diverges on every path - emit as statements only */
         emit_stmt(ctx, file, fd->body);
@@ -287,6 +523,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     } else if (result_kind == TY_NIL && !is_main) {
         /* void function - emit body as statements */
         emit_stmt(ctx, file, fd->body);
+    } else if (tco_eligible) {
+        /* CF1: self-tail-call loop. Label the top of the body; emit_tail turns
+         * each self-tail-call into a parameter-reassignment + goto backedge. */
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "__tur_tailcall:;\n");
+        emit_tail(ctx, file, e, fd, fd->body, result_kind, is_main);
     } else {
         /* Function with return value */
         char *ret_val = emit_value(ctx, file, fd->body);

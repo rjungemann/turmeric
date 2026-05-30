@@ -1,0 +1,10 @@
+;; CF2: a mistyped shift is rejected.  The body is the value handed to the
+;; continuation receiver, so it must match the receiver's parameter type.
+;; Here f expects :int but the body is a :cstr.
+(defn bad [] :int
+  (reset
+    (shift (fn [v :int] (+ v 1)) "nope")))
+
+(defn main [] :int
+  (println (bad))
+  0)

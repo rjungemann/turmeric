@@ -516,7 +516,9 @@ struct Expr {
                                           * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */
                  AbiTypeBinding *abi_bindings; /* GS5/CS3: named-tyvar substitution captured at the call site;
                                                 * NULL when the call has no named-tyvar bindings. Arena-owned. */
-                 uint8_t  n_abi_bindings; } call_;
+                 uint8_t  n_abi_bindings;
+                 bool is_tail_self_call; /* CF1: direct self-tail-call lowered to a goto backedge
+                                          * by the emitter (set by emit_fns.c tco_mark). */ } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
