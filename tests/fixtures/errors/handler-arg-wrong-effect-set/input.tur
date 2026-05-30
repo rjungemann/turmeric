@@ -1,0 +1,15 @@
+;; PH3.1: a single-effect handler value passed where a function parameter
+;; declares a multi-effect handler type -- (handler #{Ask Tell} int int).
+;; PH1.2 makes this a row-precise TUR-E0001 (previously type-checked silently
+;; and aborted at runtime on the unhandled Tell effect); PH1.3 names both
+;; handler types in the message.
+(defeffect Ask [] :int)
+(defeffect Tell [s :cstr] :nil)
+(defn run-with [h :(handler #{Ask Tell} int int)] :int
+  (with-handler h
+    (do (perform (Tell "hi")) (+ (perform (Ask)) 1))))
+(defn main [] :int
+  (let [r (run-with
+            (handler (Ask [] k) (resume k 41)))]
+    (println r))
+  0)

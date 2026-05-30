@@ -963,6 +963,19 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
     g_adt_apps[idx].emitting = false;
 }
 
+/* OWNERSHIP CONTRACT (PH2): type_name has *mixed* ownership -- it returns a
+ * static string literal for atomic/primitive kinds but a freshly tur_strdup-ed
+ * heap string for composite kinds (TY_FN, TY_HANDLER, TY_UNION, TY_REF,
+ * applied structs/ADTs, ...). Callers cannot free the result without crashing
+ * on the static cases, so every composite name returned here leaks.
+ *
+ * For diagnostics that may name a composite type, prefer type_print(Buf*, Type)
+ * (a thin public wrapper over type_name_buf): build the name into a Buf you own,
+ * pass buf.data to the formatter, and buf_free() it afterward. The handler/
+ * intersection/linear arg-mismatch paths in elab_call.c use this pattern and
+ * are LeakSanitizer-clean. type_name is retained for the many borrow-only
+ * primitive sites; a full strategy-(a) conversion to uniform ownership is a
+ * tracked, optional follow-up. */
 const char *type_name(Type t) {
     switch (t.kind) {
         case TY_UNKNOWN: return "?";
@@ -1609,7 +1622,13 @@ static void type_name_buf(Buf *b, Type t) {
         /* ET3: Handler type */
         case TY_HANDLER: {
             buf_puts(b, "handler<");
-            buf_puts(b, t.as.handler_.effect_name ? t.as.handler_.effect_name : "?");
+            /* PH2.2: prefer the full handled-effect *row* (e.g. "Ask | Tell")
+             * when present, matching type_name; fall back to the single
+             * effect_name only when no row is attached. */
+            if (t.as.handler_.handled_row)
+                effect_row_format_names(b, t.as.handler_.handled_row);
+            else
+                buf_puts(b, t.as.handler_.effect_name ? t.as.handler_.effect_name : "?");
             buf_puts(b, ", ");
             type_name_buf(b, type_from_kind(t.as.handler_.value_kind));
             buf_puts(b, ", ");

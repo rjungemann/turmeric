@@ -891,6 +891,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 if (g_intersection_types_enabled && ann->kind == TY_INTERSECTION) {
                     param_poly_types[n_params - 1] = ann;
                 }
+                /* PH1.1: For handler-typed parameters, store the full type so
+                 * the declared handled-effect row + value/result kinds reach
+                 * arg_full_types at the call site, enabling row-precise
+                 * argument checking (PH1.2) and a precise mismatch diagnostic
+                 * (PH1.3) instead of a kind-only handler<?, ?, ?> comparison. */
+                if (g_effect_types_enabled && ann->kind == TY_HANDLER) {
+                    param_poly_types[n_params - 1] = ann;
+                }
                 /* GS2: preserve full applied struct parameter types so call
                  * sites can distinguish (Box int) from (Box float) instead of
                  * comparing only the TY_APP kind shell. */

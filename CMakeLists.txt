@@ -50,6 +50,17 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# PH3.2: LeakSanitizer regression gate for composite-type diagnostics. Runs the
+# sanitized `tur` directly on handler-mismatch error fixtures with
+# detect_leaks=1 and asserts no leak (the normal suite compiles generated
+# programs without ASan, so a leak in tur's own error-reporting path -- e.g. the
+# type_name composite-string leak fixed in PH2 -- would otherwise slip past).
+# See docs/handler-typecheck-and-typename-followups-plan.md.
+add_test(
+  NAME tur_leak_gate
+  COMMAND bash tests/run-leak-gate.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
 # The script builds tests/fixtures/build-shared-smoke as a .so and runs a
 # hand-written C harness that dlsyms the exported defn and calls it.

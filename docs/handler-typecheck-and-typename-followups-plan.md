@@ -6,7 +6,7 @@ description: Two follow-ups surfaced by the first-class-handlers work -- making 
 
 # Handler Arg-Checking + `type_name` Ownership -- Follow-up Plan
 
-> **Status:** Not started. Captures the two caveats called out at the end of
+> **Status:** Complete (PH0-PH3). Captures the two caveats called out at the end of
 > [first-class-handlers-plan.md](first-class-handlers-plan.md) FH4.1. Both are
 > pre-existing and **independent of** the first-class-handler *feature* (which
 > is complete and correct); they surfaced because handler types now appear in
@@ -94,6 +94,16 @@ static check and (2) is a memory-hygiene defect.
   *Recommendation:* **(b)** for the diagnostic sites that currently leak (small,
   surgical, no global churn), optionally followed by **(c)** if a broader
   cleanup is wanted. *Done when:* the strategy is recorded here.
+
+  **Decision (PH0.1): strategy (b) -- caller-provided buffer.** The existing
+  `type_name_buf(Buf*, Type)` is promoted to a public API (declared in
+  `types.h`, no longer `static`) and used at the leaking diagnostic sites in
+  `elab_call.c`. Each site builds the type name into a local `Buf`, passes
+  `buf.data` to `diag_emit*`, and frees the `Buf` afterward -- no `tur_strdup`
+  result is leaked. `type_name` keeps its mixed static/heap contract for the
+  ~150 borrow-and-never-free call sites (a full strategy-(a) conversion is
+  explicitly scoped out as optional follow-up to avoid a large mechanical
+  diff). The known-leaking handler arg-mismatch path is the required scope.
 - **PH0.2** Handler subtyping variance. FH4.1 implemented handler comparison as
   effect-set **equality** with `TY_UNKNOWN` value/result kinds as wildcards.
   Decide whether argument checking should use strict `type_eq` (equality) or
@@ -101,6 +111,13 @@ static check and (2) is a memory-hygiene defect.
   a subset is required, with the documented value/result variance). *Done when:*
   the intended relation for PH1 is chosen (default: `type_is_subtype`, matching
   how `TY_FN` args already use `fn_type_subtype`).
+
+  **Decision (PH0.2): use `type_is_subtype`.** PH1's handler argument check
+  calls `type_is_subtype(args[i]->type, *expected_full)`, matching how `TY_FN`
+  args use `fn_type_subtype`. The relation stays exactly the FH4.1 one
+  (effect-set equality + `TY_UNKNOWN` value/result wildcards) as implemented in
+  `type_is_subtype`'s `TY_HANDLER` branch; effect-superset subtyping is *not*
+  introduced here (see Risks).
 
 ---
 
@@ -147,10 +164,28 @@ static check and (2) is a memory-hygiene defect.
   Convert or free as appropriate per PH0.1. *Done when:* no diagnostic path
   leaks a `type_name` result; the broad refactor (if strategy (a)/(c)) is either
   completed or explicitly scoped out with a tracked remainder.
+
+  **Status: done for `elab_call.c` arg-check diagnostics.** Converted the three
+  composite-leaking sites in the call-site argument loop to `type_print`-into-`Buf`:
+  the arg-mismatch formatter (PH2.1), the IT3 intersection-member mismatch, and
+  the LT2 linear-function mismatch. Also fixed `type_name_buf`'s `TY_HANDLER`
+  case to format the full handled-effect *row* (it previously printed only the
+  single `effect_name`, so `type_print` would have regressed the PH1.3 message
+  to `handler<?, ...>`); it now matches `type_name`. **Tracked remainder
+  (scoped out):** the broad strategy-(a) conversion of the remaining ~150
+  borrow-only `type_name` sites is deferred; most name primitive/atomic types
+  on hot or non-leaking paths. The ownership rule is documented at the
+  `type_name` declaration so new diagnostic sites reach for `type_print`.
 - **PH2.3** (If strategy (a)) make `type_name` return owned strings uniformly
   and update all sites; add a brief contract comment on `type_name` stating the
   ownership rule so new call sites do the right thing. *Done when:* the ownership
   rule is documented at the declaration and there is no mixed static/heap return.
+
+  **Status: contract comment added; uniform-ownership conversion N/A (strategy
+  (b)).** Since PH0.1 chose strategy (b), `type_name` keeps its mixed
+  static/heap return by design. An OWNERSHIP CONTRACT comment now sits above the
+  `type_name` definition in `src/compiler/types.c`, directing new
+  composite-type diagnostic sites to `type_print(Buf*, Type)` instead.
 
 ---
 
@@ -163,12 +198,30 @@ static check and (2) is a memory-hygiene defect.
   - handler argument with mismatched value/result kind (where not wildcarded)
     -> `TUR-E0001`.
   *Done when:* both fail at compile time with the expected message substrings.
+
+  **Status: done.** Added `tests/fixtures/errors/handler-arg-wrong-effect-set/`
+  (single-effect handler passed where `handler<Ask | Tell, int, int>` is
+  required) and `tests/fixtures/errors/handler-arg-wrong-value-kind/` (matching
+  `#{Ask}` row but result kind `int` vs the required, non-wildcarded `cstr`).
+  Each carries a `flags` file (`-Xeffect-types`) and an `expected.diag` asserting
+  `TUR-E0001` plus both `expected handler<...>` / `got handler<...>` substrings.
+  Both run green under `tests/run.sh` (suite: 1097 passed, 0 failed).
 - **PH3.2** Leak regression gate. Because `tests/run.sh` compiles the *generated
   program* without ASan and only the `tur` binary is sanitized, add a check that
   actually exercises the sanitized compiler on an error path -- e.g. a ctest
   target (or `run.sh` hook) that runs `tur check` on a handler-mismatch fixture
   under `ASAN_OPTIONS=detect_leaks=1` and asserts a clean exit. *Done when:* a
   reintroduced `type_name` leak on a composite-type diagnostic fails CI.
+
+  **Status: done.** Added `tests/run-leak-gate.sh` and registered it as the
+  `tur_leak_gate` ctest target. It runs the sanitized `tur -Xeffect-types check`
+  on both PH3.1 handler-mismatch fixtures with
+  `ASAN_OPTIONS=detect_leaks=1`, asserts the `TUR-E0001` diagnostic fires (so we
+  are genuinely on the error path) and that LeakSanitizer reports no leak.
+  Verified the gate *catches* regressions: temporarily restoring the leaking
+  `type_name(args[i]->type)` call made it fail with
+  `SUMMARY: AddressSanitizer: 87 byte(s) leaked in 2 allocation(s)`; reverting
+  the leak makes it pass again.
 
 ---
 

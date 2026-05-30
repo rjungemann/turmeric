@@ -1752,7 +1752,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 if (isect_t && isect_t->kind == TY_INTERSECTION) {
                     /* Check each member -- the arg must match all of them */
                     bool all_ok = true;
-                    const char *first_mismatch = NULL;
+                    Type first_mismatch = TYPE_UNKNOWN;
+                    bool have_mismatch = false;
                     for (uint8_t im = 0; im < isect_t->as.intersection_.n_members; im++) {
                         Type *mem = isect_t->as.intersection_.members[im];
                         if (!mem) continue;
@@ -1762,20 +1763,32 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         if (!typekind_is_concrete_for_disjoint(mem->kind)) continue;
                         if (!type_eq(args[i]->type, *mem)) {
                             all_ok = false;
-                            first_mismatch = type_name(*mem);
+                            first_mismatch = *mem;
+                            have_mismatch = true;
                             break;
                         }
                     }
                     if (all_ok) {
                         arg_ok = true;
                     } else {
+                        /* PH2.2: build composite type names into owned buffers
+                         * (see PH2.1) so this error path does not leak. */
+                        Buf got_buf; buf_init(&got_buf);
+                        type_print(&got_buf, args[i]->type);
+                        buf_putc(&got_buf, '\0');
+                        Buf mem_buf; buf_init(&mem_buf);
+                        if (have_mismatch) type_print(&mem_buf, first_mismatch);
+                        else buf_puts(&mem_buf, "?");
+                        buf_putc(&mem_buf, '\0');
                         diag_emit_with_code(DIAG_ERROR, args[i]->span,
                             TUR_E0351_INTERSECTION_MEMBER_MISMATCH,
                             "function '%s' arg %u: value of type %s does not satisfy "
                             "intersection member %s",
                             fn_binding->name->name, i + 1,
-                            type_name(args[i]->type),
-                            first_mismatch ? first_mismatch : "?");
+                            got_buf.data,
+                            mem_buf.data);
+                        buf_free(&got_buf);
+                        buf_free(&mem_buf);
                         return NULL;
                     }
                 }
@@ -1804,14 +1817,38 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 const Type *expected_fn = fn_type.as.fn.arg_full_types[fn_arg_idx_lt2];
                 if (expected_fn && expected_fn->kind == TY_FN &&
                     !fn_type_subtype(args[i]->type, *expected_fn)) {
+                    /* PH2.2: owned buffer for the composite (fn) type name. */
+                    Buf exp_buf; buf_init(&exp_buf);
+                    type_print(&exp_buf, *expected_fn);
+                    buf_putc(&exp_buf, '\0');
                     diag_emit_with_code(DIAG_ERROR, args[i]->span,
                                         TUR_E0001_TYPE_MISMATCH,
                                         "function '%s' arg %u: linear function type mismatch"
                                         " -- expected %s but got a function with different"
                                         " linearity annotations; ^linear parameters must match exactly",
                                         fn_binding->name->name, i + 1,
-                                        type_name(*expected_fn));
+                                        exp_buf.data);
+                    buf_free(&exp_buf);
                     return NULL;
+                }
+            }
+        }
+
+        /* PH1.2: Row-precise handler argument checking. When both expected and
+         * actual argument types are handlers, the kind-only `arg_ok` above is
+         * not enough -- any handler would satisfy any handler parameter. Refine
+         * it with `type_is_subtype` (PH0.2) so the handled-effect row and
+         * value/result kinds must be compatible (FH4.1 relation: set-equality +
+         * TY_UNKNOWN wildcards). The declared handler type is threaded into
+         * arg_full_types by PH1.1. */
+        if (arg_ok && g_effect_types_enabled &&
+            expected_arg_kind == TY_HANDLER && args[i]->type.kind == TY_HANDLER) {
+            uint32_t fn_arg_idx_h = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx_h < fn_type.as.fn.arity) {
+                Type *expected_h = fn_type.as.fn.arg_full_types[fn_arg_idx_h];
+                if (expected_h && expected_h->kind == TY_HANDLER) {
+                    arg_ok = type_is_subtype(args[i]->type, *expected_h);
                 }
             }
         }
@@ -1824,26 +1861,38 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                            args[i]->type.kind == TY_UNION)) {
                 err_code = TUR_E0300_UNION_TYPE_MISMATCH;
             }
-            /* Compute expected type name for diagnostic.
-             * For compound types (union, intersection) that store their full type in
-             * arg_full_types, look it up there so the name includes member types. */
-            const char *expected_str;
+            /* Compute expected type for the diagnostic.
+             * For compound types (union, intersection, app, handler) that store
+             * their full type in arg_full_types, look it up there so the name
+             * includes member/row types. */
+            Type expected_ty = type_from_kind(expected_arg_kind);
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
-                 expected_arg_kind == TY_APP) &&
+                 expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx4] : NULL;
-                expected_str = ct ? type_name(*ct)
-                                  : type_name(type_from_kind(expected_arg_kind));
-            } else {
-                expected_str = type_name(type_from_kind(expected_arg_kind));
+                if (ct) expected_ty = *ct;
             }
+            /* PH2.1: Build the type names into owned local buffers via
+             * type_print rather than type_name. type_name returns a strdup-ed
+             * heap string for composite kinds (handler, union, fn, ...) that no
+             * caller frees -- a real LeakSanitizer-visible leak on every
+             * composite-type diagnostic. type_print writes into a Buf we own and
+             * free here, so this error path is leak-clean. */
+            Buf expected_buf; buf_init(&expected_buf);
+            type_print(&expected_buf, expected_ty);
+            buf_putc(&expected_buf, '\0');
+            Buf actual_buf; buf_init(&actual_buf);
+            type_print(&actual_buf, args[i]->type);
+            buf_putc(&actual_buf, '\0');
             diag_emit_with_code(DIAG_ERROR, args[i]->span, err_code,
                                 "function '%s' arg %u: expected %s, got %s",
                                 fn_binding->name->name, i + 1,
-                                expected_str,
-                                type_name(args[i]->type));
+                                expected_buf.data,
+                                actual_buf.data);
+            buf_free(&expected_buf);
+            buf_free(&actual_buf);
             /* List-macro tuple hint: tcons arg 1 is the element; when it fails
              * to unify with the expected :int type, the caller is most likely
              * mixing types in a (list ...) or hand-written (tcons ...) chain.
