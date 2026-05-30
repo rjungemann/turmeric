@@ -1,0 +1,21 @@
+;; CF2: shift result typing (audit item 3).
+;;
+;; (shift f body) has the type of f's RESULT (codomain), not body's type.
+;; The old placeholder reused body's type, which only happened to be correct
+;; when f's domain and codomain matched.
+
+;; codomain != domain: f : int -> bool, body : int  ==>  shift expr is :bool
+(defn classify [n :int] :bool
+  (reset
+    (shift (fn [v :int] (> v 0)) n)))
+
+;; matching answer types: f : int -> int, body : int  ==>  shift expr is :int
+(defn add-one [n :int] :int
+  (reset
+    (shift (fn [v :int] (+ v 1)) n)))
+
+(defn main [] :int
+  (if (classify 5) (println 1) (println 0))
+  (if (classify -3) (println 1) (println 0))
+  (println (add-one 41))
+  0)

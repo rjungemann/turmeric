@@ -11,6 +11,80 @@ static void cont_mark_consumed(Expr *k);
 
 /* Phase 18: Delimited continuations */
 
+/* CF2: Derive the delimited-continuation result type for shift/shift0.
+ *
+ * Typing rule (v1 semantics: `(shift f body)` evaluates to `(f body)`):
+ *   f : A -> B          -- the continuation receiver (1 value argument)
+ *   body : A            -- the value handed to the receiver
+ *   ------------------------------------------------------------------
+ *   (shift f body) : B  -- the receiver's *result* type, not body's type
+ *
+ * The earlier placeholder reused `body->type` (the receiver's *domain* A),
+ * which only coincides with B when f's domain equals its codomain.  This walks
+ * f to recover both A (domain) and B (codomain).  A captured-closure receiver
+ * carries the env as parameter 0, so the value parameter is at index 1.
+ * Returns false when f's function type is not statically available. */
+static bool shift_fn_domain_codomain(const Expr *k, Type *domain, Type *codomain) {
+    const Type *ft = NULL;
+    uint8_t val_idx = 0;
+    if (k->kind == EX_CLOSURE) {
+        struct Closure *c = k->as.closure_.closure;
+        if (c && c->fn && c->fn->binding && c->fn->binding->type.kind == TY_FN) {
+            ft = &c->fn->binding->type;
+            val_idx = 1;  /* env occupies parameter 0 */
+        }
+    } else if (k->type.kind == TY_FN) {
+        ft = &k->type;
+    } else if (k->kind == EX_VAR && k->as.var.binding &&
+               k->as.var.binding->type.kind == TY_FN) {
+        ft = &k->as.var.binding->type;
+    }
+    if (!ft || ft->as.fn.arity <= val_idx) return false;
+
+    if (ft->as.fn.arg_full_types && ft->as.fn.arg_full_types[val_idx]) {
+        *domain = *ft->as.fn.arg_full_types[val_idx];
+    } else {
+        TypeKind dk = ft->as.fn.arg_kinds[val_idx];
+        *domain = type_simple(dk, typekind_default_copy_kind(dk));
+    }
+    if (ft->as.fn.result_full_type) {
+        *codomain = *ft->as.fn.result_full_type;
+    } else {
+        TypeKind rk = ft->as.fn.result_kind;
+        *codomain = type_simple(rk, typekind_default_copy_kind(rk));
+    }
+    return true;
+}
+
+/* CF2: shared shift/shift0 result-typing.  Verifies the body matches the
+ * receiver's domain (rejecting a mistyped shift) and returns the receiver's
+ * codomain as the expression's type.  Falls back to `body->type` only when the
+ * receiver's type is not statically known (or its codomain is unresolved), so
+ * the placeholder behavior is preserved exactly where no better type exists.
+ * `form` is "shift" or "shift0" for diagnostics; `body_span` locates the body.
+ * On a type error emits TUR-E0001 and sets *ok = false. */
+static Type shift_result_type(const Expr *k, const Expr *body,
+                              const char *form, Span body_span, bool *ok) {
+    *ok = true;
+    Type domain, codomain;
+    if (!shift_fn_domain_codomain(k, &domain, &codomain))
+        return body->type;  /* receiver type unknown -- preserve prior behavior */
+
+    /* Reject a mistyped shift: the body is the value passed to the continuation
+     * receiver, so it must match the receiver's parameter type. */
+    if (domain.kind != TY_UNKNOWN && body->type.kind != TY_UNKNOWN &&
+        !type_eq(body->type, domain)) {
+        diag_emit_with_code(DIAG_ERROR, body_span, TUR_E0001_TYPE_MISMATCH,
+            "%s: body type mismatch -- the continuation receiver expects %s, "
+            "but the body has type %s",
+            form, type_name(domain), type_name(body->type));
+        *ok = false;
+        return body->type;
+    }
+
+    return codomain.kind != TY_UNKNOWN ? codomain : body->type;
+}
+
 /* (reset body) - Establish a continuation boundary.
  */
 Expr *elab_reset(Elab *e, const Form *call) {
@@ -57,9 +131,14 @@ Expr *elab_shift(Elab *e, const Form *call) {
     
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
-    /* The result type of shift is the result type of calling k_fn with body's value.
-     * For now, we use body's type as a placeholder (full type inference deferred). */
-    Expr *out = expr_new(e->arena, EX_SHIFT, body->type, call->span);
+    /* CF2: the result type of (shift f body) is f's codomain (the result of
+     * calling f with body's value), not body's type.  Also rejects a body whose
+     * type does not match f's parameter type. */
+    bool ok = true;
+    Type result_type = shift_result_type(k_expr, body, "shift",
+                                         call->as.list.items[2]->span, &ok);
+    if (!ok) return NULL;
+    Expr *out = expr_new(e->arena, EX_SHIFT, result_type, call->span);
     out->as.shift_.k_fn = k_expr;
     out->as.shift_.body = body;
     return out;
@@ -96,9 +175,13 @@ Expr *elab_shift0(Elab *e, const Form *call) {
     
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
-    /* The result type of shift0 is the result type of calling k_fn with body's value.
-     * For now, we use body's type as a placeholder (full type inference deferred). */
-    Expr *out = expr_new(e->arena, EX_SHIFT0, body->type, call->span);
+    /* CF2: result type is f's codomain (see elab_shift).  shift0 differs from
+     * shift only in delimiter behavior at runtime, not in this local typing. */
+    bool ok = true;
+    Type result_type = shift_result_type(k_expr, body, "shift0",
+                                         call->as.list.items[2]->span, &ok);
+    if (!ok) return NULL;
+    Expr *out = expr_new(e->arena, EX_SHIFT0, result_type, call->span);
     out->as.shift0_.k_fn = k_expr;
     out->as.shift0_.body = body;
     return out;

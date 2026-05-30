@@ -6,9 +6,10 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF1 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF2 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
-> lowering shipped); CF2 next. Companion to
+> lowering shipped; CF2: `shift`/`shift0` result typing replaces the
+> `body->type` placeholder); CF3 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -248,6 +249,33 @@ cannot silently mistype.
 - **CF2.3** Add expect-error and expect-ok fixtures covering at least: matching
   answer types (ok), mismatched answer types (error), and `shift0`'s
   distinct delimiter behavior. *Done when:* fixtures pass and are snapshotted.
+
+### CF2 outcome (complete -- 2026-05-30)
+
+The `body->type` placeholder is replaced with the receiver's result type.
+
+- **Typing rule (CF2.1)** -- v1 semantics evaluate `(shift f body)` to
+  `(f body)`, so for `f : A -> B` and `body : A` the expression `(shift f body)`
+  has type `B` (the receiver's *codomain*), and `body` must have type `A` (the
+  receiver's *domain*). `shift0` shares the identical local rule (it differs from
+  `shift` only in runtime delimiter behavior). `(reset body)` keeps the body's
+  type (the answer type) -- already correct.
+- **Implementation (CF2.2)** -- `shift_fn_domain_codomain` /
+  `shift_result_type` in `src/compiler/elab_effects.c` recover `A` and `B` from
+  the receiver's `TY_FN` (handling the captured-closure case, where the env
+  occupies parameter 0 and the value parameter is at index 1). The `EX_SHIFT` /
+  `EX_SHIFT0` node type is set to `B`; a body whose type is not `A` is rejected
+  with `TUR-E0001` and a precise span. When the receiver's type is not
+  statically known (or its codomain is unresolved) the prior `body->type`
+  behavior is preserved, so nothing regresses. This fixes a latent codegen bug:
+  the emitter declares `<e->type> result = k(body);`, which was mis-typed
+  whenever the receiver's codomain differed from `body`'s type.
+- **Fixtures (CF2.3)** -- `tests/fixtures/shift-result-typing` (codomain != domain
+  giving a `:bool` result, plus a matching-answer-type case) and
+  `tests/fixtures/shift0-result-typing` (expect-ok), and
+  `tests/fixtures/errors/shift-body-type-mismatch` (expect-error, `TUR-E0001`).
+  The existing `continuation-basic` / `continuation-advanced` snapshots are
+  unchanged (their receivers are `int -> int`, where the placeholder coincided).
 
 ---
 
