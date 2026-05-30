@@ -1,0 +1,10 @@
+;; FH4.2: with-handler discharges Write, but Other is left unhandled.  The
+;; declared row #{Write} does not include Other, so the leftover effect is
+;; reported (TUR-E0009), exactly as it would be for an inline (handle ...).
+(defeffect Write [s :cstr] :nil)
+(defeffect Other [] :int)
+(defn do-work [] #{Write} :int
+  (with-handler
+    (handler (Write [s] k) (do (println s) (resume k nil)))
+    (do (perform (Write "inner")) (perform (Other)))))
+(defn main [] :int 0)

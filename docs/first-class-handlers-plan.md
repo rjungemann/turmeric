@@ -186,6 +186,26 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## Phase FH4 -- `TY_HANDLER` effect-row generalization
 
+> **Status:** FH4.2 **done**; FH4.1 **deferred** (see note).
+>
+> FH4.2 is implemented: `effect_check`'s `collect_effects_in_expr` now treats
+> `(with-handler hv body)` like `(handle ...)` -- it discharges the handler's
+> effect(s) from the body's row (`remove_handler_effects`, which recurses
+> structurally into handler literals and compositions) and propagates leftover
+> body effects plus effects re-opened by the case bodies. A leftover effect is
+> reported through the same diagnostics as an inline `handle` (`TUR-E0009` when
+> it violates a declared row, `TUR-W0030` when a function has no annotation) --
+> the plan's reference to `TUR-E0253` predates the unified row-mismatch
+> reporting that `handle` itself uses.
+>
+> FH4.1 (storing a multi-effect `EffectRow` *in* the `TY_HANDLER` type) is
+> deferred: it is a broad, invasive change to `type_eq`/`type_name`/subtyping
+> and the type parser, and is not needed for v1 -- single-effect handler values
+> carry their one `effect_name`, and composition is handled by structural
+> introspection at the row-collection and codegen sites rather than via the
+> type. Revisit when a composed handler must round-trip through a typed
+> parameter with full effect-set precision.
+
 - **FH4.1** Extend `TY_HANDLER` to carry an `EffectRow` (handled set) rather
   than a single `effect_name`, keeping the single-effect constructor as a
   one-element row for source compatibility. *Done when:* `type_eq`,

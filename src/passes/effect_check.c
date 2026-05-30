@@ -108,6 +108,25 @@ static EffectRow *filter_cross_module_private(Arena *a, EffectRow *row) {
  * Phase P19-4: `subst` is an effect-row substitution used to resolve row
  * variables when a polymorphic callee is instantiated at a call site.  Pass a
  * fresh empty EffectRowSubst for each top-level function analysis. */
+/* FH4.2: remove the effect(s) handled by a handler value from a row.  Recurses
+ * into handler literals (their case effect names) and compositions.  For a
+ * handler bound to a variable, the handled effect name is only available as a
+ * C-string on the TY_HANDLER type (not a Symbol*), which effect_row_remove
+ * cannot consume here; that case is left conservative (the handled effect may
+ * over-propagate as a TUR-W0030 warning rather than being silently dropped). */
+static EffectRow *remove_handler_effects(EffectRow *row, Expr *hv, Arena *a) {
+    if (!hv) return row;
+    if (hv->kind == EX_HANDLER_LIT) {
+        HandleExpr *h = hv->as.handler_lit_.handle;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            row = effect_row_remove(row, h->cases[i].effect_name, a);
+    } else if (hv->kind == EX_COMPOSE_HANDLERS) {
+        row = remove_handler_effects(row, hv->as.compose_handlers_.h1, a);
+        row = remove_handler_effects(row, hv->as.compose_handlers_.h2, a);
+    }
+    return row;
+}
+
 static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                                           EffectRow *row,
                                           const FnIndex *idx,
@@ -407,6 +426,36 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
             row = collect_effects_in_expr(a, h->cases[i].body, row, idx, env, subst);
         }
         /* Any body effects that were not covered by a case propagate upward. */
+        row = effect_row_merge(a, row, body_row);
+        return row;
+    }
+
+    case EX_HANDLER_LIT: {
+        /* FH2/FH4: a handler value's case bodies may re-open effects.  The
+         * literal itself handles nothing in place (it is detached from a body),
+         * so it only contributes the effects performed inside its case bodies. */
+        HandleExpr *h = e->as.handler_lit_.handle;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            row = collect_effects_in_expr(a, h->cases[i].body, row, idx, env, subst);
+        return row;
+    }
+
+    case EX_COMPOSE_HANDLERS:
+        /* FH5: re-opened effects from both composed handlers' case bodies. */
+        row = collect_effects_in_expr(a, e->as.compose_handlers_.h1, row, idx, env, subst);
+        row = collect_effects_in_expr(a, e->as.compose_handlers_.h2, row, idx, env, subst);
+        return row;
+
+    case EX_WITH_HANDLER: {
+        /* FH4.2: applying a handler discharges its handled effect(s) from the
+         * body's row; leftover (unhandled) body effects and effects re-opened
+         * by the handler's case bodies propagate upward -- mirroring EX_HANDLE. */
+        Expr *hv = e->as.with_handler_.handler;
+        EffectRow *body_row = collect_effects_in_expr(
+            a, e->as.with_handler_.body, effect_row_empty(a), idx, env, subst);
+        body_row = remove_handler_effects(body_row, hv, a);
+        /* Re-opened effects performed inside the handler's case bodies. */
+        row = collect_effects_in_expr(a, hv, row, idx, env, subst);
         row = effect_row_merge(a, row, body_row);
         return row;
     }
@@ -715,6 +764,21 @@ static int check_closures_in_expr(Arena *a, Expr *e,
         return rc;
     }
 
+    case EX_HANDLER_LIT: {
+        HandleExpr *h = e->as.handler_lit_.handle;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            rc |= check_closures_in_expr(a, h->cases[i].body, idx, env);
+        return rc;
+    }
+    case EX_WITH_HANDLER:
+        rc |= check_closures_in_expr(a, e->as.with_handler_.handler, idx, env);
+        rc |= check_closures_in_expr(a, e->as.with_handler_.body, idx, env);
+        return rc;
+    case EX_COMPOSE_HANDLERS:
+        rc |= check_closures_in_expr(a, e->as.compose_handlers_.h1, idx, env);
+        rc |= check_closures_in_expr(a, e->as.compose_handlers_.h2, idx, env);
+        return rc;
+
     case EX_BUILTIN:
         for (uint32_t i = 0; i < e->as.builtin.n; i++)
             rc |= check_closures_in_expr(a, e->as.builtin.args[i], idx, env);
@@ -855,6 +919,21 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
             rc |= check_call_site_rows_in_expr(a, h->cases[i].body, idx, env);
         return rc;
     }
+
+    case EX_HANDLER_LIT: {
+        HandleExpr *h = e->as.handler_lit_.handle;
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            rc |= check_call_site_rows_in_expr(a, h->cases[i].body, idx, env);
+        return rc;
+    }
+    case EX_WITH_HANDLER:
+        rc |= check_call_site_rows_in_expr(a, e->as.with_handler_.handler, idx, env);
+        rc |= check_call_site_rows_in_expr(a, e->as.with_handler_.body, idx, env);
+        return rc;
+    case EX_COMPOSE_HANDLERS:
+        rc |= check_call_site_rows_in_expr(a, e->as.compose_handlers_.h1, idx, env);
+        rc |= check_call_site_rows_in_expr(a, e->as.compose_handlers_.h2, idx, env);
+        return rc;
 
     case EX_BUILTIN:
         for (uint32_t i = 0; i < e->as.builtin.n; i++)
