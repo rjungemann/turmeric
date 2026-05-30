@@ -112,6 +112,11 @@ top of that representation.
 
 ## Phase FH0 -- Semantics specification
 
+> **Status: DONE.** The operational spec lives in
+> [first-class-handlers-semantics.md](first-class-handlers-semantics.md).
+> FH0.1-FH0.4 are written there (precedence + worked trace, overlap rule,
+> typing judgment, continuation discipline).
+
 Write the operational spec before code so FH5's behavior is unambiguous.
 
 - **FH0.1** Composition precedence. Define `(compose-handlers h1 h2)` applied to
