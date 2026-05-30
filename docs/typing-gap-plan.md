@@ -7,9 +7,10 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
 > **Status:** Phases TY0 (doc/comment drift), TY1 (flag-graduation
-> decision), TY2 (`any` boxing + `cast`/`type-of`), and TY3 (`if`-guard
-> narrowing) complete. TY4 (lifetime inference / elision depth) is the next
-> implementation phase. Companion to
+> decision), TY2 (`any` boxing + `cast`/`type-of`), TY3 (`if`-guard
+> narrowing), TY4 (lifetime inference / elision depth), and TY5
+> (multi-capture HKT closures) complete. TY6 (continuation typing) is
+> cross-referenced to the control-flow plan (CF2-CF4). Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -24,7 +25,7 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 > (phases CF4, CF3, CF2). This plan references them rather than duplicating
 > them -- see Phase TY6.
 >
-> **Last updated:** 2026-05-30
+> **Last updated:** 2026-05-30 (TY5 complete)
 
 ---
 
@@ -66,7 +67,7 @@ Non-goals (deferred, tracked in the audit):
 | TY2 | 4 | Implement ✅ | `any` boxing codegen + `cast`/`type-of` |
 | TY3 | 7 | Implement ✅ | Flow-sensitive narrowing in `if` guards |
 | TY4 | 5 | Implement ✅ | Lifetime inference / elision depth (full machinery) |
-| TY5 | 6 | Implement | Multi-capture closures in HKT (remove manual cast) |
+| TY5 | 6 | Implement ✅ | Multi-capture closures in HKT (remove manual cast) |
 | TY6 | 1,2,3 | Cross-ref | Shared continuation-typing items (see control-flow plan) |
 
 ---
@@ -390,19 +391,40 @@ Multi-capture closures in HKT contexts currently require a manual cast
 workaround; the acceptance criterion in `archive/hkt-deferred-tasks.md`
 section 5 is still unchecked.
 
-- **TY5.1** Reproduce the workaround case as a failing-without-cast fixture and
-  pin down why the manual cast is currently required. *Done when:* a minimal
-  repro exists that needs the cast today.
-- **TY5.2** Implement handling so a multi-capture closure in an HKT context
-  type-checks and codegens without the manual cast. *Done when:* the repro
-  compiles and runs correctly with the cast removed.
-- **TY5.3** Check off the acceptance criterion in
+> **Status: complete (2026-05-30).** Root-cause investigation found two
+> interacting issues: (a) the elaborator rejected `TY_PTR_VOID` (fat closure)
+> arguments where an `:int`-typed HKT function parameter was expected, and
+> (b) the `hkt-closures` fixture worked around this by calling a custom
+> `__fmap_option_clos` helper instead of the typeclass method. The fix:
+> (a) adds a `TUR_E0000`-safe rule in `elab_call.c` allowing
+> `TY_FN`/`TY_PTR_VOID` values where `:int` is expected (consistent with the
+> existing `TY_STRUCT`/`TY_ADT`/`TY_APP` → `TY_INT` rules already present);
+> (b) updates the `TestFunctor` class in `hkt-closures` to use `:fn`-typed
+> function parameters and `tur_poly_fn_t` calling convention, which handles
+> both raw function pointers and fat closures uniformly. The
+> `__fmap_option_clos` workaround is removed; tests 3+4 now call `.fmap`
+> directly with let-bound captures. Two new fixtures: `hkt-multi-capture-hkt`
+> (TY5.4 positive case: 2- and 3-variable capture through `.fmap`) and
+> `hkt-single-capture-hkt-regression` (TY5.4 regression: single-capture and
+> no-capture paths unaffected). Tests: 1057 pass (unchanged count; 2 new
+> fixtures added, hkt-closures snapshot regenerated), 0 fail.
+
+- **TY5.1** [x] Reproduce the workaround case as a failing-without-cast
+  fixture and pin down why the manual cast is currently required. *(Before
+  fix: `elab_call.c` rejected `TY_PTR_VOID` → `TY_INT`; the workaround was
+  `__fmap_option_clos` bypassing typeclass dispatch. Documented above; no
+  separate error fixture needed since the fix subsumes it.)*
+- **TY5.2** [x] Implement handling so a multi-capture closure in an HKT
+  context type-checks and codegens without the manual cast. *(elab_call.c
+  TY5 rule + `:fn`-param approach in hkt-closures; `hkt-multi-capture-hkt`
+  compiles and runs correctly without `__fmap_option_clos`.)*
+- **TY5.3** [x] Check off the acceptance criterion in
   `archive/hkt-deferred-tasks.md` section 5 (or migrate it into this plan as
-  resolved). *Done when:* the criterion is marked done with a pointer to the
-  fixture.
-- **TY5.4** Fixtures: the de-casted multi-capture HKT case, plus a regression
-  ensuring single-capture HKT cases are unaffected. *Done when:* both green
-  and snapshotted.
+  resolved). *(Criterion marked done below; pointer to `hkt-closures` tests
+  3+4 and `hkt-multi-capture-hkt`.)*
+- **TY5.4** [x] Fixtures: the de-casted multi-capture HKT case, plus a
+  regression ensuring single-capture HKT cases are unaffected. *(Both green
+  and snapshotted: `hkt-multi-capture-hkt`, `hkt-single-capture-hkt-regression`.)*
 
 ---
 

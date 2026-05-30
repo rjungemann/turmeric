@@ -355,8 +355,13 @@ Two approaches exist and neither was ready:
   Expected output: `15`.
 
 **Acceptance criteria:**
-- [ ] `hkt-closures` uses a let-bound variable in the closure body and still passes.
-- [ ] No existing fixture regresses.
+- [x] `hkt-closures` uses a let-bound variable in the closure body and still passes.
+  *(Tests 3+4 now call `.fmap` directly with let-bound captures `n` and `a`/`b`
+  respectively, using the `:fn`-param / `tur_poly_fn_t` approach. No
+  `__fmap_option_clos` workaround. See also `hkt-multi-capture-hkt`.)*
+- [x] No existing fixture regresses.
+  *(`hkt-single-capture-hkt-regression` pins the no-capture and single-capture
+  paths; full suite: 1057 pass, 0 fail.)*
 
 ---
 
