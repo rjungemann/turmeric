@@ -1,0 +1,21 @@
+;; variadic-types-poly -- a declared type parameter rest accepts any arg type.
+;;
+;; (defn f [A] [& items :A] ...) -- A is a polymorphic rest element (TY_TYVAR),
+;; so any argument type is accepted.
+
+(defn cons-list-len [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t n = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  while (p) { n++; p = (__tur_cons_cell *)(intptr_t)p->tail; }
+  return (int)n;
+  ```)
+
+(defn count-any [A] [& items :A] #{Unsafe} :int
+  (cons-list-len items))
+
+(defn main [] :int
+  (unsafe
+    (let [n (count-any 1 2 3 4)]
+      (if (= n 4) 0 1))))

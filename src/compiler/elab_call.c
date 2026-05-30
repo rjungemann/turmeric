@@ -1420,28 +1420,45 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         } else {
             Expr **rest_items = (Expr **)arena_alloc(e->arena, n_rest * sizeof(Expr *));
             TypeKind rk = fn_type.as.fn.rest_kind;
+            /* Typed-variadic: when the rest element is a user-defined type the
+             * declaration carries its full Type so we can compare identity
+             * (struct/ADT def pointer, applied type args) rather than only the
+             * coarse TypeKind.  Primitive rest keeps rest_full_type == NULL and
+             * uses the fast TypeKind path below. */
+            Type *rest_full = fn_type.as.fn.rest_full_type;
+            bool rest_err = false;
             for (uint32_t i = 0; i < n_rest; i++) {
                 rest_items[i] = elab_form(e, call->as.list.items[1 + n_required + i]);
                 if (!rest_items[i]) return NULL;
-                /* AR10: type-check each rest arg against the declared rest element kind */
+                /* AR10: type-check each rest arg against the declared rest element type */
                 TypeKind ak = rest_items[i]->type.kind;
-                bool rest_ok = (ak == rk);
-                /* Accept any type for TY_TYVAR / polymorphic rest element kinds */
-                if (!rest_ok && rk == TY_TYVAR) rest_ok = true;
-                /* `:int` rest accepts ADT/APP/STRUCT values (all int64_t at runtime) */
-                if (!rest_ok && rk == TY_INT &&
-                    (ak == TY_STRUCT || ak == TY_ADT || ak == TY_APP)) rest_ok = true;
+                bool rest_ok;
+                if (rest_full) {
+                    /* Full-type comparison for user-defined rest (opaque /
+                     * struct / ADT / type application). */
+                    rest_ok = type_eq(rest_items[i]->type, *rest_full);
+                } else {
+                    rest_ok = (ak == rk);
+                    /* Accept any type for TY_TYVAR / polymorphic rest element kinds */
+                    if (!rest_ok && rk == TY_TYVAR) rest_ok = true;
+                }
                 if (!rest_ok) {
                     const char *fn_name = (fn_binding && fn_binding->name) ? fn_binding->name->name : "?";
+                    const char *expected = rest_full
+                        ? type_name(*rest_full)
+                        : typekind_to_string(rk);
+                    const char *got = type_name(rest_items[i]->type);
                     diag_emit(DIAG_ERROR,
                               call->as.list.items[1 + n_required + i]->span,
                               "variadic call to '%s': rest arg %u has wrong type "
                               "(expected %s, got %s)",
-                              fn_name, i,
-                              typekind_to_string(rk), typekind_to_string(ak));
-                    return NULL;
+                              fn_name, i, expected, got);
+                    /* Keep checking the remaining rest args so every mismatch
+                     * is reported in one pass, then fail. */
+                    rest_err = true;
                 }
             }
+            if (rest_err) return NULL;
             rest_expr = expr_new(e->arena, EX_CONS_LIST, TYPE_INT, call->span);
             rest_expr->as.cons_list_.items = rest_items;
             rest_expr->as.cons_list_.n = n_rest;

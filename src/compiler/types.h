@@ -404,7 +404,12 @@ typedef struct Type {
             bool arg_relevant[MAX_FN_ARITY];   /* ST0: true if the i-th param is ^relevant */
             /* AR6: variadic rest-param support (& rest :type) */
             bool is_variadic;                  /* true if this fn has a & rest parameter */
-            TypeKind rest_kind;                /* type of the rest cons-list elements */
+            TypeKind rest_kind;                /* type of the rest cons-list elements (fast-path) */
+            /* Typed variadic rest: full Type for the rest element when it is a
+             * user-defined type (opaque / struct / ADT / type application).
+             * NULL for primitive rest (`& rest :int`, etc.), in which case the
+             * fast-path TypeKind comparison on rest_kind is used. */
+            struct Type *rest_full_type;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -871,6 +876,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
+    t.as.fn.rest_full_type = NULL; /* typed-variadic: NULL = primitive rest */
     return t;
 }
 
