@@ -2255,27 +2255,23 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
                 name, name);
         } else {
             snprintf(path, sizeof(path), "%s/src/%s.tur", dir, mod_name);
+            /* The template is emitted in the exact shape `tur fmt` produces so
+             * a fresh scaffold passes `tur fmt --check` unchanged (NW6 / B4):
+             * a module `;;;` docstring, a `;;` separator, then a `defmodule`
+             * with `export` (so the test module can `(import ...)` it).
+             * Per-defn `;;;` docstrings inside a `defmodule` are stripped by
+             * fmt today, so the body carries none. The body uses only builtin
+             * operators (`+`); stdlib functions are not linked into a fresh
+             * spice build, so the old string `greet`/`str` template never
+             * compiled (B3). */
             snprintf(buf, sizeof(buf),
                 ";;; %s -- library module.\n"
                 ";;;\n"
                 ";;; Since: 0.1.0\n"
                 ";;\n"
-                "\n"
-                ";;; greet -- return a greeting string.\n"
-                ";;;\n"
-                ";;; Parameters:\n"
-                ";;;   name -- the name to greet\n"
-                ";;;\n"
-                ";;; Returns:\n"
-                ";;;   A greeting string.\n"
-                ";;;\n"
-                ";;; Example:\n"
-                ";;;   (greet \"world\")  ; => \"Hello, world!\"\n"
-                ";;;\n"
-                ";;; Since: 0.1.0\n"
-                "(defn greet [name :str] :str\n"
-                "  (str \"Hello, \" name \"!\"))\n",
-                name);
+                "(defmodule %s (export add) "
+                    "(defn add [a :int b :int] :int (+ a b)))\n",
+                name, mod_name);
         }
         if (!scaffold_write(path, buf, opts->dry_run)) return 1;
     }
@@ -2297,18 +2293,20 @@ int scaffold_project_ext(const ScaffoldOpts *opts) {
                 "  0)\n",
                 mod_name, name);
         } else {
+            /* fmt-canonical (see the lib template note): a `defmodule` wrapper
+             * so the `(import ...)` is legal (top-level import is rejected),
+             * and a real assertion over builtin `=`. Both `if` branches return
+             * `:int` (the `0`/`1` exit codes) so the `main` body type-checks. */
             snprintf(buf, sizeof(buf),
                 ";;; %s_test -- unit tests for %s.\n"
                 ";;\n"
-                "(import %s :refer [greet])\n"
-                "\n"
-                "(defn main [] :int\n"
-                "  (let [result (greet \"world\")]\n"
-                "    (if (str-eq? result \"Hello, world!\")\n"
-                "      (println \"tests: ok\")\n"
-                "      (do (println \"tests: FAIL\") (exit 1)))\n"
-                "    0))\n",
-                mod_name, name, mod_name);
+                "(defmodule %s_test\n"
+                "  (import %s :refer [add])\n"
+                "  (defn main [] :int\n"
+                "    (if (= (add 2 3) 5)\n"
+                "      (do (println \"tests: ok\") 0)\n"
+                "      (do (println \"tests: FAIL\") 1))))\n",
+                mod_name, name, mod_name, mod_name);
         }
         if (!scaffold_write(path, buf, opts->dry_run)) return 1;
     }
