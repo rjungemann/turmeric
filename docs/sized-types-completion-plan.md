@@ -274,6 +274,7 @@ did not exist. Once SZ6--SZ8 land, record an explicit 1.0 disposition for
 
 ## See also
 
+- [sized-types-index-spec.md](sized-types-index-spec.md) -- SZ6 representation + refinement rule (SizeTerm, SkolemEnv threading, erasure)
 - [archive/history/sized-types-plan.md](../archive/history/sized-types-plan.md) -- the shipped SZ0--SZ3 runtime layer
 - [sized-types-guide.md](../guides/sized-types-guide.md) -- user guide (to be reconciled in SZ5)
 - [advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md) -- the intended sized-types design

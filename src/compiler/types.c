@@ -2162,6 +2162,173 @@ Kind kind_apply_one(Kind k) {
     return (Kind)(k - 1);
 }
 
+/* ===== Phase SZ6/SZ7: type-level size index terms ===== */
+
+static SizeTerm *size_term_alloc(Arena *a, SizeTermKind kind) {
+    SizeTerm *t = (SizeTerm *)arena_alloc(a, sizeof(SizeTerm));
+    t->kind  = kind;
+    t->konst = 0;
+    t->var   = NULL;
+    t->lhs   = NULL;
+    t->rhs   = NULL;
+    return t;
+}
+
+SizeTerm *size_term_from_form(Arena *a, const Form *f,
+                              bool (*is_size_var)(const char *, void *),
+                              void *ctx) {
+    if (!f) return NULL;
+    /* A bare integer literal stands for that constant size (handy for nested
+     * (Static <int>) and for direct numeric indices). */
+    if (f->tag == F_INT) {
+        SizeTerm *t = size_term_alloc(a, SZT_CONST);
+        t->konst = f->as.i;
+        return t;
+    }
+    if (f->tag == F_SYM) {
+        const char *nm = f->as.sym->name;
+        if (is_size_var && !is_size_var(nm, ctx)) return NULL;
+        SizeTerm *t = size_term_alloc(a, SZT_VAR);
+        t->var = nm;
+        return t;
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 1) {
+        const Form *hd = f->as.list.items[0];
+        if (hd->tag != F_SYM) return NULL;
+        const char *op = hd->as.sym->name;
+        if (strcmp(op, "Static") == 0 && f->as.list.len == 2) {
+            const Form *arg = f->as.list.items[1];
+            if (arg->tag != F_INT) return NULL;
+            SizeTerm *t = size_term_alloc(a, SZT_CONST);
+            t->konst = arg->as.i;
+            return t;
+        }
+        if ((strcmp(op, "Add") == 0 || strcmp(op, "Mul") == 0) &&
+                f->as.list.len == 3) {
+            SizeTerm *l = size_term_from_form(a, f->as.list.items[1], is_size_var, ctx);
+            SizeTerm *r = size_term_from_form(a, f->as.list.items[2], is_size_var, ctx);
+            if (!l || !r) return NULL;
+            SizeTerm *t = size_term_alloc(a, strcmp(op, "Add") == 0 ? SZT_ADD : SZT_MUL);
+            t->lhs = l;
+            t->rhs = r;
+            return t;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
+SizeTerm *size_term_subst(Arena *a, const SizeTerm *t,
+                          const char *var, const SizeTerm *replacement) {
+    if (!t) return NULL;
+    switch (t->kind) {
+        case SZT_CONST: {
+            SizeTerm *c = size_term_alloc(a, SZT_CONST);
+            c->konst = t->konst;
+            return c;
+        }
+        case SZT_VAR:
+            if (var && t->var && strcmp(t->var, var) == 0)
+                return size_term_subst(a, replacement, NULL, NULL);
+            else {
+                SizeTerm *v = size_term_alloc(a, SZT_VAR);
+                v->var = t->var;
+                return v;
+            }
+        case SZT_ADD:
+        case SZT_MUL: {
+            SizeTerm *n = size_term_alloc(a, t->kind);
+            n->lhs = size_term_subst(a, t->lhs, var, replacement);
+            n->rhs = size_term_subst(a, t->rhs, var, replacement);
+            return n;
+        }
+    }
+    return NULL;
+}
+
+bool size_term_eval(const SizeTerm *t, int64_t *out) {
+    if (!t) return false;
+    switch (t->kind) {
+        case SZT_CONST:
+            if (out) *out = t->konst;
+            return true;
+        case SZT_VAR:
+            return false;
+        case SZT_ADD: {
+            int64_t l, r;
+            if (!size_term_eval(t->lhs, &l) || !size_term_eval(t->rhs, &r)) return false;
+            if (out) *out = l + r;
+            return true;
+        }
+        case SZT_MUL: {
+            int64_t l, r;
+            if (!size_term_eval(t->lhs, &l) || !size_term_eval(t->rhs, &r)) return false;
+            if (out) *out = l * r;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Syntactic equality after light normalisation (used as a fallback when a term
+ * is not closed).  Handles commutativity of Add/Mul and identity elements. */
+static bool size_term_syntactic_eq(const SizeTerm *a, const SizeTerm *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+        case SZT_CONST: return a->konst == b->konst;
+        case SZT_VAR:   return a->var && b->var && strcmp(a->var, b->var) == 0;
+        case SZT_ADD:
+        case SZT_MUL:
+            /* commutative: (op x y) == (op y x) */
+            return (size_term_syntactic_eq(a->lhs, b->lhs) &&
+                    size_term_syntactic_eq(a->rhs, b->rhs)) ||
+                   (size_term_syntactic_eq(a->lhs, b->rhs) &&
+                    size_term_syntactic_eq(a->rhs, b->lhs));
+    }
+    return false;
+}
+
+bool size_term_equal(const SizeTerm *a, const SizeTerm *b) {
+    if (!a || !b) return false;
+    int64_t va, vb;
+    bool ca = size_term_eval(a, &va);
+    bool cb = size_term_eval(b, &vb);
+    if (ca && cb) return va == vb;        /* both closed: decide by value */
+    if (ca != cb) return false;           /* one closed, one open: not provably equal */
+    return size_term_syntactic_eq(a, b);  /* both open: syntactic fallback */
+}
+
+static int size_term_to_string_rec(const SizeTerm *t, char *buf, size_t cap, int pos) {
+    if (!t || pos < 0 || (size_t)pos >= cap) return pos;
+    switch (t->kind) {
+        case SZT_CONST:
+            pos += snprintf(buf + pos, cap - (size_t)pos, "%lld", (long long)t->konst);
+            return pos;
+        case SZT_VAR:
+            pos += snprintf(buf + pos, cap - (size_t)pos, "%s", t->var ? t->var : "?");
+            return pos;
+        case SZT_ADD:
+        case SZT_MUL:
+            pos += snprintf(buf + pos, cap - (size_t)pos, "(%s ",
+                            t->kind == SZT_ADD ? "+" : "*");
+            pos = size_term_to_string_rec(t->lhs, buf, cap, pos);
+            if (pos < (int)cap) pos += snprintf(buf + pos, cap - (size_t)pos, " ");
+            pos = size_term_to_string_rec(t->rhs, buf, cap, pos);
+            if (pos < (int)cap) pos += snprintf(buf + pos, cap - (size_t)pos, ")");
+            return pos;
+    }
+    return pos;
+}
+
+const char *size_term_to_string(const SizeTerm *t, char *buf, size_t cap) {
+    if (!buf || cap == 0) return "";
+    buf[0] = '\0';
+    size_term_to_string_rec(t, buf, cap, 0);
+    return buf;
+}
+
 const char *typekind_to_string(TypeKind k) {
     switch (k) {
         case TY_UNKNOWN:   return "unknown";

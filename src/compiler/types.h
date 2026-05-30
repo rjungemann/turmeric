@@ -170,6 +170,26 @@ typedef struct CtorField {
     struct Type *full_type;
 } CtorField;
 
+/* Phase SZ6: Type-level size index term.
+ * A `SizeTerm` is a compile-time natural-number expression over the `Size`
+ * GADT: a constant (`Static n`), a size variable (a GADT type-parameter name),
+ * or an `Add`/`Mul` of two sub-terms.  Size indices are *erased* in codegen
+ * (zero runtime cost); they live only in the elaborator, where SZ7 compares
+ * them for static size checking.  Arena-allocated. */
+typedef enum SizeTermKind {
+    SZT_CONST,  /* (Static n) — a literal natural number */
+    SZT_VAR,    /* a size variable, e.g. `n` in (SizedVec (Add (Static 1) n) a) */
+    SZT_ADD,    /* (Add a b) */
+    SZT_MUL,    /* (Mul a b) */
+} SizeTermKind;
+
+typedef struct SizeTerm {
+    SizeTermKind kind;
+    int64_t      konst;            /* SZT_CONST */
+    const char  *var;              /* SZT_VAR (interned/borrowed name) */
+    struct SizeTerm *lhs, *rhs;    /* SZT_ADD / SZT_MUL */
+} SizeTerm;
+
 /* Phase G2: Skolem equality binding — one entry per GADT type parameter per arm */
 #define MAX_SKOLEM_BINDINGS 8
 typedef struct SkolemBinding {
@@ -177,6 +197,11 @@ typedef struct SkolemBinding {
     TypeKind    kind;      /* concrete resolved TypeKind (e.g. TY_INT) */
     /* TP3: full Type for ADT/struct bindings (e.g. `a → Foo`); NULL for primitives */
     struct Type *full_type;
+    /* SZ6: when this parameter is a size index, the captured type-level size
+     * term from the constructor's return type (e.g. `(Add (Static 1) n)`).
+     * NULL for non-size bindings; additive, so existing resolution is
+     * unchanged. */
+    struct SizeTerm *size_index;
 } SkolemBinding;
 
 /* Phase G2: Per-arm skolem environment (stack-allocated in elab_match) */
@@ -636,6 +661,37 @@ static inline bool type_requires_refinement(Type t) {
 
 /* Convert TypeKind to string representation for debugging */
 const char *typekind_to_string(TypeKind k);
+
+/* ----- Phase SZ6/SZ7: type-level size index terms ----- */
+
+/* Parse a type-position Form into a SizeTerm, or return NULL if `f` is not a
+ * size expression.  Recognises `(Static n)`, `(Add a b)`, `(Mul a b)`, and a
+ * bare symbol (treated as a size variable).  `is_size_var(name, ctx)` decides
+ * whether a bare symbol is a size variable; pass NULL to treat every bare
+ * non-numeric symbol as a variable.  Arena-allocated. */
+struct Form;
+SizeTerm *size_term_from_form(Arena *a, const struct Form *f,
+                              bool (*is_size_var)(const char *, void *),
+                              void *ctx);
+
+/* Substitute size variable `var` with `replacement` throughout `t`, returning a
+ * fresh term (or `t` unchanged when `var` does not occur). */
+SizeTerm *size_term_subst(Arena *a, const SizeTerm *t,
+                          const char *var, const SizeTerm *replacement);
+
+/* Fold a closed size term (no variables) to its integer value.
+ * Returns true and writes *out on success; false if the term mentions any
+ * size variable (i.e. is not statically known). */
+bool size_term_eval(const SizeTerm *t, int64_t *out);
+
+/* Structural/normalised equality: true iff the two terms are provably equal by
+ * constant folding + syntactic normalisation (commutative Add/Mul, identity
+ * elimination).  Used by SZ7 static size checking. */
+bool size_term_equal(const SizeTerm *a, const SizeTerm *b);
+
+/* Render a size term for diagnostics, e.g. "(+ 1 n)" or "5".  Writes into buf
+ * (size cap) and returns buf. */
+const char *size_term_to_string(const SizeTerm *t, char *buf, size_t cap);
 
 /* Convert type name string to TypeKind */
 TypeKind typekind_from_name(const char *name);
