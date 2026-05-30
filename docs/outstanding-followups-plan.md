@@ -1,6 +1,6 @@
 # Plan: Outstanding follow-ups across five archived plans
 
-> **Status:** Draft Plan
+> **Status:** In Progress
 > **Last Updated:** 2026-05-30
 > **Type:** Compiler / Codegen / Type system / Tooling -- roadmap
 > **Consolidates outstanding work from:**
@@ -9,6 +9,25 @@
 > - [`docs/archive/history/cross-module-specialization-cache-plan.md`](archive/history/cross-module-specialization-cache-plan.md)
 > - [`docs/archive/history/tur-run-plan.md`](archive/history/tur-run-plan.md) -- basic `tur run` impl landed; `tur new` + extended phases outstanding
 > - [`docs/archive/history/unboxing-and-monomorphization-plan.md`](archive/history/unboxing-and-monomorphization-plan.md) -- Phases G/H/I landed; A/B/C/D/E/F outstanding
+
+---
+
+## Progress tracker
+
+Re-verified against HEAD before execution (per "How to read this plan"). Most
+themes had already landed; the items below capture the genuinely outstanding
+work and its disposition.
+
+| Theme | State | Notes |
+| --- | --- | --- |
+| A -- Clean Clang codegen | **DONE (verified)** | All 5 canary fixtures + all 73 snapshots compile clean under `clang -Werror=int-conversion -Werror=incompatible-function-pointer-types`; no `-Wno-error` downgrade in `tests/run.sh` or compiler defaults. |
+| B -- Aggregate carrier bridge | **DONE (verified)** | 4 gate fixtures under `tests/fixtures/typed-slots/` pass; KB-004/010/012/015 fixed. |
+| C -- Sized primitives polish | **DONE (verified)** | C1 (`TUR-E0042`), C2 (kind-preserving bitwise), C3 (hash consistency), C4 (`TUR-W0037`) all implemented with fixtures + guide. |
+| D -- Unboxed struct ABI | **IN PROGRESS** | D1 (`pass_by_ptr` >16B) DONE; D2 (typed fn-ptr fields) DONE; D3 (nested-aggregate decision doc) + D4 (inline-C unboxed-local audit) outstanding. |
+| E -- Arbitrary-arity kinds | **DONE** | E1-E4 already landed; E5 completed here -- added `tur_kind_arity_unit` C unit test (round-trip through arity 15 + >15 boundary); docs already current. |
+| F -- Monomorphize closures | **OUTSTANDING** | Closure/non-global guard still bails in `emit_module.c`; F1/F2/F3 not started. |
+| G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE; J6 (persistent-cache *read* + `--no-abi-cache` + invalidation) outstanding. |
+| H -- Tooling (`tur run` / `tur new`) | **IN PROGRESS** | Most RN*/NW* done; NW0 (length + reserved-name validation) + NW6 (bootstrap CI test) outstanding. |
 
 ---
 
