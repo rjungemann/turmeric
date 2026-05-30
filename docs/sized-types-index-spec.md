@@ -142,6 +142,34 @@ typedef struct tur_adt_SizedVec {
 `tests/fixtures/sized-sz6-erasure` pins this erased shape with an `expected.c`
 snapshot.
 
+## 5. Static size checking (SZ7)
+
+SZ7 turns the captured size terms into a compile-time check with its own
+diagnostic, **TUR-E0260** (`tur explain TUR-E0260`).
+
+The check is applied at the call site of the size assertions
+`size-assert-eq!` and `size-assert-le!` (`sz7_static_size_violation` in
+`src/compiler/elab_call.c`):
+
+1. Each argument form is parsed with `size_term_from_form`, which now also
+   recognises the value-level spellings `size-static` / `size-add` /
+   `size-mul` in addition to the `Static` / `Add` / `Mul` constructors.
+2. If **both** arguments fold to constants via `size_term_eval`, the relation
+   is decided at compile time:
+   - `size-assert-eq!` with unequal constants -> `TUR-E0260` (`size N is not M`).
+   - `size-assert-le!` whose left exceeds its right -> `TUR-E0260`
+     (`size N exceeds upper bound M`).
+   A rejected program does not compile, so **no runtime check is emitted**.
+3. If either argument is **not** statically known (a variable, a value read at
+   run time, or a size threaded through a function parameter), the checker
+   returns without deciding and the call elaborates normally -- the existing
+   runtime assertion in `stdlib/sized.tur` guards it. The checker never
+   silently accepts a possibly-wrong size (the SZ7.3 fallback boundary).
+
+This deliberately uses syntactic constant folding, not an SMT solver:
+non-trivial nonlinear or multi-variable equalities fall back to the runtime
+check rather than being proven (see the non-goals in the completion plan).
+
 ## See also
 
 - [sized-types-completion-plan.md](sized-types-completion-plan.md) -- the SZ4--SZ9 plan

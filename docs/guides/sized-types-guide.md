@@ -230,6 +230,38 @@ size-assert-le!(size-static(3) size-static(10))
 size-assert-eq!(size-static(4) size-static(5))
 ```
 
+### Static checking (SZ7)
+
+Under `-Xsized-types`, `size-assert-eq!` and `size-assert-le!` are checked
+**statically** when both of their size arguments reduce to compile-time
+constants -- the `Size` expression is folded at elaboration and compared:
+
+```turmeric
+; COMPILE-TIME error TUR-E0260 (no runtime check is emitted):
+(size-assert-eq! (size-static 4) (size-static 5))
+
+; accepted at compile time -- both sides fold to 4:
+(size-assert-eq! (size-static 4) (size-add (size-static 2) (size-static 2)))
+```
+
+Run `tur explain TUR-E0260` for the full diagnostic.
+
+**Runtime fallback (the boundary).** When at least one size is *not*
+statically known -- for example a dimension derived from a runtime length or
+passed through a function parameter -- the checker cannot decide the equation
+and lowers to the existing runtime assertion shown above. It never silently
+accepts a possibly-wrong size:
+
+```turmeric
+(let [n (read-length)]              ; n is a runtime value
+  ; not statically known -> runtime assertion (panics if n != 4)
+  (size-assert-eq! (size-static n) (size-static 4)))
+```
+
+Folding currently covers `Static`/`Add`/`Mul` (and the `size-static`/`size-add`/
+`size-mul` value forms) at the assertion call site itself; sizes that arrive
+through a wrapper function fall back to the runtime check.
+
 ---
 
 ## Size Inference

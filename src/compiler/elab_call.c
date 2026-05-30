@@ -473,6 +473,42 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
 
 /* ---- general elab ---- */
 
+/* SZ7: static size checking (-Xsized-types).
+ * When a call is `(size-assert-eq! a b)` or `(size-assert-le! a b)` and BOTH
+ * size arguments reduce to compile-time constants, decide the relation at
+ * compile time: a violation is reported with TUR-E0260 (no runtime check is
+ * emitted because compilation fails).  When at least one size is not statically
+ * known, returns false so the call elaborates normally and the existing runtime
+ * assertion guards it -- the checker never silently accepts (SZ7.3). */
+static bool sz7_static_size_violation(Elab *e, const Form *call, const Symbol *name) {
+    if (!g_sized_types_enabled) return false;
+    const char *fn = name->name;
+    bool is_eq = (strcmp(fn, "size-assert-eq!") == 0);
+    bool is_le = (strcmp(fn, "size-assert-le!") == 0);
+    if (!is_eq && !is_le) return false;
+    if (call->as.list.len != 3) return false;  /* (fn a b) */
+
+    SizeTerm *t0 = size_term_from_form(e->arena, call->as.list.items[1], NULL, NULL);
+    SizeTerm *t1 = size_term_from_form(e->arena, call->as.list.items[2], NULL, NULL);
+    if (!t0 || !t1) return false;
+    int64_t v0, v1;
+    if (!size_term_eval(t0, &v0) || !size_term_eval(t1, &v1)) return false; /* runtime fallback */
+
+    if (is_eq && v0 != v1) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0260_SIZED_TYPE_MISMATCH,
+            "sized type mismatch (TUR-E0260): size %lld is not %lld",
+            (long long)v0, (long long)v1);
+        return true;
+    }
+    if (is_le && v0 > v1) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0260_SIZED_TYPE_MISMATCH,
+            "sized type mismatch (TUR-E0260): size %lld exceeds upper bound %lld",
+            (long long)v0, (long long)v1);
+        return true;
+    }
+    return false;
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -484,6 +520,10 @@ Expr *elab_call(Elab *e, Form *call) {
         return elab_call_head_expr(e, call, head_expr);
     }
     const Symbol *name = head->as.sym;
+
+    /* SZ7: static size checking -- reject statically-known size mismatches at
+     * compile time before normal call dispatch. */
+    if (sz7_static_size_violation(e, call, name)) return NULL;
 
     /* Special forms. */
     if (name == e->sym_def)    return elab_def   (e, call);

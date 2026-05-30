@@ -2196,19 +2196,25 @@ SizeTerm *size_term_from_form(Arena *a, const Form *f,
         const Form *hd = f->as.list.items[0];
         if (hd->tag != F_SYM) return NULL;
         const char *op = hd->as.sym->name;
-        if (strcmp(op, "Static") == 0 && f->as.list.len == 2) {
+        /* Accept both the type-level GADT constructor spelling (Static/Add/Mul)
+         * and the value-level stdlib spelling (size-static/size-add/size-mul),
+         * so the same parser serves SZ6 (type indices) and SZ7 (value-level
+         * size-assert-eq! arguments). */
+        bool is_static = (strcmp(op, "Static") == 0 || strcmp(op, "size-static") == 0);
+        bool is_add    = (strcmp(op, "Add")    == 0 || strcmp(op, "size-add")    == 0);
+        bool is_mul    = (strcmp(op, "Mul")    == 0 || strcmp(op, "size-mul")    == 0);
+        if (is_static && f->as.list.len == 2) {
             const Form *arg = f->as.list.items[1];
             if (arg->tag != F_INT) return NULL;
             SizeTerm *t = size_term_alloc(a, SZT_CONST);
             t->konst = arg->as.i;
             return t;
         }
-        if ((strcmp(op, "Add") == 0 || strcmp(op, "Mul") == 0) &&
-                f->as.list.len == 3) {
+        if ((is_add || is_mul) && f->as.list.len == 3) {
             SizeTerm *l = size_term_from_form(a, f->as.list.items[1], is_size_var, ctx);
             SizeTerm *r = size_term_from_form(a, f->as.list.items[2], is_size_var, ctx);
             if (!l || !r) return NULL;
-            SizeTerm *t = size_term_alloc(a, strcmp(op, "Add") == 0 ? SZT_ADD : SZT_MUL);
+            SizeTerm *t = size_term_alloc(a, is_add ? SZT_ADD : SZT_MUL);
             t->lhs = l;
             t->rhs = r;
             return t;
