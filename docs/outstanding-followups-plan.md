@@ -25,7 +25,7 @@ work and its disposition.
 | C -- Sized primitives polish | **DONE (verified)** | C1 (`TUR-E0042`), C2 (kind-preserving bitwise), C3 (hash consistency), C4 (`TUR-W0037`) all implemented with fixtures + guide. |
 | D -- Unboxed struct ABI | **DONE** | D1 (`pass_by_ptr` >16B) + D2 (typed fn-ptr fields) already landed; D3 (nested-aggregate decision: keep carrier-erased, documented in type-erasure-guide.md) + D4 (inline-C unboxed-local audit: vec.tur/hamt.tur are clean, all carrier-ABI) completed here. |
 | E -- Arbitrary-arity kinds | **DONE** | E1-E4 already landed; E5 completed here -- added `tur_kind_arity_unit` C unit test (round-trip through arity 15 + >15 boundary); docs already current. |
-| F -- Monomorphize closures | **OUTSTANDING** | Closure/non-global guard still bails in `emit_module.c`; F1/F2/F3 not started. |
+| F -- Monomorphize closures | **PARTIAL** | The landed "Phase F" concrete-dispatch fast path (`is_poly_call` branch in `emit_expr.c`) was extended here to the unsigned narrow ints (`TY_UINT8/16/32`) alongside the signed siblings, so narrow-int closure/poly applications skip the `int64_t` carrier round-trip (fixture `phase-f-poly-concrete-unsigned/`). The clone-generation F1/F2/F3 (standalone specialized closure variants) still bails in `emit_module.c` and stays deferred as deep codegen work -- see the Theme F status notes below. |
 | G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE (correctness landed). J6: `--no-abi-cache` / `TUR_NO_ABI_CACHE` added here (suppresses the `.tur-abi-cache/` machinery). The cache *read* + ownership-reuse + invalidation -- a pure rebuild-time optimization -- remains outstanding (cold cache already builds correctly). |
 | H -- Tooling (`tur run` / `tur new`) | **IN PROGRESS** | Most RN*/NW* done. NW0 (length + reserved-name validation) completed here, plus a `tur check <dir>` directory-mode fix (was crashing on a directory arg). NW6 (bootstrap CI gate) is **blocked on larger work** -- see note below. |
 
@@ -344,6 +344,33 @@ Each step is independently revertable.
 > Theme G (cross-module) is explicitly gated on it. It is left for a
 > dedicated change-set with benchmark + `--emit-abi-trace` verification
 > rather than attempted speculatively here.
+
+> **Update (2026-05-30, follow-up): a lighter-weight slice of Phase F is
+> already in the tree and was extended here.** Separate from the
+> clone-generation path guarded in `emit_abi_register_call`, the poly-call
+> emitter (`emit_expr.c`, the `is_poly_call` branch) carries a "Phase F"
+> *concrete-dispatch* fast path: when a `(forall [a] (-> a a))` value is
+> applied at a sub-64-bit integer type, it casts the live `tur_poly_fn_t.fn`
+> pointer to the concrete C signature and calls it directly, instead of
+> widening the argument/result through the `int64_t` carrier. This avoids
+> the carrier round-trip without generating a separate clone, and works for
+> both native closure thunks and the generic carrier wrapper (the narrow
+> int rides the low bits of an integer register on x86-64 SysV). It was
+> gated on `type_kind_is_poly_concrete`, which covered only the *signed*
+> narrow ints + bool (`TY_BOOL`/`TY_INT8`/`TY_INT16`/`TY_INT32`). This
+> change adds the unsigned siblings (`TY_UINT8`/`TY_UINT16`/`TY_UINT32`),
+> which share the identical register/extension behaviour; floats stay
+> excluded (the carrier wrapper returns in `rax`, not `xmm0`), and full-width
+> `(u)int64` needs no specialization since it already coincides with the
+> carrier. Fixture: `tests/fixtures/phase-f-poly-concrete-unsigned/`.
+>
+> The deep F1/F2/F3 work -- emitting standalone *specialized clones* for
+> captured closures (re-keying the spec cache by
+> `(closure_template_id, arg_types, result_type)`, rewriting the closure
+> call site at `emit_expr.c`'s `closure_fn_binding` branch, and emitting a
+> clone body that is not thunk-shaped) -- remains deferred for the reasons
+> above. The concrete-dispatch fast path already covers the common
+> narrow-int closure-application case without that risk.
 
 ### F1 -- Lift the closure / non-global guard
 
