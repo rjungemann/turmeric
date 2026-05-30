@@ -20,6 +20,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,7 +132,27 @@ static char *find_build_tur_root(const char *start) {
 /* Freshness: any .tur newer than the .so?                            */
 /* ------------------------------------------------------------------ */
 
-static time_t newest_tur_mtime(const char *dir, time_t acc) {
+/* Modification time in nanoseconds.  Whole-second `st_mtime` is too coarse
+ * for the --watch reload check: on macOS CI the `tur build --shared` rebuild
+ * is slow enough that the cached .so lands in the same whole second as a
+ * subsequent source edit, so a strict `source > lib` second comparison
+ * misses the edit and the auto-reload never fires (the edit genuinely
+ * happens after the build in wall-clock time, so sub-second resolution
+ * resolves it).  APFS and ext4 both record nanosecond mtimes; filesystems
+ * without sub-second resolution report tv_nsec == 0 and degrade cleanly to
+ * the previous second-granularity behavior. */
+static int64_t stat_mtime_ns(const struct stat *st) {
+#if defined(__APPLE__)
+    long nsec = st->st_mtimespec.tv_nsec;
+#elif defined(st_mtime) || defined(__linux__) || defined(_POSIX_C_SOURCE)
+    long nsec = st->st_mtim.tv_nsec;
+#else
+    long nsec = 0;
+#endif
+    return (int64_t)st->st_mtime * 1000000000LL + (int64_t)nsec;
+}
+
+static int64_t newest_tur_mtime(const char *dir, int64_t acc) {
     DIR *d = opendir(dir);
     if (!d) return acc;
     struct dirent *e;
@@ -148,7 +169,8 @@ static time_t newest_tur_mtime(const char *dir, time_t acc) {
         if (!S_ISREG(st.st_mode)) continue;
         size_t nl = strlen(e->d_name);
         if (nl < 5 || strcmp(e->d_name + nl - 4, ".tur") != 0) continue;
-        if (st.st_mtime > acc) acc = st.st_mtime;
+        int64_t m = stat_mtime_ns(&st);
+        if (m > acc) acc = m;
     }
     closedir(d);
     return acc;
@@ -161,8 +183,8 @@ static time_t newest_tur_mtime(const char *dir, time_t acc) {
 static bool needs_rebuild(const char *root, const char *lib_path) {
     struct stat lib_st;
     if (stat(lib_path, &lib_st) != 0) return true;
-    time_t lib_mtime = lib_st.st_mtime;
-    time_t newest = newest_tur_mtime(root, 0);
+    int64_t lib_mtime = stat_mtime_ns(&lib_st);
+    int64_t newest = newest_tur_mtime(root, 0);
     return newest > lib_mtime;
 }
 

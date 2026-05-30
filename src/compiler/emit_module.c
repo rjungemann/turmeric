@@ -902,6 +902,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.cap_carrier_call_bindings = 0;
     ctx.current_abi_specialization = NULL;
     ctx.fn_name_override = NULL;
+    ctx.fn_name_override_external = false;  /* J3: must match fn_name_override */
     ctx.n_pbp_params = 0;    /* Phase D: no pbp params at top level */
     /* ASan/LSan plan (Option C): arena for transient ABI-spec Type scratch,
      * freed in bulk at the end of this function. */
@@ -1473,8 +1474,10 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         ctx.current_abi_specialization = &ctx.abi_specializations[i];
         ctx.fn_name_override = ctx.abi_specializations[i].clone_name;
+        ctx.fn_name_override_external = false;  /* single-file clones stay static */
         emit_fn_def(&ctx, &file, ctx.abi_specializations[i].fn_expr);
         ctx.fn_name_override = NULL;
+        ctx.fn_name_override_external = false;
         ctx.current_abi_specialization = NULL;
     }
 
