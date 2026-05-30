@@ -604,6 +604,14 @@ The PKG-1 `cmd_pkg_new` predates this spec. Reconcile:
   > `pkg.c` per NW1), (b) a real `tur docs` command or a redefinition of
   > the CI contract, and (c) fmt-clean scaffold templates. This is its
   > own change-set, tracked here rather than forced into a partial fix.
+  >
+  > **A dedicated, phased plan for this change-set now exists:**
+  > [`docs/tur-new-ci-bootstrap-plan.md`](tur-new-ci-bootstrap-plan.md).
+  > It re-verifies the blockers against HEAD (2026-05-30) -- including a
+  > fourth one the original note missed: the scaffolded `src/` does not
+  > even compile (`tur build .` fails on a `(str ...)` call that should be
+  > `str-concat`) -- and sequences the fixes into four phases ending in the
+  > NW6 bootstrap CI gate itself.
 - **NW7 -- docs.** `docs/guides/tur-new-guide.md` already exists;
   confirm it covers the new flag set, the generated layout, and the
   "evolve a spice past the template" guidance from the source plan.
