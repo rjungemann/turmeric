@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frame Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#frame-guide" style="">Frame Guide</a></li>
+<li style=""><a href="#installing" style="">Installing</a></li>
+<li style=""><a href="#importing" style="">Importing</a></li>
+<li style=""><a href="#1-building-a-frame" style="">1. Building a Frame</a></li>
+<li style="padding-left:0.75rem;"><a href="#from-parallel-columns" style="color:var(--text-sec);">From parallel columns</a></li>
+<li style="padding-left:0.75rem;"><a href="#from-an-association-list" style="color:var(--text-sec);">From an association list</a></li>
+<li style="padding-left:0.75rem;"><a href="#from-rows" style="color:var(--text-sec);">From rows</a></li>
+<li style="padding-left:0.75rem;"><a href="#from-csv" style="color:var(--text-sec);">From CSV</a></li>
+<li style=""><a href="#2-selecting-filtering-and-mutating" style="">2. Selecting, Filtering, and Mutating</a></li>
+<li style="padding-left:0.75rem;"><a href="#select-cols-and-drop-cols" style="color:var(--text-sec);">select-cols and drop-cols</a></li>
+<li style="padding-left:0.75rem;"><a href="#rename-and-with-col" style="color:var(--text-sec);">rename and with-col</a></li>
+<li style="padding-left:0.75rem;"><a href="#filter" style="color:var(--text-sec);">filter</a></li>
+<li style="padding-left:0.75rem;"><a href="#drop-nulls-and-distinct" style="color:var(--text-sec);">drop-nulls and distinct</a></li>
+<li style="padding-left:0.75rem;"><a href="#mutate" style="color:var(--text-sec);">mutate</a></li>
+<li style=""><a href="#3-sorting-and-de-duplicating" style="">3. Sorting and De-duplicating</a></li>
+<li style=""><a href="#4-group-by-and-aggregation" style="">4. Group-By and Aggregation</a></li>
+<li style=""><a href="#5-joining-two-frames" style="">5. Joining Two Frames</a></li>
+<li style=""><a href="#6-reshaping-with-melt" style="">6. Reshaping with melt</a></li>
+<li style=""><a href="#7-arrow-c-data-interface" style="">7. Arrow C Data Interface</a></li>
+<li style="padding-left:0.75rem;"><a href="#exporting-to-python-pyarrow" style="color:var(--text-sec);">Exporting to Python (PyArrow)</a></li>
+<li style="padding-left:0.75rem;"><a href="#exporting-to-r-nanoarrow-and-duckdb" style="color:var(--text-sec);">Exporting to R (nanoarrow) and DuckDB</a></li>
+<li style="padding-left:0.75rem;"><a href="#importing-from-another-runtime" style="color:var(--text-sec);">Importing from another runtime</a></li>
+<li style="padding-left:0.75rem;"><a href="#column-level-export" style="color:var(--text-sec);">Column-level export</a></li>
+<li style=""><a href="#column-type-reference" style="">Column Type Reference</a></li>
+<li style=""><a href="#whats-coming-in-v02" style="">What's Coming in v0.2</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="frame-guide">Frame Guide</h1>
+<p><code>tur-frame</code> is a pure-Turmeric spice that provides in-memory columnar
+dataframes modeled on R's <code>data.frame</code>, pandas <code>DataFrame</code>, and Racket's
+<code>data-frame</code>. Columns are stored in <strong>Apache Arrow's in-memory format</strong>
+(C Data Interface compatible), which enables zero-copy hand-off to Python,
+R, DuckDB, and Polars without serialization.</p>
+<h2 id="installing">Installing</h2>
+<pre><code class="language-sh">tur add https://github.com/rjungemann/turmeric-spices \
+  --ref frame-v0.1.0 --subdir spices/frame --name frame
+tur fetch
+</code></pre>
+<p>Then in your <code>build.tur</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">{:name &quot;myapp&quot;
+ :spices [&quot;frame&quot;]}
+</code></pre>
+<h2 id="importing">Importing</h2>
+<pre><code class="language-turmeric">(import frame/frame  :refer [frame frame-from-cols frame-from-rows
+                               frame-nrows frame-ncols frame-schema
+                               frame-column frame-head frame-tail
+                               frame-slice frame=?])
+(import frame/column :refer [column-int64 column-float64 column-utf8
+                               column-type column-length column-get
+                               column-int64-at column-float64-at
+                               column-utf8-at])
+(import frame/type   :refer [type-int64 type-float64 type-utf8 type-name])
+(import frame/schema :refer [schema])
+(import frame/select :refer [select-cols drop-cols rename with-col
+                               map-col mutate])
+(import frame/filter :refer [filter drop-nulls distinct sample])
+(import frame/sort   :refer [arrange]]
+(import frame/group  :refer [group-by agg agg-sum agg-mean agg-count
+                               agg-min agg-max summarize])
+(import frame/join   :refer [inner-join left-join join])
+(import frame/reshape :refer [melt])
+(import frame/csv    :refer [read-csv write-csv default-csv-opts])
+(import frame/interop :refer [arrow-export arrow-import])
+(import frame/print  :refer [print-frame frame-describe])
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import frame/frame  :refer [frame frame-from-cols frame-from-rows
+                              frame-nrows frame-ncols frame-schema
+                              frame-column frame-head frame-tail
+                              frame-slice frame=?]
+import frame/column :refer [column-int64 column-float64 column-utf8
+                              column-type column-length column-get
+                              column-int64-at column-float64-at
+                              column-utf8-at]
+import frame/type   :refer [type-int64 type-float64 type-utf8 type-name]
+import frame/schema :refer [schema]
+import frame/select :refer [select-cols drop-cols rename with-col
+                              map-col mutate]
+import frame/filter :refer [filter drop-nulls distinct sample]
+import frame/sort   :refer [arrange]
+import frame/group  :refer [group-by agg agg-sum agg-mean agg-count
+                              agg-min agg-max summarize]
+import frame/join   :refer [inner-join left-join join]
+import frame/reshape :refer [melt]
+import frame/csv    :refer [read-csv write-csv default-csv-opts]
+import frame/interop :refer [arrow-export arrow-import]
+import frame/print  :refer [print-frame frame-describe]
+</code></pre></div></div></div>
+<hr />
+<h2 id="1-building-a-frame">1. Building a Frame</h2>
+<h3 id="from-parallel-columns">From parallel columns</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Build columns from value lists.  Pass 0 (nil) for validity to mean &quot;all valid&quot;.
+(let [names (column-utf8    (list &quot;Alice&quot; &quot;Bob&quot; &quot;Carol&quot;) 0 0)
+      ages  (column-int64   (list 30 25 35) 0 0)
+      score (column-float64 (list 8.5 7.0 9.1) 0 0)
+
+      s (schema (list (field &quot;name&quot;  (type-utf8)    0)
+                      (field &quot;age&quot;   (type-int64)   0)
+                      (field &quot;score&quot; (type-float64) 0)))
+
+      df (frame s (list names ages score))]
+
+  ;; quick sanity check
+  (print-frame df)
+  ;; =&gt;  name   age  score
+  ;;    Alice    30    8.5
+  ;;      Bob    25    7.0
+  ;;    Carol    35    9.1
+  )
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [names column-utf8(list(&quot;Alice&quot; &quot;Bob&quot; &quot;Carol&quot;) 0 0)
+     ages  column-int64(list(30 25 35) 0 0)
+     score column-float64(list(8.5 7.0 9.1) 0 0)
+
+     s schema(list(field(&quot;name&quot;  type-utf8()    0)
+                   field(&quot;age&quot;   type-int64()   0)
+                   field(&quot;score&quot; type-float64() 0)))
+
+     df frame(s list(names ages score))]
+
+  print-frame(df)
+</code></pre></div></div></div>
+<h3 id="from-an-association-list">From an association list</h3>
+<p><code>frame-from-cols</code> infers the schema from the column types:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [df (frame-from-cols
+           (vec-of (cons &quot;name&quot; (column-utf8  (list &quot;Alice&quot; &quot;Bob&quot;) 0 0))
+                   (cons &quot;age&quot;  (column-int64 (list 30 25) 0 0))))]
+  (print-frame df))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [df frame-from-cols(vec-of(cons(&quot;name&quot; column-utf8(list(&quot;Alice&quot; &quot;Bob&quot;) 0 0))
+                               cons(&quot;age&quot;  column-int64(list(30 25) 0 0))))]
+  print-frame(df)
+</code></pre></div></div></div>
+<h3 id="from-rows">From rows</h3>
+<p><code>frame-from-rows</code> accepts a schema and a list of rows. Each row is a list
+of values in schema order. This is slower than column-wise construction and
+is intended for small literals and tests:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [s  (schema (list (field &quot;x&quot; (type-int64)   0)
+                       (field &quot;y&quot; (type-float64) 0)))
+      df (frame-from-rows s
+           (list (list 1 1.5)
+                 (list 2 2.5)))]
+  (print-frame df))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [s  schema(list(field(&quot;x&quot; type-int64()   0)
+                    field(&quot;y&quot; type-float64() 0)))
+     df frame-from-rows(s list(list(1 1.5)
+                               list(2 2.5)))]
+  print-frame(df)
+</code></pre></div></div></div>
+<h3 id="from-csv">From CSV</h3>
+<p><code>read-csv</code> infers column types from the first 100 rows by default:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [df (read-csv &quot;data/sales.csv&quot; (default-csv-opts))]
+  (match df
+    [(ok f)  (print-frame f)]
+    [(err e) (println &quot;error:&quot; e)]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [df read-csv(&quot;data/sales.csv&quot; default-csv-opts())]
+  match df
+    [ok(f)  print-frame(f)]
+    [err(e) println(&quot;error:&quot; e)]
+</code></pre></div></div></div>
+<p>The type inference order is int64 → float64 → date32 → timestamp → bool → utf8.
+Use <code>read-csv-typed</code> to supply an explicit schema and skip inference:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [s (schema (list (field &quot;id&quot;    (type-int64)   0)
+                      (field &quot;name&quot;  (type-utf8)    0)
+                      (field &quot;price&quot; (type-float64) 0)))
+      df (read-csv-typed &quot;products.csv&quot; s (default-csv-opts))]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [s schema(list(field(&quot;id&quot;    type-int64()   0)
+                   field(&quot;name&quot;  type-utf8()    0)
+                   field(&quot;price&quot; type-float64() 0)))
+     df read-csv-typed(&quot;products.csv&quot; s default-csv-opts())]
+  ...
+</code></pre></div></div></div>
+<p>Write a frame back to CSV with <code>write-csv</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(write-csv df &quot;output.csv&quot; (default-csv-opts))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">write-csv(df &quot;output.csv&quot; default-csv-opts())
+</code></pre></div></div></div>
+<hr />
+<h2 id="2-selecting-filtering-and-mutating">2. Selecting, Filtering, and Mutating</h2>
+<p>Frames are <strong>immutable values</strong>. Every transformation returns a new frame;
+unchanged columns are shared with the original (no copying).</p>
+<h3 id="select-cols-and-drop-cols">select-cols and drop-cols</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Keep only named columns
+(let [small (select-cols df (list &quot;name&quot; &quot;score&quot;))]
+  (print-frame small))
+
+;; Drop named columns
+(let [no-age (drop-cols df (list &quot;age&quot;))]
+  (print-frame no-age))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [small select-cols(df list(&quot;name&quot; &quot;score&quot;))]
+  print-frame(small)
+
+let [no-age drop-cols(df list(&quot;age&quot;))]
+  print-frame(no-age)
+</code></pre></div></div></div>
+<h3 id="rename-and-with-col">rename and with-col</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Rename a column
+(let [df2 (rename df &quot;score&quot; &quot;rating&quot;)]
+  (print-frame df2))
+
+;; Add or replace a column (length must match nrows)
+(let [bonus (column-float64 (list 100.0 80.0 120.0) 0 0)
+      df2   (with-col df &quot;bonus&quot; bonus)]
+  (print-frame df2))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [df2 rename(df &quot;score&quot; &quot;rating&quot;)]
+  print-frame(df2)
+
+let [bonus column-float64(list(100.0 80.0 120.0) 0 0)
+     df2   with-col(df &quot;bonus&quot; bonus)]
+  print-frame(df2)
+</code></pre></div></div></div>
+<h3 id="filter">filter</h3>
+<p>Pass a predicate <code>(fn [frame row-index] :int)</code> -- return non-zero to keep the row:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Keep rows where age &gt;= 30
+(let [seniors (filter df (fn [f i]
+                           (let [age (column-int64-at (frame-column f &quot;age&quot;) i)]
+                             (&gt;= age 30))))]
+  (print-frame seniors))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [seniors filter(df fn([f i]
+                      let [age column-int64-at(frame-column(f &quot;age&quot;) i)]
+                        &gt;= age 30))]
+  print-frame(seniors)
+</code></pre></div></div></div>
+<h3 id="drop-nulls-and-distinct">drop-nulls and distinct</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Drop rows with any null in the named columns; pass 0 for all columns
+(let [clean (drop-nulls df (list &quot;score&quot;))]
+  ...)
+
+;; De-duplicate by named columns; 0 = all columns
+(let [uniq (distinct df (list &quot;name&quot;))]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [clean drop-nulls(df list(&quot;score&quot;))]
+  ...
+
+let [uniq distinct(df list(&quot;name&quot;))]
+  ...
+</code></pre></div></div></div>
+<h3 id="mutate">mutate</h3>
+<p><code>mutate</code> derives a new column by calling <code>row-fn</code> once per row:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Add a &quot;grade&quot; :utf8 column derived from score
+(let [df2 (mutate df &quot;grade&quot; (type-utf8)
+            (fn [f i]
+              (let [s (column-float64-at (frame-column f &quot;score&quot;) i)]
+                (if (&gt;= s 9.0) &quot;A&quot;
+                (if (&gt;= s 7.0) &quot;B&quot; &quot;C&quot;)))))]
+  (print-frame df2))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [df2 mutate(df &quot;grade&quot; type-utf8()
+          fn([f i]
+            let [s column-float64-at(frame-column(f &quot;score&quot;) i)]
+              if &gt;= s 9.0 &quot;A&quot;
+              if &gt;= s 7.0 &quot;B&quot; &quot;C&quot;))]
+  print-frame(df2)
+</code></pre></div></div></div>
+<hr />
+<h2 id="3-sorting-and-de-duplicating">3. Sorting and De-duplicating</h2>
+<p><code>arrange</code> sorts by one or more columns. The <code>keys</code> argument is two parallel
+lists: column names and sort directions (0 = ascending, 1 = descending):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Sort by score descending, then by name ascending
+(let [sorted (arrange df
+               (list &quot;score&quot; &quot;name&quot;)
+               (list 1       0))]
+  (print-frame sorted))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [sorted arrange(df
+              list(&quot;score&quot; &quot;name&quot;)
+              list(1       0))]
+  print-frame(sorted)
+</code></pre></div></div></div>
+<p><code>arrange-indices</code> returns the permutation without applying it, so you can apply
+the same ordering to multiple frames with <code>reorder</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [idx     (arrange-indices df (list &quot;score&quot;) (list 1))
+      sorted1 (reorder df   idx)
+      sorted2 (reorder df2  idx)]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [idx     arrange-indices(df list(&quot;score&quot;) list(1))
+     sorted1 reorder(df  idx)
+     sorted2 reorder(df2 idx)]
+  ...
+</code></pre></div></div></div>
+<p><code>distinct</code> removes duplicate rows by the named key columns (or all columns if
+you pass <code>0</code>). Combined with <code>arrange</code>, this is the typical "keep first
+occurrence" pattern:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [top-per-name (distinct (arrange df (list &quot;score&quot;) (list 1))
+                             (list &quot;name&quot;))]
+  (print-frame top-per-name))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [top-per-name distinct(arrange(df list(&quot;score&quot;) list(1))
+                           list(&quot;name&quot;))]
+  print-frame(top-per-name)
+</code></pre></div></div></div>
+<hr />
+<h2 id="4-group-by-and-aggregation">4. Group-By and Aggregation</h2>
+<p><code>group-by</code> returns an opaque <em>grouped-frame</em>. Call <code>agg</code> on it to produce one
+summary row per group. The <code>agg</code> argument is three parallel lists:
+output column names, input column names, and aggregation tags.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Sum and count scores, grouped by grade
+(let [grouped (group-by df (vec-of &quot;grade&quot;))
+      summary (agg grouped
+                (list &quot;total_score&quot; &quot;count&quot;)
+                (list &quot;score&quot;       &quot;name&quot;)
+                (list (agg-sum)     (agg-count)))]
+  (match summary
+    [(ok f)  (print-frame f)]
+    [(err e) (println &quot;agg error:&quot; e)]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [grouped group-by(df vec-of(&quot;grade&quot;))
+     summary agg(grouped
+                 list(&quot;total_score&quot; &quot;count&quot;)
+                 list(&quot;score&quot;       &quot;name&quot;)
+                 list(agg-sum() agg-count()))]
+  match summary
+    [ok(f)  print-frame(f)]
+    [err(e) println(&quot;agg error:&quot; e)]
+</code></pre></div></div></div>
+<p>Available aggregation functions:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(agg-count)</code></td>
+<td>Number of rows</td>
+</tr>
+<tr>
+<td><code>(agg-sum)</code></td>
+<td>Sum of column values</td>
+</tr>
+<tr>
+<td><code>(agg-mean)</code></td>
+<td>Arithmetic mean</td>
+</tr>
+<tr>
+<td><code>(agg-min)</code> / <code>(agg-max)</code></td>
+<td>Min / max value</td>
+</tr>
+<tr>
+<td><code>(agg-median)</code></td>
+<td>Median</td>
+</tr>
+<tr>
+<td><code>(agg-std)</code> / <code>(agg-var)</code></td>
+<td>Sample std / variance</td>
+</tr>
+<tr>
+<td><code>(agg-first)</code> / <code>(agg-last)</code></td>
+<td>First / last value in group</td>
+</tr>
+</tbody>
+</table>
+<p><code>summarize</code> applies aggregations without grouping -- useful for whole-frame
+summary statistics:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Overall mean and max score
+(let [stats (summarize df
+              (list &quot;mean_score&quot; &quot;max_score&quot;)
+              (list &quot;score&quot;      &quot;score&quot;)
+              (list (agg-mean)   (agg-max)))]
+  (match stats
+    [(ok f) (print-frame f)]
+    [_ 0]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [stats summarize(df
+                     list(&quot;mean_score&quot; &quot;max_score&quot;)
+                     list(&quot;score&quot;      &quot;score&quot;)
+                     list(agg-mean() agg-max()))]
+  match stats
+    [ok(f) print-frame(f)]
+    [_ 0]
+</code></pre></div></div></div>
+<p><code>frame-describe</code> produces a pandas-style summary -- count, mean, std, min,
+25th/50th/75th percentile, and max for every numeric column:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(print-frame (frame-describe df))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">print-frame frame-describe(df)
+</code></pre></div></div></div>
+<hr />
+<h2 id="5-joining-two-frames">5. Joining Two Frames</h2>
+<p>All joins return <code>result&lt;frame&gt;</code>. The <code>keys</code> argument is two parallel lists
+of column names -- left-side key names and right-side key names.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [orders   (read-csv &quot;orders.csv&quot;   (default-csv-opts))
+      products (read-csv &quot;products.csv&quot; (default-csv-opts))]
+  (match (cons orders products)
+    [(cons (ok o) (ok p))
+     ;; inner join on orders.product_id = products.id
+     (let [result (inner-join o p
+                    (list &quot;product_id&quot;)
+                    (list &quot;id&quot;))]
+       (match result
+         [(ok df) (print-frame df)]
+         [(err e) (println &quot;join error:&quot; e)]))]
+    [_ (println &quot;csv read error&quot;)]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [orders   read-csv(&quot;orders.csv&quot;   default-csv-opts())
+     products read-csv(&quot;products.csv&quot; default-csv-opts())]
+  match cons(orders products)
+    [cons(ok(o) ok(p))
+     let [result inner-join(o p
+                   list(&quot;product_id&quot;)
+                   list(&quot;id&quot;))]
+       match result
+         [ok(df) print-frame(df)]
+         [err(e) println(&quot;join error:&quot; e)]]
+    [_ println(&quot;csv read error&quot;)]
+</code></pre></div></div></div>
+<p>The convenience <code>join</code> function takes a <code>how</code> string and a single key list (for
+when the key column has the same name on both sides):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Left join on the shared &quot;category&quot; column
+(join orders products &quot;left&quot; (list &quot;category&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">join(orders products &quot;left&quot; list(&quot;category&quot;))
+</code></pre></div></div></div>
+<p>Available join kinds: <code>"inner"</code>, <code>"left"</code>, <code>"right"</code>, <code>"full"</code>, <code>"semi"</code>,
+<code>"anti"</code>, and <code>cross-join</code> (no keys needed):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Semi-join: keep left rows that have a match in right
+(semi-join orders products (list &quot;product_id&quot;) (list &quot;id&quot;))
+
+;; Cross join: Cartesian product
+(cross-join sizes colors)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">semi-join(orders products list(&quot;product_id&quot;) list(&quot;id&quot;))
+
+cross-join(sizes colors)
+</code></pre></div></div></div>
+<p>When both frames have a column with the same name (other than the join key), the
+right-frame copy gets a <code>_r</code> suffix in the output.</p>
+<hr />
+<h2 id="6-reshaping-with-melt">6. Reshaping with <code>melt</code></h2>
+<p><code>melt</code> converts a wide frame to long format. The identity columns stay unchanged;
+the remaining columns each become a row, with their name stored in <code>var-name</code> and
+their value in <code>value-name</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Wide frame:
+;;   name   q1   q2   q3
+;;   Alice  10   20   15
+;;   Bob    12   18   22
+;;
+;; After melt with id-cols=[&quot;name&quot;]:
+;;   name   quarter  sales
+;;   Alice  q1       10
+;;   Alice  q2       20
+;;   ...
+
+(let [df    (read-csv &quot;quarterly.csv&quot; (default-csv-opts))
+      long  (melt df
+              (list &quot;name&quot;)      ; identity columns
+              &quot;quarter&quot;          ; variable column name
+              &quot;sales&quot;)]          ; value column name
+  (match (cons df long)
+    [(cons (ok wide) melted)
+     (when melted (print-frame melted))]
+    [_ 0]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [df   read-csv(&quot;quarterly.csv&quot; default-csv-opts())
+     long melt $ match df [ok(f) f] [_ 0]
+               list(&quot;name&quot;)
+               &quot;quarter&quot;
+               &quot;sales&quot;]
+  when long
+    print-frame(long)
+</code></pre></div></div></div>
+<p>All non-identity columns must share the same type. <code>melt</code> returns <code>0</code> if they
+do not.</p>
+<blockquote>
+<p><strong>Note:</strong> <code>pivot</code> (long → wide) and <code>transpose</code> are not included in v0.1.0.
+For those operations, export to Arrow and use the receiving runtime's native
+pivot/transpose.</p>
+</blockquote>
+<hr />
+<h2 id="7-arrow-c-data-interface">7. Arrow C Data Interface</h2>
+<p><code>tur-frame</code> stores data in the Arrow in-memory format. Zero-copy hand-off to
+other runtimes uses the Arrow C Data Interface -- two small C structs
+(<code>ArrowSchema*</code> and <code>ArrowArray*</code>) that any Arrow-aware library can consume
+directly.</p>
+<h3 id="exporting-to-python-pyarrow">Exporting to Python (PyArrow)</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Export returns a cons pair of (schema-ptr . array-ptr)
+(let [ptrs      (arrow-export df)
+      schema-p  (head ptrs)
+      array-p   (head (tail ptrs))]
+  ;; Hand the two raw pointers to Python via ctypes or cffi:
+  ;; import pyarrow as pa
+  ;; tbl = pa.RecordBatch._import_from_c(array_ptr, schema_ptr)
+  (println &quot;schema ptr:&quot; schema-p)
+  (println &quot;array ptr:&quot;  array-p))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [ptrs     arrow-export(df)
+     schema-p head(ptrs)
+     array-p  head tail(ptrs)]
+  println(&quot;schema ptr:&quot; schema-p)
+  println(&quot;array ptr:&quot;  array-p)
+</code></pre></div></div></div>
+<p>The exporting side transfers ownership: the consumer must call the release
+callbacks embedded in the structs when done. PyArrow does this automatically.</p>
+<h3 id="exporting-to-r-nanoarrow-and-duckdb">Exporting to R (nanoarrow) and DuckDB</h3>
+<ul>
+<li><strong>R / nanoarrow</strong>: <code>nanoarrow::as_nanoarrow_array(array_ptr, schema_ptr)</code></li>
+<li><strong>DuckDB</strong>: <code>duckdb.arrow_scan(schema_ptr, array_ptr)</code></li>
+<li><strong>Polars</strong>: <code>pl.from_arrow(pa.RecordBatch._import_from_c(array_ptr, schema_ptr))</code></li>
+</ul>
+<h3 id="importing-from-another-runtime">Importing from another runtime</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Import an (ArrowSchema*, ArrowArray*) pair produced by another runtime.
+;; Turmeric takes ownership and calls the release callbacks on GC.
+(let [df (arrow-import schema-ptr array-ptr)]
+  (match df
+    [(ok f)  (print-frame f)]
+    [(err e) (println &quot;import error:&quot; e)]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [df arrow-import(schema-ptr array-ptr)]
+  match df
+    [ok(f)  print-frame(f)]
+    [err(e) println(&quot;import error:&quot; e)]
+</code></pre></div></div></div>
+<h3 id="column-level-export">Column-level export</h3>
+<p>For single-column hand-off (e.g. passing a vector to a numeric routine):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [col  (frame-column df &quot;score&quot;)
+      ptrs (arrow-export-column col &quot;score&quot;)]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [col  frame-column(df &quot;score&quot;)
+     ptrs arrow-export-column(col &quot;score&quot;)]
+  ...
+</code></pre></div></div></div>
+<hr />
+<h2 id="column-type-reference">Column Type Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Type tag function</th>
+<th>Arrow format</th>
+<th>Turmeric element accessor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(type-int32)</code></td>
+<td><code>"i"</code></td>
+<td><code>(column-int32-at col i)</code> → <code>:int</code></td>
+</tr>
+<tr>
+<td><code>(type-int64)</code></td>
+<td><code>"l"</code></td>
+<td><code>(column-int64-at col i)</code> → <code>:int</code></td>
+</tr>
+<tr>
+<td><code>(type-float32)</code></td>
+<td><code>"f"</code></td>
+<td><code>(column-float32-at col i)</code> → <code>:float</code></td>
+</tr>
+<tr>
+<td><code>(type-float64)</code></td>
+<td><code>"g"</code></td>
+<td><code>(column-float64-at col i)</code> → <code>:float</code></td>
+</tr>
+<tr>
+<td><code>(type-bool)</code></td>
+<td><code>"b"</code></td>
+<td><code>(column-bool-at col i)</code> → <code>:int</code> (0 or 1)</td>
+</tr>
+<tr>
+<td><code>(type-utf8)</code></td>
+<td><code>"u"</code></td>
+<td><code>(column-utf8-at col i)</code> → <code>:cstr</code></td>
+</tr>
+<tr>
+<td><code>(type-date32)</code></td>
+<td><code>"tdD"</code></td>
+<td><code>(column-int32-at col i)</code> → days since epoch</td>
+</tr>
+<tr>
+<td><code>(type-timestamp)</code></td>
+<td><code>"tsu:"</code></td>
+<td><code>(column-int64-at col i)</code> → µs since epoch</td>
+</tr>
+<tr>
+<td><code>(type-null)</code></td>
+<td><code>"n"</code></td>
+<td>all rows null</td>
+</tr>
+</tbody>
+</table>
+<p>Typed fast-path accessors (<code>column-int64-at</code>, etc.) are undefined if called on
+the wrong column type or out of range. Use <code>column-type</code> to check first, or call
+<code>column-get</code> for a bounds-checked option-typed result.</p>
+<hr />
+<h2 id="whats-coming-in-v02">What's Coming in v0.2</h2>
+<ul>
+<li><code>pivot-agg</code> -- long-to-wide reshape with an explicit reduction function</li>
+<li>Lazy query plans (<code>tur-frame-lazy</code>)</li>
+<li>Parquet I/O (<code>tur-frame-parquet</code>)</li>
+<li>Line-delimited JSON I/O (<code>tur-frame-stream</code>)</li>
+<li>Zero-copy Arrow export (share column buffers via refcount rather than deep-copy)</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/frame-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

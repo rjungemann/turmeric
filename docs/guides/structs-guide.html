@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Structs | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#structs-in-turmeric" style="">Structs in Turmeric</a></li>
+<li style=""><a href="#defining-a-struct" style="">Defining a struct</a></li>
+<li style=""><a href="#ownership-annotations" style="">Ownership annotations</a></li>
+<li style=""><a href="#supported-field-types" style="">Supported field types</a></li>
+<li style=""><a href="#creating-instances" style="">Creating instances</a></li>
+<li style=""><a href="#accessing-fields" style="">Accessing fields</a></li>
+<li style=""><a href="#borrowing-fields" style="">Borrowing fields</a></li>
+<li style=""><a href="#linear-fields-lreft" style="">Linear fields (lref&lt;T&gt;)</a></li>
+<li style=""><a href="#reference-counted-structs" style="">Reference-counted structs</a></li>
+<li style=""><a href="#structs-and-typeclasses" style="">Structs and typeclasses</a></li>
+<li style="padding-left:0.75rem;"><a href="#clone" style="color:var(--text-sec);">Clone</a></li>
+<li style="padding-left:0.75rem;"><a href="#eq" style="color:var(--text-sec);">Eq</a></li>
+<li style="padding-left:0.75rem;"><a href="#show" style="color:var(--text-sec);">Show</a></li>
+<li style="padding-left:0.75rem;"><a href="#deriving-show-debug-display" style="color:var(--text-sec);">Deriving Show, Debug, Display</a></li>
+<li style="padding-left:0.75rem;"><a href="#repl-auto-show" style="color:var(--text-sec);">REPL auto-show</a></li>
+<li style="padding-left:0.75rem;"><a href="#bifunctor" style="color:var(--text-sec);">Bifunctor</a></li>
+<li style=""><a href="#function-pointer-fields" style="">Function-pointer fields</a></li>
+<li style=""><a href="#cross-module-structs" style="">Cross-module structs</a></li>
+<li style=""><a href="#docstrings" style="">Docstrings</a></li>
+<li style=""><a href="#common-errors" style="">Common errors</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="structs-in-turmeric">Structs in Turmeric</h1>
+<p>Structs are named, ordered collections of fields. They are the primary way to
+group related data under a single type name, and they integrate cleanly with
+typeclasses, ownership, and the effects system.</p>
+<hr />
+<h2 id="defining-a-struct">Defining a struct</h2>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Name [field1 :type1 field2 :type2 ...])
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Name [field1 :type1 field2 :type2 ...]
+</code></pre></div></div></div>
+<p>Fields are listed as alternating name/type pairs inside the vector literal.
+All field names must be distinct.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point [x :int y :int])
+(defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8])
+(defstruct Vec2  [x :float32 y :float32])
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point [x :int y :int]
+defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8]
+defstruct Vec2  [x :float32 y :float32]
+</code></pre></div></div></div>
+<p>A <code>defstruct</code> at file scope registers the type immediately so that later
+definitions -- including self-referential or mutually-recursive structs -- can
+refer to it.</p>
+<hr />
+<h2 id="ownership-annotations">Ownership annotations</h2>
+<p>Every struct has a <strong>copy kind</strong> that governs how the value can be used:</p>
+<table>
+<thead>
+<tr>
+<th>Annotation</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:copy</code></td>
+<td>Bitwise-copyable; can be freely duplicated (all fields must be copy types)</td>
+</tr>
+<tr>
+<td><code>:move</code></td>
+<td>Move-only (default when no annotation is given)</td>
+</tr>
+<tr>
+<td><code>:linear</code></td>
+<td>Exactly-once consumed; must be used exactly once</td>
+</tr>
+</tbody>
+</table>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point   :copy   [x :int y :int])      ; freely copyable
+(defstruct Packet  :move   [ptr :ptr&lt;void&gt;])      ; ownership transferred on use
+(defstruct Socket  :linear [fd :int])             ; must be consumed exactly once
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point   :copy   [x :int y :int]      ; freely copyable
+defstruct Packet  :move   [ptr :ptr&lt;void&gt;]      ; ownership transferred on use
+defstruct Socket  :linear [fd :int]             ; must be consumed exactly once
+</code></pre></div></div></div>
+<p>Omitting the annotation is the same as <code>:move</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Pair [first :int second :int])   ; move-only by default
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Pair [first :int second :int]   ; move-only by default
+</code></pre></div></div></div>
+<p>The compiler enforces that a <code>:copy</code> struct's fields are all themselves
+copy-compatible types. Using a non-copy field (such as <code>:ref&lt;int&gt;</code>) in a
+<code>:copy</code> struct is a compile error.</p>
+<hr />
+<h2 id="supported-field-types">Supported field types</h2>
+<table>
+<thead>
+<tr>
+<th>Syntax</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:int</code></td>
+<td>64-bit signed integer</td>
+</tr>
+<tr>
+<td><code>:bool</code></td>
+<td>Boolean</td>
+</tr>
+<tr>
+<td><code>:float</code></td>
+<td>64-bit float</td>
+</tr>
+<tr>
+<td><code>:float32</code></td>
+<td>32-bit float</td>
+</tr>
+<tr>
+<td><code>:uint8</code>, <code>:int16</code>, <code>:int32</code>, …</td>
+<td>Sized numeric types</td>
+</tr>
+<tr>
+<td><code>:cstr</code></td>
+<td>C string pointer (<code>const char *</code>)</td>
+</tr>
+<tr>
+<td><code>:ptr&lt;void&gt;</code></td>
+<td>Raw pointer</td>
+</tr>
+<tr>
+<td><code>:rc&lt;T&gt;</code></td>
+<td>Reference-counted pointer to <code>T</code></td>
+</tr>
+<tr>
+<td><code>:ref&lt;T&gt;</code></td>
+<td>Owned reference to <code>T</code> (non-RC)</td>
+</tr>
+<tr>
+<td><code>:lref&lt;T&gt;</code></td>
+<td>Linear reference to <code>T</code> (exactly-once)</td>
+</tr>
+<tr>
+<td><code>:weak&lt;T&gt;</code></td>
+<td>Weak reference (non-owning, for <code>rc&lt;T&gt;</code> cycles)</td>
+</tr>
+<tr>
+<td><code>:fn</code></td>
+<td>Function pointer</td>
+</tr>
+<tr>
+<td><code>:fn #{Effect}</code></td>
+<td>Function pointer with an explicit effect-row annotation</td>
+</tr>
+</tbody>
+</table>
+<p>Drop glue (automatic cleanup of <code>rc&lt;T&gt;</code>, <code>ref&lt;T&gt;</code>, and <code>weak&lt;T&gt;</code> fields) is
+generated by the compiler whenever any such field is present.</p>
+<hr />
+<h2 id="creating-instances">Creating instances</h2>
+<p>Use <code>make-struct</code> to construct a struct value. Fields are supplied positionally
+in the order they appear in <code>defstruct</code>.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point :copy [x :int y :int])
+
+(let [p (make-struct Point 3 4)]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point :copy [x :int y :int]
+
+let [p make-struct(Point 3 4)]
+  ...
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8])
+
+(let [px (make-struct Pixel 255u8 128u8 64u8 255u8)]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Pixel [r :uint8 g :uint8 b :uint8 a :uint8]
+
+let [px make-struct(Pixel 255u8 128u8 64u8 255u8)]
+  ...
+</code></pre></div></div></div>
+<p>The argument count must exactly match the field count; a mismatch is a
+compile-time error.</p>
+<hr />
+<h2 id="accessing-fields">Accessing fields</h2>
+<p>Use <code>.fieldname</code> to read a field from a struct value:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point :copy [x :int y :int])
+
+(let [p (make-struct Point 3 4)]
+  (println (.x p))    ; 3
+  (println (.y p)))   ; 4
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point :copy [x :int y :int]
+
+let [p make-struct(Point 3 4)]
+  println $ .x(p)    ; 3
+  println $ .y(p)    ; 4
+</code></pre></div></div></div>
+<p>The <code>.fieldname</code> form is also valid for arithmetic:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn distance-sq [p] :int
+  (+ (* (.x p) (.x p))
+     (* (.y p) (.y p))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn distance-sq [p] :int
+  {{.x(p) * .x(p)} + {.y(p) * .y(p)}}
+</code></pre></div></div></div>
+<hr />
+<h2 id="borrowing-fields">Borrowing fields</h2>
+<p>Prefix <code>.fieldname</code> with <code>&amp;</code> to take an immutable borrow of a field without
+moving the struct:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point :copy [x :int y :int])
+
+(let [p (make-struct Point 3 4)]
+  (let [rx &amp;(.x p)]
+    (println @rx)))   ; prints 3
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point :copy [x :int y :int]
+
+let [p make-struct(Point 3 4)]
+  let [rx &amp;(.x p)]
+    println(@rx)   ; prints 3
+</code></pre></div></div></div>
+<hr />
+<h2 id="linear-fields-lreft">Linear fields (<code>lref&lt;T&gt;</code>)</h2>
+<p>A <code>:move</code> struct may contain <code>:lref&lt;T&gt;</code> fields. Extracting such a field
+transfers linear ownership out of the struct and marks the struct binding as
+moved. A second extraction from the same binding is a use-after-move error
+(<code>TUR-E0005</code>).</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct PtrBox :move [ptr :lref&lt;int&gt;])
+
+;; OK: single extraction
+(let [b (make-struct PtrBox (lref/new 42))]
+  (println (deref (.ptr b))))
+
+;; ERROR TUR-E0005: second extraction of a moved struct
+(defstruct Box :move [val :lref&lt;int&gt;])
+(let [b (make-struct Box (lref/new 42))]
+  (let [x (.val b)]
+    (let [y (.val b)]   ; use-after-move
+      (println (deref x)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct PtrBox :move [ptr :lref&lt;int&gt;]
+
+;; OK: single extraction
+let [b make-struct(PtrBox lref/new(42))]
+  println $ deref(.ptr(b))
+
+;; ERROR TUR-E0005: second extraction of a moved struct
+defstruct Box :move [val :lref&lt;int&gt;]
+let [b make-struct(Box lref/new(42))]
+  let [x .val(b)]
+    let [y .val(b)]   ; use-after-move
+      println $ deref(x)
+</code></pre></div></div></div>
+<hr />
+<h2 id="reference-counted-structs">Reference-counted structs</h2>
+<p>Wrap a struct in <code>rc/of</code> to heap-allocate it with reference counting. The RC
+wrapper manages drop glue automatically when the count reaches zero.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Wrapper :move [val :rc&lt;int&gt;])
+
+(let [inner (rc/of 10)]
+  (let [w (rc/of (make-struct Wrapper inner))]
+    (println (rc/strong-count w))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Wrapper :move [val :rc&lt;int&gt;]
+
+let [inner rc/of(10)]
+  let [w rc/of $ make-struct(Wrapper inner)]
+    println $ rc/strong-count(w)
+</code></pre></div></div></div>
+<p>If the struct itself contains <code>:rc&lt;T&gt;</code> fields, the compiler generates nested
+drop glue to decrement those inner counts:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Node :move [val :rc&lt;int&gt;])
+
+(let [inner (rc/of 42)
+      outer (rc/of (make-struct Node inner))]
+  (println (rc/strong-count outer)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Node :move [val :rc&lt;int&gt;]
+
+let [inner rc/of(42)
+     outer rc/of $ make-struct(Node inner)]
+  println $ rc/strong-count(outer)
+</code></pre></div></div></div>
+<hr />
+<h2 id="structs-and-typeclasses">Structs and typeclasses</h2>
+<p>Implement typeclasses for your struct types with <code>definstance</code>. Inside inline-C
+methods, struct parameters arrive as C struct values, so field access uses dot
+notation.</p>
+<h3 id="clone"><code>Clone</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Pair [first :int second :int])
+
+(definstance Clone [Pair]
+  (clone [x] :int
+    ```c
+    struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pair));
+    dst-&gt;first = x.first;
+    dst-&gt;second = x.second;
+    return (int64_t)(intptr_t)dst;
+    ```))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Pair [first :int second :int]
+
+definstance Clone [Pair]
+  clone [x] :int
+    ```c
+    struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pair));
+    dst-&gt;first = x.first;
+    dst-&gt;second = x.second;
+    return (int64_t)(intptr_t)dst;
+    ```
+</code></pre></div></div></div>
+<h3 id="eq"><code>Eq</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(definstance Eq [Pair]
+  (eq? [x y] (pair-eq? x y (fn [a b] (= a b)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">definstance Eq [Pair]
+  eq? [x y] pair-eq?(x y fn([a b] {a = b}))
+</code></pre></div></div></div>
+<h3 id="show"><code>Show</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point :copy [x :int y :int])
+
+(definstance Show [Point]
+  (show [__p] :cstr
+    ```c
+    int nx = snprintf(NULL, 0, &quot;%lld&quot;, (long long)__p.x);
+    int ny = snprintf(NULL, 0, &quot;%lld&quot;, (long long)__p.y);
+    size_t len = 13 + (size_t)nx + 6 + (size_t)ny + 3 + 1;
+    char *buf = (char *)malloc(len);
+    snprintf(buf, len, &quot;Point { x = %lld, y = %lld }&quot;,
+             (long long)__p.x, (long long)__p.y);
+    return (const char *)(intptr_t)buf;
+    ```))
+
+(let [p (make-struct Point 3 4)]
+  (println (.show p)))   ; Point { x = 3, y = 4 }
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point :copy [x :int y :int]
+
+definstance Show [Point]
+  show [__p] :cstr
+    ```c
+    int nx = snprintf(NULL, 0, &quot;%lld&quot;, (long long)__p.x);
+    int ny = snprintf(NULL, 0, &quot;%lld&quot;, (long long)__p.y);
+    size_t len = 13 + (size_t)nx + 6 + (size_t)ny + 3 + 1;
+    char *buf = (char *)malloc(len);
+    snprintf(buf, len, &quot;Point { x = %lld, y = %lld }&quot;,
+             (long long)__p.x, (long long)__p.y);
+    return (const char *)(intptr_t)buf;
+    ```
+
+let [p make-struct(Point 3 4)]
+  println $ .show(p)   ; Point { x = 3, y = 4 }
+</code></pre></div></div></div>
+<h3 id="deriving-show-debug-display">Deriving <code>Show</code>, <code>Debug</code>, <code>Display</code></h3>
+<p>Writing the inline C above for every struct is tedious. The <code>derive-show</code>,
+<code>derive-debug</code>, and <code>derive-display</code> macros in <code>stdlib/macros.tur</code> generate
+the instance from a struct name and a list of field descriptors.</p>
+<p>Each field descriptor is either a bare symbol -- <code>x</code> becomes label <code>"x"</code> with
+accessor <code>(.x s)</code> -- or a <code>[label .accessor]</code> pair to use a different label
+or non-default accessor.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point :copy [x :int y :int])
+(derive-show    Point x y)
+(derive-debug   Point x y)
+(derive-display Point x y)
+
+(let [p (make-struct Point 3 4)]
+  (println (.show    p))    ; Point { x = 3, y = 4 }
+  (println (.debug   p))    ; (Point (x 3) (y 4))
+  (println (.display p)))   ; Point { x = 3, y = 4 }
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point :copy [x :int y :int]
+derive-show    Point x y
+derive-debug   Point x y
+derive-display Point x y
+
+let [p make-struct(Point 3 4)]
+  println $ .show(p)     ; Point { x = 3, y = 4 }
+  println $ .debug(p)    ; (Point (x 3) (y 4))
+  println $ .display(p)  ; Point { x = 3, y = 4 }
+</code></pre></div></div></div>
+<p><code>derive-show</code> produces <code>"TypeName { k = v, ... }"</code>. <code>derive-debug</code> produces
+the s-expression-flavoured <code>"(TypeName (k v) ...)"</code>. <code>derive-display</code> matches
+<code>derive-show</code> but dispatches through the <code>Display</code> typeclass.</p>
+<p>Each field must itself have an instance of the relevant typeclass -- the macro
+expansion calls <code>.show</code> (or <code>.debug</code>/<code>.display</code>) on each field value and joins
+the results with <code>str-concat</code>. <code>Show</code>, <code>Debug</code>, and <code>Display</code> instances exist
+in stdlib for primitives, <code>Pair</code>, <code>Option</code>, <code>Result</code>, <code>List</code>, and <code>Vec</code>, so
+nested structs and collections print recursively out of the box.</p>
+<p>To alias a field name or access through a non-standard reader, use the
+<code>[label .accessor]</code> pair form:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct MyStruct [name :cstr internal-label :cstr count :int])
+(derive-show MyStruct name [display-name .internal-label] count)
+;; =&gt; &quot;MyStruct { name = ..., display-name = ..., count = ... }&quot;
+</code></pre>
+<h3 id="repl-auto-show">REPL auto-show</h3>
+<p>The native REPL and web REPL automatically call <code>show</code> on the result of each
+top-level expression when an applicable <code>Show</code> instance exists, so:</p>
+<pre><code>&gt; (make-struct Point 3 4)
+Point { x = 3, y = 4 }
+</code></pre>
+<p>If no <code>Show</code> instance is registered for the result type, the REPL falls back
+to printing the raw value. Note: heap-allocated stdlib types returned through
+constructors that elaborate to <code>:int</code> (for example <code>pair-new</code>) are seen by
+typeclass dispatch as <code>int</code> and will print as a raw pointer; use
+<code>(make-struct Pair 1 2)</code> (or a typed alias) when you want <code>Show</code>-dispatch to
+fire on the constructed value.</p>
+<h3 id="bifunctor"><code>Bifunctor</code></h3>
+<pre><code class="language-turmeric">(definstance Bifunctor [Pair]
+  (bimap [container fn-left fn-right]
+    (__bifunctor_pair_bimap container fn-left fn-right)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">definstance Bifunctor [Pair]
+  bimap [container fn-left fn-right]
+    __bifunctor_pair_bimap(container fn-left fn-right)
+</code></pre></div></div></div>
+<hr />
+<h2 id="function-pointer-fields">Function-pointer fields</h2>
+<p>A <code>:fn</code> field stores a function pointer. Annotate the field with <code>#{Effect}</code>
+to declare the effect row the stored function may perform. Calling the field
+propagates that effect row to the enclosing function.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Emit [s :cstr] :nil)
+
+(defstruct Emitter :copy [run :fn #{Emit}])
+
+(defn main [] :int
+  (let [em (make-struct Emitter (fn [s] (perform (Emit s))))]
+    (handle
+      (do (.run em &quot;hello&quot;) 0)
+      (Emit [s] k) (do (println s) (resume k nil)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Emit [s :cstr] :nil
+
+defstruct Emitter :copy [run :fn #{Emit}]
+
+defn main [] :int
+  let [em make-struct(Emitter fn([s] perform(Emit(s))))]
+    handle
+      do
+        .run(em &quot;hello&quot;)
+        0
+      (Emit [s] k) do
+        println(s)
+        resume(k nil)
+</code></pre></div></div></div>
+<hr />
+<h2 id="cross-module-structs">Cross-module structs</h2>
+<p>A struct defined in one module can be imported and used in another. Construct
+it with <code>make-struct</code> and access its fields with <code>.fieldname</code> exactly as if it
+were locally defined.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; geom module defines Point
+(defmodule app
+  (import geom :refer [Point])
+  (defn main [] :int
+    (let [p (make-struct Point 3 4)]
+      (println (+ (.x p) (.y p)))
+      0)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; geom module defines Point
+defmodule app
+  import geom :refer [Point]
+  defn main [] :int
+    let [p make-struct(Point 3 4)]
+      println({.x(p) + .y(p)})
+      0
+</code></pre></div></div></div>
+<hr />
+<h2 id="docstrings">Docstrings</h2>
+<p>Follow the <code>;;;</code> convention immediately above the <code>defstruct</code> form:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; Point -- a 2D integer coordinate.
+;;;
+;;; Parameters:
+;;;   x -- horizontal position
+;;;   y -- vertical position
+;;;
+;;; Example:
+;;;   (make-struct Point 3 4)  ; =&gt; Point with x=3, y=4
+;;;
+;;; Since: Phase B1
+(defstruct Point :copy [x :int y :int])
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; Point -- a 2D integer coordinate.
+;;;
+;;; Parameters:
+;;;   x -- horizontal position
+;;;   y -- vertical position
+;;;
+;;; Example:
+;;;   make-struct(Point 3 4)  ; =&gt; Point with x=3, y=4
+;;;
+;;; Since: Phase B1
+defstruct Point :copy [x :int y :int]
+</code></pre></div></div></div>
+<p>See the <a href="../../CLAUDE.md">docstring standard in CLAUDE.md</a> for the full
+required-fields table.</p>
+<hr />
+<h2 id="common-errors">Common errors</h2>
+<table>
+<thead>
+<tr>
+<th>Error</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TUR-E0005</code></td>
+<td>Use-after-move: reading a field from a struct that was already moved (or extracting a linear field twice)</td>
+</tr>
+<tr>
+<td>Field count mismatch</td>
+<td><code>make-struct</code> given fewer or more arguments than the struct has fields</td>
+</tr>
+<tr>
+<td><code>:copy</code> constraint violation</td>
+<td>A <code>:copy</code> struct contains a field type that is not copy-compatible (e.g. <code>:ref&lt;int&gt;</code>)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="substructural-types-guide.md">Substructural Types Guide</a> -- <code>^linear</code>, <code>^affine</code>, <code>^relevant</code></li>
+<li><a href="c-integration-guide.md">C Integration Guide</a> -- inline-C blocks and FFI</li>
+<li><a href="hkt-guide.md">HKT Guide</a> -- implementing Functor/Monad for your struct types</li>
+<li><a href="type-annotations-guide.md">Type Annotations Guide</a> -- compound type syntax</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/structs-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

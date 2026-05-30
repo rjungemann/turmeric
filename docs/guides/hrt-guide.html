@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Higher-Ranked Types | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#higher-ranked-types-in-turmeric" style="">Higher-Ranked Types in Turmeric</a></li>
+<li style=""><a href="#what-are-higher-ranked-types" style="">What are higher-ranked types?</a></li>
+<li style=""><a href="#enabling-hrts" style="">Enabling HRTs</a></li>
+<li style=""><a href="#syntax" style="">Syntax</a></li>
+<li style="padding-left:0.75rem;"><a href="#rank-2-parameter-annotation" style="color:var(--text-sec);">Rank-2 parameter annotation</a></li>
+<li style="padding-left:0.75rem;"><a href="#multiple-type-variables" style="color:var(--text-sec);">Multiple type variables</a></li>
+<li style="padding-left:0.75rem;"><a href="#existential-types" style="color:var(--text-sec);">Existential types</a></li>
+<li style=""><a href="#common-patterns" style="">Common patterns</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-1-uniform-transformation" style="color:var(--text-sec);">Pattern 1: Uniform transformation</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-2-church-numeral-iteration" style="color:var(--text-sec);">Pattern 2: Church-numeral iteration</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-3-cps-style-composition" style="color:var(--text-sec);">Pattern 3: CPS-style composition</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-4-let-binding-of-poly-fn-aliases" style="color:var(--text-sec);">Pattern 4: Let-binding of poly fn aliases</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-5-forwarding-poly-fn-parameters" style="color:var(--text-sec);">Pattern 5: Forwarding poly fn parameters</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-6-typeclass-methods-with-rank-n-parameters" style="color:var(--text-sec);">Pattern 6: Typeclass methods with rank-N parameters</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-7-rank-3-types" style="color:var(--text-sec);">Pattern 7: Rank-3 types</a></li>
+<li style=""><a href="#limitations" style="">Limitations</a></li>
+<li style="padding-left:0.75rem;"><a href="#container-storage-not-supported" style="color:var(--text-sec);">Container storage not supported</a></li>
+<li style="padding-left:0.75rem;"><a href="#non-function-values-cannot-be-rank-2-arguments" style="color:var(--text-sec);">Non-function values cannot be rank-2 arguments</a></li>
+<li style="padding-left:0.75rem;"><a href="#no-rank-2-inference-at-call-sites" style="color:var(--text-sec);">No rank-2 inference at call sites</a></li>
+<li style="padding-left:0.75rem;"><a href="#closures-cannot-be-rank-2-arguments-directly" style="color:var(--text-sec);">Closures cannot be rank-2 arguments directly</a></li>
+<li style=""><a href="#runtime-representation" style="">Runtime representation</a></li>
+<li style=""><a href="#error-messages" style="">Error messages</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="higher-ranked-types-in-turmeric">Higher-Ranked Types in Turmeric</h1>
+<p>This guide explains how to use higher-ranked types (HRTs) in Turmeric: what they are, when to use them, and common patterns.</p>
+<h2 id="what-are-higher-ranked-types">What are higher-ranked types?</h2>
+<p>A <strong>rank-1 type</strong> is a normal monomorphic function type: <code>(-&gt; int int)</code>.</p>
+<p>A <strong>rank-2 type</strong> introduces a <code>forall</code> <em>inside</em> a function argument. The classic example is <code>(forall [a] (-&gt; a a))</code> -- a function that works for any type <code>a</code>. When you pass such a function as an argument, the <em>callee</em> gets to choose <code>a</code> for each use, not the caller.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">; apply-poly works for any type -- the callee instantiates `a`
+(defn apply-poly [f (forall [a] (-&gt; a a)) x :int] :int
+  (f x))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">; apply-poly works for any type -- the callee instantiates `a`
+defn apply-poly [f (forall [a] (-&gt; a a)) x :int] :int
+  f(x)
+</code></pre></div></div></div>
+<p>Without rank-2 types, you'd need to pick a concrete type for <code>f</code> at the call site, losing the generality.</p>
+<h2 id="enabling-hrts">Enabling HRTs</h2>
+<p>Higher-ranked types are an opt-in feature. Enable them with the <code>-Xhrt</code> flag:</p>
+<pre><code class="language-sh">tur run -Xhrt myfile.tur
+tur compile -Xhrt myfile.tur -o myfile
+</code></pre>
+<h2 id="syntax">Syntax</h2>
+<h3 id="rank-2-parameter-annotation">Rank-2 parameter annotation</h3>
+<p>Annotate a parameter with a <code>forall</code> type by placing the type form immediately after the parameter name in the <code>[]</code> vector:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn my-fn [f (forall [a] (-&gt; a a)) x :int] :int
+  (f x))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn my-fn [f (forall [a] (-&gt; a a)) x :int] :int
+  f(x)
+</code></pre></div></div></div>
+<p>The <code>forall</code> type must appear as a parenthesized form <code>(forall [...] ...)</code> directly following the parameter symbol.</p>
+<h3 id="multiple-type-variables">Multiple type variables</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn swap-apply [f (forall [a b] (-&gt; a b a)) x :int y :int] :int
+  (f x y))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn swap-apply [f (forall [a b] (-&gt; a b a)) x :int y :int] :int
+  f(x y)
+</code></pre></div></div></div>
+<h3 id="existential-types">Existential types</h3>
+<p>Use <code>exists</code> to hide a type implementation:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn make-counter [] (exists [s] s)
+  (pack int 0))
+
+(defn use-counter [c (exists [s] s)] :int
+  (open c as [s v] v))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn make-counter [] (exists [s] s)
+  pack(int 0)
+
+defn use-counter [c (exists [s] s)] :int
+  open(c as [s v] v)
+</code></pre></div></div></div>
+<p>See <code>docs/higher-ranked-types-plan.md</code> for the full existential type spec.</p>
+<h2 id="common-patterns">Common patterns</h2>
+<h3 id="pattern-1-uniform-transformation">Pattern 1: Uniform transformation</h3>
+<p>Apply a single function uniformly over data, without fixing its type:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn apply-to-both [f (forall [a] (-&gt; a a)) x :int y :int] :int
+  (+ (f x) (f y)))
+
+(defn inc [x :int] :int (+ x 1))
+
+; At the call site, `inc` is wrapped automatically
+(apply-to-both inc 3 7)  ; =&gt; 12
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn apply-to-both [f (forall [a] (-&gt; a a)) x :int y :int] :int
+  {f(x) + f(y)}
+
+defn inc [x :int] :int
+  {x + 1}
+
+; At the call site, `inc` is wrapped automatically
+apply-to-both(inc 3 7)  ; =&gt; 12
+</code></pre></div></div></div>
+<h3 id="pattern-2-church-numeral-iteration">Pattern 2: Church-numeral iteration</h3>
+<p>Apply a polymorphic function n times -- the essence of Church numerals:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn church-apply [f (forall [a] (-&gt; a a)) n :int x :int] :int
+  (if (&lt;= n 0)
+    x
+    (church-apply f (- n 1) (f x))))
+
+(church-apply inc 5 0)       ; =&gt; 5
+(church-apply double-it 3 1) ; =&gt; 8
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn church-apply [f (forall [a] (-&gt; a a)) n :int x :int] :int
+  if {n &lt;= 0}
+    x
+    church-apply(f {n - 1} f(x))
+
+church-apply(inc 5 0)       ; =&gt; 5
+church-apply(double-it 3 1) ; =&gt; 8
+</code></pre></div></div></div>
+<p>This works because HRT5 correctly propagates the poly fn type through recursive calls.</p>
+<h3 id="pattern-3-cps-style-composition">Pattern 3: CPS-style composition</h3>
+<p>Thread a value through a sequence of polymorphic transforms:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn pipe2 [f (forall [a] (-&gt; a a)) g (forall [a] (-&gt; a a)) x :int] :int
+  (g (f x)))
+
+(pipe2 inc double-it 3)  ; =&gt; (3+1)*2 = 8
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn pipe2 [f (forall [a] (-&gt; a a)) g (forall [a] (-&gt; a a)) x :int] :int
+  g(f(x))
+
+pipe2(inc double-it 3)  ; =&gt; (3+1)*2 = 8
+</code></pre></div></div></div>
+<h3 id="pattern-4-let-binding-of-poly-fn-aliases">Pattern 4: Let-binding of poly fn aliases</h3>
+<p>You can bind a poly fn to a local name and use it multiple times:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn apply-poly [f (forall [a] (-&gt; a a)) x :int] :int
+  (f x))
+
+(defn use-poly-id [] :int
+  (let [f id]  ; f is a poly fn alias for id
+    (+ (apply-poly f 10) (apply-poly f 20))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn apply-poly [f (forall [a] (-&gt; a a)) x :int] :int
+  f(x)
+
+defn use-poly-id [] :int
+  let [f id]  ; f is a poly fn alias for id
+    {apply-poly(f 10) + apply-poly(f 20)}
+</code></pre></div></div></div>
+<p>The <code>source_binding</code> mechanism tracks <code>f</code> back to <code>id</code> so the correct wrapper is generated.</p>
+<h3 id="pattern-5-forwarding-poly-fn-parameters">Pattern 5: Forwarding poly fn parameters</h3>
+<p>Pass a received poly fn parameter to another function expecting a poly fn:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn apply-once [f (forall [a] (-&gt; a a)) x :int] :int
+  (f x))
+
+(defn apply-twice [f (forall [a] (-&gt; a a)) x :int] :int
+  (apply-once f (apply-once f x)))  ; f forwarded directly
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn apply-once [f (forall [a] (-&gt; a a)) x :int] :int
+  f(x)
+
+defn apply-twice [f (forall [a] (-&gt; a a)) x :int] :int
+  apply-once(f apply-once(f x))  ; f forwarded directly
+</code></pre></div></div></div>
+<p>No wrapper is created when forwarding -- the existing <code>tur_poly_fn_t</code> is passed through.</p>
+<h3 id="pattern-6-typeclass-methods-with-rank-n-parameters">Pattern 6: Typeclass methods with rank-N parameters</h3>
+<p>Define typeclass methods that accept polymorphic function arguments:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defclass Transform []
+  (transform [[f (forall [a] (-&gt; a a))] x] :int))
+
+(definstance Transform []
+  (transform [f x] (f x)))
+
+; Call with any function
+(.transform inc 5)  ; =&gt; 6
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defclass Transform []
+  transform([[f (forall [a] (-&gt; a a))] x] :int)
+
+definstance Transform []
+  transform([f x] f(x))
+
+; Call with any function
+.transform(inc 5)  ; =&gt; 6
+</code></pre></div></div></div>
+<h3 id="pattern-7-rank-3-types">Pattern 7: Rank-3 types</h3>
+<p>A function whose parameter is itself rank-2 -- it accepts a "polymorphic function handler":</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn with-poly-id [h (forall [a] (-&gt; (forall [b] (-&gt; b b)) a))] :int
+  (h id))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn with-poly-id [h (forall [a] (-&gt; (forall [b] (-&gt; b b)) a))] :int
+  h(id)
+</code></pre></div></div></div>
+<p>Rank-3 arguments are passed by pointer internally (compound literal protocol).</p>
+<h2 id="limitations">Limitations</h2>
+<h3 id="container-storage-not-supported">Container storage not supported</h3>
+<p>Storing <code>(forall [a] ...)</code> values in lists, options, or other containers is not
+supported. The poly fn representation (<code>tur_poly_fn_t</code>) is a struct, not an
+opaque <code>int64_t</code>, so it cannot be stored in a generic container without a
+wrapper. Use direct function calls or closure capture instead.</p>
+<h3 id="non-function-values-cannot-be-rank-2-arguments">Non-function values cannot be rank-2 arguments</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">; ERROR: 5 is not a function
+(apply-poly 5 42)  ; =&gt; error: arg 1: expected ptr&lt;void&gt;, got int
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">; ERROR: 5 is not a function
+apply-poly(5 42)  ; =&gt; error: arg 1: expected ptr&lt;void&gt;, got int
+</code></pre></div></div></div>
+<h3 id="no-rank-2-inference-at-call-sites">No rank-2 inference at call sites</h3>
+<p>You must annotate rank-2 parameters explicitly in <code>defn</code>. The compiler does not infer rank-N types from usage:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">; Without annotation, this is just (-&gt; ptr&lt;void&gt; int int), not a rank-2 fn
+(defn apply [f x])  ; NOT rank-2
+
+; With annotation, it's a proper rank-2 function
+(defn apply [f (forall [a] (-&gt; a a)) x :int] :int  ; rank-2
+  (f x))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">; Without annotation, this is just (-&gt; ptr&lt;void&gt; int int), not a rank-2 fn
+defn apply [f x]  ; NOT rank-2
+
+; With annotation, it's a proper rank-2 function
+defn apply [f (forall [a] (-&gt; a a)) x :int] :int  ; rank-2
+  f(x)
+</code></pre></div></div></div>
+<h3 id="closures-cannot-be-rank-2-arguments-directly">Closures cannot be rank-2 arguments directly</h3>
+<p>Only named global functions (and let-bound aliases of global functions) can be passed as rank-2 arguments. Closures (functions capturing variables) require special support.</p>
+<h2 id="runtime-representation">Runtime representation</h2>
+<p>A rank-2 polymorphic function value is represented as <code>tur_poly_fn_t</code>:</p>
+<pre><code class="language-c">typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
+</code></pre>
+<p>The compiler automatically:
+1. Wraps a global function into a <code>tur_poly_fn_t</code> at the call site
+2. Calls <code>f.fn(f.env, x)</code> inside the callee body
+3. Passes <code>tur_poly_fn_t</code> by value when forwarding between functions</p>
+<h2 id="error-messages">Error messages</h2>
+<table>
+<thead>
+<tr>
+<th>Error</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>arg N: expected ptr&lt;void&gt;, got int</code></td>
+<td>Non-function passed as poly fn arg</td>
+<td>Pass a named function instead</td>
+</tr>
+<tr>
+<td><code>rank-2 argument must be a named function</code></td>
+<td>Tried to pass a non-global binding</td>
+<td>Use a top-level <code>defn</code> instead of a local fn</td>
+</tr>
+<tr>
+<td><code>function 'X' expects M argument(s), got N</code></td>
+<td>Arity mismatch</td>
+<td>Check the poly fn param counts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><code>docs/higher-ranked-types-plan.md</code> -- Implementation plan and phase history</li>
+<li><code>tests/fixtures/hrt-*/</code> -- Working examples of every HRT feature</li>
+<li><code>docs/gadts-guide.md</code> -- GADTs and equality witnesses; skolem equalities produced
+  by GADT <code>match</code> arms interact with HRT bidirectional checking to enable type
+  refinement without casts (see <code>gadts-plan.md</code> §Non-Goals item 4 for the
+  boundary between HRT and GADT phases)</li>
+<li><code>tests/fixtures/errors/hrt-*/</code> -- Error cases with expected diagnostics</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/hrt-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

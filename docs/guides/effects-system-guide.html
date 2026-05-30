@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Effects System Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#effects-system-guide" style="">Effects System Guide</a></li>
+<li style=""><a href="#overview" style="">Overview</a></li>
+<li style=""><a href="#core-concepts" style="">Core Concepts</a></li>
+<li style="padding-left:0.75rem;"><a href="#effects-performs-and-handlers" style="color:var(--text-sec);">Effects, Performs, and Handlers</a></li>
+<li style="padding-left:0.75rem;"><a href="#one-shot-continuations" style="color:var(--text-sec);">One-Shot Continuations</a></li>
+<li style="padding-left:0.75rem;"><a href="#properties" style="color:var(--text-sec);">Properties</a></li>
+<li style="padding-left:0.75rem;"><a href="#composing-handlers" style="color:var(--text-sec);">Composing Handlers</a></li>
+<li style="padding-left:0.75rem;"><a href="#first-class-handler-values" style="color:var(--text-sec);">First-Class Handler Values</a></li>
+<li style=""><a href="#common-use-cases" style="">Common Use Cases</a></li>
+<li style="padding-left:0.75rem;"><a href="#direct-style-async" style="color:var(--text-sec);">Direct-Style Async</a></li>
+<li style="padding-left:0.75rem;"><a href="#custom-control-flow" style="color:var(--text-sec);">Custom Control Flow</a></li>
+<li style="padding-left:0.75rem;"><a href="#dependency-injection" style="color:var(--text-sec);">Dependency Injection</a></li>
+<li style="padding-left:0.75rem;"><a href="#transactional-retry" style="color:var(--text-sec);">Transactional Retry</a></li>
+<li style=""><a href="#effect-rows-typed-effects" style="">Effect Rows (Typed Effects)</a></li>
+<li style="padding-left:0.75rem;"><a href="#syntax" style="color:var(--text-sec);">Syntax</a></li>
+<li style="padding-left:0.75rem;"><a href="#compiler-flags" style="color:var(--text-sec);">Compiler flags</a></li>
+<li style="padding-left:0.75rem;"><a href="#module-level-visibility" style="color:var(--text-sec);">Module-level visibility</a></li>
+<li style="padding-left:0.75rem;"><a href="#benefits" style="color:var(--text-sec);">Benefits</a></li>
+<li style=""><a href="#integration-with-ownership-and-defer" style="">Integration with Ownership and Defer</a></li>
+<li style=""><a href="#see-also" style="">See Also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="effects-system-guide">Effects System Guide</h1>
+<p>This guide explains Turmeric's algebraic effects system and when to use it.</p>
+<h2 id="overview">Overview</h2>
+<p>Turmeric implements <strong>algebraic effect handlers</strong> inspired by OCaml 5, enabling ergonomic asynchronous programming, custom control flow, and composable abstractions. Effects allow you to perform operations that handlers can intercept and re-route dynamically.</p>
+<h2 id="core-concepts">Core Concepts</h2>
+<h3 id="effects-performs-and-handlers">Effects, Performs, and Handlers</h3>
+<p>Three core primitives:</p>
+<ul>
+<li><strong><code>(defeffect Name [param :type ...] :return-type)</code></strong> -- Declares a new effect <code>Name</code>.</li>
+<li><strong><code>(perform (Name arg ...))</code></strong> -- Raises the effect, searching the dynamic handler stack for a matching handler.</li>
+<li><strong><code>(handle expr (Name [p ...] k) body ...)</code></strong> -- Installs a handler. When the effect fires, <code>k</code> is the captured continuation; call <code>(resume k value)</code> to continue.</li>
+</ul>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Declare an effect
+(defeffect Read [] :str)
+
+;; Perform the effect
+(def name (perform (Read)))
+
+;; Handle the effect
+(handle
+  (let [name (perform (Read))]
+    (println (str &quot;Hello &quot; name)))
+  (Read [] k) (resume k &quot;World&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Declare an effect
+defeffect Read [] :str
+
+;; Perform the effect
+def name perform(Read())
+
+;; Handle the effect
+handle
+  let [name perform(Read())]
+    println $ str(&quot;Hello &quot; name)
+  (Read [] k) resume(k &quot;World&quot;)
+</code></pre></div></div></div>
+<h3 id="one-shot-continuations">One-Shot Continuations</h3>
+<p>Continuations in Turmeric are <strong>one-shot</strong>: calling <code>(resume k v)</code> consumes <code>k</code>, preventing reuse. This matches Turmeric's ownership model. (See <a href="logic-programming-guide.md">Logic Programming Guide</a> for cloneable continuations.)</p>
+<h3 id="properties">Properties</h3>
+<ul>
+<li><strong>Effects are not in the type system</strong> -- Whether <code>perform</code> is handled is checked dynamically. Unhandled effects raise an exception at runtime.</li>
+<li><strong>Dynamic dispatch</strong> -- The closest matching handler in the call stack handles the effect.</li>
+<li><strong>Composable</strong> -- Handlers can chain; inner handlers shadow outer ones for the same effect.</li>
+</ul>
+<h3 id="composing-handlers">Composing Handlers</h3>
+<p>Compose handlers for different effects by <strong>nesting <code>handle</code> forms</strong> -- the
+inner handler runs inside the outer one, and each effect is routed to the
+handler that declares it:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Log [msg :cstr] :nil)
+(defeffect Counter [] :int)
+
+(handle
+  (handle
+    (do (perform (Log &quot;tick&quot;)) (+ (perform (Counter)) 1))
+    (Counter [] k) (resume k 41))
+  (Log [msg] k) (do (println msg) (resume k nil)))
+;; prints &quot;tick&quot;, evaluates to 42
+</code></pre>
+<h3 id="first-class-handler-values">First-Class Handler Values</h3>
+<p>A handler is also a <strong>value</strong>: you can create one, pass it, apply it to a body,
+and compose two of them.</p>
+<ul>
+<li><strong>Create</strong> a handler with the <code>(handler (E [params] k) body)</code> literal. It has
+  type <code>(handler E V R)</code> and carries the case detached from any body.</li>
+<li><strong>Apply</strong> a handler value with <code>(with-handler hv body)</code> -- the body runs with
+  <code>hv</code>'s dispatch table installed, exactly as if its case were written inline in
+  a <code>handle</code>. (<code>with-handler</code> with case/body pairs instead of a single value
+  argument remains the inline-<code>handle</code> sugar.)</li>
+<li><strong>Compose</strong> two handlers over <em>different</em> effects with
+  <code>(compose-handlers h1 h2)</code>; <code>h1</code> is the <strong>outer</strong> handler.</li>
+</ul>
+<pre><code class="language-turmeric">(defeffect Log [msg :cstr] :nil)
+(defeffect Counter [] :int)
+
+;; compose-handlers builds one handler value over both effects (h1 = Counter is
+;; the outer handler).  Applying it is identical to the nested handle above.
+(with-handler
+  (compose-handlers
+    (handler (Counter [] k)   (resume k 41))
+    (handler (Log [msg] k)    (do (println msg) (resume k nil))))
+  (do (perform (Log &quot;tick&quot;)) (+ (perform (Counter)) 1)))
+;; prints &quot;tick&quot;, evaluates to 42
+</code></pre>
+<p>Semantics (precedence, the disjoint-effect rule, answer-type agreement, and
+per-case continuation discipline) are specified in
+<a href="../first-class-handlers-semantics.md">first-class-handlers-semantics.md</a>.</p>
+<ul>
+<li><strong>Overlap is rejected.</strong> Composing two handlers for the <em>same</em> effect is a
+  compile error (<code>TUR-E0251</code>); composition is defined only for disjoint effect
+  sets.</li>
+<li><strong>Effects discharge from the row.</strong> <code>(with-handler hv body)</code> removes <code>hv</code>'s
+  handled effect(s) from the body's effect row; a leftover (unhandled) effect
+  propagates to the enclosing function just as it does for <code>handle</code>.</li>
+<li><strong>Continuation discipline is per case.</strong> <code>^linear</code> / <code>^multishot</code> / the
+  default affine <code>k</code> are enforced inside a handler value identically to inline
+  <code>handle</code>, and composition never blends two handlers' disciplines.</li>
+</ul>
+<blockquote>
+<p><em>History:</em> <code>compose-handlers</code> was briefly gated (<code>TUR-E0704</code>) while handler
+values had no runtime representation. That gate has been removed; handler
+values are now first-class. See
+<a href="../first-class-handlers-plan.md">first-class-handlers-plan.md</a>.</p>
+</blockquote>
+<h2 id="common-use-cases">Common Use Cases</h2>
+<h3 id="direct-style-async">Direct-Style Async</h3>
+<p>Effects enable ergonomic async/await (see <a href="async-await-guide.md">Async/Await Guide</a>):</p>
+<pre><code class="language-turmeric">(async
+  (await (read-file &quot;data.txt&quot;))
+  (println &quot;done&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">async
+  await $ read-file(&quot;data.txt&quot;)
+  println(&quot;done&quot;)
+</code></pre></div></div></div>
+<h3 id="custom-control-flow">Custom Control Flow</h3>
+<p>Implement generators, early returns, or custom exception handling:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Generator: yield values one at a time
+(defeffect Yield [v :int] :nil)
+
+(handle
+  (do
+    (perform (Yield 1))
+    (perform (Yield 2)))
+  (Yield [v] k) (do (println v) (resume k nil)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Generator: yield values one at a time
+defeffect Yield [v :int] :nil
+
+handle
+  do
+    perform(Yield(1))
+    perform(Yield(2))
+  (Yield [v] k)
+    do
+      println(v)
+      resume(k nil)
+</code></pre></div></div></div>
+<h3 id="dependency-injection">Dependency Injection</h3>
+<p>Mock I/O operations in tests:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect ReadFile [path :cstr] :str)
+
+;; Production
+(handle code
+  (ReadFile [path] k) (resume k (read-file-real path)))
+
+;; Tests
+(handle code
+  (ReadFile [path] k) (resume k &quot;mock data&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect ReadFile [path :cstr] :str
+
+;; Production
+handle code
+  (ReadFile [path] k) resume(k read-file-real(path))
+
+;; Tests
+handle code
+  (ReadFile [path] k) resume(k &quot;mock data&quot;)
+</code></pre></div></div></div>
+<h3 id="transactional-retry">Transactional Retry</h3>
+<p>Automatic conflict resolution (see <a href="stm-tutorial.md">STM Tutorial</a>):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Retry [] :nil)
+
+(handle
+  (fn []
+    (when (&lt; (read-tvar x) 10)
+      (perform (Retry))))
+  ;; Re-run transaction on conflict
+  (Retry [] k) (resume k nil))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Retry [] :nil
+
+handle
+  fn []
+    when {read-tvar(x) &lt; 10}
+      perform(Retry())
+  ;; Re-run transaction on conflict
+  (Retry [] k) resume(k nil)
+</code></pre></div></div></div>
+<h2 id="effect-rows-typed-effects">Effect Rows (Typed Effects)</h2>
+<p>Effect rows track which effects a function may perform as part of its type. The
+compiler infers rows automatically; you can also annotate them explicitly.</p>
+<h3 id="syntax">Syntax</h3>
+<p>An effect row appears between the parameter list and the return type:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Annotated: may perform the Write effect
+(defn log-msg [msg :cstr] #{Write} :nil
+  (perform (Write msg)))
+
+;; Pure: performs no effects
+(defn add [a :int b :int] #{} :int
+  (+ a b))
+
+;; Row-polymorphic: propagates the row of the function argument
+(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+  (+ (f) (f)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Annotated: may perform the Write effect
+defn log-msg [msg :cstr] #{Write} :nil
+  perform(Write(msg))
+
+;; Pure: performs no effects
+defn add [a :int b :int] #{} :int
+  {a + b}
+
+;; Row-polymorphic: propagates the row of the function argument
+defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+  {f() + f()}
+</code></pre></div></div></div>
+<p>The row <code>#{e}</code> is a row variable: <code>run-twice</code> performs whatever effects <code>f</code> performs, no more.</p>
+<h3 id="compiler-flags">Compiler flags</h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--dump-effects</code></td>
+<td>Print each top-level <code>defn</code>'s inferred effect row after checking</td>
+</tr>
+<tr>
+<td><code>--lint-effects</code></td>
+<td>Warn on unannotated <code>defn</code>s whose inferred row is non-empty</td>
+</tr>
+<tr>
+<td><code>--strict-effects</code></td>
+<td>Under <code>--strict-effects</code>, unannotated functions that perform effects get a warning; callers propagate the inferred row</td>
+</tr>
+</tbody>
+</table>
+<h3 id="module-level-visibility">Module-level visibility</h3>
+<p>Effects can be declared <code>^private</code> to prevent leakage outside their defining module:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect ^private InternalLog [msg :cstr] :nil)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect ^private InternalLog [msg :cstr] :nil
+</code></pre></div></div></div>
+<p>A <code>^private</code> effect cannot be <code>perform</code>ed or <code>handle</code>d outside the module that declares it.
+Cross-module effect rows are automatically filtered: if a callee internally performs a private
+effect, the caller's inferred row does not include it.</p>
+<p>To export an effect explicitly:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defmodule MyLib
+  (export (effect Write) (effect Read))
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defmodule MyLib
+  export (effect Write) (effect Read)
+  ...
+</code></pre></div></div></div>
+<p>Other modules import it with <code>:refer [(effect Write)]</code>.</p>
+<h3 id="benefits">Benefits</h3>
+<ul>
+<li><strong>Polymorphism</strong> -- row variables let higher-order functions propagate caller effects.</li>
+<li><strong>Compile-time checking</strong> -- the compiler verifies that annotated functions do not perform unlisted effects (<code>TUR-E0009</code>).</li>
+<li><strong>Auditing</strong> -- <code>--dump-effects</code> shows the full effect signature of every function.</li>
+</ul>
+<h2 id="integration-with-ownership-and-defer">Integration with Ownership and Defer</h2>
+<p>Effects interact with Turmeric's <code>defer</code> mechanism:</p>
+<ul>
+<li><code>defer</code> cleanup runs correctly even when <code>perform</code> is inside the same <code>do</code> block (see <a href="custom-effects-tutorial.md">Custom Effects Tutorial</a> §8).</li>
+<li>Capturing a continuation across a <code>defer</code> boundary is handled: the continuation's environment is cleaned up if it crosses a <code>defer</code> boundary.</li>
+</ul>
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="async-await-guide.md">Async/Await Guide</a> -- Effects-based async/await syntax</li>
+<li><a href="logic-programming-guide.md">Logic Programming Guide</a> -- Backtracking via cloneable continuations</li>
+<li><a href="stm-tutorial.md">STM Tutorial</a> -- Composable transactions with effects</li>
+<li><a href="custom-effects-tutorial.md">Custom Effects Tutorial</a> -- Step-by-step walkthrough of all effect patterns</li>
+<li><a href="effects-vs-monads.md">Effects vs. Monads</a> -- Why effects replace monadic chaining in Turmeric</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/effects-system-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

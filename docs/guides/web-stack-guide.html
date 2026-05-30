@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Stack Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#web-stack-guide" style="">Web Stack Guide</a></li>
+<li style=""><a href="#installation" style="">Installation</a></li>
+<li style="padding-left:0.75rem;"><a href="#tur-httpd-only" style="color:var(--text-sec);">tur-httpd only</a></li>
+<li style="padding-left:0.75rem;"><a href="#full-stack-httpd-template-tourist" style="color:var(--text-sec);">Full stack (httpd + template + tourist)</a></li>
+<li style=""><a href="#tur-httpd-raw-http-server" style="">tur-httpd -- Raw HTTP server</a></li>
+<li style="padding-left:0.75rem;"><a href="#modules" style="color:var(--text-sec);">Modules</a></li>
+<li style="padding-left:0.75rem;"><a href="#quick-start" style="color:var(--text-sec);">Quick start</a></li>
+<li style="padding-left:0.75rem;"><a href="#starting-the-server" style="color:var(--text-sec);">Starting the server</a></li>
+<li style="padding-left:0.75rem;"><a href="#request-accessors" style="color:var(--text-sec);">Request accessors</a></li>
+<li style="padding-left:0.75rem;"><a href="#response-constructors" style="color:var(--text-sec);">Response constructors</a></li>
+<li style=""><a href="#tur-template-erbejs-style-templating" style="">tur-template -- ERB/EJS-style templating</a></li>
+<li style="padding-left:0.75rem;"><a href="#modules_1" style="color:var(--text-sec);">Modules</a></li>
+<li style="padding-left:0.75rem;"><a href="#quick-start_1" style="color:var(--text-sec);">Quick start</a></li>
+<li style="padding-left:0.75rem;"><a href="#template-syntax" style="color:var(--text-sec);">Template syntax</a></li>
+<li style="padding-left:0.75rem;"><a href="#env-api" style="color:var(--text-sec);">Env API</a></li>
+<li style="padding-left:0.75rem;"><a href="#rendering-from-a-file" style="color:var(--text-sec);">Rendering from a file</a></li>
+<li style=""><a href="#tur-tourist-routing-micro-framework" style="">tur-tourist -- Routing micro-framework</a></li>
+<li style="padding-left:0.75rem;"><a href="#modules_2" style="color:var(--text-sec);">Modules</a></li>
+<li style="padding-left:0.75rem;"><a href="#quick-start_2" style="color:var(--text-sec);">Quick start</a></li>
+<li style="padding-left:0.75rem;"><a href="#route-constructors" style="color:var(--text-sec);">Route constructors</a></li>
+<li style="padding-left:0.75rem;"><a href="#request-context" style="color:var(--text-sec);">Request context</a></li>
+<li style="padding-left:0.75rem;"><a href="#response-helpers" style="color:var(--text-sec);">Response helpers</a></li>
+<li style="padding-left:0.75rem;"><a href="#middleware" style="color:var(--text-sec);">Middleware</a></li>
+<li style="padding-left:0.75rem;"><a href="#static-file-serving" style="color:var(--text-sec);">Static file serving</a></li>
+<li style=""><a href="#template-rendering-in-tourist-handlers" style="">Template rendering in tourist handlers</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="web-stack-guide">Web Stack Guide</h1>
+<p>Turmeric's web stack is three composable spices:</p>
+<table>
+<thead>
+<tr>
+<th>Spice</th>
+<th>Analogue</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tur-template</code></td>
+<td>ERB / EJS</td>
+<td>String templating engine</td>
+</tr>
+<tr>
+<td><code>tur-httpd</code></td>
+<td>Civetweb / Mongoose</td>
+<td>Threaded HTTP/1.1 server</td>
+</tr>
+<tr>
+<td><code>tur-tourist</code></td>
+<td>Haskell's scotty</td>
+<td>Routing + middleware micro-framework</td>
+</tr>
+</tbody>
+</table>
+<p>Each layer can be used independently. <code>tur-tourist</code> builds on both of the
+others; <code>tur-httpd</code> and <code>tur-template</code> have no shared dependency.</p>
+<hr />
+<h2 id="installation">Installation</h2>
+<h3 id="tur-httpd-only"><code>tur-httpd</code> only</h3>
+<pre><code class="language-turmeric">:spices {
+  &quot;httpd&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+           :ref    &quot;httpd-v0.1.0&quot;
+           :subdir &quot;spices/httpd&quot;}
+}
+</code></pre>
+<h3 id="full-stack-httpd-template-tourist">Full stack (httpd + template + tourist)</h3>
+<pre><code class="language-turmeric">:spices {
+  &quot;httpd&quot;    {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;httpd-v0.1.0&quot;
+              :subdir &quot;spices/httpd&quot;}
+  &quot;template&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;template-v0.1.0&quot;
+              :subdir &quot;spices/template&quot;}
+  &quot;tourist&quot;  {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;tourist-v0.1.0&quot;
+              :subdir &quot;spices/tourist&quot;}
+}
+</code></pre>
+<hr />
+<h2 id="tur-httpd-raw-http-server"><code>tur-httpd</code> -- Raw HTTP server</h2>
+<p><code>tur-httpd</code> is the foundation: a minimal POSIX-socket HTTP/1.1 server with a
+bounded thread pool. A handler is a plain Turmeric function that receives a
+request handle and returns a response handle.</p>
+<h3 id="modules">Modules</h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>httpd/server</code></td>
+<td><code>server-start</code>, <code>server-start-pool</code>, <code>server-stop</code></td>
+</tr>
+<tr>
+<td><code>httpd/request</code></td>
+<td><code>req-method</code>, <code>req-path</code>, <code>req-query</code>, <code>req-body</code>, <code>req-header</code></td>
+</tr>
+<tr>
+<td><code>httpd/response</code></td>
+<td><code>resp-ok</code>, <code>with-header</code>, <code>with-body</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="quick-start">Quick start</h3>
+<pre><code class="language-turmeric">(import httpd/server   :refer [server-start server-stop])
+(import httpd/request  :refer [req-path])
+(import httpd/response :refer [resp-ok])
+
+(defn handler [req :int] :int
+  (resp-ok &quot;text/plain&quot;
+    (str-concat &quot;You requested: &quot; (req-path req))))
+
+(defn main [] :int
+  (let [s (server-start 8080 handler)]
+    ;; run until killed
+    (server-stop s)
+    0))
+</code></pre>
+<h3 id="starting-the-server">Starting the server</h3>
+<pre><code class="language-turmeric">;; Bounded thread pool (default -- recommended)
+(server-start      port handler)
+(server-start-pool port handler pool-size)
+
+;; Thread-per-connection (legacy)
+(server-start-spawn port handler)
+</code></pre>
+<p><code>server-start</code> returns a server handle. Pass it to <code>server-stop</code> to close
+the listening socket and join the pool threads.</p>
+<h3 id="request-accessors">Request accessors</h3>
+<pre><code class="language-turmeric">(req-method  req)       ;; &quot;GET&quot;, &quot;POST&quot;, &quot;PUT&quot;, &quot;DELETE&quot;, ...
+(req-path    req)       ;; &quot;/users/42&quot;
+(req-query   req)       ;; &quot;page=1&amp;limit=10&quot;  (raw query string)
+(req-body    req)       ;; request body as cstr (may be &quot;&quot;)
+(req-header  req &quot;x-api-key&quot;)  ;; value of a header, or 0 if absent
+</code></pre>
+<h3 id="response-constructors">Response constructors</h3>
+<pre><code class="language-turmeric">;; Convenience: status 200 with a content-type and body
+(resp-ok &quot;text/html&quot;  &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;)
+(resp-ok &quot;text/plain&quot; &quot;OK&quot;)
+(resp-ok &quot;application/json&quot; &quot;{\&quot;ok\&quot;:true}&quot;)
+
+;; Custom status
+(with-header (resp-ok &quot;text/plain&quot; &quot;Not found&quot;) &quot;x-reason&quot; &quot;missing&quot;)
+</code></pre>
+<hr />
+<h2 id="tur-template-erbejs-style-templating"><code>tur-template</code> -- ERB/EJS-style templating</h2>
+<p><code>tur-template</code> renders strings from templates that embed <code>&lt;%= expr %&gt;</code> and
+<code>&lt;% for var in list %&gt;</code> / <code>&lt;% end %&gt;</code> constructs.</p>
+<h3 id="modules_1">Modules</h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>template/render</code></td>
+<td><code>render</code> (lex+parse+render in one call)</td>
+</tr>
+<tr>
+<td><code>template/env</code></td>
+<td><code>env-new</code>, <code>env-set</code>, <code>env-set-list</code>, <code>env-free</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="quick-start_1">Quick start</h3>
+<pre><code class="language-turmeric">(import template/render :refer [render])
+(import template/env    :refer [env-new env-set env-free])
+
+(defn greet [name :cstr] :cstr
+  (let [e (env-new)]
+    (env-set e &quot;name&quot; name)
+    (let [out (render &quot;Hello, &lt;%= name %&gt;!&quot; e)]
+      (env-free e)
+      out)))
+</code></pre>
+<p>The returned string is heap-allocated; the caller must free it.</p>
+<h3 id="template-syntax">Template syntax</h3>
+<table>
+<thead>
+<tr>
+<th>Syntax</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;%= var %&gt;</code></td>
+<td>Substitute the value of <code>var</code></td>
+</tr>
+<tr>
+<td><code>&lt;% for item in list %&gt;</code> ... <code>&lt;% end %&gt;</code></td>
+<td>Repeat for each item in a list variable</td>
+</tr>
+<tr>
+<td><code>&lt;%# comment %&gt;</code></td>
+<td>Comment (not rendered)</td>
+</tr>
+<tr>
+<td><code>&lt;%%</code></td>
+<td>Literal <code>&lt;%</code> in output</td>
+</tr>
+</tbody>
+</table>
+<h3 id="env-api">Env API</h3>
+<pre><code class="language-turmeric">(env-new)                           ;; create an Env handle
+(env-set  env &quot;key&quot; &quot;value&quot;)        ;; bind a scalar string
+(env-set-list env &quot;items&quot; lst)      ;; bind a cons list of cstr values
+(env-free env)                      ;; release the Env
+</code></pre>
+<h3 id="rendering-from-a-file">Rendering from a file</h3>
+<pre><code class="language-turmeric">(import template/render :refer [render-ast])
+(import template/token  :refer [lex])
+(import template/parse  :refer [parse])
+
+(let [src  (slurp &quot;views/index.html&quot;)   ;; read file as cstr
+      toks (lex src)
+      ast  (parse toks)
+      e    (env-new)]
+  (env-set e &quot;title&quot; &quot;Home&quot;)
+  (render-ast ast e))
+</code></pre>
+<hr />
+<h2 id="tur-tourist-routing-micro-framework"><code>tur-tourist</code> -- Routing micro-framework</h2>
+<p><code>tur-tourist</code> layers routing, response helpers, middleware, and static file
+serving on top of <code>tur-httpd</code>.</p>
+<h3 id="modules_2">Modules</h3>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tourist/app</code></td>
+<td><code>tourist</code> -- start the server with routes + middleware</td>
+</tr>
+<tr>
+<td><code>tourist/dsl</code></td>
+<td><code>get!</code>, <code>post!</code>, <code>put!</code>, <code>delete!</code>, <code>any!</code> -- route constructors</td>
+</tr>
+<tr>
+<td><code>tourist/helpers</code></td>
+<td><code>text</code>, <code>html</code>, <code>json-body</code>, <code>redirect</code>, <code>status</code></td>
+</tr>
+<tr>
+<td><code>tourist/param</code></td>
+<td><code>capture</code>, <code>param</code> -- URL captures and query params</td>
+</tr>
+<tr>
+<td><code>tourist/middleware</code></td>
+<td><code>use!</code> -- middleware constructor</td>
+</tr>
+<tr>
+<td><code>tourist/static</code></td>
+<td><code>serve-static!</code> -- static file serving</td>
+</tr>
+</tbody>
+</table>
+<h3 id="quick-start_2">Quick start</h3>
+<pre><code class="language-turmeric">(import tourist/app     :refer [tourist])
+(import tourist/dsl     :refer [get! post!])
+(import tourist/helpers :refer [text html])
+(import tourist/param   :refer [capture param])
+
+(defn main [] :int
+  (let [s (tourist 3000
+            (get! &quot;/hello/:name&quot;
+              (fn [ctx]
+                (text (str-concat &quot;Hello, &quot; (ok-val (capture ctx &quot;name&quot;)) &quot;!&quot;))))
+            (get! &quot;/search&quot;
+              (fn [ctx]
+                (let [q (ok-val (param ctx &quot;q&quot;))]
+                  (text (str-concat &quot;Searching for: &quot; q)))))
+            (post! &quot;/echo&quot;
+              (fn [ctx]
+                (text (req-body ctx)))))]
+    (server-stop s)
+    0))
+</code></pre>
+<h3 id="route-constructors">Route constructors</h3>
+<pre><code class="language-turmeric">(get!    pattern handler)    ;; match GET  requests
+(post!   pattern handler)    ;; match POST requests
+(put!    pattern handler)    ;; match PUT  requests
+(delete! pattern handler)    ;; match DELETE requests
+(any!    pattern handler)    ;; match any method
+</code></pre>
+<p>Pattern syntax:
+- <code>"/exact"</code> -- literal match
+- <code>"/user/:id"</code> -- <code>:id</code> captures one path segment
+- <code>"/files/*"</code> -- <code>*</code> captures the rest of the path (greedy)</p>
+<h3 id="request-context">Request context</h3>
+<p>Handler functions receive a <em>tourist context</em> <code>ctx</code>, not a raw httpd request.
+The context transparently forwards all <code>httpd/request</code> accessors:</p>
+<pre><code class="language-turmeric">(req-method ctx)         ;; &quot;GET&quot;
+(req-path   ctx)         ;; &quot;/user/42&quot;
+(req-body   ctx)         ;; request body
+(req-header ctx &quot;name&quot;)  ;; header value
+</code></pre>
+<p>Plus tourist-specific helpers:</p>
+<pre><code class="language-turmeric">(capture ctx &quot;id&quot;)       ;; URL segment capture -- result&lt;:cstr&gt;
+(param   ctx &quot;page&quot;)     ;; query parameter    -- result&lt;:cstr&gt;
+</code></pre>
+<p>Both return <code>result&lt;:cstr&gt;</code>. Unwrap with <code>ok-val</code> after checking for <code>err</code>:</p>
+<pre><code class="language-turmeric">(let [res (capture ctx &quot;id&quot;)]
+  (if (ok? res)
+    (text (ok-val res))
+    (status 400 (text &quot;missing id&quot;))))
+</code></pre>
+<h3 id="response-helpers">Response helpers</h3>
+<pre><code class="language-turmeric">(text body)              ;; 200 text/plain
+(html body)              ;; 200 text/html
+(json-body body)         ;; 200 application/json
+(redirect path)          ;; 302 Location: path
+(status code resp)       ;; override the status code of any response
+</code></pre>
+<h3 id="middleware">Middleware</h3>
+<p><code>use!</code> items run in declaration order before any route handler. A middleware
+function receives a request and returns <code>option&lt;:int&gt;</code>:
+- <code>none-value</code> -- continue to the next middleware / route
+- <code>some(resp)</code> -- short-circuit and return this response immediately</p>
+<pre><code class="language-turmeric">(import tourist/middleware :refer [use!])
+(import stdlib/option      :refer [none-value some])
+
+(defn auth-mw [ctx :int] :int
+  (if (= (req-header ctx &quot;x-api-key&quot;) 0)
+    (some (status 401 (text &quot;Unauthorized&quot;)))
+    (none-value)))
+
+(tourist 3000
+  (use! auth-mw)
+  (get! &quot;/private&quot; (fn [ctx] (text &quot;secret&quot;))))
+</code></pre>
+<h3 id="static-file-serving">Static file serving</h3>
+<pre><code class="language-turmeric">(import tourist/static :refer [serve-static!])
+
+(tourist 3000
+  (serve-static! &quot;/assets&quot; &quot;./public&quot;)
+  (get! &quot;/&quot; (fn [ctx] (html &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;))))
+</code></pre>
+<p><code>serve-static!</code> matches <code>GET /assets/**</code> paths and serves files from
+<code>./public/</code> on disk. It rejects path-traversal attempts (<code>..</code>).</p>
+<hr />
+<h2 id="template-rendering-in-tourist-handlers">Template rendering in tourist handlers</h2>
+<p>Using <code>tur-template</code> with <code>tur-tourist</code>:</p>
+<pre><code class="language-turmeric">(import tourist/app      :refer [tourist])
+(import tourist/dsl      :refer [get!])
+(import tourist/helpers  :refer [html])
+(import template/render  :refer [render])
+(import template/env     :refer [env-new env-set env-free])
+
+(defn render-view [name :cstr env :int] :cstr
+  (let [out (render name env)]
+    (env-free env)
+    out))
+
+(defn main [] :int
+  (let [s (tourist 3000
+            (get! &quot;/hello/:name&quot;
+              (fn [ctx]
+                (let [e (env-new)
+                      n (ok-val (capture ctx &quot;name&quot;))]
+                  (env-set e &quot;name&quot; n)
+                  (html (render-view &quot;Hello, &lt;%= name %&gt;!&quot; e))))))]
+    (server-stop s)
+    0))
+</code></pre>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="threading-guide.md">Threading Guide</a> -- OS threads, Mutex, Arc (used by tur-httpd internally)</li>
+<li><a href="error-handling-guide.md">Error Handling Guide</a> -- <code>result&lt;:cstr&gt;</code> unwrapping patterns</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/web-stack-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Binding Forms Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#binding-forms-guide" style="">Binding Forms Guide</a></li>
+<li style=""><a href="#define-body-level-sequential-binding" style="">define -- Body-level sequential binding</a></li>
+<li style="padding-left:0.75rem;"><a href="#supported-body-positions" style="color:var(--text-sec);">Supported body positions</a></li>
+<li style="padding-left:0.75rem;"><a href="#annotations" style="color:var(--text-sec);">Annotations</a></li>
+<li style="padding-left:0.75rem;"><a href="#semantics-let-sequential" style="color:var(--text-sec);">Semantics: let* (sequential)</a></li>
+<li style=""><a href="#letrec-mutually-recursive-local-bindings" style="">letrec -- Mutually-recursive local bindings</a></li>
+<li style="padding-left:0.75rem;"><a href="#self-recursion" style="color:var(--text-sec);">Self-recursion</a></li>
+<li style="padding-left:0.75rem;"><a href="#type-annotation-requirement" style="color:var(--text-sec);">Type annotation requirement</a></li>
+<li style="padding-left:0.75rem;"><a href="#non-function-bindings" style="color:var(--text-sec);">Non-function bindings</a></li>
+<li style=""><a href="#named-let-tail-recursive-loops" style="">Named let -- Tail-recursive loops</a></li>
+<li style="padding-left:0.75rem;"><a href="#type-annotations-in-named-let" style="color:var(--text-sec);">Type annotations in named let</a></li>
+<li style=""><a href="#choosing-the-right-form" style="">Choosing the right form</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="binding-forms-guide">Binding Forms Guide</h1>
+<p>Turmeric provides three complementary local-binding primitives beyond <code>let</code>:
+<code>define</code> for sequential body-level bindings, <code>letrec</code> for mutually-recursive
+helpers, and <em>named let</em> for tail-recursive loops. All three desugar through
+the same elaborator primitive so their typing, continuation-discipline, and
+codegen are consistent with <code>let</code>.</p>
+<hr />
+<h2 id="define-body-level-sequential-binding"><code>define</code> -- Body-level sequential binding</h2>
+<p><code>define</code> introduces a name inside a <em>body</em> -- the body of a <code>defn</code>, <code>fn</code>,
+<code>let</code>, or <code>do</code>. It splices a <code>let</code> wrapping all subsequent forms:</p>
+<pre><code class="language-turmeric">(do
+  (define x 1)
+  (define y (+ x 1))
+  (println y))         ;; prints 2
+</code></pre>
+<p>This is exactly equivalent to:</p>
+<pre><code class="language-turmeric">(do
+  (let [x 1]
+    (let [y (+ x 1)]
+      (println y))))
+</code></pre>
+<p>Sweet-exp:</p>
+<pre><code class="language-sweet-exp">do
+  define x 1
+  define y +(x 1)
+  println(y)
+</code></pre>
+<h3 id="supported-body-positions">Supported body positions</h3>
+<p><code>define</code> works anywhere a <em>body sequence</em> is valid:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>defn</code> body</td>
+<td><code>(defn f [] (define x 1) x)</code></td>
+</tr>
+<tr>
+<td><code>fn</code> body</td>
+<td><code>(fn [] (define x 1) x)</code></td>
+</tr>
+<tr>
+<td><code>let</code> body</td>
+<td><code>(let [y 2] (define x y) x)</code></td>
+</tr>
+<tr>
+<td><code>do</code> body</td>
+<td><code>(do (define x 1) x)</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>define</code> is <strong>not</strong> valid at top level (use <code>def</code> there), in <code>if</code> branches,
+or anywhere that is not a body sequence.</p>
+<h3 id="annotations">Annotations</h3>
+<p>All annotations that <code>let</code> accepts work on <code>define</code>:</p>
+<pre><code class="language-turmeric">(defn counter [] :int
+  (define ^mut n 0)
+  (set! n (+ n 1))
+  n)
+</code></pre>
+<p>Type annotations are written after the name:</p>
+<pre><code class="language-turmeric">(define total :int (+ a b))
+</code></pre>
+<h3 id="semantics-let-sequential">Semantics: let* (sequential)</h3>
+<p>Each <code>define</code> sees all earlier bindings but <strong>not</strong> later ones -- the same
+rule as <code>let</code>. Self-recursion inside a <code>define</code> init does not work:</p>
+<pre><code class="language-turmeric">;; Error: f is not in scope inside its own init
+(define f (fn [n] (f n)))
+
+;; Fix: use letrec (see below) or lift f to top-level defn
+</code></pre>
+<p>For mutually-recursive helpers, use <code>letrec</code>.</p>
+<hr />
+<h2 id="letrec-mutually-recursive-local-bindings"><code>letrec</code> -- Mutually-recursive local bindings</h2>
+<p><code>letrec</code> is like <code>let</code> but pre-registers every name in the binding group
+before any init is elaborated, so each init can reference any name in the
+group:</p>
+<pre><code class="language-turmeric">(defn run [] :int
+  (letrec [even? (fn [n :int] :bool (if (= n 0) true  (odd?  (- n 1))))
+           odd?  (fn [n :int] :bool (if (= n 0) false (even? (- n 1))))]
+    (println (if (even? 10) &quot;even&quot; &quot;odd&quot;))
+    0))
+</code></pre>
+<p>Sweet-exp:</p>
+<pre><code class="language-sweet-exp">defn run [] :int
+  letrec [even? fn([n :int] :bool if(=(n 0) true  odd?(-(n 1))))
+          odd?  fn([n :int] :bool if(=(n 0) false even?(-(n 1))))]
+    println $ if(even?(10) &quot;even&quot; &quot;odd&quot;)
+    0
+</code></pre>
+<h3 id="self-recursion">Self-recursion</h3>
+<p>A single self-recursive function is the common case:</p>
+<pre><code class="language-turmeric">(defn main [] :int
+  (letrec [fact (fn [n :int] :int
+                  (if (= n 0) 1 (* n (fact (- n 1)))))]
+    (println (fact 5))   ;; 120
+    0))
+</code></pre>
+<h3 id="type-annotation-requirement">Type annotation requirement</h3>
+<p>For mutual recursion, annotate the return type so the elaborator can
+build placeholder types before the bodies are checked:</p>
+<pre><code class="language-turmeric">(letrec [a (fn [n :int] :int (b (- n 1)))
+         b (fn [n :int] :int (if (= n 0) 0 (a n)))]
+  (a 3))
+</code></pre>
+<p>Omitting <code>:int</code> on mutually-referencing functions causes an "unknown type"
+error; add <code>:ret</code> annotations to resolve it.</p>
+<h3 id="non-function-bindings">Non-function bindings</h3>
+<p><code>letrec</code> allows non-function bindings as long as they do not self-reference:</p>
+<pre><code class="language-turmeric">;; Fine: x is a plain value, no self-reference
+(letrec [x 42]
+  x)
+
+;; Error: x cannot reference itself during initialization
+(letrec [x (+ x 1)]
+  x)
+</code></pre>
+<hr />
+<h2 id="named-let-tail-recursive-loops">Named <code>let</code> -- Tail-recursive loops</h2>
+<p>Named let is the standard Scheme/Racket idiom for tail-recursive iteration.
+Write <code>(let loop [bindings...] body...)</code> to both introduce a local function
+<code>loop</code> and call it with the initial argument values:</p>
+<pre><code class="language-turmeric">;; Sum 1..n
+(defn sum [n :int] :int
+  (let loop [i n acc 0]
+    (if (= i 0)
+      acc
+      (loop (- i 1) (+ acc i)))))
+</code></pre>
+<p>Sweet-exp:</p>
+<pre><code class="language-sweet-exp">defn sum [n :int] :int
+  let loop [i n acc 0]
+    if =(i 0)
+      acc
+      loop(-(i 1) +(acc i))
+</code></pre>
+<p>The named let desugars to:</p>
+<pre><code class="language-turmeric">(letrec [loop (fn [i :int acc :int] :int
+                (if (= i 0) acc (loop (- i 1) (+ acc i))))]
+  (loop n 0))
+</code></pre>
+<h3 id="type-annotations-in-named-let">Type annotations in named let</h3>
+<p>Annotate binding names the same way as <code>let</code>:</p>
+<pre><code class="language-turmeric">(let loop [xs :int n :int 0]
+  (if (= xs 0)
+    n
+    (loop (cons-tail xs) (+ n 1))))
+</code></pre>
+<hr />
+<h2 id="choosing-the-right-form">Choosing the right form</h2>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Reach for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Simple sequential local name</td>
+<td><code>define</code> or <code>let</code></td>
+</tr>
+<tr>
+<td>Self-recursive local function</td>
+<td><code>letrec [f (fn ...)]</code></td>
+</tr>
+<tr>
+<td>Mutually recursive local helpers</td>
+<td><code>letrec [f (fn ...) g (fn ...)]</code></td>
+</tr>
+<tr>
+<td>Tail-recursive loop with initial values</td>
+<td>Named <code>let</code></td>
+</tr>
+<tr>
+<td>Top-level constant or function</td>
+<td><code>def</code> / <code>defn</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>define</code> and <code>let</code> share sequential semantics: pick whichever reads more
+naturally in context. <code>define</code> saves one level of indentation when the body
+is long; <code>let</code> keeps the binding and its use visually co-located.</p>
+<p>Named <code>let</code> is idiomatic for loops; <code>letrec</code> is idiomatic for mutual helpers
+that are too specific to lift to top level.</p>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="style-guide.md">Style Guide</a> -- indentation rules for <code>let</code> / <code>do</code> bodies</li>
+<li><code>stdlib/macros.tur</code> -- <code>for</code>, <code>cond</code>, <code>when</code>, and other loop/control macros</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/binding-forms-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

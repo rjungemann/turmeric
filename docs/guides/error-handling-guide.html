@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Error Handling Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#error-handling-guide" style="">Error Handling Guide</a></li>
+<li style=""><a href="#overview" style="">Overview</a></li>
+<li style=""><a href="#result" style="">Result</a></li>
+<li style="padding-left:0.75rem;"><a href="#constructors" style="color:var(--text-sec);">Constructors</a></li>
+<li style="padding-left:0.75rem;"><a href="#predicates" style="color:var(--text-sec);">Predicates</a></li>
+<li style="padding-left:0.75rem;"><a href="#extractors" style="color:var(--text-sec);">Extractors</a></li>
+<li style="padding-left:0.75rem;"><a href="#unwrapping" style="color:var(--text-sec);">Unwrapping</a></li>
+<li style="padding-left:0.75rem;"><a href="#combinators" style="color:var(--text-sec);">Combinators</a></li>
+<li style="padding-left:0.75rem;"><a href="#equality" style="color:var(--text-sec);">Equality</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-interop" style="color:var(--text-sec);">Option interop</a></li>
+<li style="padding-left:0.75rem;"><a href="#collection-utilities" style="color:var(--text-sec);">Collection utilities</a></li>
+<li style="padding-left:0.75rem;"><a href="#memory" style="color:var(--text-sec);">Memory</a></li>
+<li style="padding-left:0.75rem;"><a href="#typeclass-instances" style="color:var(--text-sec);">Typeclass instances</a></li>
+<li style=""><a href="#option" style="">Option</a></li>
+<li style="padding-left:0.75rem;"><a href="#constructors_1" style="color:var(--text-sec);">Constructors</a></li>
+<li style="padding-left:0.75rem;"><a href="#predicates_1" style="color:var(--text-sec);">Predicates</a></li>
+<li style="padding-left:0.75rem;"><a href="#unwrapping_1" style="color:var(--text-sec);">Unwrapping</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-interop-with-result" style="color:var(--text-sec);">Option interop with Result</a></li>
+<li style="padding-left:0.75rem;"><a href="#equality_1" style="color:var(--text-sec);">Equality</a></li>
+<li style="padding-left:0.75rem;"><a href="#memory_1" style="color:var(--text-sec);">Memory</a></li>
+<li style="padding-left:0.75rem;"><a href="#typeclass-instances_1" style="color:var(--text-sec);">Typeclass instances</a></li>
+<li style=""><a href="#panic" style="">panic</a></li>
+<li style="padding-left:0.75rem;"><a href="#double-panic-guard" style="color:var(--text-sec);">Double-panic guard</a></li>
+<li style="padding-left:0.75rem;"><a href="#defer-during-panic" style="color:var(--text-sec);">defer during panic</a></li>
+<li style=""><a href="#unwrap-helpers-must-and-must-msg" style="">Unwrap helpers: must! and must-msg!</a></li>
+<li style=""><a href="#option-must-and-option-expect" style="">option-must and option-expect</a></li>
+<li style=""><a href="#ignore" style="">ignore!</a></li>
+<li style=""><a href="#contract-macros" style="">Contract macros</a></li>
+<li style="padding-left:0.75rem;"><a href="#assert-and-assert-msg" style="color:var(--text-sec);">assert! and assert-msg!</a></li>
+<li style="padding-left:0.75rem;"><a href="#require-and-require-msg" style="color:var(--text-sec);">require! and require-msg!</a></li>
+<li style="padding-left:0.75rem;"><a href="#ensure-and-ensure-msg" style="color:var(--text-sec);">ensure! and ensure-msg!</a></li>
+<li style="padding-left:0.75rem;"><a href="#invariant-and-invariant-msg" style="color:var(--text-sec);">invariant! and invariant-msg!</a></li>
+<li style=""><a href="#when-to-use-what" style="">When to use what</a></li>
+<li style=""><a href="#deferred" style="">Deferred</a></li>
+<li style="padding-left:0.75rem;"><a href="#panic-inside-effect-handlers-and-continuations-phase-r6" style="color:var(--text-sec);">Panic inside effect handlers and continuations (Phase R6)</a></li>
+<li style="padding-left:0.75rem;"><a href="#panic-inside-async-tasks-phase-r6" style="color:var(--text-sec);">Panic inside async tasks (Phase R6)</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="error-handling-guide">Error Handling Guide</h1>
+<p>This guide covers the Turmeric error handling story: <code>Result</code>, <code>Option</code>, <code>panic</code>,
+unwrap helpers, and contract macros. It describes what is implemented today.</p>
+<h2 id="overview">Overview</h2>
+<p>Turmeric offers two primary error handling strategies:</p>
+<ol>
+<li><strong><code>Result</code></strong> -- recoverable errors; use when callers should handle failure.</li>
+<li><strong><code>panic</code></strong> -- unrecoverable errors; use for programming mistakes and invariant violations.</li>
+</ol>
+<p><code>Option</code> is a separate type for nullable / optional values and has its own unwrap helpers.
+Contract macros (<code>assert!</code>, <code>require!</code>, <code>ensure!</code>, <code>invariant!</code>) provide structured
+precondition and postcondition checking built on top of <code>panic</code>.</p>
+<hr />
+<h2 id="result"><code>Result</code></h2>
+<p>A result value is either <code>(ok value)</code> or <code>(err error)</code>. The runtime representation
+is a heap-allocated struct <code>{ bool is_ok; int64_t ok_val; int64_t err_val; }</code> returned
+as <code>ptr&lt;void&gt;</code>. Both the ok and err fields are <code>int64_t</code> in v1; typed generics are a
+future follow-on.</p>
+<h3 id="constructors">Constructors</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ok 42)        ;; ok result
+(err 99)       ;; err result
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ok(42)         ;; ok result
+err(99)        ;; err result
+</code></pre></div></div></div>
+<h3 id="predicates">Predicates</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ok?  r)       ;; =&gt; bool
+(err? r)       ;; =&gt; bool
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ok?(r)         ;; =&gt; bool
+err?(r)        ;; =&gt; bool
+</code></pre></div></div></div>
+<h3 id="extractors">Extractors</h3>
+<p>These are unsafe -- check <code>ok?</code> / <code>err?</code> first:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ok-val  r)    ;; =&gt; int  (undefined behaviour if r is err)
+(err-val r)    ;; =&gt; int  (undefined behaviour if r is ok)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ok-val(r)      ;; =&gt; int  (undefined behaviour if r is err)
+err-val(r)     ;; =&gt; int  (undefined behaviour if r is ok)
+</code></pre></div></div></div>
+<h3 id="unwrapping">Unwrapping</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(result-unwrap     r)            ;; ok value, or abort() with message to stderr
+(result-unwrap-or  r default)    ;; ok value, or default
+(result-expect     r &quot;message&quot;)  ;; ok value, or abort() printing &quot;message&quot;
+(result-must       r)            ;; ok value, or panic &quot;result-must: called on err&quot;
+(result-must-msg   r &quot;msg&quot;)      ;; ok value, or panic with &quot;msg&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">result-unwrap(r)               ;; ok value, or abort() with message to stderr
+result-unwrap-or(r default)    ;; ok value, or default
+result-expect(r &quot;message&quot;)     ;; ok value, or abort() printing &quot;message&quot;
+result-must(r)                 ;; ok value, or panic &quot;result-must: called on err&quot;
+result-must-msg(r &quot;msg&quot;)       ;; ok value, or panic with &quot;msg&quot;
+</code></pre></div></div></div>
+<blockquote>
+<p><strong>Note:</strong> <code>result-unwrap</code> and <code>result-expect</code> call <code>abort()</code> directly (not via
+<code>tur_panic</code>). Prefer <code>result-must</code> / <code>result-must-msg</code> when you want the standard
+panic message format and double-panic guard.</p>
+</blockquote>
+<h3 id="combinators">Combinators</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(result-map      r f)            ;; apply f to ok value; propagate err unchanged
+(result-map-err  r f)            ;; apply f to err value; propagate ok unchanged
+(result-flat-map r f)            ;; f receives ok value and returns a new result
+(result-or       r alt)          ;; r if ok, else alt
+(result-or-else  r f)            ;; r if ok, else (f err-value)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">result-map(r f)                ;; apply f to ok value; propagate err unchanged
+result-map-err(r f)            ;; apply f to err value; propagate ok unchanged
+result-flat-map(r f)           ;; f receives ok value and returns a new result
+result-or(r alt)               ;; r if ok, else alt
+result-or-else(r f)            ;; r if ok, else f(err-value)
+</code></pre></div></div></div>
+<h3 id="equality">Equality</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(result-eq? r1 r2 ok-cmp err-cmp)
+;; ok-cmp  -- fn [a b :int] :bool  used when both are ok
+;; err-cmp -- fn [a b :int] :bool  used when both are err
+;; =&gt; bool; false if variants differ
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">result-eq?(r1 r2 ok-cmp err-cmp)
+;; ok-cmp  -- fn [a b :int] :bool  used when both are ok
+;; err-cmp -- fn [a b :int] :bool  used when both are err
+;; =&gt; bool; false if variants differ
+</code></pre></div></div></div>
+<p>The <code>Eq</code> typeclass instance uses <code>=</code> for both sides:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(eq? (ok 1) (ok 1))   ;; =&gt; true
+(eq? (ok 1) (err 1))  ;; =&gt; false
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">eq?(ok(1) ok(1))    ;; =&gt; true
+eq?(ok(1) err(1))   ;; =&gt; false
+</code></pre></div></div></div>
+<h3 id="option-interop">Option interop</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ok-or   opt err-val)    ;; some(v) -&gt; ok(v), none -&gt; err(err-val)
+(err-context r &quot;prefix&quot;) ;; prepend &quot;prefix: &quot; to the err string; ok passes through
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ok-or(opt err-val)       ;; some(v) -&gt; ok(v), none -&gt; err(err-val)
+err-context(r &quot;prefix&quot;)  ;; prepend &quot;prefix: &quot; to the err string; ok passes through
+</code></pre></div></div></div>
+<h3 id="collection-utilities">Collection utilities</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(result-collect    vec)    ;; (vec result) -&gt; result&lt;vec, E&gt;; first err wins
+(result-partition  vec)    ;; -&gt; pair; separate ok and err elements
+(result-partition-ok  pair)  ;; -&gt; vec of ok values from the pair
+(result-partition-err pair)  ;; -&gt; vec of err values from the pair
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">result-collect(vec)          ;; (vec result) -&gt; result&lt;vec, E&gt;; first err wins
+result-partition(vec)        ;; -&gt; pair; separate ok and err elements
+result-partition-ok(pair)    ;; -&gt; vec of ok values from the pair
+result-partition-err(pair)   ;; -&gt; vec of err values from the pair
+</code></pre></div></div></div>
+<h3 id="memory">Memory</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(result-free r)    ;; free the heap struct (does not free the contained value)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">result-free(r)     ;; free the heap struct (does not free the contained value)
+</code></pre></div></div></div>
+<h3 id="typeclass-instances">Typeclass instances</h3>
+<p><code>result</code> (as <code>ptr&lt;void&gt;</code>) implements <code>Functor</code>, <code>Applicative</code>, <code>Monad</code>,
+<code>Foldable</code>, <code>Bifunctor</code>, and <code>Eq</code>. These are defined in <code>stdlib/result.tur</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Typeclass</th>
+<th>Behaviour on <code>ok</code> / <code>err</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Functor</code></td>
+<td><code>fmap</code> applies to ok value; err propagates</td>
+</tr>
+<tr>
+<td><code>Applicative</code></td>
+<td><code>pure x = ok(x)</code>; <code>ap</code> short-circuits on first err</td>
+</tr>
+<tr>
+<td><code>Monad</code></td>
+<td><code>bind</code> applies f to ok value; err propagates</td>
+</tr>
+<tr>
+<td><code>Foldable</code></td>
+<td><code>foldl</code> / <code>foldr</code> operate on ok value; err is skipped</td>
+</tr>
+<tr>
+<td><code>Bifunctor</code></td>
+<td><code>bimap fn-left fn-right</code> -- fn-left over err, fn-right over ok</td>
+</tr>
+<tr>
+<td><code>Eq</code></td>
+<td>structural equality via <code>result-eq?</code> with <code>=</code> comparator</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="option"><code>Option</code></h2>
+<p>An option is either <code>(some value)</code> or <code>(none)</code>. <code>none</code> is represented as <code>NULL</code>.</p>
+<h3 id="constructors_1">Constructors</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(some 42)    ;; some option
+(none)       ;; none option (NULL)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">some(42)     ;; some option
+none()       ;; none option (NULL)
+</code></pre></div></div></div>
+<h3 id="predicates_1">Predicates</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(some? o)    ;; =&gt; bool
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">some?(o)     ;; =&gt; bool
+</code></pre></div></div></div>
+<h3 id="unwrapping_1">Unwrapping</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-unwrap o)            ;; value, or exit(1) with message to stderr
+(option-must   o)            ;; value, or panic &quot;option-must: called on none&quot;
+(option-expect o &quot;message&quot;)  ;; value, or panic with &quot;message&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-unwrap(o)             ;; value, or exit(1) with message to stderr
+option-must(o)               ;; value, or panic &quot;option-must: called on none&quot;
+option-expect(o &quot;message&quot;)   ;; value, or panic with &quot;message&quot;
+</code></pre></div></div></div>
+<blockquote>
+<p><strong>Note:</strong> <code>option-unwrap</code> calls <code>exit(1)</code> directly. Prefer <code>option-must</code> /
+<code>option-expect</code> for consistent panic semantics.</p>
+</blockquote>
+<h3 id="option-interop-with-result">Option interop with Result</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ok-or opt err-val)    ;; some(v) -&gt; ok(v), none -&gt; err(err-val)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ok-or(opt err-val)     ;; some(v) -&gt; ok(v), none -&gt; err(err-val)
+</code></pre></div></div></div>
+<h3 id="equality_1">Equality</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-eq? o1 o2 cmp-fn)
+;; cmp-fn -- fn [a b :int] :bool
+;; =&gt; true if both none, or both some with cmp-fn returning true
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-eq?(o1 o2 cmp-fn)
+;; cmp-fn -- fn [a b :int] :bool
+;; =&gt; true if both none, or both some with cmp-fn returning true
+</code></pre></div></div></div>
+<p>The <code>Eq</code> typeclass instance uses <code>=</code> for the contained value.</p>
+<h3 id="memory_1">Memory</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-free o)    ;; free the heap struct
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-free(o)     ;; free the heap struct
+</code></pre></div></div></div>
+<h3 id="typeclass-instances_1">Typeclass instances</h3>
+<p><code>option</code> implements <code>Functor</code>, <code>Applicative</code>, <code>Monad</code>, <code>Foldable</code>, <code>Traversable</code>,
+<code>Alternative</code>, <code>Eq</code>, <code>Clone</code>, and <code>Show</code>. These are defined in <code>stdlib/option.tur</code>.</p>
+<hr />
+<h2 id="panic"><code>panic</code></h2>
+<p><code>panic</code> terminates the program unconditionally. Use it for:</p>
+<ul>
+<li>Bugs and invariant violations that cannot be recovered from.</li>
+<li>Assertions in test code.</li>
+<li>Unreachable code branches.</li>
+</ul>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(panic &quot;something went wrong&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">panic(&quot;something went wrong&quot;)
+</code></pre></div></div></div>
+<p>This prints <code>panic: something went wrong</code> to stderr and calls <code>abort()</code>.</p>
+<h3 id="double-panic-guard">Double-panic guard</h3>
+<p>If <code>tur_panic</code> is called while a panic is already in progress (e.g. in a <code>defer</code>
+chain), it prints <code>double panic: aborting</code> and calls <code>abort()</code> immediately.</p>
+<h3 id="defer-during-panic"><code>defer</code> during panic</h3>
+<p>Defer thunks registered before the panic are fired in reverse order during
+unwinding. If a defer thunk itself panics, the double-panic guard triggers <code>abort()</code>.</p>
+<hr />
+<h2 id="unwrap-helpers-must-and-must-msg">Unwrap helpers: <code>must!</code> and <code>must-msg!</code></h2>
+<p>These macros unwrap an <strong>option</strong> value, panicking on <code>none</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(must!     (some 42))                   ;; =&gt; 42
+(must!     (none))                      ;; panic: option-must: called on none
+
+(must-msg! (some 42) &quot;expected value&quot;)  ;; =&gt; 42
+(must-msg! (none)    &quot;expected value&quot;)  ;; panic: expected value
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">must!(some(42))                         ;; =&gt; 42
+must!(none())                           ;; panic: option-must: called on none
+
+must-msg!(some(42) &quot;expected value&quot;)    ;; =&gt; 42
+must-msg!(none()   &quot;expected value&quot;)    ;; panic: expected value
+</code></pre></div></div></div>
+<blockquote>
+<p><code>must!</code> expands to <code>(option-must expr)</code>. <code>must-msg!</code> expands to
+<code>(option-expect expr msg)</code>. For <code>result</code> values use <code>result-must</code> /
+<code>result-must-msg</code> directly -- the macros do not dispatch generically.</p>
+</blockquote>
+<hr />
+<h2 id="option-must-and-option-expect"><code>option-must</code> and <code>option-expect</code></h2>
+<p>These are the underlying functions used by <code>must!</code> and <code>must-msg!</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-must   (some 42))               ;; =&gt; 42
+(option-must   (none))                  ;; panic: option-must: called on none
+(option-expect (some 42) &quot;want value&quot;)  ;; =&gt; 42
+(option-expect (none)    &quot;want value&quot;)  ;; panic: want value
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-must $ some(42)               ;; =&gt; 42
+option-must $ none()                 ;; panic: option-must: called on none
+option-expect(some(42) &quot;want value&quot;) ;; =&gt; 42
+option-expect(none()   &quot;want value&quot;) ;; panic: want value
+</code></pre></div></div></div>
+<hr />
+<h2 id="ignore"><code>ignore!</code></h2>
+<p>Explicitly discard a result or option value to silence unused-value warnings
+(when linting is enabled):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ignore! (some-fn-returning-result))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ignore!(some-fn-returning-result())
+</code></pre></div></div></div>
+<p><code>ignore!</code> expands to <code>(do expr nil)</code> -- the expression is evaluated for its side
+effects and the value is dropped.</p>
+<hr />
+<h2 id="contract-macros">Contract macros</h2>
+<p>Contract macros live in <code>stdlib/macros.tur</code> (module <code>tur/macros</code>) and are
+auto-imported. They all expand to <code>tur-contract-check</code> or <code>tur-contract-check-inv</code>
+from <code>stdlib/contract.tur</code>, which call <code>tur_panic</code> on failure.</p>
+<p>In v1, contracts are always enabled (<code>contract-enabled?</code> returns <code>true</code>).
+A <code>--no-contracts</code> flag is planned for Phase C2.</p>
+<h3 id="assert-and-assert-msg"><code>assert!</code> and <code>assert-msg!</code></h3>
+<p>Unconditional sanity check. Use anywhere you want to verify an intermediate
+condition holds:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(assert! (= x 1))
+;; panics with &quot;Assertion failed&quot; if x != 1
+
+(assert-msg! (= x 1) &quot;x must be 1&quot;)
+;; panics with &quot;x must be 1&quot; if x != 1
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">assert!({x = 1})
+;; panics with &quot;Assertion failed&quot; if x != 1
+
+assert-msg!({x = 1} &quot;x must be 1&quot;)
+;; panics with &quot;x must be 1&quot; if x != 1
+</code></pre></div></div></div>
+<h3 id="require-and-require-msg"><code>require!</code> and <code>require-msg!</code></h3>
+<p>Precondition check at function entry:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn sqrt [n :int] :int
+  (require! (&gt;= n 0))
+  ...)
+;; panics with &quot;Precondition failed&quot; if n &lt; 0
+
+(defn sqrt [n :int] :int
+  (require-msg! (&gt;= n 0) &quot;sqrt: n must be non-negative&quot;)
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn sqrt [n :int] :int
+  require!({n &gt;= 0})
+  ...
+;; panics with &quot;Precondition failed&quot; if n &lt; 0
+
+defn sqrt [n :int] :int
+  require-msg!({n &gt;= 0} &quot;sqrt: n must be non-negative&quot;)
+  ...
+</code></pre></div></div></div>
+<h3 id="ensure-and-ensure-msg"><code>ensure!</code> and <code>ensure-msg!</code></h3>
+<p>Postcondition check before returning from a function:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn abs [n :int] :int
+  (let [result (if (&lt; n 0) (- 0 n) n)]
+    (ensure! (&gt;= result 0))
+    result))
+;; panics with &quot;Postcondition failed&quot; if the result is somehow negative
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn abs [n :int] :int
+  let [result
+       if {n &lt; 0}
+         {0 - n}
+         n]
+    ensure!({result &gt;= 0})
+    result
+;; panics with &quot;Postcondition failed&quot; if the result is somehow negative
+</code></pre></div></div></div>
+<h3 id="invariant-and-invariant-msg"><code>invariant!</code> and <code>invariant-msg!</code></h3>
+<p>Structural invariant check -- passes the value to a predicate function:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(invariant! my-list non-empty?)
+;; panics with &quot;Invariant failed&quot; if (non-empty? my-list) is false
+
+(invariant-msg! my-list non-empty? &quot;list must not be empty&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">invariant!(my-list non-empty?)
+;; panics with &quot;Invariant failed&quot; if non-empty?(my-list) is false
+
+invariant-msg!(my-list non-empty? &quot;list must not be empty&quot;)
+</code></pre></div></div></div>
+<hr />
+<h2 id="when-to-use-what">When to use what</h2>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Approach</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Caller should handle the failure (e.g. file not found)</td>
+<td><code>result</code></td>
+</tr>
+<tr>
+<td>Value may or may not be present</td>
+<td><code>option</code> / <code>some</code> / <code>none</code></td>
+</tr>
+<tr>
+<td>Programming error / violated invariant</td>
+<td><code>panic</code></td>
+</tr>
+<tr>
+<td>Unwrapping a result you are confident is ok</td>
+<td><code>result-must</code> / <code>result-must-msg</code></td>
+</tr>
+<tr>
+<td>Unwrapping an option you are confident is some</td>
+<td><code>option-must</code> / <code>must!</code></td>
+</tr>
+<tr>
+<td>Checking a precondition at function entry</td>
+<td><code>require!</code> / <code>require-msg!</code></td>
+</tr>
+<tr>
+<td>Checking a postcondition before returning</td>
+<td><code>ensure!</code> / <code>ensure-msg!</code></td>
+</tr>
+<tr>
+<td>Verifying a structural invariant</td>
+<td><code>invariant!</code> / <code>invariant-msg!</code></td>
+</tr>
+<tr>
+<td>General sanity check in the middle of code</td>
+<td><code>assert!</code> / <code>assert-msg!</code></td>
+</tr>
+<tr>
+<td>Discarding a result intentionally</td>
+<td><code>ignore!</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="deferred">Deferred</h2>
+<p>The following features are planned but not yet implemented:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Phase</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>?</code> operator</td>
+<td>R1</td>
+<td>Short-circuit error propagation in the caller</td>
+</tr>
+<tr>
+<td><code>catch-unwind</code></td>
+<td>R2</td>
+<td>Catch a panic at a safe boundary</td>
+</tr>
+<tr>
+<td><code>--no-contracts</code> flag</td>
+<td>C2</td>
+<td>Strip contracts from release builds</td>
+</tr>
+<tr>
+<td><code>--warn-unused-result</code> compiler flag</td>
+<td>R6</td>
+<td>Lint for dropped results</td>
+</tr>
+<tr>
+<td><code>--lint-panic</code> compiler flag</td>
+<td>R6</td>
+<td>Audit panic call sites</td>
+</tr>
+</tbody>
+</table>
+<h3 id="panic-inside-effect-handlers-and-continuations-phase-r6">Panic inside effect handlers and continuations (Phase R6)</h3>
+<p>When a panic occurs inside an effect handler or continuation:</p>
+<ol>
+<li><strong>Effect handlers</strong>: Panics propagate normally through the handler chain unless
+   a <code>catch-unwind</code> boundary (Phase R2) is present.</li>
+<li><strong>Continuations</strong>: A panic unwinds the stack to the <code>reset</code> boundary. Resuming
+   a continuation (<code>shift</code>/<code>reset</code>) after a panic clears the panic state; it does
+   not re-panic automatically.</li>
+<li><strong>Defer</strong>: Defer thunks fire during panic unwinding. A defer thunk that itself
+   panics triggers the double-panic guard and calls <code>abort()</code>.</li>
+</ol>
+<h3 id="panic-inside-async-tasks-phase-r6">Panic inside async tasks (Phase R6)</h3>
+<p>In v1, <code>(async fn)</code> calls the function synchronously with no fiber scheduler. A
+panic inside an async body propagates through the call stack and is not caught at
+any task boundary.</p>
+<p>The v2 target behavior (when true fiber-based async lands):</p>
+<ol>
+<li>A panic inside an async task is caught at the task boundary. The task's future
+   resolves to a rejected state carrying the panic payload; use <code>catch-unwind</code> at
+   the join point to recover.</li>
+<li>If a task is cancelled while a panic is in progress, the panic takes precedence.</li>
+<li>An uncaught panic in async main terminates the process with a nonzero exit code
+   after all defer thunks have fired.</li>
+<li>WASM target: panics lower to the WebAssembly <code>unreachable</code> instruction.</li>
+</ol>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/error-handling-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

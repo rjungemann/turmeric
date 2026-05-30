@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Type Erasure to int64_t | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#type-erasure-to-int64_t" style="">Type Erasure to int64_t</a></li>
+<li style=""><a href="#the-single-choke-point" style="">The single choke point</a></li>
+<li style=""><a href="#the-three-mechanisms" style="">The three mechanisms</a></li>
+<li style="padding-left:0.75rem;"><a href="#1-pointer-as-int" style="color:var(--text-sec);">1. Pointer-as-int</a></li>
+<li style="padding-left:0.75rem;"><a href="#2-opaque-by-default" style="color:var(--text-sec);">2. Opaque-by-default</a></li>
+<li style="padding-left:0.75rem;"><a href="#3-tagged-pair" style="color:var(--text-sec);">3. Tagged pair</a></li>
+<li style=""><a href="#function-values" style="">Function values</a></li>
+<li style=""><a href="#what-stays-unboxed" style="">What stays unboxed</a></li>
+<li style=""><a href="#why-this-matters" style="">Why this matters</a></li>
+<li style=""><a href="#re-verifying-the-map" style="">Re-verifying the map</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="type-erasure-to-int64_t">Type Erasure to <code>int64_t</code></h1>
+<p>Turmeric compiles to C. Many high-level types -- closures, ADTs, opaque
+structs, type variables, recursive types, tagged unions -- share one
+runtime representation: a 64-bit opaque handle. This guide maps where
+that collapse happens today, so contributors extending the type system
+or codegen know which boundary they are crossing.</p>
+<p>This is a snapshot. As sized types (SZ*), unboxed structs, and
+monomorphization land, several of these sites will gain non-erased
+representations. Treat the file:line citations as a starting point and
+re-verify before relying on them.</p>
+<hr />
+<h2 id="the-single-choke-point">The single choke point</h2>
+<p>Everything funnels through one function:</p>
+<ul>
+<li><strong><code>type_c_name()</code></strong> at <code>src/compiler/types.c:1560</code> -- maps a <code>Type</code>
+  to the C type name used in the emitted header and source.</li>
+</ul>
+<p>If <code>type_c_name()</code> returns <code>"int64_t"</code> for a type, that type is erased
+at the C boundary. If it returns a struct name or a concrete C type,
+it is not.</p>
+<hr />
+<h2 id="the-three-mechanisms">The three mechanisms</h2>
+<h3 id="1-pointer-as-int">1. Pointer-as-int</h3>
+<p>Heap-allocated values are cast through <code>(int64_t)(intptr_t)</code> and stored
+as raw integers. The runtime keeps a pointer; the type system pretends
+it's an int.</p>
+<ul>
+<li>ADTs (<code>TY_ADT</code>) -- <code>src/compiler/types.c:1630-1631</code></li>
+<li>Opaque structs and <code>defopaque</code> -- <code>src/compiler/types.c:1626-1627</code></li>
+<li>Cons cells -- <code>stdlib/list.tur:18, 33, 56, 68</code></li>
+<li>Option values -- <code>stdlib/option.tur:30-35</code></li>
+</ul>
+<p>Call sites that marshal these into generic positions live in
+<code>src/compiler/elab_call.c:1570-1576</code>.</p>
+<h3 id="2-opaque-by-default">2. Opaque-by-default</h3>
+<p>Anything the type checker cannot lower to a concrete C layout falls
+through to <code>int64_t</code>. This is how parametric polymorphism is
+implemented in the absence of monomorphization.</p>
+<ul>
+<li>Type variables (<code>TY_TYVAR</code>) -- <code>src/compiler/types.c:1632-1634</code></li>
+<li>Type applications without concrete layout (<code>TY_APP</code>) --
+  <code>src/compiler/types.c:1638-1643</code></li>
+<li>Recursive types (<code>TY_REC</code>, Fix-style) -- <code>src/compiler/types.c:1645-1646</code></li>
+</ul>
+<p>Note the asymmetry inside <code>TY_APP</code>: if <code>type_has_concrete_codegen_layout()</code>
+succeeds, the application gets a real struct via <code>register_struct_app()</code>.
+Otherwise it collapses. This is the seam where HKT specialization can
+hook in.</p>
+<h3 id="3-tagged-pair">3. Tagged pair</h3>
+<p>For runtime-discriminated values, both the tag and the payload are
+<code>int64_t</code>:</p>
+<pre><code class="language-c">typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
+#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
+</code></pre>
+<ul>
+<li>Definition -- <code>src/compiler/emit_module.c:1324-1327</code></li>
+<li>Tag construction -- <code>src/compiler/emit_expr.c:725</code></li>
+</ul>
+<p>Used for <code>(A | B)</code> union types and the <code>any</code> top type.</p>
+<hr />
+<h2 id="function-values">Function values</h2>
+<p>Function values are a special case because they need both a code
+pointer and an environment, but the type system still wants to treat
+them uniformly.</p>
+<ul>
+<li><code>TY_FN</code> inside a struct field -- <code>src/compiler/types.c:473</code> --
+  always <code>int64_t</code>.</li>
+<li>Fat closure struct -- <code>src/compiler/emit_expr.c:1715</code>:
+  <code>c
+  struct __env_N { int64_t __fn; &lt;captures...&gt; };</code></li>
+<li>Rank-2 polymorphic wrapper -- <code>src/compiler/emit_module.c:1314</code>:
+  <code>c
+  typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;</code></li>
+<li>Function pointers cast <code>(int64_t)(intptr_t)</code> when passed into poly
+  helpers -- <code>src/compiler/emit_expr.c:1169-1243</code>.</li>
+</ul>
+<p>The code pointer is erased into <code>int64_t</code>; the environment travels
+alongside as a separate <code>void *</code>.</p>
+<hr />
+<h2 id="what-stays-unboxed">What stays unboxed</h2>
+<p>Not everything collapses. Types that already fit in a register and
+have a stable C representation pass through unchanged:</p>
+<table>
+<thead>
+<tr>
+<th>Turmeric type</th>
+<th>C type</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:int</code></td>
+<td><code>int64_t</code> (carrier, not erasure)</td>
+</tr>
+<tr>
+<td><code>:bool</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>:float</code></td>
+<td><code>double</code></td>
+</tr>
+<tr>
+<td><code>:cstr</code></td>
+<td><code>const char *</code></td>
+</tr>
+<tr>
+<td><code>:ptr</code></td>
+<td><code>void *</code></td>
+</tr>
+<tr>
+<td>Concrete <code>defstruct</code></td>
+<td>the struct's C name</td>
+</tr>
+<tr>
+<td>Concrete <code>TY_APP</code> with codegen layout</td>
+<td>a registered struct app</td>
+</tr>
+<tr>
+<td><code>TY_SET</code></td>
+<td><code>tur_set_t *</code></td>
+</tr>
+</tbody>
+</table>
+<p>The distinction between "<code>:int</code> as a carrier" and "<code>:int</code> as erasure
+target" matters when reading inline-C: a parameter declared <code>:int</code> may
+be carrying a real integer, or it may be carrying a cast pointer. The
+declaring <code>defn</code> is the source of truth.</p>
+<hr />
+<h2 id="why-this-matters">Why this matters</h2>
+<p>A few practical consequences of the current erasure scheme:</p>
+<ol>
+<li><strong>No type-directed dispatch at the C level.</strong> Two functions that
+   take an erased generic parameter receive the same <code>int64_t</code> and
+   cannot branch on the runtime type without a <code>tur_tagged_t</code>-style
+   discriminant.</li>
+<li><strong>Pointer provenance is invisible to the C compiler.</strong> GC and
+   sanitizer tooling that wants to walk heap pointers has to know
+   which <code>int64_t</code> fields are actually casts. The runtime tracks this
+   separately.</li>
+<li><strong>The HKT codegen seam is <code>type_has_concrete_codegen_layout()</code>.</strong>
+   Any improvement that turns more <code>TY_APP</code> cases into real structs
+   passes through this predicate.</li>
+<li><strong>Sized types (SZ*) narrow the carrier, not the erasure.</strong> A
+   <code>:int32</code> argument still lives in an int-sized slot at the call
+   boundary; the narrowing happens inside the function body.</li>
+</ol>
+<hr />
+<h2 id="re-verifying-the-map">Re-verifying the map</h2>
+<p>Line numbers drift. To regenerate this list:</p>
+<pre><code class="language-sh"># All sites that emit &quot;int64_t&quot; as a C type from the type lowering
+rg -n '&quot;int64_t&quot;' src/compiler/types.c
+
+# Sites that cast pointers through intptr_t into the int64_t carrier
+rg -n '\(int64_t\)\(intptr_t\)' src/ stdlib/
+
+# The tagged union and poly function typedefs
+rg -n 'tur_tagged_t|tur_poly_fn_t' src/compiler/emit_module.c
+</code></pre>
+<p>The choke point at <code>type_c_name()</code> is stable -- start there and walk
+outward.</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/type-erasure-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

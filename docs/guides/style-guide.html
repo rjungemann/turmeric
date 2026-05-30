@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Turmeric Style Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#turmeric-style-guide" style="">Turmeric Style Guide</a></li>
+<li style=""><a href="#function-arity" style="">Function Arity</a></li>
+<li style="padding-left:0.75rem;"><a href="#hard-parameter-limit" style="color:var(--text-sec);">Hard parameter limit</a></li>
+<li style="padding-left:0.75rem;"><a href="#more-than-5-params-reach-for-defstruct" style="color:var(--text-sec);">More than 5 params -- reach for defstruct</a></li>
+<li style="padding-left:0.75rem;"><a href="#default-values-via-partial-application-haskell-style-idiom" style="color:var(--text-sec);">Default values via partial application (Haskell-style idiom)</a></li>
+<li style="padding-left:0.75rem;"><a href="#genuine-variadic-interfaces-use-rest-type" style="color:var(--text-sec);">Genuine variadic interfaces -- use &amp; rest :type</a></li>
+<li style="padding-left:0.75rem;"><a href="#rules-for-rest" style="color:var(--text-sec);">Rules for &amp; rest</a></li>
+<li style="padding-left:0.75rem;"><a href="#cons-list-manipulation-in-unsafe-code" style="color:var(--text-sec);">Cons-list manipulation in #{Unsafe} code</a></li>
+<li style="padding-left:0.75rem;"><a href="#performance-note" style="color:var(--text-sec);">Performance note</a></li>
+<li style="padding-left:0.75rem;"><a href="#quick-decision-guide" style="color:var(--text-sec);">Quick decision guide</a></li>
+<li style=""><a href="#naming-conventions" style="">Naming Conventions</a></li>
+<li style=""><a href="#docstring-standard" style="">Docstring Standard (;;;)</a></li>
+<li style=""><a href="#indentation" style="">Indentation</a></li>
+<li style=""><a href="#inline-c-style" style="">Inline-C Style</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="turmeric-style-guide">Turmeric Style Guide</h1>
+<blockquote>
+<p><strong>Status:</strong> Living document -- updated as idioms are established.
+<strong>Last Updated:</strong> 2026-05-27</p>
+</blockquote>
+<hr />
+<h2 id="function-arity">Function Arity</h2>
+<h3 id="hard-parameter-limit">Hard parameter limit</h3>
+<p><code>MAX_FN_ARITY</code> is <strong>16</strong>. Functions with more than ~5 positional parameters
+are a code smell; 16 is an emergency escape hatch, not a target.</p>
+<h3 id="more-than-5-params-reach-for-defstruct">More than 5 params -- reach for <code>defstruct</code></h3>
+<p>When a function needs many named, independent inputs, pack them into a
+struct and pass a single options value:</p>
+<pre><code class="language-turmeric">(defstruct CsvOpts
+  [delim       :int   ;; field separator (e.g. 44 = ',')
+   quote       :int   ;; quote char (e.g. 34 = '&quot;')
+   has-header  :int   ;; 1 = first row is header
+   infer-rows  :int   ;; rows to sample for type inference
+   null-str    :cstr  ;; string that represents NULL (e.g. &quot;&quot;)
+  ])
+
+(defn read-csv [src :cstr opts :CsvOpts] :int
+  ...)
+</code></pre>
+<h4 id="default-values-via-partial-application-haskell-style-idiom">Default values via partial application (Haskell-style idiom)</h4>
+<p>With currying, locking in a default options value is a one-liner:</p>
+<pre><code class="language-turmeric">(def default-csv-opts (CsvOpts 44 34 1 100 &quot;&quot;))
+
+;; read-csv-fast is a closure with opts baked in.
+;; Call it with just the filename.
+(def read-csv-fast (read-csv default-csv-opts))
+
+(read-csv-fast &quot;data.csv&quot;)
+</code></pre>
+<p><code>(read-csv default-csv-opts)</code> returns a closure <code>(fn [src :cstr] :int ...)</code>.
+No macro magic, no keyword arguments -- just currying.</p>
+<h3 id="genuine-variadic-interfaces-use-rest-type">Genuine variadic interfaces -- use <code>&amp; rest :type</code></h3>
+<p>When a function takes an <em>unknown number of values of the same type</em>
+(<code>println</code>, <code>format</code>, aggregation column lists, etc.), use a variadic
+rest parameter:</p>
+<pre><code class="language-turmeric">(defn println-all [first :cstr &amp; rest :cstr] :void
+  (println first)
+  ;; rest is a cons-list of :cstr; walk it with head/tail helpers
+  ...)
+
+(println-all &quot;hello&quot;)              ;; rest = nil (0)
+(println-all &quot;a&quot; &quot;b&quot; &quot;c&quot;)         ;; rest = cons(&quot;b&quot;, cons(&quot;c&quot;, 0))
+</code></pre>
+<h4 id="rules-for-rest">Rules for <code>&amp; rest</code></h4>
+<ul>
+<li><strong>One <code>&amp;</code> per parameter list</strong> -- the rest parameter must be last.</li>
+<li><strong>Type annotation required</strong> -- <code>&amp; rest :int</code>, <code>&amp; rest :cstr</code>, etc.</li>
+<li><strong>Nil when absent</strong> -- calling with zero rest args passes <code>rest = 0</code>.</li>
+<li><strong>No inline-C in variadic bodies</strong> -- inline-C blocks declare fixed C
+  signatures. Wrap inline-C in a fixed-arity helper and call it from
+  the variadic body instead.</li>
+<li><strong>Not auto-curried</strong> -- variadic <code>defn</code> does not produce a curried entry
+  point. You can under-saturate up to the required positional params
+  (returning a variadic closure), but you cannot partially apply into
+  the rest slot.</li>
+</ul>
+<h4 id="cons-list-manipulation-in-unsafe-code">Cons-list manipulation in <code>#{Unsafe}</code> code</h4>
+<p>The rest parameter is an <code>int64_t</code> holding a pointer to a linked list
+of <code>__tur_cons_cell { int64_t head; int64_t tail; }</code> cells, or <code>0</code>
+(nil). Inline-C helpers that walk it:</p>
+<pre><code class="language-turmeric">(defn cons-list-sum [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t acc = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  while (p) { acc += p-&gt;head; p = (__tur_cons_cell *)(intptr_t)p-&gt;tail; }
+  return acc;
+  ```)
+</code></pre>
+<p>Or use a pure tail-recursive helper:</p>
+<pre><code class="language-turmeric">(defn cons-head [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  return p ? p-&gt;head : 0;
+  ```)
+
+(defn cons-tail [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  return p ? p-&gt;tail : 0;
+  ```)
+
+(defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
+  (if (= lst 0)
+    acc
+    (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))
+</code></pre>
+<h4 id="performance-note">Performance note</h4>
+<p>Each variadic call with <code>k</code> rest args allocates <code>k</code> cons cells on the
+heap. Variadics are for convenience calls, not hot paths. If you're
+calling a variadic function in a tight loop, consider refactoring to a
+fixed-arity helper.</p>
+<h3 id="quick-decision-guide">Quick decision guide</h3>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Reach for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&gt;5 named, independent params</td>
+<td><code>defstruct</code> options value</td>
+</tr>
+<tr>
+<td>Default values + currying</td>
+<td><code>defstruct</code> + <code>(def fast (f defaults))</code></td>
+</tr>
+<tr>
+<td>Unknown number of same-type values</td>
+<td><code>&amp; rest :type</code> variadic</td>
+</tr>
+<tr>
+<td>Recursive accumulator threading context</td>
+<td>closure-capture for context; fixed-arity for changing args</td>
+</tr>
+<tr>
+<td>Genuinely &gt;16 params</td>
+<td>Something is wrong -- split the function</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="naming-conventions">Naming Conventions</h2>
+<ul>
+<li><strong>Predicates</strong> end in <code>?</code>: <code>empty?</code>, <code>done?</code>, <code>nil?</code></li>
+<li><strong>Mutating / effectful helpers</strong> end in <code>!</code>: <code>assert!</code>, <code>push!</code></li>
+<li><strong>Private / internal helpers</strong> are prefixed with <code>__</code>: <code>__with-col-replace</code></li>
+<li><strong>Module-prefixed names</strong> use <code>/</code>: <code>frame/select</code>, <code>io/read-line</code></li>
+<li><strong>kebab-case</strong> everywhere for multi-word names</li>
+</ul>
+<hr />
+<h2 id="docstring-standard">Docstring Standard (<code>;;;</code>)</h2>
+<p>See the full standard in <a href="../CLAUDE.md#docstring-standard-">CLAUDE.md</a>.</p>
+<p>Quick reference:</p>
+<pre><code class="language-turmeric">;;; fn-name -- brief one-line summary.
+;;;
+;;; Parameters:
+;;;   param -- description
+;;;
+;;; Returns:
+;;;   description of return value
+;;;
+;;; Example:
+;;;   (fn-name arg)  ; =&gt; expected result
+;;;
+;;; Since: Phase B1
+(defn fn-name [param :int] :int
+  ...)
+</code></pre>
+<hr />
+<h2 id="indentation">Indentation</h2>
+<p>Follow Clojure-style indentation -- see <a href="../CLAUDE.md#indentation-style">CLAUDE.md</a>
+for the full rules.</p>
+<p>Key points:</p>
+<ul>
+<li>Regular function calls: align args under the first arg.</li>
+<li>Special forms (<code>defn</code>, <code>fn</code>, <code>let</code>, <code>if</code>, <code>do</code>): 2-space body indent.</li>
+<li>Binding vectors: align binding names under each other.</li>
+</ul>
+<hr />
+<h2 id="inline-c-style">Inline-C Style</h2>
+<ul>
+<li>Closing <code>```</code> and its <code>)</code> go on the <strong>same line</strong> (<code>```)</code>).</li>
+<li>Do not use inline-C in variadic function bodies -- use a fixed-arity
+  helper instead.</li>
+</ul>
+<pre><code class="language-turmeric">;; Good:
+(defn file-size [f] :int
+  ```c
+  return (int)ftell((FILE*)f);
+  ```)
+
+;; Bad (closing ``` on its own line breaks Markdown fences):
+(defn file-size [f] :int
+  ```c
+  return (int)ftell((FILE*)f);
+  ```
+)
+</code></pre>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/style-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

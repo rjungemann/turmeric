@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Developing Spices Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#developing-spices-guide" style="">Developing Spices Guide</a></li>
+<li style=""><a href="#when-to-create-a-spice" style="">When to Create a Spice</a></li>
+<li style=""><a href="#scaffolding-the-project" style="">Scaffolding the Project</a></li>
+<li style=""><a href="#the-buildtur-manifest" style="">The build.tur Manifest</a></li>
+<li style="padding-left:0.75rem;"><a href="#key-manifest-fields" style="color:var(--text-sec);">Key manifest fields</a></li>
+<li style=""><a href="#declaring-exports" style="">Declaring Exports</a></li>
+<li style=""><a href="#source-layout" style="">Source Layout</a></li>
+<li style=""><a href="#multi-file-spices-defmodule-import" style="">Multi-file Spices: defmodule + import</a></li>
+<li style="padding-left:0.75rem;"><a href="#the-correct-approach" style="color:var(--text-sec);">The correct approach</a></li>
+<li style="padding-left:0.75rem;"><a href="#anti-pattern-cross-file-type-stubs" style="color:var(--text-sec);">Anti-pattern: cross-file type stubs</a></li>
+<li style=""><a href="#depending-on-other-spices" style="">Depending on Other Spices</a></li>
+<li style=""><a href="#cross-spice-development-in-a-workspace" style="">Cross-spice Development in a Workspace</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-a-workspace-member-auto-resolution-no-manifest-entry-needed" style="color:var(--text-sec);">Option A: workspace-member auto-resolution (no manifest entry needed)</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-b-explicit-path-dep-works-outside-workspaces-too" style="color:var(--text-sec);">Option B: explicit :path dep (works outside workspaces too)</a></li>
+<li style="padding-left:0.75rem;"><a href="#tur-fetch-dry-run-for-verification" style="color:var(--text-sec);">tur fetch --dry-run for verification</a></li>
+<li style="padding-left:0.75rem;"><a href="#release-switch-to-a-url-dep-for-external-consumers" style="color:var(--text-sec);">Release: switch to a URL dep for external consumers</a></li>
+<li style=""><a href="#wrapping-a-c-library-with-cmake-deps" style="">Wrapping a C Library with :cmake-deps</a></li>
+<li style="padding-left:0.75rem;"><a href="#declaring-the-dependency" style="color:var(--text-sec);">Declaring the dependency</a></li>
+<li style="padding-left:0.75rem;"><a href="#declaring-c-symbols-in-turmeric" style="color:var(--text-sec);">Declaring C symbols in Turmeric</a></li>
+<li style="padding-left:0.75rem;"><a href="#inline-c-for-small-wrappers" style="color:var(--text-sec);">Inline C for small wrappers</a></li>
+<li style="padding-left:0.75rem;"><a href="#cmake-name-and-targets-overrides" style="color:var(--text-sec);">:cmake-name and :targets overrides</a></li>
+<li style=""><a href="#writing-the-public-api" style="">Writing the Public API</a></li>
+<li style="padding-left:0.75rem;"><a href="#module-docstring-optional" style="color:var(--text-sec);">Module docstring (optional)</a></li>
+<li style="padding-left:0.75rem;"><a href="#style-avoid-cons-0-chains-in-examples" style="color:var(--text-sec);">Style: avoid cons ... 0 chains in examples</a></li>
+<li style="padding-left:0.75rem;"><a href="#typed-variadic-rest-parameters" style="color:var(--text-sec);">Typed variadic rest parameters</a></li>
+<li style=""><a href="#testing-your-spice" style="">Testing Your Spice</a></li>
+<li style=""><a href="#versioning" style="">Versioning</a></li>
+<li style=""><a href="#publishing" style="">Publishing</a></li>
+<li style="padding-left:0.75rem;"><a href="#as-a-standalone-repository" style="color:var(--text-sec);">As a standalone repository</a></li>
+<li style="padding-left:0.75rem;"><a href="#contributing-to-turmeric-spices" style="color:var(--text-sec);">Contributing to turmeric-spices</a></li>
+<li style="padding-left:0.75rem;"><a href="#spice-registry-future" style="color:var(--text-sec);">Spice registry (future)</a></li>
+<li style=""><a href="#per-file-commands-inside-a-spice" style="">Per-file Commands Inside a Spice</a></li>
+<li style="padding-left:0.75rem;"><a href="#-i-for-extra-directories" style="color:var(--text-sec);">-I for extra directories</a></li>
+<li style="padding-left:0.75rem;"><a href="#-no-auto-spice-escape-hatch" style="color:var(--text-sec);">--no-auto-spice escape hatch</a></li>
+<li style="padding-left:0.75rem;"><a href="#when-auto-discovery-does-not-apply" style="color:var(--text-sec);">When auto-discovery does not apply</a></li>
+<li style=""><a href="#supporting-cmake-consumers" style="">Supporting CMake Consumers</a></li>
+<li style=""><a href="#emscripten-wasm-support" style="">Emscripten / WASM Support</a></li>
+<li style=""><a href="#global-spices-as-libraries-v2" style="">Global Spices as Libraries (v2)</a></li>
+<li style=""><a href="#release-checklist" style="">Release Checklist</a></li>
+<li style=""><a href="#see-also" style="">See Also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="developing-spices-guide">Developing Spices Guide</h1>
+<p>A <em>spice</em> is a Turmeric package that other projects depend on. This guide
+covers every step of authoring one: project structure, declaring exports,
+wrapping C libraries with <code>:cmake-deps</code>, testing, versioning, and publishing.</p>
+<p>See <a href="consuming-spices-guide.md">Consuming Spices</a> if you only need to add
+an existing spice to your project.</p>
+<hr />
+<h2 id="when-to-create-a-spice">When to Create a Spice</h2>
+<p>Create a spice when you want to:</p>
+<ul>
+<li>Share a library across multiple projects.</li>
+<li>Wrap a C library and expose it as a clean Turmeric API.</li>
+<li>Contribute to the official
+  <a href="https://github.com/rjungemann/turmeric-spices">turmeric-spices</a> monorepo.</li>
+<li>Distribute a library that others can add with <code>tur add</code>.</li>
+</ul>
+<p>For code shared only within a single project, use the module system -- no
+separate package is needed.</p>
+<hr />
+<h2 id="scaffolding-the-project">Scaffolding the Project</h2>
+<pre><code class="language-sh">tur new tur-mylib --lib
+cd tur-mylib
+</code></pre>
+<p>This creates:</p>
+<pre><code>tur-mylib/
+  build.tur        -- package manifest
+  tur.lock         -- empty lock file (commit to VCS)
+  src/
+    lib.tur        -- stub exported function
+  .gitignore
+  README.md
+</code></pre>
+<p>By convention, name the package with a <code>tur-</code> prefix. Consumers drop the
+prefix as the import alias: <code>tur-geom</code> becomes <code>geom</code>, <code>tur-math</code> becomes
+<code>math</code>.</p>
+<hr />
+<h2 id="the-buildtur-manifest">The <code>build.tur</code> Manifest</h2>
+<p>A complete library manifest:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defpackage tur-mylib
+  :name        &quot;tur-mylib&quot;
+  :version     &quot;0.1.0&quot;
+  :description &quot;A brief description of my library&quot;
+  :license     &quot;MIT&quot;
+  :authors     [&quot;Your Name &lt;you@example.com&gt;&quot;]
+  :repository  &quot;https://github.com/you/tur-mylib&quot;
+
+  :exports {
+    &quot;mylib/core&quot; [&quot;some-fn&quot; &quot;another-fn&quot;]
+    &quot;mylib/util&quot; [&quot;helper-fn&quot;]
+  })
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defpackage tur-mylib
+  :name        &quot;tur-mylib&quot;
+  :version     &quot;0.1.0&quot;
+  :description &quot;A brief description of my library&quot;
+  :license     &quot;MIT&quot;
+  :authors     [&quot;Your Name &lt;you@example.com&gt;&quot;]
+  :repository  &quot;https://github.com/you/tur-mylib&quot;
+
+  :exports {
+    &quot;mylib/core&quot; [&quot;some-fn&quot; &quot;another-fn&quot;]
+    &quot;mylib/util&quot; [&quot;helper-fn&quot;]
+  }
+</code></pre></div></div></div>
+<h3 id="key-manifest-fields">Key manifest fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Required</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>:name</code></td>
+<td>Yes</td>
+<td>Must match <code>[a-z][a-z0-9-]*</code></td>
+</tr>
+<tr>
+<td><code>:version</code></td>
+<td>Yes</td>
+<td>Semver: <code>MAJOR.MINOR.PATCH</code></td>
+</tr>
+<tr>
+<td><code>:description</code></td>
+<td>Recommended</td>
+<td>One-line summary</td>
+</tr>
+<tr>
+<td><code>:license</code></td>
+<td>Recommended</td>
+<td>SPDX identifier (e.g. <code>"MIT"</code>)</td>
+</tr>
+<tr>
+<td><code>:authors</code></td>
+<td>Recommended</td>
+<td><code>"Name &lt;email&gt;"</code> list</td>
+</tr>
+<tr>
+<td><code>:repository</code></td>
+<td>Recommended</td>
+<td>URL to the canonical Git repo</td>
+</tr>
+<tr>
+<td><code>:exports</code></td>
+<td>Yes (library)</td>
+<td>Map of module path to exported symbol names</td>
+</tr>
+<tr>
+<td><code>:spices</code></td>
+<td>If needed</td>
+<td>Turmeric package dependencies</td>
+</tr>
+<tr>
+<td><code>:cmake-deps</code></td>
+<td>If needed</td>
+<td>C/C++ library dependencies</td>
+</tr>
+<tr>
+<td><code>:build-opts</code></td>
+<td>Rarely</td>
+<td>Extra C compiler flags or additional link libs</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="declaring-exports">Declaring Exports</h2>
+<p>The <code>:exports</code> map controls what is visible to consumers. Only listed
+symbols are part of the public API; everything else is private.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:exports {
+  &quot;mylib/types&quot; [&quot;Coord&quot; &quot;Rect&quot; &quot;Color&quot;]
+  &quot;mylib/draw&quot;  [&quot;draw-rect&quot; &quot;draw-circle&quot; &quot;draw-line&quot;]
+  &quot;mylib/io&quot;    [&quot;read-file&quot; &quot;write-file&quot;]
+}
+</code></pre>
+<p>Each key (<code>"mylib/types"</code>) becomes an importable path for consumers:</p>
+<pre><code class="language-turmeric">(import mylib/types :refer [Coord Rect])
+(import mylib/draw  :refer [draw-rect])
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import mylib/types :refer [Coord Rect]
+import mylib/draw  :refer [draw-rect]
+</code></pre></div></div></div>
+<p>Internal helpers that should not be exposed are simply omitted from
+<code>:exports</code>.</p>
+<hr />
+<h2 id="source-layout">Source Layout</h2>
+<p>Follow this layout so that module paths and file paths align without
+extra configuration:</p>
+<pre><code>tur-mylib/
+  build.tur
+  tur.lock
+  src/
+    types.tur       -- exports &quot;mylib/types&quot;
+    draw.tur        -- exports &quot;mylib/draw&quot;
+    io.tur          -- exports &quot;mylib/io&quot;
+    internal/
+      helpers.tur   -- not exported; only imported by other src files
+  tests/
+    types_test.tur
+    draw_test.tur
+</code></pre>
+<p>The module path <code>"mylib/types"</code> resolves to <code>src/types.tur</code>. A nested path
+<code>"mylib/net/http"</code> resolves to <code>src/net/http.tur</code>.</p>
+<hr />
+<h2 id="multi-file-spices-defmodule-import">Multi-file Spices: <code>defmodule</code> + <code>import</code></h2>
+<p>When a spice spans more than one source file, use <code>defmodule</code> with an explicit
+<code>(export ...)</code> list and <code>(import &lt;other-module&gt; :refer [...])</code> to wire the
+files together. The module system handles cross-file symbol sharing correctly
+at every scale.</p>
+<h3 id="the-correct-approach">The correct approach</h3>
+<p>Each file declares its own <code>defmodule</code>, exports what it offers, and imports
+what it needs from siblings:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; src/mylib/types.tur
+(defmodule mylib/types
+  (export Widget WidgetResult)
+  (defstruct Widget [value :int])
+  ...)
+</code></pre>
+<pre><code class="language-turmeric">;; src/mylib/core.tur
+(defmodule mylib/core
+  (export make-widget widget-value)
+  (import mylib/types :refer [Widget WidgetResult])
+
+  (defn make-widget [v :int] :Widget ...)
+  (defn widget-value [w :Widget] :int ...))
+</code></pre>
+<p><code>tur check</code>, <code>tur emit-c</code>, and <code>tur build</code> all resolve intra-spice imports
+automatically through the auto-spice include path -- no <code>-I</code> flags needed.
+See <a href="#per-file-commands-inside-a-spice">Per-file Commands Inside a Spice</a>.</p>
+<h3 id="anti-pattern-cross-file-type-stubs">Anti-pattern: cross-file type stubs</h3>
+<p>An older pattern copies function bodies across files so each file compiles
+in isolation without imports:</p>
+<pre><code class="language-turmeric">;; src/mylib/io.tur -- ANTI-PATTERN
+;; Stub copy of make-widget from core.tur; real body is return NULL.
+(defn make-widget [v :int] #{Unsafe} :Widget
+  ```c
+  return NULL;
+  ```)
+
+(defn read-widget [path :cstr] :Widget ...)  ;; real implementation
+</code></pre>
+<p>This pattern fails in three ways:</p>
+<ul>
+<li><strong>Silent breakage</strong>: stubs with <code>return NULL</code> or no-op bodies mean any
+  code path that hits the stub produces garbage or does nothing -- with no
+  diagnostic.</li>
+<li><strong>Linker errors when combined</strong>: two files that both define <code>make-widget</code>
+  as a <code>static</code> C function produce duplicate-symbol link failures the moment
+  they are compiled together (via <code>(load ...)</code> or <code>tur build</code>).</li>
+<li><strong>Per-file checks appear clean</strong>: each file is self-contained so
+  <code>tur check</code>/<code>tur emit-c</code> on a single file passes while the combined build
+  fails.</li>
+</ul>
+<p>The <code>scscm</code> spice used this pattern across all five of its source files.
+It was eliminated in the 2026-05 import refactor by converting each file to
+<code>defmodule</code> + <code>import</code>. See
+<a href="../scscm-spice-import-refactor-plan.md">scscm-spice-import-refactor-plan.md</a>
+for the full migration. If you encounter the stub pattern in other spices,
+the fix is the same: add a <code>(defmodule ...)</code> + <code>(export ...)</code> header and
+replace each stub block with <code>(import &lt;module&gt; :refer [...])</code>.</p>
+<hr />
+<h2 id="depending-on-other-spices">Depending on Other Spices</h2>
+<p>Add Turmeric spice dependencies the same way any project does:</p>
+<pre><code class="language-sh">tur add https://github.com/rjungemann/turmeric-spices \
+  --ref math-v0.1.0 --subdir spices/math --name math
+</code></pre>
+<p>This produces:</p>
+<pre><code class="language-turmeric">:spices {
+  &quot;math&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+          :ref    &quot;math-v0.1.0&quot;
+          :subdir &quot;spices/math&quot;}
+}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices {
+  &quot;math&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+          :ref    &quot;math-v0.1.0&quot;
+          :subdir &quot;spices/math&quot;}
+}
+</code></pre></div></div></div>
+<p>Mark spices that are only needed for tests <code>:optional true</code> so consumers
+are not forced to fetch them:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:spices {
+  &quot;test&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+          :ref    &quot;test-v0.1.0&quot;
+          :subdir &quot;spices/test&quot;
+          :optional true}
+}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices {
+  &quot;test&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+          :ref    &quot;test-v0.1.0&quot;
+          :subdir &quot;spices/test&quot;
+          :optional true}
+}
+</code></pre></div></div></div>
+<hr />
+<h2 id="cross-spice-development-in-a-workspace">Cross-spice Development in a Workspace</h2>
+<p>When your spices live in the same workspace (a parent directory with a <code>build.tur</code>
+that lists all members under <code>:members</code>), you can import one sibling from another
+<strong>without publishing a release or running <code>tur fetch</code></strong>.</p>
+<h3 id="option-a-workspace-member-auto-resolution-no-manifest-entry-needed">Option A: workspace-member auto-resolution (no manifest entry needed)</h3>
+<p>If both spices are already listed in the workspace <code>build.tur</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; turmeric-spices/build.tur
+(defpackage turmeric-spices
+  :members [&quot;spices/watch&quot; &quot;spices/notebook&quot; ...])
+</code></pre>
+<p>Then <code>notebook</code> can <code>(import watch/watch ...)</code> directly -- the resolver walks up
+to the workspace <code>build.tur</code>, finds that <code>watch</code> is a listed member, and adds its
+<code>src/</code> to the search path automatically.</p>
+<pre><code class="language-sh"># No tur fetch, no symlink, no lock entry required:
+cd spices/notebook
+tur check src/notebook/cli.tur   # resolves watch/watch via workspace
+</code></pre>
+<p>The first time an undeclared sibling import resolves, <code>tur</code> prints a one-time
+advisory:</p>
+<pre><code>warning: import 'watch/watch' resolved via workspace sibling
+         'spices/watch'; declare it in :spices for release builds.
+         (set TUR_DEBUG_RESOLVER=1 for full resolver tracing)
+</code></pre>
+<p>To confirm a name is a workspace member before importing:</p>
+<pre><code class="language-sh">tur add --workspace watch   # exits 0, prints &quot;no manifest entry needed&quot;
+tur add --workspace typo    # fails if 'typo' is not in :members
+</code></pre>
+<h3 id="option-b-explicit-path-dep-works-outside-workspaces-too">Option B: explicit <code>:path</code> dep (works outside workspaces too)</h3>
+<p>Add a <code>:path</code> entry pointing at the sibling spice directory:</p>
+<pre><code class="language-sh">tur add ../watch --path
+</code></pre>
+<p>This writes to <code>build.tur</code>:</p>
+<pre><code class="language-turmeric">:spices {
+  &quot;watch&quot; {:path &quot;../watch&quot;}
+}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices {
+  &quot;watch&quot; {:path &quot;../watch&quot;}
+}
+</code></pre></div></div></div>
+<p>The resolver immediately adds <code>../watch/src</code> to the include path.
+No <code>tur fetch</code> step is required, and no lock entry is written for this dep.
+The path is resolved relative to the directory containing <code>build.tur</code>.</p>
+<pre><code class="language-sh">tur check src/notebook/cli.tur   # resolves watch/watch via :path
+</code></pre>
+<p>If the declared <code>:path</code> does not exist on disk (or contains no <code>build.tur</code>),
+<code>tur fetch</code> reports a hard error rather than silently ignoring the missing dep.</p>
+<h3 id="tur-fetch-dry-run-for-verification"><code>tur fetch --dry-run</code> for verification</h3>
+<p>To confirm how each dep will be classified before committing to a real fetch:</p>
+<pre><code class="language-sh">tur fetch --dry-run
+# skip :path          watch
+# skip workspace member  alpha
+# fetch  URL          ansi  https://github.com/...  ansi-v0.1.4
+# summary: 1 fetch, 2 skipped (local)
+</code></pre>
+<p>Local-source deps are never contacted or locked. Only URL deps appear in <code>tur.lock</code>.</p>
+<h3 id="release-switch-to-a-url-dep-for-external-consumers">Release: switch to a URL dep for external consumers</h3>
+<p>The workspace auto-resolution and <code>:path</code> entries are local-development shortcuts.
+For a spice that will be published and consumed outside the workspace, add a URL
+entry alongside (or instead of) the local one:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:spices {
+  &quot;watch&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+           :ref    &quot;watch-v0.1.0&quot;
+           :subdir &quot;spices/watch&quot;}
+}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices {
+  &quot;watch&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+           :ref    &quot;watch-v0.1.0&quot;
+           :subdir &quot;spices/watch&quot;}
+}
+</code></pre></div></div></div>
+<p>External consumers run <code>tur fetch</code> once to clone the ref and populate <code>tur.lock</code>.
+Inside the workspace, a URL <code>:spices</code> entry whose name matches a workspace member
+is resolved locally instead -- no spurious fetch occurs for deps you are developing
+in the same workspace.</p>
+<hr />
+<h2 id="wrapping-a-c-library-with-cmake-deps">Wrapping a C Library with <code>:cmake-deps</code></h2>
+<p>The <code>:cmake-deps</code> block tells <code>tur build</code> to fetch and compile a C library
+via CMake, then inject the resulting include dirs and link flags into the
+compilation step. You write only Turmeric; CMake is an implementation detail.</p>
+<h3 id="declaring-the-dependency">Declaring the dependency</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:cmake-deps {
+  &quot;sqlite3&quot; {:url     &quot;https://github.com/sqlite/sqlite&quot;
+             :ref     &quot;version-3.47.2&quot;
+             :options {:BUILD_SHARED_LIBS &quot;OFF&quot;}}
+}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:cmake-deps {
+  &quot;sqlite3&quot; {:url     &quot;https://github.com/sqlite/sqlite&quot;
+             :ref     &quot;version-3.47.2&quot;
+             :options {:BUILD_SHARED_LIBS &quot;OFF&quot;}}
+}
+</code></pre></div></div></div>
+<p><code>:options</code> sets CMake cache variables (<code>-DKEY=VALUE</code>). Common patterns:</p>
+<ul>
+<li>Disable shared libs: <code>:BUILD_SHARED_LIBS "OFF"</code></li>
+<li>Disable examples or tests: <code>:BUILD_EXAMPLES "OFF"</code>, <code>:YYJSON_BUILD_TESTS "OFF"</code></li>
+<li>Control feature sets: depends on the upstream library's own CMake options</li>
+</ul>
+<h3 id="declaring-c-symbols-in-turmeric">Declaring C symbols in Turmeric</h3>
+<p>Use <code>include-c</code> to pull in the C header and <code>extern-c</code> to declare symbols:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; src/db.tur
+(include-c &quot;sqlite3.h&quot;)
+
+(extern-c sqlite3_open   [:cstr :ptr] :int)
+(extern-c sqlite3_close  [:ptr]       :int)
+(extern-c sqlite3_exec   [:ptr :cstr :ptr :ptr :ptr] :int)
+(extern-c sqlite3_errmsg [:ptr] :cstr)
+
+(defn db-open [path :cstr] (result :ptr)
+  (let [db-ptr (make-ptr)]
+    (let [rc (sqlite3_open path db-ptr)]
+      (if (= rc 0)
+        (ok (deref-ptr db-ptr))
+        (err (cstr-&gt;str (sqlite3_errmsg (deref-ptr db-ptr))))))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; src/db.tur
+include-c &quot;sqlite3.h&quot;
+
+extern-c sqlite3_open   [:cstr :ptr] :int
+extern-c sqlite3_close  [:ptr]       :int
+extern-c sqlite3_exec   [:ptr :cstr :ptr :ptr :ptr] :int
+extern-c sqlite3_errmsg [:ptr] :cstr
+
+defn db-open [path :cstr] (result :ptr)
+  let [db-ptr (make-ptr)]
+    let [rc (sqlite3_open path db-ptr)]
+      if {rc = 0}
+        ok(deref-ptr(db-ptr))
+        err(cstr-&gt;str(sqlite3_errmsg(deref-ptr(db-ptr))))
+</code></pre></div></div></div>
+<p><code>extern-c</code> trusts the signature you give it -- double-check it against the
+actual C header. No <code>-I</code> or <code>-L</code> flags are needed in your source; <code>tur build</code>
+injects them from <code>cmake/spice-deps-manifest.json</code>.</p>
+<h3 id="inline-c-for-small-wrappers">Inline C for small wrappers</h3>
+<p>When a binding is simpler to write directly in C, use an inline-C block:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn db-last-insert-rowid [db :ptr] :int
+  ```c
+  return (int)sqlite3_last_insert_rowid((sqlite3*)db);
+  ```)
+</code></pre>
+<p>The closing <code>```</code> and its enclosing <code>)</code> must be on the same line. See
+the <a href="../../CLAUDE.md">inline-C style rule</a> for why.</p>
+<h3 id="cmake-name-and-targets-overrides"><code>:cmake-name</code> and <code>:targets</code> overrides</h3>
+<p>When the CMake <code>find_package</code> name or target name differs from the key in
+<code>:cmake-deps</code>, supply overrides:</p>
+<pre><code class="language-turmeric">:cmake-deps {
+  &quot;sqlite&quot; {:url        &quot;https://github.com/sqlite/sqlite&quot;
+            :ref        &quot;version-3.47.2&quot;
+            :cmake-name &quot;SQLite3&quot;
+            :targets    [&quot;SQLite::SQLite3&quot;]}
+}
+</code></pre>
+<p>For the full <code>:cmake-deps</code> field reference, the generated <code>SpiceDeps.cmake</code>
+format, the <code>spice-deps-manifest.json</code> schema, and hash locking, see the
+<a href="../archive/cmake-cpm-integration-plan.md">CMake/CPM integration notes</a>.</p>
+<hr />
+<h2 id="writing-the-public-api">Writing the Public API</h2>
+<p>Every exported symbol should have a <code>;;;</code> docstring immediately above its
+definition. The standard format (from CLAUDE.md):</p>
+<pre><code class="language-turmeric">;;; db-open -- open an SQLite database file.
+;;;
+;;; Parameters:
+;;;   path -- filesystem path to the database file (created if absent)
+;;;
+;;; Returns:
+;;;   (ok db) on success, (err message) if the file cannot be opened
+;;;
+;;; Example:
+;;;   (match (db-open &quot;app.db&quot;)
+;;;     (ok db) (println &quot;opened&quot;)
+;;;     (err m) (println &quot;failed:&quot; m))
+;;;
+;;; Since: Phase P2
+(defn db-open [path :cstr] (result :ptr)
+  ...)
+</code></pre>
+<p>Exported symbols without docstrings will be omitted from <code>just docs</code> output.</p>
+<h3 id="module-docstring-optional">Module docstring (optional)</h3>
+<p>A spice module can optionally include a module-level docstring at the very top
+of the file, before the first <code>defn</code>, <code>defmacro</code>, <code>defstruct</code>, <code>definstance</code>,
+or <code>defopaque</code>. Place a contiguous <code>;;;</code> block followed by a <code>;;</code> comment line
+(which acts as the separator):</p>
+<pre><code class="language-turmeric">;;; myspice/db -- SQLite database bindings.
+;;;
+;;; Thin wrapper around libsqlite3; provides open/close/query/exec with
+;;; result-typed error handling.
+;;;
+;;; Since: Phase P2
+;; ---- SQLite bindings ----
+(extern-c sqlite3_open ...)
+</code></pre>
+<p>Without a module docstring the page renders with no description block -- the
+per-symbol cards still appear normally.</p>
+<h3 id="style-avoid-cons-0-chains-in-examples">Style: avoid <code>cons ... 0</code> chains in examples</h3>
+<p>In README quick-starts and docstring examples, do not show runtime list values
+as <code>(cons x (cons y 0))</code> chains. The trailing <code>0</code> is the nil-of-list footgun --
+new readers have no way to tell that <code>0</code> means "end of list," and the chain
+itself reads in reversed nesting order.</p>
+<p>Use the <code>list</code> macro instead. It expands to the same <code>tcons</code>/<code>tnil</code> cells, so
+it's a drop-in for any API that today takes a <code>:int</code> cons list:</p>
+<pre><code class="language-turmeric">;; Avoid
+(group-by f (cons &quot;g&quot; 0))
+(plot (cons (axes) (cons (function f) 0)))
+
+;; Prefer
+(group-by f (list &quot;g&quot;))
+(plot (list (axes) (function f)))
+</code></pre>
+<p>Pair-cons (<code>(cons key value)</code> with no trailing <code>0</code>) is fine -- a two-element
+pair is a clear, idiomatic data shape. The footgun is the nil-terminated chain.</p>
+<p>If your spice API can take a <code>Vec</code> instead of a cons list, prefer that and
+document it with <code>(vec-of ...)</code>. The end goal is for <code>cons</code> to disappear from
+quick-start surfaces entirely.</p>
+<h3 id="typed-variadic-rest-parameters">Typed variadic rest parameters</h3>
+<p>A <code>&amp; rest :T</code> parameter type-checks against <code>T</code> even when <code>T</code> is a user-defined
+type -- a <code>defopaque</code> newtype, struct, ADT, or type application. The rest
+element type is resolved to its full type and each argument is checked by
+identity at the call site, so you can give a variadic API a real handle type
+instead of an untyped <code>:int</code>:</p>
+<pre><code class="language-turmeric">(defopaque Route :int)
+
+;; Each rest arg must be a Route; a raw :int or a different opaque is rejected.
+(defn launch [&amp; routes :Route] :ptr&lt;void&gt;
+  ...)
+</code></pre>
+<p>The old workaround of declaring the rest as <code>:int</code> and casting handles back
+inside the body is no longer needed. For an interface that mixes distinct
+handle types (e.g. middlewares and routes), use two explicit <code>:list&lt;T&gt;</code>
+parameters rather than one untyped rest -- a single <code>&amp; rest</code> is one
+homogeneous element type by design.</p>
+<hr />
+<h2 id="testing-your-spice">Testing Your Spice</h2>
+<p>Add <code>tur-test</code> as an optional dependency and place test files in <code>tests/</code>:</p>
+<pre><code class="language-sh">tur add https://github.com/rjungemann/turmeric-spices \
+  --ref test-v0.1.0 --subdir spices/test --name test
+</code></pre>
+<p>A test file using <code>tur-test</code>:</p>
+<pre><code class="language-turmeric">(import test/assert :refer [assert-eq assert-ok assert-err])
+(import test/suite  :refer [describe it])
+(import test/runner :refer [run-all])
+(import mylib/core  :refer [some-fn])
+
+(describe &quot;some-fn&quot;
+  (it &quot;returns the expected value&quot;
+    (assert-eq (some-fn 10) 42))
+  (it &quot;returns err for invalid input&quot;
+    (assert-err (some-fn nil))))
+
+(run-all)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import test/assert :refer [assert-eq assert-ok assert-err]
+import test/suite  :refer [describe it]
+import test/runner :refer [run-all]
+import mylib/core  :refer [some-fn]
+
+describe &quot;some-fn&quot;
+  it &quot;returns the expected value&quot;
+    assert-eq(some-fn(10), 42)
+  it &quot;returns err for invalid input&quot;
+    assert-err(some-fn(nil))
+
+run-all()
+</code></pre></div></div></div>
+<p>Run the test suite:</p>
+<pre><code class="language-sh">tur test
+</code></pre>
+<p>For the full testing API see <a href="test-runner-contract.md">test-runner-contract.md</a>.</p>
+<hr />
+<h2 id="versioning">Versioning</h2>
+<ul>
+<li>Use semver: <code>MAJOR.MINOR.PATCH</code>.</li>
+<li>Git tags must be <code>vMAJOR.MINOR.PATCH</code> for standalone repos (<code>v0.1.0</code>).</li>
+<li>For spices inside the <code>turmeric-spices</code> monorepo use the per-spice tag
+  format <code>&lt;spice&gt;-vMAJOR.MINOR.PATCH</code> (<code>math-v0.1.0</code>, <code>sqlite-v0.2.1</code>).</li>
+<li>Pre-releases: <code>v0.2.0-alpha.1</code>.</li>
+<li>Bump <code>MAJOR</code> for breaking API changes, <code>MINOR</code> for additive changes,
+  <code>PATCH</code> for bug fixes.</li>
+</ul>
+<hr />
+<h2 id="publishing">Publishing</h2>
+<h3 id="as-a-standalone-repository">As a standalone repository</h3>
+<pre><code class="language-sh">git tag v0.1.0
+git push &amp;&amp; git push --tags
+</code></pre>
+<p>Consumers then add your spice with:</p>
+<pre><code class="language-sh">tur add https://github.com/you/tur-mylib --ref v0.1.0
+</code></pre>
+<h3 id="contributing-to-turmeric-spices">Contributing to turmeric-spices</h3>
+<p>The <a href="https://github.com/rjungemann/turmeric-spices">turmeric-spices</a> monorepo
+accepts spices that meet the bar for the ecosystem. To contribute:</p>
+<ol>
+<li>Fork the monorepo and add your spice under <code>spices/&lt;name&gt;/</code>.</li>
+<li>Add it to the workspace root <code>build.tur</code> <code>:members</code> list.</li>
+<li>Include a <code>README.md</code> and at least one test file.</li>
+<li>Open a pull request.</li>
+</ol>
+<p>After merging, tag the spice's first release:</p>
+<pre><code class="language-sh">git tag math-v0.1.0
+git push --tags
+</code></pre>
+<p>Consumers use <code>--subdir spices/&lt;name&gt;</code> when adding:</p>
+<pre><code class="language-sh">tur add https://github.com/rjungemann/turmeric-spices \
+  --ref myspice-v0.1.0 --subdir spices/myspice --name myspice
+</code></pre>
+<h3 id="spice-registry-future">Spice registry (future)</h3>
+<p>Once <code>pkg.turmeric-lang.org</code> launches, <code>tur publish</code> will register the
+package and consumers will use <code>tur add spice/&lt;name&gt;</code> without a Git URL.</p>
+<hr />
+<h2 id="per-file-commands-inside-a-spice">Per-file Commands Inside a Spice</h2>
+<p><code>tur build &lt;dir&gt;</code> and <code>tur run</code> (project mode) know about the spice they
+live in because they start by reading <code>build.tur</code>. For <code>tur build &lt;dir&gt;</code>
+that means: descend into <code>src/</code> (recursively, including nested
+<code>src/&lt;pkg&gt;/</code> trees), skip the manifest itself, compile every module,
+resolve the include path from the project's own <code>src/</code> plus each
+<code>:spices</code> dep's <code>src/</code>, and verify each declared <code>:exports</code> module has a
+backing source file -- failing loudly otherwise. (See
+<a href="../manifest-driven-build-descent-plan.md">manifest-driven-build-descent-plan.md</a>.)
+The per-file subcommands <code>tur check</code>, <code>tur emit-c</code>, <code>tur emit-h</code>, and
+<code>tur run &lt;file&gt;</code> get the same module resolution automatically -- they
+walk up from the input file looking for a sibling <code>build.tur</code> and add
+that spice's <code>src/</code> (and its <code>:spices</code> deps' <code>src/</code>) to the include path.</p>
+<p>This means editors, format-on-save hooks, LSP clients, and quick
+"compile this one file" loops work without per-spice configuration:</p>
+<pre><code class="language-sh">cd spices/frame
+tur check src/frame/frame.tur     # resolves intra-spice imports
+tur emit-c src/frame/schema.tur   # same
+tur run src/frame/quickstart.tur  # builds and executes
+</code></pre>
+<p>The walk-up is capped at 16 ancestor directories, so a stray
+<code>build.tur</code> far above your working tree won't accidentally win.</p>
+<h3 id="-i-for-extra-directories"><code>-I</code> for extra directories</h3>
+<p>Explicit <code>-I &lt;dir&gt;</code> flags still work and take priority over
+auto-discovered paths -- useful for fixtures, vendored copies, or when
+you want to test against a different version of a dep:</p>
+<pre><code class="language-sh">tur check -I vendor/alternate src/main.tur
+</code></pre>
+<p><code>-I</code> accepts both the spaced (<code>-I path</code>) and concatenated (<code>-Ipath</code>)
+forms.</p>
+<h3 id="-no-auto-spice-escape-hatch"><code>--no-auto-spice</code> escape hatch</h3>
+<p>If you need to compile a file as if no spice exists around it (rare --
+typically only useful for resolver-fixture tests or when an unrelated
+<code>build.tur</code> is in the ancestor chain), pass <code>--no-auto-spice</code>:</p>
+<pre><code class="language-sh">tur --no-auto-spice check tests/fixtures/resolver/input.tur
+</code></pre>
+<p>This restores the pre-auto-discovery behavior: only the input file's
+own directory, the stdlib, and any explicit <code>-I</code> paths are searched.</p>
+<h3 id="when-auto-discovery-does-not-apply">When auto-discovery does not apply</h3>
+<ul>
+<li><code>tur build &lt;dir&gt;</code> -- already configures itself from the directory's
+  <code>build.tur</code> (reads the manifest, descends into <code>src/</code>, and resolves the
+  include path); the per-file walk-up does not apply.</li>
+<li><code>tur build &lt;file&gt;</code> -- the single-file build doesn't auto-discover;
+  use <code>tur run &lt;file&gt;</code> if you want the same convenience for a one-off
+  invocation, or pass <code>-I</code> explicitly.</li>
+<li><code>tur format &lt;file&gt;</code> -- the formatter doesn't resolve imports, so
+  include paths are irrelevant.</li>
+</ul>
+<hr />
+<h2 id="supporting-cmake-consumers">Supporting CMake Consumers</h2>
+<p>If you want C and C++ projects to consume your spice via CMake or CPM
+without knowing anything about Turmeric, run:</p>
+<pre><code class="language-sh">tur emit-cmake
+</code></pre>
+<p>This reads <code>build.tur</code> and generates <code>CMakeLists.txt</code>,
+<code>&lt;name&gt;Config.cmake</code>, and helper modules. Commit those files, tag the
+release, and a CPM consumer can add your library with:</p>
+<pre><code class="language-cmake">CPMAddPackage(
+  NAME    tur-mylib
+  URL     https://github.com/you/tur-mylib/archive/refs/tags/v0.1.0.tar.gz
+  VERSION 0.1.0
+)
+target_link_libraries(my_app PRIVATE tur-mylib::all)
+</code></pre>
+<p>For the complete step-by-step see
+<a href="using-turmeric-from-cmake.md">Using a Turmeric library from CMake</a>.</p>
+<hr />
+<h2 id="emscripten-wasm-support">Emscripten / WASM Support</h2>
+<p>Once <code>tur build --target wasm</code> lands, all cmake-deps spices will get WASM
+builds automatically when the underlying C library supports Emscripten.
+To make your spice Emscripten-compatible:</p>
+<ul>
+<li>Prefer C libraries with documented Emscripten support (yyjson, mbedTLS,
+  PCRE2, and the SQLite amalgamation all qualify).</li>
+<li>Avoid libraries that require native threads or sockets without WASM
+  fallbacks.</li>
+<li>Use <code>#ifdef __EMSCRIPTEN__</code> in inline-C blocks to handle differences
+  (e.g. skipping native TLS when the browser provides its own TLS stack).</li>
+</ul>
+<hr />
+<h2 id="global-spices-as-libraries-v2">Global Spices as Libraries (v2)</h2>
+<p>A spice installed globally with <code>tur install</code> is currently usable as a
+<strong>command-line tool only</strong>: its <code>:bin</code> entries are symlinked into
+<code>~/.local/bin/</code> and become available as <code>tur-&lt;cmd&gt;</code> (or via the
+<code>tur &lt;cmd&gt;</code> fallthrough). The same install is <strong>not</strong> automatically
+visible as a library to other projects -- the global <code>spices/</code> root is
+left out of the default module-resolution path to preserve build
+reproducibility.</p>
+<p>A future v2 will let a project opt in to consuming a globally-installed
+spice as a library by naming it in its <code>build.tur</code>:</p>
+<pre><code class="language-turmeric">:spices {
+  &quot;notebook&quot; {:global true}
+}
+</code></pre>
+<p><code>tur fetch</code> would then validate the global install exists at a matching
+version and record its resolved SHA in <code>tur.lock</code>. A project-level
+<code>:global-policy</code> knob would decide whether a missing global install gets
+auto-installed or errors out.</p>
+<p>This is <strong>deferred</strong>; until it ships, a spice that wants to be reused as
+a library should be added the normal way with <code>tur add</code>. See the
+<a href="../global-spice-install-plan.md#imports-from-global-spices">global-spice-install plan</a>
+for the full design sketch.</p>
+<hr />
+<h2 id="release-checklist">Release Checklist</h2>
+<ul>
+<li>[ ] <code>tur build --release</code> passes with no warnings</li>
+<li>[ ] <code>tur test</code> passes</li>
+<li>[ ] All public symbols are listed in <code>:exports</code></li>
+<li>[ ] Each exported symbol has a <code>;;;</code> docstring (summary + params + returns + example)</li>
+<li>[ ] cmake-deps spices build cleanly on macOS and Linux</li>
+<li>[ ] <code>tur emit-cmake</code> succeeds if you intend to support CMake consumers</li>
+<li>[ ] Generated CMake files are committed if supporting CMake consumers</li>
+<li>[ ] <code>CHANGELOG.md</code> entry written</li>
+<li>[ ] Git tag pushed: <code>git tag v0.1.0 &amp;&amp; git push --tags</code></li>
+</ul>
+<hr />
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="consuming-spices-guide.md">Consuming spices</a> -- adding and using spices in a project</li>
+<li><a href="package-management-guide.md">Package management guide</a> -- full <code>build.tur</code> manifest reference and <code>tur</code> CLI</li>
+<li><a href="c-integration-guide.md">C integration guide</a> -- <code>extern-c</code>, <code>include-c</code>, inline-C blocks</li>
+<li><a href="../archive/cmake-cpm-integration-plan.md">CMake/CPM integration notes</a> -- cmake-deps internals, generated files, hash locking, security</li>
+<li><a href="using-turmeric-from-cmake.md">Using a Turmeric library from CMake</a> -- step-by-step guide for <code>tur emit-cmake</code></li>
+<li><a href="test-runner-contract.md">Test runner contract</a> -- full testing API</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/developing-spices-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>State Machines Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#state-machines-in-turmeric" style="">State Machines in Turmeric</a></li>
+<li style=""><a href="#approaches-overview" style="">Approaches Overview</a></li>
+<li style=""><a href="#1-pure-transition-function" style="">1. Pure Transition Function</a></li>
+<li style=""><a href="#2-state-algebraic-effects" style="">2. State + Algebraic Effects</a></li>
+<li style=""><a href="#3-free-monad" style="">3. Free Monad</a></li>
+<li style=""><a href="#4-arrow-composition" style="">4. Arrow Composition</a></li>
+<li style=""><a href="#5-serializable-workflows" style="">5. Serializable Workflows</a></li>
+<li style=""><a href="#recommendation" style="">Recommendation</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="state-machines-in-turmeric">State Machines in Turmeric</h1>
+<h2 id="approaches-overview">Approaches Overview</h2>
+<p>Five approaches, from simplest to most sophisticated:</p>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Best for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pure transition function</td>
+<td>Simple, pure, easily testable machines</td>
+</tr>
+<tr>
+<td>Algebraic effects</td>
+<td>Transitions with side effects (I/O, logging)</td>
+</tr>
+<tr>
+<td>Free monad</td>
+<td>Pluggable interpretation / multiple backends</td>
+</tr>
+<tr>
+<td>Arrow composition</td>
+<td>Signal-processing pipelines with feedback</td>
+</tr>
+<tr>
+<td>Serializable workflows</td>
+<td>Machines that suspend and resume across restarts</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1-pure-transition-function">1. Pure Transition Function</h2>
+<p>Model states and events as <code>defdata</code> variants, write a <code>transition</code> function
+with nested <code>match</code>. Guards (<code>when</code>) handle conditional transitions.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdata State (Idle) (Running :int) (Done))
+(defdata Event (Start) (Tick :int) (Stop))
+
+(defn transition [state :State event :Event] :State
+  (match state
+    (Idle)      (match event
+                  (Start)   (Running 0)
+                  (Tick _)  (Idle)
+                  (Stop)    (Idle))
+    (Running n) (match event
+                  (Tick x)  (Running (+ n x))
+                  (Stop)    (Done)
+                  (Start)   (Running n))
+    (Done)      (Done)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defdata State (Idle) (Running :int) (Done)
+defdata Event (Start) (Tick :int) (Stop)
+
+defn transition [state :State event :Event] :State
+  match state
+    (Idle)
+      match event
+        (Start)   Running(0)
+        (Tick _)  Idle()
+        (Stop)    Idle()
+    (Running n)
+      match event
+        (Tick x)  Running({n + x})
+        (Stop)    Done()
+        (Start)   Running(n)
+    (Done)  Done()
+</code></pre></div></div></div>
+<hr />
+<h2 id="2-state-algebraic-effects">2. State + Algebraic Effects</h2>
+<p>When transitions need side effects, declare them with <code>defeffect</code> and keep the
+transition logic pure. A <code>handle</code> block wires in the real implementation later,
+making the machine testable with mock handlers.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Emit [msg :cstr] :nil ^extends IO)
+(defeffect Store [key :cstr val :int] :nil ^extends IO)
+
+(defn step [state :State event :Event] :State
+  (match state
+    (Running n) (match event
+                  (Tick x) (do
+                    (perform (Emit &quot;tick&quot;))
+                    (perform (Store &quot;count&quot; (+ n x)))
+                    (Running (+ n x)))
+                  ...)
+    ...))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Emit [msg :cstr] :nil ^extends IO
+defeffect Store [key :cstr val :int] :nil ^extends IO
+
+defn step [state :State event :Event] :State
+  match state
+    (Running n)
+      match event
+        (Tick x)
+          do
+            perform(Emit(&quot;tick&quot;))
+            perform(Store(&quot;count&quot; {n + x}))
+            Running({n + x})
+        ...
+    ...
+</code></pre></div></div></div>
+<p>See <code>stdlib/effects.tur</code> and <code>docs/guides/effects-system-guide.md</code>.</p>
+<hr />
+<h2 id="3-free-monad">3. Free Monad</h2>
+<p>Use <code>Free</code> from <code>stdlib/free.tur</code> to describe transitions as data. The machine
+produces a description of what it wants to do; a separate interpreter decides
+how to execute it. Useful when you need multiple backends (testing, production,
+simulation) without changing the machine definition.</p>
+<p>See <code>stdlib/free.tur</code>.</p>
+<hr />
+<h2 id="4-arrow-composition">4. Arrow Composition</h2>
+<p><code>stdlib/arrow.tur</code> provides <code>&gt;&gt;&gt;</code> for sequential composition and <code>ArrowLoop</code>
+for feedback. Suited to machines that are really signal-processing pipelines
+where each stage transforms and routes values.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; route each input through pre-processing, then the core step
+(&gt;&gt;&gt; pre-process core-step)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; route each input through pre-processing, then the core step
+&gt;&gt;&gt;(pre-process core-step)
+</code></pre></div></div></div>
+<p>See <code>stdlib/arrow.tur</code>.</p>
+<hr />
+<h2 id="5-serializable-workflows">5. Serializable Workflows</h2>
+<p><code>stdlib/workflow.tur</code> provides <code>serial-shift</code>/<code>serial-reset</code> for machines that
+need to suspend and resume across process restarts -- e.g. a multi-step approval
+workflow that checkpoints its continuation to disk.</p>
+<p>See <code>docs/guides/serializable-continuations-guide.md</code> and
+<code>docs/guides/web-continuations-guide.md</code>.</p>
+<hr />
+<h2 id="recommendation">Recommendation</h2>
+<p>Start with <strong>approach 1</strong> (pure <code>defdata</code> + <code>match</code>). The combination of
+<code>defdata</code>, <code>match</code>, and <code>when</code> guards is expressive enough for most machines.
+Layer in algebraic effects (approach 2) when transitions need side effects,
+keeping the transition logic itself pure. Reach for <code>Free</code> or <code>workflow</code> only
+when you specifically need pluggable interpretation or persistence.</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/state-machines-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

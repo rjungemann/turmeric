@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Existential Types | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#existential-types-in-turmeric" style="">Existential Types in Turmeric</a></li>
+<li style=""><a href="#what-is-an-existential-type" style="">What is an existential type?</a></li>
+<li style=""><a href="#pack-introduce-an-existential" style="">pack -- introduce an existential</a></li>
+<li style=""><a href="#open-eliminate-an-existential" style="">open -- eliminate an existential</a></li>
+<li style=""><a href="#a-worked-example-showable-lists" style="">A worked example: Showable lists</a></li>
+<li style=""><a href="#the-stdlibexistentialtur-helpers" style="">The stdlib/existential.tur helpers</a></li>
+<li style=""><a href="#when-to-use-existentials" style="">When to use existentials</a></li>
+<li style=""><a href="#what-is-not-yet-supported" style="">What is not (yet) supported</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="existential-types-in-turmeric">Existential Types in Turmeric</h1>
+<p>This guide covers existential types: how to <em>hide</em> a concrete type behind an
+opaque boundary while still allowing operations on it through typeclass
+constraints. Existentials are the dual of higher-ranked types (<code>forall</code>):
+where <code>forall</code> lets the caller pick the type, <code>exists</code> lets the callee pick
+the type and only expose what the caller is allowed to do with it.</p>
+<h2 id="what-is-an-existential-type">What is an existential type?</h2>
+<p><code>(exists [a] T)</code> means "there is some type <code>a</code> for which <code>T</code> holds, but
+the value's holder does not know which one". The type is sealed behind
+the existential boundary. Without constraints the holder can do nothing
+useful with the inner value -- it is fully opaque.</p>
+<p>With a typeclass constraint, the holder can call the constraint's methods
+on the inner value without ever learning its concrete type:</p>
+<pre><code class="language-turmeric">; A boxed value paired with an evidence that its type implements Show.
+(exists [a] [(Show a)] a)
+</code></pre>
+<h2 id="pack-introduce-an-existential"><code>pack</code> -- introduce an existential</h2>
+<p><code>(pack value (exists [a] [(C a) ...] T))</code> boxes a value as an existential.
+The compiler verifies at the pack site that the concrete type of <code>value</code>
+has an instance for each constraint <code>(C a)</code>. The resulting record carries
+the boxed value and a vtable pointer for each constraint.</p>
+<pre><code class="language-turmeric">(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, &quot;%lld&quot;, (long long)x);
+    return (const char *)buf;
+    ```))
+
+(defn main [] :int
+  (let [e (pack 42 (exists [a] [(Show a)] a))]
+    0))
+</code></pre>
+<p>If you omit the constraint, the existential has no usable methods -- it
+is a pure information-hiding boundary:</p>
+<pre><code class="language-turmeric">(pack 42 (exists [a] a))   ; opaque -- nothing you can do with the inner value
+</code></pre>
+<h2 id="open-eliminate-an-existential"><code>open</code> -- eliminate an existential</h2>
+<p><code>(open e [a v] body)</code> unboxes the existential and binds:</p>
+<ul>
+<li><code>a</code> to a fresh <em>skolem</em> (an abstract type that unifies only with itself
+  inside <code>body</code>)</li>
+<li><code>v</code> to the inner value</li>
+</ul>
+<p>The escape check then refuses any <code>body</code> whose result type can refer to
+<code>a</code>. That is what makes the existential genuinely opaque: you cannot
+return the inner value, alias it through a <code>let</code>, or smuggle it through
+one branch of an <code>if</code>.</p>
+<pre><code class="language-turmeric">; ok: body returns a :cstr, not a value of type `a`.
+(open e [a v]
+  (.show v))
+
+; rejected: body would leak the abstract type `a` out of its scope.
+(open e [a v]
+  v)
+</code></pre>
+<p>The error message names the abstract variable that escapes:</p>
+<pre><code>open: existential type variable 'a' escapes its scope
+(the body returns the bound value 'v' or an alias)
+</code></pre>
+<h2 id="a-worked-example-showable-lists">A worked example: Showable lists</h2>
+<p>A heterogeneous list of "things that can be shown" requires either an
+existential type or a shared concrete type. With existentials each
+element pairs the value with the witness for its <code>Show</code> instance, so a
+list of mixed concrete payloads can still be printed:</p>
+<pre><code class="language-turmeric">(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, &quot;%lld&quot;, (long long)x);
+    return (const char *)buf;
+    ```))
+
+(definstance Show [bool]
+  (show [x] :cstr
+    (if x &quot;true&quot; &quot;false&quot;)))
+
+(defn main [] :int
+  (let [e1 (pack 42   (exists [a] [(Show a)] a))
+        e2 (pack true (exists [a] [(Show a)] a))]
+    (println (open e1 [a v] (.show v)))
+    (println (open e2 [a v] (.show v))))
+  0)
+</code></pre>
+<p>The pack/open sites stay inline; passing a constrained existential
+through a function parameter erases the constraint info and prevents
+<code>open</code> from extracting the boxed value (use the value at the
+construction site for now).</p>
+<h2 id="the-stdlibexistentialtur-helpers">The <code>stdlib/existential.tur</code> helpers</h2>
+<p>The <code>tur/existential</code> stdlib module provides two convenience macros for
+the <code>Show</code>-constrained case. They are load-on-demand:</p>
+<pre><code class="language-turmeric">(load &quot;stdlib/existential.tur&quot;)
+
+(defn main [] :int
+  (let [e (showable 42)]
+    (println (show-it e)))
+  0)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Macro</th>
+<th>Expands to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(showable x)</code></td>
+<td><code>(pack x (exists [a] [(Show a)] a))</code></td>
+</tr>
+<tr>
+<td><code>(show-it e)</code></td>
+<td><code>(open e [a v] (.show v))</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>Show</code> must be in scope at the call site, either via a local <code>defclass</code>
+or by loading <code>stdlib/typeclass.tur</code>. The helpers are macros so the
+existential type form appears literally at the pack/open site, which is
+required by the elaborator.</p>
+<h2 id="when-to-use-existentials">When to use existentials</h2>
+<ul>
+<li><strong>Heterogeneous collections</strong> of values that share a common operation
+  set (<code>Show</code>, <code>Eq</code>, <code>Display</code>, ...) but not a concrete type.</li>
+<li><strong>Opaque handles</strong> where the caller must not inspect the internal
+  representation -- the constraint set defines the entire public API.</li>
+<li><strong>Hiding size indices</strong> (planned, EX2): <code>Vec[A] = (exists [n] (SizedVec [n A]))</code>
+  unifies length-indexed and length-erased vectors.</li>
+</ul>
+<h2 id="what-is-not-yet-supported">What is not (yet) supported</h2>
+<ul>
+<li><strong>Passing constrained existentials through <code>:ptr&lt;void&gt;</code> parameters.</strong>
+  The static type loses its constraint info and <code>open</code> can no longer
+  extract the boxed value from the runtime record. Open at the
+  construction site, or pass through a binding typed with the full
+  existential form.</li>
+<li><strong>Heterogeneous-dispatch method calls.</strong> Inside <code>open</code>, method
+  dispatch on <code>v</code> currently resolves through the inner concrete type's
+  static instance. The full vtable-indirected dispatch through the
+  record's witnesses is reserved for a follow-on patch.</li>
+<li><strong>Reclaiming existential records.</strong> Constrained packs allocate a
+  <code>tur_existential_t</code> on the heap; the deferred memory-management work
+  is tracked in <a href="../existential-gc-plan.md"><code>../existential-gc-plan.md</code></a>.</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/existential-types-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

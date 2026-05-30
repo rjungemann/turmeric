@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Range Reader Shorthand Plan | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#range-reader-shorthand-plan-rr0-rr4" style="">Range Reader Shorthand -- Plan (RR0--RR4)</a></li>
+<li style=""><a href="#overview" style="">Overview</a></li>
+<li style=""><a href="#motivation" style="">Motivation</a></li>
+<li style=""><a href="#syntax-grammar" style="">Syntax Grammar</a></li>
+<li style=""><a href="#desugaring-tables" style="">Desugaring Tables</a></li>
+<li style="padding-left:0.75rem;"><a href="#one-sided-var-op-form" style="color:var(--text-sec);">One-sided (var op form)</a></li>
+<li style="padding-left:0.75rem;"><a href="#one-sided-form-op-var-mirrors" style="color:var(--text-sec);">One-sided (form op var) -- mirrors</a></li>
+<li style="padding-left:0.75rem;"><a href="#two-sided-left-to-right-form-op-fwd-var-op-fwd-form" style="color:var(--text-sec);">Two-sided left-to-right (form op-fwd var op-fwd form)</a></li>
+<li style="padding-left:0.75rem;"><a href="#two-sided-right-to-left-form-op-rev-var-op-rev-form" style="color:var(--text-sec);">Two-sided right-to-left (form op-rev var op-rev form)</a></li>
+<li style="padding-left:0.75rem;"><a href="#float-constructors" style="color:var(--text-sec);">Float constructors</a></li>
+<li style=""><a href="#implementation-phases" style="">Implementation Phases</a></li>
+<li style="padding-left:0.75rem;"><a href="#rr0-reader-dispatch-and-tokenization" style="color:var(--text-sec);">RR0 -- Reader dispatch and tokenization</a></li>
+<li style="padding-left:0.75rem;"><a href="#rr1-one-sided-and-literal-two-sided-ranges" style="color:var(--text-sec);">RR1 -- One-sided and literal two-sided ranges</a></li>
+<li style="padding-left:0.75rem;"><a href="#rr2-expression-bounds" style="color:var(--text-sec);">RR2 -- Expression bounds</a></li>
+<li style="padding-left:0.75rem;"><a href="#rr3-variable-shadowing-warning-elaborator" style="color:var(--text-sec);">RR3 -- Variable shadowing warning (elaborator)</a></li>
+<li style="padding-left:0.75rem;"><a href="#rr4-float-range-stdlib" style="color:var(--text-sec);">RR4 -- Float range stdlib</a></li>
+<li style=""><a href="#error-messages" style="">Error Messages</a></li>
+<li style=""><a href="#affected-files" style="">Affected Files</a></li>
+<li style=""><a href="#example-usage" style="">Example Usage</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="range-reader-shorthand-plan-rr0-rr4">Range Reader Shorthand -- Plan (RR0--RR4)</h1>
+<blockquote>
+<p><strong>Status:</strong> Draft Plan
+<strong>Last Updated:</strong> 2026-05-22
+<strong>Type:</strong> Reader / Syntax Feature</p>
+</blockquote>
+<hr />
+<h2 id="overview">Overview</h2>
+<p><code>#r{...}</code> is a reader-level shorthand for constructing <code>Range</code> values from
+<code>stdlib/range.tur</code> (integers) and <code>stdlib/float-range.tur</code> (floats).  It
+desugars completely at read time to a plain constructor call -- no new
+elaborator phases, no new type-system machinery.</p>
+<pre><code class="language-turmeric">;; One-sided (unbounded on one end)
+#r{n &gt; 0}        ; =&gt; (greater-than-range 0)         -- (0, +inf)
+#r{n &gt;= 0}       ; =&gt; (at-least-range 0)              -- [0, +inf)
+#r{n &lt; 0}        ; =&gt; (less-than-range 0)             -- (-inf, 0)
+#r{n &lt;= 0}       ; =&gt; (at-most-range 0)               -- (-inf, 0]
+#r{n = 0}        ; =&gt; (singleton-range 0)             -- [0, 0]
+
+;; Two-sided (left-to-right)
+#r{0 &lt;= n &lt; 10}  ; =&gt; (closed-open-range 0 10)        -- [0, 10)
+#r{0 &lt; n &lt;= 10}  ; =&gt; (open-closed-range 0 10)        -- (0, 10]
+#r{0 &lt; n &lt; 10}   ; =&gt; (open-range 0 10)               -- (0, 10)
+#r{0 &lt;= n &lt;= 10} ; =&gt; (closed-range 0 10)             -- [0, 10]
+
+;; Two-sided (right-to-left -- same semantics, mirrored operators)
+#r{10 &gt; n &gt;= 0}  ; =&gt; (closed-open-range 0 10)        -- [0, 10)
+#r{10 &gt;= n &gt; 0}  ; =&gt; (open-closed-range 0 10)        -- (0, 10]
+#r{10 &gt; n &gt; 0}   ; =&gt; (open-range 0 10)               -- (0, 10)
+#r{10 &gt;= n &gt;= 0} ; =&gt; (closed-range 0 10)             -- [0, 10]
+
+;; Float bounds (uses float-range constructors)
+#r{0.0 &lt;= n &lt; 1.0} ; =&gt; (float-closed-open-range 0.0 1.0)
+
+;; Expression bounds (runtime values, no compile-time empty check)
+#r{0 &lt;= n &lt; len}   ; =&gt; (closed-open-range 0 len)
+#r{lo &lt;= n &lt;= hi}  ; =&gt; (closed-range lo hi)
+</code></pre>
+<p>The variable name (<code>n</code>, <code>i</code>, <code>x</code>, ...) must be a single-letter identifier.
+It guides the human reader but is not bound or referenced in the expansion.
+A warning is emitted at elaboration time if the variable shadows an outer
+binding (see RR3).</p>
+<hr />
+<h2 id="motivation">Motivation</h2>
+<p><code>closed-open-range 0 10</code> requires the reader to know the Turmeric range
+constructor names and to mentally map the argument order to interval
+boundaries.  The <code>#r{...}</code> form lets the reader write the constraint in the
+same notation used in mathematical prose and most type-system papers, while
+the compiler substitutes the correct constructor at read time.</p>
+<p>Useful contexts:</p>
+<ul>
+<li><strong>Contract types</strong>: <code>{ i : :int | (range-contains? #r{0 &lt;= i &lt; len} i) }</code></li>
+<li><strong>Guard conditions</strong>: <code>(when (range-contains? #r{1 &lt;= score &lt;= 5} score) ...)</code></li>
+<li><strong>Seq iteration</strong>: <code>(for i (seq/from-range #r{0 &lt;= i &lt; n}) ...)</code></li>
+<li><strong>Pattern documentation</strong>: self-describing bounds in function signatures</li>
+</ul>
+<hr />
+<h2 id="syntax-grammar">Syntax Grammar</h2>
+<pre><code>range-literal   ::= '#r{' range-body '}'
+range-body      ::= two-sided-range | one-sided-range
+
+two-sided-range ::= form op-fwd var op-fwd form   ; left-to-right: lo &lt; n &lt;= hi
+                  | form op-rev var op-rev form   ; right-to-left: hi &gt; n &gt;= lo
+op-fwd  ::= '&lt;' | '&lt;='
+op-rev  ::= '&gt;' | '&gt;='
+
+one-sided-range ::= var op form
+                  | form op var
+op      ::= '&lt;' | '&lt;=' | '&gt;' | '&gt;=' | '='
+
+var     ::= single-letter symbol  (a-z or A-Z)
+form    ::= any Turmeric form (literal or expression)
+</code></pre>
+<p>Notes:
+- <code>var</code> must be exactly one ASCII letter.  Anything longer is a reader error.
+- <code>form</code> on either bound side may be a literal (<code>0</code>, <code>-10</code>, <code>3.14</code>) or any
+  arbitrary expression (<code>len</code>, <code>(vec-len v)</code>, <code>(+ lo offset)</code>).
+- Mixing <code>op-fwd</code> and <code>op-rev</code> in a two-sided form is a reader error
+  (<code>0 &lt; n &gt; 5</code> is meaningless and rejected).
+- <code>=</code> is only valid in one-sided position.  Using it in a two-sided form is a
+  reader error.
+- Numeric type of the bounds determines which constructor family is used:
+  - All-integer (or expression) bounds use <code>stdlib/range.tur</code> constructors.
+  - Any float literal on either bound uses <code>stdlib/float-range.tur</code>
+    constructors.  Mixing integer literals with a float literal promotes the
+    integers (<code>0</code> alongside <code>1.0</code> uses float constructors).</p>
+<hr />
+<h2 id="desugaring-tables">Desugaring Tables</h2>
+<h3 id="one-sided-var-op-form">One-sided (var op form)</h3>
+<table>
+<thead>
+<tr>
+<th><code>#r{...}</code></th>
+<th>Expansion</th>
+<th>Interval</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>n = v</code></td>
+<td><code>(singleton-range v)</code></td>
+<td><code>[v, v]</code></td>
+</tr>
+<tr>
+<td><code>n &lt; hi</code></td>
+<td><code>(less-than-range hi)</code></td>
+<td><code>(-inf, hi)</code></td>
+</tr>
+<tr>
+<td><code>n &lt;= hi</code></td>
+<td><code>(at-most-range hi)</code></td>
+<td><code>(-inf, hi]</code></td>
+</tr>
+<tr>
+<td><code>n &gt; lo</code></td>
+<td><code>(greater-than-range lo)</code></td>
+<td><code>(lo, +inf)</code></td>
+</tr>
+<tr>
+<td><code>n &gt;= lo</code></td>
+<td><code>(at-least-range lo)</code></td>
+<td><code>[lo, +inf)</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="one-sided-form-op-var-mirrors">One-sided (form op var) -- mirrors</h3>
+<p>Flip the operator to canonical <code>var op form</code>, then apply the table above.</p>
+<table>
+<thead>
+<tr>
+<th>Seen</th>
+<th>Canonical</th>
+<th>Flip rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hi &gt; n</code></td>
+<td><code>n &lt; hi</code></td>
+<td><code>&gt;</code> → <code>&lt;</code></td>
+</tr>
+<tr>
+<td><code>hi &gt;= n</code></td>
+<td><code>n &lt;= hi</code></td>
+<td><code>&gt;=</code> → <code>&lt;=</code></td>
+</tr>
+<tr>
+<td><code>lo &lt; n</code></td>
+<td><code>n &gt; lo</code></td>
+<td><code>&lt;</code> → <code>&gt;</code></td>
+</tr>
+<tr>
+<td><code>lo &lt;= n</code></td>
+<td><code>n &gt;= lo</code></td>
+<td><code>&lt;=</code> → <code>&gt;=</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="two-sided-left-to-right-form-op-fwd-var-op-fwd-form">Two-sided left-to-right (form op-fwd var op-fwd form)</h3>
+<table>
+<thead>
+<tr>
+<th><code>op-left</code></th>
+<th><code>op-right</code></th>
+<th>Constructor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;=</code></td>
+<td><code>&lt;=</code></td>
+<td><code>closed-range lo hi</code></td>
+</tr>
+<tr>
+<td><code>&lt;</code></td>
+<td><code>&lt;</code></td>
+<td><code>open-range lo hi</code></td>
+</tr>
+<tr>
+<td><code>&lt;=</code></td>
+<td><code>&lt;</code></td>
+<td><code>closed-open-range lo hi</code></td>
+</tr>
+<tr>
+<td><code>&lt;</code></td>
+<td><code>&lt;=</code></td>
+<td><code>open-closed-range lo hi</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="two-sided-right-to-left-form-op-rev-var-op-rev-form">Two-sided right-to-left (form op-rev var op-rev form)</h3>
+<p>The form reads <code>hi op1 n op2 lo</code>.  Derive the bound inclusivity from each
+operator's perspective on the variable:</p>
+<table>
+<thead>
+<tr>
+<th><code>op1</code> (hi op1 n)</th>
+<th><code>op2</code> (n op2 lo)</th>
+<th>Derived</th>
+<th>Constructor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&gt;</code> (n &lt; hi, excl upper)</td>
+<td><code>&gt;</code> (n &gt; lo, excl lower)</td>
+<td>(lo, hi)</td>
+<td><code>open-range lo hi</code></td>
+</tr>
+<tr>
+<td><code>&gt;=</code> (n &lt;= hi, incl upper)</td>
+<td><code>&gt;=</code> (n &gt;= lo, incl lower)</td>
+<td>[lo, hi]</td>
+<td><code>closed-range lo hi</code></td>
+</tr>
+<tr>
+<td><code>&gt;</code> (n &lt; hi, excl upper)</td>
+<td><code>&gt;=</code> (n &gt;= lo, incl lower)</td>
+<td>[lo, hi)</td>
+<td><code>closed-open-range lo hi</code></td>
+</tr>
+<tr>
+<td><code>&gt;=</code> (n &lt;= hi, incl upper)</td>
+<td><code>&gt;</code> (n &gt; lo, excl lower)</td>
+<td>(lo, hi]</td>
+<td><code>open-closed-range lo hi</code></td>
+</tr>
+</tbody>
+</table>
+<p>Arguments are passed as <code>(constructor lo hi)</code> (lo and hi swapped relative to
+the source token order, since the source reads right-to-left).</p>
+<h3 id="float-constructors">Float constructors</h3>
+<p>Float variants mirror the integer constructors exactly, using the
+<code>float-</code> prefix:</p>
+<table>
+<thead>
+<tr>
+<th>Integer constructor</th>
+<th>Float constructor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>closed-range</code></td>
+<td><code>float-closed-range</code></td>
+</tr>
+<tr>
+<td><code>open-range</code></td>
+<td><code>float-open-range</code></td>
+</tr>
+<tr>
+<td><code>closed-open-range</code></td>
+<td><code>float-closed-open-range</code></td>
+</tr>
+<tr>
+<td><code>open-closed-range</code></td>
+<td><code>float-open-closed-range</code></td>
+</tr>
+<tr>
+<td><code>at-least-range</code></td>
+<td><code>float-at-least-range</code></td>
+</tr>
+<tr>
+<td><code>greater-than-range</code></td>
+<td><code>float-greater-than-range</code></td>
+</tr>
+<tr>
+<td><code>at-most-range</code></td>
+<td><code>float-at-most-range</code></td>
+</tr>
+<tr>
+<td><code>less-than-range</code></td>
+<td><code>float-less-than-range</code></td>
+</tr>
+<tr>
+<td><code>singleton-range</code></td>
+<td><code>float-singleton-range</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="implementation-phases">Implementation Phases</h2>
+<h3 id="rr0-reader-dispatch-and-tokenization">RR0 -- Reader dispatch and tokenization</h3>
+<p><strong>Location:</strong> <code>src/compiler/reader.c</code>, inside <code>read_form</code>.</p>
+<p>Add a new dispatch arm immediately before the <code>#{}</code> map check:</p>
+<pre><code class="language-c">/* RR0: Range literal #r{...} */
+if (c == '#' &amp;&amp; peek2(r) == 'r' &amp;&amp; peek3(r) == '{') {
+    return read_range_literal(r);
+}
+/* existing: #{ map */
+if (c == '#' &amp;&amp; peek2(r) == '{') {
+    return read_map(r);
+}
+</code></pre>
+<p><code>read_range_literal</code> consumes <code>#</code>, <code>r</code>, <code>{</code>, then reads forms using the
+existing <code>read_form</code> machinery until <code>}</code>.  It collects exactly three or five
+tokens (see grammar).  Any other count is a reader error.</p>
+<p>No new <code>FormTag</code> is introduced.  The function returns an <code>F_LIST</code> form
+representing the desugared constructor call, indistinguishable from a
+hand-written call.</p>
+<p><strong>Deliverable:</strong> <code>#r{...}</code> is recognized by the reader.  Invalid interiors
+produce a clear <code>DIAG_ERROR</code>.</p>
+<hr />
+<h3 id="rr1-one-sided-and-literal-two-sided-ranges">RR1 -- One-sided and literal two-sided ranges</h3>
+<p>Implement:
+- All five one-sided forms (<code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>=</code>) in both orientations.
+- Two-sided left-to-right forms with literal bounds.
+- Two-sided right-to-left forms with literal bounds.
+- <strong>Compile-time empty-range warning</strong> when both bounds are integer or float
+  literals and the range is provably empty (e.g. <code>#r{5 &lt;= n &lt; 3}</code>).
+  This is a <code>DIAG_WARNING</code>, not an error.</p>
+<p>Variable validation:
+- Token identified as <code>var</code> must be a single <code>F_SYM</code> whose name is exactly
+  one ASCII letter.  Otherwise emit <code>DIAG_ERROR</code>:
+  <code>"#r{...}: variable must be a single letter, got '&lt;name&gt;'"</code>.</p>
+<p><strong>Deliverables:</strong>
+- One-sided and literal two-sided <code>#r{...}</code> forms desugar correctly.
+- Fixture: <code>tests/fixtures/range_reader_one_sided.tur</code>
+- Fixture: <code>tests/fixtures/range_reader_two_sided.tur</code></p>
+<hr />
+<h3 id="rr2-expression-bounds">RR2 -- Expression bounds</h3>
+<p>Allow any Turmeric form (not just literals) as a bound.  The reader passes
+the form through unchanged into the constructor call; evaluation happens at
+runtime.</p>
+<pre><code class="language-turmeric">#r{0 &lt;= n &lt; len}        ; =&gt; (closed-open-range 0 len)
+#r{lo &lt;= n &lt;= hi}       ; =&gt; (closed-range lo hi)
+#r{(- hi 1) &gt; n &gt;= 0}  ; =&gt; (closed-open-range 0 (- hi 1))
+</code></pre>
+<p>Changes from RR1:
+- The compile-time empty-range check is <strong>skipped</strong> when either bound is not a
+  numeric literal (a non-literal form has unknown value at read time).
+- <code>singleton-range</code> (<code>n = v</code>) still requires <code>v</code> to be a form; the reader
+  passes it through.
+- No other changes to the desugaring logic.</p>
+<p><strong>Deliverables:</strong>
+- Expression bounds pass through to the constructor call.
+- Fixture: <code>tests/fixtures/range_reader_expr_bounds.tur</code></p>
+<hr />
+<h3 id="rr3-variable-shadowing-warning-elaborator">RR3 -- Variable shadowing warning (elaborator)</h3>
+<p>The variable name in <code>#r{...}</code> is not bound.  However, if the surrounding
+scope already binds a name with the same single letter, using that letter in
+the range literal is misleading -- the reader has already discarded it.</p>
+<p>A light check in the elaborator:</p>
+<ul>
+<li>After <code>read_range_literal</code> desugars to a constructor call, the original
+  variable name is lost.  To preserve it for this check, the reader annotates
+  the desugared <code>F_LIST</code> with a source-level attribute (reusing the <code>#[...]</code>
+  attribute form mechanism, or a simpler side-table keyed by form span).</li>
+<li>The elaborator, when it sees a range constructor call that carries the
+  annotation, checks whether the annotated name is bound in the current
+  environment.  If so, emit <code>DIAG_WARNING</code>:
+  <code>"#r{...}: variable 'n' shadows a binding in scope; the name is not used in the expansion"</code>.</li>
+</ul>
+<p>This phase is <strong>optional</strong> for initial shipping; the warning is ergonomic, not
+correctness-critical.  It can be deferred until after RR2.</p>
+<p><strong>Deliverable:</strong> Shadowing warning emitted when <code>n</code> names an outer binding.
+Fixture: <code>tests/fixtures/range_reader_shadow_warn.tur</code></p>
+<hr />
+<h3 id="rr4-float-range-stdlib">RR4 -- Float range stdlib</h3>
+<p><strong>Location:</strong> <code>stdlib/float-range.tur</code></p>
+<p>Mirror of <code>stdlib/range.tur</code> using <code>float64</code> bounds.  The internal
+<code>FloatRangeBound</code> struct uses <code>double</code> instead of <code>int64_t</code>.</p>
+<pre><code class="language-turmeric">;; float-range constructors (same shape as stdlib/range.tur)
+(defn float-closed-range [lo :float hi :float] :int ...)
+(defn float-open-range [lo :float hi :float] :int ...)
+(defn float-closed-open-range [lo :float hi :float] :int ...)
+(defn float-open-closed-range [lo :float hi :float] :int ...)
+(defn float-at-least-range [lo :float] :int ...)
+(defn float-greater-than-range [lo :float] :int ...)
+(defn float-at-most-range [hi :float] :int ...)
+(defn float-less-than-range [hi :float] :int ...)
+(defn float-singleton-range [v :float] :int ...)
+(defn float-unbounded-range [] :int ...)
+(defn float-range-contains? [r :int v :float] :bool ...)
+</code></pre>
+<p>The reader selects float constructors when any bound token is a <code>F_FLOAT</code>
+literal.  If one bound is <code>F_INT</code> and the other is <code>F_FLOAT</code>, the int is
+promoted (the constructor call is emitted with the integer as a float literal,
+e.g. <code>0</code> → <code>0.0</code>).</p>
+<p>If a bound is a non-literal expression, the reader cannot infer the numeric
+type.  In that case it defaults to the integer constructor family and emits a
+<code>DIAG_NOTE</code> if the other bound is a float literal:
+<code>"#r{...}: mixed literal types; using float constructors -- ensure the expression produces a float"</code>.</p>
+<p><strong>Deliverables:</strong>
+- <code>stdlib/float-range.tur</code> with all constructors and <code>float-range-contains?</code>.
+- Reader emits float constructors when float literals are present.
+- Fixture: <code>tests/fixtures/range_reader_float.tur</code></p>
+<hr />
+<h2 id="error-messages">Error Messages</h2>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Interior is empty</td>
+<td><code>#r{} requires a range expression</code></td>
+</tr>
+<tr>
+<td>Wrong token count</td>
+<td><code>#r{...} expects 'var op form' or 'form op var op form', got N tokens</code></td>
+</tr>
+<tr>
+<td>Variable is not a single letter</td>
+<td><code>#r{...}: variable must be a single letter, got '&lt;name&gt;'</code></td>
+</tr>
+<tr>
+<td>No symbol found (both sides are forms)</td>
+<td><code>#r{...}: expected a single-letter variable on one side</code></td>
+</tr>
+<tr>
+<td>Mixed <code>op-fwd</code>/<code>op-rev</code> in two-sided</td>
+<td><code>#r{...}: cannot mix '&lt;'/'&lt;=' and '&gt;'/&gt;=' in a two-sided range</code></td>
+</tr>
+<tr>
+<td><code>=</code> in two-sided position</td>
+<td><code>#r{...}: '=' is only valid in a one-sided range</code></td>
+</tr>
+<tr>
+<td>Empty range (literal bounds)</td>
+<td><code>#r{...}: range is provably empty</code> (warning)</td>
+</tr>
+<tr>
+<td>Unclosed brace</td>
+<td><code>#r{...}: unterminated range literal (missing '}')</code></td>
+</tr>
+<tr>
+<td>Unknown operator token</td>
+<td><code>#r{...}: expected a comparison operator, got '&lt;tok&gt;'</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="affected-files">Affected Files</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>src/compiler/reader.c</code></td>
+<td>Add <code>read_range_literal</code>; dispatch arm in <code>read_form</code></td>
+</tr>
+<tr>
+<td><code>src/compiler/reader.h</code></td>
+<td>No public API changes</td>
+</tr>
+<tr>
+<td><code>stdlib/float-range.tur</code></td>
+<td>New file (RR4)</td>
+</tr>
+<tr>
+<td><code>tests/fixtures/range_reader_one_sided.tur</code></td>
+<td>New fixture</td>
+</tr>
+<tr>
+<td><code>tests/fixtures/range_reader_two_sided.tur</code></td>
+<td>New fixture</td>
+</tr>
+<tr>
+<td><code>tests/fixtures/range_reader_expr_bounds.tur</code></td>
+<td>New fixture</td>
+</tr>
+<tr>
+<td><code>tests/fixtures/range_reader_shadow_warn.tur</code></td>
+<td>New fixture (RR3)</td>
+</tr>
+<tr>
+<td><code>tests/fixtures/range_reader_float.tur</code></td>
+<td>New fixture (RR4)</td>
+</tr>
+<tr>
+<td><code>stdlib/range.tur</code></td>
+<td>No changes (constructors already present)</td>
+</tr>
+<tr>
+<td><code>docs/api/</code></td>
+<td>Regenerate after RR4 adds <code>float-range.tur</code> docstrings</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="example-usage">Example Usage</h2>
+<pre><code class="language-turmeric">;; Index bounds check with expression upper bound
+(defn safe-get [v :int i :int] :int
+  (require! (range-contains? #r{0 &lt;= i &lt; (vec-len v)} i)
+            &quot;index out of bounds&quot;)
+  (vec-get v i))
+
+;; Contract type
+(defn classify-score [score : { s : :int | (range-contains? #r{1 &lt;= s &lt;= 5} s) }] :cstr
+  (cond
+    ((= score 5) &quot;excellent&quot;)
+    ((= score 4) &quot;good&quot;)
+    (&quot;average&quot;)))
+
+;; Seq iteration over an integer range
+(for i (seq/from-range #r{0 &lt;= i &lt; 10})
+  (println i))
+
+;; Float range membership test
+(defn unit-clamp [x :float] :float
+  (if (float-range-contains? #r{0.0 &lt;= x &lt;= 1.0} x) x
+      (if (&lt; x 0.0) 0.0 1.0)))
+
+;; Right-to-left syntax (same semantics)
+(when (range-contains? #r{100 &gt; n &gt;= 0} score)
+  (println &quot;in range&quot;))
+</code></pre>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/range-reader-plan.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

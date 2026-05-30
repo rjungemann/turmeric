@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vim Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#vim-syntax-highlighting-for-turmeric" style="">Vim Syntax Highlighting for Turmeric</a></li>
+<li style=""><a href="#installation" style="">Installation</a></li>
+<li style="padding-left:0.75rem;"><a href="#manual-no-plugin-manager" style="color:var(--text-sec);">Manual (no plugin manager)</a></li>
+<li style="padding-left:0.75rem;"><a href="#vim-plug" style="color:var(--text-sec);">vim-plug</a></li>
+<li style="padding-left:0.75rem;"><a href="#lazynvim" style="color:var(--text-sec);">lazy.nvim</a></li>
+<li style="padding-left:0.75rem;"><a href="#packernvim" style="color:var(--text-sec);">packer.nvim</a></li>
+<li style=""><a href="#features" style="">Features</a></li>
+<li style=""><a href="#recommended-settings" style="">Recommended settings</a></li>
+<li style=""><a href="#highlight-groups" style="">Highlight groups</a></li>
+<li style=""><a href="#rainbow-parentheses" style="">Rainbow parentheses</a></li>
+<li style=""><a href="#known-limitations" style="">Known limitations</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="vim-syntax-highlighting-for-turmeric">Vim Syntax Highlighting for Turmeric</h1>
+<p>The Turmeric Vim plugin provides syntax highlighting for <code>.tur</code> files in Vim
+and Neovim. It lives in <code>vim-syntax/</code> at the repo root.</p>
+<h2 id="installation">Installation</h2>
+<h3 id="manual-no-plugin-manager">Manual (no plugin manager)</h3>
+<p>Copy or symlink the two directories into <code>~/.vim</code> (Vim) or <code>~/.config/nvim</code>
+(Neovim):</p>
+<pre><code class="language-sh"># Vim
+cp -r vim-syntax/syntax   ~/.vim/syntax/
+cp -r vim-syntax/ftdetect ~/.vim/ftdetect/
+
+# Neovim
+cp -r vim-syntax/syntax   ~/.config/nvim/syntax/
+cp -r vim-syntax/ftdetect ~/.config/nvim/ftdetect/
+</code></pre>
+<p>Alternatively, symlink the whole plugin directory so updates are picked up
+automatically:</p>
+<pre><code class="language-sh"># Vim
+ln -s &quot;$(pwd)/vim-syntax&quot; ~/.vim/pack/turmeric/start/turmeric
+
+# Neovim
+ln -s &quot;$(pwd)/vim-syntax&quot; ~/.config/nvim/pack/turmeric/start/turmeric
+</code></pre>
+<h3 id="vim-plug">vim-plug</h3>
+<pre><code class="language-vim">Plug '/path/to/turmeric/vim-syntax'
+</code></pre>
+<h3 id="lazynvim">lazy.nvim</h3>
+<pre><code class="language-lua">{
+  dir = &quot;/path/to/turmeric/vim-syntax&quot;,
+  ft = &quot;tur&quot;,
+}
+</code></pre>
+<h3 id="packernvim">packer.nvim</h3>
+<pre><code class="language-lua">use { &quot;/path/to/turmeric/vim-syntax&quot;, ft = &quot;tur&quot; }
+</code></pre>
+<h2 id="features">Features</h2>
+<p>Once installed, any <code>.tur</code> file is automatically highlighted:</p>
+<ul>
+<li><strong>Definition forms</strong> -- <code>defn</code>, <code>defmacro</code>, <code>defstruct</code>, <code>defclass</code>,
+  <code>definstance</code>, <code>defgadt</code>, <code>defmodule</code>, and all other definition keywords</li>
+<li><strong>Control flow</strong> -- <code>if</code>, <code>cond</code>, <code>case</code>, <code>match</code>, <code>loop</code>, <code>while</code>, <code>for</code>,
+  <code>and</code>, <code>or</code>, <code>not</code></li>
+<li><strong>Type keywords</strong> -- <code>type</code>, <code>typeclass</code>, <code>forall</code>, <code>where</code>, <code>impl</code>, <code>trait</code></li>
+<li><strong>Effect system</strong> -- <code>effect</code>, <code>handle</code>, <code>perform</code>, <code>do</code>, <code>with</code></li>
+<li><strong>Exception forms</strong> -- <code>try</code>, <code>catch</code>, <code>throw</code>, <code>finally</code>, <code>raise</code></li>
+<li><strong>Core special forms</strong> -- <code>let</code>, <code>let*</code>, <code>lambda</code>, <code>fn</code>, <code>begin</code>, quote forms</li>
+<li><strong>Built-in functions</strong> -- <code>cons</code>, <code>map</code>, <code>filter</code>, <code>reduce</code>, <code>vec</code>, <code>len</code>,
+  predicates (<code>string?</code>, <code>list?</code>, <code>null?</code>, etc.), and more</li>
+<li><strong>Literals</strong> -- integers, hex (<code>0xFF</code>), binary (<code>0b1010</code>), floats,
+  scientific notation, booleans (<code>#t</code>, <code>#f</code>), characters (<code>#\a</code>, <code>#\newline</code>)</li>
+<li><strong>Strings</strong> -- with escape sequence validation (<code>\n</code>, <code>\t</code>, <code>A</code>, etc.)</li>
+<li><strong>Comments</strong> -- line comments (<code>;</code>), docstring comments (<code>;;;</code>), and block
+  comments (<code>#| ... |#</code>, nestable)</li>
+<li><strong>Keyword literals</strong> -- <code>:else</code>, <code>:pre</code>, <code>:post</code>, <code>:name</code>, and other
+  colon-prefixed symbols</li>
+<li><strong>Metadata annotations</strong> -- <code>^linear</code>, <code>^unique</code>, <code>^affine</code>, <code>^mut</code>, etc.</li>
+<li><strong>Reader macros</strong> -- quote (<code>'</code>), quasiquote (<code>`</code>), unquote (<code>~</code>),
+  unquote-splicing (<code>~@</code>)</li>
+<li><strong>Operators</strong> -- <code>::</code> (type ascription), <code>|&gt;</code> (pipe)</li>
+<li><strong>C inline blocks</strong> -- <code>```c ... ```</code> blocks highlighted as preprocessor</li>
+</ul>
+<h2 id="recommended-settings">Recommended settings</h2>
+<p>Add to your <code>~/.vim/after/ftplugin/turmeric.vim</code> (Vim) or the equivalent Lua
+config (Neovim):</p>
+<pre><code class="language-vim">&quot; Turmeric ftplugin settings
+setlocal tabstop=2
+setlocal shiftwidth=2
+setlocal expandtab
+setlocal textwidth=80
+
+&quot; Use ; as the comment leader for commentary.vim / comment operators
+setlocal commentstring=;\ %s
+
+&quot; Treat hyphens as part of words for motions (already set by syntax file,
+&quot; but explicit here for clarity)
+setlocal iskeyword+=45
+</code></pre>
+<p>For Neovim with <code>nvim-treesitter</code> not yet supporting Turmeric, the Vim syntax
+file is the correct fallback -- no additional configuration is needed.</p>
+<h2 id="highlight-groups">Highlight groups</h2>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Default link</th>
+<th>Matches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>turmericDefine</code></td>
+<td><code>Define</code></td>
+<td><code>defn</code>, <code>defmacro</code>, <code>defstruct</code>, etc.</td>
+</tr>
+<tr>
+<td><code>turmericControl</code></td>
+<td><code>Conditional</code></td>
+<td><code>if</code>, <code>cond</code>, <code>match</code>, <code>loop</code>, etc.</td>
+</tr>
+<tr>
+<td><code>turmericType</code></td>
+<td><code>Type</code></td>
+<td><code>type</code>, <code>typeclass</code>, <code>forall</code>, <code>where</code></td>
+</tr>
+<tr>
+<td><code>turmericEffect</code></td>
+<td><code>Keyword</code></td>
+<td><code>effect</code>, <code>handle</code>, <code>perform</code>, <code>with</code></td>
+</tr>
+<tr>
+<td><code>turmericExcept</code></td>
+<td><code>Exception</code></td>
+<td><code>try</code>, <code>catch</code>, <code>throw</code>, <code>finally</code></td>
+</tr>
+<tr>
+<td><code>turmericSpecial</code></td>
+<td><code>Special</code></td>
+<td><code>let</code>, <code>let*</code>, <code>lambda</code>, <code>fn</code>, <code>begin</code></td>
+</tr>
+<tr>
+<td><code>turmericBuiltin</code></td>
+<td><code>Function</code></td>
+<td>Built-in functions and predicates</td>
+</tr>
+<tr>
+<td><code>turmericNil</code></td>
+<td><code>Constant</code></td>
+<td><code>nil</code>, <code>null</code>, <code>none</code>, <code>unit</code></td>
+</tr>
+<tr>
+<td><code>turmericInt</code></td>
+<td><code>Number</code></td>
+<td>Integer literals</td>
+</tr>
+<tr>
+<td><code>turmericFloat</code></td>
+<td><code>Float</code></td>
+<td>Floating-point literals</td>
+</tr>
+<tr>
+<td><code>turmericHex</code></td>
+<td><code>Number</code></td>
+<td>Hex literals (<code>0xFF</code>)</td>
+</tr>
+<tr>
+<td><code>turmericBin</code></td>
+<td><code>Number</code></td>
+<td>Binary literals (<code>0b1010</code>)</td>
+</tr>
+<tr>
+<td><code>turmericBool</code></td>
+<td><code>Boolean</code></td>
+<td><code>#t</code>, <code>#f</code></td>
+</tr>
+<tr>
+<td><code>turmericChar</code></td>
+<td><code>Character</code></td>
+<td>Character literals (<code>#\a</code>, <code>#\newline</code>)</td>
+</tr>
+<tr>
+<td><code>turmericString</code></td>
+<td><code>String</code></td>
+<td>String literals</td>
+</tr>
+<tr>
+<td><code>turmericStringEsc</code></td>
+<td><code>SpecialChar</code></td>
+<td>Valid escape sequences</td>
+</tr>
+<tr>
+<td><code>turmericBadEsc</code></td>
+<td><code>Error</code></td>
+<td>Unrecognized escape sequences</td>
+</tr>
+<tr>
+<td><code>turmericKeyLit</code></td>
+<td><code>Constant</code></td>
+<td>Keyword literals (<code>:name</code>)</td>
+</tr>
+<tr>
+<td><code>turmericMeta</code></td>
+<td><code>PreProc</code></td>
+<td>Metadata annotations (<code>^linear</code>)</td>
+</tr>
+<tr>
+<td><code>turmericLineComment</code></td>
+<td><code>Comment</code></td>
+<td><code>;</code> and <code>;;</code> line comments</td>
+</tr>
+<tr>
+<td><code>turmericDocComment</code></td>
+<td><code>SpecialComment</code></td>
+<td><code>;;;</code> docstring comments</td>
+</tr>
+<tr>
+<td><code>turmericBlockComment</code></td>
+<td><code>Comment</code></td>
+<td><code>#| ... |#</code> block comments</td>
+</tr>
+<tr>
+<td><code>turmericTodo</code></td>
+<td><code>Todo</code></td>
+<td><code>TODO</code>, <code>FIXME</code>, <code>HACK</code>, <code>NOTE</code>, <code>XXX</code></td>
+</tr>
+<tr>
+<td><code>turmericQuote</code></td>
+<td><code>Special</code></td>
+<td><code>'</code>, <code>`</code></td>
+</tr>
+<tr>
+<td><code>turmericUnquote</code></td>
+<td><code>Special</code></td>
+<td><code>~</code></td>
+</tr>
+<tr>
+<td><code>turmericSplice</code></td>
+<td><code>Special</code></td>
+<td><code>~@</code></td>
+</tr>
+<tr>
+<td><code>turmericOp</code></td>
+<td><code>Operator</code></td>
+<td><code>::</code>, <code>\|&gt;</code></td>
+</tr>
+<tr>
+<td><code>turmericCBlock</code></td>
+<td><code>PreProc</code></td>
+<td><code>```c ... ```</code> inline C blocks</td>
+</tr>
+<tr>
+<td><code>turmericDelim</code></td>
+<td><code>Delimiter</code></td>
+<td><code>()</code>, <code>[]</code>, <code>{}</code></td>
+</tr>
+</tbody>
+</table>
+<p>To override a highlight group, add lines like this to your colorscheme or
+<code>after/syntax/turmeric.vim</code>:</p>
+<pre><code class="language-vim">hi turmericDocComment guifg=#a0c4ff gui=italic
+hi turmericDefine     guifg=#ffd166 gui=bold
+</code></pre>
+<h2 id="rainbow-parentheses">Rainbow parentheses</h2>
+<p>The syntax file links <code>turmericDelim</code> to <code>Delimiter</code>. If you use a rainbow
+parentheses plugin (e.g. <code>rainbow</code>, <code>rainbow_parentheses.vim</code>), add Turmeric
+to its file type list:</p>
+<pre><code class="language-vim">&quot; rainbow_parentheses.vim
+au VimEnter * RainbowParenthesesActivate
+au Syntax turmeric RainbowParenthesesLoadRound
+au Syntax turmeric RainbowParenthesesLoadSquare
+au Syntax turmeric RainbowParenthesesLoadBraces
+</code></pre>
+<p>For <code>nvim-ts-rainbow</code> or <code>rainbow-delimiters.nvim</code> in Neovim, no extra
+configuration is needed once Treesitter supports Turmeric.</p>
+<h2 id="known-limitations">Known limitations</h2>
+<ul>
+<li><code>#| ... |#</code> block comment nesting is syntactically correct but Vim's
+  highlight engine does not track nesting depth, so deeply nested block
+  comments may mis-highlight.</li>
+<li>C inline blocks (<code>```c ... ```</code>) are highlighted as <code>PreProc</code> rather
+  than embedded C syntax. Embedded language highlighting is possible with
+  <code>:syn include</code> but requires <code>vim-syntax/syntax/turmeric.vim</code> to be
+  restructured as a cluster.</li>
+<li>No LSP (hover docs, go-to-definition, diagnostics) -- planned for a future
+  language server (<code>turl</code>).</li>
+<li>Operator highlighting is limited to <code>::</code> and <code>|&gt;</code>. Arithmetic and comparison
+  operators (<code>+</code>, <code>-</code>, <code>&lt;</code>, <code>&gt;</code>, <code>=</code>, etc.) are left uncolored, which matches
+  typical Lisp syntax conventions.</li>
+</ul>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><code>vim-syntax/</code> -- Plugin source</li>
+<li><code>vim-syntax/syntax/turmeric.vim</code> -- Syntax definitions</li>
+<li><code>vim-syntax/ftdetect/turmeric.vim</code> -- File type detection</li>
+<li><a href="vscode-guide.md">vscode-guide.md</a> -- VS Code extension</li>
+<li><a href="formatter-guide.md">formatter-guide.md</a> -- <code>tur format</code> CLI</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/vim-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

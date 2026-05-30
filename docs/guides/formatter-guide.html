@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Formatter Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#code-formatting-in-turmeric" style="">Code Formatting in Turmeric</a></li>
+<li style=""><a href="#cli-usage" style="">CLI usage</a></li>
+<li style=""><a href="#web-repl" style="">Web REPL</a></li>
+<li style=""><a href="#formatting-rules" style="">Formatting rules</a></li>
+<li style="padding-left:0.75rem;"><a href="#indentation" style="color:var(--text-sec);">Indentation</a></li>
+<li style="padding-left:0.75rem;"><a href="#special-forms" style="color:var(--text-sec);">Special forms</a></li>
+<li style="padding-left:0.75rem;"><a href="#regular-function-calls" style="color:var(--text-sec);">Regular function calls</a></li>
+<li style="padding-left:0.75rem;"><a href="#vectors-maps-sets" style="color:var(--text-sec);">Vectors, maps, sets</a></li>
+<li style="padding-left:0.75rem;"><a href="#comments" style="color:var(--text-sec);">Comments</a></li>
+<li style="padding-left:0.75rem;"><a href="#type-annotations" style="color:var(--text-sec);">Type annotations</a></li>
+<li style="padding-left:0.75rem;"><a href="#quote-quasiquote-sugar" style="color:var(--text-sec);">Quote / quasiquote sugar</a></li>
+<li style="padding-left:0.75rem;"><a href="#inline-c-blocks" style="color:var(--text-sec);">Inline C blocks</a></li>
+<li style=""><a href="#example" style="">Example</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="code-formatting-in-turmeric">Code Formatting in Turmeric</h1>
+<p>Turmeric ships a built-in formatter that produces canonical, consistent style
+for <code>.tur</code> source files. It is a pure pretty-printer: it reads source text,
+walks the <code>Form</code> tree produced by the existing reader, and re-emits formatted
+output. It never touches the elaborator or code generator, so it works on any
+syntactically valid file regardless of type errors.</p>
+<h2 id="cli-usage">CLI usage</h2>
+<pre><code class="language-sh"># Format a file and print to stdout
+tur format myfile.tur
+
+# Format stdin and print to stdout
+tur format &lt; myfile.tur
+
+# Overwrite a file in-place
+tur format myfile.tur &gt; myfile.tur.tmp &amp;&amp; mv myfile.tur.tmp myfile.tur
+
+# Check whether a file is already formatted (exits 1 if not)
+tur format --check myfile.tur
+</code></pre>
+<p>The <code>--check</code> flag is useful in CI:</p>
+<pre><code class="language-sh"># Fail the build if any .tur file is not canonically formatted
+find stdlib -name '*.tur' | xargs -n1 tur format --check
+</code></pre>
+<h2 id="web-repl">Web REPL</h2>
+<p>The Try Turmeric web interface has a <strong>Format</strong> button in the editor toolbar
+(between Clear and Share). It calls <code>turi_wasm_format()</code> from the WASM module
+and replaces the editor contents with the formatted output.</p>
+<p>Keyboard shortcut: <code>Alt+Shift+F</code> (or <code>Option+Shift+F</code> on macOS).</p>
+<h2 id="formatting-rules">Formatting rules</h2>
+<h3 id="indentation">Indentation</h3>
+<p>Two-space indentation by default. A form is emitted on one line if it fits
+within the configured line width (default 80 columns); otherwise it is broken
+into a block layout.</p>
+<h3 id="special-forms">Special forms</h3>
+<p>These forms have well-known argument roles and use custom layouts:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Layout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>defn</code></td>
+<td><code>(defn name params :ret\n  body...)</code></td>
+</tr>
+<tr>
+<td><code>defmacro</code></td>
+<td>same as <code>defn</code></td>
+</tr>
+<tr>
+<td><code>fn</code></td>
+<td><code>(fn params\n  body...)</code></td>
+</tr>
+<tr>
+<td><code>let</code></td>
+<td><code>(let [bindings...]\n  body...)</code> -- each binding pair on its own line</td>
+</tr>
+<tr>
+<td><code>if</code></td>
+<td><code>(if test\n  then\n  else)</code></td>
+</tr>
+<tr>
+<td><code>when</code> / <code>unless</code></td>
+<td><code>(when test\n  body...)</code></td>
+</tr>
+<tr>
+<td><code>do</code></td>
+<td><code>(do\n  form...)</code></td>
+</tr>
+<tr>
+<td><code>case</code></td>
+<td><code>(case expr\n  pat result...)</code> -- each arm on its own line</td>
+</tr>
+<tr>
+<td><code>loop</code></td>
+<td><code>(loop [bindings]\n  body...)</code></td>
+</tr>
+<tr>
+<td><code>handle</code></td>
+<td><code>(handle expr\n  arm...)</code></td>
+</tr>
+<tr>
+<td><code>defclass</code></td>
+<td><code>(defclass Name [params]\n  method...)</code></td>
+</tr>
+<tr>
+<td><code>definstance</code></td>
+<td><code>(definstance Name Class Type\n  impl...)</code></td>
+</tr>
+<tr>
+<td><code>defeffect</code></td>
+<td><code>(defeffect Name [] :ret)</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="regular-function-calls">Regular function calls</h3>
+<ul>
+<li>If the whole form fits on the current line, emit it inline.</li>
+<li>Otherwise emit the head and first argument on the same line, then indent
+  remaining arguments by two spaces from the opening paren.</li>
+</ul>
+<h3 id="vectors-maps-sets">Vectors, maps, sets</h3>
+<ul>
+<li><code>[...]</code> -- inline if total width fits; otherwise one element per line.</li>
+<li><code>#{...}</code> maps -- inline if total width fits; otherwise one key-value pair
+  per line.</li>
+<li><code>#s(...)</code> sets -- inline if total width fits; otherwise one element per line.</li>
+</ul>
+<h3 id="comments">Comments</h3>
+<ul>
+<li><code>;;</code> and <code>;;;</code> comments at the top level are emitted on their own line.</li>
+<li>Inline <code>;</code> comments after an expression are preserved on the same line.</li>
+<li>One blank line is preserved between top-level forms; two blank lines before
+  a <code>;;</code> section header.</li>
+</ul>
+<h3 id="type-annotations">Type annotations</h3>
+<p><code>:keyword</code> type annotations stay on the same line as the expression they
+annotate and are never line-wrapped independently.</p>
+<h3 id="quote-quasiquote-sugar">Quote / quasiquote sugar</h3>
+<p>Sugar forms are preserved: <code>'x</code>, <code>`x</code>, <code>,x</code>, <code>,@x</code> stay as-is rather
+than being expanded to their <code>(quote ...)</code> equivalents.</p>
+<h3 id="inline-c-blocks">Inline C blocks</h3>
+<p><code>```c ... ```</code> blocks are emitted verbatim; the formatter does not
+reformat embedded C.</p>
+<h2 id="example">Example</h2>
+<p>Before formatting:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn add [x :int y :int] :int (+ x y))
+(defn factorial [n :int] :int (if (&lt;= n 1) 1 (* n (factorial (- n 1)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn add [x :int y :int] :int
+  {x + y}
+defn factorial [n :int] :int
+  if {n &lt;= 1}
+    1
+    {n * factorial({n - 1})}
+</code></pre></div></div></div>
+<p>After <code>tur format</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn add [x :int y :int] :int
+  (+ x y))
+
+(defn factorial [n :int] :int
+  (if (&lt;= n 1)
+    1
+    (* n (factorial (- n 1)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn add [x :int y :int] :int
+  {x + y}
+
+defn factorial [n :int] :int
+  if {n &lt;= 1}
+    1
+    {n * factorial({n - 1})}
+</code></pre></div></div></div>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><code>src/fmt.h</code> -- Public C API (<code>fmt_print</code>, <code>FmtOptions</code>)</li>
+<li><code>src/fmt.c</code> -- Formatter implementation</li>
+<li><a href="vscode-guide.md">vscode-guide.md</a> -- VS Code extension (format-on-save coming in Phase 3)</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/formatter-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

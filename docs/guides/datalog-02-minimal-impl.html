@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Datalog Tutorial Pt. 2: Minimal Implementation | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#eavt-database-minimal-implementationdatalog-tutorial-pt-2-minimal-implementation" style="">EAVT Database: Minimal ImplementationDatalog Tutorial Pt. 2: Minimal Implementation</a></li>
+<li style=""><a href="#1-the-value-adt" style="">1. The Value ADT</a></li>
+<li style=""><a href="#2-datum-layout" style="">2. Datum Layout</a></li>
+<li style=""><a href="#3-the-database" style="">3. The Database</a></li>
+<li style=""><a href="#4-result-vec" style="">4. Result Vec</a></li>
+<li style=""><a href="#5-string-helpers" style="">5. String Helpers</a></li>
+<li style=""><a href="#6-query-combinators" style="">6. Query Combinators</a></li>
+<li style=""><a href="#7-running-the-demo" style="">7. Running the Demo</a></li>
+<li style=""><a href="#8-memory-note" style="">8. Memory Note</a></li>
+<li style=""><a href="#exercises" style="">Exercises</a></li>
+<li style=""><a href="#next" style="">Next</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="eavt-database-minimal-implementationdatalog-tutorial-pt-2-minimal-implementation">EAVT Database: Minimal ImplementationDatalog Tutorial Pt. 2: Minimal Implementation</h1>
+<p>This session walks through <code>examples/datalog/minimal.tur</code> line by line. By the
+end you will have a working, append-only fact database with a predicate-based
+query interface in roughly 150 lines of Turmeric.</p>
+<p>Run the complete example at any time:</p>
+<pre><code class="language-sh">./build/tur examples/datalog/minimal.tur
+</code></pre>
+<hr />
+<h2 id="1-the-value-adt">1. The Value ADT</h2>
+<p>The first design decision is how to represent typed values. The tutorial uses a
+simple tagged union (algebraic data type) with three variants:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdata Value
+  (LongVal :int)    ;; 64-bit integer
+  (StrVal :int)     ;; :cstr pointer stored as int
+  (EntityVal :int)) ;; entity ID reference
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defdata Value
+  (LongVal :int)    ; 64-bit integer
+  (StrVal :int)     ; :cstr pointer stored as int
+  (EntityVal :int)  ; entity ID reference
+</code></pre></div></div></div>
+<p><code>LongVal</code> holds a 64-bit integer (ages, counts, timestamps).
+<code>StrVal</code> holds a string -- the <code>:cstr</code> pointer is stored as a plain <code>:int</code>
+so it can pass through the database machinery without triggering the borrow
+checker.
+<code>EntityVal</code> holds an entity ID, enabling typed cross-entity references.</p>
+<p>Constructors wrap the raw int:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn long-val [n :int] :int  (LongVal n))
+(defn str-val  [s :cstr] :int (StrVal (cstr-&gt;int s)))
+(defn entity-val [e :int] :int (EntityVal e))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn long-val [n :int] :int
+  LongVal(n)
+defn str-val [s :cstr] :int
+  StrVal $ cstr-&gt;int(s)
+defn entity-val [e :int] :int
+  EntityVal(e)
+</code></pre></div></div></div>
+<p>The printer dispatches on the constructor:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn print-value [v :int] :nil
+  (match v
+    (LongVal n)   (println n)
+    (StrVal s)    (println-cstr s)
+    (EntityVal e) (println e)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn print-value [v :int] :nil
+  match v
+    (LongVal n)   println(n)
+    (StrVal s)    println-cstr(s)
+    (EntityVal e) println(e)
+</code></pre></div></div></div>
+<hr />
+<h2 id="2-datum-layout">2. Datum Layout</h2>
+<p>A datum is four 64-bit integers stored consecutively on the heap:</p>
+<pre><code>[entity :int64, attr (cstr ptr) :int64, value (Value ptr) :int64, tx :int64]
+</code></pre>
+<p>The C helper allocates and fills the struct:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+</code></pre></div></div></div>
+<p>Accessors project individual fields:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+(defn datum-attr   [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+(defn datum-value  [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+(defn datum-tx     [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+defn datum-attr [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+defn datum-value [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+defn datum-tx [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+</code></pre></div></div></div>
+<p>Note the <code>return (int64_t)(intptr_t)d</code> pattern -- this is the canonical way to
+hand a heap pointer back to Turmeric as an opaque <code>:int</code>.</p>
+<hr />
+<h2 id="3-the-database">3. The Database</h2>
+<p>The database is a two-word header on the heap:</p>
+<pre><code>[datums-vec-ptr :int64, next-tx :int64]
+</code></pre>
+<p><code>datums-vec-ptr</code> points to a growable C vector (<code>{data, len, cap}</code>) of datum
+pointers. <code>next-tx</code> is the transaction counter; each call to <code>db-assert!</code>
+increments it before stamping the new datum.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v-&gt;data = NULL; v-&gt;len = 0; v-&gt;cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v-&gt;data = NULL; v-&gt;len = 0; v-&gt;cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+</code></pre></div></div></div>
+<p><code>db-assert!</code> increments <code>next-tx</code>, allocates a new datum, appends it to the
+vector, and returns the transaction number:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn db-assert! [db :int entity :int attr :int value :int] :int
+  ...
+  p[1] += 1;
+  int64_t tx = p[1];
+  ...
+  v-&gt;data[v-&gt;len++] = (int64_t)(intptr_t)d;
+  return tx;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn db-assert! [db :int entity :int attr :int value :int] :int
+  ...
+  p[1] += 1;
+  int64_t tx = p[1];
+  ...
+  v-&gt;data[v-&gt;len++] = (int64_t)(intptr_t)d;
+  return tx;
+</code></pre></div></div></div>
+<p>The doubling-growth vector ensures amortized O(1) append.</p>
+<hr />
+<h2 id="4-result-vec">4. Result Vec</h2>
+<p>Query results are collected in a <code>rvec</code> -- another growable C vector, typed
+<code>:ptr&lt;void&gt;</code> to keep the Turmeric ownership checker out of query logic:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn rvec-new  [] :ptr&lt;void&gt;  ...)
+(defn rvec-len  [v :ptr&lt;void&gt;] :int  ...)
+(defn rvec-get  [v :ptr&lt;void&gt; i :int] :int  ...)
+(defn rvec-push! [v :ptr&lt;void&gt; val :int]  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn rvec-new [] :ptr&lt;void&gt;  ...
+defn rvec-len [v :ptr&lt;void&gt;] :int  ...
+defn rvec-get [v :ptr&lt;void&gt; i :int] :int  ...
+defn rvec-push! [v :ptr&lt;void&gt; val :int]  ...
+</code></pre></div></div></div>
+<p><code>:ptr&lt;void&gt;</code> is an escape hatch that tells the compiler "I own this memory,
+do not track it". Use it sparingly and only when you are certain the vector
+outlives all uses of its contents.</p>
+<hr />
+<h2 id="5-string-helpers">5. String Helpers</h2>
+<p>Attribute names are C string literals. Two helpers convert between Turmeric
+<code>:cstr</code> and the opaque <code>:int</code> representation used inside the database:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn cstr-&gt;int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+(defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn cstr-&gt;int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+</code></pre></div></div></div>
+<p><code>cstr-&gt;int</code> turns a string literal (whose address is stable for the lifetime of
+the program) into an opaque integer for storage. <code>cstr-eq?</code> compares two such
+stored strings using <code>strcmp</code>.</p>
+<hr />
+<h2 id="6-query-combinators">6. Query Combinators</h2>
+<p><code>db-q</code> is the core query driver -- it accepts a predicate and returns a fresh
+result vec of all matching datums:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn db-q [db :int pred] :ptr&lt;void&gt;
+  (let [n (db-count db)
+        result (rvec-new)
+        ^mut i 0]
+    (while (&lt; i n)
+      (do
+        (let [d (db-ref db i)]
+          (when (pred d)
+            (rvec-push! result d)))
+        (set! i (+ i 1))))
+    result))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn db-q [db :int pred] :ptr&lt;void&gt;
+  let [n db-count(db)
+       result rvec-new()
+       ^mut i 0]
+    while {i &lt; n}
+      do
+        let [d db-ref(db i)]
+          when pred(d)
+            rvec-push!(result d)
+        set! i {i + 1}
+    result
+</code></pre></div></div></div>
+<p>Higher-level combinators return closures suitable as <code>pred</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Combinator</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(q-entity e)</code></td>
+<td>Datums for entity <code>e</code></td>
+</tr>
+<tr>
+<td><code>(q-attr a)</code></td>
+<td>Datums with attribute <code>a</code></td>
+</tr>
+<tr>
+<td><code>(q-ea e a)</code></td>
+<td>Entity <code>e</code> AND attribute <code>a</code></td>
+</tr>
+<tr>
+<td><code>(q-and p q)</code></td>
+<td>Datums matching both <code>p</code> and <code>q</code></td>
+</tr>
+<tr>
+<td><code>(q-or p q)</code></td>
+<td>Datums matching either <code>p</code> or <code>q</code></td>
+</tr>
+<tr>
+<td><code>(q-not p)</code></td>
+<td>Datums NOT matching <code>p</code></td>
+</tr>
+</tbody>
+</table>
+<p>Example -- find all names:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [names (db-q db (q-attr &quot;:user/name&quot;))
+      ^mut i 0]
+  (while (&lt; i (rvec-len names))
+    (do
+      (print-value (datum-value (rvec-get names i)))
+      (set! i (+ i 1)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [names db-q(db q-attr(&quot;:user/name&quot;))
+     ^mut i 0]
+  while {i &lt; rvec-len(names)}
+    do
+      print-value $ datum-value $ rvec-get(names i)
+      set! i {i + 1}
+</code></pre></div></div></div>
+<hr />
+<h2 id="7-running-the-demo">7. Running the Demo</h2>
+<p>The <code>demo</code> function in <code>minimal.tur</code> asserts six facts (two users, three
+attributes each), then exercises the query combinators:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; All user names
+(db-q db (q-attr &quot;:user/name&quot;))
+
+;; Everything known about entity 1 (Alice)
+(db-q db (q-entity 1))
+
+;; Users who are NOT entity 2 (i.e. not Bob), filtered by having an age attr
+(db-q db (q-and (q-attr &quot;:user/age&quot;) (q-not (q-entity 2))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">; All user names
+db-q(db q-attr(&quot;:user/name&quot;))
+
+; Everything known about entity 1 (Alice)
+db-q(db q-entity(1))
+
+; Users who are NOT entity 2 (i.e. not Bob), filtered by having an age attr
+db-q(db q-and(q-attr(&quot;:user/age&quot;) q-not(q-entity(2))))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>-- All user names --
+Alice
+Bob
+-- Alice's facts --
+:user/name
+Alice
+:user/email
+alice@example.com
+:user/age
+30
+-- Users with age NOT 25 --
+30
+</code></pre>
+<hr />
+<h2 id="8-memory-note">8. Memory Note</h2>
+<p>The tutorial uses <code>malloc</code> directly with no <code>free</code>. For a real application you
+would want to free each datum, the internal vector, and the database header when
+the database goes out of scope. For the tutorial, the process exits immediately
+after <code>main</code> returns, so the OS reclaims all memory.</p>
+<hr />
+<h2 id="exercises">Exercises</h2>
+<ol>
+<li>
+<p><strong>Boolean values</strong> -- add a <code>(BoolVal :bool)</code> variant to <code>Value</code> and assert
+   a <code>:user/admin</code> fact with <code>(BoolVal true)</code>. Update <code>print-value</code> to handle
+   the new case.</p>
+</li>
+<li>
+<p><strong>Count query</strong> -- write <code>db-count-matching [db pred]</code> that returns how many
+   datums satisfy <code>pred</code> without allocating an <code>rvec</code>.</p>
+</li>
+<li>
+<p><strong>Distinct entities</strong> -- write a query that returns the set of unique entity
+   IDs for all datums matching a given attribute.</p>
+</li>
+</ol>
+<hr />
+<h2 id="next">Next</h2>
+<p><a href="03-query-api.md">03 -- Query API</a> -- Add value equality, attribute+value queries,
+temporal as-of snapshots, pull, history, and retraction.</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/datalog-02-minimal-impl.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

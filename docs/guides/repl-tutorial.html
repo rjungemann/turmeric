@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interactive REPL Tutorial | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#turmeric-interactive-repl-tutorial" style="">Turmeric Interactive REPL Tutorial</a></li>
+<li style=""><a href="#how-to-use-this-tutorial" style="">How to use this tutorial</a></li>
+<li style=""><a href="#part-1-expressions-and-the-repl" style="">Part 1 -- Expressions and the REPL</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-1-your-first-expression" style="color:var(--text-sec);">Step 1 -- Your first expression</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-2-strings-and-booleans" style="color:var(--text-sec);">Step 2 -- Strings and booleans</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-3-binding-names-with-let" style="color:var(--text-sec);">Step 3 -- Binding names with let</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-4-defining-functions-with-defn" style="color:var(--text-sec);">Step 4 -- Defining functions with defn</a></li>
+<li style=""><a href="#part-2-control-flow-and-recursion" style="">Part 2 -- Control Flow and Recursion</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-5-if-and-cond" style="color:var(--text-sec);">Step 5 -- if and cond</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-6-recursion" style="color:var(--text-sec);">Step 6 -- Recursion</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-7-when-and-unless" style="color:var(--text-sec);">Step 7 -- when and unless</a></li>
+<li style=""><a href="#part-3-data-option-and-result" style="">Part 3 -- Data: Option and Result</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-8-option-constructors-and-predicates" style="color:var(--text-sec);">Step 8 -- Option: constructors and predicates</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-9-option-safe-unwrapping" style="color:var(--text-sec);">Step 9 -- Option: safe unwrapping</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-10-result-success-or-failure" style="color:var(--text-sec);">Step 10 -- Result: success or failure</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-11-branching-on-option-and-result-with-cond" style="color:var(--text-sec);">Step 11 -- Branching on Option and Result with cond</a></li>
+<li style=""><a href="#part-4-collections" style="">Part 4 -- Collections</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-12-vectors" style="color:var(--text-sec);">Step 12 -- Vectors</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-13-the-for-macro" style="color:var(--text-sec);">Step 13 -- The for macro</a></li>
+<li style=""><a href="#part-5-higher-order-functions-and-closures" style="">Part 5 -- Higher-Order Functions and Closures</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-14-closures-and-fn" style="color:var(--text-sec);">Step 14 -- Closures and fn</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-15-passing-functions-as-arguments" style="color:var(--text-sec);">Step 15 -- Passing functions as arguments</a></li>
+<li style=""><a href="#part-6-structs" style="">Part 6 -- Structs</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-16-defining-structs" style="color:var(--text-sec);">Step 16 -- Defining structs</a></li>
+<li style=""><a href="#part-7-algebraic-effects" style="">Part 7 -- Algebraic Effects</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-17-declaring-and-performing-effects" style="color:var(--text-sec);">Step 17 -- Declaring and performing effects</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-18-handling-effects" style="color:var(--text-sec);">Step 18 -- Handling effects</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-19-effects-for-dependency-injection" style="color:var(--text-sec);">Step 19 -- Effects for dependency injection</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-20-effects-that-return-values" style="color:var(--text-sec);">Step 20 -- Effects that return values</a></li>
+<li style=""><a href="#part-8-wrap-up" style="">Part 8 -- Wrap-up</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-21-loading-a-file-with-reload" style="color:var(--text-sec);">Step 21 -- Loading a file with :reload</a></li>
+<li style="padding-left:0.75rem;"><a href="#step-22-where-to-go-next" style="color:var(--text-sec);">Step 22 -- Where to go next</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="turmeric-interactive-repl-tutorial">Turmeric Interactive REPL Tutorial</h1>
+<p>This tutorial walks you through Turmeric in 22 steps, one expression at a
+time. Open the REPL with <code>tur repl</code> (or load the web REPL) and type along.</p>
+<p>Each step shows exactly what to type, what to expect back, and a brief
+explanation. "Try it yourself" prompts invite you to experiment before moving
+on -- they are optional but recommended.</p>
+<p>The companion prose guide (<code>docs/guides/quickstart.md</code>) covers the same ground
+with more explanation if you prefer reading over typing.</p>
+<hr />
+<h2 id="how-to-use-this-tutorial">How to use this tutorial</h2>
+<ol>
+<li>Start the REPL: <code>tur repl</code></li>
+<li>Type the expression shown under "Type this" and press Enter.</li>
+<li>Compare your output to "Expected output".</li>
+<li>Read "What happened", then try the variation at the bottom of the step.</li>
+<li>Move to the next step.</li>
+</ol>
+<p>If you get stuck: <code>:doc &lt;name&gt;</code> prints documentation for any symbol.
+<code>:help</code> lists all meta-commands. A blank line abandons an incomplete
+expression.</p>
+<hr />
+<h2 id="part-1-expressions-and-the-repl">Part 1 -- Expressions and the REPL</h2>
+<h3 id="step-1-your-first-expression">Step 1 -- Your first expression</h3>
+<p><strong>What you'll learn:</strong> how the REPL works and how arithmetic is written.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(+ 1 2)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">{1 + 2}
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>3
+</code></pre>
+<p><strong>What happened:</strong> Turmeric uses prefix notation -- the operator comes first,
+inside parentheses, followed by its arguments. <code>(+ 1 2)</code> means "add 1 and 2".
+The REPL prints the result immediately.</p>
+<blockquote>
+<p><strong>REPL tip:</strong> <code>:help</code> lists all meta-commands. <code>:quit</code> or Ctrl-D exits.</p>
+<p><strong>Try it yourself:</strong> evaluate <code>(- 100 58)</code> and <code>(* 6 7)</code>. What does
+<code>(/ 144 12)</code> return?</p>
+</blockquote>
+<hr />
+<h3 id="step-2-strings-and-booleans">Step 2 -- Strings and booleans</h3>
+<p><strong>What you'll learn:</strong> string literals, boolean values, equality, and <code>println</code>.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(println &quot;Hello, Turmeric!&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">println(&quot;Hello, Turmeric!&quot;)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>Hello, Turmeric!
+</code></pre>
+<p>Then try:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(= 1 1)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">{1 = 1}
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>true
+</code></pre>
+<p><strong>What happened:</strong> String literals are written in double quotes. <code>println</code>
+prints a value followed by a newline and returns nil (which the REPL does not
+print). <code>=</code> tests equality and returns a boolean.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> evaluate <code>(not true)</code> and <code>(not false)</code>. Print a
+greeting of your own.</p>
+</blockquote>
+<hr />
+<h3 id="step-3-binding-names-with-let">Step 3 -- Binding names with <code>let</code></h3>
+<p><strong>What you'll learn:</strong> how to introduce local names scoped to an expression.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [x 10 y 20] (+ x y))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [x 10 y 20] {x + y}
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>30
+</code></pre>
+<p><strong>What happened:</strong> <code>let</code> binds names to values for the duration of its body.
+The bindings <code>x</code> and <code>y</code> do not exist outside the <code>let</code>. You can have as many
+bindings as you like in the same vector.</p>
+<blockquote>
+<p><strong>REPL tip:</strong> If you open a parenthesis and press Enter, the REPL keeps
+reading (shown with an indented prompt) until the expression is balanced.
+A blank line abandons an incomplete expression.</p>
+<p><strong>Try it yourself:</strong> bind three values <code>a</code>, <code>b</code>, <code>c</code> and compute
+<code>(+ a (* b c))</code>.</p>
+</blockquote>
+<hr />
+<h3 id="step-4-defining-functions-with-defn">Step 4 -- Defining functions with <code>defn</code></h3>
+<p><strong>What you'll learn:</strong> how to define a named function that persists across REPL
+expressions.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn square [x :int] :int (* x x))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn square [x :int] :int
+  {x * x}
+</code></pre></div></div></div>
+<p>Then call it:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(square 9)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">square(9)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>81
+</code></pre>
+<p><strong>What happened:</strong> <code>defn</code> defines a named function. The parameter list
+<code>[x :int]</code> gives each parameter a name and type annotation. The return type
+<code>:int</code> follows the parameter list. Top-level definitions persist for the rest
+of the REPL session.</p>
+<blockquote>
+<p><strong>REPL tip:</strong> <code>:doc square</code> prints the signature of a user-defined symbol.
+<code>:type (square 3)</code> shows the inferred return type without evaluating.</p>
+<p><strong>Try it yourself:</strong> define a <code>cube</code> function and call it with a few values.</p>
+</blockquote>
+<hr />
+<h2 id="part-2-control-flow-and-recursion">Part 2 -- Control Flow and Recursion</h2>
+<h3 id="step-5-if-and-cond">Step 5 -- <code>if</code> and <code>cond</code></h3>
+<p><strong>What you'll learn:</strong> conditional expressions; <code>if</code> always produces a value.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn abs [n :int] :int
+  (if (&lt; n 0) (- 0 n) n))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn abs [n :int] :int
+  if {n &lt; 0}
+    {0 - n}
+    n
+</code></pre></div></div></div>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(abs -5)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">abs(-5)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>5
+</code></pre>
+<p>Now try a multi-branch form:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn sign [n :int] :int
+  (cond
+    (&gt; n 0) 1
+    (&lt; n 0) -1
+    :else   0))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn sign [n :int] :int
+  cond
+    {n &gt; 0}  1
+    {n &lt; 0}  -1
+    :else    0
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(sign -3)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">sign(-3)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>-1
+</code></pre>
+<p><strong>What happened:</strong> <code>if</code> takes a condition, a "then" expression, and an "else"
+expression -- both branches must produce a value. <code>cond</code> chains tests in order
+and evaluates the expression next to the first truthy test; <code>:else</code> is the
+fallback.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write a <code>clamp</code> function that takes <code>n</code>, <code>lo</code>, and <code>hi</code>
+and returns <code>lo</code> if <code>n &lt; lo</code>, <code>hi</code> if <code>n &gt; hi</code>, or <code>n</code> otherwise.</p>
+</blockquote>
+<hr />
+<h3 id="step-6-recursion">Step 6 -- Recursion</h3>
+<p><strong>What you'll learn:</strong> writing recursive functions; base case and recursive case.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn factorial [n :int] :int
+  (if (&lt;= n 1) 1 (* n (factorial (- n 1)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn factorial [n :int] :int
+  if {n &lt;= 1}
+    1
+    {n * factorial({n - 1})}
+</code></pre></div></div></div>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(factorial 10)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">factorial(10)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>3628800
+</code></pre>
+<p><strong>What happened:</strong> <code>factorial</code> calls itself with a smaller argument until it
+reaches the base case <code>(&lt;= n 1)</code>. Turmeric has no loop keyword -- iteration is
+expressed through recursion or macros like <code>for</code> (step 13).</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write a recursive <code>fib</code> function that computes Fibonacci
+numbers. Try <code>(fib 30)</code>.</p>
+</blockquote>
+<hr />
+<h3 id="step-7-when-and-unless">Step 7 -- <code>when</code> and <code>unless</code></h3>
+<p><strong>What you'll learn:</strong> one-arm conditionals for side-effectful code.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(when true (println &quot;yes&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">when true
+  println(&quot;yes&quot;)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>yes
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(unless false (println &quot;also yes&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">unless false
+  println(&quot;also yes&quot;)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>also yes
+</code></pre>
+<p><strong>What happened:</strong> <code>when</code> evaluates its body only when the condition is truthy
+and returns nil otherwise. <code>unless</code> is the opposite -- it evaluates its body
+when the condition is falsy. Both are macros defined in <code>stdlib/macros.tur</code>.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> use <code>when</code> to print a warning only when a value is
+negative.</p>
+</blockquote>
+<hr />
+<h2 id="part-3-data-option-and-result">Part 3 -- Data: Option and Result</h2>
+<h3 id="step-8-option-constructors-and-predicates">Step 8 -- <code>Option</code>: constructors and predicates</h3>
+<p><strong>What you'll learn:</strong> how to represent a value that may or may not be present.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-some? (option-some 42))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-some?(option-some(42))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>true
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-none? (option-none))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-none?(option-none())
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>true
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-some? (option-none))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-some?(option-none())
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>false
+</code></pre>
+<p><strong>What happened:</strong> <code>option-some</code> wraps a value in an optional container.
+<code>option-none</code> represents the absence of a value. The predicates <code>option-some?</code>
+and <code>option-none?</code> test which case you have. Evaluating <code>(option-none)</code> alone
+produces a nil result, which the REPL does not print -- that is normal.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> evaluate <code>(option-none? (option-some 0))</code>. Is a <code>some</code>
+of zero still <code>some</code>?</p>
+</blockquote>
+<hr />
+<h3 id="step-9-option-safe-unwrapping">Step 9 -- <code>Option</code>: safe unwrapping</h3>
+<p><strong>What you'll learn:</strong> extracting a value from an <code>Option</code> without crashing,
+and writing functions that return <code>Option</code> instead of panicking.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-unwrap (option-some 99))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-unwrap(option-some(99))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>99
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-unwrap-or (option-none) -1)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-unwrap-or(option-none() -1)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>-1
+</code></pre>
+<p>Now define a division function that never crashes:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn safe-div [a :int b :int]
+  (if (= b 0) (option-none) (option-some (/ a b))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn safe-div [a :int b :int]
+  if {b = 0}
+    option-none()
+    option-some({a / b})
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-unwrap (safe-div 10 2))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-unwrap(safe-div(10 2))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>5
+</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(option-unwrap-or (safe-div 10 0) -1)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">option-unwrap-or(safe-div(10 0) -1)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>-1
+</code></pre>
+<p><strong>What happened:</strong> <code>option-unwrap</code> extracts the inner value or panics if the
+option is none. <code>option-unwrap-or</code> provides a fallback instead of panicking.
+Returning <code>Option</code> from a function lets callers decide how to handle the
+missing case.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write <code>safe-head</code> that returns <code>(option-none)</code> for an
+empty vector and <code>(option-some (vec-get v 0))</code> otherwise. You will need
+<code>vec-len</code> from step 12 to check emptiness.</p>
+</blockquote>
+<hr />
+<h3 id="step-10-result-success-or-failure">Step 10 -- <code>Result</code>: success or failure</h3>
+<p><strong>What you'll learn:</strong> the two-case <code>Result</code> type that carries either a success
+value or an error value.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(ok? (ok 100))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">ok?(ok(100))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>true
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(err? (ok 100))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">err?(ok(100))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>false
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(result-unwrap-or (err 0) -1)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">result-unwrap-or(err(0) -1)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>-1
+</code></pre>
+<p><strong>What happened:</strong> <code>ok</code> wraps a success value; <code>err</code> wraps an error value.
+<code>ok?</code> and <code>err?</code> test which case you have. <code>result-unwrap-or</code> extracts the
+success value or returns a fallback when the result is an error. Like
+<code>option-none</code>, evaluating <code>(ok 100)</code> or <code>(err 0)</code> alone prints nothing.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> rewrite <code>safe-div</code> from step 9 to return <code>(ok (/ a b))</code>
+on success and <code>(err 0)</code> on division by zero.</p>
+</blockquote>
+<hr />
+<h3 id="step-11-branching-on-option-and-result-with-cond">Step 11 -- Branching on <code>Option</code> and <code>Result</code> with <code>cond</code></h3>
+<p><strong>What you'll learn:</strong> composing predicates inside <code>cond</code> to dispatch on
+wrapped values.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn describe-result [r]
+  (cond
+    (ok? r)  (println &quot;ok!&quot;)
+    (err? r) (println &quot;err!&quot;)
+    :else    (println &quot;unknown&quot;)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn describe-result [r]
+  cond
+    ok?(r)  println(&quot;ok!&quot;)
+    err?(r) println(&quot;err!&quot;)
+    :else   println(&quot;unknown&quot;)
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(describe-result (ok 1))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">describe-result(ok(1))
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>ok!
+</code></pre>
+<p>Then:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn describe-option [o]
+  (cond
+    (option-some? o) (println &quot;some!&quot;)
+    (option-none? o) (println &quot;none!&quot;)
+    :else            (println &quot;unknown&quot;)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn describe-option [o]
+  cond
+    option-some?(o) println(&quot;some!&quot;)
+    option-none?(o) println(&quot;none!&quot;)
+    :else           println(&quot;unknown&quot;)
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(describe-option (option-none))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">describe-option(option-none())
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>none!
+</code></pre>
+<p><strong>What happened:</strong> <code>cond</code> with <code>ok?</code> / <code>err?</code> / <code>option-some?</code> / <code>option-none?</code>
+gives you a clean, readable way to branch on wrapped values. This is the
+standard lightweight dispatch pattern before reaching for full pattern matching.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write <code>show-div</code> that calls <code>safe-div</code> and prints either
+the result or the string "division by zero".</p>
+</blockquote>
+<hr />
+<h2 id="part-4-collections">Part 4 -- Collections</h2>
+<h3 id="step-12-vectors">Step 12 -- Vectors</h3>
+<p><strong>What you'll learn:</strong> mutable growable arrays -- creating them, adding
+elements, and reading back by index.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [v (vec-new)]
+  (vec-push! v 10)
+  (vec-push! v 20)
+  (vec-push! v 30)
+  (println (vec-len v))
+  (println (vec-get v 1)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [v vec-new()]
+  vec-push!(v 10)
+  vec-push!(v 20)
+  vec-push!(v 30)
+  println $ vec-len(v)
+  println $ vec-get(v 1)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>3
+20
+</code></pre>
+<p><strong>What happened:</strong> <code>vec-new</code> allocates an empty vector. <code>vec-push!</code> appends a
+value in place (the <code>!</code> suffix signals mutation). <code>vec-len</code> returns the current
+length; <code>vec-get</code> reads by zero-based index.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> build a vector containing the integers 0 through 4 by
+calling <code>vec-push!</code> five times, then print each element.</p>
+</blockquote>
+<hr />
+<h3 id="step-13-the-for-macro">Step 13 -- The <code>for</code> macro</h3>
+<p><strong>What you'll learn:</strong> counted iteration with <code>for</code>; combining a loop with a
+vector built in step 12.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(for i 0 5 (println i))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">for i 0 5 println(i)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>0
+1
+2
+3
+4
+</code></pre>
+<p><strong>What happened:</strong> <code>(for i lo hi body)</code> binds <code>i</code> to each integer in <code>[lo,
+hi)</code> and evaluates <code>body</code> once per value. It is a macro -- <code>:doc for</code> shows
+its signature. The index variable is available inside the body.</p>
+<blockquote>
+<p><strong>REPL tip:</strong> <code>:doc for</code> shows the macro's parameter names and a usage
+example.</p>
+<p><strong>Try it yourself:</strong> use <code>for</code> to push the first five square numbers into a
+vector, then print the vector's length.</p>
+</blockquote>
+<hr />
+<h2 id="part-5-higher-order-functions-and-closures">Part 5 -- Higher-Order Functions and Closures</h2>
+<h3 id="step-14-closures-and-fn">Step 14 -- Closures and <code>fn</code></h3>
+<p><strong>What you'll learn:</strong> anonymous functions that capture their surrounding scope.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [add5 (fn [x :int] :int (+ x 5))]
+  (add5 10))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [add5 fn([x :int] :int {x + 5})]
+  add5(10)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>15
+</code></pre>
+<p>Then define a function that returns a closure:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn make-adder [n :int] (fn [x :int] :int (+ x n)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn make-adder [n :int]
+  fn [x :int] :int {x + n}
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [add3 (make-adder 3)] (add3 7))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [add3 make-adder(3)]
+  add3(7)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>10
+</code></pre>
+<p><strong>What happened:</strong> <code>fn</code> creates an anonymous function. When <code>make-adder</code> runs,
+the returned closure captures the value of <code>n</code> from the enclosing scope and
+carries it along. Each call to <code>make-adder</code> produces a distinct closure with
+its own <code>n</code>.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write <code>make-multiplier</code> that returns a closure
+multiplying its argument by <code>n</code>.</p>
+</blockquote>
+<hr />
+<h3 id="step-15-passing-functions-as-arguments">Step 15 -- Passing functions as arguments</h3>
+<p><strong>What you'll learn:</strong> functions are first-class values that can be passed to
+and returned from other functions.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn apply-twice [f x :int] :int (f (f x)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn apply-twice [f x :int] :int
+  f(f(x))
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(apply-twice (fn [x :int] :int (* x 2)) 3)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">apply-twice(fn([x :int] :int {x * 2}) 3)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>12
+</code></pre>
+<p><strong>What happened:</strong> <code>apply-twice</code> accepts any function <code>f</code> and an integer <code>x</code>,
+applies <code>f</code> to <code>x</code>, then applies <code>f</code> again to the result. The inline <code>fn</code>
+doubles its argument, so <code>3</code> becomes <code>6</code> then <code>12</code>.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write <code>apply-n</code> that takes a function, a starting value,
+and a count, and applies the function that many times.</p>
+</blockquote>
+<hr />
+<h2 id="part-6-structs">Part 6 -- Structs</h2>
+<h3 id="step-16-defining-structs">Step 16 -- Defining structs</h3>
+<p><strong>What you'll learn:</strong> grouping related values into a named record type.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Point [x :int y :int])
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Point [x :int y :int]
+</code></pre></div></div></div>
+<p>Then construct an instance and read its fields:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [p (Point 3 4)]
+  (println (Point-x p))
+  (println (Point-y p)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [p Point(3 4)]
+  println $ Point-x(p)
+  println $ Point-y(p)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>3
+4
+</code></pre>
+<p><strong>What happened:</strong> <code>defstruct</code> declares a record type with named fields.
+The constructor shares the struct's name. For each field <code>f</code> in struct <code>S</code>,
+<code>defstruct</code> generates an accessor <code>S-f</code>. Struct values are allocated on the
+heap and passed by pointer.</p>
+<blockquote>
+<p><strong>REPL tip:</strong> <code>:type (Point 1 2)</code> confirms the inferred type of a struct
+expression.</p>
+<p><strong>Try it yourself:</strong> define a <code>Rect</code> struct with <code>width :int</code> and
+<code>height :int</code> fields. Write an <code>area</code> function that returns <code>(* (Rect-width r)
+(Rect-height r))</code>.</p>
+</blockquote>
+<hr />
+<h2 id="part-7-algebraic-effects">Part 7 -- Algebraic Effects</h2>
+<h3 id="step-17-declaring-and-performing-effects">Step 17 -- Declaring and performing effects</h3>
+<p><strong>What you'll learn:</strong> how to declare a named effect and invoke it; what
+happens without a handler.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Log [msg :cstr] :void)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Log [msg :cstr] :void
+</code></pre></div></div></div>
+<p>Then define a function that performs it:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn do-work [] :void
+  (perform (Log &quot;starting&quot;))
+  (perform (Log &quot;done&quot;)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn do-work [] :void
+  perform(Log(&quot;starting&quot;))
+  perform(Log(&quot;done&quot;))
+</code></pre></div></div></div>
+<p>Now call it without a handler:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(do-work)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">do-work()
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>error: unhandled effect Log
+</code></pre>
+<p><strong>What happened:</strong> <code>defeffect</code> declares a named effect with a parameter list
+and return type. <code>perform</code> raises the effect and suspends the current
+computation, searching up the call stack for a matching handler. With none
+present the runtime raises an error. This is intentional -- the handler comes
+in the next step.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> declare a second effect <code>Warn [msg :cstr] :void</code> and
+call <code>(perform (Warn "careful"))</code> inside <code>do-work</code>.</p>
+</blockquote>
+<hr />
+<h3 id="step-18-handling-effects">Step 18 -- Handling effects</h3>
+<p><strong>What you'll learn:</strong> writing a <code>handle</code> block that intercepts an effect and
+resumes the computation.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(handle (do-work)
+  (Log [msg] k)
+    (do (println msg) (resume k (nil-value))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">handle do-work()
+  (Log [msg] k)
+    do
+      println(msg)
+      resume(k nil-value())
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>starting
+done
+</code></pre>
+<p><strong>What happened:</strong> <code>handle</code> wraps a computation and installs a handler clause
+for <code>Log</code>. When <code>do-work</code> performs <code>Log</code>, execution jumps to the clause body.
+<code>msg</code> receives the argument; <code>k</code> is the captured one-shot continuation.
+<code>(resume k (nil-value))</code> passes nil back to the <code>perform</code> expression and
+continues <code>do-work</code> from where it left off.</p>
+<blockquote>
+<p><strong>REPL tip:</strong> <code>k</code> is one-shot -- calling <code>(resume k v)</code> consumes it.
+Attempting to resume twice is a runtime error.</p>
+<p><strong>Try it yourself:</strong> change the handler body to also print a counter
+alongside each message, e.g. <code>"[1] starting"</code>.</p>
+</blockquote>
+<hr />
+<h3 id="step-19-effects-for-dependency-injection">Step 19 -- Effects for dependency injection</h3>
+<p><strong>What you'll learn:</strong> swapping handlers to change behavior without modifying
+the computation.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(handle (do-work)
+  (Log [msg] k)
+    (do (println (str-concat &quot;[LOG] &quot; msg)) (resume k (nil-value))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">handle do-work()
+  (Log [msg] k)
+    do
+      println $ str-concat(&quot;[LOG] &quot; msg)
+      resume(k nil-value())
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>[LOG] starting
+[LOG] done
+</code></pre>
+<p><strong>What happened:</strong> <code>do-work</code> is unchanged. Only the handler differs -- it now
+prefixes each message with <code>[LOG]</code>. Effects separate the declaration of an
+operation from its implementation, making it straightforward to swap in
+logging, testing, or no-op handlers without touching the business logic.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> write a silent handler that discards log messages
+(calls <code>resume</code> without printing). Confirm that <code>do-work</code> still completes.</p>
+</blockquote>
+<hr />
+<h3 id="step-20-effects-that-return-values">Step 20 -- Effects that return values</h3>
+<p><strong>What you'll learn:</strong> an effect whose <code>perform</code> expression evaluates to a
+value supplied by the handler.</p>
+<p>Type this:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Ask [] :int)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Ask [] :int
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn use-ask [] :int
+  {1 + perform(Ask())}
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(handle (use-ask)
+  (Ask [] k) (resume k 41))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">handle use-ask()
+  (Ask [] k) resume(k 41)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>42
+</code></pre>
+<p><strong>What happened:</strong> <code>Ask</code> has return type <code>:int</code>, so <code>(perform (Ask))</code>
+evaluates to whatever the handler passes to <code>resume</code>. The handler supplies
+<code>41</code>; <code>use-ask</code> adds <code>1</code>, giving <code>42</code>. The handler controls the value the
+computation receives back from <code>perform</code>.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> change <code>(resume k 41)</code> to <code>(resume k 99)</code> and observe
+the new result of <code>use-ask</code>.</p>
+</blockquote>
+<hr />
+<h2 id="part-8-wrap-up">Part 8 -- Wrap-up</h2>
+<h3 id="step-21-loading-a-file-with-reload">Step 21 -- Loading a file with <code>:reload</code></h3>
+<p><strong>What you'll learn:</strong> writing Turmeric code to a file and loading it into
+the current REPL session.</p>
+<p>First, save the following to a file called <code>hello.tur</code> in your working
+directory:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn greet [name :cstr] :void
+  (println (str-concat &quot;Hello, &quot; (str-concat name &quot;!&quot;))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn greet [name :cstr] :void
+  println $ str-concat(&quot;Hello, &quot; str-concat(name &quot;!&quot;))
+</code></pre></div></div></div>
+<p>Then in the REPL:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:reload hello.tur
+</code></pre>
+<p>Expected output:</p>
+<pre><code>reloaded hello.tur
+</code></pre>
+<p>Now call the function:</p>
+<pre><code class="language-turmeric">(greet &quot;world&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">greet(&quot;world&quot;)
+</code></pre></div></div></div>
+<p>Expected output:</p>
+<pre><code>Hello, world!
+</code></pre>
+<p><strong>What happened:</strong> <code>:reload &lt;file&gt;</code> evaluates the contents of the file into
+the current session, making all its definitions available immediately. If the
+file contains an error, a diagnostic is printed and the session continues. You
+can edit the file and <code>:reload</code> again without restarting.</p>
+<blockquote>
+<p><strong>Try it yourself:</strong> add a second function to <code>hello.tur</code>, <code>:reload</code> it, and
+call the new function.</p>
+</blockquote>
+<hr />
+<h3 id="step-22-where-to-go-next">Step 22 -- Where to go next</h3>
+<p><strong>What you'll learn:</strong> nothing to type -- just a map of where to head next.</p>
+<p>You have covered the core of Turmeric: expressions, functions, control flow,
+<code>Option</code>, <code>Result</code>, vectors, closures, structs, and algebraic effects. Here
+are the natural next stops depending on what interests you:</p>
+<p><strong>Deeper on today's topics</strong></p>
+<ul>
+<li><code>docs/guides/error-handling-guide.md</code> -- <code>Result</code>, <code>Option</code>, <code>panic</code>, and
+  contract macros (<code>assert!</code>, <code>require!</code>, <code>ensure!</code>)</li>
+<li><code>docs/guides/effects-system-guide.md</code> -- full effects reference: effect rows,
+  composing handlers, one-shot vs. cloneable continuations</li>
+</ul>
+<p><strong>Concurrency</strong></p>
+<ul>
+<li><code>docs/guides/threading-guide.md</code> -- OS threads, <code>Mutex</code>, <code>Atomic</code>, channels</li>
+<li><code>docs/guides/async-await-guide.md</code> -- async/await with fibers</li>
+<li><code>docs/guides/stm-tutorial.md</code> -- software transactional memory</li>
+</ul>
+<p><strong>Type system</strong></p>
+<ul>
+<li><code>docs/guides/hkt-guide.md</code> -- Functor, Monad, Applicative (higher-kinded
+  types)</li>
+<li><code>docs/guides/hrt-guide.md</code> -- rank-2 polymorphic function parameters</li>
+<li><code>docs/guides/gadts-guide.md</code> -- generalized algebraic data types</li>
+<li><code>docs/guides/type-annotations-guide.md</code> -- compound annotation syntax</li>
+</ul>
+<p><strong>Modules and packages</strong></p>
+<ul>
+<li><code>docs/guides/module-system-guide.md</code> -- namespacing and exports</li>
+<li><code>docs/guides/package-management-guide.md</code> -- projects, spices, <code>tur.lock</code></li>
+</ul>
+<p><strong>API reference</strong></p>
+<ul>
+<li><code>docs/html/api/index.html</code> -- generated reference from <code>;;;</code> docstrings</li>
+</ul>
+<blockquote>
+<p><strong>REPL tip:</strong> <code>:doc &lt;sym&gt;</code> works for any symbol in scope. It is the fastest
+way to look something up without leaving the REPL.</p>
+</blockquote>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/repl-tutorial.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>libturi -- C Embedding API Reference | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#libturi-c-embedding-api-reference" style="">libturi -- C Embedding API Reference</a></li>
+<li style=""><a href="#quick-start" style="">Quick start</a></li>
+<li style=""><a href="#headers" style="">Headers</a></li>
+<li style=""><a href="#initialisation" style="">Initialisation</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_initbool-use_color" style="color:var(--text-sec);">void turi_init(bool use_color)</a></li>
+<li style=""><a href="#environments" style="">Environments</a></li>
+<li style="padding-left:0.75rem;"><a href="#turienv-turi_env_newvoid" style="color:var(--text-sec);">TuriEnv *turi_env_new(void)</a></li>
+<li style="padding-left:0.75rem;"><a href="#turienv-turi_env_new_sandboxedvoid" style="color:var(--text-sec);">TuriEnv *turi_env_new_sandboxed(void)</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_env_freeturienv-env" style="color:var(--text-sec);">void turi_env_free(TuriEnv *env)</a></li>
+<li style="padding-left:0.75rem;"><a href="#turivalue-turi_env_getturienv-env-const-char-name" style="color:var(--text-sec);">TuriValue turi_env_get(TuriEnv *env, const char *name)</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_env_setturienv-env-const-char-name-turivalue-value" style="color:var(--text-sec);">void turi_env_set(TuriEnv *env, const char *name, TuriValue value)</a></li>
+<li style=""><a href="#evaluation" style="">Evaluation</a></li>
+<li style="padding-left:0.75rem;"><a href="#turivalue-turi_evalturienv-env-const-char-src" style="color:var(--text-sec);">TuriValue turi_eval(TuriEnv *env, const char *src)</a></li>
+<li style="padding-left:0.75rem;"><a href="#turivalue-turi_eval_fileturienv-env-const-char-path" style="color:var(--text-sec);">TuriValue turi_eval_file(TuriEnv *env, const char *path)</a></li>
+<li style=""><a href="#values-turivalue" style="">Values -- TuriValue</a></li>
+<li style="padding-left:0.75rem;"><a href="#tags" style="color:var(--text-sec);">Tags</a></li>
+<li style="padding-left:0.75rem;"><a href="#constructors" style="color:var(--text-sec);">Constructors</a></li>
+<li style="padding-left:0.75rem;"><a href="#predicates-and-accessors" style="color:var(--text-sec);">Predicates and accessors</a></li>
+<li style="padding-left:0.75rem;"><a href="#printing" style="color:var(--text-sec);">Printing</a></li>
+<li style=""><a href="#registering-native-c-functions" style="">Registering native C functions</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_env_register_nativeturienv-env-const-char-name-turinativefn-fn-void-ud" style="color:var(--text-sec);">void turi_env_register_native(TuriEnv *env, const char *name, TuriNativeFn fn, void *ud)</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_native_throwturienv-env-const-char-msg" style="color:var(--text-sec);">void turi_native_throw(TuriEnv *env, const char *msg)</a></li>
+<li style=""><a href="#async-api" style="">Async API</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_run_event_loopturienv-env" style="color:var(--text-sec);">void turi_run_event_loop(TuriEnv *env)</a></li>
+<li style="padding-left:0.75rem;"><a href="#turivalue-turi_task_spawnturienv-env-const-char-src" style="color:var(--text-sec);">TuriValue turi_task_spawn(TuriEnv *env, const char *src)</a></li>
+<li style="padding-left:0.75rem;"><a href="#void-turi_task_cancelturienv-env-turifuture-f" style="color:var(--text-sec);">void turi_task_cancel(TuriEnv *env, TuriFuture *f)</a></li>
+<li style="padding-left:0.75rem;"><a href="#turivalue-turi_future_poll_valturifuture-f" style="color:var(--text-sec);">TuriValue turi_future_poll_val(TuriFuture *f)</a></li>
+<li style="padding-left:0.75rem;"><a href="#turivalue-turi_sleep_asyncturienv-env-uint64_t-ms" style="color:var(--text-sec);">TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms)</a></li>
+<li style=""><a href="#thread-safety" style="">Thread safety</a></li>
+<li style=""><a href="#error-handling-pattern" style="">Error handling pattern</a></li>
+<li style=""><a href="#full-example-sandboxed-calculator" style="">Full example -- sandboxed calculator</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="libturi-c-embedding-api-reference">libturi -- C Embedding API Reference</h1>
+<p><code>libturi</code> is the Turmeric eval runtime packaged as a static library (<code>libturi.a</code>).
+It lets C programs evaluate Turmeric expressions, call Turmeric functions, and
+expose C functions to Turmeric code -- all without spawning a subprocess.</p>
+<hr />
+<h2 id="quick-start">Quick start</h2>
+<pre><code class="language-c">#include &lt;turi/eval.h&gt;
+
+int main(void) {
+    turi_init(/*use_color=*/false);
+
+    TuriEnv *env = turi_env_new();
+
+    TuriValue v = turi_eval(env, &quot;(+ 1 2)&quot;);
+    /* v.tag == TURI_INT, v.as_int == 3 */
+
+    turi_env_free(env);
+    return 0;
+}
+</code></pre>
+<p>Compile and link:</p>
+<pre><code class="language-sh">cc -o demo demo.c -I/usr/local/include/turi \
+   -L/usr/local/lib -lturi -lpthread
+</code></pre>
+<hr />
+<h2 id="headers">Headers</h2>
+<table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>turi/eval.h</code></td>
+<td>Main API -- eval, init, async helpers</td>
+</tr>
+<tr>
+<td><code>turi/env.h</code></td>
+<td><code>TuriEnv</code> type and environment operations</td>
+</tr>
+<tr>
+<td><code>turi/value.h</code></td>
+<td><code>TuriValue</code> tagged union and constructors</td>
+</tr>
+</tbody>
+</table>
+<p>Include only <code>turi/eval.h</code>; it pulls in the others transitively.</p>
+<hr />
+<h2 id="initialisation">Initialisation</h2>
+<h3 id="void-turi_initbool-use_color"><code>void turi_init(bool use_color)</code></h3>
+<p>Initialises the diagnostics subsystem.  Call <strong>once</strong> before the first
+<code>turi_eval</code>.  Pass <code>use_color = true</code> to enable ANSI colour in error messages
+(suitable when stderr is a terminal).</p>
+<hr />
+<h2 id="environments">Environments</h2>
+<p>An environment (<code>TuriEnv</code>) holds all accumulated definitions and per-call
+arenas.  Closures captured from an environment must not outlive it.</p>
+<h3 id="turienv-turi_env_newvoid"><code>TuriEnv *turi_env_new(void)</code></h3>
+<p>Creates an unrestricted environment.  All builtins -- including I/O -- are
+available.</p>
+<h3 id="turienv-turi_env_new_sandboxedvoid"><code>TuriEnv *turi_env_new_sandboxed(void)</code></h3>
+<p>Creates a sandboxed environment.  I/O builtins (<code>println</code>, <code>read-async</code>,
+<code>write-async</code>, …) and inline-C expressions are disabled.  Suitable for
+evaluating untrusted code.</p>
+<h3 id="void-turi_env_freeturienv-env"><code>void turi_env_free(TuriEnv *env)</code></h3>
+<p>Frees all resources owned by <code>env</code>.  Any <code>TuriValue</code> containing a closure,
+struct, or future that was produced by this environment becomes invalid after
+this call.</p>
+<h3 id="turivalue-turi_env_getturienv-env-const-char-name"><code>TuriValue turi_env_get(TuriEnv *env, const char *name)</code></h3>
+<p>Looks up a global binding by name.  Returns a <code>TURI_ERROR</code> value if the name
+is not bound.</p>
+<h3 id="void-turi_env_setturienv-env-const-char-name-turivalue-value"><code>void turi_env_set(TuriEnv *env, const char *name, TuriValue value)</code></h3>
+<p>Creates or replaces a global binding.  Useful for injecting values from C into
+Turmeric code before evaluating expressions that reference them.</p>
+<hr />
+<h2 id="evaluation">Evaluation</h2>
+<h3 id="turivalue-turi_evalturienv-env-const-char-src"><code>TuriValue turi_eval(TuriEnv *env, const char *src)</code></h3>
+<p>Evaluates a Turmeric source string in <code>env</code>.  Prior definitions in <code>env</code> remain
+visible.  New top-level definitions (<code>defn</code>, <code>def</code>) are stored back into <code>env</code>
+for subsequent calls.</p>
+<p>On parse or elaboration error the diagnostic is emitted to stderr and the
+returned value has tag <code>TURI_ERROR</code>.</p>
+<p>The returned value is valid until <code>turi_env_free(env)</code>.</p>
+<pre><code class="language-c">/* Define a function, then call it in a later eval. */
+turi_eval(env, &quot;(defn double [x :int] :int (* x 2))&quot;);
+TuriValue r = turi_eval(env, &quot;(double 21)&quot;);
+/* r.as_int == 42 */
+</code></pre>
+<h3 id="turivalue-turi_eval_fileturienv-env-const-char-path"><code>TuriValue turi_eval_file(TuriEnv *env, const char *path)</code></h3>
+<p>Reads <code>path</code> and evaluates its contents via <code>turi_eval</code>.  Returns a <code>TURI_ERROR</code>
+if the file cannot be opened.</p>
+<hr />
+<h2 id="values-turivalue">Values -- <code>TuriValue</code></h2>
+<p><code>TuriValue</code> is a tagged union:</p>
+<pre><code class="language-c">typedef struct TuriValue {
+    TuriTag tag;
+    union {
+        bool             as_bool;
+        int64_t          as_int;
+        double           as_float;
+        const char      *as_cstr;    /* NUL-terminated string */
+        TuriClosure     *as_closure;
+        const char      *as_error;   /* error message */
+        TuriEffectCont  *as_cont;
+        TuriStruct      *as_struct;
+        TuriThrow       *as_throw;
+        TuriFuture      *as_future;
+    };
+} TuriValue;
+</code></pre>
+<h3 id="tags">Tags</h3>
+<table>
+<thead>
+<tr>
+<th>Tag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TURI_NIL</code></td>
+<td>Unit / void -- <code>()</code>, <code>nil</code></td>
+</tr>
+<tr>
+<td><code>TURI_BOOL</code></td>
+<td>Boolean -- <code>true</code> / <code>false</code></td>
+</tr>
+<tr>
+<td><code>TURI_INT</code></td>
+<td>64-bit signed integer</td>
+</tr>
+<tr>
+<td><code>TURI_FLOAT</code></td>
+<td>64-bit float (double)</td>
+</tr>
+<tr>
+<td><code>TURI_CSTR</code></td>
+<td>NUL-terminated C string</td>
+</tr>
+<tr>
+<td><code>TURI_CLOSURE</code></td>
+<td>First-class function</td>
+</tr>
+<tr>
+<td><code>TURI_ERROR</code></td>
+<td>Runtime / parse error (not catchable by <code>try/catch</code>)</td>
+</tr>
+<tr>
+<td><code>TURI_EFFECT_CONT</code></td>
+<td>Live algebraic-effect continuation</td>
+</tr>
+<tr>
+<td><code>TURI_STRUCT</code></td>
+<td>Struct instance</td>
+</tr>
+<tr>
+<td><code>TURI_THROW</code></td>
+<td>In-flight exception (catchable by <code>try/catch</code>)</td>
+</tr>
+<tr>
+<td><code>TURI_FUTURE</code></td>
+<td>Async future handle</td>
+</tr>
+</tbody>
+</table>
+<h3 id="constructors">Constructors</h3>
+<pre><code class="language-c">TuriValue turi_nil(void);
+TuriValue turi_bool(bool b);
+TuriValue turi_int(int64_t i);
+TuriValue turi_float(double f);
+TuriValue turi_cstr(const char *s);   /* borrows s -- caller keeps it alive */
+TuriValue turi_error(const char *msg);
+TuriValue turi_errorf(const char *fmt, ...);
+</code></pre>
+<h3 id="predicates-and-accessors">Predicates and accessors</h3>
+<pre><code class="language-c">bool        turi_is_error(TuriValue v);
+bool        turi_is_truthy(TuriValue v);
+bool        turi_is_throw(TuriValue v);
+bool        turi_as_bool(TuriValue v);
+int64_t     turi_as_int(TuriValue v);
+double      turi_as_float(TuriValue v);
+const char *turi_as_cstr(TuriValue v);
+const char *turi_error_message(TuriValue v);
+</code></pre>
+<h3 id="printing">Printing</h3>
+<pre><code class="language-c">void turi_value_repr(char *buf, size_t cap, TuriValue v);
+</code></pre>
+<p>Writes a human-readable representation into <code>buf</code> (at most <code>cap</code> bytes,
+NUL-terminated).  Examples: <code>"42"</code>, <code>"\"hello\""</code>, <code>"#&lt;fn double&gt;"</code>,
+<code>"true"</code>.</p>
+<pre><code class="language-c">void turi_print_value(FILE *out, TuriValue v);
+</code></pre>
+<p>Prints the same representation to <code>out</code>.</p>
+<hr />
+<h2 id="registering-native-c-functions">Registering native C functions</h2>
+<h3 id="void-turi_env_register_nativeturienv-env-const-char-name-turinativefn-fn-void-ud"><code>void turi_env_register_native(TuriEnv *env, const char *name, TuriNativeFn fn, void *ud)</code></h3>
+<p>Registers a C function so that Turmeric code can call it by <code>name</code>.</p>
+<pre><code class="language-c">typedef TuriValue (*TuriNativeFn)(TuriEnv *env, TuriValue *args,
+                                   uint32_t n, void *ud);
+</code></pre>
+<ul>
+<li><code>args</code> -- array of evaluated arguments (length <code>n</code>).</li>
+<li><code>ud</code> -- the <code>void *ud</code> passed to <code>turi_env_register_native</code>.</li>
+<li>Return <code>turi_nil()</code> for void functions; return an appropriate <code>TuriValue</code>
+  for functions that produce results.</li>
+<li>To raise a catchable exception call <code>turi_native_throw</code> then return
+  <code>turi_nil()</code>.</li>
+</ul>
+<pre><code class="language-c">static TuriValue native_add(TuriEnv *env, TuriValue *args,
+                             uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n != 2) return turi_error(&quot;add: expected 2 args&quot;);
+    return turi_int(args[0].as_int + args[1].as_int);
+}
+
+turi_env_register_native(env, &quot;my-add&quot;, native_add, NULL);
+TuriValue r = turi_eval(env, &quot;(my-add 10 32)&quot;);
+/* r.as_int == 42 */
+</code></pre>
+<h3 id="void-turi_native_throwturienv-env-const-char-msg"><code>void turi_native_throw(TuriEnv *env, const char *msg)</code></h3>
+<p>Raises a catchable Turmeric exception from inside a <code>TuriNativeFn</code>.  Sets
+<code>env-&gt;throwing</code> and <code>env-&gt;throw_value</code>; the native must return <code>turi_nil()</code>
+immediately afterwards.</p>
+<pre><code class="language-c">static TuriValue native_fail(TuriEnv *env, TuriValue *args,
+                              uint32_t n, void *ud) {
+    turi_native_throw(env, &quot;something went wrong&quot;);
+    return turi_nil();
+}
+</code></pre>
+<hr />
+<h2 id="async-api">Async API</h2>
+<p>The async scheduler is cooperative and single-threaded.  <code>(async ...)</code> spawns
+a fiber; <code>(await ...)</code> suspends the current fiber until a future resolves.
+From C, call <code>turi_run_event_loop</code> after evaluating async code to drive
+completion.</p>
+<h3 id="void-turi_run_event_loopturienv-env"><code>void turi_run_event_loop(TuriEnv *env)</code></h3>
+<p>Runs the cooperative scheduler until all pending fibers, timers, and I/O
+callbacks complete.  Call after any <code>turi_eval</code> that starts async tasks.</p>
+<pre><code class="language-c">turi_eval(env, &quot;(defn work [] :int (await (async (fn [] :int 42))))&quot;);
+TuriValue r = turi_eval(env, &quot;(work)&quot;);
+/* r.as_int == 42  -- (await ...) in main context drives the loop inline */
+</code></pre>
+<h3 id="turivalue-turi_task_spawnturienv-env-const-char-src"><code>TuriValue turi_task_spawn(TuriEnv *env, const char *src)</code></h3>
+<p>Evaluates <code>src</code> as a zero-argument closure and spawns it as an async task.
+Returns a <code>TURI_FUTURE</code> value.</p>
+<h3 id="void-turi_task_cancelturienv-env-turifuture-f"><code>void turi_task_cancel(TuriEnv *env, TuriFuture *f)</code></h3>
+<p>Cancels the fiber owning <code>f</code>.  The future is rejected; any <code>(await f)</code> will
+throw a cancellation exception.</p>
+<h3 id="turivalue-turi_future_poll_valturifuture-f"><code>TuriValue turi_future_poll_val(TuriFuture *f)</code></h3>
+<p>Non-blocking poll.  Returns the resolved value, a <code>TURI_ERROR</code> if rejected,
+or <code>TURI_NIL</code> if still pending.</p>
+<h3 id="turivalue-turi_sleep_asyncturienv-env-uint64_t-ms"><code>TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms)</code></h3>
+<p>Returns a <code>TURI_FUTURE</code> that resolves after <code>ms</code> milliseconds.  The current
+fiber (if any) should <code>(await)</code> this future to suspend.</p>
+<hr />
+<h2 id="thread-safety">Thread safety</h2>
+<p><code>TuriEnv</code> is <strong>not</strong> thread-safe.  Use one environment per thread, or protect
+access with an external lock.</p>
+<hr />
+<h2 id="error-handling-pattern">Error handling pattern</h2>
+<pre><code class="language-c">TuriValue v = turi_eval(env, user_input);
+if (turi_is_error(v)) {
+    fprintf(stderr, &quot;error: %s\n&quot;, turi_error_message(v));
+}
+</code></pre>
+<p>Note: <code>TURI_ERROR</code> is a value-level error (parse failure, unbound variable).
+<code>TURI_THROW</code> is a Turmeric exception thrown by <code>(throw ...)</code> or
+<code>turi_native_throw</code>.  Uncaught throws surface as <code>TURI_THROW</code> values returned
+from <code>turi_eval</code>; check with <code>turi_is_throw(v)</code>.</p>
+<hr />
+<h2 id="full-example-sandboxed-calculator">Full example -- sandboxed calculator</h2>
+<pre><code class="language-c">#include &lt;stdio.h&gt;
+#include &lt;turi/eval.h&gt;
+
+int main(void) {
+    turi_init(false);
+    TuriEnv *env = turi_env_new_sandboxed();
+
+    const char *exprs[] = {
+        &quot;(defn fact [n :int] :int (if (&lt;= n 1) 1 (* n (fact (- n 1)))))&quot;,
+        &quot;(fact 10)&quot;,
+        &quot;(fact 20)&quot;,
+    };
+
+    for (int i = 0; i &lt; 3; i++) {
+        TuriValue v = turi_eval(env, exprs[i]);
+        if (turi_is_error(v)) {
+            fprintf(stderr, &quot;error: %s\n&quot;, turi_error_message(v));
+        } else {
+            char buf[64];
+            turi_value_repr(buf, sizeof(buf), v);
+            printf(&quot;%s =&gt; %s\n&quot;, exprs[i], buf);
+        }
+    }
+
+    turi_env_free(env);
+    return 0;
+}
+</code></pre>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/eval-api.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

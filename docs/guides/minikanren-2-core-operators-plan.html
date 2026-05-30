@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>"MiniKanren Part 2: Core Operators -- Plan" | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#plan-minikanren-part-2-core-operators" style="">Plan: MiniKanren Part 2 -- Core Operators</a></li>
+<li style=""><a href="#target-audience" style="">Target audience</a></li>
+<li style=""><a href="#code-location" style="">Code location</a></li>
+<li style=""><a href="#outline" style="">Outline</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-1-representing-terms" style="color:var(--text-sec);">Section 1 -- Representing terms</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-2-substitutions-and-walking" style="color:var(--text-sec);">Section 2 -- Substitutions and walking</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-3-unification" style="color:var(--text-sec);">Section 3 -- Unification (==)</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-4-goals-and-the-goal-type" style="color:var(--text-sec);">Section 4 -- Goals and the goal type</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-5-fresh" style="color:var(--text-sec);">Section 5 -- fresh</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-6-conde" style="color:var(--text-sec);">Section 6 -- conde</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-7-run-and-run" style="color:var(--text-sec);">Section 7 -- run and run*</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-8-reification" style="color:var(--text-sec);">Section 8 -- Reification</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-9-putting-it-together-family-graph-revisited" style="color:var(--text-sec);">Section 9 -- Putting it together: family graph revisited</a></li>
+<li style="padding-left:0.75rem;"><a href="#section-10-optional-stretch-constraint-operators" style="color:var(--text-sec);">Section 10 (optional / stretch) -- Constraint operators</a></li>
+<li style=""><a href="#implementation-notes" style="">Implementation notes</a></li>
+<li style="padding-left:0.75rem;"><a href="#streams" style="color:var(--text-sec);">Streams</a></li>
+<li style="padding-left:0.75rem;"><a href="#occurs-check" style="color:var(--text-sec);">Occurs check</a></li>
+<li style="padding-left:0.75rem;"><a href="#fresh-variable-counter" style="color:var(--text-sec);">Fresh variable counter</a></li>
+<li style=""><a href="#files-to-create" style="">Files to create</a></li>
+<li style=""><a href="#cross-references" style="">Cross-references</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="plan-minikanren-part-2-core-operators">Plan: MiniKanren Part 2 -- Core Operators</h1>
+<p>This document plans the second miniKanren tutorial guide.
+Part 1 (<a href="minikanren-1-relations-and-queries.md">minikanren-1-relations-and-queries.md</a>)
+introduced relational programming using explicit loops and helper predicates.
+Part 2 implements the real miniKanren engine inside Turmeric, giving the reader
+working <code>==</code>, <code>fresh</code>, <code>conde</code>, <code>run</code>, and optional constraint operators.</p>
+<p>Inspiration: the "Next steps" section of Part 1 and the
+<a href="https://io.livecode.ch/learn/webyrd/webmk">webmk interactive tutorial</a>.</p>
+<hr />
+<h2 id="target-audience">Target audience</h2>
+<p>Readers who have completed Part 1 and want to understand how miniKanren works
+from first principles and how to use it idiomatically in Turmeric.</p>
+<hr />
+<h2 id="code-location">Code location</h2>
+<p><code>examples/minikanren2/src/main.tur</code> (new example directory).</p>
+<hr />
+<h2 id="outline">Outline</h2>
+<h3 id="section-1-representing-terms">Section 1 -- Representing terms</h3>
+<p>Introduce the <code>Term</code> sum type used throughout the engine:</p>
+<ul>
+<li><code>(LVar id)</code> -- a logic variable, identified by a unique integer</li>
+<li><code>(Sym name)</code> -- an atom / symbol (a <code>:cstr</code>)</li>
+<li><code>(Pair car cdr)</code> -- a cons pair (used to encode lists and structured data)</li>
+<li><code>(Nil)</code> -- the empty list / null term</li>
+</ul>
+<p>Show how domain values from Part 1 (integer person IDs, string names) are
+lifted into <code>Term</code>.</p>
+<h3 id="section-2-substitutions-and-walking">Section 2 -- Substitutions and walking</h3>
+<p>A <em>substitution</em> is a <code>Map</code> from <code>LVar</code> id to <code>Term</code>. Introduce:</p>
+<ul>
+<li><code>(empty-subst)</code> -- the identity substitution</li>
+<li><code>(walk t s)</code> -- chase variable bindings until a non-variable or unbound var</li>
+<li><code>(ext-s x t s)</code> -- extend the substitution (fails / returns <code>none</code> on occurs check)</li>
+</ul>
+<p>Explain why <code>walk</code> must loop (chains of variable-to-variable bindings).</p>
+<h3 id="section-3-unification">Section 3 -- Unification (<code>==</code>)</h3>
+<p>Unification tries to make two terms identical under a substitution:</p>
+<pre><code class="language-turmeric">;;; unify -- attempt to unify two terms under substitution s.
+;;;
+;;; Returns: (some subst) on success, (none) on failure.
+(defn unify [u v s] ...)
+</code></pre>
+<p>Cover:
+- Unifying two atoms
+- Unifying a variable with a term (occurs check)
+- Unifying two pairs recursively
+- Unifying two already-walked values</p>
+<p>Show the <code>==</code> goal constructor that wraps <code>unify</code>:</p>
+<pre><code class="language-turmeric">(defn == [u v] ...)
+</code></pre>
+<p>Demonstrate:</p>
+<pre><code class="language-turmeric">(run 1 (q) (== q 3))        ; =&gt; (3)
+(run 1 (q) (== 4 3))        ; =&gt; ()
+(run 1 (x) (fresh (y) (== x y) (== y 7)))  ; =&gt; (7)
+</code></pre>
+<h3 id="section-4-goals-and-the-goal-type">Section 4 -- Goals and the goal type</h3>
+<p>A <em>goal</em> is a function <code>Subst -&gt; Stream&lt;Subst&gt;</code> (a lazy stream of substitutions).
+Introduce the <code>Goal</code> type alias and the <code>Stream</code> type (lazy list / coroutine).</p>
+<p>Show goal combinators:</p>
+<ul>
+<li><code>(succeed)</code> -- always succeeds, returns the input substitution unchanged</li>
+<li><code>(fail)</code> -- always fails, returns the empty stream</li>
+<li><code>(conj g1 g2)</code> -- conjunction: <code>g1</code> then <code>g2</code> on each result of <code>g1</code></li>
+<li><code>(disj g1 g2)</code> -- disjunction: interleave results of <code>g1</code> and <code>g2</code></li>
+</ul>
+<h3 id="section-5-fresh">Section 5 -- <code>fresh</code></h3>
+<p><code>fresh</code> introduces new logic variables and conjoins goals over them:</p>
+<pre><code class="language-turmeric">(fresh (x y)
+  (== x 1)
+  (== y 2))
+</code></pre>
+<p>Implement as a macro that allocates fresh <code>LVar</code> ids and builds a <code>conj</code> chain.</p>
+<p>Demonstrate shadowing (a <code>fresh</code> variable can shadow an outer one) using the
+same example from webmk where the inner <code>y</code> differs from the outer <code>y</code>.</p>
+<h3 id="section-6-conde">Section 6 -- <code>conde</code></h3>
+<p><code>conde</code> provides disjunction in clausal form (each clause is a conjunction):</p>
+<pre><code class="language-turmeric">(conde
+  ((== q :cat))
+  ((== q :dog))
+  ((== q :fish)))
+</code></pre>
+<p>Implement as interleaved <code>disj</code> of <code>conj</code> chains. Emphasise:
+- Each clause is tried independently (the substitution is "refreshed" per clause)
+- Answers are interleaved, not depth-first, so diverging clauses do not starve finite ones
+- Use <code>run N</code> to limit output; show <code>run*</code> causes divergence with recursive relations</p>
+<p>Example with multiple answers:</p>
+<pre><code class="language-turmeric">(run 3 (q)
+  (conde
+    ((== q :a))
+    ((== q :b))
+    ((== q :c))))
+; =&gt; (:a :b :c)
+</code></pre>
+<h3 id="section-7-run-and-run">Section 7 -- <code>run</code> and <code>run*</code></h3>
+<p><code>run</code> is the top-level interface between Turmeric and the miniKanren engine:</p>
+<pre><code class="language-turmeric">(run N (q) goal ...)
+</code></pre>
+<p>Steps:
+1. Allocate a fresh query variable <code>q</code>
+2. Build the goal as a conjunction
+3. Run the goal on the empty substitution
+4. Take the first <code>N</code> substitutions from the stream
+5. Reify each: walk <code>q</code> fully, replace remaining unbound vars with <code>_.0</code>, <code>_.1</code>, ...</p>
+<p>Discuss <code>run*</code> (no limit) and its interaction with diverging goals.</p>
+<h3 id="section-8-reification">Section 8 -- Reification</h3>
+<p>Reification converts an internal substitution + term into a readable answer:</p>
+<ul>
+<li>Walk the term fully under the substitution</li>
+<li>Replace each unbound <code>LVar</code> with a display name <code>_.0</code>, <code>_.1</code>, ...
+  (numbered left-to-right within each answer, restarting from 0 per answer)</li>
+</ul>
+<p>Show the reified output for:</p>
+<pre><code class="language-turmeric">(run 1 (q) succeed)           ; =&gt; (_.0)   -- q is unbound
+(run 1 (q) (== q (list 1 q))) ; =&gt; ()      -- fails: occurs check
+</code></pre>
+<h3 id="section-9-putting-it-together-family-graph-revisited">Section 9 -- Putting it together: family graph revisited</h3>
+<p>Re-encode the Part 1 family graph using the new engine:</p>
+<pre><code class="language-turmeric">(defn parento [parent child]
+  (conde
+    ((== parent :abe)   (== child :homer))
+    ((== parent :homer) (== child :bart))
+    ((== parent :homer) (== child :lisa))
+    ...))
+
+(defn grandparento [grand child]
+  (fresh (mid)
+    (parento grand mid)
+    (parento mid child)))
+</code></pre>
+<p>Show the same queries as Part 1, now written with <code>run</code>:</p>
+<pre><code class="language-turmeric">(run* (p) (parento p :bart))         ; parents of Bart
+(run* (c) (parento :homer c))        ; children of Homer
+(run* (g) (grandparento g :bart))    ; grandparents of Bart
+(run* (p c) (parento p c))           ; all pairs
+</code></pre>
+<p>Contrast with Part 1 to show the gain in expressiveness.</p>
+<h3 id="section-10-optional-stretch-constraint-operators">Section 10 (optional / stretch) -- Constraint operators</h3>
+<p>If time permits, sketch the constraint extensions from cKanren:</p>
+<ul>
+<li><code>=/=</code> (disequality): <code>(run* (p) (=/= p 1))</code> -- <code>p</code> is unbound but cannot be <code>1</code></li>
+<li><code>symbolo</code> / <code>numbero</code>: type constraints propagated through unification</li>
+<li><code>absento</code>: ensure a tag symbol does not appear anywhere in a term</li>
+</ul>
+<p>Each constraint is stored alongside the substitution and checked / simplified
+whenever new bindings are added.</p>
+<hr />
+<h2 id="implementation-notes">Implementation notes</h2>
+<h3 id="streams">Streams</h3>
+<p>The lazy stream type can be implemented with Turmeric's existing coroutine / effect
+support or as a simple thunk-based lazy list:</p>
+<pre><code class="language-turmeric">;; A Stream&lt;A&gt; is one of:
+;;   (Empty)
+;;   (Cons head tail)    -- eager head, lazy tail (thunk)
+;;   (Thunk f)           -- suspended computation
+</code></pre>
+<p>Interleaving (<code>disj</code>) alternates between two streams by forcing one step at a
+time -- this is the core of miniKanren's fair search.</p>
+<h3 id="occurs-check">Occurs check</h3>
+<p>Enable the occurs check in <code>unify</code> by default to match standard miniKanren
+behaviour. Provide a note that some Scheme miniKanren implementations omit it
+for performance.</p>
+<h3 id="fresh-variable-counter">Fresh variable counter</h3>
+<p>A simple monotonic integer counter (passed via a state monad or a mutable ref)
+provides fresh <code>LVar</code> ids. Document the chosen approach.</p>
+<hr />
+<h2 id="files-to-create">Files to create</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>examples/minikanren2/build.tur</code></td>
+<td>Spice manifest</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/main.tur</code></td>
+<td>Tutorial driver</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/term.tur</code></td>
+<td><code>Term</code> type + constructors</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/subst.tur</code></td>
+<td>Substitution map, <code>walk</code>, <code>ext-s</code></td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/unify.tur</code></td>
+<td><code>unify</code>, <code>==</code> goal</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/goal.tur</code></td>
+<td><code>Goal</code> type, <code>succeed</code>, <code>fail</code>, <code>conj</code>, <code>disj</code></td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/fresh.tur</code></td>
+<td><code>fresh</code> macro</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/conde.tur</code></td>
+<td><code>conde</code> macro</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/run.tur</code></td>
+<td><code>run</code>, <code>run*</code>, reification</td>
+</tr>
+<tr>
+<td><code>examples/minikanren2/src/mk/constraints.tur</code></td>
+<td>(stretch) <code>=/=</code>, <code>symbolo</code>, <code>numbero</code>, <code>absento</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="cross-references">Cross-references</h2>
+<ul>
+<li>Part 1: <a href="minikanren-1-relations-and-queries.md">minikanren-1-relations-and-queries.md</a></li>
+<li>Backtracking background: <a href="backtracking-guide.md">backtracking-guide.md</a></li>
+<li>Logic programming overview: <a href="logic-programming-guide.md">logic-programming-guide.md</a></li>
+<li>Datalog series (related relational approach): <a href="datalog-01-concepts.md">datalog-01-concepts.md</a></li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/minikanren-2-core-operators-plan.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

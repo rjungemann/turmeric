@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Releases and Installation | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#releases-and-installation" style="">Releases and Installation</a></li>
+<li style=""><a href="#installing-turmeric" style="">Installing Turmeric</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-1-prebuilt-binary-from-github-releases" style="color:var(--text-sec);">Option 1: Prebuilt binary from GitHub Releases</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-2-homebrew-source-build" style="color:var(--text-sec);">Option 2: Homebrew (source build)</a></li>
+<li style="padding-left:0.75rem;"><a href="#option-3-building-from-source" style="color:var(--text-sec);">Option 3: Building from source</a></li>
+<li style=""><a href="#whats-in-the-tarball" style="">What's in the tarball</a></li>
+<li style=""><a href="#what-works-and-what-doesnt-outside-the-source-repo" style="">What works (and what doesn't) outside the source repo</a></li>
+<li style="padding-left:0.75rem;"><a href="#works" style="color:var(--text-sec);">Works</a></li>
+<li style="padding-left:0.75rem;"><a href="#does-not-yet-work-outside-the-repo-tree" style="color:var(--text-sec);">Does not yet work outside the repo tree</a></li>
+<li style=""><a href="#cutting-a-release-maintainers" style="">Cutting a release (maintainers)</a></li>
+<li style="padding-left:0.75rem;"><a href="#steps" style="color:var(--text-sec);">Steps</a></li>
+<li style="padding-left:0.75rem;"><a href="#what-the-workflow-does" style="color:var(--text-sec);">What the workflow does</a></li>
+<li style="padding-left:0.75rem;"><a href="#iterating-on-the-workflow-itself" style="color:var(--text-sec);">Iterating on the workflow itself</a></li>
+<li style="padding-left:0.75rem;"><a href="#troubleshooting" style="color:var(--text-sec);">Troubleshooting</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="releases-and-installation">Releases and Installation</h1>
+<p>This guide covers two audiences:</p>
+<ul>
+<li><strong>End users</strong> who want to install <code>tur</code> from a tagged release or via
+  Homebrew, and need to know what's in the tarball and which subcommands
+  work outside the source repo.</li>
+<li><strong>Maintainers</strong> who want to cut a new tagged release (or change how
+  releases are built).</li>
+</ul>
+<hr />
+<h2 id="installing-turmeric">Installing Turmeric</h2>
+<p>There are three supported paths today.</p>
+<h3 id="option-1-prebuilt-binary-from-github-releases">Option 1: Prebuilt binary from GitHub Releases</h3>
+<p>For every tag matching <code>v*</code> pushed to the repository, a
+<a href="https://github.com/rjungemann/turmeric/releases">GitHub Release</a> is
+published with three tarballs and a <code>sha256sums.txt</code>:</p>
+<pre><code>turmeric-vX.Y.Z-linux-x86_64.tar.gz
+turmeric-vX.Y.Z-linux-aarch64.tar.gz
+turmeric-vX.Y.Z-macos-arm64.tar.gz
+sha256sums.txt
+</code></pre>
+<p>Pick the tarball for your platform, verify, and extract:</p>
+<pre><code class="language-sh"># Apple Silicon macOS example. Adjust the URL for your platform/version.
+TAG=v0.13.0
+ARCH=macos-arm64
+curl -fLO &quot;https://github.com/rjungemann/turmeric/releases/download/${TAG}/turmeric-${TAG}-${ARCH}.tar.gz&quot;
+curl -fLO &quot;https://github.com/rjungemann/turmeric/releases/download/${TAG}/sha256sums.txt&quot;
+
+# Verify just the file you downloaded:
+shasum -a 256 -c &lt;(grep &quot;${ARCH}&quot; sha256sums.txt)
+
+# Extract somewhere stable:
+mkdir -p ~/.local/turmeric
+tar -xzf &quot;turmeric-${TAG}-${ARCH}.tar.gz&quot; -C ~/.local/turmeric
+
+# Make `tur` runnable:
+ln -s ~/.local/turmeric/tur ~/.local/bin/tur     # ensure ~/.local/bin is on PATH
+</code></pre>
+<p>The macOS binary is unsigned. On first run macOS will quarantine it:</p>
+<pre><code class="language-sh">xattr -d com.apple.quarantine ~/.local/turmeric/tur
+</code></pre>
+<p>There is no precompiled Intel-Mac (<code>macos-x86_64</code>) tarball. Intel-Mac
+users should use Option 2 or Option 3.</p>
+<h3 id="option-2-homebrew-source-build">Option 2: Homebrew (source build)</h3>
+<pre><code class="language-sh">brew install --HEAD rjungemann/turmeric
+# (if a tap isn't published yet:)
+brew install --HEAD https://raw.githubusercontent.com/rjungemann/turmeric/main/Formula/turmeric.rb
+</code></pre>
+<p>The formula builds from the latest commit on <code>main</code> (CMake source build,
+~10s on modern hardware). It installs:</p>
+<ul>
+<li><code>tur</code> at <code>&lt;prefix&gt;/bin/tur</code></li>
+<li>The standard library at <code>&lt;prefix&gt;/share/turmeric/stdlib/</code></li>
+</ul>
+<p>On Apple Silicon, <code>&lt;prefix&gt;</code> is <code>/opt/homebrew</code>; on Intel macOS and
+Linuxbrew it's <code>/usr/local</code> or <code>/home/linuxbrew/.linuxbrew</code>.</p>
+<p>There is currently no stable (versioned) Homebrew formula -- only
+<code>--HEAD</code>. A pinned <code>url</code>/<code>sha256</code> stanza will be added once a stable
+release line is established.</p>
+<h3 id="option-3-building-from-source">Option 3: Building from source</h3>
+<pre><code class="language-sh">git clone https://github.com/rjungemann/turmeric.git
+cd turmeric
+just build       # debug build
+just release     # optimized build, drops `tur` in build/
+</code></pre>
+<p>You'll need CMake 3.20+, a C99 compiler, and <code>libedit</code> (for the REPL).
+See <a href="devcontainer-guide.md"><code>devcontainer-guide.md</code></a> for a fully-scripted
+Linux dev environment.</p>
+<hr />
+<h2 id="whats-in-the-tarball">What's in the tarball</h2>
+<p>After extracting, the tarball lays out like:</p>
+<pre><code>.
+|-- tur                       # the CLI
+|-- libturi.a                 # static library for C embedding
+|-- include/turi/             # public headers (eval.h, env.h, value.h, fiber.h)
+`-- stdlib/                   # the standard library (86 .tur files)
+</code></pre>
+<p><code>tur</code> finds <code>stdlib/</code> via a probe defined in <code>src/main.c:188</code>
+(<code>resolve_stdlib_root</code>), in this order:</p>
+<ol>
+<li>The <code>TUR_STDLIB_DIR</code> environment variable, if set.</li>
+<li>Walk up from <code>tur</code>'s directory looking for <code>stdlib/macros.tur</code>
+   (matches when <code>stdlib/</code> sits next to the binary -- the tarball layout).</li>
+<li><code>&lt;exe_dir&gt;/../share/turmeric/stdlib/macros.tur</code> (the Homebrew layout).</li>
+</ol>
+<p>If you move <code>tur</code> somewhere without an adjacent <code>stdlib/</code>, set
+<code>TUR_STDLIB_DIR</code> to the directory containing the stdlib <code>.tur</code> files.</p>
+<hr />
+<h2 id="what-works-and-what-doesnt-outside-the-source-repo">What works (and what doesn't) outside the source repo</h2>
+<h3 id="works">Works</h3>
+<ul>
+<li><code>tur --version</code></li>
+<li><code>tur --interpret &lt;file.tur&gt;</code> -- tree-walking interpreter; no C compile</li>
+<li><code>tur repl</code> -- interactive REPL</li>
+<li><code>tur check &lt;file.tur&gt;</code> -- type checking only</li>
+<li><code>tur doc &lt;symbol&gt;</code> -- documentation lookup</li>
+<li><code>tur explain &lt;code&gt;</code> -- diagnostic-code lookup</li>
+<li><code>tur format</code> -- source formatter</li>
+<li>Library embedding via <code>libturi.a</code> + <code>include/turi/</code></li>
+</ul>
+<h3 id="does-not-yet-work-outside-the-repo-tree">Does <em>not</em> yet work outside the repo tree</h3>
+<ul>
+<li><code>tur run &lt;file.tur&gt;</code> and <code>tur build &lt;file.tur&gt;</code></li>
+</ul>
+<p>These go through the C-codegen path and link against runtime sources
+referenced by autolink markers in stdlib (e.g. <code>stdlib/hamt.tur</code> contains
+<code>/* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */</code>). The path
+is interpreted relative to the current working directory, so a <code>tur run</code>
+from outside a Turmeric source checkout fails with:</p>
+<pre><code>clang: error: no such file or directory: 'src/runtime/hamt.c'
+tur: cc invocation failed (status 256)
+</code></pre>
+<p>This is a known limitation, tracked in
+<a href="../release-binaries-plan.md"><code>docs/release-binaries-plan.md</code></a> under
+"Discovered during execution: runtime sources also missing". Until it's
+resolved, the <code>--interpret</code> and library-embedding paths are the
+fully-supported uses of a downloaded release.</p>
+<hr />
+<h2 id="cutting-a-release-maintainers">Cutting a release (maintainers)</h2>
+<p>The release pipeline lives at <code>.github/workflows/release.yml</code> and is
+triggered automatically on <code>git push</code> of any tag matching <code>v*</code>.</p>
+<h3 id="steps">Steps</h3>
+<ol>
+<li>Bump the version in <code>VERSION</code> (the single source of truth -- read by
+   CMake, baked into <code>tur --version</code>, and reused by <code>web/</code> and other
+   build outputs). The version string is plain <code>MAJOR.MINOR.PATCH</code>,
+   no leading <code>v</code>.</li>
+<li>Commit the bump.</li>
+<li>Tag the bump commit:
+   <code>sh
+   git tag v0.13.0    # match the new VERSION
+   git push origin main
+   git push origin v0.13.0</code></li>
+<li>The workflow runs (~1-2 minutes per matrix leg, ~3 minutes total),
+   builds three binaries, and publishes a GitHub Release.</li>
+<li>Verify the release page lists three tarballs plus <code>sha256sums.txt</code>.</li>
+</ol>
+<h3 id="what-the-workflow-does">What the workflow does</h3>
+<p>For each matrix leg (<code>linux-x86_64</code>, <code>linux-aarch64</code>, <code>macos-arm64</code>):</p>
+<ol>
+<li>Checks out the tagged commit.</li>
+<li>Installs <code>libedit</code> (Apple/Linux differ on package manager).</li>
+<li>Configures and builds with CMake in Release mode.</li>
+<li>Runs <code>tur --version</code> as a smoke test.</li>
+<li>Packages <code>tur</code> + <code>libturi.a</code> + <code>include/turi/*.h</code> + <code>stdlib/</code> into
+   a <code>tar.gz</code>.</li>
+<li>Uploads the artifact.</li>
+</ol>
+<p>A final job downloads all artifacts, generates <code>sha256sums.txt</code>, and
+publishes the release with auto-generated notes.</p>
+<p>The <code>release</code> job has <code>if: always() &amp;&amp; needs.build.result != 'cancelled'</code>,
+so if one matrix leg fails (e.g. a future runner image breaks Linux
+aarch64), the other binaries still ship -- you'll get a partial release
+that you can re-run or supplement.</p>
+<h3 id="iterating-on-the-workflow-itself">Iterating on the workflow itself</h3>
+<p>To test changes to <code>release.yml</code> without burning real version numbers,
+use a throwaway tag like <code>v0.0.0-test1</code>:</p>
+<pre><code class="language-sh">git tag v0.0.0-test1
+git push origin v0.0.0-test1
+
+# Watch the run:
+gh run list --workflow=release.yml --limit 1
+gh run watch &lt;run-id&gt;
+
+# Clean up afterwards:
+gh release delete v0.0.0-test1 --cleanup-tag --yes
+git tag -d v0.0.0-test1
+</code></pre>
+<p>Increment the suffix (<code>-test2</code>, <code>-test3</code>, ...) per iteration so each
+failed attempt's history is preserved.</p>
+<h3 id="troubleshooting">Troubleshooting</h3>
+<ul>
+<li><strong>Job stuck "awaiting a runner" for hours.</strong> The runner image the leg
+  pins to is no longer scheduled. Update <code>matrix.&lt;leg&gt;.os</code> to a current
+  GitHub-hosted runner.</li>
+<li><strong>macOS configure fails with <code>command not found</code>.</strong> A semicolon in a
+  CMake flag is being interpreted by the shell. Wrap the value with
+  literal double-quotes in the matrix value
+  (<code>cmake_extra: '"-Dfoo=a;b"'</code>) so the shell treats it as one argument
+  after <code>${{ matrix.cmake_extra }}</code> substitution.</li>
+<li><strong><code>actions/checkout</code> or <code>actions/upload-artifact</code> Node-20 warning.</strong>
+  Informational until June 2026. Bump the action to the latest major
+  when an upstream Node-24 release ships, or opt in early with the
+  <code>FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true</code> env var on the job.</li>
+<li><strong><code>brew test turmeric</code> fails with <code>unbound variable: when</code>.</strong> The
+  formula did not install <code>stdlib/</code> under <code>&lt;prefix&gt;/share/turmeric/</code>.
+  Confirm the formula's <code>install</code> block contains
+  <code>(share/"turmeric").install "stdlib"</code>.</li>
+</ul>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="../release-binaries-plan.md"><code>docs/release-binaries-plan.md</code></a> --
+  the original plan; documents the trade-offs (why arm64-only on macOS,
+  why sibling-stdlib over embedded, what's still out of scope).</li>
+<li><code>Formula/turmeric.rb</code> -- the Homebrew formula.</li>
+<li><code>.github/workflows/release.yml</code> -- the release pipeline.</li>
+<li><code>src/main.c:188</code> (<code>resolve_stdlib_root</code>) -- the stdlib-discovery logic
+  that makes both the tarball and Homebrew layouts work without code
+  changes.</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/releases-and-installation-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

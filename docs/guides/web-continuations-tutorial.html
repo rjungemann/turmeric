@@ -1,0 +1,1596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Continuations Tutorial | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#web-continuations-tutorial-multi-page-forms-without-session-state" style="">Web Continuations Tutorial -- Multi-Page Forms Without Session State</a></li>
+<li style=""><a href="#tutorial-overview" style="">Tutorial Overview</a></li>
+<li style=""><a href="#background-the-web-programming-problem" style="">Background: The Web-Programming Problem</a></li>
+<li style="padding-left:0.75rem;"><a href="#the-stateless-mismatch" style="color:var(--text-sec);">The Stateless Mismatch</a></li>
+<li style="padding-left:0.75rem;"><a href="#the-continuation-solution" style="color:var(--text-sec);">The Continuation Solution</a></li>
+<li style="padding-left:0.75rem;"><a href="#racket-as-the-reference-point" style="color:var(--text-sec);">Racket as the Reference Point</a></li>
+<li style=""><a href="#step-0-project-layout" style="">Step 0: Project Layout</a></li>
+<li style="padding-left:0.75rem;"><a href="#01-directory-structure" style="color:var(--text-sec);">0.1 Directory Structure</a></li>
+<li style=""><a href="#step-1-minimal-http-listener" style="">Step 1: Minimal HTTP Listener</a></li>
+<li style="padding-left:0.75rem;"><a href="#11-the-c-shim" style="color:var(--text-sec);">1.1 The C Shim</a></li>
+<li style="padding-left:0.75rem;"><a href="#12-turmeric-bindings" style="color:var(--text-sec);">1.2 Turmeric Bindings</a></li>
+<li style="padding-left:0.75rem;"><a href="#13-request-and-response-structs" style="color:var(--text-sec);">1.3 Request and Response Structs</a></li>
+<li style=""><a href="#step-2-hello-world-handler" style="">Step 2: Hello World Handler</a></li>
+<li style="padding-left:0.75rem;"><a href="#21-defining-httpeffect" style="color:var(--text-sec);">2.1 Defining HttpEffect</a></li>
+<li style="padding-left:0.75rem;"><a href="#22-a-trivial-handler" style="color:var(--text-sec);">2.2 A Trivial Handler</a></li>
+<li style="padding-left:0.75rem;"><a href="#23-the-effect-handler-in-maintur" style="color:var(--text-sec);">2.3 The Effect Handler in main.tur</a></li>
+<li style=""><a href="#step-3-single-page-form" style="">Step 3: Single-Page Form</a></li>
+<li style="padding-left:0.75rem;"><a href="#31-rendering-the-name-form" style="color:var(--text-sec);">3.1 Rendering the Name Form</a></li>
+<li style="padding-left:0.75rem;"><a href="#32-parsing-form-fields" style="color:var(--text-sec);">3.2 Parsing Form Fields</a></li>
+<li style=""><a href="#step-4-introducing-continuations" style="">Step 4: Introducing Continuations</a></li>
+<li style="padding-left:0.75rem;"><a href="#41-the-core-idea" style="color:var(--text-sec);">4.1 The Core Idea</a></li>
+<li style="padding-left:0.75rem;"><a href="#42-the-send-form-and-wait-helper" style="color:var(--text-sec);">4.2 The send-form-and-wait Helper</a></li>
+<li style="padding-left:0.75rem;"><a href="#43-token-generation-and-storage" style="color:var(--text-sec);">4.3 Token Generation and Storage</a></li>
+<li style="padding-left:0.75rem;"><a href="#44-the-router" style="color:var(--text-sec);">4.4 The Router</a></li>
+<li style=""><a href="#step-5-two-page-flow" style="">Step 5: Two-Page Flow</a></li>
+<li style="padding-left:0.75rem;"><a href="#51-what-happens-at-runtime" style="color:var(--text-sec);">5.1 What Happens at Runtime</a></li>
+<li style=""><a href="#step-7-persisting-the-guestbook-store" style="">Step 7: Persisting the Guestbook Store</a></li>
+<li style="padding-left:0.75rem;"><a href="#71-the-guestentry-struct" style="color:var(--text-sec);">7.1 The GuestEntry Struct</a></li>
+<li style="padding-left:0.75rem;"><a href="#72-the-serializable-instance" style="color:var(--text-sec);">7.2 The Serializable Instance</a></li>
+<li style="padding-left:0.75rem;"><a href="#73-the-store-api" style="color:var(--text-sec);">7.3 The Store API</a></li>
+<li style=""><a href="#step-8-confirmation-posting-and-thank-you" style="">Step 8: Confirmation, Posting, and Thank-You</a></li>
+<li style="padding-left:0.75rem;"><a href="#81-the-thank-you-template" style="color:var(--text-sec);">8.1 The Thank-You Template</a></li>
+<li style=""><a href="#step-9-security-hardening" style="">Step 9: Security Hardening</a></li>
+<li style="padding-left:0.75rem;"><a href="#91-hmac-token-signing" style="color:var(--text-sec);">9.1 HMAC Token Signing</a></li>
+<li style="padding-left:0.75rem;"><a href="#92-token-expiry" style="color:var(--text-sec);">9.2 Token Expiry</a></li>
+<li style="padding-left:0.75rem;"><a href="#93-input-sanitization" style="color:var(--text-sec);">9.3 Input Sanitization</a></li>
+<li style="padding-left:0.75rem;"><a href="#94-single-threaded-note" style="color:var(--text-sec);">9.4 Single-Threaded Note</a></li>
+<li style=""><a href="#running-the-guestbook" style="">Running the Guestbook</a></li>
+<li style=""><a href="#what-to-read-next" style="">What to Read Next</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="web-continuations-tutorial-multi-page-forms-without-session-state">Web Continuations Tutorial -- Multi-Page Forms Without Session State</h1>
+<p>A <strong>step-by-step guide</strong> to building a multi-page web form application in Turmeric using serializable continuations. Each step introduces one new concept. By the end you will have a working guestbook server that captures, stores, and resumes continuations across HTTP round-trips.</p>
+<blockquote>
+<p><strong>Prerequisites</strong>: Read <a href="serializable-continuations-guide.md">serializable-continuations-guide.md</a> first. You should understand <code>serial-reset</code>, <code>serial-shift</code>, and <code>serial-resume</code> before starting.</p>
+<p><strong>Related guides</strong>: <a href="effects-system-guide.md">effects-system-guide.md</a>, <a href="c-integration-guide.md">c-integration-guide.md</a>, <a href="checkpointing-guide.md">checkpointing-guide.md</a></p>
+</blockquote>
+<hr />
+<h2 id="tutorial-overview">Tutorial Overview</h2>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Title</th>
+<th>Key Concepts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Project Layout</td>
+<td>Directory structure, <code>CMakeLists.txt</code>, build targets</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Minimal HTTP Listener</td>
+<td>C FFI, <code>defeffect HttpEffect</code>, request/response types</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Hello World Handler</td>
+<td>Rendering HTML strings, routing, <code>HttpEffect</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Single-Page Form</td>
+<td>Parsing form bodies, <code>defstruct</code>, returning responses</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Introducing Continuations</td>
+<td><code>serial-reset</code>, <code>serial-shift</code>, <code>serial-resume</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>Two-Page Flow</td>
+<td>Name form -&gt; message form, continuation token in URL</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Three-Page Preview</td>
+<td>Preview page, "back" link re-using an older continuation</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Persisting the Store</td>
+<td><code>Serializable</code> typeclass, guestbook entries, file-based store</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Confirmation and Posting</td>
+<td>Confirm page, writing entry, thank-you redirect</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Security Hardening</td>
+<td>HMAC token signing, expiry, input sanitization</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="background-the-web-programming-problem">Background: The Web-Programming Problem</h2>
+<h3 id="the-stateless-mismatch">The Stateless Mismatch</h3>
+<p>HTTP is stateless. A web form spanning multiple pages is inherently stateful. The standard solutions all require the programmer to manually manage state:</p>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Mechanism</th>
+<th>Drawbacks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hidden form fields</td>
+<td>Encode state in <code>&lt;input type="hidden"&gt;</code></td>
+<td>Tedious, error-prone, exposed to tampering</td>
+</tr>
+<tr>
+<td>Server-side sessions</td>
+<td>Cookie holds session ID, server stores map</td>
+<td>Memory leak risk, sticky sessions, scaling issues</td>
+</tr>
+<tr>
+<td>URL query params</td>
+<td>State embedded in URL</td>
+<td>URL length limits, bookmarking problems</td>
+</tr>
+<tr>
+<td>Explicit state machine</td>
+<td>Each page is a named step in a DB table</td>
+<td>Lots of boilerplate, business logic fragmented</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-continuation-solution">The Continuation Solution</h3>
+<p>The continuation approach, popularized by PLT Scheme's <code>web-server/servlet</code> and Racket's <code>send/suspend</code>, threads the control-flow problem away entirely:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">handler-1 runs to a &quot;send this form, then resume&quot; point
+  -&gt; captures continuation k
+  -&gt; stashes k under token T
+  -&gt; sends HTML page with action=&quot;/?k=T&quot;
+
+browser submits form
+  -&gt; server looks up T, loads k
+  -&gt; resumes k with form data
+  -&gt; k is now inside handler-1 again, with form data in hand
+  -&gt; proceeds naturally to the next step
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">handler-1 runs to a &quot;send this form, then resume&quot; point
+  -&gt; captures continuation k
+  -&gt; stashes k under token T
+  -&gt; sends HTML page with action=&quot;/?k=T&quot;
+
+browser submits form
+  -&gt; server looks up T, loads k
+  -&gt; resumes k with form data
+  -&gt; k is now inside handler-1 again, with form data in hand
+  -&gt; proceeds naturally to the next step
+</code></pre></div></div></div>
+<p>From the programmer's perspective, writing a multi-page flow reads like a single straight-line function. No state machine, no session table, no hidden fields to maintain.</p>
+<h3 id="racket-as-the-reference-point">Racket as the Reference Point</h3>
+<p>Racket's <code>send/suspend</code> API looks like this (for comparison):</p>
+<pre><code class="language-racket">(define (enter-name)
+  (send/suspend
+    (lambda (k-url)
+      (response/xexpr
+        `(html (body
+          (form ([action ,k-url])
+            (input ([name &quot;name&quot;]))
+            (input ([type &quot;submit&quot;] [value &quot;Next&quot;])))))))))
+</code></pre>
+<p>Turmeric's <code>serial-shift</code> plays the same role as <code>send/suspend</code>, with the difference that the continuation is serialized to bytes and stored in a lookup table rather than living in a heap closure.</p>
+<hr />
+<h2 id="step-0-project-layout">Step 0: Project Layout</h2>
+<h3 id="01-directory-structure">0.1 Directory Structure</h3>
+<p>The guestbook lives at <code>examples/guestbook/</code>:</p>
+<pre><code>examples/guestbook/
+  CMakeLists.txt       -- builds the guestbook binary
+  httpd.c              -- tiny raw-socket HTTP listener (~150 lines)
+  src/
+    main.tur           -- entry point, starts listener, runs router loop
+    handlers.tur       -- run-guestbook-flow and GET / entry point
+    router.tur         -- dispatches POST /submit?k=TOKEN to continuations
+    conts.tur          -- continuation store: token generation, file load/save
+    store.tur          -- guestbook entry store: load/append/list
+    templates.tur      -- HTML rendering helpers for each page
+    security.tur       -- HMAC signing, token verification, html-escape
+  data/
+    entries.bin        -- serialized guestbook entries (auto-created at runtime)
+    conts/             -- one file per continuation blob (auto-created at runtime)
+```text
+
+The `data/` directory is created at runtime by the server on first start. You do not need to create it manually.
+
+### 0.2 Adding the Build Target
+
+In the root `CMakeLists.txt`, the guestbook is included when `TUR_EXAMPLES=ON`:
+
+</code></pre>
+<p>if(TUR_EXAMPLES)
+  add_subdirectory(examples/guestbook)
+endif()</p>
+<pre><code>
+The guestbook `CMakeLists.txt` links only against the Turmeric runtime and the C standard library -- no external HTTP library is required.
+
+### 0.3 Justfile Recipe
+
+After following this tutorial, the root `Justfile` gains:
+
+```just
+run-guestbook: configure-examples
+    cmake --build build --target guestbook
+    ./build/examples/guestbook/guestbook
+</code></pre>
+<hr />
+<h2 id="step-1-minimal-http-listener">Step 1: Minimal HTTP Listener</h2>
+<h3 id="11-the-c-shim">1.1 The C Shim</h3>
+<p>Rather than pulling in a third-party library, the tutorial ships a tiny <code>httpd.c</code> (around 150 lines) that uses only POSIX sockets. This keeps dependencies at zero and makes the networking layer fully transparent.</p>
+<p>Three C functions are exposed to Turmeric:</p>
+<pre><code class="language-c">/* httpd.c -- minimal raw-socket HTTP/1.1 listener.
+ * Handles one request at a time (single-threaded by design).
+ * Production use: replace with libmicrohttpd or similar.
+ */
+
+/* Bind a TCP socket and start listening on port.
+ * Returns 0 on success, -1 on error. */
+int httpd_start(int port);
+
+/* Block until the next HTTP request arrives.
+ * Writes method, path, query, and body into the out-params.
+ * Caller must free the returned strings. */
+void httpd_next_request(char **out_method, char **out_path,
+                        char **out_query, char **out_body);
+
+/* Send an HTTP response.
+ * status: e.g. 200, 302, 404
+ * content_type: e.g. &quot;text/html&quot;
+ * body: response body string */
+void httpd_send_response(int status, const char *content_type,
+                         const char *body);
+</code></pre>
+<h3 id="12-turmeric-bindings">1.2 Turmeric Bindings</h3>
+<p>Declare the three C functions using <code>extern-c</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; httpd-start -- bind an HTTP listener on the given port.
+;;;
+;;; Parameters:
+;;;   port -- TCP port number (1-65535)
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (httpd-start 8080)
+;;;
+;;; Since: Guestbook example
+(extern-c httpd-start [(port : int64)] : int64
+  &quot;httpd_start&quot;)
+
+;;; httpd-next-request -- block until the next HTTP request arrives.
+;;;
+;;; Parameters:
+;;;   out-method -- pointer to receive the HTTP method string
+;;;   out-path   -- pointer to receive the URL path
+;;;   out-query  -- pointer to receive the raw query string
+;;;   out-body   -- pointer to receive the POST body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   (httpd-next-request method path query body)
+;;;
+;;; Since: Guestbook example
+(extern-c httpd-next-request
+  [(out-method : ptr&lt;cstr&gt;)
+   (out-path   : ptr&lt;cstr&gt;)
+   (out-query  : ptr&lt;cstr&gt;)
+   (out-body   : ptr&lt;cstr&gt;)] : unit
+  &quot;httpd_next_request&quot;)
+
+;;; httpd-send-response -- write an HTTP response to the current connection.
+;;;
+;;; Parameters:
+;;;   status       -- HTTP status code (200, 302, 404, etc.)
+;;;   content-type -- MIME type string
+;;;   body         -- response body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   (httpd-send-response 200 &quot;text/html&quot; &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;)
+;;;
+;;; Since: Guestbook example
+(extern-c httpd-send-response
+  [(status       : int64)
+   (content-type : cstr)
+   (body         : cstr)] : unit
+  &quot;httpd_send_response&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; httpd-start -- bind an HTTP listener on the given port.
+;;;
+;;; Parameters:
+;;;   port -- TCP port number (1-65535)
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   httpd-start(8080)
+;;;
+;;; Since: Guestbook example
+extern-c httpd-start [(port : int64)] : int64
+  &quot;httpd_start&quot;
+
+;;; httpd-next-request -- block until the next HTTP request arrives.
+;;;
+;;; Parameters:
+;;;   out-method -- pointer to receive the HTTP method string
+;;;   out-path   -- pointer to receive the URL path
+;;;   out-query  -- pointer to receive the raw query string
+;;;   out-body   -- pointer to receive the POST body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   httpd-next-request(method path query body)
+;;;
+;;; Since: Guestbook example
+extern-c httpd-next-request
+  [(out-method : ptr&lt;cstr&gt;)
+   (out-path   : ptr&lt;cstr&gt;)
+   (out-query  : ptr&lt;cstr&gt;)
+   (out-body   : ptr&lt;cstr&gt;)] : unit
+  &quot;httpd_next_request&quot;
+
+;;; httpd-send-response -- write an HTTP response to the current connection.
+;;;
+;;; Parameters:
+;;;   status       -- HTTP status code (200, 302, 404, etc.)
+;;;   content-type -- MIME type string
+;;;   body         -- response body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   httpd-send-response(200 &quot;text/html&quot; &quot;&lt;h1&gt;Hello&lt;/h1&gt;&quot;)
+;;;
+;;; Since: Guestbook example
+extern-c httpd-send-response
+  [(status       : int64)
+   (content-type : cstr)
+   (body         : cstr)] : unit
+  &quot;httpd_send_response&quot;
+</code></pre></div></div></div>
+<h3 id="13-request-and-response-structs">1.3 Request and Response Structs</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; HttpRequest -- parsed HTTP request from the listener.
+;;;
+;;; Since: Guestbook example
+(defstruct HttpRequest
+  [method  : cstr   ; &quot;GET&quot; or &quot;POST&quot;
+   path    : cstr   ; URL path, e.g. &quot;/submit&quot;
+   query   : cstr   ; raw query string, e.g. &quot;k=abc123&quot;
+   body    : cstr]) ; raw POST body, e.g. &quot;name=Alice&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; HttpRequest -- parsed HTTP request from the listener.
+;;;
+;;; Since: Guestbook example
+defstruct HttpRequest
+  [method  : cstr   ; &quot;GET&quot; or &quot;POST&quot;
+   path    : cstr   ; URL path, e.g. &quot;/submit&quot;
+   query   : cstr   ; raw query string, e.g. &quot;k=abc123&quot;
+   body    : cstr]  ; raw POST body, e.g. &quot;name=Alice&quot;
+</code></pre></div></div></div>
+<p><code>HttpResponse</code> is implicit -- the C shim owns the socket, so the Turmeric side just calls <code>httpd-send-response</code> directly rather than constructing a value.</p>
+<hr />
+<h2 id="step-2-hello-world-handler">Step 2: Hello World Handler</h2>
+<h3 id="21-defining-httpeffect">2.1 Defining <code>HttpEffect</code></h3>
+<p>Algebraic effects decouple handler logic from transport. Define one effect operation:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; HttpEffect -- algebraic effect for sending HTTP responses.
+;;;
+;;; Since: Guestbook example
+(defeffect HttpEffect
+  (send-html [body : cstr] : unit))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; HttpEffect -- algebraic effect for sending HTTP responses.
+;;;
+;;; Since: Guestbook example
+defeffect HttpEffect
+  send-html [body : cstr] : unit
+</code></pre></div></div></div>
+<h3 id="22-a-trivial-handler">2.2 A Trivial Handler</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; hello-handler -- send a minimal HTML page.
+;;;
+;;; Parameters:
+;;;   req -- the incoming HTTP request (unused)
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   (hello-handler req)
+;;;
+;;; Since: Guestbook example
+(defn hello-handler [req : HttpRequest] : unit
+  (perform HttpEffect (send-html &quot;&lt;h1&gt;Hello from Turmeric!&lt;/h1&gt;&quot;)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; hello-handler -- send a minimal HTML page.
+;;;
+;;; Parameters:
+;;;   req -- the incoming HTTP request (unused)
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Example:
+;;;   hello-handler(req)
+;;;
+;;; Since: Guestbook example
+defn hello-handler [req : HttpRequest] : unit
+  perform HttpEffect
+    send-html(&quot;&lt;h1&gt;Hello from Turmeric!&lt;/h1&gt;&quot;)
+</code></pre></div></div></div>
+<h3 id="23-the-effect-handler-in-maintur">2.3 The Effect Handler in <code>main.tur</code></h3>
+<p>The top-level loop in <code>main.tur</code> interprets <code>HttpEffect</code> by calling the C shim:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn run-loop [] : unit
+  (loop
+    (def method (ptr-alloc cstr))
+    (def path   (ptr-alloc cstr))
+    (def query  (ptr-alloc cstr))
+    (def body   (ptr-alloc cstr))
+    (httpd-next-request method path query body)
+    (def req (HttpRequest
+               :method (ptr-deref method)
+               :path   (ptr-deref path)
+               :query  (ptr-deref query)
+               :body   (ptr-deref body)))
+    (handle
+      (dispatch req)
+      (HttpEffect.send-html [html] -&gt;
+        (httpd-send-response 200 &quot;text/html&quot; html)
+        (resume unit)))))
+
+(defn main [] : unit
+  (httpd-start 8080)
+  (run-loop))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn run-loop [] : unit
+  loop
+    def method ptr-alloc(cstr)
+    def path   ptr-alloc(cstr)
+    def query  ptr-alloc(cstr)
+    def body   ptr-alloc(cstr)
+    httpd-next-request(method path query body)
+    def req
+      HttpRequest
+        :method ptr-deref(method)
+        :path   ptr-deref(path)
+        :query  ptr-deref(query)
+        :body   ptr-deref(body)
+    handle dispatch(req)
+      HttpEffect.send-html [html] -&gt;
+        httpd-send-response(200 &quot;text/html&quot; html)
+        resume(unit)
+
+defn main [] : unit
+  httpd-start(8080)
+  run-loop()
+</code></pre></div></div></div>
+<p>The <code>dispatch</code> function (defined in <code>router.tur</code>) routes requests to the appropriate handler.</p>
+<hr />
+<h2 id="step-3-single-page-form">Step 3: Single-Page Form</h2>
+<p>Before introducing continuations, build a plain single-page form to establish the baseline.</p>
+<h3 id="31-rendering-the-name-form">3.1 Rendering the Name Form</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; render-name-form -- render the name-entry page.
+;;;
+;;; Parameters:
+;;;   action -- form action URL
+;;;
+;;; Returns:
+;;;   HTML string for the name-entry page.
+;;;
+;;; Example:
+;;;   (render-name-form &quot;/step2&quot;)
+;;;
+;;; Since: Guestbook example
+(defn render-name-form [action : cstr] : cstr
+  (str &quot;&lt;html&gt;&lt;body&gt;&quot;
+       &quot;&lt;h2&gt;Guestbook -- Enter Your Name&lt;/h2&gt;&quot;
+       &quot;&lt;form method='POST' action='&quot; action &quot;'&gt;&quot;
+       &quot;&lt;label&gt;Your name: &lt;input name='name' autofocus/&gt;&lt;/label&gt;&quot;
+       &quot;&lt;br/&gt;&lt;button type='submit'&gt;Next &amp;rarr;&lt;/button&gt;&quot;
+       &quot;&lt;/form&gt;&lt;/body&gt;&lt;/html&gt;&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; render-name-form -- render the name-entry page.
+;;;
+;;; Parameters:
+;;;   action -- form action URL
+;;;
+;;; Returns:
+;;;   HTML string for the name-entry page.
+;;;
+;;; Example:
+;;;   render-name-form(&quot;/step2&quot;)
+;;;
+;;; Since: Guestbook example
+defn render-name-form [action : cstr] : cstr
+  str(&quot;&lt;html&gt;&lt;body&gt;&quot;
+      &quot;&lt;h2&gt;Guestbook -- Enter Your Name&lt;/h2&gt;&quot;
+      &quot;&lt;form method='POST' action='&quot; action &quot;'&gt;&quot;
+      &quot;&lt;label&gt;Your name: &lt;input name='name' autofocus/&gt;&lt;/label&gt;&quot;
+      &quot;&lt;br/&gt;&lt;button type='submit'&gt;Next &amp;rarr;&lt;/button&gt;&quot;
+      &quot;&lt;/form&gt;&lt;/body&gt;&lt;/html&gt;&quot;)
+</code></pre></div></div></div>
+<h3 id="32-parsing-form-fields">3.2 Parsing Form Fields</h3>
+<p>URL-encoded POST bodies have the form <code>name=Alice&amp;message=Hello+World</code>. Extract a single named field:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; parse-form-field -- extract a named field from a URL-encoded body.
+;;;
+;;; Parameters:
+;;;   body  -- raw POST body string
+;;;   field -- field name to extract
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(value) if found, None if absent.
+;;;
+;;; Example:
+;;;   (parse-form-field &quot;name=Alice&amp;msg=Hello&quot; &quot;name&quot;)  ; =&gt; (Some &quot;Alice&quot;)
+;;;
+;;; Since: Guestbook example
+(defn parse-form-field [body : cstr, field : cstr] : (Option cstr)
+  (def prefix (str field &quot;=&quot;))
+  (def start  (cstr-find body prefix))
+  (match start
+    (None) -&gt; (None)
+    (Some idx) -&gt;
+      (def val-start (+ idx (cstr-len prefix)))
+      (def rest      (cstr-drop body val-start))
+      (def end       (or (cstr-find rest &quot;&amp;&quot;) (cstr-len rest)))
+      (Some (percent-decode (cstr-take rest end)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; parse-form-field -- extract a named field from a URL-encoded body.
+;;;
+;;; Parameters:
+;;;   body  -- raw POST body string
+;;;   field -- field name to extract
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(value) if found, None if absent.
+;;;
+;;; Example:
+;;;   parse-form-field(&quot;name=Alice&amp;msg=Hello&quot; &quot;name&quot;)  ; =&gt; Some(&quot;Alice&quot;)
+;;;
+;;; Since: Guestbook example
+defn parse-form-field [body : cstr, field : cstr] : (Option cstr)
+  def prefix str(field &quot;=&quot;)
+  def start  cstr-find(body prefix)
+  match start
+    None -&gt; None
+    Some(idx) -&gt;
+      def val-start {idx + cstr-len(prefix)}
+      def rest      cstr-drop(body val-start)
+      def end       or(cstr-find(rest &quot;&amp;&quot;) cstr-len(rest))
+      Some $ percent-decode $ cstr-take(rest end)
+</code></pre></div></div></div>
+<p>The <code>percent-decode</code> helper converts <code>%XX</code> sequences and replaces <code>+</code> with space:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; percent-decode -- decode a URL percent-encoded string.
+;;;
+;;; Parameters:
+;;;   s -- percent-encoded input
+;;;
+;;; Returns:
+;;;   Decoded cstr. Invalid sequences are passed through unchanged.
+;;;
+;;; Example:
+;;;   (percent-decode &quot;Hello%20World&quot;)  ; =&gt; &quot;Hello World&quot;
+;;;
+;;; Since: Guestbook example
+(defn percent-decode [s : cstr] : cstr
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; percent-decode -- decode a URL percent-encoded string.
+;;;
+;;; Parameters:
+;;;   s -- percent-encoded input
+;;;
+;;; Returns:
+;;;   Decoded cstr. Invalid sequences are passed through unchanged.
+;;;
+;;; Example:
+;;;   percent-decode(&quot;Hello%20World&quot;)  ; =&gt; &quot;Hello World&quot;
+;;;
+;;; Since: Guestbook example
+defn percent-decode [s : cstr] : cstr
+  ...
+</code></pre></div></div></div>
+<blockquote>
+<p><strong>Note</strong>: A complete <code>percent-decode</code> implementation is provided in <code>src/security.tur</code>. For ASCII-only names and messages you can skip percent-decoding during early development, but include it before exposing the server to real users.</p>
+</blockquote>
+<hr />
+<h2 id="step-4-introducing-continuations">Step 4: Introducing Continuations</h2>
+<h3 id="41-the-core-idea">4.1 The Core Idea</h3>
+<p><code>serial-reset</code> marks the outer boundary of a serializable computation. <code>serial-shift</code> pauses the computation and hands a serialized continuation to the body:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Toy example: add two numbers entered on separate pages.
+(defn add-flow [req : HttpRequest] : unit
+  (serial-reset
+    ;; Page 1: ask for first number
+    (def body-a (send-form-and-wait (fn [action]
+      (str &quot;&lt;form method='POST' action='&quot; action &quot;'&gt;&quot;
+           &quot;&lt;input name='a'/&gt;&lt;button&gt;Next&lt;/button&gt;&lt;/form&gt;&quot;))))
+    (def a (cstr-&gt;int64 (or (parse-form-field body-a &quot;a&quot;) &quot;0&quot;)))
+
+    ;; Page 2: ask for second number
+    (def body-b (send-form-and-wait (fn [action]
+      (str &quot;&lt;form method='POST' action='&quot; action &quot;'&gt;&quot;
+           &quot;&lt;input name='b'/&gt;&lt;button&gt;Add&lt;/button&gt;&lt;/form&gt;&quot;))))
+    (def b (cstr-&gt;int64 (or (parse-form-field body-b &quot;b&quot;) &quot;0&quot;)))
+
+    ;; Done: show result
+    (perform HttpEffect
+      (send-html (str &quot;&lt;p&gt;&quot; a &quot; + &quot; b &quot; = &quot; (int64-&gt;cstr (+ a b)) &quot;&lt;/p&gt;&quot;)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Toy example: add two numbers entered on separate pages.
+defn add-flow [req : HttpRequest] : unit
+  serial-reset
+    ;; Page 1: ask for first number
+    def body-a
+      send-form-and-wait(fn [action]
+        str(&quot;&lt;form method='POST' action='&quot; action &quot;'&gt;&quot;
+            &quot;&lt;input name='a'/&gt;&lt;button&gt;Next&lt;/button&gt;&lt;/form&gt;&quot;))
+    def a cstr-&gt;int64(or(parse-form-field(body-a &quot;a&quot;) &quot;0&quot;))
+
+    ;; Page 2: ask for second number
+    def body-b
+      send-form-and-wait(fn [action]
+        str(&quot;&lt;form method='POST' action='&quot; action &quot;'&gt;&quot;
+            &quot;&lt;input name='b'/&gt;&lt;button&gt;Add&lt;/button&gt;&lt;/form&gt;&quot;))
+    def b cstr-&gt;int64(or(parse-form-field(body-b &quot;b&quot;) &quot;0&quot;))
+
+    ;; Done: show result
+    perform HttpEffect
+      send-html(str(&quot;&lt;p&gt;&quot; a &quot; + &quot; b &quot; = &quot; int64-&gt;cstr({a + b}) &quot;&lt;/p&gt;&quot;))
+</code></pre></div></div></div>
+<p>The two <code>send-form-and-wait</code> calls look like blocking reads but each one:
+1. Serializes the continuation ("everything left to do after this point")
+2. Stores it under a random token
+3. Renders an HTML page whose form <code>action</code> contains that token
+4. Returns control to the HTTP listener</p>
+<p>When the browser submits the form, the router loads the token, deserializes the continuation, and calls <code>serial-resume</code>.</p>
+<h3 id="42-the-send-form-and-wait-helper">4.2 The <code>send-form-and-wait</code> Helper</h3>
+<p>This helper encapsulates the pattern:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; send-form-and-wait -- render a form page and suspend until it is submitted.
+;;;
+;;; Parameters:
+;;;   render-fn -- a function from action URL to HTML string
+;;;
+;;; Returns:
+;;;   The raw POST body submitted by the browser.
+;;;
+;;; Example:
+;;;   (def body (send-form-and-wait (fn [action] (render-name-form action))))
+;;;
+;;; Since: Guestbook example
+(defn send-form-and-wait [render-fn : (-&gt; cstr cstr)] : cstr
+  (serial-shift [k]
+    (def token  (store-continuation k))
+    (def action (str &quot;/submit?k=&quot; token))
+    (def html   (render-fn action))
+    (perform HttpEffect (send-html html))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; send-form-and-wait -- render a form page and suspend until it is submitted.
+;;;
+;;; Parameters:
+;;;   render-fn -- a function from action URL to HTML string
+;;;
+;;; Returns:
+;;;   The raw POST body submitted by the browser.
+;;;
+;;; Example:
+;;;   def body send-form-and-wait(fn [action] render-name-form(action))
+;;;
+;;; Since: Guestbook example
+defn send-form-and-wait [render-fn : (-&gt; cstr cstr)] : cstr
+  serial-shift [k]
+    def token  store-continuation(k)
+    def action str(&quot;/submit?k=&quot; token)
+    def html   render-fn(action)
+    perform HttpEffect
+      send-html(html)
+</code></pre></div></div></div>
+<p>After <code>perform HttpEffect (send-html html)</code>, the current fiber is done -- the HTTP loop will call <code>serial-resume k body</code> the next time that token is POSTed.</p>
+<h3 id="43-token-generation-and-storage">4.3 Token Generation and Storage</h3>
+<p><code>conts.tur</code> provides two operations:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; store-continuation -- serialize k and save to data/conts/&lt;token&gt;.bin.
+;;;
+;;; Parameters:
+;;;   k -- a serial-continuation to persist
+;;;
+;;; Returns:
+;;;   A random hex token string (64 hex characters).
+;;;
+;;; Since: Guestbook example
+(defn store-continuation [k : (serial-continuation cstr)] : cstr
+  (def token (random-hex-64))
+  (def bytes (serial-cont-&gt;bytes k))
+  (file-write (str &quot;data/conts/&quot; token &quot;.bin&quot;) bytes)
+  token)
+
+;;; load-continuation -- deserialize a continuation from disk.
+;;;
+;;; Parameters:
+;;;   token -- hex token returned by store-continuation
+;;;
+;;; Returns:
+;;;   (Option (serial-continuation cstr)) -- Some(k) if found, None if missing.
+;;;
+;;; Since: Guestbook example
+(defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
+  (def path (str &quot;data/conts/&quot; token &quot;.bin&quot;))
+  (match (file-read path)
+    (Err _) -&gt; (None)
+    (Ok bytes) -&gt;
+      (match (bytes-&gt;serial-cont bytes)
+        (Err _)  -&gt; (None)
+        (Ok k)   -&gt; (Some k))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; store-continuation -- serialize k and save to data/conts/&lt;token&gt;.bin.
+;;;
+;;; Parameters:
+;;;   k -- a serial-continuation to persist
+;;;
+;;; Returns:
+;;;   A random hex token string (64 hex characters).
+;;;
+;;; Since: Guestbook example
+defn store-continuation [k : (serial-continuation cstr)] : cstr
+  def token random-hex-64()
+  def bytes serial-cont-&gt;bytes(k)
+  file-write(str(&quot;data/conts/&quot; token &quot;.bin&quot;) bytes)
+  token
+
+;;; load-continuation -- deserialize a continuation from disk.
+;;;
+;;; Parameters:
+;;;   token -- hex token returned by store-continuation
+;;;
+;;; Returns:
+;;;   (Option (serial-continuation cstr)) -- Some(k) if found, None if missing.
+;;;
+;;; Since: Guestbook example
+defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
+  def path str(&quot;data/conts/&quot; token &quot;.bin&quot;)
+  match file-read(path)
+    Err(_) -&gt; None
+    Ok(bytes) -&gt;
+      match bytes-&gt;serial-cont(bytes)
+        Err(_) -&gt; None
+        Ok(k)  -&gt; Some(k)
+</code></pre></div></div></div>
+<h3 id="44-the-router">4.4 The Router</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; dispatch -- route an HTTP request to the appropriate handler.
+;;;
+;;; Parameters:
+;;;   req -- the incoming request
+;;;
+;;; Returns:
+;;;   unit (side effect: sends an HTTP response)
+;;;
+;;; Since: Guestbook example
+(defn dispatch [req : HttpRequest] : unit
+  (cond
+    ;; GET / -&gt; start a new guestbook flow
+    (and (cstr-eq? req.method &quot;GET&quot;) (cstr-eq? req.path &quot;/&quot;))
+    (run-guestbook-flow req)
+
+    ;; GET /entries -&gt; list all entries
+    (and (cstr-eq? req.method &quot;GET&quot;) (cstr-eq? req.path &quot;/entries&quot;))
+    (show-entries-handler req)
+
+    ;; POST /submit?k=TOKEN -&gt; resume a stored continuation
+    (and (cstr-eq? req.method &quot;POST&quot;) (cstr-eq? req.path &quot;/submit&quot;))
+    (resume-handler req)
+
+    ;; 404 for everything else
+    :else
+    (perform HttpEffect
+      (send-html &quot;&lt;h1&gt;404 Not Found&lt;/h1&gt;&quot;))))
+
+;;; resume-handler -- extract the token from the query string and resume.
+;;;
+;;; Since: Guestbook example
+(defn resume-handler [req : HttpRequest] : unit
+  (def token (parse-form-field req.query &quot;k&quot;))
+  (match token
+    (None) -&gt;
+      (perform HttpEffect (send-html &quot;&lt;p&gt;Missing token.&lt;/p&gt;&quot;))
+    (Some t) -&gt;
+      (match (load-continuation t)
+        (None) -&gt;
+          (perform HttpEffect (send-html &quot;&lt;p&gt;Unknown or expired token.&lt;/p&gt;&quot;))
+        (Some k) -&gt;
+          (serial-resume k req.body))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; dispatch -- route an HTTP request to the appropriate handler.
+;;;
+;;; Parameters:
+;;;   req -- the incoming request
+;;;
+;;; Returns:
+;;;   unit (side effect: sends an HTTP response)
+;;;
+;;; Since: Guestbook example
+defn dispatch [req : HttpRequest] : unit
+  cond
+    ;; GET / -&gt; start a new guestbook flow
+    and(cstr-eq?(req.method &quot;GET&quot;) cstr-eq?(req.path &quot;/&quot;))
+    run-guestbook-flow(req)
+
+    ;; GET /entries -&gt; list all entries
+    and(cstr-eq?(req.method &quot;GET&quot;) cstr-eq?(req.path &quot;/entries&quot;))
+    show-entries-handler(req)
+
+    ;; POST /submit?k=TOKEN -&gt; resume a stored continuation
+    and(cstr-eq?(req.method &quot;POST&quot;) cstr-eq?(req.path &quot;/submit&quot;))
+    resume-handler(req)
+
+    ;; 404 for everything else
+    :else
+    perform HttpEffect
+      send-html(&quot;&lt;h1&gt;404 Not Found&lt;/h1&gt;&quot;)
+
+;;; resume-handler -- extract the token from the query string and resume.
+;;;
+;;; Since: Guestbook example
+defn resume-handler [req : HttpRequest] : unit
+  def token parse-form-field(req.query &quot;k&quot;)
+  match token
+    None -&gt;
+      perform HttpEffect
+        send-html(&quot;&lt;p&gt;Missing token.&lt;/p&gt;&quot;)
+    Some(t) -&gt;
+      match load-continuation(t)
+        None -&gt;
+          perform HttpEffect
+            send-html(&quot;&lt;p&gt;Unknown or expired token.&lt;/p&gt;&quot;)
+        Some(k) -&gt;
+          serial-resume(k req.body)
+</code></pre></div></div></div>
+<hr />
+<h2 id="step-5-two-page-flow">Step 5: Two-Page Flow</h2>
+<p>Now wire together two <code>send-form-and-wait</code> calls for the name and message pages.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; run-guestbook-flow -- the main multi-page flow.
+;;;
+;;; Parameters:
+;;;   req -- the initial GET / request (used only to start the flow)
+;;;
+;;; Returns:
+;;;   unit (side effect: sends HTML pages, eventually writes an entry)
+;;;
+;;; Since: Guestbook example
+(defn run-guestbook-flow [req : HttpRequest] : unit
+  (serial-reset
+
+    ;; Page 1: name
+    (def name-body (send-form-and-wait
+                     (fn [action] (render-name-form action))))
+    (def name (or (parse-form-field name-body &quot;name&quot;) &quot;Anonymous&quot;))
+
+    ;; Page 2: message
+    (def msg-body (send-form-and-wait
+                    (fn [action] (render-message-form action name))))
+    (def message (or (parse-form-field msg-body &quot;message&quot;) &quot;&quot;))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; run-guestbook-flow -- the main multi-page flow.
+;;;
+;;; Parameters:
+;;;   req -- the initial GET / request (used only to start the flow)
+;;;
+;;; Returns:
+;;;   unit (side effect: sends HTML pages, eventually writes an entry)
+;;;
+;;; Since: Guestbook example
+defn run-guestbook-flow [req : HttpRequest] : unit
+  serial-reset
+
+    ;; Page 1: name
+    def name-body
+      send-form-and-wait(fn [action] render-name-form(action))
+    def name or(parse-form-field(name-body &quot;name&quot;) &quot;Anonymous&quot;)
+
+    ;; Page 2: message
+    def msg-body
+      send-form-and-wait(fn [action] render-message-form(action name))
+    def message or(parse-form-field(msg-body &quot;message&quot;) &quot;&quot;)
+</code></pre></div></div></div>
+<h3 id="51-what-happens-at-runtime">5.1 What Happens at Runtime</h3>
+<p>Walk through the sequence for <code>name = "Alice"</code> and <code>message = "Hello"</code>:</p>
+<pre><code>Browser                 Server
+  |                       |
+  |-- GET / ------------&gt;|  run-guestbook-flow starts
+  |                       |  serial-reset begins
+  |                       |  send-form-and-wait:
+  |                       |    serial-shift captures k1
+  |                       |    k1 serialized -&gt; data/conts/abc123.bin
+  |                       |    token = &quot;abc123&quot;
+  |                       |    render-name-form called with action=&quot;/submit?k=abc123&quot;
+  |&lt;-- HTML (name form) --|
+  |                       |
+  |-- POST /submit?k=abc123  body: name=Alice
+  |                       |  router: load-continuation &quot;abc123&quot; -&gt; k1
+  |                       |  serial-resume k1 &quot;name=Alice&quot;
+  |                       |  flow resumes: name = &quot;Alice&quot;
+  |                       |  send-form-and-wait:
+  |                       |    serial-shift captures k2
+  |                       |    k2 serialized -&gt; data/conts/def456.bin
+  |                       |    render-message-form called with action=&quot;/submit?k=def456&quot;
+  |&lt;-- HTML (msg form) ---|
+  |                       |
+  |-- POST /submit?k=def456  body: message=Hello
+  |                       |  router: load-continuation &quot;def456&quot; -&gt; k2
+  |                       |  serial-resume k2 &quot;message=Hello&quot;
+  |                       |  flow resumes: message = &quot;Hello&quot;
+  |                       |  (more steps follow in Step 8)
+```text
+
+Each `serial-resume` re-enters the flow at exactly the point after `send-form-and-wait` returned, with all local variables (`name`, etc.) intact in the deserialized continuation.
+
+---
+
+## Step 6: Three-Page Preview with Back Navigation
+
+Add a preview page between message entry and posting. The user can click &quot;Edit&quot; to go back.
+
+</code></pre>
+<pre><code>;; Page 3: preview
+(def preview-body
+  (serial-shift [k-back]
+    (serial-shift [k-confirm]
+      (def t-back    (store-continuation k-back))
+      (def t-confirm (store-continuation k-confirm))
+      (perform HttpEffect
+        (send-html (render-preview
+                     (html-escape name)
+                     (html-escape message)
+                     t-back
+                     t-confirm))))))
+</code></pre>
+<pre><code>
+### 6.1 How Back Navigation Works
+
+Two continuations are stored on the preview page:
+
+- `k-confirm` resumes the outer `serial-shift` -- i.e., the code *after* the preview, which writes the entry.
+- `k-back` resumes the inner `serial-shift` -- i.e., re-entering the `serial-shift` that generated the message form.
+
+When the user clicks &quot;Edit&quot;, the browser POSTs to `/submit?k=&lt;t-back&gt;`. The router deserializes `k-back` and calls `serial-resume k-back &quot;&quot;`. This re-runs the message-form `send-form-and-wait`, presenting the form again with a fresh token.
+
+Back navigation is completely free -- the server already serialized both continuations. No extra state tracking is needed.
+
+### 6.2 The Preview Template
+
+```turmeric
+;;; render-preview -- render the preview page with confirm and back links.
+;;;
+;;; Parameters:
+;;;   name      -- HTML-escaped author name
+;;;   message   -- HTML-escaped message text
+;;;   t-back    -- token for the &quot;Edit&quot; continuation
+;;;   t-confirm -- token for the &quot;Confirm&quot; continuation
+;;;
+;;; Returns:
+;;;   HTML string.
+;;;
+;;; Since: Guestbook example
+(defn render-preview [name    : cstr,
+                      message : cstr,
+                      t-back  : cstr,
+                      t-confirm : cstr] : cstr
+  (str &quot;&lt;html&gt;&lt;body&gt;&quot;
+       &quot;&lt;h2&gt;Preview Your Entry&lt;/h2&gt;&quot;
+       &quot;&lt;p&gt;&lt;strong&gt;Name:&lt;/strong&gt; &quot; name &quot;&lt;/p&gt;&quot;
+       &quot;&lt;p&gt;&lt;strong&gt;Message:&lt;/strong&gt; &quot; message &quot;&lt;/p&gt;&quot;
+       &quot;&lt;form method='POST' action='/submit?k=&quot; t-confirm &quot;'&gt;&quot;
+       &quot;  &lt;button type='submit' name='action' value='confirm'&gt;&quot;
+       &quot;    Confirm and Post&lt;/button&gt;&quot;
+       &quot;&lt;/form&gt;&quot;
+       &quot;&lt;form method='POST' action='/submit?k=&quot; t-back &quot;'&gt;&quot;
+       &quot;  &lt;button type='submit'&gt;&amp;#8592; Edit Message&lt;/button&gt;&quot;
+       &quot;&lt;/form&gt;&quot;
+       &quot;&lt;/body&gt;&lt;/html&gt;&quot;))
+</code></pre>
+<pre><code class="language-sweet-exp">;;; render-preview -- render the preview page with confirm and back links.
+;;;
+;;; Parameters:
+;;;   name      -- HTML-escaped author name
+;;;   message   -- HTML-escaped message text
+;;;   t-back    -- token for the &quot;Edit&quot; continuation
+;;;   t-confirm -- token for the &quot;Confirm&quot; continuation
+;;;
+;;; Returns:
+;;;   HTML string.
+;;;
+;;; Since: Guestbook example
+defn render-preview [name    : cstr,
+                     message : cstr,
+                     t-back  : cstr,
+                     t-confirm : cstr] : cstr
+  str(&quot;&lt;html&gt;&lt;body&gt;&quot;
+      &quot;&lt;h2&gt;Preview Your Entry&lt;/h2&gt;&quot;
+      &quot;&lt;p&gt;&lt;strong&gt;Name:&lt;/strong&gt; &quot; name &quot;&lt;/p&gt;&quot;
+      &quot;&lt;p&gt;&lt;strong&gt;Message:&lt;/strong&gt; &quot; message &quot;&lt;/p&gt;&quot;
+      &quot;&lt;form method='POST' action='/submit?k=&quot; t-confirm &quot;'&gt;&quot;
+      &quot;  &lt;button type='submit' name='action' value='confirm'&gt;&quot;
+      &quot;    Confirm and Post&lt;/button&gt;&quot;
+      &quot;&lt;/form&gt;&quot;
+      &quot;&lt;form method='POST' action='/submit?k=&quot; t-back &quot;'&gt;&quot;
+      &quot;  &lt;button type='submit'&gt;&amp;#8592; Edit Message&lt;/button&gt;&quot;
+      &quot;&lt;/form&gt;&quot;
+      &quot;&lt;/body&gt;&lt;/html&gt;&quot;)
+</code></pre>
+<hr />
+<h2 id="step-7-persisting-the-guestbook-store">Step 7: Persisting the Guestbook Store</h2>
+<h3 id="71-the-guestentry-struct">7.1 The <code>GuestEntry</code> Struct</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; GuestEntry -- a single guestbook post.
+;;;
+;;; Since: Guestbook example
+(defstruct GuestEntry
+  [name      : cstr
+   message   : cstr
+   posted-at : int64])  ; Unix timestamp (seconds since epoch)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; GuestEntry -- a single guestbook post.
+;;;
+;;; Since: Guestbook example
+defstruct GuestEntry
+  [name      : cstr
+   message   : cstr
+   posted-at : int64]  ; Unix timestamp (seconds since epoch)
+</code></pre></div></div></div>
+<h3 id="72-the-serializable-instance">7.2 The <code>Serializable</code> Instance</h3>
+<p>Entries are serialized as a <code>Vec cstr</code> (name, message, timestamp-string):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; Serializable instance for GuestEntry.
+;;; Serializes as a Vec of three cstr values.
+(definstance Serializable GuestEntry
+  (serialize [e]
+    (serialize (Vec.of [e.name e.message (int64-&gt;cstr e.posted-at)])))
+  (deserialize [b]
+    (match (deserialize b : (Result (Vec cstr) cstr))
+      (Err msg) -&gt; (Err msg)
+      (Ok parts) -&gt;
+        (if (&lt; (Vec.len parts) 3)
+          (Err &quot;GuestEntry: not enough fields&quot;)
+          (Ok (GuestEntry
+                :name      (Vec.get parts 0)
+                :message   (Vec.get parts 1)
+                :posted-at (cstr-&gt;int64 (Vec.get parts 2))))))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; Serializable instance for GuestEntry.
+;;; Serializes as a Vec of three cstr values.
+definstance Serializable GuestEntry
+  serialize [e]
+    serialize $ Vec.of([e.name e.message int64-&gt;cstr(e.posted-at)])
+  deserialize [b]
+    match deserialize(b : (Result (Vec cstr) cstr))
+      Err(msg) -&gt; Err(msg)
+      Ok(parts) -&gt;
+        if {Vec.len(parts) &lt; 3}
+          Err(&quot;GuestEntry: not enough fields&quot;)
+          Ok(GuestEntry
+              :name      Vec.get(parts 0)
+              :message   Vec.get(parts 1)
+              :posted-at cstr-&gt;int64 $ Vec.get(parts 2))
+</code></pre></div></div></div>
+<h3 id="73-the-store-api">7.3 The Store API</h3>
+<p><code>store.tur</code> exposes three functions:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; store-load -- load all guestbook entries from data/entries.bin.
+;;;
+;;; Returns:
+;;;   (Vec GuestEntry) -- empty Vec if the file does not exist yet.
+;;;
+;;; Since: Guestbook example
+(defn store-load [] : (Vec GuestEntry) ...)
+
+;;; store-append -- append a new entry and flush to disk.
+;;;
+;;; Parameters:
+;;;   entry -- the entry to append
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Since: Guestbook example
+(defn store-append [entry : GuestEntry] : unit ...)
+
+;;; store-all -- return a snapshot of all current entries.
+;;;
+;;; Returns:
+;;;   (Vec GuestEntry) -- most-recent entry last.
+;;;
+;;; Since: Guestbook example
+(defn store-all [] : (Vec GuestEntry) ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; store-load -- load all guestbook entries from data/entries.bin.
+;;;
+;;; Returns:
+;;;   (Vec GuestEntry) -- empty Vec if the file does not exist yet.
+;;;
+;;; Since: Guestbook example
+defn store-load [] : (Vec GuestEntry) ...
+
+;;; store-append -- append a new entry and flush to disk.
+;;;
+;;; Parameters:
+;;;   entry -- the entry to append
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Since: Guestbook example
+defn store-append [entry : GuestEntry] : unit ...
+
+;;; store-all -- return a snapshot of all current entries.
+;;;
+;;; Returns:
+;;;   (Vec GuestEntry) -- most-recent entry last.
+;;;
+;;; Since: Guestbook example
+defn store-all [] : (Vec GuestEntry) ...
+</code></pre></div></div></div>
+<p>The file format is a serialized <code>(Vec GuestEntry)</code> written atomically: write to a temp file, then rename over the live file. This prevents corruption on crash.</p>
+<hr />
+<h2 id="step-8-confirmation-posting-and-thank-you">Step 8: Confirmation, Posting, and Thank-You</h2>
+<p>Complete the flow. After the preview confirmation, write the entry and show the guestbook.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn run-guestbook-flow [req : HttpRequest] : unit
+  (serial-reset
+
+    ;; Page 1: name
+    (def name-body (send-form-and-wait
+                     (fn [a] (render-name-form a))))
+    (def name (or (parse-form-field name-body &quot;name&quot;) &quot;Anonymous&quot;))
+
+    ;; Page 2: message
+    (def msg-body  (send-form-and-wait
+                     (fn [a] (render-message-form a name))))
+    (def message (or (parse-form-field msg-body &quot;message&quot;) &quot;&quot;))
+
+    ;; Page 3: preview (stores two continuations: k-back and k-confirm)
+    (serial-shift [k-back]
+      (serial-shift [k-confirm]
+        (def t-back    (store-continuation k-back))
+        (def t-confirm (store-continuation k-confirm))
+        (perform HttpEffect
+          (send-html (render-preview
+                       (html-escape name)
+                       (html-escape message)
+                       t-back
+                       t-confirm)))))
+
+    ;; Page 4: confirmed -- write entry and show thank-you
+    (store-append (GuestEntry
+                    :name      (html-escape name)
+                    :message   (html-escape message)
+                    :posted-at (unix-now)))
+    (perform HttpEffect
+      (send-html (render-thankyou (store-all))))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn run-guestbook-flow [req : HttpRequest] : unit
+  serial-reset
+
+    ;; Page 1: name
+    def name-body
+      send-form-and-wait(fn [a] render-name-form(a))
+    def name or(parse-form-field(name-body &quot;name&quot;) &quot;Anonymous&quot;)
+
+    ;; Page 2: message
+    def msg-body
+      send-form-and-wait(fn [a] render-message-form(a name))
+    def message or(parse-form-field(msg-body &quot;message&quot;) &quot;&quot;)
+
+    ;; Page 3: preview (stores two continuations: k-back and k-confirm)
+    serial-shift [k-back]
+      serial-shift [k-confirm]
+        def t-back    store-continuation(k-back)
+        def t-confirm store-continuation(k-confirm)
+        perform HttpEffect
+          send-html(render-preview(html-escape(name)
+                                   html-escape(message)
+                                   t-back
+                                   t-confirm))
+
+    ;; Page 4: confirmed -- write entry and show thank-you
+    store-append(GuestEntry
+                  :name      html-escape(name)
+                  :message   html-escape(message)
+                  :posted-at unix-now())
+    perform HttpEffect
+      send-html $ render-thankyou $ store-all()
+</code></pre></div></div></div>
+<blockquote>
+<p><strong>How confirm vs. back is handled:</strong> The preview page has two forms pointing to two different tokens. The router dispatches entirely based on which token was POSTed. No <code>action</code> field inspection is needed in the flow itself.</p>
+</blockquote>
+<h3 id="81-the-thank-you-template">8.1 The Thank-You Template</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; render-thankyou -- render the thank-you page with the full guestbook.
+;;;
+;;; Parameters:
+;;;   entries -- all guestbook entries to display
+;;;
+;;; Returns:
+;;;   HTML string.
+;;;
+;;; Since: Guestbook example
+(defn render-thankyou [entries : (Vec GuestEntry)] : cstr
+  (def rows
+    (Vec.map entries
+             (fn [e]
+               (str &quot;&lt;li&gt;&lt;strong&gt;&quot; e.name &quot;&lt;/strong&gt;: &quot; e.message &quot;&lt;/li&gt;&quot;))))
+  (str &quot;&lt;html&gt;&lt;body&gt;&quot;
+       &quot;&lt;h2&gt;Thank you! Your entry has been posted.&lt;/h2&gt;&quot;
+       &quot;&lt;h3&gt;Guestbook&lt;/h3&gt;&quot;
+       &quot;&lt;ul&gt;&quot; (cstr-join rows &quot;&quot;) &quot;&lt;/ul&gt;&quot;
+       &quot;&lt;p&gt;&lt;a href='/'&gt;Add another entry&lt;/a&gt;&lt;/p&gt;&quot;
+       &quot;&lt;/body&gt;&lt;/html&gt;&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; render-thankyou -- render the thank-you page with the full guestbook.
+;;;
+;;; Parameters:
+;;;   entries -- all guestbook entries to display
+;;;
+;;; Returns:
+;;;   HTML string.
+;;;
+;;; Since: Guestbook example
+defn render-thankyou [entries : (Vec GuestEntry)] : cstr
+  def rows
+    Vec.map(entries fn [e]
+      str(&quot;&lt;li&gt;&lt;strong&gt;&quot; e.name &quot;&lt;/strong&gt;: &quot; e.message &quot;&lt;/li&gt;&quot;))
+  str(&quot;&lt;html&gt;&lt;body&gt;&quot;
+      &quot;&lt;h2&gt;Thank you! Your entry has been posted.&lt;/h2&gt;&quot;
+      &quot;&lt;h3&gt;Guestbook&lt;/h3&gt;&quot;
+      &quot;&lt;ul&gt;&quot; cstr-join(rows &quot;&quot;) &quot;&lt;/ul&gt;&quot;
+      &quot;&lt;p&gt;&lt;a href='/'&gt;Add another entry&lt;/a&gt;&lt;/p&gt;&quot;
+      &quot;&lt;/body&gt;&lt;/html&gt;&quot;)
+</code></pre></div></div></div>
+<hr />
+<h2 id="step-9-security-hardening">Step 9: Security Hardening</h2>
+<h3 id="91-hmac-token-signing">9.1 HMAC Token Signing</h3>
+<p>Random tokens prevent guessing, but they do not prevent token forgery if an attacker observes a valid token. Sign each token with a server secret using HMAC-SHA256:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; sign-token -- append an HMAC-SHA256 signature to a token.
+;;;
+;;; Parameters:
+;;;   token  -- raw hex token string
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   &quot;token.signature&quot; cstr.
+;;;
+;;; Since: Guestbook example
+(defn sign-token [token : cstr, secret : bytes] : cstr
+  (def sig (hex-encode (hmac-sha256 secret (cstr-&gt;bytes token))))
+  (str token &quot;.&quot; sig))
+
+;;; verify-token -- check the signature and return the raw token.
+;;;
+;;; Parameters:
+;;;   signed -- &quot;token.signature&quot; cstr
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(token) if valid, None if tampered or malformed.
+;;;
+;;; Since: Guestbook example
+(defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
+  (def parts (cstr-split signed &quot;.&quot;))
+  (match parts
+    [token sig] -&gt;
+      (def expected (hex-encode (hmac-sha256 secret (cstr-&gt;bytes token))))
+      (if (cstr-eq? sig expected)
+        (Some token)
+        (None))
+    _ -&gt; (None)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; sign-token -- append an HMAC-SHA256 signature to a token.
+;;;
+;;; Parameters:
+;;;   token  -- raw hex token string
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   &quot;token.signature&quot; cstr.
+;;;
+;;; Since: Guestbook example
+defn sign-token [token : cstr, secret : bytes] : cstr
+  def sig hex-encode $ hmac-sha256(secret cstr-&gt;bytes(token))
+  str(token &quot;.&quot; sig)
+
+;;; verify-token -- check the signature and return the raw token.
+;;;
+;;; Parameters:
+;;;   signed -- &quot;token.signature&quot; cstr
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(token) if valid, None if tampered or malformed.
+;;;
+;;; Since: Guestbook example
+defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
+  def parts cstr-split(signed &quot;.&quot;)
+  match parts
+    [token sig] -&gt;
+      def expected hex-encode $ hmac-sha256(secret cstr-&gt;bytes(token))
+      if cstr-eq?(sig expected)
+        Some(token)
+        None
+    _ -&gt; None
+</code></pre></div></div></div>
+<p>Load the secret from an environment variable at startup:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def SERVER-SECRET
+  (cstr-&gt;bytes (or (getenv &quot;GUESTBOOK_SECRET&quot;) &quot;dev-insecure-secret&quot;)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def SERVER-SECRET
+  cstr-&gt;bytes(or(getenv(&quot;GUESTBOOK_SECRET&quot;) &quot;dev-insecure-secret&quot;))
+</code></pre></div></div></div>
+<p>Replace <code>store-continuation</code> and <code>load-continuation</code> with signed variants that call <code>sign-token</code> / <code>verify-token</code> before returning or looking up a token.</p>
+<h3 id="92-token-expiry">9.2 Token Expiry</h3>
+<p>Store a creation timestamp alongside the continuation bytes. Reject tokens older than 30 minutes:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def CONT-TTL-SECONDS 1800)
+
+;;; StoredCont -- a continuation blob with a creation timestamp.
+;;; Since: Guestbook example
+(defstruct StoredCont
+  [bytes      : bytes
+   created-at : int64])  ; unix-now at time of storage
+
+;;; continuation-expired? -- true if the stored continuation is too old.
+;;; Since: Guestbook example
+(defn continuation-expired? [sc : StoredCont] : bool
+  (&gt; (- (unix-now) sc.created-at) CONT-TTL-SECONDS))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def CONT-TTL-SECONDS 1800
+
+;;; StoredCont -- a continuation blob with a creation timestamp.
+;;; Since: Guestbook example
+defstruct StoredCont
+  [bytes      : bytes
+   created-at : int64]  ; unix-now at time of storage
+
+;;; continuation-expired? -- true if the stored continuation is too old.
+;;; Since: Guestbook example
+defn continuation-expired? [sc : StoredCont] : bool
+  {unix-now() - sc.created-at} &gt; CONT-TTL-SECONDS
+</code></pre></div></div></div>
+<p><code>load-continuation</code> checks <code>continuation-expired?</code> and returns <code>None</code> for stale tokens.</p>
+<h3 id="93-input-sanitization">9.3 Input Sanitization</h3>
+<p>Escape <code>&lt;</code>, <code>&gt;</code>, <code>&amp;</code>, and <code>"</code> before inserting user input into HTML:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;;; html-escape -- escape HTML special characters in a string.
+;;;
+;;; Parameters:
+;;;   s -- raw user input
+;;;
+;;; Returns:
+;;;   HTML-safe cstr.
+;;;
+;;; Example:
+;;;   (html-escape &quot;&lt;script&gt;&quot;) ; =&gt; &quot;&amp;lt;script&amp;gt;&quot;
+;;;
+;;; Since: Guestbook example
+(defn html-escape [s : cstr] : cstr
+  (def s1 (cstr-replace-all s &quot;&amp;&quot;  &quot;&amp;amp;&quot;))
+  (def s2 (cstr-replace-all s1 &quot;&lt;&quot;  &quot;&amp;lt;&quot;))
+  (def s3 (cstr-replace-all s2 &quot;&gt;&quot;  &quot;&amp;gt;&quot;))
+  (cstr-replace-all s3 &quot;\&quot;&quot; &quot;&amp;quot;&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; html-escape -- escape HTML special characters in a string.
+;;;
+;;; Parameters:
+;;;   s -- raw user input
+;;;
+;;; Returns:
+;;;   HTML-safe cstr.
+;;;
+;;; Example:
+;;;   html-escape(&quot;&lt;script&gt;&quot;) ; =&gt; &quot;&amp;lt;script&amp;gt;&quot;
+;;;
+;;; Since: Guestbook example
+defn html-escape [s : cstr] : cstr
+  def s1 cstr-replace-all(s &quot;&amp;&quot;  &quot;&amp;amp;&quot;)
+  def s2 cstr-replace-all(s1 &quot;&lt;&quot;  &quot;&amp;lt;&quot;)
+  def s3 cstr-replace-all(s2 &quot;&gt;&quot;  &quot;&amp;gt;&quot;)
+  cstr-replace-all(s3 &quot;\&quot;&quot; &quot;&amp;quot;&quot;)
+</code></pre></div></div></div>
+<p>Call <code>html-escape</code> on every user-supplied string before embedding it in a template. The preview page and thank-you page in Step 8 already do this.</p>
+<h3 id="94-single-threaded-note">9.4 Single-Threaded Note</h3>
+<p>This tutorial server handles one request at a time. If a reader opens two browser tabs simultaneously, the second <code>GET /</code> starts a new flow concurrently -- but because the socket listener is single-threaded, requests are serialized at the OS level. For a multi-threaded extension, see the <a href="threading-guide.md">threading-guide.md</a> and <a href="stm-guide.md">stm-guide.md</a>.</p>
+<hr />
+<h2 id="running-the-guestbook">Running the Guestbook</h2>
+<pre><code class="language-bash"># First-time setup (from repo root)
+just configure-examples
+cmake --build build --target guestbook
+
+# Run the server
+GUESTBOOK_SECRET=&quot;my-real-secret&quot; ./build/examples/guestbook/guestbook
+# Server listens on http://localhost:8080
+
+# Or use the Justfile recipe
+just run-guestbook
+</code></pre>
+<p>Visit <code>http://localhost:8080</code> in a browser. Fill in your name, a message, preview the entry, and confirm. The entry appears in the thank-you page and persists in <code>data/entries.bin</code> across restarts.</p>
+<hr />
+<h2 id="what-to-read-next">What to Read Next</h2>
+<ul>
+<li><a href="web-continuations-guide.md">web-continuations-guide.md</a> -- Compact reference: <code>send-form-and-wait</code> pattern, continuation store contract, composing flows</li>
+<li><a href="serializable-continuations-guide.md">serializable-continuations-guide.md</a> -- In-depth coverage of <code>serial-reset</code>, <code>serial-shift</code>, <code>Serializable</code>, and error handling</li>
+<li><a href="effects-system-guide.md">effects-system-guide.md</a> -- <code>defeffect</code>, <code>perform</code>, <code>handle</code> -- the mechanics behind <code>HttpEffect</code></li>
+<li><a href="checkpointing-guide.md">checkpointing-guide.md</a> -- A sibling use case: long-running business workflows that survive crashes</li>
+<li><a href="c-integration-guide.md">c-integration-guide.md</a> -- Deeper coverage of <code>extern-c</code> and the C FFI</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/web-continuations-tutorial.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

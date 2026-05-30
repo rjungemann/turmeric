@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dynamic Vars Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#dynamic-vars-guide" style="">Dynamic Vars Guide</a></li>
+<li style=""><a href="#quick-start" style="">Quick Start</a></li>
+<li style=""><a href="#core-forms" style="">Core Forms</a></li>
+<li style="padding-left:0.75rem;"><a href="#defdynamic" style="color:var(--text-sec);">defdynamic</a></li>
+<li style="padding-left:0.75rem;"><a href="#binding" style="color:var(--text-sec);">binding</a></li>
+<li style="padding-left:0.75rem;"><a href="#set" style="color:var(--text-sec);">set!</a></li>
+<li style=""><a href="#thread-isolation" style="">Thread Isolation</a></li>
+<li style=""><a href="#conveying-bindings-to-child-threads" style="">Conveying Bindings to Child Threads</a></li>
+<li style=""><a href="#common-stdlib-vars" style="">Common Stdlib Vars</a></li>
+<li style=""><a href="#effects-vs-dynamic-vars" style="">Effects vs. Dynamic Vars</a></li>
+<li style="padding-left:0.75rem;"><a href="#use-dynamic-vars-when" style="color:var(--text-sec);">Use dynamic vars when</a></li>
+<li style="padding-left:0.75rem;"><a href="#use-effects-when" style="color:var(--text-sec);">Use effects when</a></li>
+<li style="padding-left:0.75rem;"><a href="#comparison" style="color:var(--text-sec);">Comparison</a></li>
+<li style=""><a href="#common-patterns" style="">Common Patterns</a></li>
+<li style="padding-left:0.75rem;"><a href="#scoped-log-level" style="color:var(--text-sec);">Scoped log level</a></li>
+<li style="padding-left:0.75rem;"><a href="#test-fixture-injection" style="color:var(--text-sec);">Test fixture injection</a></li>
+<li style="padding-left:0.75rem;"><a href="#module-tagged-structured-logging" style="color:var(--text-sec);">Module-tagged structured logging</a></li>
+<li style=""><a href="#error-reference" style="">Error Reference</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="dynamic-vars-guide">Dynamic Vars Guide</h1>
+<p>Dynamic vars are typed, thread-local, dynamically-scoped mutable cells.
+They let you pass implicit context (log level, locale, request ID) through
+deep call chains without threading an explicit parameter everywhere.</p>
+<p>Enable with the <code>-Xdynamic-vars</code> compiler flag.</p>
+<h2 id="quick-start">Quick Start</h2>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Declare a dynamic var at module toplevel
+(defdynamic *log-level* :int 1)
+
+;; Override for a dynamic extent
+(binding [*log-level* 0]
+  (do-work))
+
+;; Read anywhere -- no parameter required
+*log-level*   ; =&gt; current binding, or root value if none active
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Declare a dynamic var at module toplevel
+defdynamic *log-level* :int 1
+
+;; Override for a dynamic extent
+binding [*log-level* 0]
+  do-work()
+
+;; Read anywhere -- no parameter required
+*log-level*   ; =&gt; current binding, or root value if none active
+</code></pre></div></div></div>
+<h2 id="core-forms">Core Forms</h2>
+<h3 id="defdynamic"><code>defdynamic</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdynamic *name* :type root-expr)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defdynamic *name* :type root-expr
+</code></pre></div></div></div>
+<p>Declares a dynamic var with a fixed declared type and a root value. The root
+value is the initial value visible on any thread that has never called
+<code>binding</code> for this var.</p>
+<ul>
+<li>Must appear at module toplevel (not inside a function or <code>let</code>).</li>
+<li>The type is fixed; all overrides must match exactly.</li>
+<li>Substructural types (<code>^linear</code>, <code>^affine</code>, <code>^unique</code>) are rejected --
+  dynamic vars may be read by any number of callers.</li>
+</ul>
+<p>By convention, names use <code>*earmuffs*</code> to signal dynamic scope. The compiler
+warns (<code>TUR-W0600</code>) if earmuffs are omitted.</p>
+<h3 id="binding"><code>binding</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(binding [*var1* expr1
+          *var2* expr2]
+  body)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">binding [*var1* expr1
+         *var2* expr2]
+  body
+</code></pre></div></div></div>
+<p>Pushes an override frame for each var on the current thread, evaluates
+<code>body</code>, then pops all frames before returning. The override is visible to
+all code called transitively from <code>body</code> -- not just lexically enclosed code.</p>
+<p>Multiple vars in one <code>binding</code> form are all pushed before <code>body</code> runs.</p>
+<p>Binding forms compose: inner forms take precedence over outer ones:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(binding [*log-level* 1]
+  (binding [*log-level* 3]
+    *log-level*)   ; =&gt; 3
+  *log-level*)     ; =&gt; 1
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">binding [*log-level* 1]
+  binding [*log-level* 3]
+    *log-level*   ; =&gt; 3
+  *log-level*     ; =&gt; 1
+</code></pre></div></div></div>
+<h3 id="set"><code>set!</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(binding [*log-level* 1]
+  (set! *log-level* 4)
+  *log-level*)   ; =&gt; 4
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">binding [*log-level* 1]
+  set!(*log-level* 4)
+  *log-level*   ; =&gt; 4
+</code></pre></div></div></div>
+<p>Mutates the current thread's top binding frame for the var. Requires an
+active binding frame on the current thread (<code>TUR-E0601</code> otherwise). The
+root value is never mutated by <code>set!</code>.</p>
+<p><code>set!</code> is rejected inside <code>atomically</code> blocks (<code>TUR-E0605</code>): STM
+transactions may be retried, but binding stack mutations cannot be rolled
+back.</p>
+<h2 id="thread-isolation">Thread Isolation</h2>
+<p>Each thread has its own binding stack. A <code>binding</code> in one thread does not
+affect any other thread's view of the var.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdynamic *locale* :cstr &quot;en-US&quot;)
+
+(defn show-locale [] :int
+  (println *locale*))
+
+(defn use-fr [] :int
+  (binding [*locale* &quot;fr-FR&quot;]
+    (show-locale))   ; show-locale sees &quot;fr-FR&quot; from its callsite
+  0)
+
+(use-fr)             ; prints fr-FR
+(show-locale)        ; prints en-US -- binding was restored when use-fr returned
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defdynamic *locale* :cstr &quot;en-US&quot;
+
+defn show-locale [] :int
+  println(*locale*)
+
+defn use-fr [] :int
+  binding [*locale* &quot;fr-FR&quot;]
+    show-locale()   ; show-locale sees &quot;fr-FR&quot; from its callsite
+  0
+
+use-fr()             ; prints fr-FR
+show-locale()        ; prints en-US -- binding was restored when use-fr returned
+</code></pre></div></div></div>
+<p>A spawned thread (via <code>spawn</code>) starts with no binding frames; all var reads
+return root values.</p>
+<h2 id="conveying-bindings-to-child-threads">Conveying Bindings to Child Threads</h2>
+<p><code>spawn-conveying</code> (from <code>stdlib/dynvar.tur</code>) starts a new thread with a
+snapshot of the parent's current binding frame:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/dynvar.tur&quot;)
+
+(defdynamic *request-id* :cstr &quot;none&quot;)
+
+(defn thread-join [t :ptr&lt;void&gt;] :nil ...)  ; see stdlib/thread.tur
+
+(defn main [] :int
+  (binding [*request-id* &quot;req-1&quot;]
+    (let [t (spawn-conveying (fn [] (println *request-id*)))]
+      (set! *request-id* &quot;req-2&quot;)   ; parent changes its own binding
+      (thread-join t)                ; child printed &quot;req-1&quot; (snapshot)
+      (println *request-id*)))       ; prints &quot;req-2&quot;
+  0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/dynvar.tur&quot;)
+
+defdynamic *request-id* :cstr &quot;none&quot;
+
+defn thread-join [t :ptr&lt;void&gt;] :nil ...  ; see stdlib/thread.tur
+
+defn main [] :int
+  binding [*request-id* &quot;req-1&quot;]
+    let [t spawn-conveying(fn [] println(*request-id*))]
+      set!(*request-id* &quot;req-2&quot;)   ; parent changes its own binding
+      thread-join(t)                ; child printed &quot;req-1&quot; (snapshot)
+      println(*request-id*)         ; prints &quot;req-2&quot;
+  0
+</code></pre></div></div></div>
+<p>The snapshot is a <strong>copy</strong> of each var's current top-of-stack value taken at
+spawn time. Parent and child binding stacks are independent afterwards.</p>
+<h2 id="common-stdlib-vars">Common Stdlib Vars</h2>
+<p><code>stdlib/dynvar.tur</code> declares four standard dynamic vars:</p>
+<table>
+<thead>
+<tr>
+<th>Var</th>
+<th>Type</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>*log-level*</code></td>
+<td><code>:int</code></td>
+<td><code>1</code></td>
+<td>Logging verbosity (0 = verbose, 1 = info, 2 = warn, 3 = error)</td>
+</tr>
+<tr>
+<td><code>*locale*</code></td>
+<td><code>:cstr</code></td>
+<td><code>"en-US"</code></td>
+<td>BCP-47 locale for formatting and i18n</td>
+</tr>
+<tr>
+<td><code>*random-seed*</code></td>
+<td><code>:int</code></td>
+<td><code>0</code></td>
+<td>RNG seed; 0 = use system entropy</td>
+</tr>
+<tr>
+<td><code>*current-module*</code></td>
+<td><code>:cstr</code></td>
+<td><code>""</code></td>
+<td>Module name for structured log output</td>
+</tr>
+</tbody>
+</table>
+<p>Load the file to get both the vars and <code>spawn-conveying</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/dynvar.tur&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/dynvar.tur&quot;)
+</code></pre></div></div></div>
+<blockquote>
+<p><strong>Known limitation:</strong> Root-value initialization for vars declared in
+loaded files (<code>load</code>) is not emitted when the loading program defines
+an explicit <code>(defn main ...)</code>. Until this is fixed, use script mode
+(no explicit <code>defn main</code>) when relying on non-zero root values from
+loaded files, or declare the vars locally in the main file.</p>
+</blockquote>
+<h2 id="effects-vs-dynamic-vars">Effects vs. Dynamic Vars</h2>
+<p>Both algebraic effects and dynamic vars solve the "implicit context" problem.
+The right tool depends on whether the context is configuration (rarely
+overridden, never intercepted) or an interceptable operation.</p>
+<h3 id="use-dynamic-vars-when">Use dynamic vars when</h3>
+<ul>
+<li>The value is almost always the root: log level, locale, feature flags.</li>
+<li>You want zero call-site annotation: any function can read the var without
+  declaring anything in its signature.</li>
+<li>You want snapshot isolation across threads (<code>spawn-conveying</code>).</li>
+<li>You don't need multi-shot resumption or handler composition.</li>
+</ul>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Dynamic var: no annotation at call site, no handler at every boundary
+(defdynamic *log-level* :int 1)
+
+(defn log-info [msg :cstr] :int
+  (if (&gt;= *log-level* 1) (println msg) 0))
+
+(defn process [] :int
+  (log-info &quot;processing&quot;)
+  42)
+
+(binding [*log-level* 0]   ; one override, deep stack covered automatically
+  (process))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Dynamic var: no annotation at call site, no handler at every boundary
+defdynamic *log-level* :int 1
+
+defn log-info [msg :cstr] :int
+  if {*log-level* &gt;= 1}
+    println(msg)
+    0
+
+defn process [] :int
+  log-info(&quot;processing&quot;)
+  42
+
+binding [*log-level* 0]   ; one override, deep stack covered automatically
+  process()
+</code></pre></div></div></div>
+<h3 id="use-effects-when">Use effects when</h3>
+<ul>
+<li>The operation has multiple implementations (prod vs. mock, local vs. remote).</li>
+<li>You want the compiler to enforce that a handler is installed at each
+  architectural boundary (effect rows in types).</li>
+<li>You need multi-shot resumption (e.g. backtracking, generators).</li>
+<li>The handler needs to observe every invocation.</li>
+</ul>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect DbEffect (query [sql :str] :str))
+
+(defn run-tests [] :unit
+  (handle
+    (assert! (= (query &quot;SELECT 1&quot;) &quot;1&quot;))
+    [(DbEffect.query sql k)
+     (resume k (mock-db-exec sql))]))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect DbEffect query([sql :str] :str)
+
+defn run-tests [] :unit
+  handle
+    assert!(=(query(&quot;SELECT 1&quot;) &quot;1&quot;))
+    [(DbEffect.query sql k)
+     resume(k mock-db-exec(sql))]
+</code></pre></div></div></div>
+<h3 id="comparison">Comparison</h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th><code>binding</code>/<code>defdynamic</code></th>
+<th><code>perform</code>/<code>handle</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Call-site annotation</td>
+<td>None</td>
+<td><code>perform</code> required</td>
+</tr>
+<tr>
+<td>Compile-time enforcement</td>
+<td>Type of override must match</td>
+<td>Effect row must be handled</td>
+</tr>
+<tr>
+<td>No-override cost</td>
+<td>Single global load</td>
+<td>Effect row overhead</td>
+</tr>
+<tr>
+<td>Multi-shot resumption</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Thread isolation</td>
+<td>Automatic (per-thread stack)</td>
+<td>Manual (handler in thread body)</td>
+</tr>
+<tr>
+<td>Cross-thread conveyance</td>
+<td><code>spawn-conveying</code></td>
+<td>Not built-in</td>
+</tr>
+<tr>
+<td>Interceptable per-call</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+<p>The two mechanisms are orthogonal. <code>binding</code> may appear inside <code>handle</code>
+bodies and <code>perform</code> may appear inside <code>binding</code> bodies without interaction.</p>
+<h2 id="common-patterns">Common Patterns</h2>
+<h3 id="scoped-log-level">Scoped log level</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdynamic *log-level* :int 1)
+
+(defn log-debug [msg :cstr] :int
+  (if (= *log-level* 0) (println msg) 0))
+
+(defn run-verbose [thunk] :int
+  (binding [*log-level* 0]
+    (thunk)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defdynamic *log-level* :int 1
+
+defn log-debug [msg :cstr] :int
+  if {*log-level* = 0}
+    println(msg)
+    0
+
+defn run-verbose [thunk] :int
+  binding [*log-level* 0]
+    thunk()
+</code></pre></div></div></div>
+<h3 id="test-fixture-injection">Test fixture injection</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defdynamic *db* :int 0)   ; :int as a stand-in for a connection handle
+
+(defn query [sql :cstr] :int
+  *db*)
+
+(defn run-tests [] :int
+  (binding [*db* 42]   ; inject test connection
+    (println (query &quot;SELECT 1&quot;)))
+  0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defdynamic *db* :int 0   ; :int as a stand-in for a connection handle
+
+defn query [sql :cstr] :int
+  *db*
+
+defn run-tests [] :int
+  binding [*db* 42]   ; inject test connection
+    println(query(&quot;SELECT 1&quot;))
+  0
+</code></pre></div></div></div>
+<h3 id="module-tagged-structured-logging">Module-tagged structured logging</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/dynvar.tur&quot;)   ; provides *current-module*
+
+(defn log [msg :cstr] :int
+  (println *current-module*)
+  (println msg))
+
+(defn start-auth-module [] :int
+  (binding [*current-module* &quot;auth&quot;]
+    (log &quot;starting&quot;))
+  0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/dynvar.tur&quot;)   ; provides *current-module*
+
+defn log [msg :cstr] :int
+  println(*current-module*)
+  println(msg)
+
+defn start-auth-module [] :int
+  binding [*current-module* &quot;auth&quot;]
+    log(&quot;starting&quot;)
+  0
+</code></pre></div></div></div>
+<h2 id="error-reference">Error Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TUR-E0600</code></td>
+<td><code>set!</code> or <code>binding</code> target is not a dynamic var</td>
+</tr>
+<tr>
+<td><code>TUR-E0601</code></td>
+<td><code>set!</code> with no active <code>binding</code> frame on the current thread</td>
+</tr>
+<tr>
+<td><code>TUR-E0602</code></td>
+<td>Override type does not match the <code>defdynamic</code> declared type</td>
+</tr>
+<tr>
+<td><code>TUR-E0603</code></td>
+<td>Dynamic var declared with a substructural (linear/affine/unique) type</td>
+</tr>
+<tr>
+<td><code>TUR-E0604</code></td>
+<td><code>defdynamic</code> at non-toplevel position</td>
+</tr>
+<tr>
+<td><code>TUR-E0605</code></td>
+<td><code>set!</code> on a dynamic var inside an <code>atomically</code> block</td>
+</tr>
+<tr>
+<td><code>TUR-W0600</code></td>
+<td><code>defdynamic</code> name does not use <code>*earmuffs*</code> convention</td>
+</tr>
+</tbody>
+</table>
+<p>Run <code>tur explain TUR-E0600</code> (etc.) for full explanations with examples.</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/dynamic-vars-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

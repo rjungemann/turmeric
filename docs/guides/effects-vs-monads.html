@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Effects vs. Monads | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#effects-vs-monads-in-turmeric" style="">Effects vs. Monads in Turmeric</a></li>
+<li style=""><a href="#why-not-haskell-style-monads" style="">Why not Haskell-style monads?</a></li>
+<li style=""><a href="#where-monad-use-cases-land-in-turmeric" style="">Where monad use cases land in Turmeric</a></li>
+<li style=""><a href="#effect-handler-version-of-monadic-code" style="">Effect-handler version of "monadic" code</a></li>
+<li style="padding-left:0.75rem;"><a href="#maybe-short-circuit-on-missing-value" style="color:var(--text-sec);">Maybe / short-circuit on missing value</a></li>
+<li style="padding-left:0.75rem;"><a href="#result-either-with-rich-errors" style="color:var(--text-sec);">Result / Either with rich errors</a></li>
+<li style="padding-left:0.75rem;"><a href="#state-threading" style="color:var(--text-sec);">State threading</a></li>
+<li style="padding-left:0.75rem;"><a href="#parser-combinators" style="color:var(--text-sec);">Parser combinators</a></li>
+<li style=""><a href="#when-you-actually-want-a-monad-value" style="">When you actually want a monad value</a></li>
+<li style="padding-left:0.75rem;"><a href="#do-monadic-notation" style="color:var(--text-sec);">do-monadic notation</a></li>
+<li style=""><a href="#tradeoffs-vs-haskell" style="">Tradeoffs vs. Haskell</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="effects-vs-monads-in-turmeric">Effects vs. Monads in Turmeric</h1>
+<p>Turmeric uses algebraic effects instead of Haskell-style monadic chaining for
+most use cases. This guide explains the design decision and shows how each
+common monad use case maps to the Turmeric equivalent.</p>
+<h2 id="why-not-haskell-style-monads">Why not Haskell-style monads?</h2>
+<p>The classical Haskell signature:</p>
+<pre><code class="language-haskell">Monad m =&gt; m a -&gt; (a -&gt; m b) -&gt; m b
+</code></pre>
+<p>requires <strong>higher-kinded types</strong> -- <code>m</code> is a type constructor of kind <code>* -&gt; *</code>.
+Turmeric's typeclass system operates at kind <code>*</code> only. Extending to HKTs would
+require kind inference, kind-polymorphic dispatch, kind-checking in the
+elaborator, and new dispatch-table key shapes -- significant cost for a feature
+whose motivation mostly evaporates once effects exist.</p>
+<p>The architectural decision:</p>
+<ol>
+<li><strong>No HKT typeclasses in v1 of the type system.</strong></li>
+<li><strong><code>bind</code> / <code>pure</code> are per-type functions, not a <code>Monad</code> typeclass.</strong></li>
+<li><strong>Effects are the primary tool for what people use monads for in Haskell.</strong></li>
+</ol>
+<h2 id="where-monad-use-cases-land-in-turmeric">Where monad use cases land in Turmeric</h2>
+<table>
+<thead>
+<tr>
+<th>Use case</th>
+<th>Turmeric answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IO</code>, async</td>
+<td>Effects (<code>Io</code>, <code>Await</code>)</td>
+</tr>
+<tr>
+<td><code>State</code></td>
+<td>Effects (<code>Get</code>, <code>Set</code>)</td>
+</tr>
+<tr>
+<td>Exceptions / errors</td>
+<td>Effects (<code>Throw</code>) or <code>do-result</code> macro</td>
+</tr>
+<tr>
+<td><code>Maybe</code> / optional / short-circuit</td>
+<td>Effects (<code>Fail</code>) or <code>do-option</code> macro</td>
+</tr>
+<tr>
+<td><code>Either</code> / <code>Result</code></td>
+<td>Effects (<code>Throw</code>) or <code>do-result</code> macro</td>
+</tr>
+<tr>
+<td><code>Logger</code> / <code>Writer</code></td>
+<td>Effects (<code>Log</code>)</td>
+</tr>
+<tr>
+<td><code>List</code> / nondeterminism</td>
+<td>Multi-shot effects (planned)</td>
+</tr>
+<tr>
+<td>Parser combinators</td>
+<td>Effects (<code>Parse-Char</code>, <code>Parse-Fail</code>) -- direct-style</td>
+</tr>
+<tr>
+<td>Custom domain DSL</td>
+<td>Per-type macro + typeclass-resolved <code>bind</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="effect-handler-version-of-monadic-code">Effect-handler version of "monadic" code</h2>
+<p>This is what 80% of "monad chaining" turns into.</p>
+<h3 id="maybe-short-circuit-on-missing-value">Maybe / short-circuit on missing value</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Fail [] : a)
+
+(defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
+  (let [s (perform (Read-Config cfg-key))]
+    (cond
+      (empty? s) (perform (Fail))
+      :else      (parse-int s))))
+
+(handle (lookup-port &quot;http.port&quot;)
+  (Fail [] _) 8080)   ;; default if anything in the chain fails
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Fail [] : a
+
+defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
+  let [s perform(Read-Config(cfg-key))]
+    cond
+      empty?(s)  perform(Fail())
+      :else      parse-int(s)
+
+handle lookup-port(&quot;http.port&quot;)
+  (Fail [] _)  8080   ;; default if anything in the chain fails
+</code></pre></div></div></div>
+<p>No <code>&gt;&gt;=</code>, no nested <code>Just</code>, no chains of <code>match</code>. Direct-style code that fails
+through an effect.</p>
+<h3 id="result-either-with-rich-errors">Result / Either with rich errors</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Cfg-Error [what :cstr where :cstr])
+(defeffect Throw [e :Cfg-Error] : a)
+
+(defn read-config [path :cstr] :Config @ {Throw Io}
+  (let [text   (read-file path)
+        parsed (parse-toml text)]
+    (validate parsed)))
+
+(handle (read-config &quot;/etc/foo.toml&quot;)
+  (Throw [e]  _) (do
+                   (eprintln (str-concat &quot;config error: &quot; (.what e)))
+                   (default-config))
+  (Io    [op] k) (resume k (do-io op)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Cfg-Error [what :cstr where :cstr]
+defeffect Throw [e :Cfg-Error] : a
+
+defn read-config [path :cstr] :Config @ {Throw Io}
+  let [text   read-file(path)
+       parsed parse-toml(text)]
+    validate(parsed)
+
+handle read-config(&quot;/etc/foo.toml&quot;)
+  (Throw [e]  _)
+    do
+      eprintln $ str-concat(&quot;config error: &quot; .what(e))
+      default-config()
+  (Io    [op] k)  resume(k do-io(op))
+</code></pre></div></div></div>
+<p>Chains of <code>bind</code> threading <code>Result&lt;T, Error&gt;</code> become linear, direct-style
+code. The handler is the only place errors are visible.</p>
+<h3 id="state-threading">State threading</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Get []       :int)
+(defeffect Set [v :int] :nil)
+
+(defn counter-step [] :nil @ {Get Set}
+  (let [n (perform (Get))]
+    (perform (Set (+ n 1)))))
+
+(defn run-with-state [init :int body] :(pair int a)
+  (let [s init
+        r nil]
+    (handle (set! r (body))
+      (Get []  k) (resume k s)
+      (Set [v] k) (do (set! s v) (resume k nil)))
+    (pair s r)))
+
+(run-with-state 0 counter-step)  ; =&gt; (pair 1 nil)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Get []       :int
+defeffect Set [v :int] :nil
+
+defn counter-step [] :nil @ {Get Set}
+  let [n perform(Get())]
+    perform(Set({n + 1}))
+
+defn run-with-state [init :int body] :(pair int a)
+  let [s init
+       r nil]
+    handle set!(r body())
+      (Get []  k)  resume(k s)
+      (Set [v] k)
+        do
+          set!(s v)
+          resume(k nil)
+    pair(s r)
+
+run-with-state(0 counter-step)  ; =&gt; (pair 1 nil)
+</code></pre></div></div></div>
+<p>This is the <code>State</code> monad as an effect handler. The handler is the
+interpretation; callers of <code>counter-step</code> don't see the threading.</p>
+<h3 id="parser-combinators">Parser combinators</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defeffect Parse-Peek [] :(option char))
+(defeffect Parse-Take [] :char)
+(defeffect Parse-Fail [] :a)
+
+(defn digit [] :char @ {Parse-Peek Parse-Take Parse-Fail}
+  (let [c (perform (Parse-Peek))]
+    (cond
+      (none? c)     (perform (Parse-Fail))
+      (is-digit? c) (perform (Parse-Take))
+      :else         (perform (Parse-Fail)))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defeffect Parse-Peek [] :(option char)
+defeffect Parse-Take [] :char
+defeffect Parse-Fail [] :a
+
+defn digit [] :char @ {Parse-Peek Parse-Take Parse-Fail}
+  let [c perform(Parse-Peek())]
+    cond
+      none?(c)      perform(Parse-Fail())
+      is-digit?(c)  perform(Parse-Take())
+      :else         perform(Parse-Fail())
+</code></pre></div></div></div>
+<p>Classical Haskell parser-combinator code looks like <code>digit &gt;&gt;= \d -&gt; ...</code>.
+The effect version is direct-style -- looks like reading a stream, fails
+through <code>Parse-Fail</code>. The handler interprets it.</p>
+<blockquote>
+<p><strong>Caveat.</strong> Backtracking parsers want multi-shot continuations (resume the
+same <code>k</code> more than once with different inputs). v1 effects are one-shot. Until
+multi-shot lands, backtracking parsers either (a) use an explicit input cursor
+with <code>Parse-Fail</code> and longest-match semantics, or (b) use a per-type <code>Parser</code>
+value with <code>bind</code>. See the next section.</p>
+</blockquote>
+<h2 id="when-you-actually-want-a-monad-value">When you actually want a monad value</h2>
+<p>Some cases want a first-class "this is a value representing a computation":</p>
+<ul>
+<li>Building an AST or query plan to be executed later by another mechanism.</li>
+<li>Cross-thread message passing where the sender constructs a chain and the
+  receiver runs it.</li>
+<li>Backtracking / nondeterministic search before multi-shot effects exist.</li>
+<li>Lazy / pull-based streams where the consumer drives evaluation.</li>
+</ul>
+<p>For these, write a per-type <code>bind</code> and use a <code>do-monadic</code> macro:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Per-type bind functions -- no Monad typeclass needed.
+(defn opt-bind [m :(option a) f :(-&gt; a (option b))] :(option b)
+  (cond (some? m) (f (unwrap m)) :else none))
+
+(defn opt-pure [x] :(option a) (some x))
+
+(defn res-bind [m :(result a e) f :(-&gt; a (result b e))] :(result b e)
+  (cond (ok? m) (f (unwrap-ok m)) :else m))
+
+(defn res-pure [x] :(result a e) (ok x))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Per-type bind functions -- no Monad typeclass needed.
+defn opt-bind [m :(option a) f :(-&gt; a (option b))] :(option b)
+  cond
+    some?(m)  f $ unwrap(m)
+    :else     none
+
+defn opt-pure [x] :(option a)
+  some(x)
+
+defn res-bind [m :(result a e) f :(-&gt; a (result b e))] :(result b e)
+  cond
+    ok?(m)  f $ unwrap-ok(m)
+    :else   m
+
+defn res-pure [x] :(result a e)
+  ok(x)
+</code></pre></div></div></div>
+<p><code>bind</code> and <code>pure</code> are just functions per-type, not methods of a <code>Monad</code>
+typeclass. Call them by name: <code>(opt-bind ...)</code>, <code>(res-pure ...)</code>.</p>
+<h3 id="do-monadic-notation"><code>do-monadic</code> notation</h3>
+<p>A macro lifts the chaining boilerplate. It takes the <code>bind</code> / <code>pure</code> names as
+parameters, since there is no global "the Monad":</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defmacro do-option [bindings body]
+  `(do-monadic opt-bind opt-pure ~bindings ~body))
+
+(defmacro do-result [bindings body]
+  `(do-monadic res-bind res-pure ~bindings ~body))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defmacro do-option [bindings body]
+  `(do-monadic opt-bind opt-pure ~bindings ~body)
+
+defmacro do-result [bindings body]
+  `(do-monadic res-bind res-pure ~bindings ~body)
+</code></pre></div></div></div>
+<p>Usage:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(do-option
+  [x (lookup-int &quot;port&quot;)
+   y (lookup-int &quot;timeout&quot;)]
+  (opt-pure (+ x y)))
+;; =&gt; (some 30) if both lookups succeed; none otherwise.
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">do-option
+  [x lookup-int(&quot;port&quot;)
+   y lookup-int(&quot;timeout&quot;)]
+  opt-pure({x + y})
+;; =&gt; (some 30) if both lookups succeed; none otherwise.
+</code></pre></div></div></div>
+<h2 id="tradeoffs-vs-haskell">Tradeoffs vs. Haskell</h2>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Turmeric</th>
+<th>Haskell</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Monad m =&gt;</code> polymorphism</td>
+<td>None -- pick a concrete monad per call site</td>
+<td>Full HKT polymorphism</td>
+</tr>
+<tr>
+<td><code>do</code>-notation</td>
+<td>Per-monad macros (<code>do-option</code>, <code>do-result</code>, ...)</td>
+<td>Single <code>do</code> polymorphic over <code>Monad</code></td>
+</tr>
+<tr>
+<td>Most "monad" use cases</td>
+<td>Effect handlers (direct-style)</td>
+<td>Monad transformers / <code>mtl</code></td>
+</tr>
+<tr>
+<td>Async / IO</td>
+<td>Effects</td>
+<td><code>IO</code> monad</td>
+</tr>
+<tr>
+<td>State</td>
+<td>Effects</td>
+<td><code>State</code> monad</td>
+</tr>
+<tr>
+<td>Errors</td>
+<td>Effects</td>
+<td><code>Either</code> / <code>ExceptT</code></td>
+</tr>
+<tr>
+<td>Parsers</td>
+<td>Effects</td>
+<td>Parser combinator monad</td>
+</tr>
+<tr>
+<td>First-class "computation values"</td>
+<td>Per-type bind + macro</td>
+<td>Polymorphic <code>&gt;&gt;=</code></td>
+</tr>
+<tr>
+<td>Multi-shot continuations</td>
+<td>Planned (multi-shot effects)</td>
+<td>Native via <code>&gt;&gt;=</code> for <code>[]</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>The deal Turmeric makes:</strong> trade type-level monad polymorphism for
+direct-style code via effects. Most "monad-heavy" programs become
+effect-using programs that don't look monadic at all. The cases that
+genuinely want monad-as-value get a per-type fallback.</p>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="effects-system-guide.md">effects-system-guide.md</a> -- Algebraic effects API</li>
+<li><a href="custom-effects-tutorial.md">custom-effects-tutorial.md</a> -- Writing custom effects</li>
+<li><a href="error-handling-guide.md">error-handling-guide.md</a> -- Error handling patterns</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/effects-vs-monads.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

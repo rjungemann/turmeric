@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bibliography | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#bibliography" style="">Bibliography</a></li>
+<li style=""><a href="#type-inference" style="">Type Inference</a></li>
+<li style=""><a href="#gadts-and-higher-rank-polymorphism" style="">GADTs and Higher-Rank Polymorphism</a></li>
+<li style=""><a href="#algebraic-effects-and-handlers" style="">Algebraic Effects and Handlers</a></li>
+<li style=""><a href="#contract-types" style="">Contract Types</a></li>
+<li style=""><a href="#intersection-and-union-types" style="">Intersection and Union Types</a></li>
+<li style=""><a href="#session-types" style="">Session Types</a></li>
+<li style=""><a href="#substructural-and-linear-types" style="">Substructural and Linear Types</a></li>
+<li style=""><a href="#refinement-types-and-program-verification" style="">Refinement Types and Program Verification</a></li>
+<li style=""><a href="#standards-and-specifications" style="">Standards and Specifications</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="bibliography">Bibliography</h1>
+<p>Academic papers, theses, and technical references cited across the Turmeric
+design documents and guides.</p>
+<hr />
+<h2 id="type-inference">Type Inference</h2>
+<p><strong>Damas-Milner Type Inference</strong>
+Luis Damas and Robin Milner. <em>Principal type-schemes for functional programs.</em>
+POPL 1982.
+<a href="https://dl.acm.org/doi/10.1145/359576.359587">https://dl.acm.org/doi/10.1145/359576.359587</a></p>
+<p>Referenced by: <code>docs/archive/history/higher-kinded-types-plan.md</code> (kind
+inference algorithm); <code>docs/guides/compiler-flags-guide.md</code> (rank-1
+polymorphism description).</p>
+<hr />
+<h2 id="gadts-and-higher-rank-polymorphism">GADTs and Higher-Rank Polymorphism</h2>
+<p><strong>Simple Unification-Based Type Inference for GADTs</strong>
+Simon Peyton Jones, Dimitrios Vytiniotis, Stephanie Weirich, Geoffrey Washburn.
+<em>Simple Unification-Based Type Inference for GADTs.</em> ICFP 2006.
+<a href="https://www.microsoft.com/en-us/research/publication/simple-unification-based-type-inference-for-gadts/">https://www.microsoft.com/en-us/research/publication/simple-unification-based-type-inference-for-gadts/</a></p>
+<p>Referenced by: <code>docs/archive/gadts-plan.md</code>.</p>
+<hr />
+<p><strong>Wobbly Types: Type Inference for GADTs</strong>
+Simon Peyton Jones, Geoffrey Washburn, Stephanie Weirich.
+<em>Wobbly Types: Type Inference for GADTs.</em> 2004.
+<a href="https://www.microsoft.com/en-us/research/publication/wobbly-types-type-inference-for-gadts/">https://www.microsoft.com/en-us/research/publication/wobbly-types-type-inference-for-gadts/</a></p>
+<p>Referenced by: <code>docs/archive/gadts-plan.md</code>.</p>
+<hr />
+<p><strong>Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism</strong>
+Joshua Dunfield and Neelakantan R. Krishnaswami.
+<em>Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism.</em>
+ICFP 2013.
+<a href="https://arxiv.org/abs/1306.6032">https://arxiv.org/abs/1306.6032</a></p>
+<p>Referenced by: <code>docs/archive/gadts-plan.md</code>.</p>
+<hr />
+<p><strong>Fun with Phantom Types</strong>
+Ralf Hinze.
+<em>Fun with Phantom Types.</em> In <em>The Fun of Programming</em>, 2003.
+<a href="https://www.cs.ox.ac.uk/ralf.hinze/publications/With.pdf">https://www.cs.ox.ac.uk/ralf.hinze/publications/With.pdf</a></p>
+<p>Referenced by: <code>docs/archive/gadts-plan.md</code>.</p>
+<hr />
+<p><strong>Type-Safe Observable Sharing in Haskell</strong>
+Andy Gill.
+<em>Type-Safe Observable Sharing in Haskell.</em> Haskell Symposium 2009.
+<a href="https://dl.acm.org/doi/10.1145/1596638.1596641">https://dl.acm.org/doi/10.1145/1596638.1596641</a></p>
+<p>Referenced by: <code>docs/archive/gadts-plan.md</code> (motivation for typed ASTs).</p>
+<hr />
+<h2 id="algebraic-effects-and-handlers">Algebraic Effects and Handlers</h2>
+<p><strong>Programming with Algebraic Effects and Handlers</strong>
+Andrej Bauer and Matija Pretnar.
+<em>Programming with Algebraic Effects and Handlers.</em> JLAMP 2015.
+(Eff language.)
+<a href="https://doi.org/10.1016/j.jlamp.2014.02.001">https://doi.org/10.1016/j.jlamp.2014.02.001</a></p>
+<p>Referenced by: <code>docs/archive/effect-types-row-polymorphism-plan.md</code>.</p>
+<hr />
+<p><strong>Koka: Programming with Row-Polymorphic Effect Types</strong>
+Daan Leijen.
+<em>Koka: Programming with Row-Polymorphic Effect Types.</em>
+MSFP 2014 (EPTCS 153).
+<a href="https://doi.org/10.4204/EPTCS.153.8">https://doi.org/10.4204/EPTCS.153.8</a></p>
+<p>Referenced by: <code>docs/archive/effect-types-row-polymorphism-plan.md</code>.</p>
+<hr />
+<p><strong>Retrofitting Effect Handlers onto OCaml</strong>
+K.C. Sivaramakrishnan, Tom Kelly, Leo White, Stephen Dolan, Sadiq Jaffer,
+Anil Madhavapeddy.
+<em>Retrofitting Effect Handlers onto OCaml.</em> PLDI 2021. (OCaml 5.)
+<a href="https://doi.org/10.1145/3453483.3454039">https://doi.org/10.1145/3453483.3454039</a></p>
+<p>Referenced by: <code>docs/archive/effect-types-row-polymorphism-plan.md</code>.</p>
+<hr />
+<p><strong>Liberating Effects with Rows and Handlers</strong>
+Daniel Hillerström and Sam Lindley.
+<em>Liberating Effects with Rows and Handlers.</em>
+TyDe 2016.
+<a href="https://doi.org/10.1145/3007263.3007271">https://doi.org/10.1145/3007263.3007271</a></p>
+<p>Referenced by: <code>docs/archive/effect-types-row-polymorphism-plan.md</code>.</p>
+<hr />
+<h2 id="contract-types">Contract Types</h2>
+<p><strong>Contracts for Higher-Order Functions</strong>
+Robert Bruce Findler and Matthias Felleisen.
+<em>Contracts for Higher-Order Functions.</em> ICFP 2002.
+<a href="https://dl.acm.org/doi/10.1145/351492.351503">https://dl.acm.org/doi/10.1145/351492.351503</a></p>
+<p>Referenced by: <code>docs/archive/history/contract-types-plan.md</code>.</p>
+<hr />
+<h2 id="intersection-and-union-types">Intersection and Union Types</h2>
+<p><strong>Intersection and Union Types: Syntax and Semantics</strong>
+Franco Barbanera and Mariangiola Dezani-Ciancaglini.
+<em>Intersection and Union Types: Syntax and Semantics.</em>
+(Attributed to Barbanera &amp; Franzese in the plan document.)
+<a href="https://dl.acm.org/doi/10.1145/357052.357055">https://dl.acm.org/doi/10.1145/357052.357055</a></p>
+<p>Referenced by: <code>docs/archive/history/intersection-union-types-plan.md</code>.</p>
+<hr />
+<h2 id="session-types">Session Types</h2>
+<p><strong>Types for Dyadic Interaction</strong>
+Kohei Honda.
+<em>Types for Dyadic Interaction.</em> CONCUR 1993.
+<a href="https://dl.acm.org/doi/10.1145/248206.248214">https://dl.acm.org/doi/10.1145/248206.248214</a></p>
+<p>Referenced by: <code>docs/archive/history/session-types-plan.md</code>;
+<code>docs/guides/advanced-type-system-rationale.md</code> (Honda-Yoshida-Carbone
+projection algorithm).</p>
+<hr />
+<p><strong>Multiparty Asynchronous Session Types</strong>
+Kohei Honda, Nobuko Yoshida, Marco Carbone.
+<em>Multiparty Asynchronous Session Types.</em> POPL 2008.
+<a href="https://dl.acm.org/doi/10.1145/1328897.1328472">https://dl.acm.org/doi/10.1145/1328897.1328472</a></p>
+<p>Referenced by: <code>docs/archive/history/session-types-plan.md</code>;
+<code>docs/guides/advanced-type-system-rationale.md</code>.</p>
+<hr />
+<p><strong>Session Types for C</strong>
+Nels Covington, Robert Dockins, Andrew Kennedy, Amal Ahmed.
+<em>Session Types for C.</em> (Attributed to Covington et al. in the plan document.)
+<a href="https://dl.acm.org/doi/10.1145/1596553.1596586">https://dl.acm.org/doi/10.1145/1596553.1596586</a></p>
+<p>Referenced by: <code>docs/archive/history/session-types-plan.md</code>.</p>
+<hr />
+<h2 id="substructural-and-linear-types">Substructural and Linear Types</h2>
+<p><strong>Linear Types Can Change the World!</strong>
+Philip Wadler.
+<em>Linear Types Can Change the World!</em> IFIP TC2 Working Conference, 1990.
+<a href="https://philipwadler.com/papers/linearity/linearity.pdf">https://philipwadler.com/papers/linearity/linearity.pdf</a></p>
+<p>Referenced by: <code>docs/archive/history/linear-types-plan.md</code>.</p>
+<hr />
+<h2 id="refinement-types-and-program-verification">Refinement Types and Program Verification</h2>
+<p><strong>Liquid Types</strong>
+Patrick M. Rondon, Ming Kawaguchi, Ranjit Jhala.
+<em>Liquid Types.</em> PLDI 2008.
+(The template-based inference approach in the Turmeric refinement-types design
+follows this paper closely.)</p>
+<p>Referenced by: <code>docs/upcoming/refinement-types-plan.md</code>.</p>
+<hr />
+<p><strong>F*: Towards a Verified Extraction-Based Compiler for Mutual Recursive Definitions</strong>
+Nikhil Swamy et al.
+(The two-phase static-then-runtime-fallback strategy in the Turmeric refinement
+types design is modelled on F*'s <code>Tot</code>/<code>Dv</code> effect distinction.)</p>
+<p>Referenced by: <code>docs/upcoming/refinement-types-plan.md</code>.</p>
+<hr />
+<p><strong>Dafny: An Automatic Program Verifier for Functional Correctness</strong>
+K. Rustan M. Leino.
+<em>Dafny: An Automatic Program Verifier for Functional Correctness.</em>
+LPAR 2010.
+(The counterexample hint generation in the refinement-types design mirrors
+Dafny's error reporting.)</p>
+<p>Referenced by: <code>docs/upcoming/refinement-types-plan.md</code>.</p>
+<hr />
+<h2 id="standards-and-specifications">Standards and Specifications</h2>
+<p><strong>SMT-LIB 2.6 Standard</strong>
+Clark Barrett, Pascal Fontaine, Cesare Tinelli et al.
+<a href="https://smtlib.cs.uiowa.edu/">https://smtlib.cs.uiowa.edu/</a></p>
+<p>Referenced by: <code>docs/upcoming/refinement-types-plan.md</code> (SMT-LIB2 encoder for
+refinement-type obligations).</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/bibliography.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

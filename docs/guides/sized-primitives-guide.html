@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sized Primitive Types | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#sized-primitive-types-guide" style="">Sized Primitive Types Guide</a></li>
+<li style=""><a href="#available-types" style="">Available Types</a></li>
+<li style=""><a href="#literal-syntax" style="">Literal Syntax</a></li>
+<li style=""><a href="#no-implicit-coercion-use-as-explicitly" style="">No Implicit Coercion -- Use (as ...) Explicitly</a></li>
+<li style="padding-left:0.75rem;"><a href="#rationale" style="color:var(--text-sec);">Rationale</a></li>
+<li style=""><a href="#arithmetic-operators" style="">Arithmetic Operators</a></li>
+<li style=""><a href="#casting-with-as" style="">Casting with (as ...)</a></li>
+<li style=""><a href="#struct-fields" style="">Struct Fields</a></li>
+<li style=""><a href="#bitwise-operations" style="">Bitwise Operations</a></li>
+<li style=""><a href="#test-surface" style="">Test Surface</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="sized-primitive-types-guide">Sized Primitive Types Guide</h1>
+<p>Turmeric provides fixed-width numeric types alongside the canonical <code>int</code>
+(64-bit signed) and <code>float</code> (64-bit IEEE 754) types. This guide explains
+the available types, their literal syntax, the coercion rule, and how to
+cast between them.</p>
+<h2 id="available-types">Available Types</h2>
+<table>
+<thead>
+<tr>
+<th>Type name</th>
+<th>Short alias</th>
+<th>C type</th>
+<th>Width</th>
+<th>Signed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>int8</code></td>
+<td><code>i8</code></td>
+<td><code>int8_t</code></td>
+<td>8 bit</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>int16</code></td>
+<td><code>i16</code></td>
+<td><code>int16_t</code></td>
+<td>16 bit</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>int32</code></td>
+<td><code>i32</code></td>
+<td><code>int32_t</code></td>
+<td>32 bit</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>int64</code></td>
+<td><code>i64</code></td>
+<td><code>int64_t</code></td>
+<td>64 bit</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>uint8</code></td>
+<td><code>u8</code></td>
+<td><code>uint8_t</code></td>
+<td>8 bit</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>uint16</code></td>
+<td><code>u16</code></td>
+<td><code>uint16_t</code></td>
+<td>16 bit</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>uint32</code></td>
+<td><code>u32</code></td>
+<td><code>uint32_t</code></td>
+<td>32 bit</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>uint64</code></td>
+<td><code>u64</code></td>
+<td><code>uint64_t</code></td>
+<td>64 bit</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>float32</code></td>
+<td><code>f32</code></td>
+<td><code>float</code></td>
+<td>32 bit</td>
+<td>--</td>
+</tr>
+<tr>
+<td><code>float64</code></td>
+<td><code>f64</code></td>
+<td><code>double</code></td>
+<td>64 bit</td>
+<td>--</td>
+</tr>
+</tbody>
+</table>
+<p><code>int</code> is an alias for <code>int64</code> and <code>float</code> is an alias for <code>float64</code>. All
+other types are distinct numeric kinds at both the type-system and C-codegen
+levels.</p>
+<h2 id="literal-syntax">Literal Syntax</h2>
+<p>Append a suffix to an integer or float literal to fix its kind:</p>
+<pre><code class="language-turmeric">42i8        ; int8   -- value 42
+200u8       ; uint8  -- value 200
+1000i16     ; int16
+0xFFu32     ; uint32 -- hex literal
+2.5f32      ; float32
+3.14159f64  ; float64 (same as 3.14159)
+</code></pre>
+<p>Unsuffixed integer literals have type <code>int</code> (int64). Unsuffixed float
+literals have type <code>float</code> (float64).</p>
+<h2 id="no-implicit-coercion-use-as-explicitly">No Implicit Coercion -- Use <code>(as ...)</code> Explicitly</h2>
+<p><strong>Turmeric does not implicitly widen or narrow numeric values.</strong> Mixing
+two distinct numeric kinds in an arithmetic or comparison expression is a
+compile error (TUR-E0042):</p>
+<pre><code class="language-turmeric">(+ 1i8 2i16)      ; error TUR-E0042: int8 and int16 cannot be mixed
+(+ 1i32 2)        ; error TUR-E0042: int32 and int (int64) cannot be mixed
+(&lt; 1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
+</code></pre>
+<p>To operate on values of different widths, cast one side with <code>(as type expr)</code>:</p>
+<pre><code class="language-turmeric">(+ 1i8 (as int8 2i16))      ; narrow 2i16 to int8
+(+ (as int16 1i8) 2i16)     ; widen 1i8 to int16
+
+(+ 1i32 (as int32 2))       ; narrow canonical int to int32
+(+ (as int 1i32) 2)         ; widen int32 to int64
+
+(&lt; 1.5f32 (as float32 2.0)) ; narrow float64 literal to float32
+</code></pre>
+<h3 id="rationale">Rationale</h3>
+<p>Implicit numeric coercion makes it easy to accidentally widen a
+computation to 64 bits where a 32-bit or narrower representation was
+intended. It also obscures the ABI boundary: a function declared to return
+<code>:int32</code> should not silently widen every intermediate value to <code>int64_t</code> in
+the emitted C. Requiring explicit <code>(as ...)</code> makes the intent visible in
+source and keeps the generated C free of unintended <code>int64_t</code> round-trips.</p>
+<h2 id="arithmetic-operators">Arithmetic Operators</h2>
+<p>All standard arithmetic and comparison operators are available for each
+numeric kind. Both operands must have the same kind:</p>
+<pre><code class="language-turmeric">(+ 10i8 20i8)       ; int8 + int8   -&gt; int8
+(mod 100u32 7u32)   ; uint32 mod uint32 -&gt; uint32
+(&lt; 1i32 2i32)       ; int32 &lt; int32  -&gt; bool
+(= 42u8 42u8)       ; uint8 = uint8  -&gt; bool
+(+ 1.5f32 2.5f32)   ; float32 + float32 -&gt; float32
+</code></pre>
+<h2 id="casting-with-as">Casting with <code>(as ...)</code></h2>
+<p><code>(as TargetType expr)</code> converts a value to a different numeric kind. The
+conversion is the same as a C explicit cast -- no overflow checking is
+performed:</p>
+<pre><code class="language-turmeric">(as int8  300)          ; wraps: 300 mod 256 = 44
+(as uint8 -1)           ; wraps: 255
+(as float32 1i32)       ; integer -&gt; float
+(as int32 3.7f32)       ; truncates: 3
+</code></pre>
+<p>Casts between signed and unsigned types of the same width reinterpret the
+bit pattern at the C level.</p>
+<h2 id="struct-fields">Struct Fields</h2>
+<p>Struct fields can use any numeric kind:</p>
+<pre><code class="language-turmeric">(defstruct Pixel
+  [r :uint8
+   g :uint8
+   b :uint8
+   a :uint8])
+
+(defstruct Vec3f
+  [x :float32
+   y :float32
+   z :float32])
+</code></pre>
+<p>The generated C struct uses the corresponding <code>&lt;stdint.h&gt;</code> types
+(<code>uint8_t</code>, <code>float</code>, etc.) directly, with no <code>int64_t</code> boxing for fields
+of fully-known width.</p>
+<h2 id="bitwise-operations">Bitwise Operations</h2>
+<p><code>bit-and</code>, <code>bit-or</code>, <code>bit-xor</code>, <code>bit-shl</code>, and <code>bit-shr</code> operate on the
+canonical <code>int</code> type. To use them on narrower types, cast to <code>int</code>, operate,
+then cast back:</p>
+<pre><code class="language-turmeric">(let [x 0xF0u8
+      y 0x0Fu8]
+  (as uint8 (bit-and (as int x) (as int y))))  ; =&gt; 0u8
+</code></pre>
+<p>See Phase C of the unboxing plan for kind-preserving bitwise ops.</p>
+<h2 id="test-surface">Test Surface</h2>
+<p>The <code>numeric-types-cast</code> fixture covers the main casting scenarios.  The
+<code>sized-mixed-arith-error</code> fixture covers every operator that rejects
+mixed-width operands and expects <code>TUR-E0042</code> on each.</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/sized-primitives-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

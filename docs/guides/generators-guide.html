@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generators and Lazy Sequences Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#generators-and-lazy-sequences-guide" style="">Generators and Lazy Sequences Guide</a></li>
+<li style=""><a href="#generators" style="">Generators</a></li>
+<li style="padding-left:0.75rem;"><a href="#the-gen-form" style="color:var(--text-sec);">The gen form</a></li>
+<li style="padding-left:0.75rem;"><a href="#consuming-a-generator" style="color:var(--text-sec);">Consuming a generator</a></li>
+<li style="padding-left:0.75rem;"><a href="#gen-collect-materialise-to-array" style="color:var(--text-sec);">gen-collect -- materialise to array</a></li>
+<li style="padding-left:0.75rem;"><a href="#gen-nth-nth-yielded-value" style="color:var(--text-sec);">gen-nth -- nth yielded value</a></li>
+<li style="padding-left:0.75rem;"><a href="#yield-re-yield-from-an-inner-generator" style="color:var(--text-sec);">yield* -- re-yield from an inner generator</a></li>
+<li style="padding-left:0.75rem;"><a href="#supported-control-flow-in-gen-bodies" style="color:var(--text-sec);">Supported control flow in gen bodies</a></li>
+<li style="padding-left:0.75rem;"><a href="#limitations-10" style="color:var(--text-sec);">Limitations (1.0)</a></li>
+<li style="padding-left:0.75rem;"><a href="#generated-c" style="color:var(--text-sec);">Generated C</a></li>
+<li style=""><a href="#lazy-sequences-seq" style="">Lazy Sequences (Seq)</a></li>
+<li style="padding-left:0.75rem;"><a href="#creating-sequences" style="color:var(--text-sec);">Creating sequences</a></li>
+<li style="padding-left:0.75rem;"><a href="#transformations" style="color:var(--text-sec);">Transformations</a></li>
+<li style="padding-left:0.75rem;"><a href="#combinators" style="color:var(--text-sec);">Combinators</a></li>
+<li style="padding-left:0.75rem;"><a href="#consumers-force-evaluation" style="color:var(--text-sec);">Consumers (force evaluation)</a></li>
+<li style="padding-left:0.75rem;"><a href="#chaining-with-pipeline-style" style="color:var(--text-sec);">Chaining with -&gt;&gt; (pipeline style)</a></li>
+<li style=""><a href="#range-types" style="">Range Types</a></li>
+<li style="padding-left:0.75rem;"><a href="#constructors" style="color:var(--text-sec);">Constructors</a></li>
+<li style="padding-left:0.75rem;"><a href="#predicates" style="color:var(--text-sec);">Predicates</a></li>
+<li style="padding-left:0.75rem;"><a href="#set-operations" style="color:var(--text-sec);">Set operations</a></li>
+<li style="padding-left:0.75rem;"><a href="#converting-a-range-to-a-seq" style="color:var(--text-sec);">Converting a Range to a Seq</a></li>
+<li style=""><a href="#stdlibgentur-api-reference" style="">stdlib/gen.tur API Reference</a></li>
+<li style=""><a href="#stdlibseq-module-reference" style="">stdlib/seq/ Module Reference</a></li>
+<li style=""><a href="#stdlibrangetur-api-reference" style="">stdlib/range.tur API Reference</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="generators-and-lazy-sequences-guide">Generators and Lazy Sequences Guide</h1>
+<p>Turmeric provides two related features for lazy, incremental computation:</p>
+<ul>
+<li><strong>Generators</strong> -- resumable functions using <code>gen</code>/<code>yield</code>, compiled to C state
+  machines with no heap allocation per yield</li>
+<li><strong>Lazy sequences</strong> (<code>Seq</code>) -- composable combinators built on generators, with
+  no intermediate allocation when chained</li>
+<li><strong>Range types</strong> -- first-class continuous intervals convertible to sequences</li>
+</ul>
+<h2 id="generators">Generators</h2>
+<h3 id="the-gen-form">The <code>gen</code> form</h3>
+<p>A generator function uses <code>gen</code> in place of a function body and <code>yield</code> to
+produce values one at a time. The compiler rewrites each generator into a C
+struct plus a <code>_next</code> dispatch function -- no continuations, no heap alloc per
+step.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn integers-from [start :int] : (Generator :int)
+  (gen []
+    (let [^mut i start]
+      (while true
+        (yield i)
+        (set! i (+ i 1))))))
+
+(defn range-gen [lo :int hi :int] : (Generator :int)
+  (gen []
+    (let [^mut i lo]
+      (while (&lt; i hi)
+        (yield i)
+        (set! i (+ i 1))))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn integers-from [start :int] : (Generator :int)
+  gen []
+    let [^mut i start]
+      while true
+        yield i
+        set! i {i + 1}
+
+defn range-gen [lo :int hi :int] : (Generator :int)
+  gen []
+    let [^mut i lo]
+      while {i &lt; hi}
+        yield i
+        set! i {i + 1}
+</code></pre></div></div></div>
+<h3 id="consuming-a-generator">Consuming a generator</h3>
+<p>Use <code>gen-next</code> to advance the generator. It returns a <code>ptr&lt;void&gt;</code> -- non-NULL
+when a value was yielded, NULL when exhausted. Use the <code>gen.tur</code> helpers:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/gen.tur&quot;)
+
+(let [g (range-gen 0 5)]
+  (while (gen-some? (let [v (gen-next g)]
+                      (when (gen-some? v)
+                        (println (gen-unwrap v)))
+                      v))))
+</code></pre>
+<pre><code class="language-turmeric">;; gen-for-each macro -- preferred for side effects
+(gen-for-each (range-gen 0 5)
+              (fn [x] (println x)))
+; prints 0 1 2 3 4
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">gen-for-each(range-gen(0, 5))
+  fn [x] println(x)
+</code></pre></div></div></div>
+<h3 id="gen-collect-materialise-to-array"><code>gen-collect</code> -- materialise to array</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [arr (gen-collect (range-gen 1 6))]
+  (println (gen-arr-len arr))        ; 5
+  (println (gen-arr-get arr 2)))     ; 3
+</code></pre>
+<h3 id="gen-nth-nth-yielded-value"><code>gen-nth</code> -- nth yielded value</h3>
+<pre><code class="language-turmeric">(gen-nth (range-gen 10 20) 3)   ; =&gt; 13 (0-indexed)
+</code></pre>
+<h3 id="yield-re-yield-from-an-inner-generator"><code>yield*</code> -- re-yield from an inner generator</h3>
+<pre><code class="language-turmeric">(defn concat-gen [g1 g2] : (Generator :int)
+  (gen []
+    (yield* g1)
+    (yield* g2)))
+</code></pre>
+<h3 id="supported-control-flow-in-gen-bodies">Supported control flow in <code>gen</code> bodies</h3>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Supported</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>while</code> with <code>yield</code> inside</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>if</code> / <code>cond</code> with <code>yield</code> in branches</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>let</code> bindings that span a yield point</td>
+<td>Yes (promoted to struct field)</td>
+</tr>
+<tr>
+<td><code>yield</code> inside <code>match</code> arms</td>
+<td>No -- see Limitations below</td>
+</tr>
+<tr>
+<td>Recursive generators</td>
+<td>No -- see Limitations below</td>
+</tr>
+</tbody>
+</table>
+<h3 id="limitations-10">Limitations (1.0)</h3>
+<p>Two <code>yield</code> placements are hard compile errors in 1.0 because the gen/yield
+state-machine lowering cannot represent them without the post-1.0 CPS pass:</p>
+<p><strong><code>yield</code> / <code>yield*</code> inside a <code>match</code> arm (<code>TUR-E0702</code>)</strong></p>
+<p>The state machine needs to save and restore match-arm position across a
+<code>yield</code>. Without full CPS this is not representable; the compiler rejects it:</p>
+<pre><code class="language-turmeric">;; ERROR: TUR-E0702
+(defn broken [flag :int] : (Generator :int)
+  (gen []
+    (match flag
+      0 (yield 42)   ;; 'yield' is not supported inside a 'match' arm
+      _ (yield 99))))
+</code></pre>
+<p>Workaround -- yield before or after the <code>match</code>, or use <code>if</code>/<code>cond</code>:</p>
+<pre><code class="language-turmeric">(defn ok [flag :int] : (Generator :int)
+  (gen []
+    (let [v (if (= flag 0) 42 99)]
+      (yield v))))
+</code></pre>
+<p><strong>Recursive generators (<code>TUR-E0703</code>)</strong></p>
+<p>A <code>gen</code> body whose enclosing function calls itself is a recursive generator.
+Suspending across a recursive call requires CPS; the compiler rejects it:</p>
+<pre><code class="language-turmeric">;; ERROR: TUR-E0703
+(defn count-down [n :int] : (Generator :int)
+  (gen []
+    (yield n)
+    (count-down (- n 1))))  ;; recursive call inside gen body
+</code></pre>
+<p>Workaround -- unroll the recursion into an explicit loop:</p>
+<pre><code class="language-turmeric">(defn count-down [start :int] : (Generator :int)
+  (gen []
+    (let [^mut n start]
+      (while (&gt;= n 0)
+        (yield n)
+        (set! n (- n 1))))))
+</code></pre>
+<p>Both limitations are tracked in Phase CF5 of
+<a href="../control-flow-completeness-plan.md">control-flow-completeness-plan.md</a>
+and require the post-1.0 CPS pass to lift.</p>
+<h3 id="generated-c">Generated C</h3>
+<p>The compiler emits a struct per <code>gen</code> body and a <code>_next</code> function with a
+<code>switch</code> on the state tag. Each <code>yield</code> saves state and returns. This means:</p>
+<ul>
+<li>Zero dynamic allocation per <code>next</code> call</li>
+<li>Zero function-pointer indirection</li>
+<li>Inlineable by the C compiler in performance-critical paths</li>
+</ul>
+<hr />
+<h2 id="lazy-sequences-seq">Lazy Sequences (<code>Seq</code>)</h2>
+<p>The <code>Seq</code> type wraps a generator-producing thunk. Combinators chain generators
+without building intermediate collections.</p>
+<pre><code class="language-turmeric">(import seq/core     :refer [seq-from-vec seq-of empty-seq])
+(import seq/builders :refer [seq/range seq/repeat])
+(import seq/transform :refer [seq/map seq/filter seq/take seq/drop])
+(import seq/combine  :refer [seq/zip seq/concat])
+(import seq/consume  :refer [seq/into-vec seq/foldl seq/for-each seq/first])
+</code></pre>
+<h3 id="creating-sequences">Creating sequences</h3>
+<pre><code class="language-turmeric">;; From a range [lo, hi)
+(seq/range 0 10)
+
+;; From a range with step
+(seq/range-step 0 20 2)      ; 0 2 4 6 8 10 12 14 16 18
+
+;; Wrap a vec
+(seq-from-vec [1 2 3 4 5])
+
+;; Single-element sequence
+(seq-of 42)
+
+;; Infinite repetition
+(seq/repeat &quot;hello&quot;)
+
+;; Infinite thunk calls
+(seq/repeatedly (fn [] (rand-int 100)))
+
+;; x, f(x), f(f(x)), ...
+(seq/iterate 1 (fn [x] (* x 2)))    ; 1 2 4 8 16 ...
+
+;; Cycle a finite sequence infinitely
+(seq/cycle (seq/range 0 3))          ; 0 1 2 0 1 2 0 1 2 ...
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">seq/range(0, 10)
+seq/range-step(0, 20, 2)
+seq-from-vec([1, 2, 3, 4, 5])
+seq-of(42)
+seq/repeat(&quot;hello&quot;)
+seq/iterate(1, fn [x] {x * 2})
+seq/cycle(seq/range(0, 3))
+</code></pre></div></div></div>
+<h3 id="transformations">Transformations</h3>
+<p>All transformations are lazy -- no work is done until a consumer drives the
+sequence:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; map
+(seq/map (fn [x] (* x x)) (seq/range 1 6))
+; lazy: 1 4 9 16 25
+
+;; filter
+(seq/filter even? (seq/range 0 10))
+; lazy: 0 2 4 6 8
+
+;; take / drop
+(seq/take 3 (seq/repeat 7))     ; lazy: 7 7 7
+(seq/drop 2 (seq/range 0 5))    ; lazy: 2 3 4
+
+;; take-while / drop-while
+(seq/take-while (fn [x] (&lt; x 5)) (seq/range 0 100))
+; lazy: 0 1 2 3 4
+
+;; map-indexed: receive (index value) pairs
+(seq/map-indexed (fn [i x] (pair i x)) (seq/range 10 13))
+; lazy: (0 10) (1 11) (2 12)
+
+;; filter-map: map + filter in one pass (None values dropped)
+(seq/filter-map (fn [x] (if (even? x) (some (* x 10)) (none)))
+                (seq/range 0 5))
+; lazy: 0 20 40
+
+;; flat-map
+(seq/flat-map (fn [x] (seq/range 0 x)) (seq/range 1 4))
+; lazy: 0   0 1   0 1 2
+
+;; flatten
+(seq/flatten (seq-from-vec [(seq/range 0 2) (seq/range 5 7)]))
+; lazy: 0 1 5 6
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">seq/map(fn [x] {x * x}, seq/range(1, 6))
+seq/filter(even?, seq/range(0, 10))
+seq/take(3, seq/repeat(7))
+seq/take-while(fn [x] {x &lt; 5}, seq/range(0, 100))
+</code></pre></div></div></div>
+<h3 id="combinators">Combinators</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; concat two sequences
+(seq/concat (seq/range 0 3) (seq/range 10 13))
+; lazy: 0 1 2 10 11 12
+
+;; zip two sequences (stops at shorter)
+(seq/zip (seq/range 0 3) (seq/range 10 13))
+; lazy: (0 10) (1 11) (2 12)
+
+;; zip-with a combining function
+(seq/zip-with + (seq/range 0 3) (seq/range 10 13))
+; lazy: 10 12 14
+
+;; interleave: alternate elements
+(seq/interleave (seq/range 0 3) (seq/range 10 13))
+; lazy: 0 10 1 11 2 12
+</code></pre>
+<h3 id="consumers-force-evaluation">Consumers (force evaluation)</h3>
+<pre><code class="language-turmeric">;; collect to vec
+(seq/into-vec (seq/range 0 5))          ; =&gt; [0 1 2 3 4]
+
+;; collect to cons list
+(seq/into-list (seq/range 0 3))         ; =&gt; (0 1 2)
+
+;; nth element (0-indexed)
+(seq/nth 2 (seq/range 10 20))           ; =&gt; (some 12)
+
+;; first element
+(seq/first (seq/filter even? (seq/range 1 10)))  ; =&gt; (some 2)
+
+;; count elements
+(seq/count (seq/range 0 100))           ; =&gt; 100
+
+;; foldl: left fold with accumulator
+(seq/foldl 0 + (seq/range 1 6))        ; =&gt; 15
+
+;; reduce: fold with first element as seed
+(seq/reduce + (seq/range 1 6))         ; =&gt; (some 15)
+
+;; for-each: side effects
+(seq/for-each println (seq/range 0 3)) ; prints 0 1 2
+
+;; short-circuit consumers
+(seq/any? even? (seq/range 1 10))      ; =&gt; true (stops at 2)
+(seq/all? even? (seq/range 0 6 2))    ; =&gt; true  (checks 0 2 4)
+(seq/find even? (seq/range 1 10))     ; =&gt; (some 2)
+(seq/find-index even? (seq/range 1 10)) ; =&gt; (some 1)
+</code></pre>
+<h3 id="chaining-with-pipeline-style">Chaining with <code>-&gt;&gt;</code> (pipeline style)</h3>
+<pre><code class="language-turmeric">(-&gt;&gt; (seq/range 0 1000)
+     (seq/filter even?)
+     (seq/map (fn [x] (* x x)))
+     (seq/take-while (fn [x] (&lt; x 10000)))
+     (seq/foldl 0 +))
+; =&gt; 0 + 4 + 16 + 36 + ... + 9604
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">{seq/range(0, 1000)
+  -&gt;&gt; seq/filter(even?)
+  -&gt;&gt; seq/map(fn [x] {x * x})
+  -&gt;&gt; seq/take-while(fn [x] {x &lt; 10000})
+  -&gt;&gt; seq/foldl(0, +)}
+</code></pre></div></div></div>
+<p>No intermediate vecs are allocated; the chain compiles to nested state-machine
+dispatch.</p>
+<hr />
+<h2 id="range-types"><code>Range</code> Types</h2>
+<p><code>Range</code> is a first-class value type representing a continuous interval with
+inclusive, exclusive, or unbounded endpoints. It is not itself a sequence, but
+integer ranges can be converted to <code>Seq</code>.</p>
+<pre><code class="language-turmeric">(import range :refer [closed-range open-range closed-open-range
+                      range-contains? range-span seq/from-range])
+</code></pre>
+<h3 id="constructors">Constructors</h3>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Interval</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(closed-range lo hi)</code></td>
+<td><code>[lo, hi]</code> -- both inclusive</td>
+</tr>
+<tr>
+<td><code>(open-range lo hi)</code></td>
+<td><code>(lo, hi)</code> -- both exclusive</td>
+</tr>
+<tr>
+<td><code>(closed-open-range lo hi)</code></td>
+<td><code>[lo, hi)</code> -- inclusive lower, exclusive upper</td>
+</tr>
+<tr>
+<td><code>(open-closed-range lo hi)</code></td>
+<td><code>(lo, hi]</code> -- exclusive lower, inclusive upper</td>
+</tr>
+<tr>
+<td><code>(at-least-range lo)</code></td>
+<td><code>[lo, +inf)</code></td>
+</tr>
+<tr>
+<td><code>(greater-than-range lo)</code></td>
+<td><code>(lo, +inf)</code></td>
+</tr>
+<tr>
+<td><code>(at-most-range hi)</code></td>
+<td><code>(-inf, hi]</code></td>
+</tr>
+<tr>
+<td><code>(less-than-range hi)</code></td>
+<td><code>(-inf, hi)</code></td>
+</tr>
+<tr>
+<td><code>(singleton-range v)</code></td>
+<td><code>[v, v]</code></td>
+</tr>
+<tr>
+<td><code>(unbounded-range)</code></td>
+<td><code>(-inf, +inf)</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="predicates">Predicates</h3>
+<pre><code class="language-turmeric">(range-contains? (closed-range 1 10) 5)     ; =&gt; true
+(range-contains? (open-range   1 10) 10)    ; =&gt; false
+(range-encloses? (closed-range 0 10) (closed-range 2 8))  ; =&gt; true
+(range-overlaps? (closed-range 0 5)  (closed-range 3 8))  ; =&gt; true
+(range-connected? (closed-open-range 0 5) (closed-range 5 10)) ; =&gt; true
+(empty-range? (open-range 5 5))             ; =&gt; true
+(singleton-range? (closed-range 7 7))       ; =&gt; true
+(bounded-range? (at-least-range 0))         ; =&gt; false
+</code></pre>
+<h3 id="set-operations">Set operations</h3>
+<pre><code class="language-turmeric">;; Convex hull of two ranges
+(range-span (closed-range 0 3) (closed-range 7 10))
+; =&gt; [0, 10]
+
+;; Gap between non-overlapping ranges
+(range-gap (closed-open-range 0 5) (closed-range 7 10))
+; =&gt; [5, 7)
+
+;; Intersection of overlapping ranges
+(range-intersection (closed-range 0 8) (closed-range 5 10))
+; =&gt; [5, 8]
+</code></pre>
+<h3 id="converting-a-range-to-a-seq">Converting a Range to a Seq</h3>
+<p>For discrete (integer) ranges, use <code>seq/from-range</code> or <code>seq/from-range-step</code>:</p>
+<pre><code class="language-turmeric">;; [1, 5] =&gt; (Seq 1 2 3 4 5)
+(seq/into-vec (seq/from-range (closed-range 1 5)))
+; =&gt; [1 2 3 4 5]
+
+;; [0, 10) with step 2 =&gt; (Seq 0 2 4 6 8)
+(seq/into-vec (seq/from-range-step 2 (closed-open-range 0 10)))
+; =&gt; [0 2 4 6 8]
+</code></pre>
+<hr />
+<h2 id="stdlibgentur-api-reference"><code>stdlib/gen.tur</code> API Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gen-some?</code></td>
+<td>True if <code>gen-next</code> returned a value (non-NULL)</td>
+</tr>
+<tr>
+<td><code>gen-unwrap</code></td>
+<td>Extract the <code>:int</code> value from a non-NULL <code>gen-next</code> result</td>
+</tr>
+<tr>
+<td><code>gen-none</code></td>
+<td>Return NULL to represent no value</td>
+</tr>
+<tr>
+<td><code>gen-arr-new</code></td>
+<td>Allocate an empty growable array</td>
+</tr>
+<tr>
+<td><code>gen-arr-push!</code></td>
+<td>Append a value to a gen array</td>
+</tr>
+<tr>
+<td><code>gen-arr-len</code></td>
+<td>Number of elements in a gen array</td>
+</tr>
+<tr>
+<td><code>gen-arr-get</code></td>
+<td>Element at index (0-based)</td>
+</tr>
+<tr>
+<td><code>gen-collect</code></td>
+<td>Macro: drive a generator, collect all values into a gen array</td>
+</tr>
+<tr>
+<td><code>gen-for-each</code></td>
+<td>Macro: drive a generator, call <code>f</code> on each value</td>
+</tr>
+<tr>
+<td><code>gen-nth</code></td>
+<td>Macro: return the nth value from a generator, or <code>gen-none</code></td>
+</tr>
+<tr>
+<td><code>yield*</code></td>
+<td>Macro: re-yield every value from an inner generator</td>
+</tr>
+</tbody>
+</table>
+<h2 id="stdlibseq-module-reference"><code>stdlib/seq/</code> Module Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Exported symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seq/core</code></td>
+<td><code>seq-iter</code>, <code>seq-of</code>, <code>empty-seq</code>, <code>seq-from-vec</code>, <code>seq-from-list</code></td>
+</tr>
+<tr>
+<td><code>seq/builders</code></td>
+<td><code>seq/range</code>, <code>seq/range-step</code>, <code>seq/repeat</code>, <code>seq/repeatedly</code>, <code>seq/cycle</code>, <code>seq/iterate</code>, <code>seq/unfold</code></td>
+</tr>
+<tr>
+<td><code>seq/transform</code></td>
+<td><code>seq/map</code>, <code>seq/filter</code>, <code>seq/take</code>, <code>seq/drop</code>, <code>seq/take-while</code>, <code>seq/drop-while</code>, <code>seq/map-indexed</code>, <code>seq/filter-map</code>, <code>seq/flat-map</code>, <code>seq/flatten</code></td>
+</tr>
+<tr>
+<td><code>seq/combine</code></td>
+<td><code>seq/concat</code>, <code>seq/chain</code>, <code>seq/zip</code>, <code>seq/zip-with</code>, <code>seq/interleave</code></td>
+</tr>
+<tr>
+<td><code>seq/consume</code></td>
+<td><code>seq/into-vec</code>, <code>seq/into-list</code>, <code>seq/nth</code>, <code>seq/first</code>, <code>seq/last</code>, <code>seq/count</code>, <code>seq/reduce</code>, <code>seq/foldl</code>, <code>seq/for-each</code>, <code>seq/any?</code>, <code>seq/all?</code>, <code>seq/find</code>, <code>seq/find-index</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="stdlibrangetur-api-reference"><code>stdlib/range.tur</code> API Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>closed-range</code> / <code>open-range</code> / <code>closed-open-range</code> / <code>open-closed-range</code></td>
+<td>Bounded constructors</td>
+</tr>
+<tr>
+<td><code>at-least-range</code> / <code>greater-than-range</code></td>
+<td>Unbounded above</td>
+</tr>
+<tr>
+<td><code>at-most-range</code> / <code>less-than-range</code></td>
+<td>Unbounded below</td>
+</tr>
+<tr>
+<td><code>singleton-range</code> / <code>unbounded-range</code></td>
+<td>Single value / no bounds</td>
+</tr>
+<tr>
+<td><code>range-contains?</code></td>
+<td>Test membership</td>
+</tr>
+<tr>
+<td><code>range-encloses?</code></td>
+<td>Test subset</td>
+</tr>
+<tr>
+<td><code>range-overlaps?</code></td>
+<td>Test nonempty intersection</td>
+</tr>
+<tr>
+<td><code>range-connected?</code></td>
+<td>Test adjacency (touching counts)</td>
+</tr>
+<tr>
+<td><code>bounded-range?</code> / <code>bounded-above?</code> / <code>bounded-below?</code></td>
+<td>Boundedness tests</td>
+</tr>
+<tr>
+<td><code>unbounded-above?</code> / <code>unbounded-below?</code></td>
+<td>Unboundedness tests</td>
+</tr>
+<tr>
+<td><code>empty-range?</code> / <code>nonempty-range?</code> / <code>singleton-range?</code></td>
+<td>Cardinality</td>
+</tr>
+<tr>
+<td><code>range-span</code></td>
+<td>Convex hull of two ranges</td>
+</tr>
+<tr>
+<td><code>range-gap</code></td>
+<td>Interval between non-overlapping ranges</td>
+</tr>
+<tr>
+<td><code>range-intersection</code></td>
+<td>Largest range within both</td>
+</tr>
+<tr>
+<td><code>seq/from-range</code></td>
+<td>Integer range to <code>Seq</code> (step 1)</td>
+</tr>
+<tr>
+<td><code>seq/from-range-step</code></td>
+<td>Integer range to <code>Seq</code> with custom step</td>
+</tr>
+</tbody>
+</table>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/generators-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

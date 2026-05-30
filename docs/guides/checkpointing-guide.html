@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkpointing and Persistent Workflows | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#checkpointing-and-persistent-workflows-with-serializable-continuations" style="">Checkpointing and Persistent Workflows with Serializable Continuations</a></li>
+<li style=""><a href="#overview" style="">Overview</a></li>
+<li style=""><a href="#core-concept" style="">Core Concept</a></li>
+<li style=""><a href="#serialization-design" style="">Serialization Design</a></li>
+<li style="padding-left:0.75rem;"><a href="#stable-symbol-table" style="color:var(--text-sec);">Stable Symbol Table</a></li>
+<li style="padding-left:0.75rem;"><a href="#the-serializable-typeclass" style="color:var(--text-sec);">The Serializable Typeclass</a></li>
+<li style="padding-left:0.75rem;"><a href="#resource-types" style="color:var(--text-sec);">Resource Types</a></li>
+<li style="padding-left:0.75rem;"><a href="#ownership-model-and-serialization" style="color:var(--text-sec);">Ownership Model and Serialization</a></li>
+<li style=""><a href="#example-persistent-workflow" style="">Example: Persistent Workflow</a></li>
+<li style=""><a href="#example-distributed-task-migration" style="">Example: Distributed Task Migration</a></li>
+<li style=""><a href="#example-web-continuations-racket-style" style="">Example: Web Continuations (Racket-style)</a></li>
+<li style=""><a href="#example-checkpointing-long-running-computation" style="">Example: Checkpointing Long-Running Computation</a></li>
+<li style=""><a href="#reconstruction-and-error-handling" style="">Reconstruction and Error Handling</a></li>
+<li style="padding-left:0.75rem;"><a href="#schema-versioning" style="color:var(--text-sec);">Schema Versioning</a></li>
+<li style="padding-left:0.75rem;"><a href="#partial-reconstruction" style="color:var(--text-sec);">Partial Reconstruction</a></li>
+<li style=""><a href="#performance-considerations" style="">Performance Considerations</a></li>
+<li style="padding-left:0.75rem;"><a href="#serialization-overhead" style="color:var(--text-sec);">Serialization Overhead</a></li>
+<li style="padding-left:0.75rem;"><a href="#strategies" style="color:var(--text-sec);">Strategies</a></li>
+<li style=""><a href="#api-summary" style="">API Summary</a></li>
+<li style=""><a href="#see-also" style="">See Also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="checkpointing-and-persistent-workflows-with-serializable-continuations">Checkpointing and Persistent Workflows with Serializable Continuations</h1>
+<p>Save and resume computations across process boundaries using serializable continuations.</p>
+<h2 id="overview">Overview</h2>
+<p>Turmeric v2 will support <strong>serializable continuations</strong>, enabling suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This enables:</p>
+<ul>
+<li>Persistent multi-step workflows (pause and resume days later)</li>
+<li>Distributed task migration (send half-finished computation to another node)</li>
+<li>Checkpointing (save state periodically; restart from checkpoint on crash)</li>
+<li>Web continuations (Racket-style: continuation as URL token)</li>
+<li>Mobile agents (send code + state to remote peer)</li>
+<li>Debugger snapshots (freeze and replay)</li>
+</ul>
+<h2 id="core-concept">Core Concept</h2>
+<p>Phase 18's delimited continuations reify the call stack as a heap-allocated closure chain. Each frame is a struct on the heap. Serialization traverses this chain, emitting a stable encoding, then reconstructs on load.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Capture a continuation
+(def saved #f)
+(def result
+  (+ 1 (cloneable-shift [k]
+         (set! saved k)
+         10)))
+
+;; Serialize to bytes
+(def bytes (serialize saved))
+
+;; Write to disk or send over network
+(write-file &quot;continuation.dat&quot; bytes)
+
+;; Later, in another process:
+(def k (deserialize (read-file &quot;continuation.dat&quot;)))
+(resume k 42)  ; =&gt; 43
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Capture a continuation
+def saved #f
+def result
+  {1 + cloneable-shift([k]
+    set!(saved k)
+    10)}
+
+;; Serialize to bytes
+def bytes serialize(saved)
+
+;; Write to disk or send over network
+write-file(&quot;continuation.dat&quot; bytes)
+
+;; Later, in another process:
+def k deserialize(read-file(&quot;continuation.dat&quot;))
+resume(k 42)  ; =&gt; 43
+</code></pre></div></div></div>
+<h2 id="serialization-design">Serialization Design</h2>
+<h3 id="stable-symbol-table">Stable Symbol Table</h3>
+<p>Function pointers are not portable across builds. Each continuation frame stores:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(struct continuation-frame
+  [fn-symbol : string  ; e.g., &quot;mymodule.myfunction&quot;
+   args : (list any)   ; serializable arguments
+   captures : (map symbol any)])  ; captured variables
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">struct continuation-frame
+  [fn-symbol : string  ; e.g., &quot;mymodule.myfunction&quot;
+   args : (list any)   ; serializable arguments
+   captures : (map symbol any)]  ; captured variables
+</code></pre></div></div></div>
+<p>On deserialization, the symbol is resolved to the current build's function pointer.</p>
+<h3 id="the-serializable-typeclass">The Serializable Typeclass</h3>
+<p>Not all types can be serialized. Opt-in via the <code>Serializable</code> trait:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defclass Serializable [a]
+  (serialize [x : a] : bytes)
+  (deserialize [b : bytes] : a))
+
+;; Primitive implementations
+(instance Serializable int64 ...)
+(instance Serializable string ...)
+(instance Serializable bool ...)
+
+;; Derived implementations
+(instance Serializable (Pair a b) [Serializable a, Serializable b] ...)
+
+;; NOT serializable
+(instance Serializable FileHandle
+  ;; Custom handler: store file path, re-open on deserialize
+  (serialize [fh] (file-handle-path fh))
+  (deserialize [path] (open-file path)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defclass Serializable [a]
+  serialize([x : a] : bytes)
+  deserialize([b : bytes] : a)
+
+;; Primitive implementations
+instance Serializable int64 ...
+instance Serializable string ...
+instance Serializable bool ...
+
+;; Derived implementations
+instance Serializable (Pair a b) [Serializable a, Serializable b] ...
+
+;; NOT serializable
+instance Serializable FileHandle
+  ;; Custom handler: store file path, re-open on deserialize
+  serialize([fh] file-handle-path(fh))
+  deserialize([path] open-file(path))
+</code></pre></div></div></div>
+<h3 id="resource-types">Resource Types</h3>
+<p>File handles, sockets, and other system resources can define custom <strong>marshal/unmarshal hooks</strong>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defclass Resource-Serializable [a]
+  ;; Serialize to a stable representation
+  (marshal [x : a] : resource-token)
+  ;; Restore from token in new process
+  (unmarshal [token : resource-token] : a))
+
+(instance Resource-Serializable FileHandle
+  (marshal [fh] (file-handle-path fh))
+  (unmarshal [path] (open-file path)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defclass Resource-Serializable [a]
+  ;; Serialize to a stable representation
+  marshal([x : a] : resource-token)
+  ;; Restore from token in new process
+  unmarshal([token : resource-token] : a)
+
+instance Resource-Serializable FileHandle
+  marshal([fh] file-handle-path(fh))
+  unmarshal([path] open-file(path))
+</code></pre></div></div></div>
+<h3 id="ownership-model-and-serialization">Ownership Model and Serialization</h3>
+<p>Serialized continuations produce a <strong>deep copy</strong>. Ownership is transferred; originals are invalidated:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def r (ref 42))
+(cloneable-shift [k]
+  (serialize k))  ; Serialization deep-copies r
+                  ; Original r is now inaccessible
+(deserialize bytes)  ; Deserialize: new r created with value 42
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def r ref(42)
+cloneable-shift([k]
+  serialize(k))  ; Serialization deep-copies r
+                 ; Original r is now inaccessible
+deserialize(bytes)  ; Deserialize: new r created with value 42
+</code></pre></div></div></div>
+<p>This is safe because:
+- The original continuation is no longer reachable (it was consumed by <code>shift</code>).
+- The deserialized continuation has a fresh copy of captured state.
+- No aliasing between old and new process.</p>
+<h2 id="example-persistent-workflow">Example: Persistent Workflow</h2>
+<p>A multi-step business process that survives crashes:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn process-order [order-id]
+  ;; Step 1: Validate order
+  (def order (load-order order-id))
+  (unless (valid-order? order)
+    (throw (validation-error &quot;Invalid order&quot;)))
+  (checkpoint &quot;order-validated&quot; order)
+
+  ;; Step 2: Charge payment (slow network call)
+  (def charge-result (charge-payment order.payment-info))
+  (checkpoint &quot;payment-charged&quot; charge-result)
+
+  ;; Step 3: Fulfill order
+  (def fulfillment (fulfill order charge-result))
+  (checkpoint &quot;order-fulfilled&quot; fulfillment)
+
+  fulfillment)
+
+;; Checkpointing macro
+(defmacro checkpoint [name value]
+  `(cloneable-shift [k]
+     ;; Save continuation to disk
+     (def checkpoint-file (str &quot;checkpoint-&quot; ~name &quot;.bin&quot;))
+     (write-file checkpoint-file (serialize k))
+     ;; Resume immediately on first run
+     (continue k ~value)))
+
+;; On crash, user can resume from last checkpoint
+(defn resume-from-checkpoint [name]
+  (def checkpoint-file (str &quot;checkpoint-&quot; name &quot;.bin&quot;))
+  (def k (deserialize (read-file checkpoint-file)))
+  (resume k))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn process-order [order-id]
+  ;; Step 1: Validate order
+  def order load-order(order-id)
+  unless valid-order?(order)
+    throw(validation-error(&quot;Invalid order&quot;))
+  checkpoint(&quot;order-validated&quot; order)
+
+  ;; Step 2: Charge payment (slow network call)
+  def charge-result charge-payment(order.payment-info)
+  checkpoint(&quot;payment-charged&quot; charge-result)
+
+  ;; Step 3: Fulfill order
+  def fulfillment fulfill(order charge-result)
+  checkpoint(&quot;order-fulfilled&quot; fulfillment)
+
+  fulfillment
+
+;; Checkpointing macro
+defmacro checkpoint [name value]
+  `(cloneable-shift [k]
+     ;; Save continuation to disk
+     (def checkpoint-file (str &quot;checkpoint-&quot; ~name &quot;.bin&quot;))
+     (write-file checkpoint-file (serialize k))
+     ;; Resume immediately on first run
+     (continue k ~value))
+
+;; On crash, user can resume from last checkpoint
+defn resume-from-checkpoint [name]
+  def checkpoint-file str(&quot;checkpoint-&quot; name &quot;.bin&quot;)
+  def k deserialize(read-file(checkpoint-file))
+  resume(k)
+</code></pre></div></div></div>
+<h2 id="example-distributed-task-migration">Example: Distributed Task Migration</h2>
+<p>Send a half-finished computation to another node:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Node A: long-running job, half done
+(def job
+  (cloneable-reset
+    (fn []
+      (def task1-result (run-task1))
+      (def task2-result (run-task2 task1-result))
+      (def task3-result (run-task3 task2-result))
+      task3-result)))
+
+;; Save state
+(def bytes (serialize job))
+(send-to-node-b bytes)
+
+;; Node B: resume
+(def job (deserialize (receive-bytes))
+(def result (resume job))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Node A: long-running job, half done
+def job
+  cloneable-reset
+    fn []
+      def task1-result run-task1()
+      def task2-result run-task2(task1-result)
+      def task3-result run-task3(task2-result)
+      task3-result
+
+;; Save state
+def bytes serialize(job)
+send-to-node-b(bytes)
+
+;; Node B: resume
+def job deserialize(receive-bytes())
+def result resume(job)
+</code></pre></div></div></div>
+<h2 id="example-web-continuations-racket-style">Example: Web Continuations (Racket-style)</h2>
+<p>Serialize "what to do when form is submitted" as a URL token:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Initial page
+(defn get-checkout [req]
+  (cloneable-shift [k]
+    ;; Save continuation to disk, return URL token
+    (def token (save-continuation-to-db k))
+    (render-page
+      (form :action (str &quot;/checkout-submit?token=&quot; token)))))
+
+;; Form submission handler
+(defn post-checkout-submit [token req]
+  ;; Load and resume continuation
+  (def k (load-continuation-from-db token))
+  (def response (resume k (parse-form-data req)))
+  response)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Initial page
+defn get-checkout [req]
+  cloneable-shift([k]
+    ;; Save continuation to disk, return URL token
+    def token save-continuation-to-db(k)
+    render-page
+      form(:action str(&quot;/checkout-submit?token=&quot; token)))
+
+;; Form submission handler
+defn post-checkout-submit [token req]
+  ;; Load and resume continuation
+  def k load-continuation-from-db(token)
+  def response resume(k parse-form-data(req))
+  response
+</code></pre></div></div></div>
+<h2 id="example-checkpointing-long-running-computation">Example: Checkpointing Long-Running Computation</h2>
+<p>Periodic snapshots for crash recovery:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn analyze-large-dataset [data]
+  (defn checkpoint-every-n [n items]
+    (let [processed []]
+      (for-each-with-index items
+        (fn [i item]
+          (set! processed (conj processed (process item)))
+          (when (= (mod (+ i 1) n) 0)
+            ;; Checkpoint every n items
+            (cloneable-shift [k]
+              (write-file (str &quot;checkpoint-&quot; i &quot;.bin&quot;)
+                         (serialize k))
+              (continue k)))))))
+
+  (checkpoint-every-n 1000 data))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn analyze-large-dataset [data]
+  defn checkpoint-every-n [n items]
+    let [processed []]
+      for-each-with-index(items
+        fn [i item]
+          set!(processed conj(processed process(item)))
+          when {mod({i + 1} n) = 0}
+            ;; Checkpoint every n items
+            cloneable-shift([k]
+              write-file(str(&quot;checkpoint-&quot; i &quot;.bin&quot;)
+                         serialize(k))
+              continue(k)))
+
+  checkpoint-every-n(1000 data)
+</code></pre></div></div></div>
+<h2 id="reconstruction-and-error-handling">Reconstruction and Error Handling</h2>
+<h3 id="schema-versioning">Schema Versioning</h3>
+<p>Continuation frames carry schema version. Mismatches produce an error:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def k (deserialize bytes))  ; May fail if:
+                             ; - Function no longer exists
+                             ; - Argument types changed
+                             ; - Captured types are incompatible
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def k deserialize(bytes)  ; May fail if:
+                          ; - Function no longer exists
+                          ; - Argument types changed
+                          ; - Captured types are incompatible
+</code></pre></div></div></div>
+<p>Error handling:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(try-with
+  (fn []
+    (deserialize (read-file &quot;checkpoint.bin&quot;)))
+  (fn [e k]
+    (match e
+      (schema-mismatch _ old-version) -&gt;
+        (throw (error (str &quot;Cannot resume: checkpoint uses version &quot; old-version
+                           &quot; but current code is version &quot; (current-version)))))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">try-with
+  fn []
+    deserialize(read-file(&quot;checkpoint.bin&quot;))
+  fn [e k]
+    match e
+      (schema-mismatch _ old-version) -&gt;
+        throw $ error $ str(&quot;Cannot resume: checkpoint uses version &quot; old-version
+                            &quot; but current code is version &quot; current-version())
+</code></pre></div></div></div>
+<h3 id="partial-reconstruction">Partial Reconstruction</h3>
+<p>If deserialization of a captured value fails, the whole continuation fails. To tolerate missing state:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Wrap potentially failing values in Option
+(def opt-value
+  (try
+    (deserialize captured-value)
+    (catch [e] (None))))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Wrap potentially failing values in Option
+def opt-value
+  try
+    deserialize(captured-value)
+    catch([e] None())
+</code></pre></div></div></div>
+<h2 id="performance-considerations">Performance Considerations</h2>
+<h3 id="serialization-overhead">Serialization Overhead</h3>
+<ul>
+<li><strong>Small continuations (~1-10 frames):</strong> Microsecond-scale serialization</li>
+<li><strong>Large continuations (100+ frames):</strong> Millisecond-scale; consider streaming</li>
+<li><strong>Deep captured state:</strong> Clone overhead proportional to state size</li>
+</ul>
+<h3 id="strategies">Strategies</h3>
+<ol>
+<li><strong>Limit continuation depth</strong> -- Design workflows to have shallow call stacks.</li>
+<li><strong>Minimize captured state</strong> -- Use identifiers (e.g., order ID) instead of entire objects.</li>
+<li><strong>Lazy serialization</strong> -- For large state, write once, reference by ID on resumption.</li>
+<li><strong>Incremental checkpointing</strong> -- Save deltas instead of full continuation.</li>
+</ol>
+<h2 id="api-summary">API Summary</h2>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Serialize a continuation
+(serialize cont : (cloneable-shift [k] k)) : bytes
+
+;; Deserialize a continuation
+(deserialize bytes : bytes) : (cloneable-shift [k] k)
+
+;; Resume a continuation with a value
+(resume k : (cloneable-shift [k] k) v : a) : a
+
+;; Checkpoint macro (example)
+(checkpoint name value)
+
+;; Resource marshalling
+(marshal resource : a) : resource-token
+(unmarshal token : resource-token) : a
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Serialize a continuation
+serialize(cont : (cloneable-shift [k] k)) : bytes
+
+;; Deserialize a continuation
+deserialize(bytes : bytes) : (cloneable-shift [k] k)
+
+;; Resume a continuation with a value
+resume(k : (cloneable-shift [k] k) v : a) : a
+
+;; Checkpoint macro (example)
+checkpoint(name value)
+
+;; Resource marshalling
+marshal(resource : a) : resource-token
+unmarshal(token : resource-token) : a
+</code></pre></div></div></div>
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="logic-programming-guide.md">Logic Programming Guide</a> -- Cloneable continuations for backtracking</li>
+<li><a href="async-await-guide.md">Async/Await Guide</a> -- One-shot continuations for async I/O</li>
+<li><a href="effects-system-guide.md">Effects System Guide</a> -- Dynamic effect handling</li>
+<li><a href="../turmeric-plan.md">turmeric-plan.md</a> §18 -- Delimited continuations</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/checkpointing-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

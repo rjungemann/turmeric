@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Type Annotation Syntax | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#type-annotation-syntax" style="">Type Annotation Syntax</a></li>
+<li style=""><a href="#basic-annotations" style="">Basic annotations</a></li>
+<li style=""><a href="#compound-type-expressions" style="">Compound type expressions</a></li>
+<li style="padding-left:0.75rem;"><a href="#function-types-arg-ret" style="color:var(--text-sec);">Function types: (-&gt; arg... ret)</a></li>
+<li style="padding-left:0.75rem;"><a href="#container-types" style="color:var(--text-sec);">Container types</a></li>
+<li style="padding-left:0.75rem;"><a href="#polymorphic-types" style="color:var(--text-sec);">Polymorphic types</a></li>
+<li style="padding-left:0.75rem;"><a href="#universal-and-existential-quantifiers" style="color:var(--text-sec);">Universal and existential quantifiers</a></li>
+<li style="padding-left:0.75rem;"><a href="#higher-kinded-type-arguments" style="color:var(--text-sec);">Higher-kinded type arguments</a></li>
+<li style=""><a href="#the-operator-in-symbols" style="">The | operator in symbols</a></li>
+<li style=""><a href="#annotations-on-let-bindings" style="">Annotations on let bindings</a></li>
+<li style=""><a href="#substructural-annotations" style="">Substructural annotations</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="type-annotation-syntax">Type Annotation Syntax</h1>
+<p>Turmeric supports both simple keyword-style type annotations and compound type
+expressions. This guide covers the full annotation syntax available today.</p>
+<hr />
+<h2 id="basic-annotations">Basic annotations</h2>
+<p>The simplest form is a colon followed by a type name. A space between <code>:</code> and the
+name is required when the type is a symbol (not fused to a keyword):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Primitive types
+(defn add [a : int  b : int] : int ...)
+(defn ok? [r : ptr&lt;void&gt;]   : bool ...)
+(defn greet [s : cstr]      : unit ...)
+
+;; The old fused-keyword style is still accepted for primitives
+(defn add [a :int b :int] :int ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Primitive types
+defn add [a : int  b : int] : int ...
+defn ok? [r : ptr&lt;void&gt;]   : bool ...
+defn greet [s : cstr]      : unit ...
+
+;; The old fused-keyword style is still accepted for primitives
+defn add [a :int b :int] :int ...
+</code></pre></div></div></div>
+<p>New code should prefer the spaced form (<code>: int</code>) because it composes cleanly
+with compound types.</p>
+<hr />
+<h2 id="compound-type-expressions">Compound type expressions</h2>
+<p>When the type is not a single name, write it as a parenthesised list after <code>:</code>:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Function type (arrow)
+(defn apply [f : (-&gt; int int)  x : int] : int ...)
+
+;; Parameterised container
+(defn sum [v : (vec int)] : int ...)
+
+;; Nested
+(defn transform [v : (vec (option int))] : (vec int) ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Function type (arrow)
+defn apply [f : (-&gt; int int)  x : int] : int ...
+
+;; Parameterised container
+defn sum [v : (vec int)] : int ...
+
+;; Nested
+defn transform [v : (vec (option int))] : (vec int) ...
+</code></pre></div></div></div>
+<h3 id="function-types-arg-ret">Function types: <code>(-&gt; arg... ret)</code></h3>
+<p><code>-&gt;</code> takes one or more arguments; the last position is the return type:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(-&gt; int)             ;; nullary function returning int
+(-&gt; int int)         ;; int -&gt; int
+(-&gt; int int int)     ;; (int, int) -&gt; int
+(-&gt; cstr (vec int))  ;; cstr -&gt; (vec int)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">(-&gt; int)             ;; nullary function returning int
+(-&gt; int int)         ;; int -&gt; int
+(-&gt; int int int)     ;; (int, int) -&gt; int
+(-&gt; cstr (vec int))  ;; cstr -&gt; (vec int)
+</code></pre></div></div></div>
+<h3 id="container-types">Container types</h3>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(vec T)</code></td>
+<td>Growable array of <code>T</code></td>
+</tr>
+<tr>
+<td><code>(option T)</code></td>
+<td>Optional value (<code>some</code> / <code>none</code>)</td>
+</tr>
+<tr>
+<td><code>(result T E)</code></td>
+<td>Success or error (<code>ok</code> / <code>err</code>)</td>
+</tr>
+<tr>
+<td><code>(pair A B)</code></td>
+<td>Two-element pair</td>
+</tr>
+<tr>
+<td><code>(rc T)</code></td>
+<td>Reference-counted shared pointer</td>
+</tr>
+<tr>
+<td><code>(ref T)</code></td>
+<td>Unique, move-only reference</td>
+</tr>
+</tbody>
+</table>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn first  [p : (pair int bool)] : int ...)
+(defn clone  [p : (rc Buffer)]     : (rc Buffer) ...)
+(defn consume [r : (ref Socket)]   : unit ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn first  [p : (pair int bool)] : int ...
+defn clone  [p : (rc Buffer)]     : (rc Buffer) ...
+defn consume [r : (ref Socket)]   : unit ...
+</code></pre></div></div></div>
+<h3 id="polymorphic-types">Polymorphic types</h3>
+<p>Use type variables (bare symbols) in generic function signatures:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn identity [x : a] : a ...)
+(defn map-vec  [v : (vec a)  f : (-&gt; a b)] : (vec b) ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn identity [x : a] : a ...
+defn map-vec  [v : (vec a)  f : (-&gt; a b)] : (vec b) ...
+</code></pre></div></div></div>
+<h3 id="universal-and-existential-quantifiers">Universal and existential quantifiers</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Universally quantified (explicit forall)
+(defn id [a b] : (forall [a] (-&gt; a a)) ...)
+
+;; Existentially quantified
+(defn pack [] : (exists [a] (pair a (-&gt; a int))) ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Universally quantified (explicit forall)
+defn id [a b] : (forall [a] (-&gt; a a)) ...
+
+;; Existentially quantified
+defn pack [] : (exists [a] (pair a (-&gt; a int))) ...
+</code></pre></div></div></div>
+<h3 id="higher-kinded-type-arguments">Higher-kinded type arguments</h3>
+<p>For functions parameterised over a type constructor, use the <code>^f</code> / <code>^^f</code> kind
+annotations (see <a href="hkt-guide.md">hkt-guide.md</a>):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn fmap [^f x : (^f a)  fn : (-&gt; a b)] : (^f b) ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn fmap [^f x : (^f a)  fn : (-&gt; a b)] : (^f b) ...
+</code></pre></div></div></div>
+<hr />
+<h2 id="the-operator-in-symbols">The <code>|</code> operator in symbols</h2>
+<p><code>|</code> is a valid symbol character, enabling Haskell- and Arrows-style operators:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn ||| [a : arr  b : arr] : arr ...)  ;; parallel composition
+(defn |&gt;  [x : a   f : (-&gt; a b)] : b ...) ;; pipe
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn ||| [a : arr  b : arr] : arr ...  ;; parallel composition
+defn |&gt;  [x : a   f : (-&gt; a b)] : b ... ;; pipe
+</code></pre></div></div></div>
+<hr />
+<h2 id="annotations-on-let-bindings">Annotations on let bindings</h2>
+<p>Type annotations work on <code>let</code> bindings too:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [x : int 42]
+  (println x))
+
+(let [f : (-&gt; int int) (fn [n] (* n 2))]
+  (println (f 21)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [x : int 42]
+  println(x)
+
+let [f : (-&gt; int int) fn [n] {n * 2}]
+  println $ f(21)
+</code></pre></div></div></div>
+<hr />
+<h2 id="substructural-annotations">Substructural annotations</h2>
+<p>Ownership annotations (<code>^unique</code>, <code>^linear</code>, <code>^affine</code>, <code>^relevant</code>) precede the
+type expression:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn consume [^linear  fh : FileHandle] : unit ...)
+(defn sort!   [^unique  v  : (vec int)]  : unit ...)
+(defn log     [^relevant msg : str]      : unit ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn consume [^linear  fh : FileHandle] : unit ...
+defn sort!   [^unique  v  : (vec int)]  : unit ...
+defn log     [^relevant msg : str]      : unit ...
+</code></pre></div></div></div>
+<p>See <a href="substructural-types-guide.md">substructural-types-guide.md</a> and
+<a href="uniqueness-types-guide.md">uniqueness-types-guide.md</a>.</p>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="hkt-guide.md">hkt-guide.md</a> -- higher-kinded types and kind annotations</li>
+<li><a href="hrt-guide.md">hrt-guide.md</a> -- rank-2 / rank-3 polymorphism</li>
+<li><a href="substructural-types-guide.md">substructural-types-guide.md</a> -- <code>^linear</code>, <code>^affine</code>, <code>^relevant</code></li>
+<li><a href="uniqueness-types-guide.md">uniqueness-types-guide.md</a> -- <code>^unique</code></li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/type-annotations-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

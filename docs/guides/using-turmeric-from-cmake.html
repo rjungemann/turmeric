@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Using a Turmeric Library from CMake | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#using-a-turmeric-library-from-cmake" style="">Using a Turmeric Library from CMake</a></li>
+<li style=""><a href="#prerequisites" style="">Prerequisites</a></li>
+<li style=""><a href="#step-1-declare-exported-sources" style="">Step 1 -- Declare exported sources</a></li>
+<li style=""><a href="#step-2-generate-the-cmake-files" style="">Step 2 -- Generate the CMake files</a></li>
+<li style="padding-left:0.75rem;"><a href="#optional-write-to-a-different-directory" style="color:var(--text-sec);">Optional: write to a different directory</a></li>
+<li style=""><a href="#step-3-commit-and-tag" style="">Step 3 -- Commit and tag</a></li>
+<li style=""><a href="#step-4-add-to-a-cc-project-via-cpm" style="">Step 4 -- Add to a C/C++ project via CPM</a></li>
+<li style="padding-left:0.75rem;"><a href="#using-the-generated-header" style="color:var(--text-sec);">Using the generated header</a></li>
+<li style=""><a href="#using-find_package-instead-of-cpm" style="">Using find_package instead of CPM</a></li>
+<li style=""><a href="#how-it-works-internally" style="">How it works internally</a></li>
+<li style=""><a href="#checklist-for-library-authors" style="">Checklist for library authors</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="using-a-turmeric-library-from-cmake">Using a Turmeric Library from CMake</h1>
+<p>This guide explains how to publish a Turmeric library so that C and C++ projects
+can import it through CMake or CPM without knowing anything about Turmeric.</p>
+<p>The <code>tur emit-cmake</code> command does the heavy lifting: it reads your <code>build.tur</code>
+and generates all of the CMake files a consumer needs.</p>
+<hr />
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li>A Turmeric library project created with <code>tur init --lib &lt;name&gt;</code></li>
+<li>The library builds cleanly with <code>tur build</code></li>
+<li><code>tur</code> is on <code>PATH</code> on the machine where CMake will build the consumer project</li>
+</ul>
+<hr />
+<h2 id="step-1-declare-exported-sources">Step 1 -- Declare exported sources</h2>
+<p>Open <code>build.tur</code> and add an <code>:exports</code> field listing the <code>.tur</code> source files
+that form the public API of your library:</p>
+<pre><code class="language-scheme">(defpackage my-geom
+  :version &quot;0.3.0&quot;
+  :description &quot;2-D geometry primitives&quot;
+  :license &quot;MIT&quot;
+
+  :exports [
+    &quot;src/vector.tur&quot;
+    &quot;src/matrix.tur&quot;
+  ])
+</code></pre>
+<p>If you omit <code>:exports</code>, <code>tur emit-cmake</code> falls back to scanning every <code>*.tur</code>
+file in <code>src/</code>.</p>
+<hr />
+<h2 id="step-2-generate-the-cmake-files">Step 2 -- Generate the CMake files</h2>
+<p>Run this command from your project root (where <code>build.tur</code> lives):</p>
+<pre><code class="language-sh">tur emit-cmake
+</code></pre>
+<p>It creates four files:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CMakeLists.txt</code></td>
+<td>Top-level CMake project that compiles your library</td>
+</tr>
+<tr>
+<td><code>&lt;name&gt;Config.cmake</code></td>
+<td><code>find_package(&lt;name&gt;)</code> support</td>
+</tr>
+<tr>
+<td><code>cmake/FindTurmeric.cmake</code></td>
+<td>Locates the <code>tur</code> binary on the consumer's machine</td>
+</tr>
+<tr>
+<td><code>cmake/AddTurmericTarget.cmake</code></td>
+<td>Helper macros (used internally)</td>
+</tr>
+</tbody>
+</table>
+<p>All four files are auto-generated -- do not edit them by hand. Re-run
+<code>tur emit-cmake</code> whenever you add or remove source files, or change the version.</p>
+<h3 id="optional-write-to-a-different-directory">Optional: write to a different directory</h3>
+<pre><code class="language-sh">tur emit-cmake --output-dir dist/
+</code></pre>
+<p>This writes <code>dist/CMakeLists.txt</code>, <code>dist/&lt;name&gt;Config.cmake</code>, and
+<code>dist/cmake/*.cmake</code>.</p>
+<hr />
+<h2 id="step-3-commit-and-tag">Step 3 -- Commit and tag</h2>
+<pre><code class="language-sh">git add CMakeLists.txt my-geomConfig.cmake cmake/
+git commit -m &quot;chore: regenerate cmake files for v0.3.0&quot;
+git tag v0.3.0
+git push &amp;&amp; git push --tags
+</code></pre>
+<p>CPM identifies releases by tag, so a clean tag is required.</p>
+<hr />
+<h2 id="step-4-add-to-a-cc-project-via-cpm">Step 4 -- Add to a C/C++ project via CPM</h2>
+<p>In the consuming project's <code>CMakeLists.txt</code>:</p>
+<pre><code class="language-cmake">cmake_minimum_required(VERSION 3.20)
+project(my_app LANGUAGES C)
+
+# CPM bootstrap (download once, cache afterwards)
+include(cmake/CPM.cmake)
+
+CPMAddPackage(
+  NAME    my-geom
+  URL     https://github.com/alice/my-geom/archive/refs/tags/v0.3.0.tar.gz
+  VERSION 0.3.0
+)
+
+add_executable(my_app src/main.c)
+target_link_libraries(my_app PRIVATE my-geom::all)
+</code></pre>
+<p>CPM fetches the archive, runs the generated <code>CMakeLists.txt</code>, which in turn
+invokes <code>tur emit-c --output-dir</code> to compile the <code>.tur</code> sources to C, then
+builds the static library. The consumer never calls <code>tur</code> directly.</p>
+<h3 id="using-the-generated-header">Using the generated header</h3>
+<p>The Turmeric compiler generates one <code>.h</code> per source file:</p>
+<pre><code class="language-c">/* src/main.c */
+#include &quot;vector.h&quot;   /* generated from src/vector.tur */
+#include &quot;matrix.h&quot;   /* generated from src/matrix.tur */
+
+int main(void) {
+    my_geom_vector_2d v = my_geom_vector_2d_make(1.0f, 2.0f);
+    /* ... */
+    return 0;
+}
+</code></pre>
+<p><code>target_link_libraries</code> with <code>my-geom::all</code> causes CMake to add the include
+directory automatically -- no manual <code>-I</code> flags needed.</p>
+<hr />
+<h2 id="using-find_package-instead-of-cpm">Using <code>find_package</code> instead of CPM</h2>
+<p>If the library is installed to a standard prefix:</p>
+<pre><code class="language-sh"># in the library project
+cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build
+cmake --install build
+</code></pre>
+<p>Then in the consumer:</p>
+<pre><code class="language-cmake">find_package(my-geom REQUIRED)
+target_link_libraries(my_app PRIVATE my-geom::all)
+</code></pre>
+<hr />
+<h2 id="how-it-works-internally">How it works internally</h2>
+<p><code>tur emit-cmake</code> generates a <code>CMakeLists.txt</code> that:</p>
+<ol>
+<li>Calls <code>find_package(Turmeric REQUIRED)</code> to locate the <code>tur</code> binary via
+   <code>cmake/FindTurmeric.cmake</code>.</li>
+<li>Registers an <code>add_custom_command</code> that runs
+   <code>tur emit-c --output-dir &lt;build-dir&gt; &lt;source files&gt;</code> to produce one <code>.h</code>
+   and one <code>.c</code> per <code>.tur</code> module.</li>
+<li>Passes those <code>.c</code> files to <code>add_library(&lt;name&gt; STATIC ...)</code>.</li>
+<li>Exports an alias target <code>&lt;name&gt;::all</code> for consumers.</li>
+</ol>
+<p>The <code>&lt;name&gt;Config.cmake</code> file is what <code>find_package(&lt;name&gt;)</code> reads. It sets
+<code>&lt;name&gt;_VERSION</code> and <code>&lt;name&gt;_FOUND</code>, then includes the install targets file.</p>
+<hr />
+<h2 id="checklist-for-library-authors">Checklist for library authors</h2>
+<ul>
+<li>[ ] <code>tur build --release</code> passes</li>
+<li>[ ] <code>:exports</code> lists all public <code>.tur</code> files in <code>build.tur</code></li>
+<li>[ ] <code>tur emit-cmake</code> runs without errors</li>
+<li>[ ] Generated files are committed to the repository</li>
+<li>[ ] Release is tagged: <code>git tag vX.Y.Z</code></li>
+<li>[ ] CPM fetch test passes from a clean directory</li>
+<li>[ ] <code>cmake/</code> usage example included in README</li>
+</ul>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="package-management-guide.md">Package management guide</a> -- Turmeric-to-Turmeric dependencies</li>
+<li><a href="c-integration-guide.md">C integration guide</a> -- calling C from Turmeric</li>
+<li><a href="../archive/cmake-cpm-integration-plan.md">cmake-cpm-integration-plan.md</a> -- full design specification</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/using-turmeric-from-cmake.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Substructural Types | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#substructural-types-in-turmeric" style="">Substructural Types in Turmeric</a></li>
+<li style=""><a href="#when-to-use-each-discipline" style="">When to use each discipline</a></li>
+<li style="padding-left:0.75rem;"><a href="#linear-use-exactly-once" style="color:var(--text-sec);">^linear -- use exactly once</a></li>
+<li style="padding-left:0.75rem;"><a href="#affine-use-at-most-once" style="color:var(--text-sec);">^affine -- use at most once</a></li>
+<li style="padding-left:0.75rem;"><a href="#relevant-use-at-least-once" style="color:var(--text-sec);">^relevant -- use at least once</a></li>
+<li style=""><a href="#stdlib-macros" style="">Stdlib macros</a></li>
+<li style="padding-left:0.75rem;"><a href="#must-use-expr" style="color:var(--text-sec);">(must-use expr)</a></li>
+<li style="padding-left:0.75rem;"><a href="#with-resource-name-init-body" style="color:var(--text-sec);">(with-resource [name init] body...)</a></li>
+<li style=""><a href="#error-codes" style="">Error codes</a></li>
+<li style=""><a href="#interaction-with-other-features" style="">Interaction with other features</a></li>
+<li style="padding-left:0.75rem;"><a href="#reft-and-linear-inference" style="color:var(--text-sec);">ref&lt;T&gt; and linear inference</a></li>
+<li style="padding-left:0.75rem;"><a href="#affine-vs-move-semantics" style="color:var(--text-sec);">Affine vs. move semantics</a></li>
+<li style="padding-left:0.75rem;"><a href="#pattern-matching" style="color:var(--text-sec);">Pattern matching</a></li>
+<li style=""><a href="#borrows-and-lifetimes-ty4" style="">Borrows and Lifetimes (TY4)</a></li>
+<li style="padding-left:0.75rem;"><a href="#borrow-types-and-explicit-a-lifetimes" style="color:var(--text-sec);">Borrow types and explicit 'a lifetimes</a></li>
+<li style="padding-left:0.75rem;"><a href="#inter-procedural-borrow-checking" style="color:var(--text-sec);">Inter-procedural borrow checking</a></li>
+<li style="padding-left:0.75rem;"><a href="#lifetime-elision-and-outlives-constraints" style="color:var(--text-sec);">Lifetime elision and outlives constraints</a></li>
+<li style=""><a href="#see-also" style="">See also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="substructural-types-in-turmeric">Substructural Types in Turmeric</h1>
+<p>Turmeric supports three substructural type disciplines via the <code>-Xsubstructural</code> flag.
+Each discipline restricts which structural rules a value may use:</p>
+<table>
+<thead>
+<tr>
+<th>Annotation</th>
+<th>May be dropped</th>
+<th>May be duplicated</th>
+<th>Summary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>^linear</code></td>
+<td>No</td>
+<td>No</td>
+<td>Used exactly once</td>
+</tr>
+<tr>
+<td><code>^affine</code></td>
+<td>Yes</td>
+<td>No</td>
+<td>Used at most once</td>
+</tr>
+<tr>
+<td><code>^relevant</code></td>
+<td>No</td>
+<td>Yes</td>
+<td>Used at least once</td>
+</tr>
+<tr>
+<td>(none)</td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No restrictions (default)</td>
+</tr>
+</tbody>
+</table>
+<p>Enable the system with:</p>
+<pre><code class="language-sh">tur build -Xsubstructural myfile.tur
+</code></pre>
+<p><code>-Xsubstructural</code> implies <code>-Xlinear</code>.</p>
+<hr />
+<h2 id="when-to-use-each-discipline">When to use each discipline</h2>
+<h3 id="linear-use-exactly-once"><code>^linear</code> -- use exactly once</h3>
+<p>Use <code>^linear</code> for values that represent exclusive ownership of a resource, where both
+dropping the resource unintentionally and aliasing it are errors.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn open-file  [path : cstr]             : ^linear FileHandle)
+(defn close-file [^linear fh : FileHandle] : unit)
+
+(defn copy-file [src dst : cstr] : unit
+  (let [fh (open-file src)]
+    ;; fh must be consumed exactly once
+    (close-file fh)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn open-file  [path : cstr]             : ^linear FileHandle
+defn close-file [^linear fh : FileHandle] : unit
+
+defn copy-file [src dst : cstr] : unit
+  let [fh open-file(src)]
+    ;; fh must be consumed exactly once
+    close-file(fh)
+</code></pre></div></div></div>
+<p>Under <code>-Xsubstructural</code>, <code>ref&lt;T&gt;</code> bindings are automatically inferred as <code>^linear</code>
+unless another annotation is present. You must explicitly <code>(drop! r)</code> or consume
+the ref -- it will not be silently freed.</p>
+<h3 id="affine-use-at-most-once"><code>^affine</code> -- use at most once</h3>
+<p>Use <code>^affine</code> when a value may be discarded but must not be aliased. This is
+appropriate for one-shot tokens, single-use callbacks, or initialization keys.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn initialize [^affine key : EncryptionKey] : unit
+  ...)
+
+;; OK: use once
+(let [^affine k (generate-key)]
+  (initialize k))
+
+;; OK: discard without use (weakening allowed)
+(let [^affine k (generate-key)]
+  0)
+
+;; ERROR TUR-E0150: affine value used more than once
+(let [^affine k (generate-key)]
+  (initialize k)
+  (initialize k))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn initialize [^affine key : EncryptionKey] : unit
+  ...
+
+;; OK: use once
+let [^affine k generate-key()]
+  initialize(k)
+
+;; OK: discard without use (weakening allowed)
+let [^affine k generate-key()]
+  0
+
+;; ERROR TUR-E0150: affine value used more than once
+let [^affine k generate-key()]
+  initialize(k)
+  initialize(k)
+</code></pre></div></div></div>
+<h3 id="relevant-use-at-least-once"><code>^relevant</code> -- use at least once</h3>
+<p>Use <code>^relevant</code> for values that must be observed but may be inspected multiple times.
+This is appropriate for audit logs, mandatory acknowledgements, or results that
+must not be silently discarded.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn log-and-store [^relevant msg : str] : unit
+  (log msg)     ;; first use (duplication OK)
+  (store msg))  ;; second use
+
+;; ERROR TUR-E0151: relevant value dropped without use
+(let [^relevant msg &quot;important event&quot;]
+  0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn log-and-store [^relevant msg : str] : unit
+  log(msg)     ;; first use (duplication OK)
+  store(msg)   ;; second use
+
+;; ERROR TUR-E0151: relevant value dropped without use
+let [^relevant msg &quot;important event&quot;]
+  0
+</code></pre></div></div></div>
+<hr />
+<h2 id="stdlib-macros">Stdlib macros</h2>
+<h3 id="must-use-expr"><code>(must-use expr)</code></h3>
+<p>Wraps <code>expr</code> so that the binding holding its value is inferred as <code>^relevant</code>.
+The bound value must be used at least once before its scope exits.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Under -Xsubstructural:
+(let [r (must-use (acquire-resource))]
+  (process r)   ;; OK -- ^relevant allows duplication
+  (process r))
+
+;; ERROR TUR-E0151: relevant value 'r' dropped without use
+(let [r (must-use (acquire-resource))]
+  0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Under -Xsubstructural:
+let [r must-use(acquire-resource())]
+  process(r)   ;; OK -- ^relevant allows duplication
+  process(r)
+
+;; ERROR TUR-E0151: relevant value 'r' dropped without use
+let [r must-use(acquire-resource())]
+  0
+</code></pre></div></div></div>
+<h3 id="with-resource-name-init-body"><code>(with-resource [name init] body...)</code></h3>
+<p>Scoped resource binding -- equivalent to <code>(let [name init] body...)</code>.
+Useful to signal intent that <code>name</code> is a resource to be consumed within <code>body</code>.
+When combined with <code>-Xsubstructural</code> and a <code>ref&lt;T&gt;</code> init, the binding is inferred
+as <code>^linear</code> and must be explicitly consumed (via <code>(drop! name)</code> or a consuming call).</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Under -Xsubstructural:
+(with-resource [r (ref 42)]
+  (drop! r))    ;; must consume the linear ref
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Under -Xsubstructural:
+with-resource [r ref(42)]
+  drop!(r)    ;; must consume the linear ref
+</code></pre></div></div></div>
+<hr />
+<h2 id="error-codes">Error codes</h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TUR-E0100</code></td>
+<td>Linear value dropped without being consumed</td>
+</tr>
+<tr>
+<td><code>TUR-E0101</code></td>
+<td>Linear value used after being consumed</td>
+</tr>
+<tr>
+<td><code>TUR-E0102</code></td>
+<td>Linear value captured by a closure</td>
+</tr>
+<tr>
+<td><code>TUR-E0150</code></td>
+<td>Affine value used more than once</td>
+</tr>
+<tr>
+<td><code>TUR-E0151</code></td>
+<td>Relevant value dropped without being used</td>
+</tr>
+</tbody>
+</table>
+<p>Use <code>tur --explain TUR-E0150</code> (or any other code) for a detailed explanation
+and fix suggestions.</p>
+<hr />
+<h2 id="interaction-with-other-features">Interaction with other features</h2>
+<h3 id="reft-and-linear-inference"><code>ref&lt;T&gt;</code> and linear inference</h3>
+<p>Under <code>-Xsubstructural</code>, all <code>ref&lt;T&gt;</code> let bindings and <code>:ref</code> parameters are
+automatically inferred as <code>^linear</code>. You do not need an explicit <code>^linear</code>
+annotation -- but you must explicitly consume the ref.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn consume [r :ref] :int
+  (drop! r)
+  0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn consume [r :ref] :int
+  drop!(r)
+  0
+</code></pre></div></div></div>
+<h3 id="affine-vs-move-semantics">Affine vs. move semantics</h3>
+<p>Turmeric's ownership model is affine by default for move types (<code>CK_UNIQUE</code>):
+values can be dropped implicitly but cannot be aliased. The explicit <code>^affine</code>
+annotation makes this restriction visible in the type signature, enabling
+the elaborator to catch double-use at compile time.</p>
+<h3 id="pattern-matching">Pattern matching</h3>
+<p>Substructural annotations are checked at each match arm independently.
+A <code>^linear</code> value bound inside a match arm must be consumed within that arm.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(match opt
+  (some v) (let [^linear r (ref v)]
+             (drop! r))   ;; must consume before arm exits
+  none     0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">match opt
+  (some v)
+    let [^linear r ref(v)]
+      drop!(r)   ;; must consume before arm exits
+  none  0
+</code></pre></div></div></div>
+<hr />
+<h2 id="borrows-and-lifetimes-ty4">Borrows and Lifetimes (TY4)</h2>
+<p>A borrow (<code>(&amp; x)</code> / <code>(&amp;mut x)</code>) is a non-owning reference whose validity is tied
+to the value it points at. Turmeric enforces, at compile time, that <strong>a borrow
+never outlives the value it borrows from</strong> (TUR-E0105):</p>
+<pre><code class="language-turmeric">;; ERROR (TUR-E0105): `r` borrows `x`, which lives only in the inner let.
+(defn bad [] : int
+  (let [r (let [x 42] (&amp; x))]   ;; x dies when the inner let ends ...
+    (deref r)))                 ;; ... but r still points at it
+
+;; OK: the borrow does not outlive its referent.
+(defn deref-outer [] : int
+  (let [x 42]
+    (let [r (&amp; x)]              ;; x outlives r
+      (deref r))))
+</code></pre>
+<p>The check is flow-sensitive through <code>do</code>, <code>let</code>, and both <code>if</code> branches, so a
+borrow produced inside a nested block is still attributed to its referent. It
+fires at two positions: a <code>let</code> binding whose initializer is an escaping borrow,
+and a function whose result is a borrow of one of its own locals. A borrow of an
+equal-or-outer-scope binding is always fine.</p>
+<h3 id="borrow-types-and-explicit-a-lifetimes">Borrow types and explicit <code>'a</code> lifetimes</h3>
+<p>Borrows are first-class <strong>type annotations</strong>, written Rust-style with the
+lifetime immediately after the borrow sigil:</p>
+<pre><code class="language-turmeric">;; &amp;'a int        -- immutable borrow with lifetime 'a
+;; &amp;mut 'a int    -- mutable borrow with lifetime 'a
+;; &amp;int           -- borrow with an elided (implicitly fresh) lifetime
+</code></pre>
+<p>Lifetimes are <strong>implicitly quantified</strong>: every distinct <code>'a</code> in a signature is a
+fresh lifetime parameter, and a repeated <code>'a</code> refers to the same one (just like
+type variables). A borrow may also be a <strong>return type</strong>, which is how an output
+borrow is tied back to an input:</p>
+<pre><code class="language-turmeric">;; The result borrows from x and y (both 'a), so it is valid for as long as
+;; the shorter of the two arguments.
+(defn longer [x : &amp;'a int y : &amp;'a int] : &amp;'a int
+  (if (&gt; @x @y) x y))
+</code></pre>
+<h3 id="inter-procedural-borrow-checking">Inter-procedural borrow checking</h3>
+<p>Because the return lifetime is tied to a parameter, the borrow checker follows
+the relationship <strong>across calls</strong>. A borrow returned from a call is treated as a
+borrow of the corresponding argument, so it cannot outlive that argument's
+referent:</p>
+<pre><code class="language-turmeric">(defn idb [x : &amp;'a int] : &amp;'a int x)
+
+;; ERROR (TUR-E0105): (idb (&amp; a)) borrows the local `a`; returning it lets that
+;; borrow escape `bad`, where `a` no longer exists.
+(defn bad [] : &amp;int
+  (let [a 5]
+    (idb (&amp; a))))
+</code></pre>
+<p>This reuses the same TUR-E0105 escape machinery as the direct case, so a single
+diagnostic is reported (no double-reporting).</p>
+<h3 id="lifetime-elision-and-outlives-constraints">Lifetime elision and outlives constraints</h3>
+<p>A borrow parameter or return that omits a lifetime gets one by the classic
+elision rules -- each borrow parameter gets its own lifetime (rule 1), a sole
+input lifetime flows to an elided borrow return (rule 2), and a receiver-style
+first borrow parameter lends its lifetime to the return (rule 3). Explicit <code>'a</code>
+annotations override elision for the borrows that carry them.</p>
+<p>Nested borrows imply outlives constraints: <code>&amp;'a &amp;'b T</code> requires the inner
+reference to outlive the outer, i.e. <code>'b</code> outlives <code>'a</code>. The resulting
+constraints are solved with cycle detection, so a contradictory, cyclic
+signature -- e.g. one parameter <code>&amp;'a &amp;'b int</code> paired with another <code>&amp;'b &amp;'a int</code>
+-- is rejected (TUR-E0106) rather than looping. The elision rules, the
+name-to-id interning, and the cycle-safe solver are unit-tested in
+<code>tests/lifetime_unit.c</code>; end-to-end fixtures live in <code>tests/fixtures/lifetime-*</code>
+and <code>tests/fixtures/errors/lifetime-*</code>.</p>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="uniqueness-types-guide.md">Uniqueness Types Guide</a> -- <code>^unique</code> (at-most-one-reference discipline)</li>
+<li><code>tur --explain TUR-E0100</code> -- linear drop without consume</li>
+<li><code>tur --explain TUR-E0150</code> -- affine used twice</li>
+<li><code>tur --explain TUR-E0151</code> -- relevant dropped without use</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/substructural-types-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

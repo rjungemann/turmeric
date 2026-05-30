@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tur/logic — Logic Programming Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#turlogic-logic-programming-guide" style="">tur/logic — Logic Programming Guide</a></li>
+<li style=""><a href="#background-what-is-minikanren" style="">Background: what is miniKanren?</a></li>
+<li style=""><a href="#quick-start" style="">Quick start</a></li>
+<li style=""><a href="#core-concepts" style="">Core concepts</a></li>
+<li style="padding-left:0.75rem;"><a href="#terms" style="color:var(--text-sec);">Terms</a></li>
+<li style="padding-left:0.75rem;"><a href="#logic-variables" style="color:var(--text-sec);">Logic variables</a></li>
+<li style="padding-left:0.75rem;"><a href="#substitutions" style="color:var(--text-sec);">Substitutions</a></li>
+<li style="padding-left:0.75rem;"><a href="#goals" style="color:var(--text-sec);">Goals</a></li>
+<li style="padding-left:0.75rem;"><a href="#running-a-goal" style="color:var(--text-sec);">Running a goal</a></li>
+<li style=""><a href="#examples" style="">Examples</a></li>
+<li style="padding-left:0.75rem;"><a href="#unification-failure" style="color:var(--text-sec);">Unification failure</a></li>
+<li style="padding-left:0.75rem;"><a href="#disjunction-multiple-answers" style="color:var(--text-sec);">Disjunction — multiple answers</a></li>
+<li style="padding-left:0.75rem;"><a href="#fresh-variables" style="color:var(--text-sec);">Fresh variables</a></li>
+<li style="padding-left:0.75rem;"><a href="#pair-unification" style="color:var(--text-sec);">Pair unification</a></li>
+<li style="padding-left:0.75rem;"><a href="#conjunction-chain" style="color:var(--text-sec);">Conjunction chain</a></li>
+<li style="padding-left:0.75rem;"><a href="#family-tree-relations" style="color:var(--text-sec);">Family-tree relations</a></li>
+<li style=""><a href="#extending-turlogic" style="">Extending tur/logic</a></li>
+<li style="padding-left:0.75rem;"><a href="#custom-constraints" style="color:var(--text-sec);">Custom constraints</a></li>
+<li style="padding-left:0.75rem;"><a href="#reification-helpers" style="color:var(--text-sec);">Reification helpers</a></li>
+<li style="padding-left:0.75rem;"><a href="#conde-macro" style="color:var(--text-sec);">conde macro</a></li>
+<li style="padding-left:0.75rem;"><a href="#interleaving-search" style="color:var(--text-sec);">Interleaving search</a></li>
+<li style="padding-left:0.75rem;"><a href="#tabling-memoisation" style="color:var(--text-sec);">Tabling / memoisation</a></li>
+<li style=""><a href="#integration-with-turbacktrack" style="">Integration with tur/backtrack</a></li>
+<li style=""><a href="#performance-notes" style="">Performance notes</a></li>
+<li style=""><a href="#where-to-learn-more" style="">Where to learn more</a></li>
+<li style="padding-left:0.75rem;"><a href="#the-minikanren-language-and-theory" style="color:var(--text-sec);">The miniKanren language and theory</a></li>
+<li style="padding-left:0.75rem;"><a href="#unification" style="color:var(--text-sec);">Unification</a></li>
+<li style="padding-left:0.75rem;"><a href="#logic-programming-broadly" style="color:var(--text-sec);">Logic programming broadly</a></li>
+<li style="padding-left:0.75rem;"><a href="#related-guides-in-this-documentation" style="color:var(--text-sec);">Related guides in this documentation</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="turlogic-logic-programming-guide"><code>tur/logic</code> — Logic Programming Guide</h1>
+<p><code>tur/logic</code> provides miniKanren-style logic programming: unification, logic
+variables, goals, and a backtracking search engine.  The module lives in
+<code>stdlib/logic.tur</code> and has no dependencies outside the standard C allocator.</p>
+<hr />
+<h2 id="background-what-is-minikanren">Background: what is miniKanren?</h2>
+<p>miniKanren is a small, embeddable logic programming language pioneered by
+William Byrd, Daniel Friedman, and collaborators.  Its central idea is that
+programs are written as <em>relations</em> rather than functions, so the same
+relation can be queried in multiple directions:</p>
+<ul>
+<li>given <code>x</code>, find all <code>y</code> such that <code>parento(x, y)</code> holds;</li>
+<li>given <code>y</code>, find all <code>x</code> such that <code>parento(x, y)</code> holds;</li>
+<li>enumerate all <code>(x, y)</code> pairs for which the relation holds.</li>
+</ul>
+<p>The key primitives are:</p>
+<table>
+<thead>
+<tr>
+<th>Concept</th>
+<th>miniKanren name</th>
+<th><code>tur/logic</code> name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Succeed unconditionally</td>
+<td><code>succeed</code></td>
+<td><code>(succeed)</code></td>
+</tr>
+<tr>
+<td>Fail unconditionally</td>
+<td><code>fail</code></td>
+<td><code>(fail)</code></td>
+</tr>
+<tr>
+<td>Unify two terms</td>
+<td><code>==</code></td>
+<td><code>(lequal t1 t2)</code></td>
+</tr>
+<tr>
+<td>Logical AND</td>
+<td><code>fresh</code>/<code>conj</code></td>
+<td><code>(conjoined g1 g2)</code></td>
+</tr>
+<tr>
+<td>Logical OR</td>
+<td><code>conde</code>/<code>disj</code></td>
+<td><code>(disjoined g1 g2)</code></td>
+</tr>
+<tr>
+<td>Introduce a variable</td>
+<td><code>fresh</code></td>
+<td><code>(fresh (fn [x] ...))</code></td>
+</tr>
+<tr>
+<td>Run a goal</td>
+<td><code>run</code></td>
+<td><code>(run-logic n goal)</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="quick-start">Quick start</h2>
+<pre><code class="language-turmeric">(import tur/logic :refer [term-int term-var term-nil term-pair
+                           lvar-next subs-empty
+                           lequal succeed fail conjoined disjoined fresh
+                           run-logic first-state reify-walk
+                           term-int-val term-tag logic-walk])
+
+;; Q: is 5 equal to 5?
+(let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
+  (println (bt-length results)))   ; =&gt; 1
+
+;; Q: what value does x have if x == 7?
+(let [x      (term-var (lvar-next))
+      goal   (lequal x (term-int 7))
+      result (run-logic 1 goal)
+      walked (reify-walk x result)]
+  (println (term-int-val walked)))  ; =&gt; 7
+</code></pre>
+<hr />
+<h2 id="core-concepts">Core concepts</h2>
+<h3 id="terms">Terms</h3>
+<p>A <em>term</em> is a tagged heap struct with three 64-bit fields: <code>tag</code>, <code>data1</code>,
+<code>data2</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Tag</th>
+<th>Kind</th>
+<th>Constructor</th>
+<th>Accessor(s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>integer constant</td>
+<td><code>(term-int n)</code></td>
+<td><code>(term-int-val t)</code></td>
+</tr>
+<tr>
+<td>1</td>
+<td>logic variable</td>
+<td><code>(term-var id)</code></td>
+<td><code>(term-var-id t)</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td>pair</td>
+<td><code>(term-pair a b)</code></td>
+<td><code>(term-pair-fst t)</code>, <code>(term-pair-snd t)</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>nil</td>
+<td><code>(term-nil)</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>The tag of any term can be inspected with <code>(term-tag t)</code>.</p>
+<p>Pairs nest to form lists in the usual cons-cell style:</p>
+<pre><code class="language-turmeric">;; build the list [1, 2, nil]
+(let [lst (term-pair (term-int 1)
+                     (term-pair (term-int 2) (term-nil)))]
+  ...)
+</code></pre>
+<h3 id="logic-variables">Logic variables</h3>
+<p>Every variable is identified by a unique integer id, obtained from the
+global counter <code>(lvar-next)</code>:</p>
+<pre><code class="language-turmeric">(let [x (term-var (lvar-next))
+      y (term-var (lvar-next))]
+  ...)
+</code></pre>
+<p>Prefer <code>(fresh ...)</code> (below) over manual <code>lvar-next</code> calls — it keeps
+variable scope explicit.</p>
+<h3 id="substitutions">Substitutions</h3>
+<p>A <em>substitution</em> maps variable ids to terms.  It is represented as an alist
+(a linked list of <code>{ var_id, term_ptr, next }</code> structs) whose empty value is
+<code>(subs-empty)</code> (i.e., 0).</p>
+<p>You rarely manipulate substitutions directly; <code>run-logic</code> starts from the
+empty one and <code>reify-walk</code> lets you look up results.</p>
+<h3 id="goals">Goals</h3>
+<p>A <em>goal</em> is a fat closure of type <code>UState → list UState</code> — it accepts a
+substitution and returns zero or more extended substitutions (the solution
+stream).</p>
+<p>The built-in goal constructors:</p>
+<pre><code class="language-turmeric">;; Primitives
+(succeed)                         ; always succeeds
+(fail)                            ; always fails
+(lequal t1 t2)                    ; unify t1 and t2
+
+;; Combination
+(conjoined g1 g2)                 ; g1 AND g2 (sequential)
+(disjoined g1 g2)                 ; g1 OR  g2 (parallel streams)
+
+;; Variable introduction
+(fresh (fn [x] body-goal))        ; create one fresh variable x
+</code></pre>
+<h3 id="running-a-goal">Running a goal</h3>
+<pre><code class="language-turmeric">(run-logic n goal)
+</code></pre>
+<p>Returns a solution list of at most <code>n</code> substitutions.  Use helper functions
+to extract results:</p>
+<pre><code class="language-turmeric">(first-state results)             ; first substitution, or 0
+(reify-walk term results)         ; walk a term through the first substitution
+(bt-length results)               ; number of solutions (from tur/logic, re-exported)
+</code></pre>
+<hr />
+<h2 id="examples">Examples</h2>
+<h3 id="unification-failure">Unification failure</h3>
+<pre><code class="language-turmeric">(let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
+  (println (bt-length results)))   ; =&gt; 0 (no solutions)
+</code></pre>
+<h3 id="disjunction-multiple-answers">Disjunction — multiple answers</h3>
+<pre><code class="language-turmeric">(let [x   (term-var (lvar-next))
+      g   (disjoined (lequal x (term-int 1))
+                     (disjoined (lequal x (term-int 2))
+                                (lequal x (term-int 3))))
+      res (run-logic 5 g)]
+  (println (bt-length res)))       ; =&gt; 3
+</code></pre>
+<h3 id="fresh-variables">Fresh variables</h3>
+<p><code>fresh</code> is the idiomatic way to introduce a scoped logic variable:</p>
+<pre><code class="language-turmeric">(let [res (run-logic 1
+            (fresh (fn [x]
+              (conjoined
+                (lequal x (term-int 42))
+                (succeed)))))]
+  (println (term-int-val (reify-walk x res))))  ; =&gt; 42
+</code></pre>
+<h3 id="pair-unification">Pair unification</h3>
+<pre><code class="language-turmeric">(let [x   (term-var (lvar-next))
+      y   (term-var (lvar-next))
+      lhs (term-pair x (term-int 2))
+      rhs (term-pair (term-int 1) y)
+      res (run-logic 1 (lequal lhs rhs))]
+  ;; after unification: x=1, y=2
+  (println (term-int-val (reify-walk x res)))  ; =&gt; 1
+  (println (term-int-val (reify-walk y res)))) ; =&gt; 2
+</code></pre>
+<h3 id="conjunction-chain">Conjunction chain</h3>
+<p>Build a chain of goals with <code>conjoined</code>:</p>
+<pre><code class="language-turmeric">;; helper: (conjoin-all gs) folds a list of goals with conjoined
+(defn conjoin-all [gs] :ptr&lt;void&gt;
+  (if (= (tail gs) 0)
+    (head gs)
+    (conjoined (head gs) (conjoin-all (tail gs)))))
+</code></pre>
+<h3 id="family-tree-relations">Family-tree relations</h3>
+<pre><code class="language-turmeric">;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
+(defn parento [parent child] :ptr&lt;void&gt;
+  (disjoined (conjoined (lequal parent (term-int 0))
+                        (lequal child  (term-int 1)))
+             (disjoined (conjoined (lequal parent (term-int 0))
+                                   (lequal child  (term-int 2)))
+                        (conjoined (lequal parent (term-int 1))
+                                   (lequal child  (term-int 3))))))
+
+;; grandparento via fresh intermediate variable
+(defn grandparento [grand child] :ptr&lt;void&gt;
+  (fresh (fn [mid]
+    (conjoined (parento grand mid)
+               (parento mid child)))))
+
+;; Query: who are the grandchildren of Alice (id=0)?
+(let [child (term-var (lvar-next))
+      res   (run-logic 10 (grandparento (term-int 0) child))]
+  ;; walks each solution
+  ...)
+</code></pre>
+<hr />
+<h2 id="extending-turlogic">Extending <code>tur/logic</code></h2>
+<h3 id="custom-constraints">Custom constraints</h3>
+<p><code>tur/logic</code> uses <em>syntactic unification</em> without an occurs check.  You can
+add arithmetic constraints or domain restrictions by building goals that
+inspect terms:</p>
+<pre><code class="language-turmeric">;; goal: t must walk to an integer in the range [lo, hi]
+(defn range-goal [t lo hi] :ptr&lt;void&gt;
+  (fn [state]
+    (let [walked (logic-walk t state)
+          tag    (term-tag walked)]
+      (if (= tag 0)                             ; INT term
+        (let [v (term-int-val walked)]
+          (if (and (&gt;= v lo) (&lt;= v hi))
+            (mreturn state)
+            (mzero)))
+        (mzero)))))                             ; not ground — fail
+</code></pre>
+<h3 id="reification-helpers">Reification helpers</h3>
+<p><code>reify-walk</code> follows a single substitution.  To pretty-print a full term
+tree, walk recursively:</p>
+<pre><code class="language-turmeric">(defn reify-term [t subs] :cstr
+  (let [walked (logic-walk t subs)
+        tag    (term-tag walked)]
+    (cond
+      (= tag 0) (int-&gt;cstr (term-int-val walked))
+      (= tag 1) &quot;_&quot;
+      (= tag 2) (str-concat &quot;(&quot; (str-concat (reify-term (term-pair-fst walked) subs)
+                                            (str-concat &quot; . &quot; (str-concat (reify-term (term-pair-snd walked) subs) &quot;)&quot;))))
+      (= tag 3) &quot;nil&quot;
+      :else     &quot;?&quot;)))
+</code></pre>
+<h3 id="conde-macro"><code>conde</code> macro</h3>
+<p>The classic miniKanren <code>conde</code> is syntactic sugar over nested <code>disjoined</code> /
+<code>conjoined</code>.  You can define it as a Turmeric macro:</p>
+<pre><code class="language-turmeric">;; (conde [g1 g2 ...] [g3 g4 ...] ...)
+;; each clause is a conjunction; clauses are disjoined
+(defmacro conde [&amp; clauses]
+  (if (= (tail clauses) 0)
+    `(conjoin-all ~(head clauses))
+    `(disjoined (conjoin-all ~(head clauses))
+                (conde ~@(tail clauses)))))
+</code></pre>
+<h3 id="interleaving-search">Interleaving search</h3>
+<p><code>disjoined</code> currently uses <code>mplus</code>, which appends streams left-to-right
+(<em>depth-first</em> enumeration).  For fairer, <em>breadth-first</em> (interleaved)
+search replace <code>mplus</code> with an interleaving version:</p>
+<pre><code class="language-turmeric">;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
+(defn mplus-i [xs ys] :int
+  ;; swap xs and ys for every cons cell so solutions alternate
+  (if (= xs 0) ys
+    (let [head-val (bt-head xs)
+          rest     (bt-tail xs)]
+      (bt-cons head-val (mplus-i ys rest)))))
+</code></pre>
+<p>Then define <code>disjoined-i</code> analogously and use it in place of <code>disjoined</code>
+when you need complete enumeration of infinite search spaces.</p>
+<h3 id="tabling-memoisation">Tabling / memoisation</h3>
+<p>For recursive relations that diverge under depth-first search, add a memo
+table keyed on <code>(goal-id, substitution)</code>:</p>
+<pre><code class="language-turmeric">;; memo-table: map from (goal-name × subs-hash) → result-list
+;; Use tur/hamt for the persistent map.
+(import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup])
+
+(defn tabled [name goal-fn args subs] :int
+  (let [key  (hash-key name args subs)
+        memo (hamt-lookup *memo-table* key)]
+    (if (option-some? memo)
+      (option-unwrap memo)
+      (let [result (apply-goal (goal-fn args) subs)]
+        (set! *memo-table* (hamt-insert *memo-table* key result))
+        result))))
+</code></pre>
+<hr />
+<h2 id="integration-with-turbacktrack">Integration with <code>tur/backtrack</code></h2>
+<p><code>tur/logic</code> inlines the backtracking monad (<code>mzero</code>, <code>mreturn</code>, <code>mplus</code>,
+<code>mbind</code>) directly for performance.  If you are building tools on top of the
+same monad without the full logic layer, <code>stdlib/backtrack.tur</code> exports these
+primitives separately.</p>
+<hr />
+<h2 id="performance-notes">Performance notes</h2>
+<ul>
+<li>Substitutions are persistent alists.  Deep chains of <code>conjoined</code> goals
+  produce long alist walks.  For critical inner loops, cache <code>logic-walk</code>
+  results in a local let binding.</li>
+<li><code>run-logic n g</code> returns at most <code>n</code> solutions and short-circuits; use
+  small <code>n</code> in interactive sessions.</li>
+<li>The N-Queens benchmark (<code>benchmarks/bench-backtrack-n-queens.tur</code>) and the
+  pair-sum benchmark (<code>benchmarks/bench-logic-query.tur</code>) serve as
+  representative workloads.</li>
+</ul>
+<hr />
+<h2 id="where-to-learn-more">Where to learn more</h2>
+<h3 id="the-minikanren-language-and-theory">The miniKanren language and theory</h3>
+<ul>
+<li>
+<p><strong>"The Reasoned Schemer" (2nd ed.)</strong> — Daniel P. Friedman, William E. Byrd,
+  Oleg Kiselyov, Jason Hemann (MIT Press, 2018).  The canonical introduction;
+  every concept in <code>tur/logic</code> maps directly to a chapter.</p>
+</li>
+<li>
+<p><strong>"miniKanren, Live and Untagged"</strong> — William Byrd et al., 2012 Workshop
+  on Scheme and Functional Programming.
+  <a href="https://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf">https://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf</a></p>
+</li>
+<li>
+<p><strong>µKanren</strong> (micro-Kanren) — Jason Hemann &amp; Daniel Friedman, 2013.
+  The minimal core (≈ 40 lines of Scheme) that <code>tur/logic</code> is modeled after.
+  <a href="http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf">http://webyrd.net/scheme-2013/papers/HemannMuKanren2013.pdf</a></p>
+</li>
+<li>
+<p><strong>miniKanren.org</strong> — canonical reference implementation, papers, and talks.
+  <a href="http://minikanren.org">http://minikanren.org</a></p>
+</li>
+</ul>
+<h3 id="unification">Unification</h3>
+<ul>
+<li>
+<p><strong>"An Efficient Unification Algorithm"</strong> — Martelli &amp; Montanari (1982),
+  <em>ACM Transactions on Programming Languages and Systems</em>.
+  Describes the linear-time algorithm; <code>tur/logic</code> uses the simpler quadratic
+  alist walk, suitable for small substitutions.</p>
+</li>
+<li>
+<p><strong>"Unification: A Multidisciplinary Survey"</strong> — Kevin Knight (1989).
+  <a href="https://dl.acm.org/doi/10.1145/62029.62030">https://dl.acm.org/doi/10.1145/62029.62030</a></p>
+</li>
+</ul>
+<h3 id="logic-programming-broadly">Logic programming broadly</h3>
+<ul>
+<li>
+<p><strong>"The Art of Prolog"</strong> — Sterling &amp; Shapiro (MIT Press, 1994).
+  Classical treatment of resolution, unification, and search strategies.</p>
+</li>
+<li>
+<p><strong>core.logic</strong> (Clojure) — a production miniKanren embedding closest in
+  spirit to <code>tur/logic</code>.  Good source of idioms and constraint extensions.
+  <a href="https://github.com/clojure/core.logic">https://github.com/clojure/core.logic</a></p>
+</li>
+<li>
+<p><strong>Kanren</strong> (original, Scheme) — Byrd &amp; Friedman.
+  <a href="https://github.com/webyrd/miniKanren">https://github.com/webyrd/miniKanren</a></p>
+</li>
+</ul>
+<h3 id="related-guides-in-this-documentation">Related guides in this documentation</h3>
+<ul>
+<li><a href="backtracking-guide.md">backtracking-guide.md</a> — The <code>tur/backtrack</code> monad
+  that <code>tur/logic</code> is built on.</li>
+<li><a href="minikanren-1-relations-and-queries.md">minikanren-1-relations-and-queries.md</a>
+  — A runnable worked example building a family-graph query.</li>
+<li><a href="datalog-01-concepts.md">datalog-01-concepts.md</a> — Datalog, a cousin of
+  miniKanren suited to database-style queries.</li>
+<li><a href="effects-system-guide.md">effects-system-guide.md</a> — Algebraic effects,
+  an alternative to the monad-based search strategy used here.</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/tur-logic-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

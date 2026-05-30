@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notebook Guide | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#turmeric-notebook-guide" style="">Turmeric Notebook Guide</a></li>
+<li style=""><a href="#installing" style="">Installing</a></li>
+<li style=""><a href="#quick-start" style="">Quick Start</a></li>
+<li style="padding-left:0.75rem;"><a href="#create-a-new-notebook" style="color:var(--text-sec);">Create a new notebook</a></li>
+<li style="padding-left:0.75rem;"><a href="#open-the-tui" style="color:var(--text-sec);">Open the TUI</a></li>
+<li style="padding-left:0.75rem;"><a href="#run-cells-non-interactively" style="color:var(--text-sec);">Run cells non-interactively</a></li>
+<li style="padding-left:0.75rem;"><a href="#export-to-html" style="color:var(--text-sec);">Export to HTML</a></li>
+<li style="padding-left:0.75rem;"><a href="#render-to-terminal-markdown" style="color:var(--text-sec);">Render to terminal markdown</a></li>
+<li style=""><a href="#notebook-file-format" style="">Notebook File Format</a></li>
+<li style="padding-left:0.75rem;"><a href="#cell-attributes" style="color:var(--text-sec);">Cell attributes</a></li>
+<li style=""><a href="#cell-types" style="">Cell Types</a></li>
+<li style="padding-left:0.75rem;"><a href="#turmeric-cells" style="color:var(--text-sec);">Turmeric cells</a></li>
+<li style="padding-left:0.75rem;"><a href="#prose-cells" style="color:var(--text-sec);">Prose cells</a></li>
+<li style=""><a href="#exec-subcommand" style="">exec Subcommand</a></li>
+<li style=""><a href="#new-subcommand" style="">new Subcommand</a></li>
+<li style=""><a href="#image-hook-nb11" style="">Image Hook (NB11)</a></li>
+<li style=""><a href="#math-katex" style="">Math (KaTeX)</a></li>
+<li style="padding-left:0.75rem;"><a href="#inline-math" style="color:var(--text-sec);">Inline math</a></li>
+<li style="padding-left:0.75rem;"><a href="#display-math" style="color:var(--text-sec);">Display math</a></li>
+<li style="padding-left:0.75rem;"><a href="#html-export" style="color:var(--text-sec);">HTML export</a></li>
+<li style="padding-left:0.75rem;"><a href="#cell-output-math-mathtrue" style="color:var(--text-sec);">Cell output math (math=true)</a></li>
+<li style="padding-left:0.75rem;"><a href="#unsupported-macros" style="color:var(--text-sec);">Unsupported macros</a></li>
+<li style=""><a href="#tui-key-bindings" style="">TUI Key Bindings</a></li>
+<li style=""><a href="#further-reading" style="">Further Reading</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="turmeric-notebook-guide">Turmeric Notebook Guide</h1>
+<p><code>tur-notebook</code> brings literate-programming <code>.tur.md</code> notebooks to the Turmeric
+ecosystem -- think Jupyter, but backed by the Turmeric evaluator with a
+terminal-first TUI, standalone HTML export, and a scriptable <code>exec</code> mode.</p>
+<hr />
+<h2 id="installing">Installing</h2>
+<p>Clone <code>turmeric-spices</code> next to your <code>turmeric</code> checkout:</p>
+<pre><code class="language-sh">git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices
+</code></pre>
+<p>Declare the spice in your project's <code>build.tur</code>:</p>
+<pre><code class="language-turmeric">:spices {
+  &quot;notebook&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;notebook-v0.1.0&quot;
+              :subdir &quot;spices/notebook&quot;}
+}
+</code></pre>
+<p>Then run <code>tur add</code> or <code>tur build</code> to fetch and link it.</p>
+<hr />
+<h2 id="quick-start">Quick Start</h2>
+<h3 id="create-a-new-notebook">Create a new notebook</h3>
+<pre><code class="language-sh">nb new my-notes.tur.md
+</code></pre>
+<p>This writes a starter <code>.tur.md</code> file with a prose heading and one
+<code>turmeric</code> code fence.</p>
+<h3 id="open-the-tui">Open the TUI</h3>
+<pre><code class="language-sh">nb tui my-notes.tur.md
+</code></pre>
+<p>Navigate cells with <code>j</code>/<code>k</code>, edit in your <code>$EDITOR</code> with <code>e</code>, evaluate with
+<code>Enter</code>, and quit with <code>q</code> (you will be prompted if there are unsaved changes).
+Press <code>?</code> for the full key binding list.</p>
+<h3 id="run-cells-non-interactively">Run cells non-interactively</h3>
+<pre><code class="language-sh"># Evaluate every cell and print outputs
+nb exec --all my-notes.tur.md
+
+# Evaluate from a specific cell onward
+nb exec --cell my-cell-id my-notes.tur.md
+</code></pre>
+<h3 id="export-to-html">Export to HTML</h3>
+<pre><code class="language-sh">nb export my-notes.tur.md -o my-notes.html
+</code></pre>
+<p>Produces a self-contained HTML file with the vendored stylesheet.</p>
+<h3 id="render-to-terminal-markdown">Render to terminal markdown</h3>
+<pre><code class="language-sh">nb render my-notes.tur.md
+</code></pre>
+<hr />
+<h2 id="notebook-file-format">Notebook File Format</h2>
+<p>A notebook is a Markdown file where Turmeric code blocks are designated with
+an info string that starts with <code>turmeric</code>:</p>
+<pre><code class="language-markdown"># My Notebook
+
+Some prose.
+
+```turmeric {id=setup}
+(def x 42)
+```
+
+```turmeric {id=use-x depends=setup}
+(+ x 1)
+```
+</code></pre>
+<h3 id="cell-attributes">Cell attributes</h3>
+<p>Attributes appear in a <code>{...}</code> block after <code>turmeric</code> on the opening fence:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>string</td>
+<td>Unique cell identifier (required for <code>exec --cell</code> and caching)</td>
+</tr>
+<tr>
+<td><code>eval</code></td>
+<td><code>true</code>/<code>false</code></td>
+<td>Set to <code>false</code> to skip evaluation (default: <code>true</code>)</td>
+</tr>
+<tr>
+<td><code>depends</code></td>
+<td>string</td>
+<td>Space-separated list of cell ids this cell depends on</td>
+</tr>
+<tr>
+<td><code>cache</code></td>
+<td><code>true</code>/<code>false</code></td>
+<td>Cache output; re-use unless dependencies change (default: <code>false</code>)</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>continue</code></td>
+<td>Continue evaluating subsequent cells if this cell errors</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="cell-types">Cell Types</h2>
+<h3 id="turmeric-cells">Turmeric cells</h3>
+<p>Cells with the <code>turmeric</code> language tag are evaluated by the embedded Turmeric
+interpreter session. All cells in a notebook share one session, so bindings
+defined in earlier cells are visible in later ones.</p>
+<h3 id="prose-cells">Prose cells</h3>
+<p>Everything outside a code fence is prose. Prose is rendered as Markdown in
+the TUI and included verbatim in the HTML export.</p>
+<hr />
+<h2 id="exec-subcommand">exec Subcommand</h2>
+<p><code>nb exec</code> is the non-interactive entry point for running notebooks from
+scripts, CI, or editor integrations.</p>
+<pre><code class="language-sh"># Evaluate all cells
+nb exec --all notebook.tur.md
+
+# Evaluate from a named cell onward
+nb exec --cell analysis notebook.tur.md
+</code></pre>
+<p>Outputs are printed to stdout in the format <code>[&lt;cell-id&gt;] =&gt; &lt;repr&gt;</code>.
+Error outputs are printed to stderr.
+Exit code is 0 on success, 1 on evaluation or I/O error.</p>
+<hr />
+<h2 id="new-subcommand">new Subcommand</h2>
+<pre><code class="language-sh">nb new my-notebook.tur.md
+</code></pre>
+<p>Writes a minimal starter notebook to the given path. Refuses to overwrite an
+existing file (exit code 1 if the path already exists).</p>
+<hr />
+<h2 id="image-hook-nb11">Image Hook (NB11)</h2>
+<p>Cells can advertise image files to the TUI via the image hook convention:</p>
+<pre><code class="language-turmeric">(import notebook/image :refer [image-hook-record-path])
+
+;; After generating /tmp/plot.png:
+(image-hook-record-path &quot;/tmp/plot.png&quot;)
+</code></pre>
+<p>The TUI reads the advertised paths and displays the images inline using:</p>
+<ul>
+<li><strong>Kitty graphics protocol</strong> -- if <code>$TERM</code> is <code>xterm-kitty</code></li>
+<li><strong>iTerm2 inline images</strong> -- if <code>$TERM_PROGRAM</code> is <code>iTerm.app</code></li>
+<li><strong>Text fallback</strong> -- prints the file path for all other terminals</li>
+</ul>
+<p>The image hook works by printing a <code>__NB_IMG__: &lt;path&gt;</code> marker to stdout,
+which the session evaluator captures and strips before returning output.</p>
+<hr />
+<h2 id="math-katex">Math (KaTeX)</h2>
+<p>Notebooks support LaTeX math via <a href="https://katex.org">KaTeX</a>. Math is rendered
+client-side in the browser when you export to HTML.</p>
+<h3 id="inline-math">Inline math</h3>
+<p>Wrap LaTeX between single <code>$</code> delimiters on the same line:</p>
+<pre><code class="language-markdown">The variance is $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(x_i - \mu)^2$.
+</code></pre>
+<p>An opening <code>$</code> is only recognized when it is <strong>not</strong> immediately followed by a
+digit or whitespace, so currency amounts like <code>$5</code> and <code>$10</code> are left as
+literal text.</p>
+<h3 id="display-math">Display math</h3>
+<p>Wrap multi-line expressions between <code>$$</code> on their own lines:</p>
+<pre><code class="language-markdown">The Gaussian PDF is
+
+$$
+f(x) = \frac{1}{\sigma\sqrt{2\pi}}\,
+       e^{-\tfrac{1}{2}\left(\tfrac{x-\mu}{\sigma}\right)^2}
+$$
+</code></pre>
+<p>A one-line form <code>$$ E = mc^2 $$</code> is also accepted.</p>
+<h3 id="html-export">HTML export</h3>
+<p>Math is injected automatically during <code>export html</code>:</p>
+<pre><code class="language-sh">tur nb export html notebook.tur.md
+</code></pre>
+<p>The <code>--math</code> flag controls KaTeX injection:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--math=auto</code> (default)</td>
+<td>Inject KaTeX only if the document contains math nodes</td>
+</tr>
+<tr>
+<td><code>--math=always</code></td>
+<td>Always inject (useful when cells emit math at runtime)</td>
+</tr>
+<tr>
+<td><code>--math=never</code></td>
+<td>Never inject; math nodes render as raw <code>$$...$$</code> source</td>
+</tr>
+</tbody>
+</table>
+<p>By default the KaTeX CSS and JS are <strong>inlined</strong> into the HTML file so it works
+offline. Use <code>--assets=sibling</code> to write <code>katex.min.css</code>, <code>katex.min.js</code>, and
+<code>auto-render.min.js</code> as separate files next to the HTML instead:</p>
+<pre><code class="language-sh">tur nb export html notebook.tur.md --assets=sibling
+</code></pre>
+<p>Font files (<code>katex-fonts/</code>) are always written as siblings regardless of mode.</p>
+<h3 id="cell-output-math-mathtrue">Cell output math (<code>math=true</code>)</h3>
+<p>Add <code>math=true</code> to a cell's fence attributes to have the cell's stdout
+rendered as math rather than preformatted text:</p>
+<pre><code class="language-markdown">```turmeric {math=true}
+(println &quot;$$ E = mc^2 $$&quot;)
+```
+</code></pre>
+<p>The cell output is scanned for <code>$$...$$</code> and <code>$...$</code> spans and wrapped in
+<code>&lt;div class="math-output"&gt;</code>. This also implies <code>--math=always</code> for the page
+even if no prose math nodes are present.</p>
+<h3 id="unsupported-macros">Unsupported macros</h3>
+<p>KaTeX implements a large subset of LaTeX but not everything. If you hit an
+unsupported macro (<code>\newcommand</code> chains, <code>tikzpicture</code>, etc.) the expression
+renders in red with the error message. As a fallback, generate the math as an
+image from your preferred TeX engine and embed it via the image pipeline:</p>
+<pre><code class="language-turmeric">(import notebook/image :refer [image-hook-record-path])
+;; generate /tmp/eq.png from LaTeX here ...
+(image-hook-record-path &quot;/tmp/eq.png&quot;)
+</code></pre>
+<p>The full list of supported KaTeX functions is at
+<a href="https://katex.org/docs/supported.html">https://katex.org/docs/supported.html</a>.</p>
+<hr />
+<h2 id="tui-key-bindings">TUI Key Bindings</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>j</code> / <code>k</code></td>
+<td>Move down / up</td>
+</tr>
+<tr>
+<td><code>e</code></td>
+<td>Edit focused cell in <code>$EDITOR</code></td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Evaluate focused cell</td>
+</tr>
+<tr>
+<td><code>o</code></td>
+<td>Toggle focused-output view</td>
+</tr>
+<tr>
+<td><code>i</code></td>
+<td>Insert cell below</td>
+</tr>
+<tr>
+<td><code>d</code></td>
+<td>Delete focused cell</td>
+</tr>
+<tr>
+<td><code>p</code></td>
+<td>Paste cell below</td>
+</tr>
+<tr>
+<td><code>/</code></td>
+<td>Start search</td>
+</tr>
+<tr>
+<td><code>n</code> / <code>N</code></td>
+<td>Next / previous search match</td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Show help overlay</td>
+</tr>
+<tr>
+<td><code>q</code></td>
+<td>Quit (prompts if unsaved changes)</td>
+</tr>
+</tbody>
+</table>
+<p>Custom key bindings can be provided with <code>--keybindings &lt;file.tur&gt;</code>, which is
+merged onto the built-in map.</p>
+<hr />
+<h2 id="further-reading">Further Reading</h2>
+<ul>
+<li><a href="../notebook-spice-plan.md"><code>docs/notebook-spice-plan.md</code></a> -- full milestone plan</li>
+<li><a href="https://github.com/rjungemann/turmeric-spices/blob/main/spices/notebook/README.md"><code>../turmeric-spices/spices/notebook/README.md</code></a> -- spice README</li>
+<li><a href="developing-spices-guide.md"><code>developing-spices-guide.md</code></a> -- how to develop and publish spices</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/notebook-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

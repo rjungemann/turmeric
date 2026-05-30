@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arrows and Signal Processing | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#arrows-and-signal-processing" style="">Arrows and Signal Processing</a></li>
+<li style=""><a href="#the-arrow-typeclass" style="">The Arrow Typeclass</a></li>
+<li style=""><a href="#function-arrow-basics" style="">Function Arrow Basics</a></li>
+<li style=""><a href="#arrow-laws" style="">Arrow Laws</a></li>
+<li style=""><a href="#product-combinators" style="">Product Combinators</a></li>
+<li style=""><a href="#additional-combinators" style="">Additional Combinators</a></li>
+<li style="padding-left:0.75rem;"><a href="#reverse-composition" style="color:var(--text-sec);">&lt;&lt;&lt; (reverse composition)</a></li>
+<li style="padding-left:0.75rem;"><a href="#par-comp-parallel-composition" style="color:var(--text-sec);">par-comp (parallel composition)</a></li>
+<li style="padding-left:0.75rem;"><a href="#arrow-split-fanout" style="color:var(--text-sec);">arrow-split (fanout)</a></li>
+<li style="padding-left:0.75rem;"><a href="#arrow-const-and-arrow-dup" style="color:var(--text-sec);">arrow-const and arrow-dup</a></li>
+<li style=""><a href="#signals-and-signal-functions" style="">Signals and Signal Functions</a></li>
+<li style="padding-left:0.75rem;"><a href="#core-signal-constructors" style="color:var(--text-sec);">Core signal constructors</a></li>
+<li style="padding-left:0.75rem;"><a href="#combining-signals" style="color:var(--text-sec);">Combining signals</a></li>
+<li style=""><a href="#dsp-primitives" style="">DSP Primitives</a></li>
+<li style="padding-left:0.75rem;"><a href="#oscillators" style="color:var(--text-sec);">Oscillators</a></li>
+<li style="padding-left:0.75rem;"><a href="#filters" style="color:var(--text-sec);">Filters</a></li>
+<li style="padding-left:0.75rem;"><a href="#amplitude-operations" style="color:var(--text-sec);">Amplitude operations</a></li>
+<li style=""><a href="#building-a-dsp-signal-graph" style="">Building a DSP Signal Graph</a></li>
+<li style="padding-left:0.75rem;"><a href="#parallel-paths-with-pair-signals" style="color:var(--text-sec);">Parallel paths with pair-signals</a></li>
+<li style="padding-left:0.75rem;"><a href="#multi-oscillator-mix" style="color:var(--text-sec);">Multi-oscillator mix</a></li>
+<li style=""><a href="#extended-arrow-typeclasses" style="">Extended Arrow Typeclasses</a></li>
+<li style=""><a href="#examples" style="">Examples</a></li>
+<li style=""><a href="#quick-reference" style="">Quick Reference</a></li>
+<li style=""><a href="#see-also" style="">See Also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="arrows-and-signal-processing">Arrows and Signal Processing</h1>
+<p>Turmeric's <code>stdlib/arrow.tur</code> implements the Arrow typeclass hierarchy from
+functional programming. Arrows generalize functions: they describe composable
+computations that take an input and produce an output, but the "computation"
+can carry extra structure -- state, effects, or signal transformation over time.</p>
+<p>The most immediate use case in Turmeric is <strong>signal processing</strong>: the <code>stdlib/signal/</code>
+libraries build on the function Arrow to create composable DSP graphs from pure
+building blocks.</p>
+<h2 id="the-arrow-typeclass">The Arrow Typeclass</h2>
+<p>An Arrow wraps a two-parameter type constructor <code>arr</code> with four operations:</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>arr f</code></td>
+<td><code>(a -&gt; b) -&gt; arr a b</code></td>
+<td>Lift a pure function to an arrow</td>
+</tr>
+<tr>
+<td><code>&gt;&gt;&gt; f g</code></td>
+<td><code>arr a b -&gt; arr b c -&gt; arr a c</code></td>
+<td>Compose: first f, then g</td>
+</tr>
+<tr>
+<td><code>first f</code></td>
+<td><code>arr a b -&gt; arr (Pair a c) (Pair b c)</code></td>
+<td>Apply f to the first component of a product</td>
+</tr>
+<tr>
+<td><code>second f</code></td>
+<td><code>arr a b -&gt; arr (Pair a c) (Pair c b)</code></td>
+<td>Apply f to the second component</td>
+</tr>
+</tbody>
+</table>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defclass Arrow [^arr]
+  (arr    [f]   :int)
+  (&gt;&gt;&gt;    [f g] :int)
+  (first  [f]   :int)
+  (second [f]   :int))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defclass Arrow [^arr]
+  arr    [f]   :int
+  &gt;&gt;&gt;    [f g] :int
+  first  [f]   :int
+  second [f]   :int
+</code></pre></div></div></div>
+<p>The simplest Arrow instance is plain functions (<code>-&gt;</code>). For functions, <code>arr</code> is
+the identity, and <code>&gt;&gt;&gt;</code> is left-to-right composition.</p>
+<h2 id="function-arrow-basics">Function Arrow Basics</h2>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import stdlib/arrow.tur)
+
+;; arr: lift a function (identity for the function Arrow)
+(let [add1   (arr (fn [x] (+ x 1)))
+      double (arr (fn [x] (* x 2)))]
+
+  ;; &gt;&gt;&gt; : compose left-to-right: add1 first, then double
+  (let [pipeline (&gt;&gt;&gt; add1 double)]
+    (println (pipeline 5))))   ; =&gt; 12
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import stdlib/arrow.tur
+
+let [add1   arr(fn [x] {x + 1})
+     double arr(fn [x] {x * 2})]
+
+  let [pipeline &gt;&gt;&gt; add1 double]
+    println pipeline(5)        ; =&gt; 12
+</code></pre></div></div></div>
+<p>The dataflow reads left-to-right: input enters <code>add1</code>, the result flows into
+<code>double</code>, and the final value exits.</p>
+<h2 id="arrow-laws">Arrow Laws</h2>
+<p>Any correct Arrow instance must satisfy:</p>
+<pre><code>arr id &gt;&gt;&gt; f        = f                      ; identity
+arr (g . f)         = arr f &gt;&gt;&gt; arr g        ; composition
+(f &gt;&gt;&gt; g) &gt;&gt;&gt; h     = f &gt;&gt;&gt; (g &gt;&gt;&gt; h)        ; associativity
+first (arr f)       = arr (first f)          ; naturality
+first (f &gt;&gt;&gt; g)     = first f &gt;&gt;&gt; first g    ; product distribution
+</code></pre>
+<p>Turmeric does not enforce these at compile time, but violating them produces
+pipelines with unexpected behaviour.</p>
+<h2 id="product-combinators">Product Combinators</h2>
+<p><code>first</code> and <code>second</code> let you route a branch of a <code>Pair</code> through an arrow while
+passing the other branch unchanged.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import stdlib/arrow.tur)
+
+(let [add1       (arr (fn [x] (+ x 1)))
+      first-add1 (arrow-first add1)    ; apply add1 to fst, pass snd through
+      p          (Pair 5 10)]
+  (println (first-add1 p)))            ; =&gt; Pair(6, 10)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import stdlib/arrow.tur
+
+let [add1       arr(fn [x] {x + 1})
+     first-add1 arrow-first(add1)
+     p          Pair(5 10)]
+  println first-add1(p)                ; =&gt; Pair(6, 10)
+</code></pre></div></div></div>
+<p><code>arrow-first</code> and <code>arrow-second</code> are the plain-function helpers exported from
+<code>stdlib/arrow.tur</code>. (<code>first</code>/<code>second</code> from the typeclass dispatch are also
+available for future use when the full typeclass machinery is active.)</p>
+<h2 id="additional-combinators">Additional Combinators</h2>
+<p><code>stdlib/arrow.tur</code> exports several convenience combinators:</p>
+<h3 id="reverse-composition"><code>&lt;&lt;&lt;</code> (reverse composition)</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; (&lt;&lt;&lt; g f) applies f first, then g -- right-to-left reading
+((&lt;&lt;&lt; double add1) 3)   ; =&gt; 8   (same as (&gt;&gt;&gt; add1 double) 3)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">&lt;&lt;&lt;(double add1)(3)     ; =&gt; 8
+</code></pre></div></div></div>
+<h3 id="par-comp-parallel-composition"><code>par-comp</code> (parallel composition)</h3>
+<p>Apply <code>f</code> to the first component of a <code>Pair</code> and <code>g</code> to the second simultaneously.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [both (par-comp 0 0 0 0 (fn [x] (+ x 1)) (fn [x] (* x 2)))]
+  (both (Pair 3 4)))   ; =&gt; Pair(4, 8)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [both par-comp(0 0 0 0 fn([x] {x + 1}) fn([x] {x * 2}))]
+  both Pair(3 4)       ; =&gt; Pair(4, 8)
+</code></pre></div></div></div>
+<p>Note: the first four <code>0</code> arguments are type-level placeholders (the type
+variables <code>a b c d</code>); they are ignored at runtime.</p>
+<h3 id="arrow-split-fanout"><code>arrow-split</code> (fanout)</h3>
+<p>Duplicate a value and apply two functions, collecting results in a <code>Pair</code>.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [split (arrow-split 0 0 0 (fn [x] (+ x 1)) (fn [x] (* x 2)))]
+  (split 3))   ; =&gt; Pair(4, 6)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [split arrow-split(0 0 0 fn([x] {x + 1}) fn([x] {x * 2}))]
+  split 3      ; =&gt; Pair(4, 6)
+</code></pre></div></div></div>
+<h3 id="arrow-const-and-arrow-dup"><code>arrow-const</code> and <code>arrow-dup</code></h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">((arrow-const 42) 999)   ; =&gt; 42  (ignores input)
+(first (arrow-dup 7))    ; =&gt; 7   (Pair(7, 7))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">arrow-const(42)(999)     ; =&gt; 42
+first arrow-dup(7)       ; =&gt; 7
+</code></pre></div></div></div>
+<hr />
+<h2 id="signals-and-signal-functions">Signals and Signal Functions</h2>
+<p><code>stdlib/signal/core.tur</code> introduces the Signal abstraction:</p>
+<pre><code>Signal a  =  Time -&gt; a
+SF a b    =  Signal a -&gt; Signal b
+</code></pre>
+<p>A <strong>Signal</strong> is just a function from time to a value. A <strong>Signal Function</strong> (SF)
+transforms one signal into another. Because SF is itself a function <code>(Signal a -&gt;
+Signal b)</code>, the plain function Arrow instance applies without any extra machinery:
+<code>arr</code>, <code>&gt;&gt;&gt;</code>, <code>first</code>, and <code>second</code> all work on SFs out of the box.</p>
+<h3 id="core-signal-constructors">Core signal constructors</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import stdlib/signal/core.tur)
+
+;; constant: ignore time, always return the same value
+(let [dc (constant 5.0)]
+  (dc 0.0)    ; =&gt; 5.0
+  (dc 99.0))  ; =&gt; 5.0
+
+;; time-signal: identity -- returns the time at each sample
+(time-signal 2.5)   ; =&gt; 2.5
+
+;; sample: evaluate a signal at a point in time
+(sample (constant 3.0) 1.0)   ; =&gt; 3.0
+
+;; map-signal: lift a function to pointwise operation over a signal
+(let [louder (map-signal (fn [x] (* x 2.0)) (constant 0.5))]
+  (louder 0.0))   ; =&gt; 1.0
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import stdlib/signal/core.tur
+
+let [dc constant(5.0)]
+  dc(0.0)    ; =&gt; 5.0
+  dc(99.0)   ; =&gt; 5.0
+
+time-signal 2.5           ; =&gt; 2.5
+sample(constant(3.0) 1.0) ; =&gt; 3.0
+
+let [louder map-signal(fn([x] {x * 2.0}) constant(0.5))]
+  louder(0.0)             ; =&gt; 1.0
+</code></pre></div></div></div>
+<h3 id="combining-signals">Combining signals</h3>
+<p><code>pair-signals</code> zips two signals into a product signal, needed by combinators
+like <code>mix</code> and <code>add</code> that take stereo or multi-channel input:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [prod (pair-signals (constant 1.0) (constant 2.0))]
+  (prod 0.0))   ; =&gt; Pair(1.0, 2.0)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [prod pair-signals(constant(1.0) constant(2.0))]
+  prod(0.0)     ; =&gt; Pair(1.0, 2.0)
+</code></pre></div></div></div>
+<hr />
+<h2 id="dsp-primitives">DSP Primitives</h2>
+<p><code>stdlib/signal/dsp.tur</code> provides ready-made oscillators, filters, and amplitude
+operations, each as a Signal Function.</p>
+<h3 id="oscillators">Oscillators</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import stdlib/signal/core.tur)
+(import stdlib/signal/dsp.tur)
+
+(let [dummy  (constant ())
+      ;; sine oscillator: freq Hz, initial phase in radians
+      a440   (sine 440.0 0.0)
+      ;; square wave: freq, duty cycle [0,1]
+      sq     (square 220.0 0.5)
+      ;; sawtooth wave: freq
+      saw    (sawtooth 110.0)
+      ;; triangle wave (stdlib/signal/dsp.tur -- if available)
+      tri    (triangle 55.0)]
+
+  ;; An oscillator SF is called with a (usually dummy) input signal
+  ;; and returns the output signal.
+  ((a440 dummy) 0.001))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import stdlib/signal/core.tur
+import stdlib/signal/dsp.tur
+
+let [dummy  constant(())
+     a440   sine(440.0 0.0)
+     sq     square(220.0 0.5)
+     saw    sawtooth(110.0)
+     tri    triangle(55.0)]
+
+  a440(dummy)(0.001)
+</code></pre></div></div></div>
+<p>The oscillators ignore their input signal; the <code>dummy</code> argument satisfies the
+SF interface so they compose uniformly with filters and other SFs.</p>
+<h3 id="filters">Filters</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; low-pass: exponential moving average.
+;; alpha in (0,1) -- lower alpha = more smoothing (shorter cutoff)
+(let [lp  (low-pass 0.1)
+      sig (constant 1.0)
+      out (lp sig)]
+  (out 0.0)    ; starts at 0 (filter state is zero-initialised)
+  (out 0.001))
+
+;; high-pass: subtract the low-passed signal from the input
+(let [hp  (high-pass 0.1)
+      out (hp sig)]
+  (out 0.001))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [lp  low-pass(0.1)
+     sig constant(1.0)
+     out lp(sig)]
+  out(0.0)
+  out(0.001)
+
+let [hp  high-pass(0.1)
+     out hp(sig)]
+  out(0.001)
+</code></pre></div></div></div>
+<h3 id="amplitude-operations">Amplitude operations</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [sig    ((sine 440.0 0.0) (constant ()))
+
+      ;; gain: scale every sample by a constant
+      gained ((gain 0.5) sig)
+
+      ;; mix: weighted blend of a pair signal
+      ;; alpha=0 -&gt; all first, alpha=1 -&gt; all second
+      blended ((mix 0.3) (pair-signals sig (constant 0.0)))
+
+      ;; add: sample-wise sum of a pair signal
+      summed  ((add) (pair-signals sig sig))]
+  ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [sig     sine(440.0 0.0)(constant(()))
+
+     gained  gain(0.5)(sig)
+     blended mix(0.3)(pair-signals(sig constant(0.0)))
+     summed  add()(pair-signals(sig sig))]
+  ...
+</code></pre></div></div></div>
+<hr />
+<h2 id="building-a-dsp-signal-graph">Building a DSP Signal Graph</h2>
+<p>Because SFs are plain functions, <code>&gt;&gt;&gt;</code> wires them into graphs. Read each <code>&gt;&gt;&gt;</code>
+as "then": input flows left-to-right through each stage.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import stdlib/signal/core.tur)
+(import stdlib/signal/dsp.tur)
+
+(let [dummy (constant ())
+      input ((sine 440.0 0.0) dummy)
+
+      ;; Signal graph:
+      ;;   sine 440 Hz
+      ;;     -&gt; gain 0.5
+      ;;     -&gt; low-pass (alpha 0.1)
+      ;;     -&gt; DC offset +0.1
+      ;;     -&gt; clip [-0.8, 0.8]
+      chain (&gt;&gt;&gt; (&gt;&gt;&gt; (&gt;&gt;&gt; (gain 0.5)
+                           (low-pass 0.1))
+                      (offset 0.1))
+                 (clip -0.8 0.8))
+
+      output (chain input)]
+
+  (output 0.0)
+  (output 0.001)
+  (output 0.002))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import stdlib/signal/core.tur
+import stdlib/signal/dsp.tur
+
+let [dummy  constant(())
+     input  sine(440.0 0.0)(dummy)
+
+     chain  &gt;&gt;&gt;(&gt;&gt;&gt;(&gt;&gt;&gt;(gain(0.5) low-pass(0.1))
+                        offset(0.1))
+                   clip(-0.8 0.8))
+
+     output chain(input)]
+
+  output(0.0)
+  output(0.001)
+  output(0.002)
+</code></pre></div></div></div>
+<h3 id="parallel-paths-with-pair-signals">Parallel paths with <code>pair-signals</code></h3>
+<p>Route a signal down two parallel branches and mix the results:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [dummy     (constant ())
+      raw       ((sine 440.0 0.0) dummy)
+
+      ;; Branch A: full signal
+      branch-a  raw
+
+      ;; Branch B: low-passed version
+      branch-b  ((low-pass 0.05) raw)
+
+      ;; Mix 50/50
+      output    ((mix 0.5) (pair-signals branch-a branch-b))]
+
+  (output 0.001))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [dummy    constant(())
+     raw      sine(440.0 0.0)(dummy)
+
+     branch-a raw
+     branch-b low-pass(0.05)(raw)
+
+     output   mix(0.5)(pair-signals(branch-a branch-b))]
+
+  output(0.001)
+</code></pre></div></div></div>
+<h3 id="multi-oscillator-mix">Multi-oscillator mix</h3>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [dummy  (constant ())
+      a440   ((sine 440.0 0.0) dummy)   ; root
+      e660   ((sine 660.0 0.0) dummy)   ; perfect fifth
+      summed ((add) (pair-signals a440 e660))
+      out    ((gain 0.5) summed)]       ; normalise
+
+  (out 0.001))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [dummy  constant(())
+     a440   sine(440.0 0.0)(dummy)
+     e660   sine(660.0 0.0)(dummy)
+     summed add()(pair-signals(a440 e660))
+     out    gain(0.5)(summed)]
+
+  out(0.001)
+</code></pre></div></div></div>
+<hr />
+<h2 id="extended-arrow-typeclasses">Extended Arrow Typeclasses</h2>
+<p><code>stdlib/arrow.tur</code> declares the full Arrow hierarchy for future use:</p>
+<table>
+<thead>
+<tr>
+<th>Typeclass</th>
+<th>Adds</th>
+<th>Use case</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ArrowZero</code></td>
+<td><code>zeroArrow</code></td>
+<td>empty/failing arrows</td>
+</tr>
+<tr>
+<td><code>ArrowPlus</code></td>
+<td><code>&lt;+&gt;</code></td>
+<td>combining alternative arrows</td>
+</tr>
+<tr>
+<td><code>ArrowChoice</code></td>
+<td><code>left</code>, <code>right</code>, <code>+++</code>, <code>|||</code></td>
+<td>routing over sum types (<code>Either</code>)</td>
+</tr>
+<tr>
+<td><code>ArrowLoop</code></td>
+<td><code>loop</code></td>
+<td>feedback -- output fed back as input</td>
+</tr>
+<tr>
+<td><code>ArrowApply</code></td>
+<td><code>app</code></td>
+<td>first-class arrow application</td>
+</tr>
+</tbody>
+</table>
+<p><code>ArrowChoice</code> and <code>ArrowLoop</code> are fully declared but their bodies require
+<code>Either</code>/<code>Left</code>/<code>Right</code> sum types and <code>Tuple</code> unpacking, which are still
+in development. The stubs are present so code that imports them will compile;
+behaviour will be filled in as those features land.</p>
+<hr />
+<h2 id="examples">Examples</h2>
+<p>The <code>examples/signal-processing/</code> directory contains a three-step tutorial
+that you can run directly:</p>
+<pre><code class="language-sh">tur run examples/signal-processing/01_basics.tur    # Arrow fundamentals
+tur run examples/signal-processing/02_signals.tur   # Signals and SFs
+tur run examples/signal-processing/03_dsp.tur       # DSP primitives
+</code></pre>
+<p><strong><code>01_basics.tur</code></strong> -- covers <code>arr</code>, <code>&gt;&gt;&gt;</code>, arrow laws, and <code>first</code>/<code>second</code>
+using plain integer functions.</p>
+<p><strong><code>02_signals.tur</code></strong> -- introduces the <code>Signal</code> and <code>SF</code> types, <code>constant</code>,
+<code>time-signal</code>, <code>pair-signals</code>, and stateful SFs via <code>state-sf</code>.</p>
+<p><strong><code>03_dsp.tur</code></strong> -- demonstrates oscillators (<code>sine</code>, <code>square</code>, <code>sawtooth</code>,
+<code>triangle</code>), processors (<code>gain</code>, <code>offset</code>, <code>invert</code>, <code>abs-sf</code>), mixing
+(<code>add</code>, <code>mix</code>, <code>multiply</code>), filters (<code>low-pass</code>, <code>high-pass</code>), and a
+complete multi-stage processing chain.</p>
+<h2 id="quick-reference">Quick Reference</h2>
+<pre><code>stdlib/arrow.tur          -- arr, &gt;&gt;&gt;, &lt;&lt;&lt;, arrow-first, arrow-second,
+                             par-comp, arrow-split, arrow-const, arrow-dup
+stdlib/signal/core.tur    -- constant, time-signal, sample, map-signal,
+                             pair-signals, left-signal, right-signal
+stdlib/signal/dsp.tur     -- sine, square, sawtooth, triangle,
+                             low-pass, high-pass,
+                             gain, mix, add, offset, clip, invert
+</code></pre>
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><strong><a href="hkt-guide.md">hkt-guide.md</a></strong> -- higher-kinded types; the <code>^arr</code> kind used by the Arrow typeclass</li>
+<li><strong><a href="effects-vs-monads.md">effects-vs-monads.md</a></strong> -- design rationale: why Turmeric uses effects rather than monad transformers for sequencing</li>
+<li><strong><a href="generators-guide.md">generators-guide.md</a></strong> -- lazy sequences; a complementary pull-based abstraction</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/arrows-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

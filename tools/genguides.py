@@ -9,10 +9,33 @@ Usage:
 import argparse
 import html as _html
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import markdown as md_lib
+
+
+def get_creation_date(path: Path, repo_root: Path) -> str | None:
+    """Return the YYYY-MM-DD date the file was first added to git, or None."""
+    try:
+        rel = path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        rel = path
+    try:
+        result = subprocess.run(
+            ['git', 'log', '--diff-filter=A', '--follow',
+             '--format=%ai', '--', str(rel)],
+            cwd=repo_root, capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    return lines[-1].split(' ', 1)[0]
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
@@ -367,8 +390,10 @@ def _fmt_desc(text: str) -> str:
     return text
 
 
-def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> None:
+def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
+                 recent: list[dict] | None = None) -> None:
     categorized_stems = {g['stem'] for c in categories for g in c['guides']}
+    recent = recent or []
 
     def guide_item(g: dict) -> str:
         if g['stem'] not in all_stems:
@@ -400,10 +425,26 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
       <ul style="list-style:none;margin:0">{"".join(items)}</ul>
     </div>''')
 
-    sidebar_cats = '\n'.join(
+    sidebar_cats_list = [
         f'<li><a href="#{re.sub(r" +", "-", c["name"].lower())}">{c["name"]}</a></li>'
         for c in categories if any(g['stem'] in all_stems for g in c['guides'])
-    )
+    ]
+    if recent:
+        sidebar_cats_list.insert(0, '<li><a href="#recently-added">Recently Added</a></li>')
+    sidebar_cats = '\n'.join(sidebar_cats_list)
+
+    recent_html = ''
+    if recent:
+        recent_items = ''.join(
+            f'<li><a href="{r["stem"]}.html">{r["label"]}</a>'
+            f'<span style="color:var(--text-sec)"> -- {r["date"]}</span></li>'
+            for r in recent
+        )
+        recent_html = f'''\
+      <div class="index-card" style="display:block;margin-bottom:1.5rem" id="recently-added">
+        <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">Recently Added</h3>
+        <ul style="list-style:none;margin:0">{recent_items}</ul>
+      </div>'''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -438,6 +479,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
         <div class="module-path">Tutorials, how-tos, and in-depth feature guides for Turmeric</div>
       </div>
+{recent_html}
       <div class="index-grid">
         {"".join(cards)}
       </div>
@@ -474,11 +516,28 @@ def main() -> None:
 
     categories = build_categories_from_meta(meta_by_stem, all_stems)
 
+    # Find the git repo root by walking up from the guides dir.
+    repo_root = guides_dir.resolve()
+    while repo_root != repo_root.parent and not (repo_root / '.git').exists():
+        repo_root = repo_root.parent
+
+    dated: list[tuple[str, Path]] = []
+    for src in md_files:
+        d = get_creation_date(src, repo_root)
+        if d:
+            dated.append((d, src))
+    dated.sort(key=lambda t: t[0], reverse=True)
+    recent = []
+    for date, src in dated[:5]:
+        m = meta_by_stem.get(src.stem, {})
+        label = m.get('title', src.stem.replace('-', ' ').title()).strip()
+        recent.append({'stem': src.stem, 'label': label, 'date': date})
+
     print('Generating guides:')
     for src in md_files:
         render_guide(src.stem, src, out_dir / f'{src.stem}.html', all_stems,
                      meta_by_stem.get(src.stem, {}))
-    render_index(categories, all_stems, out_dir)
+    render_index(categories, all_stems, out_dir, recent=recent)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
 
 
