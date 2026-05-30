@@ -1321,19 +1321,10 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* FH5 (not yet enabled): runtime composition lands in Phase FH5; until then
-     * keep the CF3 gate so compose-handlers still reports TUR-E0704 rather than
-     * silently elaborating.  The static checks above (TUR-E0251 overlap,
-     * handler-value typing) still fire first. */
-    if (!g_fh_compose_enabled) {
-        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0704_HANDLER_COMPOSE_UNIMPL,
-            "compose-handlers: first-class handler composition is not yet "
-            "implemented and is gated for now");
-        diag_emit(DIAG_HELP, call->span,
-            "compose two effects with nested (handle ...) forms instead; see "
-            "docs/first-class-handlers-plan.md for the implementation plan");
-        return NULL;
-    }
+    /* FH5: runtime composition is implemented -- the CF3 TUR-E0704 gate is
+     * removed.  The static checks above (TUR-E0251 overlap, handler-value
+     * typing) still fire first.  Composition lowers to table concatenation
+     * (emit_effects_compose_handlers); see docs/first-class-handlers-semantics.md. */
 
     /* FH0.3: composed handlers must agree on the answer type T.  In v1 a
      * detached handler literal does not carry the answer type -- its

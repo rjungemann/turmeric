@@ -220,6 +220,14 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## Phase FH5 -- `compose-handlers` real elaboration
 
+> **Status: DONE.** `elab_compose_handlers` now produces an
+> `EX_COMPOSE_HANDLERS` value (the `TUR-E0704` gate is removed; `TUR-E0251`
+> overlap rejection retained). `emit_effects_compose_handlers` lowers it to
+> `tur_handler_table_concat` (h1 outer, per FH0.1). Applying a composed handler
+> is byte-identical to nested `handle` (fixture `fh-compose-handlers`). The
+> CF-plan CF3 outcome and gated-diagnostic list are updated; the
+> `compose-handlers-gated` fixture is removed.
+
 - **FH5.1** Replace the `TUR-E0704` gate (in `elab_compose_handlers`) with an
   elaboration that concatenates the two dispatch tables and unions the effect
   rows (`effect_row_union`), keeping the `TUR-E0251` overlap rejection. *Done
