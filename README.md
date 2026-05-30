@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.14.6` -- documentation polish across several stdlib guides and a new `wait-for-release.sh` helper for monitoring release workflow runs.
+**Latest release:** `v0.15.0` -- adds `tur fmt`, `tur run`, first-class handler values with `compose-handlers`, explicit lifetime syntax (`&'a T`), static `-Xsized-types` checking, `letrec`/`named-let`/`define` forms, typed variadic rest for user-defined types, and cross-module ABI specialization.
 
 ## What
 

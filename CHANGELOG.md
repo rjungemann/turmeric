@@ -2,6 +2,51 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.15.0] -- 2026-05-30
+
+### Added
+
+- **`tur run` Justfile task runner** -- `tur run <recipe>` executes Justfile
+  recipes with deps, params, `{{ interpolation }}`, `set` directives, and
+  dotenv. `tur new` gains `--kind lib|bin`, `--author`, `--license`, CI
+  workflow scaffolding, and a standard Justfile.
+- **`tur fmt` formatter** -- `tur fmt [paths...]` reformats `.tur`/`.tursweet`
+  files in-place with recursive directory walking; `--check`, `--stdout`,
+  `--stdin`, and `--lang` flags; idempotent on all stdlib sources.
+- **First-class handler values (FH0-FH7)** -- `(handler E [params] k body)`
+  creates a portable handler value; `(with-handler hv body)` applies it;
+  `(compose-handlers h1 h2)` composes disjoint-effect handlers (h1 outer).
+  Multi-effect handler types `(handler #{A B} V R)` supported.
+- **Explicit lifetime syntax (LS0-LS5)** -- `&'a T` and `&mut 'a T` in type
+  annotations; implicit quantification; borrow return types; inter-procedural
+  borrow-escape checking (TUR-E0105/E0106).
+- **`-Xsized-types` flag** -- promoted to a real compiler flag (implies
+  `-Xgadt`); ships type-level size indices (`SizedVec n`), static compile-time
+  size checking (TUR-E0260), size inference, and `--dump-sizes` diagnostic.
+- **`letrec`, `named-let`, and `(define ...)`** -- `letrec` supports self-
+  recursive and mutually-recursive bindings; `named-let` desugars to
+  tail-recursive `letrec`; `define` provides `let*`-style body-position
+  binding in `defn`, `fn`, `let`, and `do`.
+- **Typed variadic rest parameters for user-defined types** -- `& rest :T`
+  now fully type-checks opaque, struct, ADT, and type-application rest
+  arguments; unknown type names are hard errors; `:int`-and-cast workarounds
+  are no longer needed.
+- **Cross-module ABI specialization (J1-J7)** -- `tur build <dir>` performs
+  a two-pass build that emits owned-clone bodies in the owner module and
+  extern forward-decls in borrowers; `.tur-abi-cache/index` persists across
+  incremental builds.
+- **`any` boxing and if-guard narrowing (TY2/TY3)** -- `(box :any v)`,
+  `(cast :T v)`, and `(if (is? :T v) ...)` narrowing in control flow.
+
+### Fixed
+
+- **Memory leaks in composite-type diagnostics** -- `type_name()` result
+  strings are now arena-managed; error paths are ASan/LSan-clean.
+- **Codegen: Clang int-to-pointer warnings** -- spurious `int<->pointer`
+  casts eliminated from all generated C.
+- **Runtime autolink path resolution** -- prefix-installed builds resolve
+  absolute `-I`/`-L` SDK paths correctly.
+
 ## [0.14.6] -- 2026-05-28
 
 ### Docs
