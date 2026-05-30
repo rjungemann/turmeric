@@ -31,6 +31,7 @@ between flags.
 | `-Xcontracts` | 📋 Planned (v4) | Contract types; `assert!`/`require!`/`ensure!` at the type level; contract checking in debug builds | -- |
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
 | `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
+| `-Xcallcc` | ⚠️ Experimental (unsound) | Unlocks the v1 `call/cc` / `escape` desugar. **No real capture** -- `f` receives the integer `0` as a fake continuation. Ungated, `call/cc`/`escape` are a hard error (`TUR-E0700`/`TUR-E0701`). Real capture needs the post-1.0 CPS pass. `call/cc*` (cloneable) is unaffected. | -- |
 | `-Xsized-types` | 📋 Planned | Sized / dependent types | -- |
 
 ### Diagnostic and debug flags
@@ -360,6 +361,36 @@ are forbidden in dynamic vars (`TUR-E0603`).
 
 **See also:** [dynamic-vars-guide.md](dynamic-vars-guide.md),
 [dynamic-vars-plan.md](../archive/dynamic-vars-plan.md)
+
+---
+
+### `-Xcallcc` -- Experimental `call/cc` / `escape` *(unsound)*
+
+Unlocks the v1 desugar for `call/cc` and `escape`. This desugar has **no real
+continuation capture**: `(call/cc f)` and `(escape f)` lower to
+`(let [g f] (g 0))`, handing `f` the integer `0` as a stand-in continuation. It
+only "works" for escape/abort patterns where `f` ignores the continuation, and
+it is unsound in general -- which is why it is gated.
+
+```clojure
+;; without -Xcallcc:  hard error
+(call/cc (fn [k] 99))   ; error [TUR-E0700]: 'call/cc' has no real ...
+(escape  (fn [x] 5))    ; error [TUR-E0701]: 'escape' has no real ...
+
+;; with -Xcallcc:  the v1 desugar is unlocked (still unsound; for experiments)
+;;   tur -Xcallcc run prog.tur
+```
+
+Real first-class continuation capture requires the post-1.0 CPS pass; until then
+this flag exists only for experimentation. **`call/cc*`** (the cloneable,
+multi-shot continuation built on `cloneable-reset`/`cloneable-shift`) is a
+separate, real construct and is **not** gated.
+
+**Does not imply** any other flag.
+
+**See also:** [control-flow-completeness-plan.md](../control-flow-completeness-plan.md)
+(Phase CF4), [control-flow-completeness-audit.md](../control-flow-completeness-audit.md)
+(audit item 1)
 
 ---
 

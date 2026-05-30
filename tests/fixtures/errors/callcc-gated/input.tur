@@ -1,0 +1,11 @@
+;; CF4 (control-flow-completeness-plan): call/cc is gated.
+;;
+;; Without -Xcallcc, (call/cc f) is a hard error: the v1 desugar hands `f` the
+;; integer 0 as a fake continuation (no real capture, unsound), so it must not
+;; ship silently.  Real capture requires the post-1.0 CPS pass.
+(defn test-callcc [] :int
+  (call/cc (fn [k] 99)))
+
+(defn main [] :int
+  (println (test-callcc))
+  0)

@@ -1287,6 +1287,17 @@ Expr *elab_call_cc(Elab *e, const Form *call) {
                   "(call/cc f) requires exactly one argument");
         return NULL;
     }
+    /* CF4 (control-flow-completeness-plan): the v1 desugar below hands `f` the
+     * integer 0 as a fake continuation -- it has no real capture and is unsound.
+     * Gate it behind -Xcallcc so it cannot ship silently; real capture needs the
+     * post-1.0 CPS pass.  (call/cc* -- cloneable, real -- is not gated.) */
+    if (!g_callcc_enabled) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0700_CALLCC_GATED,
+            "'call/cc' has no real continuation capture yet (unsound) and is "
+            "gated; pass -Xcallcc to experiment. Real capture requires the "
+            "post-1.0 CPS pass.");
+        return NULL;
+    }
     /* v1 sugar: (call/cc f) => (let [__cc_f f] (__cc_f 0))
      *
      * In v1 all lambda parameters default to TY_INT, so the continuation
@@ -1330,6 +1341,15 @@ Expr *elab_escape(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(escape f) requires exactly one argument");
+        return NULL;
+    }
+    /* CF4: like call/cc, the v1 desugar hands `f` the integer 0 as a fake escape
+     * procedure -- no real early-exit, unsound.  Gate behind -Xcallcc. */
+    if (!g_callcc_enabled) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0701_ESCAPE_GATED,
+            "'escape' has no real early-exit semantics yet (unsound) and is "
+            "gated; pass -Xcallcc to experiment. Real capture requires the "
+            "post-1.0 CPS pass.");
         return NULL;
     }
     Arena *a = e->arena;

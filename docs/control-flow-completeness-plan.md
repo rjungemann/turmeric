@@ -6,14 +6,15 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF3 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF4 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
 > lowering shipped; CF2: `shift`/`shift0` result typing replaces the
 > `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
 > after discovering handler values have no runtime representation -- real
 > implementation tracked in
-> [first-class-handlers-plan.md](first-class-handlers-plan.md)); CF4 next.
-> Companion to
+> [first-class-handlers-plan.md](first-class-handlers-plan.md); CF4:
+> `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`));
+> CF5 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -145,10 +146,12 @@ Notes:
 
 - CF5 diagnostics (`E0702`/`E0703`) and the CF3 `compose-handlers` gate
   (`E0704`) are *always-on* rejections, not flag-gated: there is no experimental
-  path, since the underlying feature has no correct lowering yet.
-- `E0704` is **implemented** (CF3, shipped). `E0700`-`E0703` remain reserved
-  here so the enum additions in `src/compiler/diag.h` / `diag.c` (CF4, CF5) do
-  not collide and so the changelog can reference them before the code lands.
+  path, since the underlying feature has no correct lowering yet. The CF4 codes
+  (`E0700`/`E0701`) are unlocked by `-Xcallcc`.
+- **Implemented:** `E0700`/`E0701` (CF4), `E0704` (CF3). **Still reserved:**
+  `E0702`/`E0703` (CF5) so the enum additions in `src/compiler/diag.h` /
+  `diag.c` do not collide and the changelog can reference them before the code
+  lands.
 
 ### CF0.3 outcome -- at-risk fixture inventory
 
@@ -349,6 +352,29 @@ user the integer `0` as a "continuation".
 - **CF4.4** Document `call/cc`/`escape` status and the `-Xcallcc` flag in the
   relevant guide, linking the control-flow audit's post-1.0 CPS entry. *Done
   when:* docs state the flag and that capture is unsound until CPS lands.
+
+### CF4 outcome (complete -- 2026-05-30)
+
+`call/cc` and `escape` are gated behind `-Xcallcc` (default off); `call/cc*`
+(the real cloneable construct) is untouched.
+
+- **Flag (CF4.1)** -- `g_callcc_enabled` (`src/runtime/globals.{h,c}`), parsed
+  by both the CLI argv loop and `wk_apply_flags` in `src/main.c`; help text:
+  `enable experimental call/cc / escape -- no real capture yet (unsound);
+  requires the post-1.0 CPS pass`.
+- **Gate (CF4.2)** -- ungated, `elab_call_cc` / `elab_escape`
+  (`src/compiler/elab_effects.c`) raise `TUR-E0700` / `TUR-E0701` (added to
+  `diag.{h,c}`) with the CF0.2 wording; with `-Xcallcc` the prior v1 desugar is
+  emitted unchanged. The interpreter shares the same elaboration path, so the
+  gate applies to `tur run` and the turi harness identically.
+- **Fixtures (CF4.3)** -- `continuation-callcc` / `continuation-escape` /
+  `continuation-escape-fn` each gain a `flags` file (`-Xcallcc`) and pass
+  unchanged under both `run.sh` and `run-turi.sh`; new expect-error fixtures
+  `errors/callcc-gated` (`TUR-E0700`) and `errors/escape-gated` (`TUR-E0701`)
+  cover the ungated case.
+- **Docs (CF4.4)** -- `compiler-flags-guide.md` gains an `-Xcallcc` quick-
+  reference row and a detail section stating the desugar is unsound (no real
+  capture) until the post-1.0 CPS pass, and that `call/cc*` is not gated.
 
 ---
 

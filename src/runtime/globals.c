@@ -85,6 +85,10 @@ bool g_sessions_enabled = false;
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 bool g_dynvar_enabled = false;
 
+/* CF4: -Xcallcc flag — unlock the experimental (unsound) call/cc / escape
+ * desugar.  Default off. */
+bool g_callcc_enabled = false;
+
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
 
