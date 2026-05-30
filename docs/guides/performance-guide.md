@@ -56,13 +56,14 @@ widen to a tagged value when it cannot infer a concrete numeric type.
 Iterative is faster for large N because it avoids stack growth:
 
 ```turmeric
-; iterative -- O(n) time, O(1) space
+; iterative -- O(n) time, O(1) space.  The named-let `loop` call is a
+; self-tail-call, so it is lowered to an iterative backedge (see
+; "Self-tail-call optimization" below): the stack does not grow with n.
 (defn fib-iter [n] :int
-  (let [loop (fn [i a b] :int
-               (if (= i 0)
-                 a
-                 (loop (- i 1) b (+ a b))))]
-    (loop n 0 1)))
+  (let loop [i n a 0 b 1]
+    (if (= i 0)
+      a
+      (loop (- i 1) b (+ a b)))))
 
 ; recursive -- O(2^n) time, avoid for n > ~30
 (defn fib-rec [n] :int
@@ -72,13 +73,12 @@ Iterative is faster for large N because it avoids stack growth:
 ```
 
 ```sweet-exp
-; iterative -- O(n) time, O(1) space
+; iterative -- O(n) time, O(1) space (self-tail-call -> loop; see below)
 defn fib-iter [n] :int
-  let [loop fn [i a b] :int
-              if ={i 0}
-                a
-                loop({i - 1} b {a + b})]
-    loop(n 0 1)
+  let loop [i n a 0 b 1]
+    if ={i 0}
+      a
+      loop({i - 1} b {a + b})
 
 ; recursive -- O(2^n) time, avoid for n > ~30
 defn fib-rec [n] :int
@@ -86,6 +86,54 @@ defn fib-rec [n] :int
     n
     {fib-rec({n - 1}) + fib-rec({n - 2})}
 ```
+
+### Self-tail-call optimization
+
+A **self-tail-call** -- a call to the enclosing function (or named-let `loop`
+binding) in *tail position* -- is lowered to an iterative loop rather than a C
+function call.  The compiler reassigns the parameter variables and jumps back to
+the top of the function body, so iteration count no longer drives C-stack depth:
+a self-recursive countdown of 10,000,000 iterations completes instead of
+overflowing the stack.
+
+The guarantee applies to:
+
+- a self-recursive `defn` whose recursive call is in tail position, and
+- the named-let / loop idiom `(let loop [...] ... (loop ...))`,
+
+with tail position computed through `if`, `cond`/`when` (which macro-expand to
+`if`), `do`, and `let`/`letrec`.  For example, both of these are lowered to a
+loop:
+
+```turmeric
+; self-recursive defn -- tail call in the `if` else-branch
+(defn count-down [n :int acc :int] :int
+  (if (= n 0)
+    acc
+    (count-down (- n 1) (+ acc 1))))
+
+; named-let -- the (loop ...) call is the self-tail-call
+(defn sum-to [n :int] :int
+  (let loop [i n acc 0]
+    (if (= i 0)
+      acc
+      (loop (- i 1) (+ acc i)))))
+```
+
+**Boundary (1.0).** Only *self*-tail calls are optimized.  The following are
+left as ordinary recursive calls -- correct, but not stack-optimized:
+
+- **non-tail recursion** (e.g. `(+ n (sum-to (- n 1)))`, where work remains
+  after the call returns) -- never eligible, by definition;
+- **mutual / general tail calls** (function A tail-calls B which tail-calls A);
+- **tail calls inside `match` arms**;
+- self-recursive functions with pass-by-pointer struct, function-typed, or
+  poly-fn parameters.
+
+General/mutual tail-call elimination and trampolining are deferred to the
+post-1.0 CPS pass.  See
+[control-flow-completeness-plan.md](../control-flow-completeness-plan.md)
+(Phase CF1) for the full scope.
 
 ### Prime sieve
 

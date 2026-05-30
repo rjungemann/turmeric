@@ -6,8 +6,9 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phase CF0 complete (disposition ratified + diagnostics
-> namespace reserved + at-risk fixtures inventoried); CF1 next. Companion to
+> **Status:** Phases CF0-CF1 complete (CF0: disposition ratified + diagnostics
+> namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
+> lowering shipped); CF2 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -191,6 +192,43 @@ trampolining stay post-1.0.
 - **CF1.5** Document the guarantee and its boundary (self-tail only; mutual/
   general tail calls remain post-1.0) in `generators-guide.md`/relevant guide
   and link this phase. *Done when:* the guide states the guarantee precisely.
+
+### CF1 outcome (complete -- 2026-05-30)
+
+Self-tail-call -> loop lowering ships in the C emitter. A self-recursive call in
+tail position is rewritten to a backedge: argument values are evaluated into
+temporaries, the C parameter variables are reassigned, and control jumps to a
+`__tur_tailcall:` label at the top of the function body. A 10,000,000-iteration
+countdown that previously overflowed the C stack now completes.
+
+- **Tail-position predicate / analysis (CF1.1, CF1.2)** -- `tco_mark` in
+  `src/compiler/emit_fns.c` walks tail positions through `if`, `do`, and
+  `let`/`letrec` (`cond`/`when` macro-expand to `if` before the IR), marking the
+  new `Expr.as.call_.is_tail_self_call` flag (`src/compiler/expr.h`) on direct,
+  arity-matching self-calls. Self-identity is by resolved C name, so the
+  named-let desugar (`(let loop ...)` -> `letrec` -> static fn) is recognized
+  even though the loop binding and the `fn`'s own binding are distinct objects.
+  Non-tail recursion (e.g. `(+ n (f ...))`) is never marked.
+- **Lowering (CF1.3)** -- `emit_tail` emits the backedge; gated to value-
+  returning, non-`main`, non-closure functions whose parameters are simple
+  scalars (pass-by-pointer struct / fn-typed / poly-fn / carrier-ABI params are
+  excluded so the backedge temporary's C type is unambiguous). Functions with no
+  self-tail-call are emitted exactly as before (no snapshot churn).
+- **Fixtures (CF1.4)** -- `tests/fixtures/tco-self-tail-deep` (10M-iteration
+  countdown, asserts stdout + the lowered codegen) and
+  `tests/fixtures/tco-non-tail-unchanged` (non-tail `sum-to`; snapshot has no
+  `__tur_tailcall`, locking in "non-tail recursion is unchanged"). The existing
+  `named-let-loop` / `named-let-shadowing` snapshots were regenerated to the
+  lowered form; `letrec-self-recursive` (factorial, non-tail) is unchanged.
+- **Docs (CF1.5)** -- `docs/guides/performance-guide.md` gains a "Self-tail-call
+  optimization" subsection stating the guarantee and its boundary (self-tail
+  only; mutual/general/`match`-arm tail calls deferred to the post-1.0 CPS
+  pass), and the Fibonacci example now uses the lowered named-let form.
+
+> **Residual (documented):** tail calls inside `match` arms and mutual/general
+> tail calls are compiled as ordinary recursive calls (correct, not stack-
+> optimized) -- consistent with the "self-tail only" boundary and the post-1.0
+> CPS deferral.
 
 ---
 

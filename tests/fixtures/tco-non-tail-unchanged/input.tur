@@ -1,0 +1,18 @@
+;; CF1: self-tail-call optimization -- negative case.
+;;
+;; `sum-to` recurses in NON-tail position: the recursive call is an operand of
+;; `+`, so work remains after it returns.  The TCO analysis must NOT lower it
+;; (doing so would change the result).  The expected.c snapshot therefore
+;; contains no `__tur_tailcall` label -- `sum-to` stays ordinary recursion.
+;;
+;; This is the documented boundary: only *self-tail* calls are lowered for 1.0;
+;; mutual/general tail calls and non-tail recursion are unchanged.
+
+(defn sum-to [n :int] :int
+  (if (= n 0)
+    0
+    (+ n (sum-to (- n 1)))))
+
+(defn main [] :int
+  (println (sum-to 100))
+  0)
