@@ -13,7 +13,7 @@ description: Phased plan to give effect handlers a first-class runtime represent
 > (`(compose-handlers h1 h2)`). The CF3 `TUR-E0704` gate has been removed.
 >
 > Follow-up to
-> [control-flow-completeness-plan.md](control-flow-completeness-plan.md)
+> [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md)
 > Phase CF3, which originally **gated** `compose-handlers` (diagnostic
 > `TUR-E0704`) because handler *values* had no runtime representation.
 >
@@ -237,7 +237,7 @@ Write the operational spec before code so FH5's behavior is unambiguous.
   per FH0.1. *Done when:* a fixture composing two independent effects produces
   the FH0.1 expected stdout, identical to the hand-written nested `handle`.
 - **FH5.3** Remove `TUR-E0704` from the gated list in
-  [control-flow-completeness-plan.md](control-flow-completeness-plan.md) CF0.2
+  [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md) CF0.2
   and update CF3's outcome. *Done when:* the gate is gone and the plan reflects
   the implemented state.
 
@@ -305,6 +305,6 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## See also
 
-- [control-flow-completeness-plan.md](control-flow-completeness-plan.md) (Phase CF3)
-- [control-flow-completeness-audit.md](control-flow-completeness-audit.md) (audit item 2)
+- [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md) (Phase CF3)
+- [control-flow-completeness-audit.md](archive/control-flow-completeness-audit.md) (audit item 2)
 - [effects-system-guide.md](guides/effects-system-guide.md)

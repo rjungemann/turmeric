@@ -197,5 +197,5 @@ FH6 verifies these fire through a handler value identically to the inline path.
 ## See also
 
 - [first-class-handlers-plan.md](first-class-handlers-plan.md) (the phased plan)
-- [control-flow-completeness-plan.md](control-flow-completeness-plan.md) (Phase CF3, the `TUR-E0704` gate)
+- [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md) (Phase CF3, the `TUR-E0704` gate)
 - [effects-system-guide.md](guides/effects-system-guide.md)
