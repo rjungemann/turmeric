@@ -26,7 +26,7 @@ work and its disposition.
 | D -- Unboxed struct ABI | **DONE** | D1 (`pass_by_ptr` >16B) + D2 (typed fn-ptr fields) already landed; D3 (nested-aggregate decision: keep carrier-erased, documented in type-erasure-guide.md) + D4 (inline-C unboxed-local audit: vec.tur/hamt.tur are clean, all carrier-ABI) completed here. |
 | E -- Arbitrary-arity kinds | **DONE** | E1-E4 already landed; E5 completed here -- added `tur_kind_arity_unit` C unit test (round-trip through arity 15 + >15 boundary); docs already current. |
 | F -- Monomorphize closures | **OUTSTANDING** | Closure/non-global guard still bails in `emit_module.c`; F1/F2/F3 not started. |
-| G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE; J6 (persistent-cache *read* + `--no-abi-cache` + invalidation) outstanding. |
+| G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE (correctness landed). J6: `--no-abi-cache` / `TUR_NO_ABI_CACHE` added here (suppresses the `.tur-abi-cache/` machinery). The cache *read* + ownership-reuse + invalidation -- a pure rebuild-time optimization -- remains outstanding (cold cache already builds correctly). |
 | H -- Tooling (`tur run` / `tur new`) | **IN PROGRESS** | Most RN*/NW* done. NW0 (length + reserved-name validation) completed here, plus a `tur check <dir>` directory-mode fix (was crashing on a directory arg). NW6 (bootstrap CI gate) is **blocked on larger work** -- see note below. |
 
 ---
@@ -332,6 +332,19 @@ Each step is independently revertable.
 > across instantiations stays in the `tur_poly_fn_t` wrapper. Resolved
 > in source: no per-fn specialization cap (open question #3).
 
+> **Status (2026-05-30): OUTSTANDING -- deferred as deep codegen work.**
+> Verified the guard is intact at `src/compiler/emit_module.c:295-296`
+> (`fn_binding->closure_fn_binding || !fn_binding->is_global`) with a
+> second bail at line 313 (`fd->closure`). No `closure_template_id` exists
+> in the tree (F3). Lifting these guards to emit specialized closure
+> variants alongside the `tur_poly_fn_t` wrapper -- and re-keying the
+> spec cache by `(closure_template_id, arg_types, result_type)` -- is a
+> genuine monomorphization feature in the whole-program ABI-specialization
+> pipeline, with real miscompilation/link-error risk if done carelessly.
+> Theme G (cross-module) is explicitly gated on it. It is left for a
+> dedicated change-set with benchmark + `--emit-abi-trace` verification
+> rather than attempted speculatively here.
+
 ### F1 -- Lift the closure / non-global guard
 
 In `emit_abi_record_specialized_call`, allow specialization when a
@@ -416,6 +429,22 @@ matching benchmark.
   in the build. Cold/empty cache must always produce a correct build.
   Add a `--no-abi-cache` build flag (and/or `TUR_NO_ABI_CACHE=1`),
   mirroring `TUR_NO_AUTO_SPICE`.
+
+  > **Status (2026-05-30): PARTIAL.** The opt-out is done: `--no-abi-cache`
+  > and `TUR_NO_ABI_CACHE=1` (`parse_no_abi_cache` / `g_no_abi_cache` in
+  > `src/main.c`) now suppress the `.tur-abi-cache/` write in both
+  > `cmd_build_multi` and `cmd_emit_c_to_dir`; the build stays correct with
+  > the cache disabled. The remaining work -- reading the index at the
+  > start of the build, threading an `AbiCacheCtx*` to reuse cross-build
+  > ownership for byte-identical rebuilds, and the conservative
+  > invalidation -- is a **pure optimization**: the cache is write-only
+  > today, so every invocation is already a correct "cold" build (the J6
+  > correctness invariant). It is deferred rather than rushed, since an
+  > incorrect read would mis-assign clone ownership (duplicate or missing
+  > clone bodies -> link errors). Note the current index format is
+  > `clone_name\towning_module\tfn_symbol\tresult_kind\tn_args\targ_kinds...`
+  > (richer than the `source_hash` form sketched in J5 above); a
+  > `source_hash` column would need adding for staleness-based invalidation.
 - **J7 -- `tur emit-c --output-dir` parity.** Same plumbing applies to
   `cmd_emit_c_to_dir`. Lower priority than `build`; should share
   J5/J6 code so the two entry points behave identically.

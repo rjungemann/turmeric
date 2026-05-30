@@ -454,6 +454,11 @@ static bool g_no_auto_spice;
  * Used inside compile_to_c's stdlib auto-load loop (suffix-skip). */
 static bool g_no_auto_stdlib;
 
+/* J6 forward decl: --no-abi-cache / TUR_NO_ABI_CACHE inspected at the
+ * .tur-abi-cache/ write sites in cmd_build_multi / cmd_emit_c_to_dir;
+ * set by parse_no_abi_cache in main(). */
+static bool g_no_abi_cache;
+
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
  * (called by the LSP server) and the per-file dispatchers.
  *
@@ -1167,8 +1172,10 @@ static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs,
         free(ecd_forced); free(ecd_n_forced); free(ecd_cap_forced);
     }
 
-    /* J5: Write .tur-abi-cache/index for emit-c --output-dir. */
-    if (rc == 0) {
+    /* J5: Write .tur-abi-cache/index for emit-c --output-dir.
+     * J6: skipped entirely when the cache is disabled (--no-abi-cache /
+     * TUR_NO_ABI_CACHE); the build is still correct without it. */
+    if (rc == 0 && !g_no_abi_cache) {
         char cache_dir[4096];
         snprintf(cache_dir, sizeof(cache_dir), "%s/.tur-abi-cache", out_dir);
         struct stat st_cd;
@@ -3195,8 +3202,10 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         free_reader_macro_paths(rm_p, rm_n);
     }
 
-    /* J5: Write .tur-abi-cache/index with ownership information. */
-    {
+    /* J5: Write .tur-abi-cache/index with ownership information.
+     * J6: skipped entirely when the cache is disabled (--no-abi-cache /
+     * TUR_NO_ABI_CACHE); the build is still correct without it. */
+    if (!g_no_abi_cache) {
         char cache_dir[4096];
         snprintf(cache_dir, sizeof(cache_dir), "%s/.tur-abi-cache", dir);
         struct stat st_cache;
@@ -6465,6 +6474,7 @@ static int usage(void) {
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
         "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
+        "  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
         "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
@@ -6742,6 +6752,21 @@ static bool parse_no_auto_spice(int argc, char **argv) {
     return false;
 }
 
+/* J6: --no-abi-cache (or TUR_NO_ABI_CACHE=1) disables the persistent
+ * cross-module ABI specialization cache under <build-root>/.tur-abi-cache/.
+ * The cache is a build-time optimization; disabling it must always still
+ * produce a correct build (clones are recomputed per invocation). */
+static bool g_no_abi_cache = false;
+
+static bool parse_no_abi_cache(int argc, char **argv) {
+    const char *env = getenv("TUR_NO_ABI_CACHE");
+    if (env && *env && strcmp(env, "0") != 0) return true;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-abi-cache") == 0) return true;
+    }
+    return false;
+}
+
 /* Phase R5: Handle --panic-abort flag */
 static bool parse_panic_abort(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -6958,6 +6983,9 @@ int main(int argc, char **argv) {
     /* SC4: --no-auto-spice disables enclosing-spice auto-discovery in
      * per-file subcommands (check/emit-c/emit-h/run). */
     g_no_auto_spice = parse_no_auto_spice(argc, argv);
+    /* J6: --no-abi-cache / TUR_NO_ABI_CACHE disables the persistent
+     * cross-module ABI specialization cache (.tur-abi-cache/). */
+    g_no_abi_cache = parse_no_abi_cache(argc, argv);
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
@@ -7316,6 +7344,7 @@ int main(int argc, char **argv) {
                 int c;
                 if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
                 if (i == od_idx) { i++; continue; }   /* skip --output-dir and its value */
+                if (strcmp(argv[i], "--no-abi-cache") == 0) continue; /* J6: global, skip */
                 if (argv[i][0] == '-') { free(inputs); free(emit_inc); return usage_build(); }
                 inputs[n_inputs++] = argv[i];
             }
@@ -7494,6 +7523,8 @@ int main(int argc, char **argv) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "--shared") == 0) {
                 shared = true;
+            } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
+                /* J6: consumed globally by parse_no_abi_cache; no-op here. */
             } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
                 manifest_out = argv[++i];
             } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
