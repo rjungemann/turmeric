@@ -90,6 +90,49 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
     return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
 }
 
+/* Typed-variadic rest: resolve a `& rest :T` annotation form into a rest
+ * element kind plus an optional full Type.  The full Type is non-NULL only for
+ * user-defined int64_t-carried types (opaque / struct / ADT / type
+ * application) so that call sites can compare type identity (e.g. distinguish
+ * Route from Middleware); primitives keep rest_full_type == NULL and use the
+ * fast TypeKind comparison.  Declared type parameters yield a polymorphic rest
+ * (TY_TYVAR, accepts any arg).  An unknown type name is a hard error -- never
+ * silently demoted to :int.  `ctx` is the form name for diagnostics
+ * ("defn" / "fn"). */
+static bool resolve_variadic_rest_type(Elab *e, const Form *type_p,
+                                       const Symbol **fn_type_params,
+                                       Kind *fn_type_param_kinds,
+                                       uint8_t n_fn_type_params,
+                                       const char *ctx,
+                                       TypeKind *out_kind,
+                                       Type **out_full) {
+    *out_kind = TY_INT;
+    *out_full = NULL;
+    const Symbol *sym = type_p->as.sym;
+    /* A declared type parameter (e.g. `& rest :A` in a `[A]` defn) is a
+     * polymorphic rest that accepts any argument via the TY_TYVAR fast path. */
+    uint8_t tpi = 0;
+    if (fn_type_param_index(fn_type_params, n_fn_type_params, sym, &tpi)) {
+        *out_kind = TY_TYVAR;
+        return true;
+    }
+    Type *rt = fn_type_from_form(e, type_p, fn_type_params,
+                                 fn_type_param_kinds, n_fn_type_params);
+    /* fn_type_from_form maps any unrecognised name to a named type variable.
+     * Since we already handled declared type params above, a TY_TYVAR result
+     * here means the name is undefined. */
+    if (!rt || rt->kind == TY_TYVAR) {
+        diag_emit(DIAG_ERROR, type_p->span,
+                  "%s: unknown rest type '%s'", ctx, sym ? sym->name : "?");
+        return false;
+    }
+    *out_kind = rt->kind;
+    if (rt->kind == TY_STRUCT || rt->kind == TY_ADT || rt->kind == TY_APP) {
+        *out_full = rt;
+    }
+    return true;
+}
+
 static bool fn_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -512,6 +555,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* AR5: variadic rest parameter state */
     bool is_variadic = false;
     TypeKind rest_kind = TY_INT;  /* default rest element type */
+    Type *rest_full_type = NULL;  /* typed-variadic: full Type for user-defined rest */
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -535,11 +579,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             /* Parse optional type annotation: & rest :type */
             rest_kind = TY_INT;
+            rest_full_type = NULL;
             if (i + 2 < params_f->as.list.len) {
                 Form *type_p = params_f->as.list.items[i + 2];
                 if (type_p->tag == F_KEYWORD) {
-                    TypeKind rk = typekind_from_symbol(type_p->as.sym->name);
-                    rest_kind = (rk != TY_UNKNOWN) ? rk : TY_INT;
+                    if (!resolve_variadic_rest_type(e, type_p,
+                                                    fn_type_params, fn_type_param_kinds,
+                                                    n_fn_type_params, "defn",
+                                                    &rest_kind, &rest_full_type)) {
+                        return NULL;
+                    }
                     if (i + 3 < params_f->as.list.len) {
                         diag_emit(DIAG_ERROR, params_f->as.list.items[i + 3]->span,
                                   "defn: no parameters allowed after '& rest :type'");
@@ -1319,6 +1368,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * see is_variadic=true even if body elaboration fails before b->type=fn_type. */
         existing->type.as.fn.is_variadic = is_variadic;
         existing->type.as.fn.rest_kind   = rest_kind;
+        existing->type.as.fn.rest_full_type = rest_full_type;
         bool _any_poly = false;
         for (uint8_t _ei = 0; _ei < n_params; _ei++) {
             if (param_poly_types[_ei]) { _any_poly = true; break; }
@@ -1764,6 +1814,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* AR6: mark variadic functions in their type */
     fn_type.as.fn.is_variadic = is_variadic;
     fn_type.as.fn.rest_kind   = rest_kind;
+    fn_type.as.fn.rest_full_type = rest_full_type;
 
     /* Phase G3: attach full ADT return type if declared (for proper def propagation) */
     if (return_adt_def) {
@@ -2061,6 +2112,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* AR5: variadic rest parameter state for fn */
     bool fn_is_variadic = false;
     TypeKind fn_rest_kind = TY_INT;
+    Type *fn_rest_full_type = NULL;  /* typed-variadic: full Type for user-defined rest */
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -2086,11 +2138,16 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 return NULL;
             }
             fn_rest_kind = TY_INT;
+            fn_rest_full_type = NULL;
             if (i + 2 < params_f->as.list.len) {
                 Form *type_p = params_f->as.list.items[i + 2];
                 if (type_p->tag == F_KEYWORD) {
-                    TypeKind rk = typekind_from_symbol(type_p->as.sym->name);
-                    fn_rest_kind = (rk != TY_UNKNOWN) ? rk : TY_INT;
+                    if (!resolve_variadic_rest_type(e, type_p,
+                                                    fn_type_params, fn_type_param_kinds,
+                                                    n_fn_type_params, "fn",
+                                                    &fn_rest_kind, &fn_rest_full_type)) {
+                        return NULL;
+                    }
                     if (i + 3 < params_f->as.list.len) {
                         diag_emit(DIAG_ERROR, params_f->as.list.items[i + 3]->span,
                                   "fn: no parameters allowed after '& rest :type'");
@@ -2347,6 +2404,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* AR6: mark variadic functions in their type */
     fn_type.as.fn.is_variadic = fn_is_variadic;
     fn_type.as.fn.rest_kind   = fn_rest_kind;
+    fn_type.as.fn.rest_full_type = fn_rest_full_type;
     {
         bool any_full = false;
         for (uint8_t i = 0; i < n_params; i++) {

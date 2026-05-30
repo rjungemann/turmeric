@@ -539,10 +539,35 @@ parameter:
 (println-all "a" "b" "c")         ;; rest = cons("b", cons("c", 0))
 ```
 
+The rest type is **fully type-checked** -- not just primitives. User-defined
+types (`defopaque` newtypes, structs, ADTs, type applications) are resolved to
+their full type and each rest argument is checked by identity at the call site:
+
+```turmeric
+(defopaque Route :int)
+(defopaque Middleware :int)
+
+(defn launch [& routes :Route] :int ...)
+
+(launch (route!) (route!))     ;; OK -- all Route
+(launch (route!) (make-mw))    ;; ERROR: rest arg 1 (expected Route, got Middleware)
+```
+
+Because of this, the old workaround "declare the rest as `:int` and cast the
+opaque handles back inside the body" is **no longer needed** -- write the real
+type. A bare `:int` rest now also rejects opaque/struct/ADT values; pass the
+declared type instead. For a mix of distinct handle types, prefer two explicit
+`:list<T>` parameters over a single untyped rest.
+
 Rules for `& rest`:
 
 - **One `&` per parameter list** -- the rest parameter must be last.
-- **Type annotation required** -- `& rest :int`, `& rest :cstr`, etc.
+- **Type annotation required** -- `& rest :int`, `& rest :Route`, etc. An
+  unknown type name is a hard error (it is never silently demoted to `:int`).
+- **Typed by the declared element type** -- primitive rest uses a fast
+  TypeKind compare; a user-defined rest type compares full type identity.
+  A declared type parameter (`(defn f [A] [& xs :A] ...)`) is a polymorphic
+  rest that accepts any argument type.
 - **Nil when absent** -- calling with zero rest args passes `rest = 0`.
 - **No inline-C in variadic bodies** -- inline-C blocks declare fixed C
   signatures; wrap the inline-C in a fixed-arity helper and call it from

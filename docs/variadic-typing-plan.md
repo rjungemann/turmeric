@@ -1,6 +1,6 @@
 # Plan: Typed Variadic Rest Parameters
 
-> **Status:** Draft Plan
+> **Status:** Implemented (V0-V7)
 > **Last Updated:** 2026-05-30
 > **Type:** Compiler Fix + Type System Tightening
 > **Related:**
@@ -131,6 +131,17 @@ The "raw int rejected where opaque expected" line is the one most likely
 to break existing user code. Audit needed before flipping it; see V2.
 
 ---
+
+## V0 Audit Results
+
+Grepped the repo for `& rest` / `& args` / `& items` annotations. Every
+`& rest :T` site in `stdlib/` and `tests/fixtures/` uses the primitive `:int`
+element type (9 occurrences); no site declares a user-defined rest type, and no
+site relies on the dropped `TY_INT -> STRUCT/ADT/APP` coercion (none pass an
+opaque/struct/ADT value into an `:int` rest). The sibling `../turmeric-spices/`
+checkout is absent in this environment, so no spice migration was applied. Net
+effect: V5's migration sweep is a no-op for the current tree -- the behavior
+change in V3 does not touch any existing working code here.
 
 ## Implementation Phases
 
