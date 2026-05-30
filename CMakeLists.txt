@@ -29,6 +29,14 @@ add_test(
   COMMAND bash tests/run-cli.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# NW6 acceptance gate: a freshly scaffolded spice (`tur new`) passes its own
+# `tur run ci` (clean + check + test) end-to-end. Hermetic: no git, no
+# network, no ../turmeric-spices, no `just`. See docs/tur-new-ci-bootstrap-plan.md.
+add_test(
+  NAME tur_new_bootstrap
+  COMMAND bash tests/run-tur-new.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_fmt_tests
   COMMAND bash tests/run-fmt.sh
