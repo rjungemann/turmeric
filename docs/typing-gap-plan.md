@@ -379,7 +379,8 @@ stays. **Decision (2026-05-30): build the full lifetime machinery for 1.0** so
 > it, elision produces no constraints on ordinary programs, so inter-procedural
 > *lifetime* checking has nothing to act on yet. That syntax is a separate
 > language-surface feature, out of scope for closing this audit gap; the
-> machinery is ready for it.
+> machinery is ready for it. That follow-up is specified in
+> [lifetime-syntax-plan.md](lifetime-syntax-plan.md).
 
 ---
 
