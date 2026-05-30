@@ -2,16 +2,28 @@
  * outlives-constraint cycle detection.
  *
  * These exercise the lifetime machinery directly: the surface language does not
- * yet attach `'a` annotations to types, so elision is driven here on Type
- * values constructed in-test.  This pins the rule behavior and the cycle-safe
- * solver so the infrastructure is correct and regression-protected. */
+ * yet attach `'a` annotations to types (see docs/lifetime-syntax-plan.md), so
+ * elision is driven here on Type values constructed in-test.  This pins the
+ * rule behavior and the cycle-safe solver so the infrastructure is correct and
+ * regression-protected. */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "compiler/types.h"
-#include "passes/lifetimes.h"
-#include "passes/lifetime_elision.h"
+#include "types.h"
+#include "lifetimes.h"
+#include "lifetime_elision.h"
+#include "lsp_sym.h"
+
+/* The tur_core object set includes lsp/lsp.c, whose run_doc_analysis()
+ * references tur_collect_symbols(), normally defined in main.c.  The unit-test
+ * binaries don't link main.c, so we provide a stub here (matching the other
+ * tur_core-based unit tests, e.g. tests/compiler/reinterpret-codegen.c). */
+int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap, int *count_out) {
+    (void)source_path; (void)out; (void)cap;
+    if (count_out) *count_out = 0;
+    return 0;
+}
 
 /* Build a fresh &T immutable borrow Type with no lifetime. */
 static Type borrow_immut(TypeKind target) {
@@ -111,12 +123,11 @@ static void test_cycle_detection(void) {
 }
 
 static void test_self_cycle(void) {
-    /* a: a is a trivial self-cycle. */
+    /* a: a is a trivial self-cycle.  Detection must terminate either way. */
     LifetimeContext ctx;
     lifetime_context_init(&ctx);
     LifetimeId a = lifetime_context_add(&ctx);
-    lifetime_context_add_constraint(&ctx, a, a); /* dropped? add_constraint allows it */
-    /* Even if the self-edge is stored, detection must terminate. */
+    lifetime_context_add_constraint(&ctx, a, a);
     LifetimeId x, y;
     (void)lifetime_has_cycle(&ctx, &x, &y);
     printf("ok self_cycle\n");
