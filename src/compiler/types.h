@@ -500,9 +500,17 @@ typedef struct Type {
         struct {
             const char *name;  /* interned type var name (e.g. "a"), or NULL for anonymous escaped skolem */
         } tyvar_;
-        /* ET3: Handler type — handler<Effect, ValueType, ResultType> */
+        /* ET3/FH4.1: Handler type — handler<EffectRow, ValueType, ResultType> */
         struct {
-            const char *effect_name;  /* interned effect name (e.g. "Write") */
+            const char *effect_name;  /* FH4.1: single-effect name, or NULL for a
+                                       * multi-effect (composed) handler.  Kept for
+                                       * source compatibility; the authoritative
+                                       * handled set is handled_row. */
+            struct EffectRow *handled_row; /* FH4.1: the set of effects this handler
+                                       * handles (an ERK_UNRESOLVED name-set built at
+                                       * parse time; a one-element row in the single-
+                                       * effect case, the union under composition).
+                                       * May be NULL for legacy single-effect types. */
             TypeKind    value_kind;   /* the type of the value passed to the effect */
             TypeKind    result_kind;  /* the result type of the handle expression */
             CopyKind    cont_kind;    /* LC0: ownership discipline for the continuation k */

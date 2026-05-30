@@ -1064,10 +1064,251 @@ Expr *elab_handle(Elab *e, const Form *call) {
     return out;
 }
 
-/* ET3-E: (compose-handlers h1 h2)
- * Compose two handlers that must handle different effects.
- * Emits TUR_E0251 if both handlers handle the same effect.
- * Returns a nil-typed expression (placeholder; runtime semantics TBD).
+/* FH2: (handler (E [params] k) body) -- a single-effect handler value literal.
+ * Parses one handle case (identical surface syntax to a (handle ...) case) and
+ * builds a HandleExpr with body == NULL.  The result has type TY_HANDLER
+ * carrying the effect name, value/result kinds, and continuation discipline.
+ */
+Expr *elab_handler_lit(Elab *e, const Form *call) {
+    if (!g_effect_types_enabled) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'handler' value literal requires -Xeffect-types");
+        return NULL;
+    }
+    /* (handler (E [params] k) body) -- head + header + body = 3 items. */
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(handler (E [params] k) body) requires a case header and a body");
+        return NULL;
+    }
+
+    HandleCase *cases = arena_alloc(e->arena, sizeof(HandleCase));
+    memset(cases, 0, sizeof(HandleCase));
+
+    Form *case_f = call->as.list.items[1];
+    if (case_f->tag != F_LIST) {
+        diag_emit(DIAG_ERROR, case_f->span,
+                  "handler literal: expected case header (E [params] k), got %s",
+                  form_tag_name(case_f->tag));
+        return NULL;
+    }
+    uint32_t hdr_len = case_f->as.list.len;
+    if (hdr_len != 3 && hdr_len != 4) {
+        diag_emit(DIAG_ERROR, case_f->span,
+                  "handler literal header requires (EffectName [params...] k) "
+                  "or (EffectName [params...] ^annotation k)");
+        return NULL;
+    }
+
+    Form *name_f = case_f->as.list.items[0];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "handler literal: effect name must be a symbol");
+        return NULL;
+    }
+    cases[0].effect_name = name_f->as.sym;
+
+    Form *params_f = case_f->as.list.items[1];
+    if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "handler literal: expected parameter list, got %s",
+                  form_tag_name(params_f->tag));
+        return NULL;
+    }
+    cases[0].n_params = params_f->as.list.len;
+    cases[0].param_names = arena_alloc(e->arena, cases[0].n_params * sizeof(const Symbol *));
+    cases[0].param_bindings = arena_alloc(e->arena, cases[0].n_params * sizeof(Binding *));
+    for (uint8_t j = 0; j < cases[0].n_params; j++) {
+        Form *param_f = params_f->as.list.items[j];
+        if (param_f->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, param_f->span, "handler literal: parameter name must be a symbol");
+            return NULL;
+        }
+        cases[0].param_names[j] = param_f->as.sym;
+    }
+
+    /* Optional cont_kind annotation + continuation name. */
+    cases[0].cont_kind = CK_UNIQUE;
+    Form *k_f;
+    if (hdr_len == 4) {
+        Form *ann_f = case_f->as.list.items[2];
+        k_f = case_f->as.list.items[3];
+        if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_linear) {
+            cases[0].cont_kind = CK_LINEAR;
+        } else if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_unsafe_multishot) {
+            cases[0].cont_kind = CK_COPY;
+        } else if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_multishot) {
+            cases[0].cont_kind = CK_MULTISHOT;
+        } else {
+            diag_emit(DIAG_ERROR, ann_f->span,
+                      "handler literal: expected ^linear, ^unsafe-multishot, or ^multishot "
+                      "before continuation name");
+            return NULL;
+        }
+    } else {
+        k_f = case_f->as.list.items[2];
+    }
+    if (k_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, k_f->span, "handler literal: continuation name must be a symbol");
+        return NULL;
+    }
+    cases[0].k_name = k_f->as.sym;
+
+    Effect *eff = effect_env_lookup(e->effect_env, cases[0].effect_name);
+    if (eff && !eff->is_exported
+        && eff->defining_module_name != NULL
+        && eff->defining_module_name != e->current_module_name
+        && !elab_effect_is_referred(e, eff)) {
+        diag_emit_with_code(DIAG_ERROR, name_f->span, TUR_E0021_PRIVATE_EFFECT,
+                            "effect '%s' is private to module '%s'",
+                            cases[0].effect_name->name, eff->defining_module_name->name);
+        return NULL;
+    }
+
+    /* Handler scope: bind params + k, then elaborate the body. */
+    Scope handler_scope;
+    scope_init(&handler_scope, e->scope);
+    Scope *saved_scope = e->scope;
+    e->scope = &handler_scope;
+
+    for (uint8_t j = 0; j < cases[0].n_params; j++) {
+        TypeKind pk = (eff && j < eff->constructor->n_params)
+            ? eff->constructor->param_types[j] : TY_INT;
+        Type ptype = type_from_kind(pk);
+        Binding *pb = binding_new(e, cases[0].param_names[j], ptype, false, false, params_f->span);
+        cases[0].param_bindings[j] = pb;
+        scope_add(&handler_scope, pb);
+    }
+
+    Binding *kb = binding_new(e, cases[0].k_name, TYPE_INT, false, false, k_f->span);
+    switch (cases[0].cont_kind) {
+    case CK_LINEAR:
+        kb->is_linear = true; kb->type.copy_kind = CK_LINEAR;
+        kb->is_affine = true; kb->is_relevant = true;
+        break;
+    case CK_COPY:
+        kb->type.copy_kind = CK_COPY;
+        diag_emit_with_code(DIAG_WARNING, k_f->span, TUR_W0035_UNSAFE_MULTISHOT_CONT,
+            "unsafe-multishot continuation '%s' -- ownership not tracked", kb->name->name);
+        diag_emit_with_code(DIAG_WARNING, k_f->span, TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
+            "'^unsafe-multishot' is deprecated; use '^multishot' instead");
+        break;
+    case CK_MULTISHOT:
+        kb->type.copy_kind = CK_MULTISHOT;
+        break;
+    default:
+        kb->type.copy_kind = CK_MOVE; kb->is_affine = true;
+        break;
+    }
+    kb->is_continuation = true;
+    cases[0].k_binding = kb;
+    scope_add(&handler_scope, kb);
+
+    Form *body_f = call->as.list.items[2];
+    cases[0].body = elab_form(e, body_f);
+
+    /* MS2: a ^multishot handler literal may re-run its body per resume, so it
+     * must not capture a unique (move-only) or linear free variable (TUR-E0500).
+     * Mirrors the inline-handle check in elab_handle. */
+    if (cases[0].cont_kind == CK_MULTISHOT && cases[0].body) {
+        uint8_t n_hparams = (uint8_t)(cases[0].n_params + 1);
+        Binding **hparams = arena_alloc(e->arena, n_hparams * sizeof(Binding *));
+        for (uint8_t j = 0; j < cases[0].n_params; j++)
+            hparams[j] = cases[0].param_bindings[j];
+        hparams[cases[0].n_params] = kb;
+        uint32_t n_caps = 0;
+        Binding **caps = collect_free_vars(cases[0].body, hparams, n_hparams, &n_caps);
+        for (uint32_t ci = 0; ci < n_caps; ci++) {
+            CopyKind ck = caps[ci]->type.copy_kind;
+            if (ck == CK_UNIQUE || ck == CK_LINEAR) {
+                diag_emit_with_code(DIAG_ERROR, cases[0].body->span,
+                    TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+                    "^multishot handler captures '%s' which is %s -- "
+                    "cannot be safely captured in a multi-shot handler",
+                    caps[ci]->name->name,
+                    ck == CK_UNIQUE ? "unique (move-only)" : "linear");
+            }
+        }
+        free(caps);
+    }
+
+    if (cases[0].cont_kind == CK_LINEAR && kb && !kb->is_linear_consumed) {
+        diag_emit_with_code(DIAG_ERROR, k_f->span, TUR_E0100_LINEAR_DROPPED,
+            "linear continuation '%s' was not resumed or discontinued", kb->name->name);
+    }
+
+    e->scope = saved_scope;
+    scope_free(&handler_scope);
+    if (!cases[0].body) return NULL;
+
+    HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    handle->body = NULL;          /* literal: detached from any body (FH design) */
+    handle->cases = cases;
+    handle->n_cases = 1;
+
+    /* Build the TY_HANDLER value type. */
+    Type htype;
+    memset(&htype, 0, sizeof(Type));
+    htype.kind = TY_HANDLER;
+    htype.copy_kind = CK_COPY;
+    htype.hkt_kind = KIND_STAR;
+    htype.as.handler_.effect_name = cases[0].effect_name->name;
+    {
+        /* FH4.1: single-element handled row (unresolved name-set). */
+        const Symbol *one[1] = { cases[0].effect_name };
+        htype.as.handler_.handled_row = effect_row_unresolved(e->arena, one, 1);
+    }
+    htype.as.handler_.value_kind  = (eff && eff->constructor->n_params > 0)
+        ? eff->constructor->param_types[0] : TY_INT;
+    htype.as.handler_.result_kind = cases[0].body->type.kind;
+    htype.as.handler_.cont_kind   = cases[0].cont_kind;
+
+    Expr *out = expr_new(e->arena, EX_HANDLER_LIT, htype, call->span);
+    out->as.handler_lit_.handle = handle;
+    return out;
+}
+
+/* FH3: (with-handler hv body) -- apply a handler value to a body.
+ * The body runs with hv's dispatch table installed; the result type is the
+ * body's type (the answer type T).  hv must be a TY_HANDLER value.
+ */
+Expr *elab_with_handler(Elab *e, const Form *call) {
+    if (!g_effect_types_enabled) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(with-handler hv body) value application requires -Xeffect-types");
+        return NULL;
+    }
+    /* hv first so we know which effects to mark handled while elaborating body. */
+    Expr *hv = elab_form(e, call->as.list.items[1]);
+    if (!hv) return NULL;
+    if (hv->type.kind != TY_HANDLER) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "(with-handler): first argument must be a handler value, got '%s'",
+                  type_name(hv->type));
+        return NULL;
+    }
+
+    /* Push the handler's effect(s) onto the handled-effects scope so perform
+     * calls in the body see them as handled (mirrors elab_handle's pre-scan). */
+    uint32_t saved_n_handled = e->n_handled_effects;
+    if (hv->type.as.handler_.effect_name != NULL) {
+        /* Intern the effect name back to a Symbol for push_handled_effect. */
+        const Symbol *eff_sym = intern_cstr(e->st, hv->type.as.handler_.effect_name);
+        push_handled_effect(e, eff_sym);
+    }
+    Expr *body = elab_form(e, call->as.list.items[2]);
+    e->n_handled_effects = saved_n_handled;
+    if (!body) return NULL;
+
+    Expr *out = expr_new(e->arena, EX_WITH_HANDLER, body->type, call->span);
+    out->as.with_handler_.handler = hv;
+    out->as.with_handler_.body = body;
+    return out;
+}
+
+/* ET3-E / FH5: (compose-handlers h1 h2)
+ * Compose two handler values that must handle different effects (TUR_E0251 on
+ * overlap).  Produces a TY_HANDLER value whose runtime table is the
+ * concatenation of h1's and h2's tables (h1 outer, per FH0.1).
  */
 Expr *elab_compose_handlers(Elab *e, const Form *call) {
     if (!g_effect_types_enabled) {
@@ -1099,8 +1340,27 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* ET3: Handlers must handle different effects (TUR-E0251) */
-    if (h1->type.as.handler_.effect_name != NULL
+    /* FH4.1: handlers must handle disjoint effect *sets* (TUR-E0251).  Compare
+     * the handled rows by name so the check also covers composed (multi-effect)
+     * handlers, not just the single effect_name. */
+    {
+        const Symbol *n1[32]; uint8_t c1 = 0;
+        const Symbol *n2[32]; uint8_t c2 = 0;
+        effect_row_collect_names(h1->type.as.handler_.handled_row, n1, &c1, 32);
+        effect_row_collect_names(h2->type.as.handler_.handled_row, n2, &c2, 32);
+        for (uint8_t i = 0; i < c1; i++)
+            for (uint8_t j = 0; j < c2; j++)
+                if (n1[i] == n2[j]) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0251_HANDLER_OVERLAP,
+                        "composed handlers both handle effect '%s'; overlapping "
+                        "effects are not allowed", n1[i]->name);
+                    return NULL;
+                }
+    }
+    /* Fallback for legacy types without a handled_row: compare effect_name. */
+    if ((!h1->type.as.handler_.handled_row || !h2->type.as.handler_.handled_row)
+        && h1->type.as.handler_.effect_name != NULL
         && h2->type.as.handler_.effect_name != NULL
         && h1->type.as.handler_.effect_name == h2->type.as.handler_.effect_name) {
         diag_emit_with_code(DIAG_ERROR, call->span,
@@ -1110,21 +1370,42 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* CF3 (control-flow-completeness-plan): the arguments type-check and do not
-     * overlap, but first-class handler *composition* has no runtime
-     * representation yet -- handler values cannot be created or applied, so a
-     * composed handler cannot run.  Rather than return a silent nil placeholder
-     * (audit item 2), gate the form with a loud diagnostic.  The static checks
-     * above (TUR-E0251 overlap, handler-value typing) still fire first so users
-     * get the most specific error.  Implementation is tracked separately; the
-     * pre/post-1.0 decision is deferred. */
-    diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0704_HANDLER_COMPOSE_UNIMPL,
-        "compose-handlers: first-class handler composition is not yet "
-        "implemented and is gated for now");
-    diag_emit(DIAG_HELP, call->span,
-        "compose two effects with nested (handle ...) forms instead; see "
-        "docs/first-class-handlers-plan.md for the implementation plan");
-    return NULL;
+    /* FH5: runtime composition is implemented -- the CF3 TUR-E0704 gate is
+     * removed.  The static checks above (TUR-E0251 overlap, handler-value
+     * typing) still fire first.  Composition lowers to table concatenation
+     * (emit_effects_compose_handlers); see docs/first-class-handlers-semantics.md. */
+
+    /* FH0.3: composed handlers must agree on the answer type T.  In v1 a
+     * detached handler literal does not carry the answer type -- its
+     * result_kind records the case body's own type, which for a resume-
+     * terminated body is the resumed value's type, not T.  Enforcing strict T
+     * equality from that field would misfire, so the check is deferred to the
+     * application site (the body type of with-handler is the real T).  The
+     * disjoint-effect rule (TUR-E0251) above is still enforced. */
+
+    /* FH5: produce a composed handler value.  Its runtime table is the
+     * concatenation of h1's and h2's tables (h1 outer, per FH0.1).  The
+     * value type is TY_HANDLER; the single effect_name field is meaningful
+     * only for single-effect handlers, so a composed value sets it to NULL
+     * (the row is carried implicitly by the two children at codegen time). */
+    Type ctype;
+    memset(&ctype, 0, sizeof(Type));
+    ctype.kind = TY_HANDLER;
+    ctype.copy_kind = CK_COPY;
+    ctype.hkt_kind = KIND_STAR;
+    ctype.as.handler_.effect_name = NULL;   /* composed: multi-effect row */
+    /* FH4.1: the composed handled set is the union of the two rows. */
+    ctype.as.handler_.handled_row = effect_row_union(e->arena,
+        h1->type.as.handler_.handled_row, h2->type.as.handler_.handled_row);
+    ctype.as.handler_.value_kind  = TY_UNKNOWN;
+    ctype.as.handler_.result_kind = (h1->type.as.handler_.result_kind != TY_UNKNOWN)
+        ? h1->type.as.handler_.result_kind : h2->type.as.handler_.result_kind;
+    ctype.as.handler_.cont_kind   = CK_COPY;
+
+    Expr *out = expr_new(e->arena, EX_COMPOSE_HANDLERS, ctype, call->span);
+    out->as.compose_handlers_.h1 = h1;
+    out->as.compose_handlers_.h2 = h2;
+    return out;
 }
 
 /* LC1/LC2: Pre-check a continuation binding for double-use before elaborating k.

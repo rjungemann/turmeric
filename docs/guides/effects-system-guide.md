@@ -77,12 +77,51 @@ handler that declares it:
 ;; prints "tick", evaluates to 42
 ```
 
-> **`compose-handlers` is gated (`TUR-E0704`).** A first-class
-> `(compose-handlers h1 h2)` over handler *values* is **not yet implemented** --
-> handler values currently have no runtime representation (the `(handler E V R)`
-> annotation is type-level only), so `compose-handlers` raises a compile error
-> rather than silently doing nothing. Use nested `handle` (above) to compose
-> effects today. The implementation is specified in
+### First-Class Handler Values
+
+A handler is also a **value**: you can create one, pass it, apply it to a body,
+and compose two of them.
+
+- **Create** a handler with the `(handler (E [params] k) body)` literal. It has
+  type `(handler E V R)` and carries the case detached from any body.
+- **Apply** a handler value with `(with-handler hv body)` -- the body runs with
+  `hv`'s dispatch table installed, exactly as if its case were written inline in
+  a `handle`. (`with-handler` with case/body pairs instead of a single value
+  argument remains the inline-`handle` sugar.)
+- **Compose** two handlers over *different* effects with
+  `(compose-handlers h1 h2)`; `h1` is the **outer** handler.
+
+```turmeric
+(defeffect Log [msg :cstr] :nil)
+(defeffect Counter [] :int)
+
+;; compose-handlers builds one handler value over both effects (h1 = Counter is
+;; the outer handler).  Applying it is identical to the nested handle above.
+(with-handler
+  (compose-handlers
+    (handler (Counter [] k)   (resume k 41))
+    (handler (Log [msg] k)    (do (println msg) (resume k nil))))
+  (do (perform (Log "tick")) (+ (perform (Counter)) 1)))
+;; prints "tick", evaluates to 42
+```
+
+Semantics (precedence, the disjoint-effect rule, answer-type agreement, and
+per-case continuation discipline) are specified in
+[first-class-handlers-semantics.md](../first-class-handlers-semantics.md).
+
+- **Overlap is rejected.** Composing two handlers for the *same* effect is a
+  compile error (`TUR-E0251`); composition is defined only for disjoint effect
+  sets.
+- **Effects discharge from the row.** `(with-handler hv body)` removes `hv`'s
+  handled effect(s) from the body's effect row; a leftover (unhandled) effect
+  propagates to the enclosing function just as it does for `handle`.
+- **Continuation discipline is per case.** `^linear` / `^multishot` / the
+  default affine `k` are enforced inside a handler value identically to inline
+  `handle`, and composition never blends two handlers' disciplines.
+
+> *History:* `compose-handlers` was briefly gated (`TUR-E0704`) while handler
+> values had no runtime representation. That gate has been removed; handler
+> values are now first-class. See
 > [first-class-handlers-plan.md](../first-class-handlers-plan.md).
 
 ## Common Use Cases

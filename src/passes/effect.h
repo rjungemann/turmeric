@@ -102,6 +102,13 @@ EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_s
 /* ET4: Returns true if `child` is the same as `parent_eff` or is a descendant via ^extends */
 bool effect_is_subeffect(const Effect *child, const Effect *parent_eff);
 
+/* FH4.1: collect a row's effect names (deduplicated) into `out` (bounded by
+ * `cap`); compare two rows as unordered name sets; format a row's names as
+ * "A | B" (no braces).  Used by handler-type (TY_HANDLER) operations. */
+void effect_row_collect_names(EffectRow *row, const Symbol **out, uint8_t *n, uint8_t cap);
+bool effect_row_name_set_eq(EffectRow *a, EffectRow *b);
+void effect_row_format_names(Buf *b, EffectRow *row);
+
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row);
 

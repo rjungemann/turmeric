@@ -6,15 +6,17 @@ description: Phased plan to give effect handlers a first-class runtime represent
 
 # First-Class Effect Handlers -- Implementation Plan
 
-> **Status:** Not started. Created as the follow-up to
-> [control-flow-completeness-plan.md](control-flow-completeness-plan.md)
-> Phase CF3, which **gated** `compose-handlers` (diagnostic `TUR-E0704`)
-> rather than implementing it, because handler *values* have no runtime
-> representation today. This plan specifies that representation.
+> **Status:** **Implemented** (FH0-FH7, including FH4.1). Handler values have a
+> runtime representation (an effect-keyed dispatch table); they can be created
+> (`(handler ...)`), applied (`(with-handler hv body)`), and composed
+> (`(compose-handlers h1 h2)`), and the `TY_HANDLER` type now carries the
+> handled effect *set* (single- or multi-effect via `#{...}`). The CF3
+> `TUR-E0704` gate has been removed.
 >
-> **Pre/post-1.0:** **undecided.** This plan exists so the decision can be
-> made against a concrete design and cost estimate; it does not itself commit
-> the work to the 1.0 milestone.
+> Follow-up to
+> [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md)
+> Phase CF3, which originally **gated** `compose-handlers` (diagnostic
+> `TUR-E0704`) because handler *values* had no runtime representation.
 >
 > **Snapshot:** `0.14.6`.
 >
@@ -112,6 +114,11 @@ top of that representation.
 
 ## Phase FH0 -- Semantics specification
 
+> **Status: DONE.** The operational spec lives in
+> [first-class-handlers-semantics.md](first-class-handlers-semantics.md).
+> FH0.1-FH0.4 are written there (precedence + worked trace, overlap rule,
+> typing judgment, continuation discipline).
+
 Write the operational spec before code so FH5's behavior is unambiguous.
 
 - **FH0.1** Composition precedence. Define `(compose-handlers h1 h2)` applied to
@@ -181,6 +188,36 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## Phase FH4 -- `TY_HANDLER` effect-row generalization
 
+> **Status:** FH4.1 and FH4.2 **done**.
+>
+> FH4.1: `TY_HANDLER` now carries a `handled_row` (an `EffectRow` stored as an
+> `ERK_UNRESOLVED` name-set, built at parse time -- no `Effect*` resolution
+> needed). `(handler E V R)` accepts either a single effect symbol or a
+> `#{E1 E2 ...}` effect set; `effect_row_collect_names` /
+> `effect_row_name_set_eq` / `effect_row_format_names` (in `effect.c`) back the
+> updated `type_eq`, `type_name` ("handler<A | B, V, R>"), and subtyping in
+> `types.c` (`TY_UNKNOWN` value/result kinds act as wildcards so a composed
+> handler round-trips through a typed parameter). `compose-handlers` sets the
+> unioned `handled_row` and rejects overlap by name-set intersection.
+>
+> FH4.2: `effect_check`'s `collect_effects_in_expr` treats
+> `(with-handler hv body)` like `(handle ...)` -- it discharges the handler's
+> effect(s) from the body's row (`remove_handler_effects`, which recurses
+> structurally into handler literals and compositions) and propagates leftover
+> body effects plus effects re-opened by the case bodies. A leftover effect is
+> reported through the same diagnostics as an inline `handle` (`TUR-E0009` when
+> it violates a declared row, `TUR-W0030` when a function has no annotation) --
+> the plan's reference to `TUR-E0253` predates the unified row-mismatch
+> reporting that `handle` itself uses.
+>
+> *Note:* one call-site arg-checker path compares handler arguments by kind
+> only (it falls back to `type_from_kind` when a function's full parameter types
+> aren't threaded through), so it does not yet exercise the row-precise
+> `type_eq`; that is pre-existing plumbing, independent of the type-level FH4.1
+> operations, which are correct. This caveat, together with the related
+> mixed-ownership `type_name` diagnostic leak, is tracked in
+> [handler-typecheck-and-typename-followups-plan.md](handler-typecheck-and-typename-followups-plan.md).
+
 - **FH4.1** Extend `TY_HANDLER` to carry an `EffectRow` (handled set) rather
   than a single `effect_name`, keeping the single-effect constructor as a
   one-element row for source compatibility. *Done when:* `type_eq`,
@@ -195,6 +232,14 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## Phase FH5 -- `compose-handlers` real elaboration
 
+> **Status: DONE.** `elab_compose_handlers` now produces an
+> `EX_COMPOSE_HANDLERS` value (the `TUR-E0704` gate is removed; `TUR-E0251`
+> overlap rejection retained). `emit_effects_compose_handlers` lowers it to
+> `tur_handler_table_concat` (h1 outer, per FH0.1). Applying a composed handler
+> is byte-identical to nested `handle` (fixture `fh-compose-handlers`). The
+> CF-plan CF3 outcome and gated-diagnostic list are updated; the
+> `compose-handlers-gated` fixture is removed.
+
 - **FH5.1** Replace the `TUR-E0704` gate (in `elab_compose_handlers`) with an
   elaboration that concatenates the two dispatch tables and unions the effect
   rows (`effect_row_union`), keeping the `TUR-E0251` overlap rejection. *Done
@@ -203,13 +248,23 @@ Write the operational spec before code so FH5's behavior is unambiguous.
   per FH0.1. *Done when:* a fixture composing two independent effects produces
   the FH0.1 expected stdout, identical to the hand-written nested `handle`.
 - **FH5.3** Remove `TUR-E0704` from the gated list in
-  [control-flow-completeness-plan.md](control-flow-completeness-plan.md) CF0.2
+  [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md) CF0.2
   and update CF3's outcome. *Done when:* the gate is gone and the plan reflects
   the implemented state.
 
 ---
 
 ## Phase FH6 -- Continuation discipline across composition
+
+> **Status: DONE.** `elab_handler_lit` wires `cont_kind` into the `k` binding
+> exactly like `elab_handle` (linear `is_linear`/`is_relevant`, default affine
+> move, multishot snapshot), and now also carries the MS2 multishot-capture
+> check. Each case keeps its own discipline in its dispatch-table entry, so
+> composition does not blend disciplines. Expect-error fixtures confirm the same
+> diagnostics fire through a handler value: `TUR-E0101` (linear resumed twice),
+> `TUR-E0100` (linear dropped), `TUR-E0201` (affine resumed twice), `TUR-E0500`
+> (multishot captures a unique). A positive fixture shows a `^multishot` handler
+> value resumed twice matches the inline `handle` result.
 
 - **FH6.1** Verify `^linear` / `^multishot` / default-affine `k` discipline is
   enforced per case when the case lives in a handler value and across
@@ -220,6 +275,15 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 ---
 
 ## Phase FH7 -- Fixtures and documentation
+
+> **Status: DONE.** Fixtures (FH7.1): `fh-handler-value` (literal + applied,
+> runtime stdout); `fh-compose-handlers` (two independent effects, equal to
+> nested `handle`); `errors/fh-compose-overlap` (`TUR-E0251`);
+> `errors/fh-leftover-effect` + `fh-discharge-row` (FH4.2 discharge/leftover);
+> `errors/fh-{linear-twice,linear-dropped,unique-twice,multishot-capture}` and
+> `fh-multishot-value` (FH6 discipline). FH7.2: `effects-system-guide.md` now
+> documents the shipped creation/application/composition semantics and the CF3
+> gate note is removed.
 
 - **FH7.1** Fixtures: (a) handler literal bound + applied (runtime stdout);
   (b) compose two independent effects, run, compare to nested `handle`;
@@ -252,6 +316,6 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## See also
 
-- [control-flow-completeness-plan.md](control-flow-completeness-plan.md) (Phase CF3)
-- [control-flow-completeness-audit.md](control-flow-completeness-audit.md) (audit item 2)
+- [control-flow-completeness-plan.md](archive/control-flow-completeness-plan.md) (Phase CF3)
+- [control-flow-completeness-audit.md](archive/control-flow-completeness-audit.md) (audit item 2)
 - [effects-system-guide.md](guides/effects-system-guide.md)

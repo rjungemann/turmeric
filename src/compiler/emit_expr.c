@@ -3043,6 +3043,9 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_PERFORM:          return emit_effects_perform(ctx, body, e);
         case EX_HANDLE:          return emit_effects_handle(ctx, body, e);
+        case EX_HANDLER_LIT:     return emit_effects_handler_lit(ctx, body, e);
+        case EX_WITH_HANDLER:    return emit_effects_with_handler(ctx, body, e);
+        case EX_COMPOSE_HANDLERS: return emit_effects_compose_handlers(ctx, body, e);
         case EX_RESUME:          return emit_effects_resume(ctx, body, e);
         case EX_DISCONTINUE:     return emit_effects_discontinue(ctx, body, e);
         case EX_MAKE_STRUCT: {

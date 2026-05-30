@@ -263,6 +263,21 @@ bool expr_has_multishot_handler(const Expr *e) {
             }
             return false;
         }
+        case EX_HANDLER_LIT: {
+            const HandleExpr *h = e->as.handler_lit_.handle;
+            if (!h) return false;
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                if (h->cases[i].cont_kind == CK_MULTISHOT) return true;
+                if (expr_has_multishot_handler(h->cases[i].body)) return true;
+            }
+            return false;
+        }
+        case EX_WITH_HANDLER:
+            if (expr_has_multishot_handler(e->as.with_handler_.handler)) return true;
+            return expr_has_multishot_handler(e->as.with_handler_.body);
+        case EX_COMPOSE_HANDLERS:
+            if (expr_has_multishot_handler(e->as.compose_handlers_.h1)) return true;
+            return expr_has_multishot_handler(e->as.compose_handlers_.h2);
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++) {
                 if (expr_has_multishot_handler(e->as.let_.bindings[i].init)) return true;

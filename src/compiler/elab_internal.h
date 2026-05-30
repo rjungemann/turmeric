@@ -829,6 +829,9 @@ Expr *elab_try_with(Elab *e, const Form *call);
 Expr *elab_defeffect(Elab *e, const Form *call);
 Expr *elab_perform(Elab *e, const Form *call);
 Expr *elab_handle(Elab *e, const Form *call);
+/* FH2-FH5: first-class handler values */
+Expr *elab_handler_lit(Elab *e, const Form *call);
+Expr *elab_with_handler(Elab *e, const Form *call);
 Expr *elab_compose_handlers(Elab *e, const Form *call);
 bool cont_check_double_use(Elab *e, const Form *k_form);
 Expr *elab_resume(Elab *e, const Form *call);

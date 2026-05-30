@@ -206,6 +206,10 @@ typedef enum ExprKind {
     EX_DEFECT,         /* (defeffect Name [params...] : result) - define an effect */
     EX_PERFORM,        /* (perform (EffectName args...)) - perform an effect */
     EX_HANDLE,         /* (handle expr cases...) - handle effects */
+    /* FH2-FH5: first-class effect handler values */
+    EX_HANDLER_LIT,    /* (handler (E [params] k) body) - handler value literal */
+    EX_WITH_HANDLER,   /* (with-handler hv body) - apply a handler value to a body */
+    EX_COMPOSE_HANDLERS, /* (compose-handlers h1 h2) - concat two handler tables */
     EX_RESUME,         /* (resume k value) - resume continuation with value */
     EX_DISCONTINUE,    /* (discontinue k exception) - discontinue with exception */
     EX_CONT_PRED,      /* (cont? k) - check if continuation is unconsumed */
@@ -612,6 +616,10 @@ struct Expr {
         struct { EffectDef *def; }                   effect_def_;   /* (defeffect ...) */
         struct { PerformExpr *perform; }             perform_;     /* (perform ...) */
         struct { HandleExpr *handle; }               handle_;      /* (handle ...) */
+        /* FH2-FH5: first-class handler values */
+        struct { HandleExpr *handle; }               handler_lit_; /* (handler ...) -- cases, body==NULL */
+        struct { Expr *handler; Expr *body; }        with_handler_;/* (with-handler hv body) */
+        struct { Expr *h1; Expr *h2; }               compose_handlers_; /* (compose-handlers h1 h2) */
         struct { ResumeExpr *resume; }               resume_;      /* (resume k v) */
         struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
         struct { Expr *expr; }                       cont_pred_;   /* (cont? k) */

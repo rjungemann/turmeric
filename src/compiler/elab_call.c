@@ -543,7 +543,14 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_perform)   return elab_perform(e, call);
     if (name == e->sym_handle)       return elab_handle(e, call);
     if (name == e->sym_try_with)     return elab_try_with(e, call);
-    if (name == e->sym_with_handler) return elab_handle(e, call);  /* T25: sugar for handle in async context */
+    /* FH2: (handler (E [params] k) body) in value position is a handler literal. */
+    if (name == e->sym_handler_type) return elab_handler_lit(e, call);
+    /* FH3: (with-handler hv body) -- exactly two args -- applies a handler value.
+     * Any other arity is the T25 inline-handle sugar (body + case/body pairs). */
+    if (name == e->sym_with_handler) {
+        if (call->as.list.len == 3) return elab_with_handler(e, call);
+        return elab_handle(e, call);  /* T25: sugar for handle in async context */
+    }
     if (name == e->sym_resume)    return elab_resume(e, call);
     if (name == e->sym_discontinue) return elab_discontinue(e, call);
     /* ET3-E: compose-handlers */
