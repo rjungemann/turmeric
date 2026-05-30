@@ -6,15 +6,16 @@ description: Phased plan to give effect handlers a first-class runtime represent
 
 # First-Class Effect Handlers -- Implementation Plan
 
-> **Status:** Not started. Created as the follow-up to
-> [control-flow-completeness-plan.md](control-flow-completeness-plan.md)
-> Phase CF3, which **gated** `compose-handlers` (diagnostic `TUR-E0704`)
-> rather than implementing it, because handler *values* have no runtime
-> representation today. This plan specifies that representation.
+> **Status:** **Implemented** (FH0-FH7), with FH4.1 (a full `EffectRow` inside
+> the `TY_HANDLER` *type*) deferred -- see the FH4 note. Handler values now have
+> a runtime representation (an effect-keyed dispatch table); they can be
+> created (`(handler ...)`), applied (`(with-handler hv body)`), and composed
+> (`(compose-handlers h1 h2)`). The CF3 `TUR-E0704` gate has been removed.
 >
-> **Pre/post-1.0:** **undecided.** This plan exists so the decision can be
-> made against a concrete design and cost estimate; it does not itself commit
-> the work to the 1.0 milestone.
+> Follow-up to
+> [control-flow-completeness-plan.md](control-flow-completeness-plan.md)
+> Phase CF3, which originally **gated** `compose-handlers` (diagnostic
+> `TUR-E0704`) because handler *values* had no runtime representation.
 >
 > **Snapshot:** `0.14.6`.
 >
@@ -263,6 +264,15 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 ---
 
 ## Phase FH7 -- Fixtures and documentation
+
+> **Status: DONE.** Fixtures (FH7.1): `fh-handler-value` (literal + applied,
+> runtime stdout); `fh-compose-handlers` (two independent effects, equal to
+> nested `handle`); `errors/fh-compose-overlap` (`TUR-E0251`);
+> `errors/fh-leftover-effect` + `fh-discharge-row` (FH4.2 discharge/leftover);
+> `errors/fh-{linear-twice,linear-dropped,unique-twice,multishot-capture}` and
+> `fh-multishot-value` (FH6 discipline). FH7.2: `effects-system-guide.md` now
+> documents the shipped creation/application/composition semantics and the CF3
+> gate note is removed.
 
 - **FH7.1** Fixtures: (a) handler literal bound + applied (runtime stdout);
   (b) compose two independent effects, run, compare to nested `handle`;
