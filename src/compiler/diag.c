@@ -126,6 +126,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
+        /* CF6: async Send-across-await */
+        case TUR_E0022_AWAIT_LIVE_NOT_SEND:              return "TUR-E0022";
         /* Phase B: mixed-width numeric arithmetic */
         case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
@@ -135,6 +137,9 @@ const char *diag_code_to_string(DiagCode code) {
         /* CF4: gated call/cc / escape */
         case TUR_E0700_CALLCC_GATED:                     return "TUR-E0700";
         case TUR_E0701_ESCAPE_GATED:                     return "TUR-E0701";
+        /* CF5: always-on generator limitation diagnostics */
+        case TUR_E0702_YIELD_IN_MATCH_ARM:               return "TUR-E0702";
+        case TUR_E0703_YIELD_IN_RECURSIVE_GEN:           return "TUR-E0703";
         /* CF3: gated first-class handler composition */
         case TUR_E0704_HANDLER_COMPOSE_UNIMPL:           return "TUR-E0704";
         /* ET4: effect scope errors */
@@ -220,6 +225,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
+    if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
     if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     /* ET3: handler typing errors */
@@ -228,6 +234,9 @@ DiagCode diag_code_from_string(const char *s) {
     /* CF4: gated call/cc / escape */
     if (strcmp(s, "TUR-E0700") == 0) return TUR_E0700_CALLCC_GATED;
     if (strcmp(s, "TUR-E0701") == 0) return TUR_E0701_ESCAPE_GATED;
+    /* CF5: always-on generator limitation diagnostics */
+    if (strcmp(s, "TUR-E0702") == 0) return TUR_E0702_YIELD_IN_MATCH_ARM;
+    if (strcmp(s, "TUR-E0703") == 0) return TUR_E0703_YIELD_IN_RECURSIVE_GEN;
     /* CF3: gated first-class handler composition */
     if (strcmp(s, "TUR-E0704") == 0) return TUR_E0704_HANDLER_COMPOSE_UNIMPL;
     /* ET4: effect scope errors */

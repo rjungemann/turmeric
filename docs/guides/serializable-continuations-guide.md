@@ -633,6 +633,21 @@ Deserializing from an untrusted source is analogous to Java deserialization vuln
 | **Green-Thread Snapshots** | Captures full thread state | Not portable, captures OS resources, complex |
 | **Persistent Processes** | Live state, hot reloading | Requires VM support, not suitable for C target |
 
+## Residual Liveness Imprecision (1.0 limitation)
+
+The same conservative capture check that applies to cloneable continuations
+(`TUR-E0014`) applies here: bindings in scope at a `serial-shift` site inside
+the same function are checked against `Serializable`, even if they are not
+actually referenced in the continuation body.  Bindings from enclosing outer
+functions are excluded (CF7.3), but same-function bindings that happen to be
+in lexical scope may be flagged even if they are dead at the shift point.
+
+Full precision requires the post-1.0 CPS liveness pass (tracked in
+[control-flow-completeness-plan.md](../control-flow-completeness-plan.md) CF7.5).
+
+**Workaround:** consume or drop non-Serializable values before the shift point,
+or restructure so only Serializable bindings remain in scope.
+
 ## See Also
 
 - [Checkpointing Guide](checkpointing-guide.md) -- More examples of persistent workflows

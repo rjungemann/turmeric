@@ -199,7 +199,12 @@ static void check_cloneable_capture(Elab *e, Span span) {
     TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_sym);
     if (!clone_tc) return; /* No Clone typeclass in scope; nothing to check */
 
-    for (Scope *s = e->scope; s != NULL && s != &e->global; s = s->parent) {
+    /* CF7.3: stop at the outer-function boundary so bindings from enclosing
+     * functions (which are NOT captured in the continuation env) are not
+     * falsely flagged as needing Clone.  For top-level defns fn_entry_outer_scope
+     * is &e->global, giving the same behavior as before. */
+    Scope *stop = e->fn_entry_outer_scope ? e->fn_entry_outer_scope : &e->global;
+    for (Scope *s = e->scope; s != NULL && s != stop; s = s->parent) {
         for (uint32_t i = 0; i < s->n; i++) {
             Binding *b = s->bindings[i];
             if (!b || !b->name) continue;

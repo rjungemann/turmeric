@@ -524,6 +524,11 @@ typedef struct Elab {
     /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
      * detecting cloneable-shift outside any reset boundary. */
     int              cloneable_reset_depth;
+    /* CF7.3: the scope that was active immediately before the current function
+     * body's inner scope was pushed (i.e., e->scope just before scope_init in
+     * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
+     * from outer function scopes are not falsely flagged as needing Clone. */
+    struct Scope    *fn_entry_outer_scope;
     /* Phase 21: tracks nesting depth of serial-reset for detecting
      * serial-shift outside any serial-reset boundary. */
     int              serial_reset_depth;
@@ -604,6 +609,11 @@ typedef struct Elab {
     const Symbol     *sym_yield;        /* "yield" */
     const Symbol     *sym_gen_next;     /* "gen-next" */
     const Symbol     *sym_gen_done;     /* "gen-done?" */
+    /* CF5 (control-flow-completeness-plan): set true while elaborating a match arm body. */
+    bool              in_match_arm;
+    /* CF6 (control-flow-completeness-plan): set true while elaborating an inline async closure body.
+     * Used by elab_await to check that bindings in scope are Send. */
+    bool              in_async_body;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
@@ -612,6 +622,8 @@ typedef struct GenContext {
     TypeKind          element_kind;     /* TypeKind of the first yield (TY_UNKNOWN until set) */
     bool              element_kind_set; /* true once first yield is elaborated */
     struct GenContext *parent;          /* enclosing GenContext (NULL for outermost) */
+    /* CF5: true when the enclosing function calls itself inside this gen body */
+    bool              is_recursive;
     /* Collect let-bindings inside gen body for struct field promotion */
     Binding         **let_bindings;     /* arena-allocated array of Binding* */
     uint32_t          n_let_bindings;

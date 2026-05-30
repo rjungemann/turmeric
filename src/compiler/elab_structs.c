@@ -2124,10 +2124,12 @@ Expr *elab_match(Elab *e, const Form *call) {
                 }
                 pat->union_member_idx = -1; /* IT4: wildcard arm — no specific member */
                 has_wildcard = true;
+                { bool _s = e->in_match_arm; e->in_match_arm = true;
                 Expr *body = elab_form(e, body_form);
+                e->in_match_arm = _s;
                 if (!body) { free(member_covered); return NULL; }
                 arms[ai].body = body;
-                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type; }
                 continue;
             }
 
@@ -2184,7 +2186,9 @@ Expr *elab_match(Elab *e, const Form *call) {
                                              false, false, var_form->span);
                 scope_add(&arm_scope, var_b);
 
+                bool _s187 = e->in_match_arm; e->in_match_arm = true;
                 Expr *body = elab_form(e, body_form);
+                e->in_match_arm = _s187;
                 e->scope = saved_scope;
                 scope_free(&arm_scope);
                 if (!body) { free(member_covered); return NULL; }
@@ -2253,10 +2257,12 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (pat_form->tag == F_SYM) {
                 /* Wildcard */
                 pat->is_wildcard = true;
+                { bool _s = e->in_match_arm; e->in_match_arm = true;
                 Expr *body = elab_form(e, body_form);
+                e->in_match_arm = _s;
                 if (!body) return NULL;
                 arms[ai].body = body;
-                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type; }
                 continue;
             }
             if (pat_form->tag == F_LIST && pat_form->as.list.len == 2 &&
@@ -2292,7 +2298,9 @@ Expr *elab_match(Elab *e, const Form *call) {
                 Scope *saved_scope = e->scope;
                 e->scope = &arm_scope;
                 scope_add(&arm_scope, fb);
+                bool _s295 = e->in_match_arm; e->in_match_arm = true;
                 Expr *body = elab_form(e, body_form);
+                e->in_match_arm = _s295;
                 e->scope = saved_scope;
                 scope_free(&arm_scope);
                 if (!body) return NULL;
@@ -2393,6 +2401,7 @@ Expr *elab_match(Elab *e, const Form *call) {
 
                 /* Elaborate body; for is_var, introduce the binding in a new scope */
                 Expr *body;
+                bool _s_lit = e->in_match_arm; e->in_match_arm = true;
                 if (pat->is_var && pat->var_sym) {
                     Binding *vb = binding_new(e, pat->var_sym, scrutinee->type,
                                               false, false, pat_form->span);
@@ -2408,6 +2417,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                 } else {
                     body = elab_form(e, body_form);
                 }
+                e->in_match_arm = _s_lit;
                 if (!body) return NULL;
                 lit_arms[ai].body = body;
                 if (lit_result.kind == TY_UNKNOWN) lit_result = body->type;
@@ -2524,7 +2534,9 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (g_linear_enabled && n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
+            bool _s_wc = e->in_match_arm; e->in_match_arm = true;
             Expr *body = elab_form(e, body_form);
+            e->in_match_arm = _s_wc;
             if (!body) { free(covered); return NULL; }
             /* LT1: Capture outer linear state after this arm's body. */
             if (g_linear_enabled && n_match_lin > 0) {
@@ -2739,7 +2751,9 @@ Expr *elab_match(Elab *e, const Form *call) {
             if (g_linear_enabled && n_match_lin > 0) {
                 linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
             }
+            bool _s_ctor = e->in_match_arm; e->in_match_arm = true;
             Expr *body = elab_form(e, body_form);
+            e->in_match_arm = _s_ctor;
 
             /* Phase G4: Elaborate optional when-guard while arm scope is still live */
             Expr *guard_expr = NULL;

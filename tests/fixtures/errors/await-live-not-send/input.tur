@@ -1,0 +1,17 @@
+;; CF6 (control-flow-completeness-plan): non-Send binding live across await.
+;;
+;; rc<T> uses single-threaded reference counting and is not Send: if the
+;; fiber that holds an rc<T> suspends at an await and resumes on a different
+;; OS thread, the refcount races.  Holding an rc<T> value in scope across an
+;; await inside an async closure is therefore rejected with TUR-E0022.
+(load "stdlib/rc.tur")
+
+(defn zero [] :int 0)
+
+(defn main [] :nil
+  (let [fut (async
+    (fn []
+      (let [x (rc/of 42)]  ;; rc<int> -- not Send
+        (await (async zero)) ;; x is in scope across this await -- ERROR
+        (rc/deref x))))]
+    (await fut)))

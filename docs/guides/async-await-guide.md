@@ -187,6 +187,59 @@ async
         (FileNotFound _) -> continue(k "default")
 ```
 
+## Send Requirements for Async Bodies
+
+### The Send-across-await rule
+
+Every value whose binding is in scope at an `(await ...)` point within an
+inline `(async (fn [] ...))` closure must be `Send`. Non-Send types include:
+
+| Type | Reason not Send |
+|---|---|
+| `rc<T>` | Single-threaded refcount; races on cross-thread resume |
+| `ref<T>` | Owning reference tied to the creating fiber |
+| `&T` / `&mut T` | Borrows; lifetime is fiber-bound |
+| `cont<T>` | Continuation captures C stack frame |
+
+The compiler enforces this conservatively: **any binding in scope at the
+`await`** is treated as live, whether or not it is actually used after the
+await. This is a 1.0 limitation tracked in Phase CF6 of
+[control-flow-completeness-plan.md](../control-flow-completeness-plan.md).
+
+```turmeric
+;; ERROR TUR-E0022: rc<int> is not Send
+(async (fn []
+  (let [x (rc/of 42)]
+    (await (async zero))  ;; x is in scope -- not Send
+    (rc/deref x))))
+
+;; OK: int is Send
+(async (fn []
+  (let [x 42]
+    (await (async zero))  ;; x is in scope -- Send
+    x)))
+```
+
+### Workaround
+
+Consume or drop non-Send values before the `await`:
+
+```turmeric
+(async (fn []
+  (let [x (rc/of 42)
+        v (rc/deref x)]   ;; extract the value first
+    (rc/drop x)           ;; drop x before the await point
+    (await (async zero))  ;; only v (an int) is in scope
+    v)))
+```
+
+### Scope
+
+This check applies **only to inline closures** passed directly to `(async
+(fn [] ...))`. Pre-defined functions referenced as `(async my-fn)` are not
+re-elaborated and are not checked here; their bodies were compiled without
+async context. A future CPS-based implementation will close this gap.
+
 ## I/O Bindings
 
 Turmeric doesn't provide built-in async I/O primitives. Import via FFI:

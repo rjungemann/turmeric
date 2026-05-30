@@ -2220,6 +2220,17 @@ static void collect_let_bindings_walk(const Expr *body,
     free(stk);
 }
 
+/* CF5: recursively scan a Form tree for any reference to a given symbol. */
+static bool form_contains_sym(const Form *f, const Symbol *sym) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return f->as.sym == sym;
+    if (f->tag == F_LIST || f->tag == F_VEC || f->tag == F_MAP || f->tag == F_SET) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_contains_sym(f->as.list.items[i], sym)) return true;
+    }
+    return false;
+}
+
 /* GF1: (gen [] body...) -- create a generator expression.
  *
  * The form (gen [] body) compiles to a heap-allocated C state-machine struct
@@ -2271,10 +2282,22 @@ Expr *elab_gen(Elab *e, const Form *call) {
     snprintf(def->next_fn,     sizeof(def->next_fn),    "__gen_%s_%u_next", fn_name, gen_id);
     snprintf(def->create_fn,   sizeof(def->create_fn),  "__gen_%s_%u_create", fn_name, gen_id);
 
+    /* CF5: detect recursive generator -- enclosing function calls itself in body. */
+    bool gen_is_recursive = false;
+    if (e->current_fn_name) {
+        for (uint32_t i = 2; i < call->as.list.len; i++) {
+            if (form_contains_sym(call->as.list.items[i], e->current_fn_name)) {
+                gen_is_recursive = true;
+                break;
+            }
+        }
+    }
+
     /* Push gen context */
     GenContext gctx;
     memset(&gctx, 0, sizeof(gctx));
     gctx.parent = e->gen_ctx;
+    gctx.is_recursive = gen_is_recursive;
     e->gen_ctx = &gctx;
 
     /* Push a new scope for the gen body */
@@ -2369,6 +2392,20 @@ Expr *elab_yield(Elab *e, const Form *call) {
     if (!e->gen_ctx) {
         diag_emit(DIAG_ERROR, call->span,
                   "yield is only valid inside a gen body");
+        return NULL;
+    }
+    /* CF5 (TUR-E0702): yield inside a match arm is unsupported in v1. */
+    if (e->in_match_arm) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0702_YIELD_IN_MATCH_ARM,
+            "'yield' is not supported inside a 'match' arm (1.0 limitation); "
+            "this requires the post-1.0 CPS pass.");
+        return NULL;
+    }
+    /* CF5 (TUR-E0703): yield inside a recursive generator is unsupported in v1. */
+    if (e->gen_ctx->is_recursive) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0703_YIELD_IN_RECURSIVE_GEN,
+            "'yield' is not supported inside a recursive generator (1.0 limitation); "
+            "this requires the post-1.0 CPS pass.");
         return NULL;
     }
     if (call->as.list.len != 2) {

@@ -6,15 +6,21 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF4 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF7 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
 > lowering shipped; CF2: `shift`/`shift0` result typing replaces the
 > `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
 > after discovering handler values have no runtime representation -- real
 > implementation tracked in
 > [first-class-handlers-plan.md](first-class-handlers-plan.md); CF4:
-> `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`));
-> CF5 next. Companion to
+> `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`);
+> CF5: `yield`-in-`match` (`TUR-E0702`) and recursive-generator (`TUR-E0703`)
+> are hard compile errors with diagnostic guidance; CF6: non-Send bindings
+> live across `await` in inline async closures rejected (`TUR-E0022`);
+> CF7: cloneable continuation deep clone (CF7.1) confirmed, Drop typeclass
+> path implemented (CF7.2), capture check tightened to outer-function boundary
+> (CF7.3), fixtures added (CF7.4), residual imprecision documented (CF7.5)).
+> Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -148,10 +154,7 @@ Notes:
   (`E0704`) are *always-on* rejections, not flag-gated: there is no experimental
   path, since the underlying feature has no correct lowering yet. The CF4 codes
   (`E0700`/`E0701`) are unlocked by `-Xcallcc`.
-- **Implemented:** `E0700`/`E0701` (CF4), `E0704` (CF3). **Still reserved:**
-  `E0702`/`E0703` (CF5) so the enum additions in `src/compiler/diag.h` /
-  `diag.c` do not collide and the changelog can reference them before the code
-  lands.
+- **Implemented:** `E0700`/`E0701` (CF4), `E0702`/`E0703` (CF5), `E0704` (CF3).
 
 ### CF0.3 outcome -- at-risk fixture inventory
 
@@ -398,6 +401,39 @@ prominently for 1.0.
   line to a prominent "Limitations (1.0)" section. *Done when:* the section
   exists and links this phase.
 
+### CF5 outcome (complete -- 2026-05-30)
+
+Both unsupported `yield` placements are now hard compile errors, closing audit
+item 4 for 1.0.
+
+- **Detection and diagnostics (CF5.1, CF5.2)**
+  - `in_match_arm` (`bool`) added to the `Elab` struct
+    (`src/compiler/elab_internal.h`); set to `true` around every arm body
+    `elab_form` call in `elab_match` (`src/compiler/elab_structs.c`) -- all
+    eight elaboration sites across union, session-offer, literal, and
+    struct/GADT match paths.  `elab_yield` checks this flag first and emits
+    `TUR-E0702` (added to `diag.{h,c}`) with the CF0.2 wording.
+  - `is_recursive` (`bool`) added to `GenContext`
+    (`src/compiler/elab_internal.h`); populated in `elab_gen`
+    (`src/compiler/elab_forms.c`) by a pre-elaboration Form-tree scan
+    (`form_contains_sym`) that checks whether any body form references the
+    enclosing function's symbol.  `elab_yield` checks
+    `gen_ctx->is_recursive` and emits `TUR-E0703`.
+  - Both diagnostics are always-on (no experimental flag), consistent with
+    the CF0.2 ratification.
+
+- **Fixtures (CF5.3)** -- `tests/fixtures/errors/yield-in-match`
+  (expect-error, `TUR-E0702`) and
+  `tests/fixtures/errors/yield-in-recursive-gen` (expect-error, `TUR-E0703`)
+  are added and run green.  The existing `gen-range`, `gen-for-each`,
+  `gen-collect`, and `gen-yield-star` fixtures serve as the expect-ok suite
+  for supported `yield`/`yield*` and are unchanged.
+
+- **Docs (CF5.4)** -- `docs/guides/generators-guide.md` gains a prominent
+  "Limitations (1.0)" subsection with error codes, before/after examples, and
+  workarounds for each limitation; the table entry "v1 limitation" now cross-
+  references the section instead of being a dead-end footnote.
+
 ---
 
 ## Phase CF6 -- Async Send-across-await soundness (audit item 6)
@@ -423,6 +459,39 @@ or scope the async surface down to the checked subset.
 - **CF6.5** Document the rule and any conservative rejections in
   `async-await-guide.md`. *Done when:* the guide states the Send-across-await
   rule.
+
+### CF6 outcome (complete -- 2026-05-30)
+
+The send-across-await soundness hole is closed for inline `async` closures.
+
+- **Obligation and scope (CF6.1, CF6.2)** -- Disposition: **conservative
+  liveness** (option a). Any binding in scope at an `(await ...)` point within
+  an inline `(async (fn [] ...))` closure is treated as live and must be Send.
+  False-positive cost: programs where a non-Send binding is in scope but not
+  used after the await are rejected. This is sound and implementable without
+  liveness analysis; precise liveness requires the post-1.0 CPS pass. Scope
+  limitation: applies only to inline closures; pre-defined functions passed to
+  `(async fn)` were compiled without async context and are not re-checked here.
+
+- **Implementation (CF6.3)** -- `TUR_E0022_AWAIT_LIVE_NOT_SEND` added to
+  `diag.{h,c}`. `bool in_async_body` added to `Elab`
+  (`src/compiler/elab_internal.h`). `elab_async`
+  (`src/compiler/elab_concurrent.c`) saves and sets `in_async_body = true`
+  around the closure elaboration; `elab_await` checks the flag and walks
+  `e->scope` outward, emitting `TUR-E0022` for each non-Send binding. The
+  existing capture-level check at the `async` boundary (`TUR-E0010`) is
+  unchanged and remains as a complementary first line of defense.
+
+- **Fixtures (CF6.4)** -- `tests/fixtures/errors/await-live-not-send`
+  (expect-error, `TUR-E0022`; `rc<int>` held across await). The
+  existing async fixtures (`async-await-basic`, `async-await-channel`, etc.)
+  serve as the passing regression suite and are all unaffected (they use only
+  Send types inside async bodies).
+
+- **Docs (CF6.5)** -- `docs/guides/async-await-guide.md` gains a "Send
+  Requirements for Async Bodies" section covering the Send-across-await rule,
+  the table of non-Send types, the conservative approximation, a workaround,
+  and the inline-closure scope limitation.
 
 ---
 
@@ -451,6 +520,29 @@ the full CPS pass.
 - **CF7.5** Note the remaining liveness imprecision (full precision is gated on
   CPS) in the backtracking / serializable-continuations guides. *Done when:*
   the residual limitation is documented and linked to the post-1.0 CPS entry.
+
+### CF7 Outcome
+
+- **CF7.1** (confirmed): `__clenv_N_clone()` in `src/compiler/emit_effects.c`
+  already performs per-field deep clone using Clone typeclass instances recorded
+  by `cps_emit_capture_environment_expr()` in `src/passes/cps.c`. No change needed.
+- **CF7.2** (implemented): `__clenv_N_drop()` in `src/compiler/emit_effects.c`
+  now emits `rc_strong_decrement(s->field); rc_free_queue_drain();` for each
+  captured `rc<T>` field before `free(s)`. Previously it was a bare `free(p)`,
+  leaking the rc block. Fixture: `tests/fixtures/cloneable-drop-rc/`.
+- **CF7.3** (implemented): `check_cloneable_capture()` in
+  `src/compiler/elab_effects.c` now stops the scope walk at
+  `fn_entry_outer_scope` (set in `elab_fns.c` when each `fn`/`defn` body is
+  elaborated) instead of `&e->global`. Bindings from enclosing functions are
+  no longer falsely flagged. Same-function bindings remain checked (sound).
+  Fixture accept case: `tests/fixtures/cloneable-capture-precision/`;
+  existing reject cases: `errors/cloneable-non-clone-capture/` and
+  `errors/backtrack-clone-non-clone-capture/` continue to pass.
+- **CF7.4** (fixtures added): `cloneable-drop-rc` (clone-and-drop, leak-clean)
+  and `cloneable-capture-precision` (CF7.3 accept case). All suite-green.
+- **CF7.5** (documented): Residual same-function liveness imprecision noted in
+  `docs/guides/backtracking-guide.md` and
+  `docs/guides/serializable-continuations-guide.md`, linked to post-1.0 CPS.
 
 ---
 
