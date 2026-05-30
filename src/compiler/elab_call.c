@@ -1625,6 +1625,15 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                 }
             }
         }
+        if (!arg_ok && expected_arg_kind == TY_INT &&
+                (args[i]->type.kind == TY_FN || args[i]->type.kind == TY_PTR_VOID)) {
+            /* Phase TY5: Allow passing a function reference (TY_FN) or capturing closure
+             * (TY_PTR_VOID) where int64_t is expected.  HKT typeclass method signatures
+             * spell function parameters as :int (opaque int64_t); both raw function
+             * pointers and fat-closure env pointers are cast to int64_t via
+             * (int64_t)(intptr_t) in emit_expr.c. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_STRUCT) {
             /* Phase HKT H3: Allow passing an HKT container (TY_STRUCT) where int64_t
              * is expected.  HKT type constructor values are opaque int64_t at runtime. */

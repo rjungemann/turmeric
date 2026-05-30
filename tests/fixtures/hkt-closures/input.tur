@@ -1,20 +1,17 @@
-;; Phase HKT §5: HKT + closures integration.
-;; Genuine multi-capture closures can be passed to HKT helpers.
+;; Phase HKT TY5: HKT + multi-capture closures via dot-method dispatch.
 ;;
-;; Fat-closure protocol (Phase §5):
-;;   Every capturing closure is heap-allocated as a fat struct:
-;;     struct __env_N { int64_t __fn; <captured fields...> }
-;;   The __fn field stores the thunk function pointer (as int64_t).
-;;   HKT helpers that accept fat closures call through:
-;;     thunk = (int64_t(*)(void*,int64_t))(intptr_t)fat->__fn
-;;     result = thunk((void*)fat, arg)
+;; Before TY5 the only way to pass a capturing closure to an HKT method was
+;; to write a custom fat-closure helper (__fmap_option_clos) and call it
+;; directly, bypassing typeclass dispatch.  TY5 removes that workaround:
 ;;
-;; Non-capturing closures remain raw function pointers (TY_FN).  They are
-;; handled by __fmap_option using the existing function-pointer calling
-;; convention.  Tests 1 & 2 pass named functions to exercise this path.
+;; 1. The typeclass method signature uses :fn for the function parameter.
+;; 2. The instance body calls through tur_poly_fn_t so both raw function
+;;    pointers and fat closures work uniformly.
+;; 3. Calling sites use (.fmap ...) and pass (fn [x] (+ x n)) directly --
+;;    no manual cast, no custom helper.
 
 (defclass TestFunctor [^f]
-  (fmap [container fn] :int))
+  (fmap [container [fn :fn]] :int))
 
 ;; Option helpers
 (defn __opt_some [x] :int
@@ -39,36 +36,19 @@
   return (int)(p->value);
   ```)
 
-;; fmap for named functions (raw function-pointer calling convention).
-(defn __fmap_option [container fn] :int
-  ```c
-  struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
-  if (!c || !c->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
-  return (int64_t)(intptr_t)r;
-  ```)
-
-;; fmap for fat closures (Phase §5 capturing-closure calling convention).
-;; Fat struct layout: { int64_t __fn; <captures...> }
-;; Call protocol: recover thunk from fat->__fn, call thunk(fat_ptr, arg).
-(defn __fmap_option_clos [container fn] :int
-  ```c
-  typedef struct { int64_t __fn; } __tur_fat_hdr;
-  struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
-  if (!c || !c->is_some) return 0;
-  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
-  r->is_some = true;
-  __tur_fat_hdr *fat = (__tur_fat_hdr *)(intptr_t)fn;
-  r->value = ((int64_t(*)(void *, int64_t))(intptr_t)(fat->__fn))((void *)fat, c->value);
-  return (int64_t)(intptr_t)r;
-  ```)
-
+;; TestFunctor[option] using tur_poly_fn_t calling convention.
+;; fn.fn(fn.env, val) works for both named functions and fat closures.
 (definstance TestFunctor [option]
-  (fmap [container fn] (__fmap_option container fn)))
+  (fmap [container fn]
+    ```c
+    struct { bool is_some; int64_t value; } *c =
+        (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+    if (!c || !c->is_some) return 0;
+    struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+    r->is_some = true;
+    r->value = fn.fn(fn.env, c->value);
+    return (int64_t)(intptr_t)r;
+    ```))
 
 ;; Named helper functions for tests 1 & 2 (raw fn-ptr path).
 (defn __add5   [x] :int (+ x 5))
@@ -76,35 +56,35 @@
 
 (defn main [] :int
   (do
-    ;; Test 1: named function, raw function-pointer calling convention.
+    ;; Test 1: named function, tur_poly_fn_t calling convention.
     (let [opt (__opt_some 10)]
-      (let [result (__fmap_option opt __add5)]
+      (let [result (.fmap opt __add5)]
         (do
           (println (__opt_some? result))   ;; true
           (println (__opt_unwrap result))))) ;; 15
 
-    ;; Test 2: named function, raw function-pointer calling convention.
+    ;; Test 2: named function, tur_poly_fn_t calling convention.
     (let [opt2 (__opt_some 7)]
-      (let [result2 (__fmap_option opt2 __square)]
+      (let [result2 (.fmap opt2 __square)]
         (do
           (println (__opt_some? result2))   ;; true
           (println (__opt_unwrap result2))))) ;; 49
 
-    ;; Test 3: Phase §5 — single-capture closure.
-    ;; Fat closure captures let-bound `n`; applied to 10 → 15.
+    ;; Test 3: TY5 -- single-capture closure, no manual cast or custom helper.
+    ;; Fat closure captures let-bound `n`; passed directly to .fmap; result 15.
     (let [n 5]
       (let [opt3 (__opt_some 10)]
-        (let [result3 (__fmap_option_clos opt3 (fn [x] (+ x n)))]
+        (let [result3 (.fmap opt3 (fn [x] (+ x n)))]
           (do
             (println (__opt_some? result3))   ;; true
             (println (__opt_unwrap result3)))))) ;; 15
 
-    ;; Test 4: Phase §5 — multi-capture closure.
-    ;; Fat closure captures `a` and `b`; applied to 10 → 17.
+    ;; Test 4: TY5 -- multi-capture closure, no manual cast or custom helper.
+    ;; Fat closure captures `a` and `b`; passed directly to .fmap; result 17.
     (let [a 3]
       (let [b 4]
         (let [opt4 (__opt_some 10)]
-          (let [result4 (__fmap_option_clos opt4 (fn [x] (+ x (+ a b))))]
+          (let [result4 (.fmap opt4 (fn [x] (+ x (+ a b))))]
             (do
               (println (__opt_some? result4))   ;; true
               (println (__opt_unwrap result4))))))) ;; 17
