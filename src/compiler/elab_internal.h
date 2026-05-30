@@ -604,6 +604,8 @@ typedef struct Elab {
     const Symbol     *sym_yield;        /* "yield" */
     const Symbol     *sym_gen_next;     /* "gen-next" */
     const Symbol     *sym_gen_done;     /* "gen-done?" */
+    /* CF5 (control-flow-completeness-plan): set true while elaborating a match arm body. */
+    bool              in_match_arm;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
@@ -612,6 +614,8 @@ typedef struct GenContext {
     TypeKind          element_kind;     /* TypeKind of the first yield (TY_UNKNOWN until set) */
     bool              element_kind_set; /* true once first yield is elaborated */
     struct GenContext *parent;          /* enclosing GenContext (NULL for outermost) */
+    /* CF5: true when the enclosing function calls itself inside this gen body */
+    bool              is_recursive;
     /* Collect let-bindings inside gen body for struct field promotion */
     Binding         **let_bindings;     /* arena-allocated array of Binding* */
     uint32_t          n_let_bindings;

@@ -6,15 +6,16 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF4 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF5 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
 > lowering shipped; CF2: `shift`/`shift0` result typing replaces the
 > `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
 > after discovering handler values have no runtime representation -- real
 > implementation tracked in
 > [first-class-handlers-plan.md](first-class-handlers-plan.md); CF4:
-> `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`));
-> CF5 next. Companion to
+> `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`);
+> CF5: `yield`-in-`match` (`TUR-E0702`) and recursive-generator (`TUR-E0703`)
+> are hard compile errors with diagnostic guidance); CF6 next. Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -148,10 +149,7 @@ Notes:
   (`E0704`) are *always-on* rejections, not flag-gated: there is no experimental
   path, since the underlying feature has no correct lowering yet. The CF4 codes
   (`E0700`/`E0701`) are unlocked by `-Xcallcc`.
-- **Implemented:** `E0700`/`E0701` (CF4), `E0704` (CF3). **Still reserved:**
-  `E0702`/`E0703` (CF5) so the enum additions in `src/compiler/diag.h` /
-  `diag.c` do not collide and the changelog can reference them before the code
-  lands.
+- **Implemented:** `E0700`/`E0701` (CF4), `E0702`/`E0703` (CF5), `E0704` (CF3).
 
 ### CF0.3 outcome -- at-risk fixture inventory
 
@@ -397,6 +395,39 @@ prominently for 1.0.
 - **CF5.4** Promote the limitation note in `generators-guide.md` from a buried
   line to a prominent "Limitations (1.0)" section. *Done when:* the section
   exists and links this phase.
+
+### CF5 outcome (complete -- 2026-05-30)
+
+Both unsupported `yield` placements are now hard compile errors, closing audit
+item 4 for 1.0.
+
+- **Detection and diagnostics (CF5.1, CF5.2)**
+  - `in_match_arm` (`bool`) added to the `Elab` struct
+    (`src/compiler/elab_internal.h`); set to `true` around every arm body
+    `elab_form` call in `elab_match` (`src/compiler/elab_structs.c`) -- all
+    eight elaboration sites across union, session-offer, literal, and
+    struct/GADT match paths.  `elab_yield` checks this flag first and emits
+    `TUR-E0702` (added to `diag.{h,c}`) with the CF0.2 wording.
+  - `is_recursive` (`bool`) added to `GenContext`
+    (`src/compiler/elab_internal.h`); populated in `elab_gen`
+    (`src/compiler/elab_forms.c`) by a pre-elaboration Form-tree scan
+    (`form_contains_sym`) that checks whether any body form references the
+    enclosing function's symbol.  `elab_yield` checks
+    `gen_ctx->is_recursive` and emits `TUR-E0703`.
+  - Both diagnostics are always-on (no experimental flag), consistent with
+    the CF0.2 ratification.
+
+- **Fixtures (CF5.3)** -- `tests/fixtures/errors/yield-in-match`
+  (expect-error, `TUR-E0702`) and
+  `tests/fixtures/errors/yield-in-recursive-gen` (expect-error, `TUR-E0703`)
+  are added and run green.  The existing `gen-range`, `gen-for-each`,
+  `gen-collect`, and `gen-yield-star` fixtures serve as the expect-ok suite
+  for supported `yield`/`yield*` and are unchanged.
+
+- **Docs (CF5.4)** -- `docs/guides/generators-guide.md` gains a prominent
+  "Limitations (1.0)" subsection with error codes, before/after examples, and
+  workarounds for each limitation; the table entry "v1 limitation" now cross-
+  references the section instead of being a dead-end footnote.
 
 ---
 

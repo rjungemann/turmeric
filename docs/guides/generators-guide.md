@@ -112,8 +112,64 @@ gen-for-each(range-gen(0, 5))
 | `while` with `yield` inside | Yes |
 | `if` / `cond` with `yield` in branches | Yes |
 | `let` bindings that span a yield point | Yes (promoted to struct field) |
-| `yield` inside `match` arms | No (v1 limitation) |
-| Recursive generators | No (v1 limitation) |
+| `yield` inside `match` arms | No -- see Limitations below |
+| Recursive generators | No -- see Limitations below |
+
+### Limitations (1.0)
+
+Two `yield` placements are hard compile errors in 1.0 because the gen/yield
+state-machine lowering cannot represent them without the post-1.0 CPS pass:
+
+**`yield` / `yield*` inside a `match` arm (`TUR-E0702`)**
+
+The state machine needs to save and restore match-arm position across a
+`yield`. Without full CPS this is not representable; the compiler rejects it:
+
+```turmeric
+;; ERROR: TUR-E0702
+(defn broken [flag :int] : (Generator :int)
+  (gen []
+    (match flag
+      0 (yield 42)   ;; 'yield' is not supported inside a 'match' arm
+      _ (yield 99))))
+```
+
+Workaround -- yield before or after the `match`, or use `if`/`cond`:
+
+```turmeric
+(defn ok [flag :int] : (Generator :int)
+  (gen []
+    (let [v (if (= flag 0) 42 99)]
+      (yield v))))
+```
+
+**Recursive generators (`TUR-E0703`)**
+
+A `gen` body whose enclosing function calls itself is a recursive generator.
+Suspending across a recursive call requires CPS; the compiler rejects it:
+
+```turmeric
+;; ERROR: TUR-E0703
+(defn count-down [n :int] : (Generator :int)
+  (gen []
+    (yield n)
+    (count-down (- n 1))))  ;; recursive call inside gen body
+```
+
+Workaround -- unroll the recursion into an explicit loop:
+
+```turmeric
+(defn count-down [start :int] : (Generator :int)
+  (gen []
+    (let [^mut n start]
+      (while (>= n 0)
+        (yield n)
+        (set! n (- n 1))))))
+```
+
+Both limitations are tracked in Phase CF5 of
+[control-flow-completeness-plan.md](../control-flow-completeness-plan.md)
+and require the post-1.0 CPS pass to lift.
 
 ### Generated C
 

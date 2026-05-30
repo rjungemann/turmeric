@@ -119,7 +119,10 @@ typedef enum DiagCode {
     /* CF3/CF4 (control-flow-completeness-plan): gated / unsupported control-flow.
      * E07xx band reserved in Phase CF0; see docs/control-flow-completeness-plan.md. */
     TUR_E0700_CALLCC_GATED,              /* call/cc has no real capture yet (unsound); gated behind -Xcallcc */
-    TUR_E0701_ESCAPE_GATED,              /* escape has no real early-exit yet (unsound); gated behind -Xcallcc */
+    TUR_E0701_ESCAPE_GATED,             /* escape has no real early-exit yet (unsound); gated behind -Xcallcc */
+    /* CF5 (control-flow-completeness-plan): always-on generator limitation diagnostics */
+    TUR_E0702_YIELD_IN_MATCH_ARM,        /* yield/yield* inside a match arm (1.0 limitation) */
+    TUR_E0703_YIELD_IN_RECURSIVE_GEN,    /* yield/yield* inside a recursive generator (1.0 limitation) */
     TUR_E0704_HANDLER_COMPOSE_UNIMPL,    /* first-class handler composition (compose-handlers) not yet implemented (gated) */
 } DiagCode;
 

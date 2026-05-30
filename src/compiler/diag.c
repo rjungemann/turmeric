@@ -135,6 +135,9 @@ const char *diag_code_to_string(DiagCode code) {
         /* CF4: gated call/cc / escape */
         case TUR_E0700_CALLCC_GATED:                     return "TUR-E0700";
         case TUR_E0701_ESCAPE_GATED:                     return "TUR-E0701";
+        /* CF5: always-on generator limitation diagnostics */
+        case TUR_E0702_YIELD_IN_MATCH_ARM:               return "TUR-E0702";
+        case TUR_E0703_YIELD_IN_RECURSIVE_GEN:           return "TUR-E0703";
         /* CF3: gated first-class handler composition */
         case TUR_E0704_HANDLER_COMPOSE_UNIMPL:           return "TUR-E0704";
         /* ET4: effect scope errors */
@@ -228,6 +231,9 @@ DiagCode diag_code_from_string(const char *s) {
     /* CF4: gated call/cc / escape */
     if (strcmp(s, "TUR-E0700") == 0) return TUR_E0700_CALLCC_GATED;
     if (strcmp(s, "TUR-E0701") == 0) return TUR_E0701_ESCAPE_GATED;
+    /* CF5: always-on generator limitation diagnostics */
+    if (strcmp(s, "TUR-E0702") == 0) return TUR_E0702_YIELD_IN_MATCH_ARM;
+    if (strcmp(s, "TUR-E0703") == 0) return TUR_E0703_YIELD_IN_RECURSIVE_GEN;
     /* CF3: gated first-class handler composition */
     if (strcmp(s, "TUR-E0704") == 0) return TUR_E0704_HANDLER_COMPOSE_UNIMPL;
     /* ET4: effect scope errors */
