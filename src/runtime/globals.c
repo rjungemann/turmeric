@@ -45,6 +45,9 @@ bool g_has_variadics = false;
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 bool g_gadt_enabled = false;
 
+/* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
+bool g_sized_types_enabled = false;
+
 /* ER1: --strict-effects flag */
 bool g_strict_effects = false;
 

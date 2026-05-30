@@ -4239,6 +4239,7 @@ static void wk_apply_flags(const char *flags_str) {
     char *tok = strtok(copy, " \t");
     while (tok) {
         if      (strcmp(tok, "-Xgadt")             == 0) g_gadt_enabled            = true;
+        else if (strcmp(tok, "-Xsized-types")       == 0) { g_sized_types_enabled = true; g_gadt_enabled = true; }
         else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
         else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
         else if (strcmp(tok, "-Xsubstructural")     == 0) { g_substructural_enabled = true; g_linear_enabled = true; }
@@ -6430,6 +6431,8 @@ static int usage(void) {
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
         "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
+        "  -Xgadt                           enable defgadt syntax and GADT type checking (G1-G4)\n"
+        "  -Xsized-types                    enable sized types: type-level size indices (SZ4+; implies -Xgadt)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
         "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
@@ -7109,6 +7112,15 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "-Xgadt") == 0) {
             /* Phase G1: enable defgadt syntax */
+            g_gadt_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xsized-types") == 0) {
+            /* Phase SZ4: enable sized types (implies -Xgadt) */
+            g_sized_types_enabled = true;
             g_gadt_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];

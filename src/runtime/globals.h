@@ -38,6 +38,9 @@ extern bool g_has_variadics;
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 extern bool g_gadt_enabled;
 
+/* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
+extern bool g_sized_types_enabled;
+
 /* ER1: --strict-effects flag — warn/check unannotated effectful functions */
 extern bool g_strict_effects;
 
