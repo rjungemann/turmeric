@@ -4253,6 +4253,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
+        else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
         else if (strcmp(tok, "--lint-unsafe")       == 0) { g_lint_unsafe_enabled = true; g_unsafe_warn_nested = true; }
@@ -6433,6 +6434,7 @@ static int usage(void) {
         "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
         "  -Xgadt                           enable defgadt syntax and GADT type checking (G1-G4)\n"
         "  -Xsized-types                    enable sized types: type-level size indices (SZ4+; implies -Xgadt)\n"
+        "  --dump-sizes                     print inferred size index per sized-GADT constructor (SZ8; needs -Xsized-types)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
         "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
@@ -7057,6 +7059,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-effects") == 0) {
             /* ER6: print inferred effect row for each defn after inference */
             g_dump_effects = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-sizes") == 0) {
+            /* SZ8: print inferred size index per sized-GADT constructor */
+            g_dump_sizes = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

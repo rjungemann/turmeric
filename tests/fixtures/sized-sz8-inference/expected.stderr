@@ -1,0 +1,4 @@
+size: SVNil : (SizedVec 0)
+size: SVCons : (SizedVec 1)
+size: SVCons : (SizedVec 2)
+size: SVCons : (SizedVec ?)

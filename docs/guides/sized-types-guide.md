@@ -303,6 +303,38 @@ let [lst list(10 20 30)]
 `sized-vec-from-list` requires `#{Unsafe}` because it casts the cons cell
 layout directly.
 
+### Type-level index inference (SZ8)
+
+When a sized GADT carries a type-level size index, the index of a constructed
+value is inferred automatically by threading operand indices through the
+constructors -- no annotation is needed:
+
+```turmeric
+(defgadt SizedVec [n]
+  (SVNil : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+; (SVCons _ (SVCons _ (SVNil))) infers (SizedVec 2)
+```
+
+Pass `--dump-sizes` (with `-Xsized-types`) to print the inferred index for each
+constructor application:
+
+```
+size: SVNil  : (SizedVec 0)
+size: SVCons : (SizedVec 1)
+size: SVCons : (SizedVec 2)
+```
+
+A `SizedVec` parameter written without an index (`v : SizedVec`) is
+length-polymorphic: it elaborates against a fresh size variable and accepts any
+length. Inference covers literal constructor chains and linear `Add`/`Mul` over
+`Static` and one variable; an index that depends on an unknown operand (a
+parameter, a runtime-built vector) is left polymorphic -- `--dump-sizes` shows
+it as `(SizedVec ?)` -- rather than being guessed. See
+[sized-types-index-spec.md](../sized-types-index-spec.md) section 6 for the full
+inference boundary.
+
 ---
 
 ## Flat Buffers and Memory Layout

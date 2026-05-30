@@ -48,6 +48,9 @@ bool g_gadt_enabled = false;
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 bool g_sized_types_enabled = false;
 
+/* Phase SZ8: --dump-sizes flag */
+bool g_dump_sizes = false;
+
 /* ER1: --strict-effects flag */
 bool g_strict_effects = false;
 

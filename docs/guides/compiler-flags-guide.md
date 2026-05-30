@@ -45,6 +45,7 @@ reference, but you never pass a flag for them.
 | `--keep-contracts` | ✅ Complete | Retains contract checks in release builds (`just release`); without this flag, contracts are stripped in release mode |
 | `--dump-kinds` | ✅ Complete | After the kind-checking pass, prints the kind of every bound type to stdout |
 | `--dump-effects` | ✅ Complete | Prints inferred effect rows for every function, e.g. `run-twice : forall [e]. (fn [...] #{e} int)` |
+| `--dump-sizes` | ✅ Complete (SZ8) | Prints the inferred type-level size index for each sized-GADT constructor application, e.g. `size: SVCons : (SizedVec 2)`; an un-inferable index prints `(SizedVec ?)`. Requires `-Xsized-types` |
 | `--emit-abi-trace` | ✅ Complete | During `emit-c`/`build`, prints one line per resolved call site naming the C-level ABI path it takes (`concrete-clone`, `carrier`, `dictionary`, `polymorphic-wrapper`) |
 
 ---

@@ -170,6 +170,46 @@ This deliberately uses syntactic constant folding, not an SMT solver:
 non-trivial nonlinear or multi-variable equalities fall back to the runtime
 check rather than being proven (see the non-goals in the completion plan).
 
+## 6. Size inference and elision (SZ8)
+
+So that users rarely annotate, the index of a sized-GADT constructor
+application is **inferred** by substituting each operand's already-inferred
+index into the constructor's declared return-index template
+(`sz8_infer_ctor_size_index` in `src/compiler/elab_call.c`):
+
+- A nullary constructor seeds the recursion from its constant template --
+  `SVNil : (SizedVec (Static 0))` infers `0`.
+- A recursive constructor substitutes the field's index variable for the
+  argument's inferred index -- `SVCons : ... (SizedVec n) -> (SizedVec (Add
+  (Static 1) n))` applied to an operand of index `t` infers `(Add (Static 1)
+  t)`. Hence `(SVCons x (SVCons y SVNil))` infers `(SizedVec 2)`.
+
+The inferred term is stored on the constructor-call `Expr` (`call_.size_index`)
+and is **erased in codegen** like every other size index. The `--dump-sizes`
+flag prints one line per sized-GADT constructor application during
+elaboration, e.g.:
+
+```
+size: SVNil  : (SizedVec 0)
+size: SVCons : (SizedVec 1)
+size: SVCons : (SizedVec 2)
+```
+
+### What is inferable
+
+| Shape | Inferable? | Notes |
+|---|---|---|
+| A literal chain of constructors -- `(SVCons _ (SVCons _ (SVNil)))` | yes | folds to a constant |
+| A constructor over an operand with a known index | yes | substitutes operand index into the template |
+| Linear `Add`/`Mul` over `Static` and one variable | yes (symbolic) | e.g. `(Add (Static 1) n)` stays open as `(+ 1 n)` |
+| An operand whose index is **not known** (a function parameter `v : SizedVec`, a vector built from a runtime list, a value returned by a non-constructor function) | no | the result is left length-polymorphic; `--dump-sizes` prints `(SizedVec ?)` and the value still type-checks |
+
+A function parameter declared `v : SizedVec` (no explicit index) elaborates
+against a fresh size variable and works at any length (length polymorphism);
+its body's constructions over `v` are the un-inferable case above. This is the
+SZ8 elision boundary: inference covers literal/linear shapes, and everything
+else falls back to a polymorphic (unannotated) size rather than erroring.
+
 ## See also
 
 - [sized-types-completion-plan.md](sized-types-completion-plan.md) -- the SZ4--SZ9 plan
