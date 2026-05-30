@@ -1,6 +1,6 @@
 # Follow-up Plan: tur-watch recursive per-file naming
 
-> **Status:** Draft Plan
+> **Status:** Implemented (v0.2.0)
 > **Last Updated:** 2026-05-29
 > **Type:** Spice Follow-up
 > **Depends on:** [../tur-watch-spice-plan.md](../tur-watch-spice-plan.md)
@@ -162,36 +162,34 @@ A small per-watcher pending-event queue lets `watch-next` keep its
 
 ## Implementation phases
 
-- [ ] **WTNF1** -- Add `TurBackendEvent` struct and `backend-drain-into`
+- [x] **WTNF1** -- Add `TurBackendEvent` struct and `backend-drain-into`
   in `watch/backend`. Keep the old boolean drain working for
   single-file callers. Add a backend-only test that drives a few
   inotify events into a fixture and asserts names+masks come through.
 
-- [ ] **WTNF2** -- Linux pass-through path in `watch/watch`: convert
+- [x] **WTNF2** -- Linux pass-through path in `watch/watch`: convert
   drained `TurBackendEvent`s into `watch-event` records with kind
   classification from the inotify mask. Add tree-mode tests for
   `write`/`create`/`delete`/`rename` per-file naming.
 
-- [ ] **WTNF3** -- Darwin snapshot machinery: per-directory entry
-  snapshots (`name → {ino, mtime, size}`), built at `watch-open-tree`
-  and refreshed on `backend-drain-into`. Add a `__tree-snapshot-diff`
-  helper that emits `watch-event` records.
+- [x] **WTNF3** -- Darwin snapshot machinery: per-directory entry
+  snapshots (`name → {ino, size}`), built at `watch-open-tree`
+  and refreshed on each drain. `__watcher-tree-produce-events`
+  diffs new vs old snapshot and emits `watch-event` records.
 
-- [ ] **WTNF4** -- Per-watcher pending-event queue so `watch-next`
+- [x] **WTNF4** -- Per-watcher pending-event queue so `watch-next`
   still returns one event per call when the backend produced many.
   `watch-drain` continues to return cons-lists; with multi-event
   batches finally arriving from one backend wake, coalesce-by-path
-  becomes meaningful and gets a real burst test.
+  becomes meaningful and gets a real burst test (`tree_burst_test.tur`).
 
-- [ ] **WTNF5** -- Documentation refresh:
-  - update `spices/watch/README.md` "Capability matrix" to mark
-    per-file naming as shipping for both backends,
-  - update `docs/guides/watch-guide.md` §2 to reflect the new
-    semantics (drop the "callers should re-enumerate" caveat),
-  - update `docs/notebook-watch-semantics.md` "What tur-watch must
-    add" table.
+- [x] **WTNF5** -- Documentation refresh:
+  - updated `spices/watch/README.md` capability matrix and architecture
+    diagram to reflect per-file naming shipping for both backends.
+  - `docs/guides/watch-guide.md` and `docs/notebook-watch-semantics.md`
+    do not yet exist in the turmeric repo; no update needed here.
 
-- [ ] **WTNF6** -- Tag a new spice release (`watch-v0.2.0`) and bump
+- [x] **WTNF6** -- Tag a new spice release (`watch-v0.2.0`) and bump
   consumers:
   - notebook (single-file, no behavior change, just version bump),
   - any other adopters that landed in the meantime (likely the
