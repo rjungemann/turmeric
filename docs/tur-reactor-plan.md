@@ -32,8 +32,8 @@ descriptors + timers), and any spice that needs to select between a
 socket, a timer, and a wake pipe.
 
 Goal: zero new C dependencies. Use what's already in `src/async/io.h`
-(epoll on Linux, kqueue on BSD/macOS, IOCP stub / select fallback on
-Windows-WASM). **libuv is not required** and is explicitly rejected for
+(epoll on Linux, kqueue on BSD/macOS; wepoll vendored as two files for
+Windows; no-op sentinel for WASM). **libuv is not required** and is explicitly rejected for
 the initial milestone -- the existing `IOBackend` already does what libuv
 does for our needs (FDs + timers + cross-thread wake), and libuv would
 roughly double the build surface area for marginal gain. We leave the
@@ -308,19 +308,70 @@ break.
 
 ## Backend mapping
 
-| Reactor API | epoll | kqueue | select fallback (Windows-WASM) |
-|---|---|---|---|
-| `reactor-add-fd READ`  | `EPOLLIN` | `EVFILT_READ`  | `FD_SET(rfds)` |
-| `reactor-add-fd WRITE` | `EPOLLOUT` | `EVFILT_WRITE` | `FD_SET(wfds)` |
-| timer | `timerfd` (Linux 2.6.25+) or wheel | `EVFILT_TIMER` | timer wheel + capped timeout |
-| wake | `eventfd` | `EVFILT_USER` | self-pipe |
-| channel bridge | reuses wake fd | reuses wake fd | reuses wake fd |
-| level-triggered semantics | default | default | natural |
+| Reactor API | epoll | kqueue | wepoll (Windows) | select fallback (WASM / pre-wepoll) |
+|---|---|---|---|---|
+| `reactor-add-fd READ`  | `EPOLLIN` | `EVFILT_READ`  | `EPOLLIN`  | `FD_SET(rfds)` |
+| `reactor-add-fd WRITE` | `EPOLLOUT` | `EVFILT_WRITE` | `EPOLLOUT` | `FD_SET(wfds)` |
+| timer | `timerfd` (Linux 2.6.25+) or wheel | `EVFILT_TIMER` | timer wheel + capped timeout | timer wheel + capped timeout |
+| wake | `eventfd` | `EVFILT_USER` | self-pipe (loopback socket) | self-pipe |
+| channel bridge | reuses wake fd | reuses wake fd | reuses wake fd | reuses wake fd |
+| level-triggered semantics | default | default | default | natural |
+| edge-triggered (post-v1) | optional | optional | **unsupported** | n/a |
 
 `src/async/io_epoll.c` and `src/async/io_kqueue.c` already implement
 everything in rows 1, 2, and 4. The timer wheel exists
 (`src/async/timer_wheel.c`). The channel bridge is the only genuinely
 new C code.
+
+### Windows: wepoll over a raw IOCP rewrite
+
+For the Windows backend we plan to use [wepoll](https://github.com/piscisaureus/wepoll),
+which emulates the epoll API on top of IOCP (by talking to `\Device\Afd`
+directly). This gives readiness semantics *and* IOCP-grade scalability while
+keeping the reactor model -- so `io_epoll.c` -> `io_wepoll.c` is roughly
+`#include "wepoll.h"` plus the fd-type fix below, instead of a separate
+proactor backend.
+
+Trade-off summary:
+
+- `select()` -- portable, sockets-only, O(n), `FD_SETSIZE` ceiling. Fine as a
+  stopgap; doesn't scale.
+- **wepoll** -- real scaling, keeps the reactor loop, `io_epoll.c` reusable.
+  Sockets only (no files, pipes, consoles -- matches our Windows scope).
+  No `EPOLLET` (we're level-triggered in v1 anyway). Vista+.
+- IOCP / libuv -- best Windows fit on paper, but requires designing the whole
+  reactor around completions. Rejected for the same reasons libuv is (see
+  Overview).
+
+**Build integration.** wepoll ships as two files (`wepoll.c` + `wepoll.h`) on
+its `dist` branch with no `CMakeLists.txt`. Vendor them under
+`src/async/vendor/wepoll.{c,h}` rather than fetching via CPM -- two files that
+change ~once a year don't benefit from a fetch step, and it keeps the "zero
+new external deps" claim literally true.
+
+### The one real Windows gotcha: `SOCKET` is not `int`
+
+On 64-bit Windows, sockets are `SOCKET` (a `UINT_PTR`), not small int fds, and
+`epoll_create` returns a `HANDLE` (void*), not an int. wepoll's `epoll_data_t`
+even adds a `SOCKET sock` member for this. Anywhere `IOBackend` /
+`io_epoll.c` stores an fd as `int`, it silently truncates on Windows -- this
+is exactly the bug that made libev refuse a real Windows backend.
+
+Fix: introduce a platform fd typedef wide enough to hold a `SOCKET`, leaving
+the Unix backends untouched.
+
+```c
+// src/async/platform_fd.h
+#ifdef _WIN32
+  typedef intptr_t platform_fd_t;   // holds a SOCKET / HANDLE
+#else
+  typedef int      platform_fd_t;   // ordinary unix fd
+#endif
+```
+
+With that in place, `io_wepoll.c` is close to a thin sibling of `io_epoll.c`.
+If fds are hardcoded `int` anywhere in `IOBackend` / `src/async/`, widening
+that type is the main porting cost to budget for the Windows milestone.
 
 ---
 
@@ -396,6 +447,10 @@ R9 is explicitly out-of-scope and listed only to anchor the API.
   operations should no-op so WASM-targeted code can compile even if it
   can't run a reactor. Mirror what we already do for sockets in WASM.
 - **Windows.** `IO_BACKEND_IOCP` is `#define`d but no `io_iocp.c` exists.
-  A select-based fallback for Windows is the pragmatic v1; IOCP can come
-  with the larger Windows-support effort tracked in
+  Plan of record (see "Windows: wepoll over a raw IOCP rewrite" above) is
+  `io_wepoll.c` -- wepoll keeps the reactor model, so the port is roughly
+  `io_epoll.c` + a vendored `wepoll.{c,h}` + a `platform_fd_t` widening
+  pass. This collapses the older "select fallback now, IOCP later" split
+  into a single Windows backend, and avoids writing a true proactor.
+  Tracked alongside the larger Windows-support effort in
   `docs/upcoming/windows-support-plan.md`.

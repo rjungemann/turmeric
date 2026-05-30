@@ -80,6 +80,7 @@ see the task plan for progress.
 - **[module-system-guide.md](module-system-guide.md)** -- Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** -- Foreign function interface (FFI) and C interop
 - **[cli-args-guide.md](cli-args-guide.md)** -- CLI argument passing via `*args*` and structured parsing with `stdlib/args.tur`
+- **[binding-forms-guide.md](binding-forms-guide.md)** -- `define`, `letrec`, and named let: local binding forms beyond `let`
 
 ### Type System
 
@@ -128,6 +129,14 @@ see the task plan for progress.
 - **[datalog/02-minimal-impl.md](datalog/02-minimal-impl.md)** -- Walk through `minimal.tur` line by line
 - **[datalog/03-query-api.md](datalog/03-query-api.md)** -- Walk through `query.tur` additions
 - **[datalog/04-indexing.md](datalog/04-indexing.md)** -- Why indexing matters and how `indexed.tur` works
+
+## Spices and Libraries
+
+- **[frame-guide.md](frame-guide.md)** -- `tur-frame` dataframes: tabular data, columns, joins, aggregations
+- **[stats-guide.md](stats-guide.md)** -- `tur-stats` statistics: descriptive stats, distributions, hypothesis tests, OLS regression
+- **[notebook-guide.md](notebook-guide.md)** -- `tur-notebook`: interactive Turmeric notebooks with Markdown + live cells
+- **[tur-watch-guide.md](tur-watch-guide.md)** -- `tur-watch`: cross-platform filesystem watching with debounce and coalescing
+- **[web-stack-guide.md](web-stack-guide.md)** -- `tur-httpd`, `tur-template`, `tur-tourist`: composable HTTP server + templating + routing stack
 
 ## Package Management
 

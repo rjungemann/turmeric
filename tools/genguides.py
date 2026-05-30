@@ -64,7 +64,7 @@ PAGE_HEADER = '''\
     <nav>
       <a href="/docs/html/guides/" class="active">Guides</a>
       <a href="/docs/html/api/">API Docs</a>
-      <a href="/docs/html/spices/">Spices</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
       <a href="/try">Try It</a>
     </nav>
   </header>'''
@@ -307,9 +307,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = f'''\
-      <div style="margin-bottom:0.5rem">
-        <a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a>
-      </div>
+      <a class="sidebar-back" href="/">← Back to home</a>
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
@@ -431,9 +429,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
 {SIDEBAR_TOGGLE_JS}
   <div class="page-layout">
     <div class="sidebar">
-      <div style="margin-bottom:1.25rem">
-        <a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a>
-      </div>
+      <a class="sidebar-back" href="/">← Back to home</a>
       <h3>Categories</h3>
       <ul>{sidebar_cats}</ul>
     </div>

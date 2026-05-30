@@ -1,0 +1,347 @@
+---
+title: Web Stack Guide
+category: Spices and Libraries
+description: Building HTTP servers with tur-httpd, tur-template, and tur-tourist -- the composable web stack for Turmeric
+---
+
+# Web Stack Guide
+
+Turmeric's web stack is three composable spices:
+
+| Spice | Analogue | Purpose |
+|-------|----------|---------|
+| `tur-template` | ERB / EJS | String templating engine |
+| `tur-httpd` | Civetweb / Mongoose | Threaded HTTP/1.1 server |
+| `tur-tourist` | Haskell's scotty | Routing + middleware micro-framework |
+
+Each layer can be used independently. `tur-tourist` builds on both of the
+others; `tur-httpd` and `tur-template` have no shared dependency.
+
+---
+
+## Installation
+
+### `tur-httpd` only
+
+```turmeric
+:spices {
+  "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
+           :ref    "httpd-v0.1.0"
+           :subdir "spices/httpd"}
+}
+```
+
+### Full stack (httpd + template + tourist)
+
+```turmeric
+:spices {
+  "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "httpd-v0.1.0"
+              :subdir "spices/httpd"}
+  "template" {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "template-v0.1.0"
+              :subdir "spices/template"}
+  "tourist"  {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "tourist-v0.1.0"
+              :subdir "spices/tourist"}
+}
+```
+
+---
+
+## `tur-httpd` -- Raw HTTP server
+
+`tur-httpd` is the foundation: a minimal POSIX-socket HTTP/1.1 server with a
+bounded thread pool. A handler is a plain Turmeric function that receives a
+request handle and returns a response handle.
+
+### Modules
+
+| Module | Contents |
+|--------|----------|
+| `httpd/server` | `server-start`, `server-start-pool`, `server-stop` |
+| `httpd/request` | `req-method`, `req-path`, `req-query`, `req-body`, `req-header` |
+| `httpd/response` | `resp-ok`, `with-header`, `with-body` |
+
+### Quick start
+
+```turmeric
+(import httpd/server   :refer [server-start server-stop])
+(import httpd/request  :refer [req-path])
+(import httpd/response :refer [resp-ok])
+
+(defn handler [req :int] :int
+  (resp-ok "text/plain"
+    (str-concat "You requested: " (req-path req))))
+
+(defn main [] :int
+  (let [s (server-start 8080 handler)]
+    ;; run until killed
+    (server-stop s)
+    0))
+```
+
+### Starting the server
+
+```turmeric
+;; Bounded thread pool (default -- recommended)
+(server-start      port handler)
+(server-start-pool port handler pool-size)
+
+;; Thread-per-connection (legacy)
+(server-start-spawn port handler)
+```
+
+`server-start` returns a server handle. Pass it to `server-stop` to close
+the listening socket and join the pool threads.
+
+### Request accessors
+
+```turmeric
+(req-method  req)       ;; "GET", "POST", "PUT", "DELETE", ...
+(req-path    req)       ;; "/users/42"
+(req-query   req)       ;; "page=1&limit=10"  (raw query string)
+(req-body    req)       ;; request body as cstr (may be "")
+(req-header  req "x-api-key")  ;; value of a header, or 0 if absent
+```
+
+### Response constructors
+
+```turmeric
+;; Convenience: status 200 with a content-type and body
+(resp-ok "text/html"  "<h1>Hello</h1>")
+(resp-ok "text/plain" "OK")
+(resp-ok "application/json" "{\"ok\":true}")
+
+;; Custom status
+(with-header (resp-ok "text/plain" "Not found") "x-reason" "missing")
+```
+
+---
+
+## `tur-template` -- ERB/EJS-style templating
+
+`tur-template` renders strings from templates that embed `<%= expr %>` and
+`<% for var in list %>` / `<% end %>` constructs.
+
+### Modules
+
+| Module | Contents |
+|--------|----------|
+| `template/render` | `render` (lex+parse+render in one call) |
+| `template/env` | `env-new`, `env-set`, `env-set-list`, `env-free` |
+
+### Quick start
+
+```turmeric
+(import template/render :refer [render])
+(import template/env    :refer [env-new env-set env-free])
+
+(defn greet [name :cstr] :cstr
+  (let [e (env-new)]
+    (env-set e "name" name)
+    (let [out (render "Hello, <%= name %>!" e)]
+      (env-free e)
+      out)))
+```
+
+The returned string is heap-allocated; the caller must free it.
+
+### Template syntax
+
+| Syntax | Meaning |
+|--------|---------|
+| `<%= var %>` | Substitute the value of `var` |
+| `<% for item in list %>` ... `<% end %>` | Repeat for each item in a list variable |
+| `<%# comment %>` | Comment (not rendered) |
+| `<%%` | Literal `<%` in output |
+
+### Env API
+
+```turmeric
+(env-new)                           ;; create an Env handle
+(env-set  env "key" "value")        ;; bind a scalar string
+(env-set-list env "items" lst)      ;; bind a cons list of cstr values
+(env-free env)                      ;; release the Env
+```
+
+### Rendering from a file
+
+```turmeric
+(import template/render :refer [render-ast])
+(import template/token  :refer [lex])
+(import template/parse  :refer [parse])
+
+(let [src  (slurp "views/index.html")   ;; read file as cstr
+      toks (lex src)
+      ast  (parse toks)
+      e    (env-new)]
+  (env-set e "title" "Home")
+  (render-ast ast e))
+```
+
+---
+
+## `tur-tourist` -- Routing micro-framework
+
+`tur-tourist` layers routing, response helpers, middleware, and static file
+serving on top of `tur-httpd`.
+
+### Modules
+
+| Module | Contents |
+|--------|----------|
+| `tourist/app` | `tourist` -- start the server with routes + middleware |
+| `tourist/dsl` | `get!`, `post!`, `put!`, `delete!`, `any!` -- route constructors |
+| `tourist/helpers` | `text`, `html`, `json-body`, `redirect`, `status` |
+| `tourist/param` | `capture`, `param` -- URL captures and query params |
+| `tourist/middleware` | `use!` -- middleware constructor |
+| `tourist/static` | `serve-static!` -- static file serving |
+
+### Quick start
+
+```turmeric
+(import tourist/app     :refer [tourist])
+(import tourist/dsl     :refer [get! post!])
+(import tourist/helpers :refer [text html])
+(import tourist/param   :refer [capture param])
+
+(defn main [] :int
+  (let [s (tourist 3000
+            (get! "/hello/:name"
+              (fn [ctx]
+                (text (str-concat "Hello, " (ok-val (capture ctx "name")) "!"))))
+            (get! "/search"
+              (fn [ctx]
+                (let [q (ok-val (param ctx "q"))]
+                  (text (str-concat "Searching for: " q)))))
+            (post! "/echo"
+              (fn [ctx]
+                (text (req-body ctx)))))]
+    (server-stop s)
+    0))
+```
+
+### Route constructors
+
+```turmeric
+(get!    pattern handler)    ;; match GET  requests
+(post!   pattern handler)    ;; match POST requests
+(put!    pattern handler)    ;; match PUT  requests
+(delete! pattern handler)    ;; match DELETE requests
+(any!    pattern handler)    ;; match any method
+```
+
+Pattern syntax:
+- `"/exact"` -- literal match
+- `"/user/:id"` -- `:id` captures one path segment
+- `"/files/*"` -- `*` captures the rest of the path (greedy)
+
+### Request context
+
+Handler functions receive a *tourist context* `ctx`, not a raw httpd request.
+The context transparently forwards all `httpd/request` accessors:
+
+```turmeric
+(req-method ctx)         ;; "GET"
+(req-path   ctx)         ;; "/user/42"
+(req-body   ctx)         ;; request body
+(req-header ctx "name")  ;; header value
+```
+
+Plus tourist-specific helpers:
+
+```turmeric
+(capture ctx "id")       ;; URL segment capture -- result<:cstr>
+(param   ctx "page")     ;; query parameter    -- result<:cstr>
+```
+
+Both return `result<:cstr>`. Unwrap with `ok-val` after checking for `err`:
+
+```turmeric
+(let [res (capture ctx "id")]
+  (if (ok? res)
+    (text (ok-val res))
+    (status 400 (text "missing id"))))
+```
+
+### Response helpers
+
+```turmeric
+(text body)              ;; 200 text/plain
+(html body)              ;; 200 text/html
+(json-body body)         ;; 200 application/json
+(redirect path)          ;; 302 Location: path
+(status code resp)       ;; override the status code of any response
+```
+
+### Middleware
+
+`use!` items run in declaration order before any route handler. A middleware
+function receives a request and returns `option<:int>`:
+- `none-value` -- continue to the next middleware / route
+- `some(resp)` -- short-circuit and return this response immediately
+
+```turmeric
+(import tourist/middleware :refer [use!])
+(import stdlib/option      :refer [none-value some])
+
+(defn auth-mw [ctx :int] :int
+  (if (= (req-header ctx "x-api-key") 0)
+    (some (status 401 (text "Unauthorized")))
+    (none-value)))
+
+(tourist 3000
+  (use! auth-mw)
+  (get! "/private" (fn [ctx] (text "secret"))))
+```
+
+### Static file serving
+
+```turmeric
+(import tourist/static :refer [serve-static!])
+
+(tourist 3000
+  (serve-static! "/assets" "./public")
+  (get! "/" (fn [ctx] (html "<h1>Hello</h1>"))))
+```
+
+`serve-static!` matches `GET /assets/**` paths and serves files from
+`./public/` on disk. It rejects path-traversal attempts (`..`).
+
+---
+
+## Template rendering in tourist handlers
+
+Using `tur-template` with `tur-tourist`:
+
+```turmeric
+(import tourist/app      :refer [tourist])
+(import tourist/dsl      :refer [get!])
+(import tourist/helpers  :refer [html])
+(import template/render  :refer [render])
+(import template/env     :refer [env-new env-set env-free])
+
+(defn render-view [name :cstr env :int] :cstr
+  (let [out (render name env)]
+    (env-free env)
+    out))
+
+(defn main [] :int
+  (let [s (tourist 3000
+            (get! "/hello/:name"
+              (fn [ctx]
+                (let [e (env-new)
+                      n (ok-val (capture ctx "name"))]
+                  (env-set e "name" n)
+                  (html (render-view "Hello, <%= name %>!" e))))))]
+    (server-stop s)
+    0))
+```
+
+---
+
+## See also
+
+- [Threading Guide](threading-guide.md) -- OS threads, Mutex, Arc (used by tur-httpd internally)
+- [Error Handling Guide](error-handling-guide.md) -- `result<:cstr>` unwrapping patterns

@@ -54,6 +54,21 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   margin: 0 auto 44px;
   line-height: 1.7;
   font-weight: 300;
+  text-align: left;
+}
+.hero-desc p { margin-bottom: 8px; }
+.hero-desc ul {
+  list-style: none;
+  padding-left: 0;
+}
+.hero-desc ul li {
+  position: relative;
+  padding-left: 0.25rem;
+  margin: 4px 0;
+}
+.hero-desc em {
+  color: var(--gold-bright);
+  font-style: italic;
 }
 
 .hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 16px; }

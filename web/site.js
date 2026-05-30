@@ -74,7 +74,7 @@ class SiteNav extends HTMLElement {
       ['/try',               'Try It'],
       ['/docs/html/guides/', 'Guides'],
       ['/docs/html/api/',    'API Docs'],
-      ['/docs/html/spices/', 'Spices'],
+      ['https://spices.turmeric-lang.com', 'Spices'],
     ];
 
     const linkHTML = links.map(([href, label]) =>
@@ -83,6 +83,9 @@ class SiteNav extends HTMLElement {
 
     this.innerHTML = `
       <nav>
+        <button class="nav-hamburger" aria-label="Open menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
         <a class="nav-logo" href="/">
           <img src="/logo-icon.svg" class="nav-logo-icon" width="28" height="28" alt="">
           <img src="/logo.svg" class="nav-logo-wordmark" width="101" height="28" alt="Turmeric">
@@ -92,10 +95,8 @@ class SiteNav extends HTMLElement {
           <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
           <a href="/try" class="btn-gold">Try it →</a>
         </div>
-        <button class="nav-hamburger" aria-label="Open menu" aria-expanded="false">
-          <span></span><span></span><span></span>
-        </button>
         <div class="nav-mobile-panel">
+          <a class="nav-mobile-back" href="/">← Back to home</a>
           ${linkHTML}
           <div class="nav-mobile-cta">
             <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
@@ -151,7 +152,7 @@ class SiteFooter extends HTMLElement {
             <div class="footer-col-title">Ecosystem</div>
             <a href="/docs/html/guides/">Guides</a>
             <a href="/docs/html/api/">API Docs</a>
-            <a href="/docs/html/spices/">Spices</a>
+            <a href="https://spices.turmeric-lang.com">Spices</a>
           </div>
           <div class="footer-col">
             <div class="footer-col-title">Community</div>

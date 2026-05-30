@@ -84,6 +84,22 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[existential-gc-followup-plan.md](existential-gc-followup-plan.md)** -- GC integration for packed existentials; cycle-construction fixtures blocked on defstruct compound annotations
 - **[existential-types-plan.md](existential-types-plan.md)** -- `pack`/`open` with typeclass constraints; phases partially in progress
 
+### Language Ergonomics (Planned)
+
+- **[internal-define-plan.md](history/internal-define-plan.md)** *(history)* -- body-level `define` (let\* semantics); implemented; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
+- **[letrec-and-named-let-plan.md](history/letrec-and-named-let-plan.md)** *(history)* -- `letrec` + named let; implemented; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
+
+### Compiler and Codegen (Active)
+
+- **[arbitrary-arity-kinds-plan.md](arbitrary-arity-kinds-plan.md)** -- Lift the `Tuple5` / `KIND_ARROW5` cap; replace closed `Kind` enum with an integer-backed representation; not started
+- **[codegen-clang-int-pointer-cleanup-plan.md](codegen-clang-int-pointer-cleanup-plan.md)** -- Clean `int<->pointer` casts in generated C to fix modern Clang warnings; not started
+- **[cross-module-specialization-cache-plan.md](cross-module-specialization-cache-plan.md)** -- Cross-module ABI specialization cache (Phase J of unboxing plan); prerequisites A--I landed; not started
+- **[unboxing-and-monomorphization-plan.md](unboxing-and-monomorphization-plan.md)** -- Unboxed structs, monomorphization, and sized primitives; partial (sized types landed); remaining work in phases B/C
+
+### Tooling (Active)
+
+- **[tur-run-plan.md](tur-run-plan.md)** -- `tur run` Justfile task runner + `tur new` scaffold; basic `tur run` shipped (see [tur-run-guide.md](../guides/tur-run-guide.md)); `tur new`, extended phases (RN6--RN9) outstanding
+
 ## Extracted Guides
 
 The following planning documents have guide counterparts in [../guides/](../guides/):
@@ -121,6 +137,9 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [web-continuations-tutorial.md](../guides/web-continuations-tutorial.md) | `web-continuations-tutorial-plan.md` (complete) |
 | [web-emscripten-tutorial.md](../guides/web-emscripten-tutorial.md) | `web-emscripten-tutorial-plan.md` (history) |
 | [frame-guide.md](../guides/frame-guide.md) | `frame-spice-plan.md` (history; FR0-FR10 complete) |
+| [binding-forms-guide.md](../guides/binding-forms-guide.md) | `internal-define-plan.md` (history); `letrec-and-named-let-plan.md` (history) |
+| [tur-watch-guide.md](../guides/tur-watch-guide.md) | `tur-watch-spice-plan.md` (history; v0.2.0); `tur-watch-tree-per-file-naming-plan.md` (history) |
+| [web-stack-guide.md](../guides/web-stack-guide.md) | `tur-httpd-plan.md` (history); `tur-template-plan.md` (history); `tur-tourist-plan.md` (history) |
 
 ## Historical Documents
 
@@ -138,6 +157,37 @@ Completed implementation plans and superseded design explorations are in
 - **[param-type-annotation-plan.md](history/param-type-annotation-plan.md)** -- Spaced `: T` parameter type annotations; landed in `fccb1621`
 - **[typed-slots-generic-substrate-plan.md](history/typed-slots-generic-substrate-plan.md)** -- GS1-GS5 substrate; subsumed by completed TS1-TS6
 - **[typed-slots-gs5-compiler-support-plan.md](history/typed-slots-gs5-compiler-support-plan.md)** -- GS5 compiler support; subsumed by completed TS1-TS6
+
+Post-v0.14.6 sweep:
+
+- **[variadic-typing-plan.md](history/variadic-typing-plan.md)** -- Typed variadic rest parameters (V0--V7); complete; documented in CLAUDE.md
+- **[control-flow-completeness-plan.md](history/control-flow-completeness-plan.md)** -- Pre-v1.0 control-flow gap closure (CF0--CF7); complete; see [effects-system-guide.md](../guides/effects-system-guide.md) and [backtracking-guide.md](../guides/backtracking-guide.md)
+- **[control-flow-completeness-audit.md](history/control-flow-completeness-audit.md)** -- Pre-/post-v1.0 control-flow audit; companion to above
+- **[typing-gap-plan.md](history/typing-gap-plan.md)** -- Pre-v1.0 advanced-typing gap closure (TY0--TY6); complete
+- **[typing-gap-audit.md](history/typing-gap-audit.md)** -- Pre-/post-v1.0 advanced-typing audit; companion to above
+- **[first-class-handlers-plan.md](history/first-class-handlers-plan.md)** -- First-class effect handler values (FH0--FH7); complete; `effects-system-guide.md` updated
+- **[first-class-handlers-semantics.md](history/first-class-handlers-semantics.md)** -- FH0 operational semantics spec; companion to above
+- **[handler-typecheck-and-typename-followups-plan.md](history/handler-typecheck-and-typename-followups-plan.md)** -- Handler arg-checking + `type_name` ownership follow-ups (PH0--PH3); complete
+- **[lifetime-syntax-plan.md](history/lifetime-syntax-plan.md)** -- `'a` lifetime-annotation surface syntax (LS0--LS5); complete; `substructural-types-guide.md` updated
+- **[sized-types-completion-plan.md](history/sized-types-completion-plan.md)** -- Sized types SZ4--SZ9 (real `-Xsized-types` flag, type-level index, static checking, inference); complete; see [sized-types-guide.md](../guides/sized-types-guide.md)
+- **[sized-types-index-spec.md](history/sized-types-index-spec.md)** -- SZ6 type-level size-index spec; companion to above
+- **[manifest-driven-build-descent-plan.md](history/manifest-driven-build-descent-plan.md)** -- Manifest-aware `tur build <dir>` + recursive src/ collection + T1--T3 follow-ups; complete; documented in CLAUDE.md
+- **[local-spice-dev-workflow-plan.md](history/local-spice-dev-workflow-plan.md)** -- `:path`/`:members` local cross-spice dependency resolution (LS1--LS8); complete; documented in CLAUDE.md
+- **[scscm-spice-import-refactor-plan.md](history/scscm-spice-import-refactor-plan.md)** -- scscm spice import refactor + `scscm-compile` fixture repair; complete
+- **[repl-spice-watch-flake-plan.md](history/repl-spice-watch-flake-plan.md)** -- De-flake `tur_repl_spice_watch` CI test; complete
+- **[reader-float-parsing-plan.md](history/reader-float-parsing-plan.md)** -- Float-literal exponent + precision fixes (Option B); complete
+- **[asan-debug-leaks-plan.md](history/asan-debug-leaks-plan.md)** -- ASan/LSan leak policy + ABI-spec arena fix (Phase 1+2); complete; documented in CLAUDE.md
+- **[known-bugs-followups-plan.md](history/known-bugs-followups-plan.md)** -- Remaining open bugs from `known-bugs.md`; all resolved
+- **[internal-define-plan.md](history/internal-define-plan.md)** -- Body-level `define` (let\* semantics); complete; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
+- **[letrec-and-named-let-plan.md](history/letrec-and-named-let-plan.md)** -- `letrec` + named let; complete; see [binding-forms-guide.md](../guides/binding-forms-guide.md)
+- **[raygui-spice-plan.md](history/raygui-spice-plan.md)** -- `tur-raygui` immediate-mode GUI spice; complete (v0.1.0 in turmeric-spices)
+- **[tur-watch-spice-plan.md](history/tur-watch-spice-plan.md)** -- `tur-watch` cross-platform watcher spice; complete (v0.2.0); see [tur-watch-guide.md](../guides/tur-watch-guide.md)
+- **[tur-watch-tree-per-file-naming-plan.md](history/tur-watch-tree-per-file-naming-plan.md)** -- `tur-watch` v0.2.0 per-file naming in tree mode; complete
+- **[tur-httpd-plan.md](history/tur-httpd-plan.md)** -- `tur-httpd` threaded HTTP/1.1 server spice; complete (v0.1.0); see [web-stack-guide.md](../guides/web-stack-guide.md)
+- **[tur-template-plan.md](history/tur-template-plan.md)** -- `tur-template` ERB/EJS-style templating engine spice; complete (v0.1.0); see [web-stack-guide.md](../guides/web-stack-guide.md)
+- **[tur-tourist-plan.md](history/tur-tourist-plan.md)** -- `tur-tourist` Scotty-style micro-framework spice; complete (v0.1.0); see [web-stack-guide.md](../guides/web-stack-guide.md)
+- **[tur-fmt-plan.md](history/tur-fmt-plan.md)** -- `tur fmt` in-place formatter with directory walking; complete (see `tur fmt --help`); see also [formatter-guide.md](../guides/formatter-guide.md)
+- **[solid-modeling-sdf-raylib-plan.md](history/solid-modeling-sdf-raylib-plan.md)** -- `tur-sdf-raylib` SDF + raylib solid modeling spice; Phase 1 complete (v0.1.0 in turmeric-spices)
 
 Earlier additions:
 

@@ -161,9 +161,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str) -> None:
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = (
-        '<div style="margin-bottom:0.5rem">'
-        '<a href="/" style="font-size:0.8rem;color:var(--text-sec)">&larr; Home</a>'
-        '</div>\n      '
+        '<a class="sidebar-back" href="/">&larr; Back to home</a>\n      '
         '<div style="margin-bottom:1.25rem">'
         '<a href="../index.html" style="font-size:0.8rem;color:var(--text-sec)">&larr; All Spices</a>'
         '</div>\n      '
@@ -259,13 +257,15 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
             '</tr>'
         )
     table_html = (
+        '<div class="spices-table-wrap">\n'
         '<table class="spices-table">\n'
         '  <thead><tr>'
         '<th>Spice</th><th>Description</th><th>Tier</th><th>C dep</th><th>Docs</th>'
         '</tr></thead>\n'
         '  <tbody>\n'
         + '\n'.join(rows)
-        + '\n  </tbody>\n</table>'
+        + '\n  </tbody>\n</table>\n'
+        '</div>'
     )
 
     intro = (
@@ -275,9 +275,7 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
     )
 
     sidebar_html = (
-        '<div style="margin-bottom:1.25rem">'
-        '<a href="/" style="font-size:0.8rem;color:var(--text-sec)">&larr; Home</a>'
-        '</div>\n      '
+        '<a class="sidebar-back" href="/">&larr; Back to home</a>\n      '
         '<h3>About</h3>\n'
         '      <ul>\n'
         f'        <li><a href="{GITHUB_BASE}">GitHub repo</a></li>\n'
@@ -298,7 +296,8 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
   <link rel="stylesheet" href="../api/style.css">
   <style>
 {GUIDE_CSS}
-    .spices-table {{ width:100%; margin-top:1rem; }}
+    .spices-table-wrap {{ width:100%; margin-top:1rem; overflow-x:auto; -webkit-overflow-scrolling:touch; }}
+    .spices-table {{ width:100%; min-width:560px; }}
     .spices-table td code {{ font-size:0.85rem; }}
   </style>
 </head>

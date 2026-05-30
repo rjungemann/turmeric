@@ -496,7 +496,7 @@ footer {
   flex-direction: column;
   justify-content: center;
   gap: 5px;
-  margin-left: auto;
+  margin-right: 12px;
   padding: 6px;
   background: none;
   border: none;
@@ -548,6 +548,15 @@ nav.nav-open .nav-mobile-panel {
 }
 .nav-mobile-panel a:hover { color: var(--text-primary); background: var(--bg-hover); }
 .nav-mobile-panel a.active { color: var(--gold-bright); }
+.nav-mobile-panel .nav-mobile-back {
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 6px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding-bottom: 10px;
+}
 .nav-mobile-cta {
   display: flex;
   gap: 8px;
@@ -601,6 +610,12 @@ nav.nav-open .nav-mobile-panel {
     gap: 12px;
     align-items: flex-start;
   }
+
+  /* Abbreviate the turmeric/sweet-exp toggle to single letters on phones */
+  .code-syntax-toggle .seg-btn { font-size: 0; padding: 4px 8px; }
+  .code-syntax-toggle .seg-btn::before { font-size: 11px; line-height: 1; }
+  .code-syntax-toggle .seg-btn[data-syntax="turmeric"]::before  { content: "T"; }
+  .code-syntax-toggle .seg-btn[data-syntax="sweet-exp"]::before { content: "S"; }
 }
 
 /* ── CODE CARD MODIFIER ────────────────── */

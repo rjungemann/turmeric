@@ -633,6 +633,18 @@ a:hover { text-decoration: underline; }
 .sidebar li { margin: 0.15rem 0; }
 .sidebar a { font-size: 0.825rem; color: var(--text-sec); font-family: 'Iosevka', 'Fira Code', monospace; }
 .sidebar a:hover { color: var(--gold-bright); text-decoration: none; }
+.sidebar-back {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  padding: 0.45rem 0.65rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.sidebar-back:hover { color: var(--gold-bright); background: var(--bg-hover); border-color: var(--gold-line); text-decoration: none; }
 
 /* Content */
 .content {
@@ -888,16 +900,15 @@ details.internal-section summary {
   .hamburger { display: block; }
   .site-header { padding: 0 1rem; }
   .site-header nav { display: none; }
-  .search-input { width: 140px; }
-  .search-input:focus { width: 180px; }
+  .search-wrap { display: none; }
   .page-layout { grid-template-columns: 1fr; }
   .sidebar {
     display: none;
     position: fixed;
-    top: 0;
+    top: 60px;
     left: 0;
     width: 280px;
-    height: 100vh;
+    height: calc(100vh - 60px);
     z-index: 100;
     background: var(--bg-surface);
     border-right: 1px solid var(--border);
@@ -1015,7 +1026,7 @@ def _html_header(title, css_path='style.css'):
   <nav>
     <a href="/docs/html/guides/">Guides</a>
     <a href="index.html" class="active">API Docs</a>
-    <a href="/docs/html/spices/">Spices</a>
+    <a href="https://spices.turmeric-lang.com">Spices</a>
     <a href="/try">Try It</a>
   </nav>
   <div class="search-wrap">
@@ -1158,7 +1169,7 @@ def render_module_page(module, out_dir, brand='stdlib'):
 
     # Build sidebar TOC (exported only)
     sidebar = '<div class="sidebar">\n'
-    sidebar += '  <div style="margin-bottom:1.25rem"><a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a></div>\n'
+    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
     sidebar += '  <h3>Exported</h3>\n  <ul>\n'
     for defn in exported:
         anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
@@ -1301,7 +1312,7 @@ def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
     content += '</div>\n'
 
     sidebar = '<div class="sidebar">\n'
-    sidebar += '  <div style="margin-bottom:1.25rem"><a href="/" style="font-size:0.8rem;color:var(--text-sec)">← Home</a></div>\n'
+    sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
     sidebar += '</div>\n'
 
     page = _html_header(f'{brand_label} | API Docs', css_path='style.css')
