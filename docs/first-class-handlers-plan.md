@@ -244,6 +244,16 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 
 ## Phase FH6 -- Continuation discipline across composition
 
+> **Status: DONE.** `elab_handler_lit` wires `cont_kind` into the `k` binding
+> exactly like `elab_handle` (linear `is_linear`/`is_relevant`, default affine
+> move, multishot snapshot), and now also carries the MS2 multishot-capture
+> check. Each case keeps its own discipline in its dispatch-table entry, so
+> composition does not blend disciplines. Expect-error fixtures confirm the same
+> diagnostics fire through a handler value: `TUR-E0101` (linear resumed twice),
+> `TUR-E0100` (linear dropped), `TUR-E0201` (affine resumed twice), `TUR-E0500`
+> (multishot captures a unique). A positive fixture shows a `^multishot` handler
+> value resumed twice matches the inline `handle` result.
+
 - **FH6.1** Verify `^linear` / `^multishot` / default-affine `k` discipline is
   enforced per case when the case lives in a handler value and across
   composition (each handler keeps its own discipline). *Done when:* expect-error

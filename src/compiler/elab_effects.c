@@ -1206,6 +1206,31 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     Form *body_f = call->as.list.items[2];
     cases[0].body = elab_form(e, body_f);
 
+    /* MS2: a ^multishot handler literal may re-run its body per resume, so it
+     * must not capture a unique (move-only) or linear free variable (TUR-E0500).
+     * Mirrors the inline-handle check in elab_handle. */
+    if (cases[0].cont_kind == CK_MULTISHOT && cases[0].body) {
+        uint8_t n_hparams = (uint8_t)(cases[0].n_params + 1);
+        Binding **hparams = arena_alloc(e->arena, n_hparams * sizeof(Binding *));
+        for (uint8_t j = 0; j < cases[0].n_params; j++)
+            hparams[j] = cases[0].param_bindings[j];
+        hparams[cases[0].n_params] = kb;
+        uint32_t n_caps = 0;
+        Binding **caps = collect_free_vars(cases[0].body, hparams, n_hparams, &n_caps);
+        for (uint32_t ci = 0; ci < n_caps; ci++) {
+            CopyKind ck = caps[ci]->type.copy_kind;
+            if (ck == CK_UNIQUE || ck == CK_LINEAR) {
+                diag_emit_with_code(DIAG_ERROR, cases[0].body->span,
+                    TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+                    "^multishot handler captures '%s' which is %s -- "
+                    "cannot be safely captured in a multi-shot handler",
+                    caps[ci]->name->name,
+                    ck == CK_UNIQUE ? "unique (move-only)" : "linear");
+            }
+        }
+        free(caps);
+    }
+
     if (cases[0].cont_kind == CK_LINEAR && kb && !kb->is_linear_consumed) {
         diag_emit_with_code(DIAG_ERROR, k_f->span, TUR_E0100_LINEAR_DROPPED,
             "linear continuation '%s' was not resumed or discontinued", kb->name->name);
