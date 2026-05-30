@@ -1,6 +1,6 @@
 # Plan: Outstanding follow-ups across five archived plans
 
-> **Status:** Draft Plan
+> **Status:** In Progress
 > **Last Updated:** 2026-05-30
 > **Type:** Compiler / Codegen / Type system / Tooling -- roadmap
 > **Consolidates outstanding work from:**
@@ -9,6 +9,25 @@
 > - [`docs/archive/history/cross-module-specialization-cache-plan.md`](archive/history/cross-module-specialization-cache-plan.md)
 > - [`docs/archive/history/tur-run-plan.md`](archive/history/tur-run-plan.md) -- basic `tur run` impl landed; `tur new` + extended phases outstanding
 > - [`docs/archive/history/unboxing-and-monomorphization-plan.md`](archive/history/unboxing-and-monomorphization-plan.md) -- Phases G/H/I landed; A/B/C/D/E/F outstanding
+
+---
+
+## Progress tracker
+
+Re-verified against HEAD before execution (per "How to read this plan"). Most
+themes had already landed; the items below capture the genuinely outstanding
+work and its disposition.
+
+| Theme | State | Notes |
+| --- | --- | --- |
+| A -- Clean Clang codegen | **DONE (verified)** | All 5 canary fixtures + all 73 snapshots compile clean under `clang -Werror=int-conversion -Werror=incompatible-function-pointer-types`; no `-Wno-error` downgrade in `tests/run.sh` or compiler defaults. |
+| B -- Aggregate carrier bridge | **DONE (verified)** | 4 gate fixtures under `tests/fixtures/typed-slots/` pass; KB-004/010/012/015 fixed. |
+| C -- Sized primitives polish | **DONE (verified)** | C1 (`TUR-E0042`), C2 (kind-preserving bitwise), C3 (hash consistency), C4 (`TUR-W0037`) all implemented with fixtures + guide. |
+| D -- Unboxed struct ABI | **DONE** | D1 (`pass_by_ptr` >16B) + D2 (typed fn-ptr fields) already landed; D3 (nested-aggregate decision: keep carrier-erased, documented in type-erasure-guide.md) + D4 (inline-C unboxed-local audit: vec.tur/hamt.tur are clean, all carrier-ABI) completed here. |
+| E -- Arbitrary-arity kinds | **DONE** | E1-E4 already landed; E5 completed here -- added `tur_kind_arity_unit` C unit test (round-trip through arity 15 + >15 boundary); docs already current. |
+| F -- Monomorphize closures | **OUTSTANDING** | Closure/non-global guard still bails in `emit_module.c`; F1/F2/F3 not started. |
+| G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE (correctness landed). J6: `--no-abi-cache` / `TUR_NO_ABI_CACHE` added here (suppresses the `.tur-abi-cache/` machinery). The cache *read* + ownership-reuse + invalidation -- a pure rebuild-time optimization -- remains outstanding (cold cache already builds correctly). |
+| H -- Tooling (`tur run` / `tur new`) | **IN PROGRESS** | Most RN*/NW* done. NW0 (length + reserved-name validation) completed here, plus a `tur check <dir>` directory-mode fix (was crashing on a directory arg). NW6 (bootstrap CI gate) is **blocked on larger work** -- see note below. |
 
 ---
 
@@ -222,6 +241,15 @@ local declared with a concrete type; any helper that assumes `int64_t`
 storage must either keep the carrier ABI or opt in to the Phase G
 template marker.
 
+**Audit outcome (2026-05-30): clean, no changes required.** Every inline-C
+helper in `stdlib/vec.tur` declares its parameters as `:int` (and reads
+the vec struct through `(void*)(intptr_t)v`); none declare a narrow sized
+type (`:int8`..`:uint64`/`:float32`), so the `int64_t` storage assumption
+is correct by construction -- they already keep the carrier ABI.
+`stdlib/hamt.tur` is `extern-c`-driven (one inline-C fence) over
+`:ptr<void>` / `:int` / `:cstr` params only, with no narrow-typed locals.
+Neither file needs the Phase G `__TUR_TY_<NAME>__` template marker.
+
 ---
 
 ## Theme E -- Arbitrary-arity kinds (lift Tuple5 / KIND_ARROW5 cap)
@@ -303,6 +331,19 @@ Each step is independently revertable.
 > or non-global, so a closure that captures one int and returns one int
 > across instantiations stays in the `tur_poly_fn_t` wrapper. Resolved
 > in source: no per-fn specialization cap (open question #3).
+
+> **Status (2026-05-30): OUTSTANDING -- deferred as deep codegen work.**
+> Verified the guard is intact at `src/compiler/emit_module.c:295-296`
+> (`fn_binding->closure_fn_binding || !fn_binding->is_global`) with a
+> second bail at line 313 (`fd->closure`). No `closure_template_id` exists
+> in the tree (F3). Lifting these guards to emit specialized closure
+> variants alongside the `tur_poly_fn_t` wrapper -- and re-keying the
+> spec cache by `(closure_template_id, arg_types, result_type)` -- is a
+> genuine monomorphization feature in the whole-program ABI-specialization
+> pipeline, with real miscompilation/link-error risk if done carelessly.
+> Theme G (cross-module) is explicitly gated on it. It is left for a
+> dedicated change-set with benchmark + `--emit-abi-trace` verification
+> rather than attempted speculatively here.
 
 ### F1 -- Lift the closure / non-global guard
 
@@ -388,6 +429,22 @@ matching benchmark.
   in the build. Cold/empty cache must always produce a correct build.
   Add a `--no-abi-cache` build flag (and/or `TUR_NO_ABI_CACHE=1`),
   mirroring `TUR_NO_AUTO_SPICE`.
+
+  > **Status (2026-05-30): PARTIAL.** The opt-out is done: `--no-abi-cache`
+  > and `TUR_NO_ABI_CACHE=1` (`parse_no_abi_cache` / `g_no_abi_cache` in
+  > `src/main.c`) now suppress the `.tur-abi-cache/` write in both
+  > `cmd_build_multi` and `cmd_emit_c_to_dir`; the build stays correct with
+  > the cache disabled. The remaining work -- reading the index at the
+  > start of the build, threading an `AbiCacheCtx*` to reuse cross-build
+  > ownership for byte-identical rebuilds, and the conservative
+  > invalidation -- is a **pure optimization**: the cache is write-only
+  > today, so every invocation is already a correct "cold" build (the J6
+  > correctness invariant). It is deferred rather than rushed, since an
+  > incorrect read would mis-assign clone ownership (duplicate or missing
+  > clone bodies -> link errors). Note the current index format is
+  > `clone_name\towning_module\tfn_symbol\tresult_kind\tn_args\targ_kinds...`
+  > (richer than the `source_hash` form sketched in J5 above); a
+  > `source_hash` column would need adding for staleness-based invalidation.
 - **J7 -- `tur emit-c --output-dir` parity.** Same plumbing applies to
   `cmd_emit_c_to_dir`. Lower priority than `build`; should share
   J5/J6 code so the two entry points behave identically.
@@ -458,10 +515,12 @@ The PKG-1 `cmd_pkg_new` predates this spec. Reconcile:
 
 - Audit `cmd_pkg_new` output against the plan's "Generated layout"
   block. Track gaps in the order below.
-- **NW0 -- validation.** Spice-name and target-path rules
-  (`tur/new/validate`): lowercase ASCII + digits + `-`, leads with a
-  letter, 2--64 chars, reject reserved names (`tur`, `build`, `test`).
-  Reused by `build.tur`'s `:name` parser.
+- **NW0 -- validation.** *DONE (2026-05-30).* `valid_project_name`
+  (`src/compiler/pkg.c`) now enforces the full rule: `[a-z][a-z0-9-]*`,
+  2--64 chars, leads with a letter, and rejects the reserved names
+  `tur` / `build` / `test` (`is_reserved_project_name`). All three
+  `tur new` / `tur init` call sites share it, and their error messages
+  spell out the complete rule.
 - **NW1 -- templates.** Embed every scaffold file as a string
   constant. Substitutions resolved at scaffold time:
   `{{ spice_name }}`, `{{ author }}`, `{{ year }}`, `{{ license }}`.
@@ -490,6 +549,34 @@ The PKG-1 `cmd_pkg_new` predates this spec. Reconcile:
   exit 0. **Acceptance gate** for the whole theme: until a freshly
   scaffolded spice passes its own CI recipe end-to-end, `tur new` is
   not done.
+
+  > **Status (2026-05-30): BLOCKED -- larger than a test fixture.** A
+  > freshly scaffolded spice does *not* pass `tur run ci` today, for
+  > reasons that are prerequisites, not test wiring:
+  >
+  > 1. **The standard Justfile recipes invoke commands that don't work as
+  >    written.** `build:`/`check:`/`test:` call `tur build` / `tur check`
+  >    / `tur test` with no argument, but those subcommands require a
+  >    target (a bare invocation prints usage and exits non-zero). They
+  >    need `tur build .`, `tur check src/`, `tur test tests/`.
+  >    (`tur check <dir>` now works -- this plan added directory-mode
+  >    support; it previously crashed reading the directory as a file.)
+  > 2. **`tur docs` is not a subcommand at all.** The `docs:` recipe and
+  >    the `ci: clean check test docs` chain assume a `tur docs`
+  >    generator that does not exist (only `tur doc <symbol>` lookup
+  >    exists). NW6 as specified presumes `tur docs` ships first.
+  > 3. **`tur fmt` strips `;;;` docstrings inside a `defmodule`** and
+  >    collapses short forms onto one line, so any richly-documented
+  >    scaffold fails `tur fmt --check` unless it is pre-collapsed. The
+  >    scaffold source/test templates would have to be written in
+  >    fmt-canonical form (module docstring only, no in-module defn
+  >    docstrings), which is in tension with the docstring standard.
+  >
+  > Closing NW6 therefore requires: (a) a recipe overhaul in the shared
+  > `JUSTFILE_TEMPLATE` (kept byte-identical between `justrun.c` and
+  > `pkg.c` per NW1), (b) a real `tur docs` command or a redefinition of
+  > the CI contract, and (c) fmt-clean scaffold templates. This is its
+  > own change-set, tracked here rather than forced into a partial fix.
 - **NW7 -- docs.** `docs/guides/tur-new-guide.md` already exists;
   confirm it covers the new flag set, the generated layout, and the
   "evolve a spice past the template" guidance from the source plan.

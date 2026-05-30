@@ -206,6 +206,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_codegen_reinterpret"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Theme E (TP3): arbitrary-arity Kind helper round-trip unit test
+add_test(
+  NAME tur_kind_arity_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_kind_arity_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # TY4: lifetime elision + outlives-cycle unit test
 add_test(
   NAME tur_lifetime_unit

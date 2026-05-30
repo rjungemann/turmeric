@@ -2075,9 +2075,22 @@ void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf) {
 /* CLI: tur new / tur init -- shared helpers                           */
 /* ================================================================== */
 
-/* Validate project name: must match [a-z][a-z0-9-]* */
+/* Reserved spice names that collide with built-in subcommands / build
+ * directives and would confuse module resolution (NW0). */
+static bool is_reserved_project_name(const char *name) {
+    static const char *const reserved[] = { "tur", "build", "test" };
+    for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++) {
+        if (strcmp(name, reserved[i]) == 0) return true;
+    }
+    return false;
+}
+
+/* Validate project name (NW0): must match [a-z][a-z0-9-]*, be 2-64
+ * characters, lead with a letter, and not be a reserved name. */
 static bool valid_project_name(const char *name) {
     if (!name || !*name) return false;
+    size_t len = strlen(name);
+    if (len < 2 || len > 64) return false;
     if (!islower((unsigned char)*name)) return false;
     for (const char *p = name + 1; *p; p++) {
         if (!islower((unsigned char)*p) &&
@@ -2085,6 +2098,7 @@ static bool valid_project_name(const char *name) {
             *p != '-')
             return false;
     }
+    if (is_reserved_project_name(name)) return false;
     return true;
 }
 
@@ -2553,7 +2567,8 @@ int cmd_pkg_new(int argc, char **argv) {
         fprintf(stderr,
             "tur new: invalid spice name '%s'\n"
             "  Names must match [a-z][a-z0-9-]* "
-            "(lowercase letters, digits, hyphens)\n",
+            "(lowercase letters, digits, hyphens), be 2-64 characters,\n"
+            "  start with a letter, and not be reserved (tur, build, test)\n",
             name);
         return 1;
     }
@@ -2618,7 +2633,8 @@ int cmd_pkg_init(int argc, char **argv) {
         fprintf(stderr,
             "tur init: invalid project name '%s'\n"
             "  Names must match [a-z][a-z0-9-]* "
-            "(lowercase letters, digits, hyphens)\n",
+            "(lowercase letters, digits, hyphens), be 2-64 characters,\n"
+            "  start with a letter, and not be reserved (tur, build, test)\n",
             name);
         return 1;
     }
