@@ -86,9 +86,14 @@ under this repository.
 from the input file looking for an enclosing `build.tur`. When they
 find one, the spice's `src/` is added to the module-resolution search
 path, and every `:spices` dep declared in the manifest contributes its
-`src/` too. The result is that intra-spice imports (like
-`(import frame/schema)`) resolve without per-spice `-I` configuration
-in your editor, LSP, or format-on-save hook.
+`src/` too -- including `:path`-based local deps and workspace siblings
+resolved via the parent `:members` list. The result is that intra-spice
+imports (like `(import frame/schema)`) resolve without per-spice `-I`
+configuration in your editor, LSP, or format-on-save hook.
+
+`tur fetch` is only needed for `:url`-backed deps. Local-source deps
+(`:path` entries and workspace siblings) resolve with no fetch step and
+produce no `tur.lock` entries.
 
 - Explicit `-I <dir>` flags still work and win on name collisions.
 - `--no-auto-spice` (global flag, before the subcommand) opts out.

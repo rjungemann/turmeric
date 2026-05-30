@@ -1,6 +1,6 @@
 # Plan: Manifest-Driven `tur build <dir>` Descent
 
-> **Status:** Phases 1-3 + follow-ups T1/T2/T3 implemented
+> **Status:** Complete (all checklist items done)
 > **Last Updated:** 2026-05-29
 > **Type:** CLI / build-system change (`tur` source, this repo)
 > **Related:**
@@ -278,8 +278,10 @@ re-run the scscm validation checklist.
       with no source file fails the build (`build-project-missing-export-fails`);
       `emit-cmake` resolves module-name exports to `src/<key>.tur`
       (`test-emit-cmake.sh` green, 15 passed).
-- [ ] After scscm Phase 2 lands: `tur build ../turmeric-spices/spices/scscm`
-      exits 0.
+- [x] After scscm Phase 2 lands: `tur build ../turmeric-spices/spices/scscm`
+      exits 0. Auto-library detection: `cmd_build_project` scans source files
+      for `(defn main`; if none found, `shared` is set to `true` automatically
+      so a spice builds as a `.so` without requiring `--shared`.
 
 ## Follow-up tasks
 

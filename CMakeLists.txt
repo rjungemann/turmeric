@@ -67,6 +67,14 @@ add_test(
   COMMAND bash tests/run-build-project.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# scscm-compile: build the scscm-compile fixture project (imports the scscm
+# spice via :path) and diff its stdout against expected.stdout.  Skips with
+# PASS when ../turmeric-spices is absent.
+add_test(
+  NAME tur_scscm_compile
+  COMMAND bash tests/run-scscm-compile.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP2: unit test for the generated FFI dispatcher trampolines in
 # src/runtime/ffi_dispatch.{h,c}. The executable is defined in
 # src/CMakeLists.txt as tur_ffi_dispatch_unit.

@@ -823,6 +823,61 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     buf_puts(out, ");\n");
 }
 
+/* Emit C forward declarations for every EX_FN_DEF in items.  Used by both
+ * emit_program (single-file) and emit_implementation (separate compilation)
+ * so that mutually-recursive static functions resolve at C-compile time. */
+static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
+                                  const Expr **items, uint32_t n_items) {
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind != EX_FN_DEF) continue;
+        FnDef *fd = e->as.fn_def_.fn;
+        if (strcmp(fd->binding->name->name, "main") == 0) continue;
+        if (emit_abi_fn_skip_generic(ctx, e)) continue;
+        if (!ctx->separate_compilation || !fd->binding->is_exported) {
+            buf_puts(out, "static ");
+        }
+        if (e->type.kind == TY_FN) {
+            TypeKind result = e->type.as.fn.result_kind;
+            if (e->type.as.fn.result_full_type) {
+                bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+                const struct Type *rft = e->type.as.fn.result_full_type;
+                if (!body_is_inline_c && rft) {
+                    buf_puts(out, type_c_name(*rft));
+                } else {
+                    buf_puts(out, "int64_t");
+                }
+            } else {
+                buf_puts(out, type_c_name(emit_type_from_kind(result)));
+            }
+        } else {
+            buf_puts(out, "void");
+        }
+        const char *fn_name = raw_name_for_binding(fd->binding);
+        buf_printf(out, " %s(", fn_name);
+        for (uint8_t j = 0; j < fd->n_params; j++) {
+            if (j > 0) buf_puts(out, ", ");
+            if (fd->params[j]->is_poly_fn) {
+                buf_puts(out, "tur_poly_fn_t");
+            } else if (fd->param_types[j].kind == TY_FN) {
+                buf_puts(out, "int64_t");
+            } else {
+                bool _fwd_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+                Type _fwd_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                    ? *e->type.as.fn.arg_full_types[j]
+                    : fd->param_types[j];
+                if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
+                    buf_printf(out, "const %s *", type_c_name(_fwd_pty));
+                } else {
+                    buf_puts(out, type_c_name(_fwd_pty));
+                }
+            }
+        }
+        buf_puts(out, ");\n");
+        free((void*)fn_name);
+    }
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -1298,73 +1353,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* Pass 1: Emit forward declarations for all functions.
      * Written to fwd_decls buffer (emitted before pending_handler_fns in final
      * assembly) so that effect handler functions can call user-defined functions. */
-    for (uint32_t i = 0; i < n_items; i++) {
-        const Expr *e = items[i];
-        if (e->kind == EX_FN_DEF) {
-            FnDef *fd = e->as.fn_def_.fn;
-            /* Skip main - it's not called from other functions in the same file */
-            if (strcmp(fd->binding->name->name, "main") == 0) continue;
-            if (emit_abi_fn_skip_generic(&ctx, e)) {
-                continue;
-            }
-            /* Phase M6: exported module functions don't need static on their
-             * forward declaration — they already get external linkage in emit_fn_def
-             * when separate_compilation is true. In single-file mode (the common
-             * case here) all functions are still static. */
-            if (!ctx.separate_compilation || !fd->binding->is_exported) {
-                buf_puts(&fwd_decls, "static ");
-            }
-            if (e->type.kind == TY_FN) {
-                TypeKind result = e->type.as.fn.result_kind;
-                /* LT4: TY_STRUCT return types lower to the actual struct name in C.
-                 * Avoid emit_type_from_kind(TY_STRUCT) here — it produces a Type with a
-                 * zeroed def pointer; passing that large struct by value can trigger
-                 * UBSan false positives in debug builds.  Instead emit the name
-                 * directly from the fn_type's result_full_type if present, or fall
-                 * back to "int64_t" for opaque/unresolved struct types. */
-                if (e->type.as.fn.result_full_type) {
-                    /* LT4/SI4-C: inline-C bodies returning :StructName always emit int64_t.
-                     * Opaque types (defopaque) also emit int64_t via type_c_name. */
-                    bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-                    const struct Type *rft = e->type.as.fn.result_full_type;
-                    if (!body_is_inline_c && rft) {
-                        buf_puts(&fwd_decls, type_c_name(*rft));
-                    } else {
-                        buf_puts(&fwd_decls, "int64_t");
-                    }
-                } else {
-                    buf_puts(&fwd_decls, type_c_name(emit_type_from_kind(result)));
-                }
-            } else {
-                buf_puts(&fwd_decls, "void");
-            }
-            const char *fn_name = raw_name_for_binding(fd->binding);
-            buf_printf(&fwd_decls, " %s(", fn_name);
-            for (uint8_t j = 0; j < fd->n_params; j++) {
-                if (j > 0) buf_puts(&fwd_decls, ", ");
-                /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
-                if (fd->params[j]->is_poly_fn) {
-                    buf_puts(&fwd_decls, "tur_poly_fn_t");
-                } else if (fd->param_types[j].kind == TY_FN) {
-                    /* ER4: function-typed parameters are passed as int64_t. */
-                    buf_puts(&fwd_decls, "int64_t");
-                } else {
-                    /* Phase D: mirror emit_fn_def's pass-by-ptr logic. */
-                    bool _fwd_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
-                    Type _fwd_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
-                        ? *e->type.as.fn.arg_full_types[j]
-                        : fd->param_types[j];
-                    if (!fd->closure && !_fwd_inline_c && type_struct_pass_by_ptr(_fwd_pty)) {
-                        buf_printf(&fwd_decls, "const %s *", type_c_name(_fwd_pty));
-                    } else {
-                        buf_puts(&fwd_decls, type_c_name(_fwd_pty));
-                    }
-                }
-            }
-            buf_puts(&fwd_decls, ");\n");
-            free((void*)fn_name);
-        }
-    }
+    emit_fn_forward_decls(&ctx, &fwd_decls, items, n_items);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         emit_abi_forward_decl(&fwd_decls, &ctx.abi_specializations[i]);
     }
@@ -4609,6 +4598,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) {
         emit_abi_forward_decl(&impl_fwd_decls, &ctx.abi_specializations[i]);
     }
+    /* Forward declarations for module-local functions so that mutually-recursive
+     * static C functions resolve at C-compile time (parity with emit_program). */
+    emit_fn_forward_decls(&ctx, &impl_fwd_decls, impl_items, impl_n_items);
 
     /* Check if user defined a main function */
     bool user_has_main = false;

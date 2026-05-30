@@ -2646,14 +2646,25 @@ static int cmd_run(int argc, char **argv) {
                 }
             }
             if (need_fetch) {
-                if (!pkg_fetch_all(root, &m, &lock, false)) {
-                    fprintf(stderr, "tur run: dependency fetch failed\n");
-                    pkg_lock_free(&lock);
-                    pkg_manifest_free(&m);
-                    free(root);
-                    return 1;
-                }
+                /* LS5: partial-fetch isolation -- a single broken URL dep
+                 * must not poison the search path for healthy ones.
+                 * pkg_fetch_all continues past per-dep failures (sets ok
+                 * false but doesn't break), so the on-disk state for
+                 * successfully-fetched deps is consistent.  Write whatever
+                 * lock entries we have and proceed; if the entry file
+                 * actually imports a symbol from the missing dep, the
+                 * elaborator's "module not found" diagnostic fires for
+                 * that import alone.  Files that only reference healthy
+                 * deps keep compiling. */
+                bool fetch_ok = pkg_fetch_all(root, &m, &lock, false);
                 pkg_lock_write(lock_path, &lock);
+                if (!fetch_ok) {
+                    fprintf(stderr,
+                        "tur run: one or more dependencies failed to "
+                        "fetch; continuing with healthy deps on disk. "
+                        "Imports referencing the missing dep(s) will "
+                        "fail with 'module not found'.\n");
+                }
             }
         }
 
@@ -2887,6 +2898,30 @@ static char *derive_module_name(const char *file, const char *src_root) {
     memcpy(m, base, len);
     m[len] = '\0';
     return m;
+}
+
+/* Return true if `path` contains a top-level `(defn main` definition (an
+ * executable entry point), false otherwise.  Treats a sweet-expr bare
+ * `defn main` form as matching too.  Used to auto-detect library mode. */
+static bool file_has_main_defn(const char *path) {
+    char *src = NULL;
+    size_t len = 0;
+    if (read_entire_file_quiet(path, &src, &len) != 0) return false;
+    bool found = false;
+    for (size_t i = 0; i + 4 < len && !found; i++) {
+        /* Match "(defn main" or "defn main" (sweet-exp) at a word boundary */
+        bool sexpr = (strncmp(src + i, "(defn main", 10) == 0);
+        bool sweet  = (i == 0 || src[i-1] == '\n') &&
+                      strncmp(src + i, "defn main", 9) == 0;
+        if (sexpr || sweet) {
+            size_t skip = sexpr ? 10 : 9;
+            char next = (i + skip < len) ? src[i + skip] : '\0';
+            if (next == ' ' || next == '\t' || next == '\n' || next == '[')
+                found = true;
+        }
+    }
+    free(src);
+    return found;
 }
 
 static int cmd_build_multi_files(char **tur_files, int n_files,
@@ -3323,6 +3358,17 @@ static int cmd_build_project(const char *root, const char *out_path,
     /* Deterministic order so generated artifacts and the ABI cache are
      * reproducible across runs. */
     qsort(tur_files, (size_t)n_files, sizeof(char *), compare_cstr_ptrs);
+
+    /* Auto-detect library mode: if no source file defines a `main` entry
+     * point, build as a shared library (.so) rather than an executable.
+     * This lets `tur build <spice-root>` work without an explicit --shared
+     * flag -- spices are pure libraries and have no main. */
+    if (!shared) {
+        bool has_main = false;
+        for (int i = 0; !has_main && i < n_files; i++)
+            has_main = file_has_main_defn(tur_files[i]);
+        if (!has_main) shared = true;
+    }
 
     /* src_root used to derive qualified module names ("app/util") from file
      * paths; matches the prefix collect_project_src_files builds paths from. */
@@ -6350,8 +6396,9 @@ static int usage(void) {
         "  tur init [--bin|--lib] <name>     create a new project\n"
         "  tur add <url> [--ref <tag>]       add a Turmeric spice\n"
         "  tur add <path> --path             add a local spice\n"
+        "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
-        "  tur fetch [--update]              download / update all spices\n"
+        "  tur fetch [--update|--dry-run]    download / update all spices (or preview)\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
         "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
         "  tur install <path> --path         install a local spice binary globally\n"

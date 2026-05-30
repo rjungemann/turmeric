@@ -1,0 +1,7 @@
+(defpackage scscm-compile-test
+  :name        "scscm-compile-test"
+  :version     "0.1.0"
+  :description "Fixture: round-trip tests for the scscm spice compile API."
+  :spices #{
+    "tur-scscm" #{:path "../../../../turmeric-spices/spices/scscm"}
+  })

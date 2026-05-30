@@ -161,6 +161,78 @@ The module path `"mylib/types"` resolves to `src/types.tur`. A nested path
 
 ---
 
+## Multi-file Spices: `defmodule` + `import`
+
+When a spice spans more than one source file, use `defmodule` with an explicit
+`(export ...)` list and `(import <other-module> :refer [...])` to wire the
+files together. The module system handles cross-file symbol sharing correctly
+at every scale.
+
+### The correct approach
+
+Each file declares its own `defmodule`, exports what it offers, and imports
+what it needs from siblings:
+
+```turmeric
+;; src/mylib/types.tur
+(defmodule mylib/types
+  (export Widget WidgetResult)
+  (defstruct Widget [value :int])
+  ...)
+```
+
+```turmeric
+;; src/mylib/core.tur
+(defmodule mylib/core
+  (export make-widget widget-value)
+  (import mylib/types :refer [Widget WidgetResult])
+
+  (defn make-widget [v :int] :Widget ...)
+  (defn widget-value [w :Widget] :int ...))
+```
+
+`tur check`, `tur emit-c`, and `tur build` all resolve intra-spice imports
+automatically through the auto-spice include path -- no `-I` flags needed.
+See [Per-file Commands Inside a Spice](#per-file-commands-inside-a-spice).
+
+### Anti-pattern: cross-file type stubs
+
+An older pattern copies function bodies across files so each file compiles
+in isolation without imports:
+
+```turmeric
+;; src/mylib/io.tur -- ANTI-PATTERN
+;; Stub copy of make-widget from core.tur; real body is return NULL.
+(defn make-widget [v :int] #{Unsafe} :Widget
+  ```c
+  return NULL;
+  ```)
+
+(defn read-widget [path :cstr] :Widget ...)  ;; real implementation
+```
+
+This pattern fails in three ways:
+
+- **Silent breakage**: stubs with `return NULL` or no-op bodies mean any
+  code path that hits the stub produces garbage or does nothing -- with no
+  diagnostic.
+- **Linker errors when combined**: two files that both define `make-widget`
+  as a `static` C function produce duplicate-symbol link failures the moment
+  they are compiled together (via `(load ...)` or `tur build`).
+- **Per-file checks appear clean**: each file is self-contained so
+  `tur check`/`tur emit-c` on a single file passes while the combined build
+  fails.
+
+The `scscm` spice used this pattern across all five of its source files.
+It was eliminated in the 2026-05 import refactor by converting each file to
+`defmodule` + `import`. See
+[scscm-spice-import-refactor-plan.md](../scscm-spice-import-refactor-plan.md)
+for the full migration. If you encounter the stub pattern in other spices,
+the fix is the same: add a `(defmodule ...)` + `(export ...)` header and
+replace each stub block with `(import <module> :refer [...])`.
+
+---
+
 ## Depending on Other Spices
 
 Add Turmeric spice dependencies the same way any project does:
@@ -208,6 +280,124 @@ are not forced to fetch them:
           :optional true}
 }
 ```
+
+---
+
+## Cross-spice Development in a Workspace
+
+When your spices live in the same workspace (a parent directory with a `build.tur`
+that lists all members under `:members`), you can import one sibling from another
+**without publishing a release or running `tur fetch`**.
+
+### Option A: workspace-member auto-resolution (no manifest entry needed)
+
+If both spices are already listed in the workspace `build.tur`:
+
+```turmeric
+;; turmeric-spices/build.tur
+(defpackage turmeric-spices
+  :members ["spices/watch" "spices/notebook" ...])
+```
+
+Then `notebook` can `(import watch/watch ...)` directly -- the resolver walks up
+to the workspace `build.tur`, finds that `watch` is a listed member, and adds its
+`src/` to the search path automatically.
+
+```sh
+# No tur fetch, no symlink, no lock entry required:
+cd spices/notebook
+tur check src/notebook/cli.tur   # resolves watch/watch via workspace
+```
+
+The first time an undeclared sibling import resolves, `tur` prints a one-time
+advisory:
+
+```
+warning: import 'watch/watch' resolved via workspace sibling
+         'spices/watch'; declare it in :spices for release builds.
+         (set TUR_DEBUG_RESOLVER=1 for full resolver tracing)
+```
+
+To confirm a name is a workspace member before importing:
+
+```sh
+tur add --workspace watch   # exits 0, prints "no manifest entry needed"
+tur add --workspace typo    # fails if 'typo' is not in :members
+```
+
+### Option B: explicit `:path` dep (works outside workspaces too)
+
+Add a `:path` entry pointing at the sibling spice directory:
+
+```sh
+tur add ../watch --path
+```
+
+This writes to `build.tur`:
+
+```turmeric
+:spices {
+  "watch" {:path "../watch"}
+}
+```
+
+```sweet-exp
+:spices {
+  "watch" {:path "../watch"}
+}
+```
+
+The resolver immediately adds `../watch/src` to the include path.
+No `tur fetch` step is required, and no lock entry is written for this dep.
+The path is resolved relative to the directory containing `build.tur`.
+
+```sh
+tur check src/notebook/cli.tur   # resolves watch/watch via :path
+```
+
+If the declared `:path` does not exist on disk (or contains no `build.tur`),
+`tur fetch` reports a hard error rather than silently ignoring the missing dep.
+
+### `tur fetch --dry-run` for verification
+
+To confirm how each dep will be classified before committing to a real fetch:
+
+```sh
+tur fetch --dry-run
+# skip :path          watch
+# skip workspace member  alpha
+# fetch  URL          ansi  https://github.com/...  ansi-v0.1.4
+# summary: 1 fetch, 2 skipped (local)
+```
+
+Local-source deps are never contacted or locked. Only URL deps appear in `tur.lock`.
+
+### Release: switch to a URL dep for external consumers
+
+The workspace auto-resolution and `:path` entries are local-development shortcuts.
+For a spice that will be published and consumed outside the workspace, add a URL
+entry alongside (or instead of) the local one:
+
+```turmeric
+:spices {
+  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
+           :ref    "watch-v0.1.0"
+           :subdir "spices/watch"}
+}
+```
+
+```sweet-exp
+:spices {
+  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
+           :ref    "watch-v0.1.0"
+           :subdir "spices/watch"}
+}
+```
+
+External consumers run `tur fetch` once to clone the ref and populate `tur.lock`.
+Inside the workspace, a URL `:spices` entry whose name matches a workspace member
+is resolved locally instead -- no spurious fetch occurs for deps you are developing
+in the same workspace.
 
 ---
 

@@ -6,7 +6,7 @@
 > **Related:**
 > - `docs/guides/developing-spices-guide.md` (spice authoring conventions)
 > - `docs/tur-httpd-plan.md` (HTTP server spice)
-> - `docs/tur-turist-plan.md` (Scotty-style micro-framework that integrates with this spice)
+> - `docs/tur-tourist-plan.md` (Scotty-style micro-framework that integrates with this spice)
 
 ---
 
@@ -15,7 +15,7 @@
 `tur-template` is a standalone string-templating engine modeled on ERB / EJS.
 It has no external dependencies and can be used in any Turmeric program -- a
 CLI tool, code generator, email renderer, or as the view layer underneath
-`tur-turist` HTTP responses.
+`tur-tourist` HTTP responses.
 
 It is one of three spices that together form a composable web stack for
 Turmeric:
@@ -24,7 +24,7 @@ Turmeric:
 |---|---|---|
 | `tur-template` | ERB / EJS | (none -- pure Turmeric) |
 | `tur-httpd` | Mongoose / Civetweb | (none -- POSIX sockets + pthreads) |
-| `tur-turist` | Haskell's scotty | `tur-httpd`, `tur-template` |
+| `tur-tourist` | Haskell's scotty | `tur-httpd`, `tur-template` |
 
 The three are deliberately separate so any layer can be used independently.
 

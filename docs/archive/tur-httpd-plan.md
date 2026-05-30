@@ -8,7 +8,7 @@
 > - `docs/guides/threading-guide.md` (OS threads / Mutex / Arc)
 > - `../turmeric-spices/spices/http/` (existing HTTP client spice)
 > - `docs/tur-template-plan.md` (template engine spice)
-> - `docs/tur-turist-plan.md` (Scotty-style micro-framework that layers on top)
+> - `docs/tur-tourist-plan.md` (Scotty-style micro-framework that layers on top)
 
 ---
 
@@ -25,7 +25,7 @@ Turmeric:
 |---|---|---|
 | `tur-template` | ERB / EJS | (none -- pure Turmeric) |
 | `tur-httpd` | Mongoose / Civetweb | (none -- POSIX sockets + pthreads) |
-| `tur-turist` | Haskell's scotty | `tur-httpd`, `tur-template` |
+| `tur-tourist` | Haskell's scotty | `tur-httpd`, `tur-template` |
 
 The three are deliberately separate so any layer can be used independently.
 
