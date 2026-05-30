@@ -542,7 +542,7 @@ properties; include at least two bundled themes.
 |---|---|---|
 | Style property constants | `src/raygui/style.tur` | Done |
 | `gui-load-style` from file | `src/raygui/core.tur` | Done |
-| Bundled dark / light themes | `src/raygui/` | Pending (out of scope: requires .rgs asset files) |
+| Bundled dark / light themes | `src/raygui/themes.tur` | Done (programmatic via gui-set-style; .rgs path via gui-load-style) |
 | Style tests | `tests/style_test.tur` | Done |
 
 **Deliverable:** Themeable GUI; swap entire style with one call.
