@@ -11,7 +11,24 @@ memory layout verification, stack allocation of fixed-size buffers, type-safe
 array operations, and FFI structs that carry size annotations through Turmeric
 wrappers.
 
-Sized types are enabled with the `-Xsized-types` compiler flag.
+Sized types are enabled with the `-Xsized-types` compiler flag, which implies
+`-Xgadt` (the sized layer is built on the GADT machinery):
+
+```sh
+tur -Xsized-types build sized-program.tur
+```
+
+> **Runtime vs. static checking.** Today the size index is a *phantom*: every
+> `SizedVec` constructor returns the same type regardless of length, and size
+> equality/compatibility (`size-eq?`, `size-compat?`, `size-assert-eq!`,
+> `sized-matrix-assert-shape!`) is checked at **run time** by evaluating both
+> sizes and comparing them. The one compile-time error today catches an
+> `int`-vs-`Size` kind mismatch, not an unequal *dimension*. Lifting size
+> indices to the type level so that a length-`n` vector's type mentions `n` and
+> a dimension mismatch is a **static** (compile-time) error is in progress --
+> see [sized-types-completion-plan.md](../sized-types-completion-plan.md)
+> (phases SZ6–SZ9). Where this guide describes a check as "compile-time", read
+> it as the goal state; the shipped behavior is noted inline.
 
 ## Table of Contents
 

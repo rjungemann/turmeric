@@ -196,8 +196,16 @@ Pattern matching on unions is exhaustive-checked: the elaborator requires a
 
 ## Sized types
 
-Sized types (`-Xgadt`, via GADT infrastructure) track container dimensions as
-type-level compile-time integers.
+Sized types (`-Xsized-types`, which implies `-Xgadt` and is built on the GADT
+infrastructure) track container dimensions as type-level compile-time integers.
+
+> **Implementation status.** The example below is the *goal*: a dimension
+> mismatch caught at compile time. The shipped SZ0–SZ4 layer provides the
+> `Size` GADT, `SizedVec`, sized buffers/matrices/bitvecs, and the
+> `-Xsized-types` flag, but size checking is currently a **runtime** assertion
+> (the size index is still a phantom). Lifting it to a **static** check is
+> tracked in [sized-types-completion-plan.md](../sized-types-completion-plan.md)
+> (phases SZ6–SZ9).
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.
