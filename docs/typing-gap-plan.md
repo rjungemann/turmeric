@@ -6,7 +6,8 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
-> **Status:** Phase TY0 complete (doc/comment drift). Companion to
+> **Status:** Phases TY0 (doc/comment drift) and TY1 (flag-graduation
+> decision) complete. TY2 is the next implementation phase. Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -58,8 +59,8 @@ Non-goals (deferred, tracked in the audit):
 
 | Phase | Audit item | Disposition | Why this order |
 |---|---|---|---|
-| TY0 | 9 | Cleanup | Doc/comment drift; cheap, unblocks honest flag decision |
-| TY1 | 8 | Decision | Flag-graduation matrix; gates what "1.0 typing" means |
+| TY0 | 9 | Cleanup ✅ | Doc/comment drift; cheap, unblocks honest flag decision |
+| TY1 | 8 | Decision ✅ | Flag-graduation matrix; gates what "1.0 typing" means |
 | TY2 | 4 | Implement | `any` boxing codegen + `cast`/`type-of` |
 | TY3 | 7 | Implement | Flow-sensitive narrowing in `if` guards |
 | TY4 | 5 | Implement | Lifetime inference / elision depth (full machinery) |
@@ -117,21 +118,69 @@ made against accurate docs.
 Everything advanced is `-X`-experimental at 0.14.6. A 1.0 needs an explicit,
 recorded decision per flag: default-on/stable vs. stays experimental.
 
-- **TY1.1** Enumerate every advanced-typing flag (`-Xgadt`, `-Xlinear`,
-  `-Xsubstructural`, `-Xunique-types`, `-Xunion-types`,
-  `-Xintersection-types`, `-Xeffect-types`, `-Xcontracts`, `-Xsessions`,
-  `-Xdynamic-vars`) plus the already-default HKT/HRT/existentials. *Done when:*
-  a table lists each with its current state and fixture coverage.
-- **TY1.2** For each flag, record a 1.0 disposition (graduate / stay
-  experimental) with a one-line rationale grounded in this audit (e.g. a flag
-  whose feature has an open pre-1.0 gap should not graduate until the gap
-  closes). *Done when:* the table has a disposition column with rationale.
-- **TY1.3** Identify cross-dependencies (a flag that, if graduated, implies a
-  pre-1.0 gap must close first -- e.g. `-Xlinear` vs. TY4 lifetimes). *Done
-  when:* dependencies are noted so sequencing is explicit.
-- **TY1.4** Get the matrix ratified and link it from the 1.0 milestone; this
-  doc becomes the source of truth. *Done when:* maintainers sign off and the
-  table is referenced from the milestone.
+> **Status: complete (2026-05-30).** Ratified by the maintainer
+> (roger@teamsketchy.com) in the planning session that produced this matrix.
+> "Graduate" was defined to mean **default-on (drop the `-X` gate)**, and the
+> agreed stance is **graduate only gap-free flags** -- a flag whose feature has
+> an open pre-1.0 gap (TY2-TY5) stays experimental until that gap closes. This
+> table is the source of truth; the actual default-on flips are follow-ups
+> tracked per flag once any gating gap clears. A `docs/v1.0-milestone.md` did
+> not exist at decision time, so the maintainer sign-off here *is* the
+> ratification; linking from a milestone doc, if one is created, is a
+> no-semantics follow-up.
+
+### TY1.1 + TY1.2 -- Flag matrix (state, coverage, disposition)
+
+Fixture counts are whole-token matches in `tests/fixtures/*/flags` (happy +
+`errors/`), de-duplicated by directory, as of snapshot 0.14.6.
+
+| Flag | Current state | Fixtures | 1.0 disposition | Rationale |
+|---|---|---|---|---|
+| `-Xgadt` | Substantial (G0-G4) | 50 | **Graduate** (default-on) | No open pre-1.0 gap; `equal-cong` leans on HKT, already default-on. Enabling unconditionally is additive (adds `defgadt` + GADT `match` refinement). |
+| `-Xcontracts` | Complete (debug-on / release-strip / `--keep-contracts`) | 14 `contract-*` (run with **no** flag) | **Graduate** (default-on) | Already default-on in practice: `g_contracts_enabled = true` (`globals.c:79`); the flag is a redundant re-enable. The "Planned (v4)" doc label is stale (fixed in TY0 follow-up). |
+| `-Xdynamic-vars` | Complete (DV0-DV4) | 15 | **Graduate** (default-on) | No open gap; additive surface (`defdynamic`/`binding`/`spawn-conveying`). |
+| `-Xunion-types` | Substantial (IT0-IT4) | 10 | **Stay experimental** | Gated by TY2 (`any` boxing codegen) and TY3 (`if`-guard narrowing). Graduate once TY2+TY3 land. |
+| `-Xintersection-types` | Substantial (IT0-IT4) | 3 | **Stay experimental** | Shares the `any`/cast codegen story (TY2) and is documented alongside unions; hold with `-Xunion-types` for a coherent gradual-typing graduation. |
+| `-Xeffect-types` | Complete row typing (ET0-ET4) | 3 (strict row typing; 65 `effect-*` run default-on) | **Stay experimental** | The effects surface owns the TY6 continuation gaps (`call/cc`, `compose-handlers`, `shift`/`shift0` -- control-flow CF2-CF4). Graduate once TY6 closes. |
+| `-Xlinear` | Complete (LT0-LT4) | 27 | **Stay experimental** | Gated by TY4: lifetime elision rules 1/3 are stubs, no constraint solving / cycle detection, inter-procedural borrow checking minimal. Graduate once TY4 lands. |
+| `-Xsubstructural` | Complete (ST0-ST3) | 18 | **Stay experimental** | Implies `-Xlinear`; inherits the TY4 dependency. |
+| `-Xunique-types` | Partial (UT0-UT1) | 10 | **Stay experimental** | UT2-UT3 (inference, stdlib patterns) deferred; feature is itself incomplete independent of TY4. |
+| `-Xsessions` | Complete (SS0-SS8) | 37 | **Stay experimental** | Implies `-Xsubstructural` -> `-Xlinear`; inherits the TY4 dependency. The session feature itself is solid, but its gate cannot drop before its implied gates do. |
+| HKT / HRT / existentials *(no flag)* | Complete | 37 / 20 / 1 | **N/A -- already default-on** | No `-X` flag exists; documented here only to close the enumeration. |
+
+### TY1.3 -- Cross-dependencies (graduation sequencing)
+
+- **TY4 (lifetimes/borrow) gates the linearity chain.** `-Xlinear` cannot
+  graduate until TY4 lands; `-Xsubstructural` (implies `-Xlinear`) and
+  `-Xsessions` (implies `-Xsubstructural` -> `-Xlinear`) are transitively
+  blocked. Graduating any of them implies graduating the whole chain, so they
+  move together after TY4.
+- **TY2 + TY3 gate the union/intersection pair.** `-Xunion-types` needs `any`
+  boxing codegen (TY2) and `if`-guard narrowing (TY3); `-Xintersection-types`
+  is held with it for a coherent gradual-typing story.
+- **TY6 (CF2-CF4) gates `-Xeffect-types`.** The continuation surface
+  (`call/cc`, `compose-handlers`, `shift`/`shift0`) must close first.
+- **`-Xunique-types` is self-gated.** UT2-UT3 are independent of TY4 but still
+  incomplete; it stays experimental regardless of the linearity chain.
+- **No dependency:** `-Xgadt`, `-Xcontracts`, `-Xdynamic-vars` graduate
+  immediately -- each is additive and gap-free.
+
+### TY1.4 -- Ratification
+
+Ratified in-session by the maintainer (see Status note above). This matrix is
+the source of truth for what "1.0 typing" includes. No `docs/v1.0-milestone.md`
+exists yet; when one is created it should link here (a no-semantics follow-up,
+not a blocker for closing TY1).
+
+- **TY1.1** [x] Enumerate every advanced-typing flag plus the already-default
+  HKT/HRT/existentials, with current state and fixture coverage. *(Matrix
+  above.)*
+- **TY1.2** [x] Record a 1.0 disposition per flag with a one-line rationale.
+  *(Disposition + Rationale columns above.)*
+- **TY1.3** [x] Identify cross-dependencies so sequencing is explicit.
+  *(Cross-dependencies subsection above.)*
+- **TY1.4** [x] Matrix ratified (maintainer sign-off) and made the source of
+  truth. *(Milestone-doc link deferred until such a doc exists.)*
 
 > Note: TY1 produces a *decision*, not code. Any actual default-on flips that
 > follow are tracked as their own follow-ups once the gating gaps close.

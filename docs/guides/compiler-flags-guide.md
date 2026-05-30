@@ -25,7 +25,7 @@ between flags.
 | `-Xunion-types` | ✅ Substantial (IT0–IT4) | Union types `(A \| B)`; `any` top type; `(cast x T)`; `(type-of x)`; union pattern matching; typeclass dispatch on unions | -- |
 | `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | -- |
 | `-Xeffect-types` | ✅ Complete (ET0–ET4, LC0–LC3, MS0–MS4) | Row-polymorphic effect types; `forall [e]` quantification; `TY_HANDLER`; effect hierarchy (`Write ≤ IO`); linear continuations; multi-shot continuations | `--strict-effects` |
-| `-Xcontracts` | 📋 Planned (v4) | Contract types; `assert!`/`require!`/`ensure!` at the type level; contract checking in debug builds | -- |
+| `-Xcontracts` | ✅ Complete | Contract types; `assert!`/`require!`/`ensure!`; refinement-style `{ x : T \| pred }`; checked in debug, stripped in release (`--keep-contracts` retains). On by default; the flag is a redundant re-enable. | -- |
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
 | `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
 | `-Xsized-types` | 📋 Planned | Sized / dependent types | -- |
@@ -41,7 +41,7 @@ reference, but you never pass a flag for them.
 | Flag | Status | What it does |
 |---|---|---|
 | `--strict-effects` | ✅ Complete | Warns on unannotated effectful functions; nudges toward explicit `forall [e]` annotations; implied by `-Xeffect-types` |
-| `--keep-contracts` | 📋 Planned | Retains contract checks in release builds (`just release`); without this flag, contracts are stripped in release mode |
+| `--keep-contracts` | ✅ Complete | Retains contract checks in release builds (`just release`); without this flag, contracts are stripped in release mode |
 | `--dump-kinds` | ✅ Complete | After the kind-checking pass, prints the kind of every bound type to stdout |
 | `--dump-effects` | ✅ Complete | Prints inferred effect rows for every function, e.g. `run-twice : forall [e]. (fn [...] #{e} int)` |
 | `--emit-abi-trace` | ✅ Complete | During `emit-c`/`build`, prints one line per resolved call site naming the C-level ABI path it takes (`concrete-clone`, `carrier`, `dictionary`, `polymorphic-wrapper`) |
@@ -281,12 +281,14 @@ algebraic effects (Phase 19). With this flag:
 
 ---
 
-### `-Xcontracts` -- Contract Types *(planned, v4)*
+### `-Xcontracts` -- Contract Types
 
-Will enable first-class contract types: `assert!`, `require!` (preconditions),
-and `ensure!` (postconditions) that are checked in debug builds and stripped in
-release builds by default. Pass `--keep-contracts` to retain them in release
-builds.
+First-class contract types: `assert!`, `require!` (preconditions), and
+`ensure!` (postconditions), plus refinement-style `{ x : T | pred }` boundary
+checks. Contracts are **on by default** (`g_contracts_enabled` initializes to
+true): they are checked in debug builds and stripped in release builds. Pass
+`--keep-contracts` to retain them in release. The `-Xcontracts` flag is a
+redundant explicit re-enable, kept for symmetry with the other `-X` flags.
 
 **See also:** [contract-types-guide.md](contract-types-guide.md)
 
@@ -379,11 +381,11 @@ quantification. Implied by `-Xeffect-types`; can also be enabled independently
 to nudge effect annotation hygiene without enabling the full row-polymorphic
 system.
 
-### `--keep-contracts` *(planned)*
+### `--keep-contracts`
 
-When `-Xcontracts` is active, retains contract checks in release builds
-(`just release`). Without this flag, `assert!`/`require!`/`ensure!` calls are
-elided in release mode. Per-contract `^always` granularity may be added later.
+Retains contract checks in release builds (`just release`). Without this flag,
+`assert!`/`require!`/`ensure!` calls are elided in release mode (contracts are
+on by default in debug). Per-contract `^always` granularity may be added later.
 
 ### `--dump-kinds`
 
@@ -482,7 +484,7 @@ turc -Xsubstructural -Xgadt -Xunion-types -Xintersection-types -Xeffect-types my
 | `-Xunion-types` | IT0–IT4 | ✅ Substantial (some IT4 items deferred) |
 | `-Xintersection-types` | IT0–IT4 | ✅ Substantial |
 | `-Xeffect-types` | ET0–ET4, LC0–LC3, MS0–MS4 | ✅ Complete |
-| `-Xcontracts` | CT phases | 📋 Planned (v4) |
+| `-Xcontracts` | CT phases | ✅ Complete (on by default) |
 | `-Xsessions` | SS0–SS8 | ✅ Complete |
 | `-Xdynamic-vars` | DV0–DV4 | ✅ Complete |
 | `-Xsized-types` | -- | 📋 Planned |
