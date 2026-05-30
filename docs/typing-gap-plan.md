@@ -6,7 +6,7 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
-> **Status:** Not started. Companion to
+> **Status:** Phase TY0 complete (doc/comment drift). Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -73,20 +73,42 @@ Non-goals (deferred, tracked in the audit):
 Cheap, no semantics change; do first so the flag-graduation decision (TY1) is
 made against accurate docs.
 
-- **TY0.1** Remove references to non-existent `-Xhkt` / `-Xexistentials` flags
-  from `advanced-type-system-rationale.md` (those features are
+> **Status: complete (2026-05-30).** The rationale doc was already clean (the
+> audit PR #123 changed `HKT (-Xhkt)` -> `HKT (default-on)`); the remaining
+> live offender was `compiler-flags-guide.md`, which presented `-Xhkt`,
+> `-Xhrt`, and `-Ximpredicative` as real flags and used `-Xunique` instead of
+> the actual `-Xunique-types`. Those are corrected. Two stale source comments
+> were fixed: the "Codegen deferred to SS2" note in `elab_sessions.c` and the
+> "runtime multi-party router is deferred to SS7" note in `elab_global.c`
+> (both features ship -- emission happens in `elab_forms.c` /
+> `emit_module.c`). Genuinely-deferred comments (CPS continuations, v2
+> dictionary passing, serial-shift codegen) were left intact -- they correctly
+> describe unimplemented work. `tests/run.sh`: 1046 passed, 0 failed, no
+> fixture snapshots changed.
+
+- **TY0.1** [x] Remove references to non-existent `-Xhkt` / `-Xexistentials`
+  flags from `advanced-type-system-rationale.md` (those features are
   unconditionally on). *Done when:* a search for `-Xhkt`/`-Xexistentials`
-  returns only intentional "not a flag" notes, if any.
-- **TY0.2** Clean the stale "Codegen deferred to SS2" comments in
+  returns only intentional "not a flag" notes, if any. *(Rationale doc was
+  already clean; also corrected `compiler-flags-guide.md`, the remaining
+  offender, to mark HKT/HRT/impredicative as always-on and `-Xunique` ->
+  `-Xunique-types`.)*
+- **TY0.2** [x] Clean the stale "Codegen deferred to SS2" comments in
   `elab_sessions.c` (sessions actually emit and run with real stdout).
   *Done when:* the stale comments are gone or corrected to reflect that
-  emission happens in the forms/module emitter.
-- **TY0.3** Sweep for other historical "deferred"/"TBD" comments in the
+  emission happens in the forms/module emitter. *(Corrected to point at
+  `elab_forms.c`'s pair-splitting emission; the `SS2:`/`SS7:` phase-tag
+  comments that accurately describe emitted code were kept.)*
+- **TY0.3** [x] Sweep for other historical "deferred"/"TBD" comments in the
   advanced-typing path that contradict shipped, tested behavior; correct or
   remove. *Done when:* no comment in the touched files claims a shipped
-  feature is unimplemented.
-- **TY0.4** No fixture snapshots should change (comment/doc only); confirm
-  `tests/run.sh` is still green. *Done when:* zero `FAIL` lines.
+  feature is unimplemented. *(Fixed `elab_global.c`'s "router deferred to SS7"
+  -- the multi-party router ships in `emit_module.c` with `session-mp-*`
+  fixtures. Other "deferred" comments correctly describe genuinely
+  unimplemented work and were left alone.)*
+- **TY0.4** [x] No fixture snapshots should change (comment/doc only); confirm
+  `tests/run.sh` is still green. *Done when:* zero `FAIL` lines. *(1046
+  passed, 0 failed; only the three doc/comment files modified.)*
 
 ---
 

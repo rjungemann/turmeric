@@ -20,11 +20,8 @@ between flags.
 |---|---|---|---|
 | `-Xlinear` | ✅ Complete | `^linear` annotation; `CK_LINEAR` capability kind; linearity tracking in elaborator | -- |
 | `-Xsubstructural` | ✅ Complete | `^linear`, `^affine`, `^relevant` capability kinds; full substructural framework | `-Xlinear` |
-| `-Xunique` | ✅ Partial (UT0–UT1) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type | -- |
+| `-Xunique-types` | ✅ Partial (UT0–UT1) | Uniqueness types; `CK_UNIQUE`; `ref<T>` as an explicit unique type | -- |
 | `-Xgadt` | ✅ Substantial (G0–G4) | `defgadt`; GADT constructor return-type annotations; skolem refinement in `match` arms; `Equal`/`coerce`/`sym`/`trans` in stdlib | -- |
-| `-Xhkt` | ✅ Complete | Higher-kinded types; kind `* -> *`; HKT typeclass parameters (`^f`/`^^f`); `--dump-kinds` | -- |
-| `-Xhrt` | ✅ Complete | Higher-ranked types; `forall` inside function arguments (rank-2/rank-3); skolem variables | -- |
-| `-Ximpredicative` | ✅ Complete | Impredicative polymorphism; instantiate type variables with polymorphic types | `-Xhrt` |
 | `-Xunion-types` | ✅ Substantial (IT0–IT4) | Union types `(A \| B)`; `any` top type; `(cast x T)`; `(type-of x)`; union pattern matching; typeclass dispatch on unions | -- |
 | `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | -- |
 | `-Xeffect-types` | ✅ Complete (ET0–ET4, LC0–LC3, MS0–MS4) | Row-polymorphic effect types; `forall [e]` quantification; `TY_HANDLER`; effect hierarchy (`Write ≤ IO`); linear continuations; multi-shot continuations | `--strict-effects` |
@@ -32,6 +29,12 @@ between flags.
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
 | `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
 | `-Xsized-types` | 📋 Planned | Sized / dependent types | -- |
+
+**Always-on (no flag).** Higher-kinded types (`^f`/`^^f`, kind `* -> *`),
+higher-ranked types (`forall` inside argument positions; rank-2/rank-3), and
+impredicative polymorphism are **enabled by default** -- there is no `-X` flag
+to turn them on. They are documented in the detail sections below for
+reference, but you never pass a flag for them.
 
 ### Diagnostic and debug flags
 
@@ -52,11 +55,10 @@ Arrows mean "enables / implies":
 ```
 -Xsubstructural ──► -Xlinear
 -Xsessions      ──► -Xsubstructural ──► -Xlinear
--Ximpredicative ──► -Xhrt
 -Xeffect-types  ──► --strict-effects
 ```
 
-Flags that stand alone (no implications): `-Xunique`, `-Xgadt`, `-Xhkt`,
+Flags that stand alone (no implications): `-Xunique-types`, `-Xgadt`,
 `-Xunion-types`, `-Xintersection-types`, `-Xcontracts`, `-Xdynamic-vars`,
 `-Xsized-types`.
 
@@ -107,7 +109,7 @@ stronger-than-affine ones. A `^linear` value used in a context that expects
 
 ---
 
-### `-Xunique` -- Uniqueness Types
+### `-Xunique-types` -- Uniqueness Types
 
 Makes uniqueness (`CK_UNIQUE`, `ref<T>`) an explicit first-class type-system
 concept. Without this flag, `ref<T>` unique ownership is enforced by the borrow
@@ -147,18 +149,18 @@ variables in each arm (via skolem equalities).
 The stdlib provides `Equal`, `Refl`, `coerce`, `sym`, and `trans` for
 equality-witness programming.
 
-**Status note:** G0–G4 substantially complete; `equal-cong` and some HKT-
-dependent features require `-Xhkt`.
+**Status note:** G0–G4 substantially complete; `equal-cong` and some
+HKT-dependent features rely on higher-kinded types (always on, no flag).
 
 **See also:** [gadts-guide.md](gadts-guide.md), [gadts-cookbook.md](gadts-cookbook.md)
 
 ---
 
-### `-Xhkt` -- Higher-Kinded Types
+### Higher-Kinded Types *(always on -- no flag)*
 
-Enables type constructors as typeclass parameters. With `-Xhkt` you can write
-typeclasses that are polymorphic over `Option`, `Vec`, or any user-defined
-container.
+Type constructors can be typeclass parameters; there is no flag to enable this.
+You can write typeclasses that are polymorphic over `Option`, `Vec`, or any
+user-defined container.
 
 ```clojure
 (defclass Functor [^f]
@@ -167,17 +169,17 @@ container.
 
 `^f` declares a kind-`* -> *` type variable; `^^f` declares kind `* -> * -> *`.
 
-Also enables the `--dump-kinds` debugging flag.
+The `--dump-kinds` debugging flag (below) is always available.
 
 **See also:** [hkt-guide.md](hkt-guide.md)
 
 ---
 
-### `-Xhrt` -- Higher-Ranked Types
+### Higher-Ranked Types *(always on -- no flag)*
 
-Enables `forall` inside function argument types (rank-2 and rank-3
-polymorphism). Without this flag, `forall` is permitted only at the outermost
-type level (Hindley-Milner rank-1).
+`forall` is permitted inside function argument types (rank-2 and rank-3
+polymorphism), not just at the outermost type level. There is no flag to
+enable this.
 
 ```clojure
 ; Rank-2: caller passes a polymorphic function; callee chooses the type
@@ -185,23 +187,21 @@ type level (Hindley-Milner rank-1).
   (f (f x)))
 ```
 
-Required by `-Ximpredicative`. Also required by `-Xeffect-types` for
-`forall [e]` effect quantification.
+Higher-ranked types underpin `-Xeffect-types`' `forall [e]` effect
+quantification.
 
 **See also:** [hrt-guide.md](hrt-guide.md)
 
 ---
 
-### `-Ximpredicative` -- Impredicative Polymorphism
+### Impredicative Polymorphism *(always on -- no flag)*
 
-Allows type variables to be instantiated with polymorphic types (types
-containing `forall`). Without this flag, type variables may only be
-instantiated with monotypes, which is the standard Hindley-Milner restriction.
+Type variables may be instantiated with polymorphic types (types containing
+`forall`), not just monotypes. There is no flag to enable this; the standard
+Hindley-Milner monotype restriction is lifted by default.
 
 Impredicativity is needed to store polymorphic functions in data structures
 without wrapping them in a newtype.
-
-**Implies:** `-Xhrt`
 
 ---
 
@@ -388,7 +388,8 @@ elided in release mode. Per-contract `^always` granularity may be added later.
 ### `--dump-kinds`
 
 Prints the kind of every bound type to stdout after the kind-checking pass.
-Useful for debugging HKT typeclass definitions. Requires `-Xhkt`.
+Useful for debugging HKT typeclass definitions. Always available (HKT is
+on by default).
 
 ### `--dump-effects`
 
@@ -458,14 +459,14 @@ turc -Xsessions myfile.tur
 # Full gradual typing: unions + GADTs + intersection
 turc -Xunion-types -Xintersection-types -Xgadt myfile.tur
 
-# Row-polymorphic effects with HRT
-turc -Xeffect-types -Xhrt myfile.tur
+# Row-polymorphic effects (HRT is always on)
+turc -Xeffect-types myfile.tur
 
-# GADTs + HKT (enables equal-cong and full stdlib)
-turc -Xgadt -Xhkt myfile.tur
+# GADTs (HKT, always on, enables equal-cong and full stdlib)
+turc -Xgadt myfile.tur
 
 # Everything on (development / experimentation)
-turc -Xsubstructural -Xgadt -Xhkt -Xhrt -Xunion-types -Xintersection-types -Xeffect-types myfile.tur
+turc -Xsubstructural -Xgadt -Xunion-types -Xintersection-types -Xeffect-types myfile.tur
 ```
 
 ---
@@ -476,11 +477,8 @@ turc -Xsubstructural -Xgadt -Xhkt -Xhrt -Xunion-types -Xintersection-types -Xeff
 |---|---|---|
 | `-Xlinear` | LT0–LT4 | ✅ Complete |
 | `-Xsubstructural` | ST0–ST3 | ✅ Complete |
-| `-Xunique` | UT0–UT1 | ✅ Partial (UT2–UT3 deferred) |
-| `-Xgadt` | G0–G4 | ✅ Substantial (`equal-cong` needs `-Xhkt`) |
-| `-Xhkt` | HKT phases | ✅ Complete |
-| `-Xhrt` | HRT phases | ✅ Complete |
-| `-Ximpredicative` | -- | ✅ Complete |
+| `-Xunique-types` | UT0–UT1 | ✅ Partial (UT2–UT3 deferred) |
+| `-Xgadt` | G0–G4 | ✅ Substantial (`equal-cong` uses HKT, always on) |
 | `-Xunion-types` | IT0–IT4 | ✅ Substantial (some IT4 items deferred) |
 | `-Xintersection-types` | IT0–IT4 | ✅ Substantial |
 | `-Xeffect-types` | ET0–ET4, LC0–LC3, MS0–MS4 | ✅ Complete |
@@ -488,3 +486,4 @@ turc -Xsubstructural -Xgadt -Xhkt -Xhrt -Xunion-types -Xintersection-types -Xeff
 | `-Xsessions` | SS0–SS8 | ✅ Complete |
 | `-Xdynamic-vars` | DV0–DV4 | ✅ Complete |
 | `-Xsized-types` | -- | 📋 Planned |
+| HKT / HRT / impredicative *(no flag)* | -- | ✅ Complete (always on) |
