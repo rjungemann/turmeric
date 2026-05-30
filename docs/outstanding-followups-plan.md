@@ -23,7 +23,7 @@ work and its disposition.
 | A -- Clean Clang codegen | **DONE (verified)** | All 5 canary fixtures + all 73 snapshots compile clean under `clang -Werror=int-conversion -Werror=incompatible-function-pointer-types`; no `-Wno-error` downgrade in `tests/run.sh` or compiler defaults. |
 | B -- Aggregate carrier bridge | **DONE (verified)** | 4 gate fixtures under `tests/fixtures/typed-slots/` pass; KB-004/010/012/015 fixed. |
 | C -- Sized primitives polish | **DONE (verified)** | C1 (`TUR-E0042`), C2 (kind-preserving bitwise), C3 (hash consistency), C4 (`TUR-W0037`) all implemented with fixtures + guide. |
-| D -- Unboxed struct ABI | **IN PROGRESS** | D1 (`pass_by_ptr` >16B) DONE; D2 (typed fn-ptr fields) DONE; D3 (nested-aggregate decision doc) + D4 (inline-C unboxed-local audit) outstanding. |
+| D -- Unboxed struct ABI | **DONE** | D1 (`pass_by_ptr` >16B) + D2 (typed fn-ptr fields) already landed; D3 (nested-aggregate decision: keep carrier-erased, documented in type-erasure-guide.md) + D4 (inline-C unboxed-local audit: vec.tur/hamt.tur are clean, all carrier-ABI) completed here. |
 | E -- Arbitrary-arity kinds | **DONE** | E1-E4 already landed; E5 completed here -- added `tur_kind_arity_unit` C unit test (round-trip through arity 15 + >15 boundary); docs already current. |
 | F -- Monomorphize closures | **OUTSTANDING** | Closure/non-global guard still bails in `emit_module.c`; F1/F2/F3 not started. |
 | G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE; J6 (persistent-cache *read* + `--no-abi-cache` + invalidation) outstanding. |
@@ -240,6 +240,15 @@ Phase 3 of `aggregate-carrier-abi-plan.md` flagged this risk. Audit
 local declared with a concrete type; any helper that assumes `int64_t`
 storage must either keep the carrier ABI or opt in to the Phase G
 template marker.
+
+**Audit outcome (2026-05-30): clean, no changes required.** Every inline-C
+helper in `stdlib/vec.tur` declares its parameters as `:int` (and reads
+the vec struct through `(void*)(intptr_t)v`); none declare a narrow sized
+type (`:int8`..`:uint64`/`:float32`), so the `int64_t` storage assumption
+is correct by construction -- they already keep the carrier ABI.
+`stdlib/hamt.tur` is `extern-c`-driven (one inline-C fence) over
+`:ptr<void>` / `:int` / `:cstr` params only, with no narrow-typed locals.
+Neither file needs the Phase G `__TUR_TY_<NAME>__` template marker.
 
 ---
 

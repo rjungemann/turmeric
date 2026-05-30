@@ -17,6 +17,14 @@ monomorphization land, several of these sites will gain non-erased
 representations. Treat the file:line citations as a starting point and
 re-verify before relying on them.
 
+> **Status: post-Theme B/C/D (2026-05-30).** The aggregate carrier bridge
+> (Theme B), sized-primitive carriers (Theme C), and the by-value/by-pointer
+> struct ABI plus typed function-pointer fields (Theme D1/D2) have landed.
+> Sized primitives narrow the carrier (`int32_t`, `uint8_t`, ...) but a
+> generic slot is still `int64_t`. The one remaining erasure that the
+> unboxing roadmap *deliberately keeps* is the nested-aggregate case --
+> see "Nested aggregates" below (Theme D3).
+
 ---
 
 ## The single choke point
@@ -125,6 +133,49 @@ The distinction between "`:int` as a carrier" and "`:int` as erasure
 target" matters when reading inline-C: a parameter declared `:int` may
 be carrying a real integer, or it may be carrying a cast pointer. The
 declaring `defn` is the source of truth.
+
+---
+
+## Nested aggregates (Theme D3 decision)
+
+A struct *field* whose type is itself an aggregate -- another `defstruct`,
+a `TY_APP` like `Option[int]`, or an ADT -- is **carrier-erased to
+`int64_t`, not flat-embedded**. This is verifiable today:
+
+```turmeric
+(defstruct Vec2 [x :int y :int])
+(defstruct HasVec [p :Vec2])           ;; field p
+(defstruct HasOpt [o : (Option int)])  ;; field o
+```
+
+lowers (via `struct_field_c_type`, `src/compiler/types.c`) to:
+
+```c
+typedef struct HasVec { int64_t p; } HasVec;   /* not Vec2 p */
+typedef struct HasOpt { int64_t o; } HasOpt;   /* not a flat Option */
+```
+
+The `default:` arm of `struct_field_c_type`'s field-kind switch returns
+`int64_t` for `TY_STRUCT` / `TY_APP` / `TY_ADT` fields; the field holds a
+cast pointer to a heap-allocated aggregate.
+
+**Decision: keep nested aggregates carrier-erased for now.** Flat-inlining
+a concrete nested struct (so `HasVec` literally contains a `Vec2`) is a
+*future optimization*, not a correctness requirement, and it would have to:
+
+1. gate on `type_has_concrete_codegen_layout()` for the field type (the
+   same seam the HKT work uses), so generic/parametric fields stay erased;
+2. agree with the Theme D1 `pass_by_ptr` decision -- an inlined wide field
+   pushes the containing struct past the 16-byte by-pointer threshold and
+   must flip the *container* to by-pointer too;
+3. update every `make-struct`, field-read (`.f s`), and field-write site
+   to stop round-tripping through `(int64_t)(intptr_t)`.
+
+The function-pointer field case (Theme D2) is the one nested case that
+*was* un-erased, because a concrete `fn` type has a stable C signature and
+no allocation; see `struct_field_c_type`'s `TY_FN` branch. Aggregates do
+not share that property, so they stay on the carrier ABI until the
+optimization above is scheduled on its own merits.
 
 ---
 
