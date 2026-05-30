@@ -155,6 +155,17 @@ callers don't have to track FD-vs-timer-vs-channel separately.
    interval-ms :int
    cb :fn<:int :ptr<void> :nil>
    user-data :ptr<void>] :int ...)
+
+;; Watch an OS signal. Returns a source id (>= 0), -1 on error.
+;; `cb` is called with (id, signum, user-data) when the signal fires.
+;; Implemented via signalfd on Linux and EVFILT_SIGNAL on kqueue (macOS/BSD).
+;; The signal is blocked from normal delivery while registered -- unregister
+;; to restore default disposition. Not supported on WASM (returns -1).
+(defn reactor-add-signal
+  [r  :Reactor
+   signum :int
+   cb :fn<:int :int :ptr<void> :nil>
+   user-data :ptr<void>] :int ...)
 ```
 
 ### Running
@@ -388,6 +399,7 @@ tests/fixtures/
   reactor-fd-readable/        -- pipe-pair smoke test
   reactor-timer/              -- one-shot + interval
   reactor-wake-cross-thread/  -- wake from another OS thread
+  reactor-signal/             -- SIGINT fires reactor-add-signal callback
   reactor-chan-bridge/        -- reactor-add-chan fires correctly
   reactor-stop-from-callback/ -- reactor-stop inside a callback unwinds cleanly
 ```
@@ -402,7 +414,7 @@ tests/fixtures/
 | R2 | `stdlib/reactor.tur`: bindings for R1; opaque `Reactor`, READ/WRITE/ERROR/HUP constants, fd API |
 | R3 | Fixture tests: FD readable, FD writable, modify, remove (pipe-pair, no socket dep) |
 | R4 | Timer support: one-shot + interval (delegate to `timer_wheel.c`, integrate into the poll timeout calculation) |
-| R5 | Cross-thread `reactor-wake` + `reactor-stop`; fixture covers wake from a second OS thread |
+| R5 | Cross-thread `reactor-wake` + `reactor-stop`; signal handling via `reactor-add-signal` (`signalfd` on Linux, `EVFILT_SIGNAL` on kqueue); fixtures: wake from a second OS thread, `SIGINT` fires callback |
 | R6 | Channel bridge: extend `TurChan` waiter kinds with `TUR_CHAN_WAITER_REACTOR`; `reactor-add-chan` |
 | R7 | Migrate `tur/httpd` listener thread to `tur/reactor`; update `docs/tur-httpd-plan.md` to reference this plan |
 | R8 | Docstrings (`;;;` blocks for every exported defn), `just docs`, `docs/guides/reactor-guide.md` with three styles example |
@@ -432,25 +444,27 @@ R9 is explicitly out-of-scope and listed only to anchor the API.
 
 ## Open questions
 
-- **Signal handling.** `kqueue` has `EVFILT_SIGNAL`; epoll has
-  `signalfd`. Worth wiring up in R5 so `tur/httpd` can handle `SIGINT`
-  cleanly, or defer to a separate `reactor-add-signal` follow-up?
-  Recommendation: defer; the wake-fd pattern already gives a clean
-  shutdown story.
-- **Timer resolution.** Timer wheel granularity vs the platform timer
-  primitives -- do we always use the wheel for portability, or
-  conditionally use `timerfd` / `EVFILT_TIMER` for sub-ms accuracy? The
-  current `timer_wheel.c` is ms-granular which is fine for HTTP; revisit
-  if a consumer needs higher resolution.
-- **WASM.** No reactor in the WASM sandbox today (`io_backend_new`
-  returns NULL). `reactor-new` should return a sentinel and all
-  operations should no-op so WASM-targeted code can compile even if it
-  can't run a reactor. Mirror what we already do for sockets in WASM.
-- **Windows.** `IO_BACKEND_IOCP` is `#define`d but no `io_iocp.c` exists.
-  Plan of record (see "Windows: wepoll over a raw IOCP rewrite" above) is
-  `io_wepoll.c` -- wepoll keeps the reactor model, so the port is roughly
-  `io_epoll.c` + a vendored `wepoll.{c,h}` + a `platform_fd_t` widening
-  pass. This collapses the older "select fallback now, IOCP later" split
-  into a single Windows backend, and avoids writing a true proactor.
-  Tracked alongside the larger Windows-support effort in
+- **Signal handling.** Resolved: `reactor-add-signal` is included in R5.
+  Uses `signalfd` on Linux and `EVFILT_SIGNAL` on kqueue (macOS/BSD).
+  The signal is blocked from normal delivery while registered; callers
+  restore disposition by removing the source. WASM no-ops. This gives
+  `tur/httpd` a clean `SIGINT` story without signal-handler globals or
+  a self-pipe workaround.
+- **Timer resolution.** Resolved for v1: always use `timer_wheel.c`
+  (ms-granular) for portability. Post-v1: if a consumer needs sub-ms
+  accuracy, conditionally delegate to `timerfd` on Linux or
+  `EVFILT_TIMER` on kqueue, with the wheel as the fallback for other
+  platforms. Not needed for the current consumer set (httpd, websockets,
+  sse).
+- **WASM.** Resolved: `reactor-new` returns `nil` on WASM (no silent
+  sentinel). All other reactor operations that receive a `nil` reactor
+  return `-1` / `nil` and set an error, so callers are forced to handle
+  the unsupported case explicitly rather than silently doing nothing.
+  This diverges from the existing async-socket no-op pattern -- that
+  pattern is considered a mistake; don't propagate it here.
+- **Windows.** Resolved: `io_wepoll.c` backed by vendored
+  `src/async/vendor/wepoll.{c,h}` (two files, no new external deps).
+  fd storage widened to `platform_fd_t` (`intptr_t` on Windows, `int`
+  on Unix) via `src/async/platform_fd.h`. No select fallback, no IOCP
+  proactor. Tracked alongside the larger Windows-support effort in
   `docs/upcoming/windows-support-plan.md`.
