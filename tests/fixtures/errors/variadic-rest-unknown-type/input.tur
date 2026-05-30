@@ -1,0 +1,5 @@
+;; variadic-rest-unknown-type -- an undefined rest type name is a hard error,
+;; never silently demoted to :int.
+(defn server [& items :Bogus] :int 0)
+(defn main [] :int
+  (server 1 2))

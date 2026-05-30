@@ -1,0 +1,2 @@
+rest arg 1 has wrong type (expected Route, got Middleware)
+rest arg 2 has wrong type (expected Route, got int)

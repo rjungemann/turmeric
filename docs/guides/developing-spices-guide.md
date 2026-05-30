@@ -581,6 +581,28 @@ If your spice API can take a `Vec` instead of a cons list, prefer that and
 document it with `(vec-of ...)`. The end goal is for `cons` to disappear from
 quick-start surfaces entirely.
 
+### Typed variadic rest parameters
+
+A `& rest :T` parameter type-checks against `T` even when `T` is a user-defined
+type -- a `defopaque` newtype, struct, ADT, or type application. The rest
+element type is resolved to its full type and each argument is checked by
+identity at the call site, so you can give a variadic API a real handle type
+instead of an untyped `:int`:
+
+```turmeric
+(defopaque Route :int)
+
+;; Each rest arg must be a Route; a raw :int or a different opaque is rejected.
+(defn launch [& routes :Route] :ptr<void>
+  ...)
+```
+
+The old workaround of declaring the rest as `:int` and casting handles back
+inside the body is no longer needed. For an interface that mixes distinct
+handle types (e.g. middlewares and routes), use two explicit `:list<T>`
+parameters rather than one untyped rest -- a single `& rest` is one
+homogeneous element type by design.
+
 ---
 
 ## Testing Your Spice
