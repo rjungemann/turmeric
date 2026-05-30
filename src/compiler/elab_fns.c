@@ -256,6 +256,44 @@ static uint8_t collect_implicit_fn_type_params(const Form *params_f, const Form 
     return n;
 }
 
+/* TY4: reject a function whose result is a borrow of one of its own locals
+ * (params or let-locals).  Such a borrow dangles once the frame is gone --
+ * today it only surfaces as a C -Wdangling-pointer warning.  Walk the body's
+ * result position through do/let/if tails; fn_local_depth is the depth of the
+ * function's parameter scope, so any referent at that depth or deeper is a
+ * function-local.  Emits TUR-E0105 and returns false on the first violation. */
+static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
+                                   const Symbol *fn_name) {
+    if (!tail) return true;
+    switch (tail->kind) {
+        case EX_DO:
+            return tail->as.do_.n == 0 ? true
+                : check_no_borrow_escape(tail->as.do_.items[tail->as.do_.n - 1],
+                                         fn_local_depth, fn_name);
+        case EX_LET:
+        case EX_LETREC:
+            return check_no_borrow_escape(tail->as.let_.body, fn_local_depth, fn_name);
+        case EX_IF:
+            return check_no_borrow_escape(tail->as.if_.then_, fn_local_depth, fn_name)
+                && check_no_borrow_escape(tail->as.if_.else_or_null, fn_local_depth, fn_name);
+        case EX_BORROW_IMMUT:
+        case EX_BORROW_MUT: {
+            const Binding *ref = borrow_referent_binding(tail);
+            if (ref && !ref->is_global && ref->scope_depth >= fn_local_depth) {
+                diag_emit_with_code(DIAG_ERROR, tail->span,
+                    TUR_E0105_BORROW_ESCAPES_SCOPE,
+                    "function '%s' returns a borrow of local `%s`, "
+                    "which does not outlive the function",
+                    fn_name ? fn_name->name : "?", ref->name->name);
+                return false;
+            }
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
 Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R5: Check for #[no-unwind] attribute before name */
     uint32_t name_idx = 1;  /* index of name in items (after 'defn') */
@@ -1057,6 +1095,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Scope inner;
     scope_init(&inner, e->scope);
     e->scope = &inner;
+    /* TY4: depth of the function's parameter/local scope, for the
+     * borrow-escape check (see check_no_borrow_escape, called after the body
+     * is elaborated).  Bindings at this depth or deeper are function-locals. */
+    uint32_t fn_local_depth = 0;
+    for (const Scope *s = e->scope; s; s = s->parent) fn_local_depth++;
     for (uint8_t kvi = 0; kvi < n_kind_vars; kvi++) {
         Type kv_type = type_tyvar_named(kind_var_names[kvi]->name);
         kv_type.hkt_kind = KIND_ARROW;
