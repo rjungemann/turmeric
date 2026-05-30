@@ -531,7 +531,13 @@ struct Expr {
                                                 * NULL when the call has no named-tyvar bindings. Arena-owned. */
                  uint8_t  n_abi_bindings;
                  bool is_tail_self_call; /* CF1: direct self-tail-call lowered to a goto backedge
-                                          * by the emitter (set by emit_fns.c tco_mark). */ } call_;
+                                          * by the emitter (set by emit_fns.c tco_mark). */
+                 /* SZ8: when this call is a sized-GADT constructor, `ctor` is the
+                  * resolved CtorDef and `size_index` is the inferred type-level
+                  * size index of the constructed value (NULL otherwise). Both
+                  * are elaboration-only; size indices are erased in codegen. */
+                 struct CtorDef *ctor;
+                 struct SizeTerm *size_index; } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;

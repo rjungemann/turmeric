@@ -1,0 +1,42 @@
+; Phase SZ8.2: length-polymorphic functions over sized vectors.
+;
+; A function whose SizedVec parameters carry no explicit size index elaborates
+; against a fresh (inferred) size variable and works at any length. svappend
+; concatenates two vectors of arbitrary length; svlen/svsum fold them. No index
+; annotation appears anywhere, yet the program type-checks and runs.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n]
+  (SVNil : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+(defn svlen [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (svlen xs))))
+
+(defn svsum [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons x xs) (+ x (svsum xs))))
+
+; Length-polymorphic: (SizedVec n) ++ (SizedVec m) -> (SizedVec (n + m)).
+(defn svappend [a :SizedVec b :SizedVec] :SizedVec
+  (match a
+    (SVNil)       b
+    (SVCons x xs) (SVCons x (svappend xs b))))
+
+(defn main [] :int
+  ; length 2 ++ length 3 = length 5
+  (println (svlen (svappend (SVCons 1 (SVCons 2 (SVNil)))
+                            (SVCons 3 (SVCons 4 (SVCons 5 (SVNil)))))))   ; 5
+  ; sum is preserved across the concatenation
+  (println (svsum (svappend (SVCons 1 (SVCons 2 (SVNil)))
+                            (SVCons 3 (SVCons 4 (SVCons 5 (SVNil)))))))   ; 15
+  ; appending nil is identity on length
+  (println (svlen (svappend (SVCons 7 (SVNil)) (SVNil))))                 ; 1
+  0)

@@ -1,0 +1,38 @@
+; Phase SZ8: size inference and elision.
+;
+; Size indices are inferred through SVNil/SVCons, so a constructed vector carries
+; the right size with no annotation: --dump-sizes prints the inferred index for
+; each sized-GADT constructor application.
+;   (SVNil)                              => (SizedVec 0)
+;   (SVCons _ (SVNil))                   => (SizedVec 1)
+;   (SVCons _ (SVCons _ (SVNil)))        => (SizedVec 2)
+;
+; A construction whose operand size is NOT statically known -- here the
+; parameter `v` of prepend -- is un-inferable and prints (SizedVec ?); it
+; stays length-polymorphic rather than erroring (SZ8 fallback).
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n]
+  (SVNil : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+; SZ8.2: a length-polymorphic function over (SizedVec n) -- no index annotation.
+(defn svlen [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (svlen xs))))
+
+; SZ8 fallback: prepends onto an arbitrary-length v; the result size is
+; (Add (Static 1) n) with n unknown, so it is un-inferable here.
+(defn prepend [v :SizedVec] :SizedVec
+  (SVCons 99 v))
+
+(defn main [] :int
+  (println (svlen (SVNil)))                                 ; 0
+  (println (svlen (SVCons 10 (SVCons 20 (SVNil)))))         ; 2
+  (println (svlen (prepend (SVCons 1 (SVNil)))))            ; 2
+  0)

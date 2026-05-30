@@ -473,6 +473,123 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
 
 /* ---- general elab ---- */
 
+/* SZ7: static size checking (-Xsized-types).
+ * When a call is `(size-assert-eq! a b)` or `(size-assert-le! a b)` and BOTH
+ * size arguments reduce to compile-time constants, decide the relation at
+ * compile time: a violation is reported with TUR-E0260 (no runtime check is
+ * emitted because compilation fails).  When at least one size is not statically
+ * known, returns false so the call elaborates normally and the existing runtime
+ * assertion guards it -- the checker never silently accepts (SZ7.3). */
+static bool sz7_static_size_violation(Elab *e, const Form *call, const Symbol *name) {
+    if (!g_sized_types_enabled) return false;
+    const char *fn = name->name;
+    bool is_eq = (strcmp(fn, "size-assert-eq!") == 0);
+    bool is_le = (strcmp(fn, "size-assert-le!") == 0);
+    if (!is_eq && !is_le) return false;
+    if (call->as.list.len != 3) return false;  /* (fn a b) */
+
+    SizeTerm *t0 = size_term_from_form(e->arena, call->as.list.items[1], NULL, NULL);
+    SizeTerm *t1 = size_term_from_form(e->arena, call->as.list.items[2], NULL, NULL);
+    if (!t0 || !t1) return false;
+    int64_t v0, v1;
+    if (!size_term_eval(t0, &v0) || !size_term_eval(t1, &v1)) return false; /* runtime fallback */
+
+    if (is_eq && v0 != v1) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0260_SIZED_TYPE_MISMATCH,
+            "sized type mismatch (TUR-E0260): size %lld is not %lld",
+            (long long)v0, (long long)v1);
+        return true;
+    }
+    if (is_le && v0 > v1) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0260_SIZED_TYPE_MISMATCH,
+            "sized type mismatch (TUR-E0260): size %lld exceeds upper bound %lld",
+            (long long)v0, (long long)v1);
+        return true;
+    }
+    return false;
+}
+
+/* SZ8: infer the type-level size index of a sized-GADT constructor application.
+ * The index is computed by substituting each operand's already-inferred index
+ * into the constructor's declared return-type index template. For example,
+ * given `SVCons : int -> (SizedVec n) -> (SizedVec (Add (Static 1) n))`, a call
+ * `(SVCons 7 v)` where `v` has inferred index `t` yields `(Add (Static 1) t)`.
+ * SVNil's template `(Static 0)` is already closed, seeding the recursion.
+ *
+ * Returns the inferred SizeTerm (arena-allocated), or NULL when the GADT is not
+ * size-indexed or an operand index is unknown (the size stays polymorphic).
+ * Inference is purely additive metadata -- erased in codegen. */
+static SizeTerm *sz8_infer_ctor_size_index(Elab *e, const CtorDef *ctor,
+                                           Expr *call_expr) {
+    if (!g_sized_types_enabled || !ctor || !ctor->adt || !ctor->adt->is_gadt)
+        return NULL;
+    const AdtDef *adt = ctor->adt;
+    const Form *rt = ctor->result_type_form;
+    if (!rt || rt->tag != F_LIST || rt->as.list.len < 2) return NULL;
+
+    /* Find the size-index parameter position: the first return-type argument
+     * that parses as a Size expression. */
+    int size_pos = -1;
+    SizeTerm *template = NULL;
+    for (uint32_t i = 1; i < rt->as.list.len; i++) {
+        SizeTerm *st = size_term_from_form(e->arena, rt->as.list.items[i], NULL, NULL);
+        if (st) { size_pos = (int)i - 1; template = st; break; }
+    }
+    if (size_pos < 0 || !template) return NULL;
+
+    /* For each field that is itself a value of the SAME sized GADT, map the
+     * field's declared index variable to the argument's inferred index. */
+    SizeTerm *result = template;
+    uint32_t n_call_args = call_expr->as.call_.n_args;
+    for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+        const Form *ff = ctor->field_forms ? ctor->field_forms[fi] : NULL;
+        if (!ff || ff->tag != F_LIST || ff->as.list.len < 2) continue;
+        const Form *fhd = ff->as.list.items[0];
+        if (fhd->tag != F_SYM || strcmp(fhd->as.sym->name, adt->name) != 0) continue;
+        if ((uint32_t)(size_pos + 1) >= ff->as.list.len) continue;
+        const Form *fidx = ff->as.list.items[size_pos + 1];
+        if (fidx->tag != F_SYM) continue;            /* only a bare index var threads */
+        const char *fvar = fidx->as.sym->name;
+        Expr *arg = call_expr->as.call_.args[fi];
+        SizeTerm *arg_idx = (arg && arg->kind == EX_CALL)
+                          ? arg->as.call_.size_index : NULL;
+        if (!arg_idx) return NULL;                   /* operand unknown -> not inferable */
+        result = size_term_subst(e->arena, result, fvar, arg_idx);
+    }
+    return result;
+}
+
+/* SZ8: true when `ctor` is a size-indexed GADT constructor (its return type
+ * carries a Size expression in some argument position). */
+static bool sz8_ctor_is_sized(Elab *e, const CtorDef *ctor) {
+    if (!g_sized_types_enabled || !ctor || !ctor->adt || !ctor->adt->is_gadt)
+        return false;
+    const Form *rt = ctor->result_type_form;
+    if (!rt || rt->tag != F_LIST || rt->as.list.len < 2) return false;
+    for (uint32_t i = 1; i < rt->as.list.len; i++)
+        if (size_term_from_form(e->arena, rt->as.list.items[i], NULL, NULL))
+            return true;
+    return false;
+}
+
+/* SZ8: --dump-sizes -- emit one line per size-indexed constructor application.
+ * A folded constant prints as the number; an open term prints symbolically;
+ * an un-inferable index (an operand whose size is unknown) prints as `?`. */
+static void sz8_dump_ctor_size(Elab *e, const CtorDef *ctor,
+                               const SizeTerm *inferred) {
+    if (!g_dump_sizes || !sz8_ctor_is_sized(e, ctor)) return;
+    char sbuf[128];
+    int64_t k;
+    if (inferred && size_term_eval(inferred, &k))
+        fprintf(stderr, "size: %s : (%s %lld)\n",
+                ctor->name, ctor->adt->name, (long long)k);
+    else if (inferred)
+        fprintf(stderr, "size: %s : (%s %s)\n", ctor->name, ctor->adt->name,
+                size_term_to_string(inferred, sbuf, sizeof(sbuf)));
+    else
+        fprintf(stderr, "size: %s : (%s ?)\n", ctor->name, ctor->adt->name);
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -484,6 +601,10 @@ Expr *elab_call(Elab *e, Form *call) {
         return elab_call_head_expr(e, call, head_expr);
     }
     const Symbol *name = head->as.sym;
+
+    /* SZ7: static size checking -- reject statically-known size mismatches at
+     * compile time before normal call dispatch. */
+    if (sz7_static_size_violation(e, call, name)) return NULL;
 
     /* Special forms. */
     if (name == e->sym_def)    return elab_def   (e, call);
@@ -824,6 +945,12 @@ Expr *elab_call(Elab *e, Form *call) {
             out->as.call_.n_args = 0;
             out->as.call_.fn_expr = NULL;
             out->as.call_.dict_arg = NULL;
+            /* SZ8: a nullary sized-GADT constructor seeds the size index from its
+             * (constant) return-type template, e.g. SVNil : (SizedVec (Static 0)). */
+            out->as.call_.ctor = ctor;
+            SizeTerm *inferred = sz8_infer_ctor_size_index(e, ctor, out);
+            out->as.call_.size_index = inferred;
+            sz8_dump_ctor_size(e, ctor, inferred);
             return out;
         }
     }
@@ -839,6 +966,13 @@ Expr *elab_call(Elab *e, Form *call) {
             if (call_expr) {
                 /* Patch result type with proper AdtDef pointer */
                 call_expr->type = type_adt(ctor->adt);
+
+                /* SZ8: record the CtorDef and infer the type-level size index of
+                 * this constructed value (sized GADTs only; erased in codegen). */
+                call_expr->as.call_.ctor = ctor;
+                SizeTerm *inferred = sz8_infer_ctor_size_index(e, ctor, call_expr);
+                call_expr->as.call_.size_index = inferred;
+                sz8_dump_ctor_size(e, ctor, inferred);
 
                 /* TP5: intra-constructor type-arg consistency check.
                  * For each field whose full_type is a named TY_TYVAR, record

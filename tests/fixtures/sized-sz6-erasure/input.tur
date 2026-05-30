@@ -1,0 +1,20 @@
+; Phase SZ6: size-index erasure.
+;
+; The type-level size index on SizedVec is compile-time only. The emitted C
+; carries no runtime size field: an indexed SizedVec lowers to the same flat
+; tagged-union representation as the phantom encoding. This expected.c snapshot
+; pins that erased shape -- if a size field ever leaked into codegen, the
+; snapshot would change and the test would fail.
+
+(defgadt SizedVec [n]
+  (SVNil : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+(defn svlen [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (svlen xs))))
+
+(defn main [] :int
+  (println (svlen (SVCons 7 (SVNil))))
+  0)

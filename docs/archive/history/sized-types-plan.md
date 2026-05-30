@@ -1,6 +1,9 @@
 # Sized Types — Implementation Plan for Turmeric
 
-> **Status:** SZ3 Complete
+> **Status:** SZ3 Complete -- runtime layer shipped.
+> **Continuation:** [../../sized-types-completion-plan.md](../../sized-types-completion-plan.md)
+> picks up at SZ4 (real `-Xsized-types` flag) and carries through SZ9
+> (type-level size indices + static size checking).
 > **Target:** v4
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete
 > **Related:** [../../guides/advanced-type-system-rationale.md](../../guides/advanced-type-system-rationale.md)

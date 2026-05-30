@@ -131,6 +131,8 @@ const char *diag_code_to_string(DiagCode code) {
         /* Phase B: mixed-width numeric arithmetic */
         case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
+        /* SZ7: static size checking */
+        case TUR_E0260_SIZED_TYPE_MISMATCH:              return "TUR-E0260";
         /* ET3: handler typing errors */
         case TUR_E0251_HANDLER_OVERLAP:                  return "TUR-E0251";
         case TUR_E0252_HANDLER_RESULT_MISMATCH:          return "TUR-E0252";
@@ -230,6 +232,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
     if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
+    if (strcmp(s, "TUR-E0260") == 0) return TUR_E0260_SIZED_TYPE_MISMATCH;
     /* ET3: handler typing errors */
     if (strcmp(s, "TUR-E0251") == 0) return TUR_E0251_HANDLER_OVERLAP;
     if (strcmp(s, "TUR-E0252") == 0) return TUR_E0252_HANDLER_RESULT_MISMATCH;
@@ -342,6 +345,31 @@ static const DiagExplanation diag_explanations_[] = {
       "changes and makes it easy to accidentally widen to a 64-bit carrier\n"
       "where a 32-bit computation was intended.  Explicit casts make the\n"
       "intent clear and keep the emitted C free of silent int64 round-trips.\n"
+    },
+    { TUR_E0260_SIZED_TYPE_MISMATCH,
+      "TUR-E0260: Sized type mismatch\n"
+      "\n"
+      "Two size indices that are both statically known reduce to different\n"
+      "natural numbers, so a sized-types check that requires them to be equal\n"
+      "(or compatible) can never hold.  This is reported at compile time --\n"
+      "no runtime assertion is emitted -- by the -Xsized-types static checker.\n"
+      "\n"
+      "Example:\n"
+      "  (size-assert-eq! (size-static 4) (size-static 5))\n"
+      "    ; error TUR-E0260: sized type mismatch: size 4 is not 5\n"
+      "\n"
+      "  (size-assert-eq! (size-static 4) (size-add (size-static 2)\n"
+      "                                             (size-static 2)))\n"
+      "    ; ok: both sides reduce to 4\n"
+      "\n"
+      "Fallback: when at least one size is NOT statically known (for example a\n"
+      "dimension derived from a runtime length), the checker cannot decide the\n"
+      "equation and emits the existing runtime assertion instead of this error\n"
+      "-- it never silently accepts a possibly-wrong size.\n"
+      "\n"
+      "Fix: make the two sizes agree, or, if they genuinely cannot be known to\n"
+      "match until run time, route the value through a size whose index is a\n"
+      "variable rather than a literal so the check falls back to run time.\n"
     },
     { TUR_E0002_ARITY_MISMATCH,
       "TUR-E0002: Arity mismatch\n"

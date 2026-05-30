@@ -1,0 +1,36 @@
+; Phase SZ6: type-level size indices (kill the phantom).
+;
+; SizedVec carries a real type-level size index that its constructors refine:
+;   SVNil  : (SizedVec (Static 0))
+;   SVCons : int -> (SizedVec n) -> (SizedVec (Add (Static 1) n))
+;
+; Unlike the SZ0 phantom encoding -- where both constructors returned the same
+; (SizedVec Size int) -- here SVNil is indexed by (Static 0) and SVCons refines
+; the index to (Add (Static 1) n). The index is erased in codegen (zero runtime
+; cost), so construct/match round-trips behave exactly like before.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n]
+  (SVNil : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+(defn svlen [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (svlen xs))))
+
+(defn svsum [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons x xs) (+ x (svsum xs))))
+
+(defn main [] :int
+  (println (svlen (SVNil)))                                   ; 0
+  (println (svlen (SVCons 10 (SVCons 20 (SVCons 30 (SVNil)))))) ; 3
+  (println (svsum (SVCons 10 (SVCons 20 (SVCons 30 (SVNil)))))) ; 60
+  (println (svlen (SVCons 1 (SVNil))))                        ; 1
+  0)

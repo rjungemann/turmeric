@@ -29,7 +29,7 @@ between flags.
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
 | `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
 | `-Xcallcc` | ⚠️ Experimental (unsound) | Unlocks the v1 `call/cc` / `escape` desugar. **No real capture** -- `f` receives the integer `0` as a fake continuation. Ungated, `call/cc`/`escape` are a hard error (`TUR-E0700`/`TUR-E0701`). Real capture needs the post-1.0 CPS pass. `call/cc*` (cloneable) is unaffected. | -- |
-| `-Xsized-types` | 📋 Planned | Sized / dependent types | -- |
+| `-Xsized-types` | ⚠️ Partial (SZ0–SZ4) | Sized types over the `Size` GADT (`SizedVec`, `sized-buf`, `sized-matrix`, `sized-bits`); flag exists and implies `-Xgadt`; size checking is **runtime** today, static checking in progress (see [sized-types-completion-plan.md](../sized-types-completion-plan.md)) | `-Xgadt` |
 
 **Always-on (no flag).** Higher-kinded types (`^f`/`^^f`, kind `* -> *`),
 higher-ranked types (`forall` inside argument positions; rank-2/rank-3), and
@@ -45,6 +45,7 @@ reference, but you never pass a flag for them.
 | `--keep-contracts` | ✅ Complete | Retains contract checks in release builds (`just release`); without this flag, contracts are stripped in release mode |
 | `--dump-kinds` | ✅ Complete | After the kind-checking pass, prints the kind of every bound type to stdout |
 | `--dump-effects` | ✅ Complete | Prints inferred effect rows for every function, e.g. `run-twice : forall [e]. (fn [...] #{e} int)` |
+| `--dump-sizes` | ✅ Complete (SZ8) | Prints the inferred type-level size index for each sized-GADT constructor application, e.g. `size: SVCons : (SizedVec 2)`; an un-inferable index prints `(SizedVec ?)`. Requires `-Xsized-types` |
 | `--emit-abi-trace` | ✅ Complete | During `emit-c`/`build`, prints one line per resolved call site naming the C-level ABI path it takes (`concrete-clone`, `carrier`, `dictionary`, `polymorphic-wrapper`) |
 
 ---
@@ -57,11 +58,11 @@ Arrows mean "enables / implies":
 -Xsubstructural ──► -Xlinear
 -Xsessions      ──► -Xsubstructural ──► -Xlinear
 -Xeffect-types  ──► --strict-effects
+-Xsized-types   ──► -Xgadt
 ```
 
 Flags that stand alone (no implications): `-Xunique-types`, `-Xgadt`,
-`-Xunion-types`, `-Xintersection-types`, `-Xcontracts`, `-Xdynamic-vars`,
-`-Xsized-types`.
+`-Xunion-types`, `-Xintersection-types`, `-Xcontracts`, `-Xdynamic-vars`.
 
 ---
 
@@ -396,9 +397,31 @@ separate, real construct and is **not** gated.
 
 ---
 
-### `-Xsized-types` -- Sized / Dependent Types *(planned)*
+### `-Xsized-types` -- Sized Types
 
-Reserved for a future sized/dependent type system. No phases have started.
+Enables sized types: containers indexed by type-level natural-number sizes
+over the `Size` GADT (`SizedVec`, `sized-buf`, `sized-matrix`, `sized-bits` in
+the stdlib). The flag **implies `-Xgadt`** -- the sized layer is built on the
+GADT skolem/index machinery, so enabling `-Xsized-types` turns on the GADT
+support it needs.
+
+```sh
+tur -Xsized-types build sized-program.tur
+```
+
+**Status (SZ0–SZ4):** The runtime layer ships -- `Size`, `SizedVec`, and the
+matrix/bitvec/buffer wrappers, plus the `-Xsized-types` flag itself. Size
+checking is currently a **runtime** assertion (`size-assert-eq!`,
+`sized-matrix-assert-shape!` reduce to `(= (size-eval s1) (size-eval s2))`).
+**Static** (type-level) size checking -- where a length-`n` vector's type
+mentions `n` and a dimension mismatch is a compile-time error -- is in
+progress; see [sized-types-completion-plan.md](../sized-types-completion-plan.md)
+(phases SZ6–SZ9).
+
+**Implies:** `-Xgadt`
+
+**See also:** [sized-types-guide.md](sized-types-guide.md),
+[sized-types-completion-plan.md](../sized-types-completion-plan.md)
 
 ---
 
@@ -518,5 +541,5 @@ turc -Xsubstructural -Xgadt -Xunion-types -Xintersection-types -Xeffect-types my
 | `-Xcontracts` | CT phases | ✅ Complete (on by default) |
 | `-Xsessions` | SS0–SS8 | ✅ Complete |
 | `-Xdynamic-vars` | DV0–DV4 | ✅ Complete |
-| `-Xsized-types` | -- | 📋 Planned |
+| `-Xsized-types` | SZ0–SZ4 | ⚠️ Partial (runtime layer + flag; static checking SZ6–SZ9 in progress) |
 | HKT / HRT / impredicative *(no flag)* | -- | ✅ Complete (always on) |

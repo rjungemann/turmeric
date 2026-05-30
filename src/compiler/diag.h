@@ -60,6 +60,8 @@ typedef enum DiagCode {
     TUR_W0034_ROW_VAR_GENERALISED,        /* row variable auto-generalised; consider explicit forall [e] (--strict-effects) */
     /* GATE / ET2: effect row type errors */
     TUR_E0254_INFINITE_EFFECT_ROW,     /* occurs check: binding effect row variable would produce an infinite row */
+    /* SZ7 (sized-types-completion-plan): static size checking (-Xsized-types) */
+    TUR_E0260_SIZED_TYPE_MISMATCH,     /* two statically-known size indices are not equal/compatible */
     /* ET3: handler typing errors */
     TUR_E0251_HANDLER_OVERLAP,            /* composed handlers handle overlapping effects */
     TUR_E0252_HANDLER_RESULT_MISMATCH,   /* handler clause result type does not match handle expression type */

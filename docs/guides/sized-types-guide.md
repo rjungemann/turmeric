@@ -11,7 +11,24 @@ memory layout verification, stack allocation of fixed-size buffers, type-safe
 array operations, and FFI structs that carry size annotations through Turmeric
 wrappers.
 
-Sized types are enabled with the `-Xsized-types` compiler flag.
+Sized types are enabled with the `-Xsized-types` compiler flag, which implies
+`-Xgadt` (the sized layer is built on the GADT machinery):
+
+```sh
+tur -Xsized-types build sized-program.tur
+```
+
+> **Runtime vs. static checking.** Today the size index is a *phantom*: every
+> `SizedVec` constructor returns the same type regardless of length, and size
+> equality/compatibility (`size-eq?`, `size-compat?`, `size-assert-eq!`,
+> `sized-matrix-assert-shape!`) is checked at **run time** by evaluating both
+> sizes and comparing them. The one compile-time error today catches an
+> `int`-vs-`Size` kind mismatch, not an unequal *dimension*. Lifting size
+> indices to the type level so that a length-`n` vector's type mentions `n` and
+> a dimension mismatch is a **static** (compile-time) error is in progress --
+> see [sized-types-completion-plan.md](../sized-types-completion-plan.md)
+> (phases SZ6–SZ9). Where this guide describes a check as "compile-time", read
+> it as the goal state; the shipped behavior is noted inline.
 
 ## Table of Contents
 
@@ -213,6 +230,38 @@ size-assert-le!(size-static(3) size-static(10))
 size-assert-eq!(size-static(4) size-static(5))
 ```
 
+### Static checking (SZ7)
+
+Under `-Xsized-types`, `size-assert-eq!` and `size-assert-le!` are checked
+**statically** when both of their size arguments reduce to compile-time
+constants -- the `Size` expression is folded at elaboration and compared:
+
+```turmeric
+; COMPILE-TIME error TUR-E0260 (no runtime check is emitted):
+(size-assert-eq! (size-static 4) (size-static 5))
+
+; accepted at compile time -- both sides fold to 4:
+(size-assert-eq! (size-static 4) (size-add (size-static 2) (size-static 2)))
+```
+
+Run `tur explain TUR-E0260` for the full diagnostic.
+
+**Runtime fallback (the boundary).** When at least one size is *not*
+statically known -- for example a dimension derived from a runtime length or
+passed through a function parameter -- the checker cannot decide the equation
+and lowers to the existing runtime assertion shown above. It never silently
+accepts a possibly-wrong size:
+
+```turmeric
+(let [n (read-length)]              ; n is a runtime value
+  ; not statically known -> runtime assertion (panics if n != 4)
+  (size-assert-eq! (size-static n) (size-static 4)))
+```
+
+Folding currently covers `Static`/`Add`/`Mul` (and the `size-static`/`size-add`/
+`size-mul` value forms) at the assertion call site itself; sizes that arrive
+through a wrapper function fall back to the runtime check.
+
 ---
 
 ## Size Inference
@@ -253,6 +302,38 @@ let [lst list(10 20 30)]
 
 `sized-vec-from-list` requires `#{Unsafe}` because it casts the cons cell
 layout directly.
+
+### Type-level index inference (SZ8)
+
+When a sized GADT carries a type-level size index, the index of a constructed
+value is inferred automatically by threading operand indices through the
+constructors -- no annotation is needed:
+
+```turmeric
+(defgadt SizedVec [n]
+  (SVNil : (SizedVec (Static 0)))
+  (SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))))
+
+; (SVCons _ (SVCons _ (SVNil))) infers (SizedVec 2)
+```
+
+Pass `--dump-sizes` (with `-Xsized-types`) to print the inferred index for each
+constructor application:
+
+```
+size: SVNil  : (SizedVec 0)
+size: SVCons : (SizedVec 1)
+size: SVCons : (SizedVec 2)
+```
+
+A `SizedVec` parameter written without an index (`v : SizedVec`) is
+length-polymorphic: it elaborates against a fresh size variable and accepts any
+length. Inference covers literal constructor chains and linear `Add`/`Mul` over
+`Static` and one variable; an index that depends on an unknown operand (a
+parameter, a runtime-built vector) is left polymorphic -- `--dump-sizes` shows
+it as `(SizedVec ?)` -- rather than being guessed. See
+[sized-types-index-spec.md](../sized-types-index-spec.md) section 6 for the full
+inference boundary.
 
 ---
 

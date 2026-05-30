@@ -1,21 +1,33 @@
-; Phase SZ3: Compile-time type error when passing int where Size is expected.
+; Phase SZ7 (migrated from SZ3): a *real* dimension check, statically rejected.
 ;
-; sized-matrix-assert-shape! expects (Size) arguments.
-; Passing a plain int literal triggers TUR-E0001.
+; Matrix multiply requires the inner dimensions to agree: an (rows x k) matrix
+; times a (k x cols) matrix is only defined when the two k's are equal. Here
+; the left matrix is 3x4 and the right is 5x6, so the inner dimensions 4 and 5
+; disagree. Because both are statically-known sizes, the -Xsized-types checker
+; rejects this at compile time with TUR-E0260 -- a genuine dimension mismatch,
+; not merely an int-vs-Size kind error (the old SZ3 TUR-E0001 behaviour).
 
 (defgadt Size []
   (Static (int) : (Size))
   (Add (Size) (Size) : (Size))
   (Mul (Size) (Size) : (Size)))
 
-(defn size-eval [s :Size] :int
-  (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
-            (Mul a b) (* (size-eval a) (size-eval b))))
+(defn size-static [n :int] :Size (Static n))
 
-(defn sized-matrix-assert-shape! [m er :Size ec :Size] #{Unsafe} :nil
-  (require-msg! (= 1 1) "ok"))
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)  n
+    (Add a b)   (+ (size-eval a) (size-eval b))
+    (Mul a b)   (* (size-eval a) (size-eval b))))
+
+(defn size-assert-eq! [s1 :Size s2 :Size] :nil
+  (require-msg! (= (size-eval s1) (size-eval s2))
+    "sized type mismatch: sizes are not equal"))
 
 (defn main [] :int
-  ; ERROR: 3 and 4 are int, not Size -- should produce TUR-E0001
-  (unsafe (sized-matrix-assert-shape! 0 3 4))
+  ; Multiply requires the left matrix's column count to equal the right
+  ; matrix's row count. Left is 3x4, right is 5x6, so the inner dimensions are
+  ; (size-static 4) and (size-static 5).
+  ; ERROR: 4 and 5 are statically known and unequal -> TUR-E0260
+  (size-assert-eq! (size-static 4) (size-static 5))
   0)

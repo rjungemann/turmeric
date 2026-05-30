@@ -1,0 +1,43 @@
+; Phase SZ7: static size checking -- accept + runtime fallback.
+;
+; size-assert-eq! / size-assert-le! on two statically-known sizes are decided
+; at compile time. This file exercises the two non-error outcomes:
+;   - static-accept: both sizes reduce to the same constant (no error).
+;   - runtime-fallback: a size derived from a runtime value is not statically
+;     known, so the existing runtime assertion guards it instead.
+; (The static-reject outcome lives in errors/sized-sz7-static-reject.)
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-static [n :int] :Size (Static n))
+(defn size-add [s1 :Size s2 :Size] :Size (Add s1 s2))
+(defn size-mul [s1 :Size s2 :Size] :Size (Mul s1 s2))
+
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)  n
+    (Add a b)   (+ (size-eval a) (size-eval b))
+    (Mul a b)   (* (size-eval a) (size-eval b))))
+
+(defn size-assert-eq! [s1 :Size s2 :Size] :nil
+  (require-msg! (= (size-eval s1) (size-eval s2))
+    "sized type mismatch: sizes are not equal"))
+
+(defn size-assert-le! [s1 :Size s2 :Size] :nil
+  (require-msg! (<= (size-eval s1) (size-eval s2))
+    "sized type mismatch: size exceeds upper bound"))
+
+(defn main [] :int
+  ; static-accept: 4 == 2 + 2, decided at compile time, no error
+  (size-assert-eq! (size-static 4) (size-add (size-static 2) (size-static 2)))
+  ; static-accept: 3 <= 10
+  (size-assert-le! (size-static 3) (size-static 10))
+  ; runtime-fallback: (size-static n) is not statically known (n is a runtime
+  ; binding), so this lowers to the runtime assertion and passes at run time
+  (let [n 6]
+    (size-assert-eq! (size-static n) (size-static 6)))
+  (println 1)
+  0)

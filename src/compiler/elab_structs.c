@@ -1512,6 +1512,19 @@ static void gadt_build_skolem_env(Elab *e, SkolemEnv *out, const AdtDef *def,
         const char *param_name = def->type_params[i];
         TypeKind k = TY_UNKNOWN;
         Type *full_type = NULL;
+        /* SZ6: capture a type-level size index when this argument is a Size
+         * expression `(Static n)`, `(Add a b)`, or `(Mul a b)`.  Detected
+         * structurally by the head symbol, so ordinary ADT applications like
+         * `(Foo int)` are never mistaken for size terms. */
+        SizeTerm *size_index = NULL;
+        if (arg->tag == F_LIST && arg->as.list.len >= 1 &&
+                arg->as.list.items[0]->tag == F_SYM) {
+            const char *op = arg->as.list.items[0]->as.sym->name;
+            if (strcmp(op, "Static") == 0 || strcmp(op, "Add") == 0 ||
+                    strcmp(op, "Mul") == 0) {
+                size_index = size_term_from_form(e->arena, arg, NULL, NULL);
+            }
+        }
 
         if (arg->tag == F_SYM) {
             const char *an = arg->as.sym->name;
@@ -1559,10 +1572,11 @@ static void gadt_build_skolem_env(Elab *e, SkolemEnv *out, const AdtDef *def,
             }
         }
 
-        if (k != TY_UNKNOWN) {
-            out->bindings[out->n].name      = param_name;
-            out->bindings[out->n].kind      = k;
-            out->bindings[out->n].full_type = full_type;
+        if (k != TY_UNKNOWN || size_index) {
+            out->bindings[out->n].name       = param_name;
+            out->bindings[out->n].kind       = k;
+            out->bindings[out->n].full_type  = full_type;
+            out->bindings[out->n].size_index = size_index;
             out->n++;
         }
     }
