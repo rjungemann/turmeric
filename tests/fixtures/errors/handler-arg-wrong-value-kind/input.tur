@@ -1,0 +1,11 @@
+;; PH3.1: a handler whose concrete result kind (int) is passed where a
+;; parameter declares a handler with a different, non-wildcarded result kind
+;; (cstr).  The handled-effect set matches (#{Ask}) but the result kinds do
+;; not, so PH1.2's type_is_subtype rejects it with TUR-E0001 and PH1.3 names
+;; both handler types.
+(defeffect Ask [] :int)
+(defn want-cstr-result [h :(handler #{Ask} int cstr)] :int
+  0)
+(defn pass-int-result [h :(handler #{Ask} int int)] :int
+  (want-cstr-result h))
+(defn main [] :int 0)

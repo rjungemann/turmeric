@@ -6,7 +6,7 @@ description: Two follow-ups surfaced by the first-class-handlers work -- making 
 
 # Handler Arg-Checking + `type_name` Ownership -- Follow-up Plan
 
-> **Status:** PH0 decided; PH1-PH3 in progress. Captures the two caveats called out at the end of
+> **Status:** Complete (PH0-PH3). Captures the two caveats called out at the end of
 > [first-class-handlers-plan.md](first-class-handlers-plan.md) FH4.1. Both are
 > pre-existing and **independent of** the first-class-handler *feature* (which
 > is complete and correct); they surfaced because handler types now appear in
@@ -198,12 +198,30 @@ static check and (2) is a memory-hygiene defect.
   - handler argument with mismatched value/result kind (where not wildcarded)
     -> `TUR-E0001`.
   *Done when:* both fail at compile time with the expected message substrings.
+
+  **Status: done.** Added `tests/fixtures/errors/handler-arg-wrong-effect-set/`
+  (single-effect handler passed where `handler<Ask | Tell, int, int>` is
+  required) and `tests/fixtures/errors/handler-arg-wrong-value-kind/` (matching
+  `#{Ask}` row but result kind `int` vs the required, non-wildcarded `cstr`).
+  Each carries a `flags` file (`-Xeffect-types`) and an `expected.diag` asserting
+  `TUR-E0001` plus both `expected handler<...>` / `got handler<...>` substrings.
+  Both run green under `tests/run.sh` (suite: 1097 passed, 0 failed).
 - **PH3.2** Leak regression gate. Because `tests/run.sh` compiles the *generated
   program* without ASan and only the `tur` binary is sanitized, add a check that
   actually exercises the sanitized compiler on an error path -- e.g. a ctest
   target (or `run.sh` hook) that runs `tur check` on a handler-mismatch fixture
   under `ASAN_OPTIONS=detect_leaks=1` and asserts a clean exit. *Done when:* a
   reintroduced `type_name` leak on a composite-type diagnostic fails CI.
+
+  **Status: done.** Added `tests/run-leak-gate.sh` and registered it as the
+  `tur_leak_gate` ctest target. It runs the sanitized `tur -Xeffect-types check`
+  on both PH3.1 handler-mismatch fixtures with
+  `ASAN_OPTIONS=detect_leaks=1`, asserts the `TUR-E0001` diagnostic fires (so we
+  are genuinely on the error path) and that LeakSanitizer reports no leak.
+  Verified the gate *catches* regressions: temporarily restoring the leaking
+  `type_name(args[i]->type)` call made it fail with
+  `SUMMARY: AddressSanitizer: 87 byte(s) leaked in 2 allocation(s)`; reverting
+  the leak makes it pass again.
 
 ---
 
