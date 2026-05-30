@@ -6,11 +6,12 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
-> **Status:** Phases TY0 (doc/comment drift), TY1 (flag-graduation
-> decision), TY2 (`any` boxing + `cast`/`type-of`), TY3 (`if`-guard
-> narrowing), TY4 (lifetime inference / elision depth), and TY5
-> (multi-capture HKT closures) complete. TY6 (continuation typing) is
-> cross-referenced to the control-flow plan (CF2-CF4). Companion to
+> **Status:** All phases TY0-TY6 complete. TY0 (doc/comment drift), TY1
+> (flag-graduation decision), TY2 (`any` boxing + `cast`/`type-of`), TY3
+> (`if`-guard narrowing), TY4 (lifetime inference / elision depth), TY5
+> (multi-capture HKT closures), TY6 (continuation typing, confirmed via
+> CF2-CF4 in control-flow plan). All 1.0 advanced-typing exit criteria met.
+> Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -25,7 +26,7 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 > (phases CF4, CF3, CF2). This plan references them rather than duplicating
 > them -- see Phase TY6.
 >
-> **Last updated:** 2026-05-30 (TY5 complete)
+> **Last updated:** 2026-05-30 (TY5 + TY6 complete; all phases done)
 
 ---
 
@@ -433,15 +434,29 @@ section 5 is still unchecked.
 These are owned by the control-flow plan; tracked here only for completeness
 of the typing audit.
 
-- **TY6.1** `call/cc`/`escape` sugar stubs -> gated for 1.0. *Owner:*
-  control-flow plan **CF4**.
-- **TY6.2** `compose-handlers` nil placeholder -> implement-or-remove. *Owner:*
-  control-flow plan **CF3**.
-- **TY6.3** `shift`/`shift0` result-type placeholder -> real inference.
-  *Owner:* control-flow plan **CF2**.
-- **TY6.4** Confirm, at 1.0 sign-off, that CF2/CF3/CF4 have landed so the
-  typing audit's items 1--3 are closed. *Done when:* this plan's exit criteria
-  reference the merged CF phases.
+> **Status: complete (2026-05-30).** All three CF phases referenced below
+> shipped in commit `58ae3b3` (CF1-CF4) and are confirmed landed:
+> CF2 replaces the `body->type` placeholder in `elab_effects.c` with the
+> receiver's codomain; CF3 gates `compose-handlers` with `TUR-E0704`;
+> CF4 gates `call/cc`/`escape` behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`).
+> The typing audit's items 1-3 are closed. Exit criteria updated below.
+
+- **TY6.1** [x] `call/cc`/`escape` sugar stubs -> gated for 1.0. *Owner:*
+  control-flow plan **CF4**. *(Done: gated behind `-Xcallcc`; `TUR-E0700`/
+  `TUR-E0701` on ungated use. Fixtures `errors/callcc-gated`,
+  `errors/escape-gated`. CF4 complete 2026-05-30.)*
+- **TY6.2** [x] `compose-handlers` nil placeholder -> implement-or-remove.
+  *Owner:* control-flow plan **CF3**. *(Done: gated with `TUR-E0704`;
+  real implementation tracked in `first-class-handlers-plan.md`. Fixture
+  `errors/compose-handlers-gated`. CF3 complete 2026-05-30.)*
+- **TY6.3** [x] `shift`/`shift0` result-type placeholder -> real inference.
+  *Owner:* control-flow plan **CF2**. *(Done: `shift_result_type` in
+  `elab_effects.c` uses the receiver's codomain; body-type mismatch rejected
+  with `TUR-E0001`. Fixtures `shift-result-typing`, `shift0-result-typing`,
+  `errors/shift-body-type-mismatch`. CF2 complete 2026-05-30.)*
+- **TY6.4** [x] Confirm, at 1.0 sign-off, that CF2/CF3/CF4 have landed so
+  the typing audit's items 1--3 are closed. *(Confirmed: all three CF phases
+  merged; exit criteria below updated to reference them.)*
 
 ---
 
@@ -459,7 +474,9 @@ of the typing audit.
   claims more than it enforces (TY4).
 - Multi-capture HKT closures need no manual cast workaround (TY5).
 - The shared continuation-typing items are closed via the control-flow plan
-  (TY6).
+  (TY6): `shift`/`shift0` result typing (CF2), `compose-handlers` gated with
+  `TUR-E0704` (CF3), `call/cc`/`escape` gated behind `-Xcallcc` (CF4). All
+  confirmed landed.
 - `bash tests/run.sh` reports zero `FAIL` lines and all fixture snapshots are
   regenerated per CLAUDE.md.
 
