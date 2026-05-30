@@ -5,6 +5,7 @@
 void lifetime_context_init(LifetimeContext *ctx) {
     ctx->count = 0;
     ctx->n_constraints = 0;
+    for (uint8_t i = 0; i < MAX_LIFETIMES; i++) ctx->names[i] = NULL;
 }
 
 LifetimeId lifetime_context_add(LifetimeContext *ctx) {
@@ -13,6 +14,25 @@ LifetimeId lifetime_context_add(LifetimeContext *ctx) {
     }
     /* Assign a new unique ID (1-based to avoid LIFETIME_NONE) */
     LifetimeId id = ctx->count + 1;
+    ctx->names[ctx->count] = NULL;     /* anonymous (elision-created) */
+    ctx->ids[ctx->count++] = id;
+    return id;
+}
+
+LifetimeId lifetime_context_intern(LifetimeContext *ctx, const char *name) {
+    if (name != NULL) {
+        /* Idempotent: a name already seen resolves to its existing ID. */
+        for (uint8_t i = 0; i < ctx->count; i++) {
+            if (ctx->names[i] != NULL && strcmp(ctx->names[i], name) == 0) {
+                return ctx->ids[i];
+            }
+        }
+    }
+    if (ctx->count >= MAX_LIFETIMES) {
+        return LIFETIME_NONE;  /* Error: too many lifetime parameters */
+    }
+    LifetimeId id = ctx->count + 1;
+    ctx->names[ctx->count] = name;     /* may be NULL for an anonymous lifetime */
     ctx->ids[ctx->count++] = id;
     return id;
 }

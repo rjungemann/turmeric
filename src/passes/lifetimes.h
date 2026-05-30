@@ -26,6 +26,11 @@ typedef struct LifetimeContext {
     uint8_t   count;                     /* Number of lifetime parameters */
     LifetimeConstraint constraints[MAX_LIFETIMES * 2];  /* Outlives constraints */
     uint8_t   n_constraints;              /* Number of constraints */
+    /* LS0: name->ID resolution.  names[i] is the source spelling (including the
+     * leading apostrophe, e.g. "'a") of the lifetime whose ID is ids[i], or NULL
+     * for anonymous (elision-created) lifetimes.  Pointers must be stable for the
+     * context's lifetime -- pass interned/arena-allocated strings. */
+    const char *names[MAX_LIFETIMES];
 } LifetimeContext;
 
 /* Initialize a lifetime context */
@@ -33,6 +38,14 @@ void lifetime_context_init(LifetimeContext *ctx);
 
 /* Add a lifetime parameter to the context, returns its ID */
 LifetimeId lifetime_context_add(LifetimeContext *ctx);
+
+/* LS0: resolve a named lifetime (e.g. "'a") to a stable LifetimeId within this
+ * context.  Interning is idempotent: a repeated name returns the same ID, while
+ * a distinct name allocates a fresh one (matching how function type variables
+ * are implicitly quantified).  `name` must point to storage that outlives the
+ * context (interned symbol text or arena memory).  Returns LIFETIME_NONE if the
+ * per-function lifetime cap (MAX_LIFETIMES) is exhausted. */
+LifetimeId lifetime_context_intern(LifetimeContext *ctx, const char *name);
 
 /* Add an outlives constraint: parent: child */
 void lifetime_context_add_constraint(LifetimeContext *ctx, LifetimeId parent, LifetimeId child);
