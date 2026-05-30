@@ -551,6 +551,11 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.any_cast_.value);
             buf_putc(b, ')');
             break;
+        case EX_ANY_IS:
+            buf_puts(b, "(is? ");
+            expr_print(b, e->as.any_is_.value);
+            buf_printf(b, " tag=%lld)", (long long)e->as.any_is_.test_tag);
+            break;
         /* GF1: Generator forms */
         case EX_GEN:
             buf_puts(b, "(gen [])");

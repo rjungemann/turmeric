@@ -101,6 +101,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
         case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
         case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
+        case EX_ANY_IS:       /* TY3: pure tag test, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:

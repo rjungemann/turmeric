@@ -1029,6 +1029,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
+        case EX_ANY_IS: {
+            /* TY3: (is? x T) — compare the box tag to the tested TypeKind. */
+            char *inner = emit_value(ctx, body, e->as.any_is_.value);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "(TUR_GETTAG(%s) == %lld)",
+                       inner, (long long)e->as.any_is_.test_tag);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         case EX_ANY_CAST: {
             /* TY2.3: (cast x T) — checked downcast.  Verify the box tag matches
              * the target TypeKind; tur_panic on mismatch, otherwise unbox.

@@ -1265,6 +1265,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_as = intern_cstr(st, "as");   /* Phase N: (as Type expr) cast */
     e->sym_type_of = intern_cstr(st, "type-of");  /* IT4: (type-of x) */
     e->sym_cast    = intern_cstr(st, "cast");      /* IT4: (cast x T) */
+    e->sym_is_q    = intern_cstr(st, "is?");       /* TY3: (is? x T) type test */
     e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
     e->has_defmodule = false;

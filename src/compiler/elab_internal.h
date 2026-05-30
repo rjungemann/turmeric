@@ -409,6 +409,7 @@ typedef struct Elab {
     /* IT4 gradual typing */
     const Symbol *sym_type_of;  /* (type-of x) — cstr name of an any-typed value's type */
     const Symbol *sym_cast;     /* (cast x T) — unsafe downcast from any to T */
+    const Symbol *sym_is_q;     /* TY3: (is? x T) — runtime type test on an any value */
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -905,6 +906,7 @@ Expr *elab_tvar_cas(Elab *e, const Form *call);
 Expr *elab_as_cast(Elab *e, const Form *call);
 Expr *elab_any_type_of(Elab *e, const Form *call);
 Expr *elab_any_cast(Elab *e, const Form *call);
+Expr *elab_is_q(Elab *e, const Form *call);
 Expr *elab_form(Elab *e, Form *f);
 
 /* elab_global.c -- SS5: multi-party global protocol types */

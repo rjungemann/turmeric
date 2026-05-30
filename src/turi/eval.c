@@ -3665,6 +3665,24 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_cstr(tname);
     }
 
+    /* --- TY3: (is? x T) — runtime type test ------------------------------ */
+    case EX_ANY_IS: {
+        TuriValue v = eval_expr(env, frame, e->as.any_is_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        /* Map the runtime TuriValue tag to a TypeKind and compare to test_tag. */
+        TypeKind vk = TY_UNKNOWN;
+        switch (v.tag) {
+        case TURI_INT:    vk = TY_INT;      break;
+        case TURI_FLOAT:  vk = TY_FLOAT;    break;
+        case TURI_BOOL:   vk = TY_BOOL;     break;
+        case TURI_CSTR:   vk = TY_CSTR;     break;
+        case TURI_NIL:    vk = TY_NIL;      break;
+        case TURI_STRUCT: vk = TY_STRUCT;   break;
+        default: break;
+        }
+        return turi_bool((int64_t)vk == e->as.any_is_.test_tag);
+    }
+
     /* serial-reset: Phase 21 not yet implemented in interpreter. */
     case EX_SERIAL_RESET:
         return turi_errorf("eval: EX_SERIAL_RESET (Phase 21 serial-shift/reset) is not yet "

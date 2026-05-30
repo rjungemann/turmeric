@@ -571,6 +571,7 @@ Expr *elab_call(Elab *e, Form *call) {
     /* IT4: gradual typing */
     if (name == e->sym_type_of) return elab_any_type_of(e, call);
     if (name == e->sym_cast)    return elab_any_cast(e, call);
+    if (name == e->sym_is_q)    return elab_is_q(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);

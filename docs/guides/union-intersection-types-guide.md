@@ -342,33 +342,49 @@ matters for arrays, struct fields, and cache pressure.
 Widening (passing `42` where `(int | cstr)` is expected) requires constructing
 the tagged union at the call site -- it is not a free annotation.
 
-### Narrowing is `match`-Only
+### `if`-Guard Narrowing (`any`)
 
-There is no flow-sensitive narrowing outside `match`. `type-of` checks in `if`
-conditions do not narrow the elaborated type:
+Flow-sensitive narrowing works in `if` guards on an `any`-typed variable. A
+type-test guard in the condition refines the variable to the tested type inside
+the **then**-branch, so it can be used at that type with no explicit cast. Two
+guard shapes are recognized:
 
 ```turmeric
-;; Does not narrow -- elaboration error inside the branch
-(if (= (type-of x) "int")
-  (+ x 1)   ;; error: (int | cstr) is not int
-  ...)
+;; (is? x T) -- the dedicated type-test predicate
+(defn bump [x : any] :int
+  (if (is? x int)
+    (+ x 1)     ;; x is narrowed to int here -- no cast needed
+    0))
 
-;; Correct: use match
+;; (= (type-of x) "T") -- type-of compared against a string literal
+(if (= (type-of x) "int")
+  (+ x 1)
+  0)
+```
+
+Chaining handles multi-type dispatch:
+
+```turmeric
+(defn describe [v : any] :cstr
+  (if (is? v int)   "int"
+    (if (is? v bool) "bool"
+      (if (is? v Point) "point" "other"))))
+```
+
+`(is? x T)` is also a plain boolean predicate (it requires an `any`-typed
+argument, like `type-of` and `cast`). The runtime check compares the value's
+box tag to `T`; `T` may be a primitive, struct, or ADT name.
+
+**Supported guard shapes (narrow):** a direct `(is? x T)` or
+`(= (type-of x) "T")` test on a single `any` variable, used as the whole `if`
+condition. **Unsupported (do not narrow):** negation (`(not (is? x T))`),
+conjunction/disjunction of tests, the else-branch complement, and tests on
+union (`A | B`) variables. For unions, use `match`, which narrows exhaustively:
+
+```turmeric
 (match x
   (n : int)  (+ n 1)
   (s : cstr) ...)
-```
-
-```sweet-exp
-;; Does not narrow -- elaboration error inside the branch
-if {type-of(x) = "int"}
-  {x + 1}   ;; error: (int | cstr) is not int
-  ...
-
-;; Correct: use match
-match x
-  (n : int)  {n + 1}
-  (s : cstr) ...
 ```
 
 ### Intersection is Constraint-Only

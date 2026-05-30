@@ -639,6 +639,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_expr_recursive(ctx, e->as.any_type_of_.value);
         case EX_ANY_CAST:
             return borrow_check_expr_recursive(ctx, e->as.any_cast_.value);
+        case EX_ANY_IS:
+            return borrow_check_expr_recursive(ctx, e->as.any_is_.value);
         /* GF1: Generator forms -- check sub-expressions */
         case EX_GEN:
             return e->as.gen_.def && e->as.gen_.def->body

@@ -7,8 +7,9 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
 > **Status:** Phases TY0 (doc/comment drift), TY1 (flag-graduation
-> decision), and TY2 (`any` boxing + `cast`/`type-of`) complete. TY3
-> (`if`-guard narrowing) is the next implementation phase. Companion to
+> decision), TY2 (`any` boxing + `cast`/`type-of`), and TY3 (`if`-guard
+> narrowing) complete. TY4 (lifetime inference / elision depth) is the next
+> implementation phase. Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -63,7 +64,7 @@ Non-goals (deferred, tracked in the audit):
 | TY0 | 9 | Cleanup ✅ | Doc/comment drift; cheap, unblocks honest flag decision |
 | TY1 | 8 | Decision ✅ | Flag-graduation matrix; gates what "1.0 typing" means |
 | TY2 | 4 | Implement ✅ | `any` boxing codegen + `cast`/`type-of` |
-| TY3 | 7 | Implement | Flow-sensitive narrowing in `if` guards |
+| TY3 | 7 | Implement ✅ | Flow-sensitive narrowing in `if` guards |
 | TY4 | 5 | Implement | Lifetime inference / elision depth (full machinery) |
 | TY5 | 6 | Implement | Multi-capture closures in HKT (remove manual cast) |
 | TY6 | 1,2,3 | Cross-ref | Shared continuation-typing items (see control-flow plan) |
@@ -262,21 +263,50 @@ payloads (cstr/struct/ADT) have no boxing wrapper, and `(cast x : T)` /
 Union narrowing works inside `match` but not in `if` guards: a `(type-of x)`
 test in an `if` condition does not refine the branch type.
 
-- **TY3.1** Define the narrowing rule for `if`: a `type-of`/type-test guard in
-  the condition refines `x` to the tested type in the then-branch (and to the
-  complement, where representable, in the else-branch). *Done when:* the rule
-  and its supported guard shapes are written down.
-- **TY3.2** Implement the refinement in the `if` typing path, reusing the
+> **Status: complete (2026-05-30).** A precondition surfaced during
+> implementation: the plan's example guard `(= (type-of x) "int")` did not even
+> *elaborate*, because `=` has no cstr overload. Rather than add general
+> cstr-equality, TY3 adds a dedicated `(is? x T)` type-test predicate (returns
+> bool; emits `TUR_GETTAG(x) == tag`) and recognizes **both** guard shapes
+> syntactically: `(is? x T)` and `(= (type-of x) "T")`. The latter is rewritten
+> to the canonical `(is? x T)` so it elaborates. Narrowing itself is a pure
+> elaboration rewrite -- the then-branch is wrapped in
+> `(let [x (cast x T)] ...)`, reusing the TY2 checked cast, so a use of `x` at
+> type `T` type-checks with no explicit cast and the runtime tag is verified on
+> branch entry. No new codegen beyond the `is?` node. Tests: 1056 pass
+> (1051 + 5 new fixtures), 0 fail.
+
+- **TY3.1** [x] Define the narrowing rule for `if`: a type-test guard in the
+  condition refines `x` to the tested type in the then-branch. *Done when:* the
+  rule and its supported guard shapes are written down. *(Two shapes:
+  `(is? x T)` and `(= (type-of x) "T")`, on a single `any` variable, as the
+  whole condition. Documented in the union-intersection guide's "`if`-Guard
+  Narrowing" section.)*
+- **TY3.2** [x] Implement the refinement in the `if` typing path, reusing the
   in-`match` narrowing machinery where possible. *Done when:* a value used at
   the narrowed type inside the then-branch type-checks without an explicit
-  cast.
-- **TY3.3** Decide and document the boundary: which guard shapes narrow (direct
-  `type-of` test) vs. which do not (negation, conjunction) for 1.0. *Done
-  when:* unsupported shapes are documented and do not silently mis-narrow.
-- **TY3.4** Fixtures: narrowing then-branch (ok), narrowed else-branch where
-  applicable, and an unsupported guard shape (no narrowing, explicit cast
-  still required). *Done when:* all green and snapshotted; the union guide
-  documents `if`-guard narrowing.
+  cast. *(Implemented in `elab_if` as a `(let [x (cast x T)] ...)` rewrite of
+  the then-branch -- reuses TY2's checked cast and the existing `let`
+  shadow-binding machinery.)*
+- **TY3.3** [x] Decide and document the boundary: which guard shapes narrow vs.
+  which do not. *Done when:* unsupported shapes are documented and do not
+  silently mis-narrow. *(Narrow: direct `(is? x T)` / `(= (type-of x) "T")` on
+  an `any` variable. Do NOT narrow: negation, conjunction/disjunction, the
+  else-complement, and union-typed variables -- those still require `match` or
+  an explicit cast and fail loudly if the value is misused. Error fixture
+  `errors/if-narrow-negation-no` pins the negation boundary.)*
+- **TY3.4** [x] Fixtures: narrowing then-branch (ok) and an unsupported guard
+  shape (no narrowing, explicit cast still required). *Done when:* all green and
+  snapshotted; the union guide documents `if`-guard narrowing. *(Five fixtures:
+  `if-narrow-isq`, `if-narrow-typeof-eq`, `if-narrow-chained`,
+  `any-is-predicate`, and `errors/if-narrow-negation-no`.)*
+
+> **Scope note (else-complement).** The plan's optional "narrow the else-branch
+> to the complement" was scoped out for 1.0: the only representable case is a
+> 2-member union, but union variables are not `is?`/`cast`-narrowable (those are
+> `any`-only) and already narrow exhaustively via `match`. For an `any`
+> variable the complement is not a single type. So TY3 narrows the then-branch
+> on `any` only; this is documented rather than half-implemented.
 
 ---
 

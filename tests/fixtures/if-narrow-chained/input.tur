@@ -1,0 +1,30 @@
+; TY3: chained if-narrowing dispatches on multiple types, each branch using the
+; value at its narrowed type (struct fields, int arithmetic) without a cast.
+
+(defstruct Point [x :int y :int])
+
+(defn describe [v : any] :cstr
+  (if (is? v int)
+    "int"
+    (if (is? v bool)
+      "bool"
+      (if (is? v Point)
+        "point"
+        "other"))))
+
+(defn value [v : any] :int
+  (if (is? v Point)
+    (+ (.x v) (.y v))   ; v narrowed to Point
+    (if (is? v int)
+      v                 ; v narrowed to int
+      -1)))
+
+(defn main [] :int
+  (println (describe 42))
+  (println (describe true))
+  (println (describe (make-struct Point 1 2)))
+  (println (describe "hi"))
+  (println (value (make-struct Point 3 4)))
+  (println (value 99))
+  (println (value "x"))
+  0)

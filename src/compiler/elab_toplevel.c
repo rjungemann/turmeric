@@ -116,6 +116,46 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
     return out;
 }
 
+/* TY3: (is? x T) — runtime type test on an `any`-typed value.  Returns bool:
+ * true iff x's stored box tag is T's TypeKind.  T may be a primitive, struct,
+ * or ADT name.  Used directly, or as an `if` guard that narrows x to T. */
+Expr *elab_is_q(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'is?' requires exactly two arguments: (is? x T)");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    if (val->type.kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'is?' expects an 'any'-typed first argument, got '%s'",
+                  type_name(val->type));
+        return NULL;
+    }
+    Form *type_form = call->as.list.items[2];
+    if (type_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'is?' expects a type name as second argument");
+        return NULL;
+    }
+    TypeKind test_kind = typekind_from_symbol(type_form->as.sym->name);
+    if (test_kind == TY_UNKNOWN) {
+        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
+        if (!named) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "unknown type '%s' in 'is?'", type_form->as.sym->name);
+            return NULL;
+        }
+        test_kind = named->kind;
+    }
+    Type bool_t = type_simple(TY_BOOL, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);
+    out->as.any_is_.value = val;
+    out->as.any_is_.test_tag = (int64_t)test_kind;
+    return out;
+}
+
 Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
