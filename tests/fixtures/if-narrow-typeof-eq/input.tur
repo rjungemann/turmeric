@@ -1,0 +1,12 @@
+; TY3: the (= (type-of x) "T") guard shape also narrows x to T in the
+; then-branch. The condition is rewritten to the canonical (is? x T) test.
+
+(defn bump [x : any] :int
+  (if (= (type-of x) "int")
+    (+ x 1)     ; x is narrowed to int here -- no cast needed
+    0))
+
+(defn main [] :int
+  (println (bump 41))
+  (println (bump "hi"))
+  0)

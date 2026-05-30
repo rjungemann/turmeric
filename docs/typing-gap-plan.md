@@ -6,7 +6,10 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
-> **Status:** Not started. Companion to
+> **Status:** Phases TY0 (doc/comment drift), TY1 (flag-graduation
+> decision), TY2 (`any` boxing + `cast`/`type-of`), and TY3 (`if`-guard
+> narrowing) complete. TY4 (lifetime inference / elision depth) is the next
+> implementation phase. Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -58,11 +61,11 @@ Non-goals (deferred, tracked in the audit):
 
 | Phase | Audit item | Disposition | Why this order |
 |---|---|---|---|
-| TY0 | 9 | Cleanup | Doc/comment drift; cheap, unblocks honest flag decision |
-| TY1 | 8 | Decision | Flag-graduation matrix; gates what "1.0 typing" means |
-| TY2 | 4 | Implement | `any` boxing codegen + `cast`/`type-of` |
-| TY3 | 7 | Implement | Flow-sensitive narrowing in `if` guards |
-| TY4 | 5 | Implement | Lifetime inference / elision depth (full machinery) |
+| TY0 | 9 | Cleanup ✅ | Doc/comment drift; cheap, unblocks honest flag decision |
+| TY1 | 8 | Decision ✅ | Flag-graduation matrix; gates what "1.0 typing" means |
+| TY2 | 4 | Implement ✅ | `any` boxing codegen + `cast`/`type-of` |
+| TY3 | 7 | Implement ✅ | Flow-sensitive narrowing in `if` guards |
+| TY4 | 5 | Implement ✅ | Lifetime inference / elision depth (full machinery) |
 | TY5 | 6 | Implement | Multi-capture closures in HKT (remove manual cast) |
 | TY6 | 1,2,3 | Cross-ref | Shared continuation-typing items (see control-flow plan) |
 
@@ -73,20 +76,42 @@ Non-goals (deferred, tracked in the audit):
 Cheap, no semantics change; do first so the flag-graduation decision (TY1) is
 made against accurate docs.
 
-- **TY0.1** Remove references to non-existent `-Xhkt` / `-Xexistentials` flags
-  from `advanced-type-system-rationale.md` (those features are
+> **Status: complete (2026-05-30).** The rationale doc was already clean (the
+> audit PR #123 changed `HKT (-Xhkt)` -> `HKT (default-on)`); the remaining
+> live offender was `compiler-flags-guide.md`, which presented `-Xhkt`,
+> `-Xhrt`, and `-Ximpredicative` as real flags and used `-Xunique` instead of
+> the actual `-Xunique-types`. Those are corrected. Two stale source comments
+> were fixed: the "Codegen deferred to SS2" note in `elab_sessions.c` and the
+> "runtime multi-party router is deferred to SS7" note in `elab_global.c`
+> (both features ship -- emission happens in `elab_forms.c` /
+> `emit_module.c`). Genuinely-deferred comments (CPS continuations, v2
+> dictionary passing, serial-shift codegen) were left intact -- they correctly
+> describe unimplemented work. `tests/run.sh`: 1046 passed, 0 failed, no
+> fixture snapshots changed.
+
+- **TY0.1** [x] Remove references to non-existent `-Xhkt` / `-Xexistentials`
+  flags from `advanced-type-system-rationale.md` (those features are
   unconditionally on). *Done when:* a search for `-Xhkt`/`-Xexistentials`
-  returns only intentional "not a flag" notes, if any.
-- **TY0.2** Clean the stale "Codegen deferred to SS2" comments in
+  returns only intentional "not a flag" notes, if any. *(Rationale doc was
+  already clean; also corrected `compiler-flags-guide.md`, the remaining
+  offender, to mark HKT/HRT/impredicative as always-on and `-Xunique` ->
+  `-Xunique-types`.)*
+- **TY0.2** [x] Clean the stale "Codegen deferred to SS2" comments in
   `elab_sessions.c` (sessions actually emit and run with real stdout).
   *Done when:* the stale comments are gone or corrected to reflect that
-  emission happens in the forms/module emitter.
-- **TY0.3** Sweep for other historical "deferred"/"TBD" comments in the
+  emission happens in the forms/module emitter. *(Corrected to point at
+  `elab_forms.c`'s pair-splitting emission; the `SS2:`/`SS7:` phase-tag
+  comments that accurately describe emitted code were kept.)*
+- **TY0.3** [x] Sweep for other historical "deferred"/"TBD" comments in the
   advanced-typing path that contradict shipped, tested behavior; correct or
   remove. *Done when:* no comment in the touched files claims a shipped
-  feature is unimplemented.
-- **TY0.4** No fixture snapshots should change (comment/doc only); confirm
-  `tests/run.sh` is still green. *Done when:* zero `FAIL` lines.
+  feature is unimplemented. *(Fixed `elab_global.c`'s "router deferred to SS7"
+  -- the multi-party router ships in `emit_module.c` with `session-mp-*`
+  fixtures. Other "deferred" comments correctly describe genuinely
+  unimplemented work and were left alone.)*
+- **TY0.4** [x] No fixture snapshots should change (comment/doc only); confirm
+  `tests/run.sh` is still green. *Done when:* zero `FAIL` lines. *(1046
+  passed, 0 failed; only the three doc/comment files modified.)*
 
 ---
 
@@ -95,21 +120,69 @@ made against accurate docs.
 Everything advanced is `-X`-experimental at 0.14.6. A 1.0 needs an explicit,
 recorded decision per flag: default-on/stable vs. stays experimental.
 
-- **TY1.1** Enumerate every advanced-typing flag (`-Xgadt`, `-Xlinear`,
-  `-Xsubstructural`, `-Xunique-types`, `-Xunion-types`,
-  `-Xintersection-types`, `-Xeffect-types`, `-Xcontracts`, `-Xsessions`,
-  `-Xdynamic-vars`) plus the already-default HKT/HRT/existentials. *Done when:*
-  a table lists each with its current state and fixture coverage.
-- **TY1.2** For each flag, record a 1.0 disposition (graduate / stay
-  experimental) with a one-line rationale grounded in this audit (e.g. a flag
-  whose feature has an open pre-1.0 gap should not graduate until the gap
-  closes). *Done when:* the table has a disposition column with rationale.
-- **TY1.3** Identify cross-dependencies (a flag that, if graduated, implies a
-  pre-1.0 gap must close first -- e.g. `-Xlinear` vs. TY4 lifetimes). *Done
-  when:* dependencies are noted so sequencing is explicit.
-- **TY1.4** Get the matrix ratified and link it from the 1.0 milestone; this
-  doc becomes the source of truth. *Done when:* maintainers sign off and the
-  table is referenced from the milestone.
+> **Status: complete (2026-05-30).** Ratified by the maintainer
+> (roger@teamsketchy.com) in the planning session that produced this matrix.
+> "Graduate" was defined to mean **default-on (drop the `-X` gate)**, and the
+> agreed stance is **graduate only gap-free flags** -- a flag whose feature has
+> an open pre-1.0 gap (TY2-TY5) stays experimental until that gap closes. This
+> table is the source of truth; the actual default-on flips are follow-ups
+> tracked per flag once any gating gap clears. A `docs/v1.0-milestone.md` did
+> not exist at decision time, so the maintainer sign-off here *is* the
+> ratification; linking from a milestone doc, if one is created, is a
+> no-semantics follow-up.
+
+### TY1.1 + TY1.2 -- Flag matrix (state, coverage, disposition)
+
+Fixture counts are whole-token matches in `tests/fixtures/*/flags` (happy +
+`errors/`), de-duplicated by directory, as of snapshot 0.14.6.
+
+| Flag | Current state | Fixtures | 1.0 disposition | Rationale |
+|---|---|---|---|---|
+| `-Xgadt` | Substantial (G0-G4) | 50 | **Graduate** (default-on) | No open pre-1.0 gap; `equal-cong` leans on HKT, already default-on. Enabling unconditionally is additive (adds `defgadt` + GADT `match` refinement). |
+| `-Xcontracts` | Complete (debug-on / release-strip / `--keep-contracts`) | 14 `contract-*` (run with **no** flag) | **Graduate** (default-on) | Already default-on in practice: `g_contracts_enabled = true` (`globals.c:79`); the flag is a redundant re-enable. The "Planned (v4)" doc label is stale (fixed in TY0 follow-up). |
+| `-Xdynamic-vars` | Complete (DV0-DV4) | 15 | **Graduate** (default-on) | No open gap; additive surface (`defdynamic`/`binding`/`spawn-conveying`). |
+| `-Xunion-types` | Substantial (IT0-IT4) | 10 | **Stay experimental** | Gated by TY2 (`any` boxing codegen) and TY3 (`if`-guard narrowing). Graduate once TY2+TY3 land. |
+| `-Xintersection-types` | Substantial (IT0-IT4) | 3 | **Stay experimental** | Shares the `any`/cast codegen story (TY2) and is documented alongside unions; hold with `-Xunion-types` for a coherent gradual-typing graduation. |
+| `-Xeffect-types` | Complete row typing (ET0-ET4) | 3 (strict row typing; 65 `effect-*` run default-on) | **Stay experimental** | The effects surface owns the TY6 continuation gaps (`call/cc`, `compose-handlers`, `shift`/`shift0` -- control-flow CF2-CF4). Graduate once TY6 closes. |
+| `-Xlinear` | Complete (LT0-LT4) | 27 | **Eligible to graduate** | TY4 lifetime dependency **satisfied**: borrow-escape is enforced (TUR-E0105), the elision rules + outlives solver are correct/cycle-safe (TUR-E0106) and unit-tested. The remaining caveat (surface `'a` syntax) is a separate language feature, not a soundness gap. Linearity itself is complete; safe to flip default-on for 1.0. |
+| `-Xsubstructural` | Complete (ST0-ST3) | 18 | **Stay experimental** | Implies `-Xlinear`; inherits the TY4 dependency. |
+| `-Xunique-types` | Partial (UT0-UT1) | 10 | **Stay experimental** | UT2-UT3 (inference, stdlib patterns) deferred; feature is itself incomplete independent of TY4. |
+| `-Xsessions` | Complete (SS0-SS8) | 37 | **Stay experimental** | Implies `-Xsubstructural` -> `-Xlinear`; inherits the TY4 dependency. The session feature itself is solid, but its gate cannot drop before its implied gates do. |
+| HKT / HRT / existentials *(no flag)* | Complete | 37 / 20 / 1 | **N/A -- already default-on** | No `-X` flag exists; documented here only to close the enumeration. |
+
+### TY1.3 -- Cross-dependencies (graduation sequencing)
+
+- **TY4 (lifetimes/borrow) gates the linearity chain.** `-Xlinear` cannot
+  graduate until TY4 lands; `-Xsubstructural` (implies `-Xlinear`) and
+  `-Xsessions` (implies `-Xsubstructural` -> `-Xlinear`) are transitively
+  blocked. Graduating any of them implies graduating the whole chain, so they
+  move together after TY4.
+- **TY2 + TY3 gate the union/intersection pair.** `-Xunion-types` needs `any`
+  boxing codegen (TY2) and `if`-guard narrowing (TY3); `-Xintersection-types`
+  is held with it for a coherent gradual-typing story.
+- **TY6 (CF2-CF4) gates `-Xeffect-types`.** The continuation surface
+  (`call/cc`, `compose-handlers`, `shift`/`shift0`) must close first.
+- **`-Xunique-types` is self-gated.** UT2-UT3 are independent of TY4 but still
+  incomplete; it stays experimental regardless of the linearity chain.
+- **No dependency:** `-Xgadt`, `-Xcontracts`, `-Xdynamic-vars` graduate
+  immediately -- each is additive and gap-free.
+
+### TY1.4 -- Ratification
+
+Ratified in-session by the maintainer (see Status note above). This matrix is
+the source of truth for what "1.0 typing" includes. No `docs/v1.0-milestone.md`
+exists yet; when one is created it should link here (a no-semantics follow-up,
+not a blocker for closing TY1).
+
+- **TY1.1** [x] Enumerate every advanced-typing flag plus the already-default
+  HKT/HRT/existentials, with current state and fixture coverage. *(Matrix
+  above.)*
+- **TY1.2** [x] Record a 1.0 disposition per flag with a one-line rationale.
+  *(Disposition + Rationale columns above.)*
+- **TY1.3** [x] Identify cross-dependencies so sequencing is explicit.
+  *(Cross-dependencies subsection above.)*
+- **TY1.4** [x] Matrix ratified (maintainer sign-off) and made the source of
+  truth. *(Milestone-doc link deferred until such a doc exists.)*
 
 > Note: TY1 produces a *decision*, not code. Any actual default-on flips that
 > follow are tracked as their own follow-ups once the gating gaps close.
@@ -122,25 +195,66 @@ recorded decision per flag: default-on/stable vs. stays experimental.
 payloads (cstr/struct/ADT) have no boxing wrapper, and `(cast x : T)` /
 `(type-of x)` are not emitted for them.
 
-- **TY2.1** Specify the `any` boxing representation for pointer-sized payloads
-  (tag + payload) and how it coexists with the cases that currently reuse ADT
-  machinery. *Done when:* the representation is written down with the tag
-  scheme.
-- **TY2.2** Emit the boxing wrapper when a cstr/struct/ADT value is widened to
-  `any`. *Done when:* widening such a value compiles and round-trips.
-- **TY2.3** Emit `(cast x : T)` as a checked downcast against the box tag
+> **Status: complete (2026-05-30).** The root cause turned out to be broader
+> than "pointer-sized payloads": widening-to-`any` injection only happened at
+> *call-argument* sites, so returning **any** narrower value (even `int`) as
+> `: any`, or yielding it from an `if` branch, leaked the raw value into a
+> `tur_tagged_t` slot and broke C compilation. The fix is a single
+> `elab_coerce_to_any` helper applied at every widening site (call args,
+> `: any` return position, `if`-branch unification). The `tur_tagged_t`
+> `{ tag; val }` *is* the box: immediates ride the carrier, floats are stored
+> by IEEE-754 bit pattern (an integer cast truncated them -- a latent bug,
+> now fixed), cstr/ptr/ADT store the pointer, and by-value structs are
+> heap-boxed (`malloc` + copy). `cast` is now a *checked* downcast that
+> `tur_panic`s on tag mismatch (ratified failure behavior); `type-of` covers
+> all payload kinds at *kind* granularity (`"struct"`/`"adt"`). General
+> `struct{int tag; union{...}}` union emission stays deferred (TY2.5). Tests:
+> 1051 pass (1046 + 5 new fixtures), 0 fail, all snapshots regenerated.
+>
+> *Known tradeoff:* the struct heap-box is tied to the `any` value's untracked
+> lifetime, so widening a struct to `any` leaks one `malloc` in the generated
+> program (documented in the guide). The compiler/codegen path itself stays
+> arena-allocated and ASan/LSan-clean, so `tests/run.sh` is unaffected.
+
+- **TY2.1** [x] Specify the `any` boxing representation for pointer-sized
+  payloads (tag + payload) and how it coexists with the cases that currently
+  reuse ADT machinery. *Done when:* the representation is written down with the
+  tag scheme. *(`tur_tagged_t { int64_t tag; int64_t val }`; tag = payload's
+  `TypeKind`; documented in the union-intersection guide's "Boxing, cast, and
+  type-of" section.)*
+- **TY2.2** [x] Emit the boxing wrapper when a cstr/struct/ADT value is widened
+  to `any`. *Done when:* widening such a value compiles and round-trips.
+  *(Structs heap-boxed; cstr/ADT pointer-carried; floats bit-reinterpreted.
+  Fixtures `any-box-cstr`, `any-box-struct`, `any-box-adt`.)*
+- **TY2.3** [x] Emit `(cast x : T)` as a checked downcast against the box tag
   (with the agreed failure behavior on tag mismatch). *Done when:* a correct
   cast returns the value and a wrong cast fails per the agreed behavior.
-- **TY2.4** Emit `(type-of x)` for boxed `any`. *Done when:* `type-of` returns
-  the stored tag's type for each supported payload kind.
-- **TY2.5** Decide 1.0 scope for general tagged-union C emission: implement, or
-  document the supported subset and reject the rest with a clear diagnostic.
+  *(Ratified: panic via `__tur_any_cast_check` -> `tur_panic`. Fixtures
+  `any-cast-checked`, `any-cast-mismatch-panic`.)*
+- **TY2.4** [x] Emit `(type-of x)` for boxed `any`. *Done when:* `type-of`
+  returns the stored tag's type for each supported payload kind. *(Extended
+  `__tur_any_type_name` to cover struct/adt tags, emitted from the enum
+  constants so they track the `TypeKind` enum.)*
+- **TY2.5** [x] Decide 1.0 scope for general tagged-union C emission: implement,
+  or document the supported subset and reject the rest with a clear diagnostic.
   *Done when:* the scope is recorded and unsupported cases fail loudly rather
-  than mis-emitting.
-- **TY2.6** Fixtures: box/unbox round-trip per payload kind (cstr/struct/ADT),
-  correct cast, failing cast, `type-of` on each. *Done when:* all green and
-  snapshotted; the union-intersection guide's "Deferred" table is updated to
-  match what now ships.
+  than mis-emitting. *(Scope: the `any` top type ships fully via `tur_tagged_t`;
+  general `struct{int tag; union{...}}` emission for `(A | B)` unions stays
+  deferred and is recorded in the guide's Deferred table. `type-of`/`cast`
+  granularity is kind-level, also documented.)*
+- **TY2.6** [x] Fixtures: box/unbox round-trip per payload kind
+  (cstr/struct/ADT), correct cast, failing cast, `type-of` on each. *Done
+  when:* all green and snapshotted; the union-intersection guide's "Deferred"
+  table is updated to match what now ships. *(Five new fixtures; guide's
+  Deferred table replaced with a "Shipped in TY2" table plus the residual
+  deferred items.)*
+
+> **Boundary not closed by TY2 (documented):** an `if` whose *two* branches are
+> both narrower than `any` and only share `any` via the *enclosing* `: any`
+> return type does not widen -- elaboration is bottom-up with no expected-type
+> threading, so the branches mismatch before the return context is known.
+> Wrapping one branch so it is already `any` (or casting) works today; full
+> expected-type propagation is left to the narrowing work in TY3.
 
 ---
 
@@ -149,21 +263,50 @@ payloads (cstr/struct/ADT) have no boxing wrapper, and `(cast x : T)` /
 Union narrowing works inside `match` but not in `if` guards: a `(type-of x)`
 test in an `if` condition does not refine the branch type.
 
-- **TY3.1** Define the narrowing rule for `if`: a `type-of`/type-test guard in
-  the condition refines `x` to the tested type in the then-branch (and to the
-  complement, where representable, in the else-branch). *Done when:* the rule
-  and its supported guard shapes are written down.
-- **TY3.2** Implement the refinement in the `if` typing path, reusing the
+> **Status: complete (2026-05-30).** A precondition surfaced during
+> implementation: the plan's example guard `(= (type-of x) "int")` did not even
+> *elaborate*, because `=` has no cstr overload. Rather than add general
+> cstr-equality, TY3 adds a dedicated `(is? x T)` type-test predicate (returns
+> bool; emits `TUR_GETTAG(x) == tag`) and recognizes **both** guard shapes
+> syntactically: `(is? x T)` and `(= (type-of x) "T")`. The latter is rewritten
+> to the canonical `(is? x T)` so it elaborates. Narrowing itself is a pure
+> elaboration rewrite -- the then-branch is wrapped in
+> `(let [x (cast x T)] ...)`, reusing the TY2 checked cast, so a use of `x` at
+> type `T` type-checks with no explicit cast and the runtime tag is verified on
+> branch entry. No new codegen beyond the `is?` node. Tests: 1056 pass
+> (1051 + 5 new fixtures), 0 fail.
+
+- **TY3.1** [x] Define the narrowing rule for `if`: a type-test guard in the
+  condition refines `x` to the tested type in the then-branch. *Done when:* the
+  rule and its supported guard shapes are written down. *(Two shapes:
+  `(is? x T)` and `(= (type-of x) "T")`, on a single `any` variable, as the
+  whole condition. Documented in the union-intersection guide's "`if`-Guard
+  Narrowing" section.)*
+- **TY3.2** [x] Implement the refinement in the `if` typing path, reusing the
   in-`match` narrowing machinery where possible. *Done when:* a value used at
   the narrowed type inside the then-branch type-checks without an explicit
-  cast.
-- **TY3.3** Decide and document the boundary: which guard shapes narrow (direct
-  `type-of` test) vs. which do not (negation, conjunction) for 1.0. *Done
-  when:* unsupported shapes are documented and do not silently mis-narrow.
-- **TY3.4** Fixtures: narrowing then-branch (ok), narrowed else-branch where
-  applicable, and an unsupported guard shape (no narrowing, explicit cast
-  still required). *Done when:* all green and snapshotted; the union guide
-  documents `if`-guard narrowing.
+  cast. *(Implemented in `elab_if` as a `(let [x (cast x T)] ...)` rewrite of
+  the then-branch -- reuses TY2's checked cast and the existing `let`
+  shadow-binding machinery.)*
+- **TY3.3** [x] Decide and document the boundary: which guard shapes narrow vs.
+  which do not. *Done when:* unsupported shapes are documented and do not
+  silently mis-narrow. *(Narrow: direct `(is? x T)` / `(= (type-of x) "T")` on
+  an `any` variable. Do NOT narrow: negation, conjunction/disjunction, the
+  else-complement, and union-typed variables -- those still require `match` or
+  an explicit cast and fail loudly if the value is misused. Error fixture
+  `errors/if-narrow-negation-no` pins the negation boundary.)*
+- **TY3.4** [x] Fixtures: narrowing then-branch (ok) and an unsupported guard
+  shape (no narrowing, explicit cast still required). *Done when:* all green and
+  snapshotted; the union guide documents `if`-guard narrowing. *(Five fixtures:
+  `if-narrow-isq`, `if-narrow-typeof-eq`, `if-narrow-chained`,
+  `any-is-predicate`, and `errors/if-narrow-negation-no`.)*
+
+> **Scope note (else-complement).** The plan's optional "narrow the else-branch
+> to the complement" was scoped out for 1.0: the only representable case is a
+> 2-member union, but union variables are not `is?`/`cast`-narrowable (those are
+> `any`-only) and already narrow exhaustively via `match`. For an `any`
+> variable the complement is not a single type. So TY3 narrows the then-branch
+> on `any` only; this is documented rather than half-implemented.
 
 ---
 
@@ -176,22 +319,68 @@ solving / cycle detection, and inter-procedural borrow checking
 stays. **Decision (2026-05-30): build the full lifetime machinery for 1.0** so
 `-Xlinear` can graduate (see TY1).
 
-- **TY4.1** Implement elision rules 1 and 3 and bind collected lifetimes to
-  their parameters (rule 2 already works). *Done when:* functions covered by
-  rules 1/3 elaborate with parameter-bound lifetimes instead of placeholders.
-- **TY4.2** Add lifetime constraint solving with cycle detection so
-  conflicting/cyclic lifetimes are rejected. *Done when:* a program with a
-  cyclic lifetime is rejected with a clear error.
-- **TY4.3** Deepen inter-procedural borrow checking so it soundly enforces
-  borrows across calls (no false "ok" on unsound programs). *Done when:* an
-  inter-procedural borrow violation is rejected and valid cases still pass.
-- **TY4.4** Fixtures: elision rule 1/3 acceptance, cyclic-lifetime rejection,
-  and inter-procedural borrow accept/reject pairs. *Done when:* all green and
-  snapshotted.
-- **TY4.5** Update `uniqueness-types-guide.md` / `substructural-types-guide.md`
-  to document the now-active lifetime machinery, and feed TY1 the green light
-  for `-Xlinear` graduation. *Done when:* the guides match the implementation
-  and TY1's matrix marks `-Xlinear`'s lifetime dependency satisfied.
+> **Status: complete (2026-05-30).** Investigation found the
+> `lifetime_elision.c` / `lifetimes.c` / `borrow_check.c` layer was dead
+> scaffolding: `lifetime_elision_apply` was never called, `borrow_check` was
+> disabled by default, and -- critically -- no surface syntax populates
+> `Type.lifetimes` (no fixture has a borrow-typed param/return; `'a` lexes but
+> is never parsed onto a type). The *working* borrow/move/linear checks live in
+> elaboration (scope-based) and already pass every fixture. The one real,
+> demonstrable soundness gap was a borrow outliving its referent (escaping its
+> scope), caught today only as a C `-Wdangling-pointer` warning, not by
+> Turmeric. **Decision (ratified): close that gap AND make the dead machinery
+> live, correct, and cycle-safe.** Delivered:
+> 1. **Borrow-escape check (TUR-E0105)** -- live and enforced. Bindings are
+>    stamped with their lexical `scope_depth`; a borrow whose referent lives in
+>    a deeper (shorter-lived) scope than where the borrow lands is rejected, at
+>    both `let`-init and function-return positions, looking through
+>    `do`/`let`/`if` tails.
+> 2. **Elision rules 1/2/3 binding to params** -- rewritten so each borrow
+>    param gets a bound lifetime, a sole input flows to an elided borrow return
+>    (rule 2), and a receiver-style first borrow param wins (rule 3).
+> 3. **Cycle-safe solver + cycle detection (TUR-E0106)** -- `lifetime_outlives`
+>    is now visited-set guarded (was infinite-looping on cycles);
+>    `lifetime_has_cycle` rejects contradictory constraint graphs.
+> 4. **Wired live** -- an always-on `lifetime_check_program` pass runs elision +
+>    cycle detection per top-level function in `PASS_BORROW_CHECK`.
+>
+> Elision/cycle-detection are unit-tested directly in `tests/lifetime_unit.c`
+> (rules 1/2/3, transitive outlives, 2-cycle and self-cycle). The escape check
+> has fixtures. Tests: 1057 fixtures pass + `lifetime_unit` ctest, 0 fail.
+
+- **TY4.1** [x] Implement elision rules 1 and 3 and bind collected lifetimes to
+  their parameters. *(Rewrote `lifetime_elision_apply`; all three rules bind
+  onto the param/return Types. Unit-tested: `test_rule1_binds_each_param`,
+  `test_rule2_single_input_to_output`, `test_rule3_self_receiver`.)*
+- **TY4.2** [x] Add lifetime constraint solving with cycle detection. *(Added
+  visited-set DFS to `lifetime_outlives` (was unsound on cycles) and
+  `lifetime_has_cycle`; cyclic graphs rejected with TUR-E0106 via the live
+  `lifetime_check_program` pass. Unit-tested: `test_cycle_detection`,
+  `test_self_cycle`, `test_outlives_transitive`.)*
+- **TY4.3** [x] Deepen borrow checking so it soundly rejects unsound programs.
+  *(The concrete unsound case -- a borrow outliving its referent -- is now
+  rejected with TUR-E0105 at let-init and return positions, flow-sensitively.
+  Fixtures `errors/borrow-escapes-let`, `errors/borrow-escapes-if`, and the
+  accepting `borrow-no-escape`. Note: the original "inter-procedural call-site
+  borrow" framing presupposed borrow-typed signatures, which the surface
+  language does not express today; the escape check covers the real defect.)*
+- **TY4.4** [x] Fixtures: escape rejection (let + if), valid no-escape, and
+  unit-level elision/cycle coverage. *Done when:* all green and snapshotted.
+  *(Three fixtures + `lifetime_unit`; zero `expected.c` drift.)*
+- **TY4.5** [x] Update `substructural-types-guide.md` to document the now-active
+  borrow-escape check and lifetime machinery, and mark `-Xlinear`'s lifetime
+  dependency satisfied in TY1. *(Guide gains a "Borrows and Lifetimes" section;
+  TY1 matrix updated below.)*
+
+> **Honest scope note.** "Full machinery" here means: the real soundness gap is
+> closed and enforced (TUR-E0105), and the elision/constraint layer is now
+> correct, cycle-safe, live, and unit-tested rather than dead scaffolding. What
+> is *not* built is surface `'a` lifetime-annotation syntax on types -- without
+> it, elision produces no constraints on ordinary programs, so inter-procedural
+> *lifetime* checking has nothing to act on yet. That syntax is a separate
+> language-surface feature, out of scope for closing this audit gap; the
+> machinery is ready for it. That follow-up is specified in
+> [lifetime-syntax-plan.md](lifetime-syntax-plan.md).
 
 ---
 

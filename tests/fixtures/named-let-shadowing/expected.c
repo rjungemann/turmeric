@@ -108,13 +108,24 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_GETTAG(x)  ((x).tag)
 static const char *__tur_any_type_name(int64_t tag) {
     switch (tag) {
-        case  1: return "nil";
-        case  2: return "bool";
-        case  3: return "int";
-        case  4: return "float";
-        case  5: return "cstr";
-        case  6: return "ptr";
+        case 1: return "nil";
+        case 2: return "bool";
+        case 3: return "int";
+        case 4: return "float";
+        case 5: return "cstr";
+        case 6: return "ptr";
+        case 18: return "struct";
+        case 19: return "adt";
         default: return "unknown";
+    }
+}
+static void tur_panic(const char *msg);
+static void __tur_any_cast_check(int64_t have, int64_t want) {
+    if (have != want) {
+        char __m[128];
+        snprintf(__m, sizeof(__m), "cast: any holds %s, not %s",
+                 __tur_any_type_name(have), __tur_any_type_name(want));
+        tur_panic(__m);
     }
 }
 /* Phase HRT2: existential type (opaque void* box) */

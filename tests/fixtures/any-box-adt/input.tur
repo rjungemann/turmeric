@@ -1,0 +1,20 @@
+; TY2.2/TY2.4: box an ADT value into `any` (ADTs are pointer-carried handles,
+; so they ride the int64_t carrier), read its tag with type-of, then cast it
+; back and match on it.
+
+(defdata Shape (Circle :int) (Square :int))
+
+(defn area [s :Shape] :int
+  (match s
+    (Circle r) (* r r)
+    (Square w) (* w w)))
+
+(defn box-shape [s :Shape] : any
+  s)
+
+(defn main [] :int
+  (let [a (box-shape (Circle 5))]
+    (println (type-of a))
+    (let [s (cast a Shape)]
+      (println (area s))))
+  0)

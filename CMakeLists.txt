@@ -187,6 +187,15 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_codegen_reinterpret"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# TY4: lifetime elision + outlives-cycle unit test
+add_test(
+  NAME tur_lifetime_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_lifetime_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_lifetime_unit PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # Phase S3: algebraic effects via eval core
 add_test(
   NAME tur_eval_effects

@@ -191,9 +191,11 @@ static Expr *session_inline_c(Elab *e, const char *code_str, uint32_t code_len,
 }
 
 /* (make-session P) — create a dual pair [Session[P], Session[Dual[P]]].
- * SS1: parses the protocol type P, computes dual(P), and returns a
+ * Parses the protocol type P, computes dual(P), and returns a
  * TY_SESSION_PAIR expression so that vector destructuring can assign
- * the correct Session types to each binding. Codegen is deferred to SS2. */
+ * the correct Session types to each binding. The actual emission
+ * (tur_session_new() for fst, __TUR_CAP_0__ for snd) happens when
+ * elab_forms.c splits the pair during destructuring. */
 Expr *elab_session_make(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,

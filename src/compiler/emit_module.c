@@ -1664,16 +1664,35 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
     buf_puts(out, "#define TUR_UNTAG(x)   ((x).val)\n");
     buf_puts(out, "#define TUR_GETTAG(x)  ((x).tag)\n");
-    /* IT4: (type-of x) helper — maps TypeKind tag to a cstr type name. */
+    /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
+     * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
+     * struct/ADT cases are emitted from the actual enum constants rather than
+     * hard-coded integers (their numeric values move as the enum grows).  Note
+     * the tag carries kind granularity only: every struct shares the "struct"
+     * tag and every ADT the "adt" tag (see the union-intersection guide). */
     buf_puts(out, "static const char *__tur_any_type_name(int64_t tag) {\n");
     buf_puts(out, "    switch (tag) {\n");
-    buf_puts(out, "        case  1: return \"nil\";\n");
-    buf_puts(out, "        case  2: return \"bool\";\n");
-    buf_puts(out, "        case  3: return \"int\";\n");
-    buf_puts(out, "        case  4: return \"float\";\n");
-    buf_puts(out, "        case  5: return \"cstr\";\n");
-    buf_puts(out, "        case  6: return \"ptr\";\n");
+    buf_printf(out, "        case %d: return \"nil\";\n",   (int)TY_NIL);
+    buf_printf(out, "        case %d: return \"bool\";\n",  (int)TY_BOOL);
+    buf_printf(out, "        case %d: return \"int\";\n",   (int)TY_INT);
+    buf_printf(out, "        case %d: return \"float\";\n", (int)TY_FLOAT);
+    buf_printf(out, "        case %d: return \"cstr\";\n",  (int)TY_CSTR);
+    buf_printf(out, "        case %d: return \"ptr\";\n",   (int)TY_PTR_VOID);
+    buf_printf(out, "        case %d: return \"struct\";\n", (int)TY_STRUCT);
+    buf_printf(out, "        case %d: return \"adt\";\n",    (int)TY_ADT);
     buf_puts(out, "        default: return \"unknown\";\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n");
+    /* TY2.3: checked-downcast helper.  (cast x T) verifies the box tag equals
+     * the target TypeKind and panics on mismatch (the agreed failure behavior).
+     * Declared after tur_panic in the preamble; forward-declare tur_panic here. */
+    buf_puts(out, "static void tur_panic(const char *msg);\n");
+    buf_puts(out, "static void __tur_any_cast_check(int64_t have, int64_t want) {\n");
+    buf_puts(out, "    if (have != want) {\n");
+    buf_puts(out, "        char __m[128];\n");
+    buf_puts(out, "        snprintf(__m, sizeof(__m), \"cast: any holds %s, not %s\",\n");
+    buf_puts(out, "                 __tur_any_type_name(have), __tur_any_type_name(want));\n");
+    buf_puts(out, "        tur_panic(__m);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */

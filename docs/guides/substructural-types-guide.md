@@ -240,6 +240,47 @@ match opt
 
 ---
 
+## Borrows and Lifetimes (TY4)
+
+A borrow (`(& x)` / `(&mut x)`) is a non-owning reference whose validity is tied
+to the value it points at. Turmeric enforces, at compile time, that **a borrow
+never outlives the value it borrows from** (TUR-E0105):
+
+```turmeric
+;; ERROR (TUR-E0105): `r` borrows `x`, which lives only in the inner let.
+(defn bad [] : int
+  (let [r (let [x 42] (& x))]   ;; x dies when the inner let ends ...
+    (deref r)))                 ;; ... but r still points at it
+
+;; OK: the borrow does not outlive its referent.
+(defn deref-outer [] : int
+  (let [x 42]
+    (let [r (& x)]              ;; x outlives r
+      (deref r))))
+```
+
+The check is flow-sensitive through `do`, `let`, and both `if` branches, so a
+borrow produced inside a nested block is still attributed to its referent. It
+fires at two positions: a `let` binding whose initializer is an escaping borrow,
+and a function whose result is a borrow of one of its own locals. A borrow of an
+equal-or-outer-scope binding is always fine.
+
+### Lifetime elision and outlives constraints
+
+For borrow-carrying function signatures the compiler applies the classic
+lifetime-elision rules -- each borrow parameter gets its own lifetime (rule 1),
+a sole input lifetime flows to an elided borrow return (rule 2), and a
+receiver-style first borrow parameter lends its lifetime to the return
+(rule 3). The resulting outlives constraints are solved with cycle detection: a
+contradictory, cyclic constraint set is rejected (TUR-E0106) rather than
+looping. The elision rules and the cycle-safe solver are unit-tested in
+`tests/lifetime_unit.c`.
+
+> **Note.** Explicit `'a` lifetime-annotation syntax on types is not yet wired,
+> so on ordinary programs elision currently produces no constraints; the
+> machinery is active and ready for when that syntax lands. The borrow-escape
+> check above does **not** depend on it -- it is fully enforced today.
+
 ## See also
 
 - [Uniqueness Types Guide](uniqueness-types-guide.md) -- `^unique` (at-most-one-reference discipline)

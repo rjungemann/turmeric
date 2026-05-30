@@ -67,4 +67,8 @@ bool borrow_check_is_enabled(void);
  * independent of borrow_check_set_enabled(). */
 bool borrow_check_effect_handler_captures(const Expr *program);
 
+/* TY4: always-on lifetime pass -- runs elision per top-level function and
+ * rejects cyclic outlives-constraint graphs (TUR-E0106). */
+bool lifetime_check_program(const Expr *program);
+
 #endif

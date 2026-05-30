@@ -1,0 +1,14 @@
+; TY2.3: a correct (cast x T) checks the runtime box tag and returns the value.
+; Covers the immediate (int/bool/float) and pointer (cstr) payload kinds.
+
+(defn box-int [] : any 42)
+(defn box-bool [] : any true)
+(defn box-float [] : any 3.5)
+(defn box-cstr [] : any "ok")
+
+(defn main [] :int
+  (println (cast (box-int) int))
+  (println (cast (box-bool) bool))
+  (println (cast (box-float) float))
+  (println (cast (box-cstr) cstr))
+  0)

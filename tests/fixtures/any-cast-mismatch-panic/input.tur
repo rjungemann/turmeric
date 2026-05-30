@@ -1,0 +1,11 @@
+; TY2.3: a (cast x T) whose runtime box tag does not match T panics (the agreed
+; failure behavior).  Here an `any` holding a cstr is cast to int, which aborts.
+
+(defn box-cstr [] : any
+  "not an int")
+
+(defn main [] :int
+  (println "before cast")
+  (println (cast (box-cstr) int))
+  (println "after cast -- should not reach here")
+  0)

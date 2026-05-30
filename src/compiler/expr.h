@@ -48,6 +48,10 @@ struct Binding {
     bool          is_param;      /* function/extern parameter binding */
     uint32_t      id;            /* unique within the program */
     Span          span;
+    /* TY4: lexical scope depth at declaration (0 = outermost). Stamped by
+     * binding_new from the live scope chain; the borrow-escape check compares
+     * a borrow referent's depth against where the borrow lands. */
+    uint32_t      scope_depth;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
     /* Returned-closure metadata: if evaluating this binding yields a closure value,
@@ -258,6 +262,7 @@ typedef enum ExprKind {
     /* IT4 gradual typing */
     EX_ANY_TYPE_OF,    /* (type-of x) — returns cstr type name of an any-typed value */
     EX_ANY_CAST,       /* (cast x T) — unsafe downcast from any; returns the inner value as T */
+    EX_ANY_IS,         /* TY3: (is? x T) — runtime type test; returns bool */
     /* DV0-DV1: Dynamic vars (-Xdynamic-vars) */
     EX_DEFDYNAMIC,       /* (defdynamic *name* :type root-expr) -- declare a dynamic var */
     EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
@@ -711,10 +716,23 @@ struct Expr {
         struct {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
+            /* TY2.2: when the injected value is a by-value struct it cannot ride
+             * the int64_t carrier; box_struct names the StructDef so codegen
+             * emits a heap copy (malloc + store) and stores the pointer. NULL
+             * for carrier-compatible payloads (int/bool/float/nil/cstr/ptr/ADT). */
+            const struct StructDef *box_struct;
         } union_inject_;
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
-        struct { struct Expr *value; TypeKind target_kind; } any_cast_;  /* (cast x T) — unbox any as T */
+        /* TY3: (is? x T) — runtime type test; emits TUR_GETTAG(x) == test_tag. */
+        struct { struct Expr *value; int64_t test_tag; } any_is_;
+        /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch.
+         * target_struct is non-NULL when T is a struct (heap-unbox via deref). */
+        struct {
+            struct Expr *value;
+            TypeKind     target_kind;
+            const struct StructDef *target_struct;
+        } any_cast_;
         /* DV0: Dynamic var declaration */
         struct {
             DynVarEntry        *entry;      /* the registered dynvar (name, value_type, index) */

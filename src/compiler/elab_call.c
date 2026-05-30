@@ -15,6 +15,30 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr);
  * churn in the body of this file. */
 typedef AbiTypeBinding CallTypeBinding;
 
+/* TY2.2: Coerce a value expression to the `any` top type by wrapping it in an
+ * EX_UNION_INJECT carrying the value's TypeKind as the runtime tag.  Used at
+ * every widening site (call args, return position, branch unification) so a
+ * narrower value flowing into an `any` slot is boxed exactly once.
+ *
+ * Carrier-compatible payloads (int/bool/float/nil/cstr/ptr and ADT handles)
+ * ride the int64_t carrier directly.  By-value structs cannot, so box_struct
+ * is set and codegen emits a heap copy.  Already-`any` values pass through
+ * unchanged (no double-boxing).  Returns NULL only on allocation paths that
+ * cannot happen (defensive). */
+Expr *elab_coerce_to_any(Elab *e, Expr *value) {
+    if (!value) return NULL;
+    if (value->type.kind == TY_ANY) return value;  /* already boxed */
+    Type any_type;
+    memset(&any_type, 0, sizeof(any_type));
+    any_type.kind = TY_ANY;
+    Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, value->span);
+    inject->as.union_inject_.tag_idx = (int64_t)value->type.kind;
+    inject->as.union_inject_.value = value;
+    inject->as.union_inject_.box_struct =
+        (value->type.kind == TY_STRUCT) ? value->type.as.struct_.def : NULL;
+    return inject;
+}
+
 static bool call_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -547,6 +571,7 @@ Expr *elab_call(Elab *e, Form *call) {
     /* IT4: gradual typing */
     if (name == e->sym_type_of) return elab_any_type_of(e, call);
     if (name == e->sym_cast)    return elab_any_cast(e, call);
+    if (name == e->sym_is_q)    return elab_is_q(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
@@ -1725,16 +1750,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         /* IT4: A <: any — any value satisfies the top type.
-         * Wrap with EX_UNION_INJECT using the TypeKind of the value as the tag,
-         * so (type-of) and (cast) can retrieve it at runtime. */
+         * Wrap with EX_UNION_INJECT (via the shared coercion helper) using the
+         * TypeKind of the value as the tag, so (type-of) and (cast) can retrieve
+         * it at runtime.  TY2.2: by-value structs are heap-boxed by the helper. */
         if (!arg_ok && (g_union_types_enabled || g_intersection_types_enabled) &&
             expected_arg_kind == TY_ANY) {
             arg_ok = true;
-            Type any_type; memset(&any_type, 0, sizeof(any_type)); any_type.kind = TY_ANY;
-            Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, args[i]->span);
-            inject->as.union_inject_.tag_idx = (int64_t)args[i]->type.kind;
-            inject->as.union_inject_.value = args[i];
-            args[i] = inject;
+            args[i] = elab_coerce_to_any(e, args[i]);
         }
 
         /* LT2: When both expected and actual argument types are function types,

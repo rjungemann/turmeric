@@ -7,8 +7,10 @@
  *   elab_recv_from     -- type-checks (recv-from chan role)
  *   elab_role_close    -- type-checks (close chan) for TY_ROLE endpoints
  *
- * Global protocols are compile-time only; no runtime representation is
- * generated in SS5.  The runtime multi-party router is deferred to SS7.
+ * Global protocols are compile-time only here in elab: the role endpoints
+ * carry their step cursors as types and the message ops are type-checked
+ * against them.  The runtime multi-party router (TurRouter / TurRole) is
+ * emitted by emit_module.c.
  */
 #include "elab_internal.h"
 #include "symbols.h"

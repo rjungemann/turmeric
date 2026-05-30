@@ -985,11 +985,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_UNION_INJECT: {
             /* IT4: wrap a member value into tur_tagged_t via TUR_TAG(tag_idx, val).
-             * The inner value is cast to int64_t so pointer/struct payloads fit. */
+             * Carrier-compatible payloads (int/bool/float/nil/cstr/ptr and ADT
+             * handles) are cast to int64_t directly.
+             *
+             * TY2.2: a by-value struct cannot be cast to int64_t, so box_struct
+             * is set: emit a heap copy (malloc + assign) and store the pointer
+             * as the tagged payload.  Unbox is the reverse (deref) in EX_ANY_CAST. */
             char *inner = emit_value(ctx, body, e->as.union_inject_.value);
             Buf out; buf_init(&out);
-            buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
-                       (long long)e->as.union_inject_.tag_idx, inner);
+            const StructDef *bs = e->as.union_inject_.box_struct;
+            int64_t tag = e->as.union_inject_.tag_idx;
+            if (bs) {
+                /* heap-box: ({ T *__b = malloc(sizeof(T)); *__b = <inner>;
+                 *             TUR_TAG(tag, (int64_t)(intptr_t)__b); }) */
+                buf_printf(&out,
+                    "__extension__ ({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                    "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
+                    bs->name, bs->name, bs->name, inner, (long long)tag);
+            } else if (tag == (int64_t)TY_FLOAT) {
+                /* TY2.2: a double does not survive an integer cast -- store its
+                 * IEEE-754 bit pattern in the payload via a union reinterpret. */
+                buf_printf(&out,
+                    "TUR_TAG(%lld, ((union { double d; int64_t i; }){.d = (%s)}).i)",
+                    (long long)tag, inner);
+            } else {
+                buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
+                           (long long)tag, inner);
+            }
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);
@@ -1007,13 +1029,47 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
-        case EX_ANY_CAST: {
-            /* IT4: (cast x T) — unsafe unbox: interpret TUR_UNTAG(x) as target C type.
-             * No runtime tag check; caller is responsible for correctness. */
-            char *inner = emit_value(ctx, body, e->as.any_cast_.value);
-            Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
+        case EX_ANY_IS: {
+            /* TY3: (is? x T) — compare the box tag to the tested TypeKind. */
+            char *inner = emit_value(ctx, body, e->as.any_is_.value);
             Buf out; buf_init(&out);
-            buf_printf(&out, "((%s)(intptr_t)TUR_UNTAG(%s))", type_c_name(target), inner);
+            buf_printf(&out, "(TUR_GETTAG(%s) == %lld)",
+                       inner, (long long)e->as.any_is_.test_tag);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        case EX_ANY_CAST: {
+            /* TY2.3: (cast x T) — checked downcast.  Verify the box tag matches
+             * the target TypeKind; tur_panic on mismatch, otherwise unbox.
+             * TY2.2: a struct target unboxes by dereferencing the heap pointer. */
+            char *inner = emit_value(ctx, body, e->as.any_cast_.value);
+            const StructDef *ts = e->as.any_cast_.target_struct;
+            int64_t target_tag = (int64_t)e->as.any_cast_.target_kind;
+            Buf out; buf_init(&out);
+            if (ts) {
+                buf_printf(&out,
+                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
+                    "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
+                    inner, (long long)target_tag, ts->name);
+            } else if (target_tag == (int64_t)TY_FLOAT) {
+                /* TY2.2: reverse the float bit-reinterpret stored on inject. */
+                buf_printf(&out,
+                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
+                    "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
+                    inner, (long long)target_tag);
+            } else {
+                Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
+                buf_printf(&out,
+                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
+                    "(%s)(intptr_t)TUR_UNTAG(__tur_c); })",
+                    inner, (long long)target_tag, type_c_name(target));
+            }
             buf_putc(&out, '\0');
             free(inner);
             char *result = strdup(out.data);

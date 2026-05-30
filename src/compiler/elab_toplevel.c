@@ -68,8 +68,10 @@ Expr *elab_any_type_of(Elab *e, const Form *call) {
     return out;
 }
 
-/* IT4: (cast x T) — unsafe downcast from any; returns the inner value unboxed as T.
- * T must be a primitive type name. No runtime tag check is emitted (unsafe). */
+/* IT4/TY2.3: (cast x T) — checked downcast from any.  Verifies the runtime box
+ * tag matches T's TypeKind and panics on mismatch (see __tur_any_cast_check),
+ * then returns the inner value as T.  T may be a primitive type name, or a
+ * struct/ADT name (TY2.2 heap-boxed payloads unbox by dereference). */
 Expr *elab_any_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -91,15 +93,66 @@ Expr *elab_any_cast(Elab *e, const Form *call) {
         return NULL;
     }
     TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    const StructDef *target_struct = NULL;
+    Type result_type;
     if (target_kind == TY_UNKNOWN) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "unknown type '%s' in 'cast'", type_form->as.sym->name);
-        return NULL;
+        /* TY2.2: a struct/ADT name is a valid cast target. */
+        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
+        if (!named) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "unknown type '%s' in 'cast'", type_form->as.sym->name);
+            return NULL;
+        }
+        target_kind = named->kind;
+        result_type = *named;
+        if (named->kind == TY_STRUCT) target_struct = named->as.struct_.def;
+    } else {
+        result_type = type_simple(target_kind, CK_COPY);
     }
-    Type result_type = type_simple(target_kind, CK_COPY);
     Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
     out->as.any_cast_.value = val;
     out->as.any_cast_.target_kind = target_kind;
+    out->as.any_cast_.target_struct = target_struct;
+    return out;
+}
+
+/* TY3: (is? x T) — runtime type test on an `any`-typed value.  Returns bool:
+ * true iff x's stored box tag is T's TypeKind.  T may be a primitive, struct,
+ * or ADT name.  Used directly, or as an `if` guard that narrows x to T. */
+Expr *elab_is_q(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'is?' requires exactly two arguments: (is? x T)");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    if (val->type.kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'is?' expects an 'any'-typed first argument, got '%s'",
+                  type_name(val->type));
+        return NULL;
+    }
+    Form *type_form = call->as.list.items[2];
+    if (type_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'is?' expects a type name as second argument");
+        return NULL;
+    }
+    TypeKind test_kind = typekind_from_symbol(type_form->as.sym->name);
+    if (test_kind == TY_UNKNOWN) {
+        Type *named = elab_lookup_type_by_name(e, type_form->as.sym);
+        if (!named) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "unknown type '%s' in 'is?'", type_form->as.sym->name);
+            return NULL;
+        }
+        test_kind = named->kind;
+    }
+    Type bool_t = type_simple(TY_BOOL, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_ANY_IS, bool_t, call->span);
+    out->as.any_is_.value = val;
+    out->as.any_is_.test_tag = (int64_t)test_kind;
     return out;
 }
 

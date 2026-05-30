@@ -540,6 +540,21 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        /* TY4: borrow-escape at a let binding.  If the init is a borrow of a
+         * referent that lives in a deeper (shorter-lived) scope than this
+         * binding, the borrow would outlive the value it points to. */
+        {
+            const Binding *ref = borrow_referent_binding(init);
+            if (ref && !ref->is_global && ref->scope_depth > b->scope_depth) {
+                diag_emit_with_code(DIAG_ERROR, init->span,
+                    TUR_E0105_BORROW_ESCAPES_SCOPE,
+                    "`%s` borrows `%s`, which does not live long enough "
+                    "(the borrow outlives the value it points to)",
+                    name->name, ref->name->name);
+                rc = -1;
+                break;
+            }
+        }
         b->is_persistent = is_persistent;
         /* LT0: Mark binding as linear if annotated with ^linear or if initializer
          * type has CK_LINEAR (e.g., returned from a function returning lref<T>). */
@@ -1345,6 +1360,76 @@ Expr *elab_named_let(Elab *e, const Form *call) {
     return elab_form(e, letrec_form);
 }
 
+/* TY3: recognize a flow-narrowing guard in an `if` condition Form.
+ *
+ * Two supported shapes, both yielding (variable symbol, type-name symbol):
+ *   (is? x T)              -- the dedicated type-test predicate
+ *   (= (type-of x) "T")    -- type-of compared against a string literal
+ *
+ * On a match, *out_var receives x's Symbol and *out_type receives T's Symbol
+ * (interned from the string literal in the type-of shape), and returns true.
+ * Only direct, single-variable tests narrow; negation/conjunction do not (see
+ * TY3.3).  Recognition is purely syntactic on the un-elaborated Form. */
+static bool if_guard_narrowing(Elab *e, const Form *cond,
+                               const Symbol **out_var, const Symbol **out_type) {
+    if (!cond || cond->tag != F_LIST || cond->as.list.len < 1) return false;
+    Form *head = cond->as.list.items[0];
+    if (head->tag != F_SYM) return false;
+
+    /* Shape 1: (is? x T) */
+    if (head->as.sym == e->sym_is_q && cond->as.list.len == 3) {
+        Form *xf = cond->as.list.items[1];
+        Form *tf = cond->as.list.items[2];
+        if (xf->tag == F_SYM && tf->tag == F_SYM) {
+            *out_var  = xf->as.sym;
+            *out_type = tf->as.sym;
+            return true;
+        }
+        return false;
+    }
+
+    /* Shape 2: (= (type-of x) "T") */
+    const Symbol *sym_eq = symtab_intern(e->st, strslice("=", 1));
+    if (head->as.sym == sym_eq && cond->as.list.len == 3) {
+        Form *lhs = cond->as.list.items[1];
+        Form *rhs = cond->as.list.items[2];
+        /* lhs must be (type-of x) with x a bare symbol */
+        if (lhs->tag != F_LIST || lhs->as.list.len != 2) return false;
+        Form *lhead = lhs->as.list.items[0];
+        Form *xf    = lhs->as.list.items[1];
+        if (lhead->tag != F_SYM || lhead->as.sym != e->sym_type_of) return false;
+        if (xf->tag != F_SYM) return false;
+        /* rhs must be a string literal naming the type */
+        if (rhs->tag != F_STR) return false;
+        *out_var  = xf->as.sym;
+        *out_type = symtab_intern(e->st, rhs->as.s);
+        return true;
+    }
+
+    return false;
+}
+
+/* TY3: wrap a branch Form so the narrowed variable is rebound to the unboxed
+ * value: <branch>  =>  (let [x (cast x T)] <branch>).  Reuses the TY2 checked
+ * cast, so a use of x at type T inside the branch type-checks and the runtime
+ * tag is verified.  Returns the original branch if any piece cannot be built. */
+static Form *if_narrow_branch(Elab *e, Form *branch,
+                              const Symbol *var, const Symbol *type_sym, Span sp) {
+    Arena *a = e->arena;
+    /* (cast x T) */
+    Form *cast_items[3];
+    cast_items[0] = form_sym(a, sp, e->sym_cast);
+    cast_items[1] = form_sym(a, sp, var);
+    cast_items[2] = form_sym(a, sp, type_sym);
+    Form *cast_f = form_list(a, sp, cast_items, 3);
+    /* binding vector [x (cast x T)] */
+    Form *bvec_items[2] = { form_sym(a, sp, var), cast_f };
+    Form *bvec = form_vec(a, sp, bvec_items, 2);
+    /* (let [x (cast x T)] branch) */
+    Form *let_items[3] = { form_sym(a, sp, e->sym_let), bvec, branch };
+    return form_list(a, sp, let_items, 3);
+}
+
 Expr *elab_if(Elab *e, const Form *call) {
     if (call->as.list.len != 3 && call->as.list.len != 4) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1352,7 +1437,38 @@ Expr *elab_if(Elab *e, const Form *call) {
                   call->as.list.len - 1);
         return NULL;
     }
-    Expr *cond = elab_form(e, call->as.list.items[1]);
+
+    /* TY3: flow-sensitive narrowing.  Detect a type-test guard on the raw
+     * condition Form *before* elaborating it.  Two effects:
+     *   1. The `(= (type-of x) "T")` shape is rewritten to `(is? x T)` so the
+     *      condition elaborates to a tag comparison (plain `=` has no cstr
+     *      overload).  The `(is? x T)` shape is already in that form.
+     *   2. When x is `any`-typed, the then-branch is wrapped in
+     *      (let [x (cast x T)] ...) so a use of x at type T type-checks
+     *      without an explicit cast; the TY2 checked cast verifies the runtime
+     *      tag on entry to the branch.
+     * (TY3.3: only the direct then-branch on an `any` variable narrows; the
+     * else-complement is left to a future phase -- the `any` complement is not
+     * a single type, and union variables already narrow via `match`.) */
+    Form *cond_form = call->as.list.items[1];
+    Form *then_form = call->as.list.items[2];
+    Form *else_form = (call->as.list.len == 4) ? call->as.list.items[3] : NULL;
+    {
+        const Symbol *gv = NULL, *gt = NULL;
+        if (if_guard_narrowing(e, cond_form, &gv, &gt)) {
+            /* Rewrite the condition to the canonical (is? x T) test form. */
+            Form *is_items[3] = { form_sym(e->arena, call->span, e->sym_is_q),
+                                  form_sym(e->arena, call->span, gv),
+                                  form_sym(e->arena, call->span, gt) };
+            cond_form = form_list(e->arena, call->span, is_items, 3);
+            Binding *vb = scope_lookup(e->scope, gv);
+            if (vb && vb->type.kind == TY_ANY) {
+                then_form = if_narrow_branch(e, then_form, gv, gt, call->span);
+            }
+        }
+    }
+
+    Expr *cond = elab_form(e, cond_form);
     if (!cond) return NULL;
     if (!type_eq(cond->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, cond->span,
@@ -1372,7 +1488,7 @@ Expr *elab_if(Elab *e, const Form *call) {
         n_lin = linear_state_snapshot_bindings(e->scope, &lin_bindings, &lin_before);
     }
 
-    Expr *then_ = elab_form(e, call->as.list.items[2]);
+    Expr *then_ = elab_form(e, then_form);
     if (!then_) {
         free(move_bindings);
         free(before_states);
@@ -1399,7 +1515,7 @@ Expr *elab_if(Elab *e, const Form *call) {
     Expr *else_ = NULL;
     Type result_t = TYPE_NIL;
     if (call->as.list.len == 4) {
-        else_ = elab_form(e, call->as.list.items[3]);
+        else_ = elab_form(e, else_form);
         if (!else_) {
             move_state_restore(move_bindings, before_states, n_move_bindings);
             free(then_states);
@@ -1479,6 +1595,13 @@ Expr *elab_if(Elab *e, const Form *call) {
         } else if (then_div) {
             result_t = else_->type;
         } else if (else_div) {
+            result_t = then_->type;
+        } else if (then_->type.kind == TY_ANY || else_->type.kind == TY_ANY) {
+            /* TY2.2: branch widening to `any`.  When one branch is `any`, box
+             * the other (a narrower subtype) so both arms share the tagged
+             * representation and the if yields `any`. */
+            then_ = elab_coerce_to_any(e, then_);
+            else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;
         } else if (!type_eq(then_->type, else_->type)) {
             free(then_states);

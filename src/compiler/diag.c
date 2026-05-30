@@ -162,6 +162,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0102_LINEAR_COPY:                return "TUR-E0102";
         case TUR_E0103_LINEAR_IN_RC:               return "TUR-E0103";
         case TUR_E0104_LINEAR_BRANCH_MISMATCH:     return "TUR-E0104";
+        case TUR_E0105_BORROW_ESCAPES_SCOPE:       return "TUR-E0105";
+        case TUR_E0106_CYCLIC_LIFETIME:            return "TUR-E0106";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -257,6 +259,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0102") == 0) return TUR_E0102_LINEAR_COPY;
     if (strcmp(s, "TUR-E0103") == 0) return TUR_E0103_LINEAR_IN_RC;
     if (strcmp(s, "TUR-E0104") == 0) return TUR_E0104_LINEAR_BRANCH_MISMATCH;
+    if (strcmp(s, "TUR-E0105") == 0) return TUR_E0105_BORROW_ESCAPES_SCOPE;
+    if (strcmp(s, "TUR-E0106") == 0) return TUR_E0106_CYCLIC_LIFETIME;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;

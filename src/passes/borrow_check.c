@@ -108,6 +108,51 @@ bool borrow_check_effect_handler_captures(const Expr *program) {
     return ctx.error_count == 0;
 }
 
+/* TY4.1/TY4.2: always-on lifetime pass.  For every top-level function, run
+ * lifetime elision over its signature (binding fresh lifetimes onto borrow
+ * params and flowing them to elided borrow returns) and reject any function
+ * whose resulting outlives-constraint graph contains a cycle.  Today the
+ * surface language attaches no `'a` annotations to types, so elision typically
+ * finds nothing; the pass is wired and ready so that lifetime-annotated
+ * signatures are checked the moment that syntax lands.  The elision + solver
+ * logic is unit-tested directly in tests/lifetime_unit.c. */
+static bool lifetime_check_fn_def(FnDef *fn) {
+    if (!fn || fn->n_params == 0 || !fn->param_types) return true;
+
+    /* Recover the function's declared return Type from its TY_FN binding. */
+    Type return_type = type_simple(TY_NIL, CK_COPY);
+    if (fn->binding && fn->binding->type.kind == TY_FN) {
+        return_type.kind = fn->binding->type.as.fn.result_kind;
+    }
+
+    lifetime_elision_apply(&fn->lifetime_ctx, fn->param_types, fn->n_params,
+                           &return_type);
+
+    LifetimeId a = LIFETIME_NONE, b = LIFETIME_NONE;
+    if (lifetime_has_cycle(&fn->lifetime_ctx, &a, &b)) {
+        Span span = fn->binding ? fn->binding->span : SPAN_UNKNOWN;
+        diag_emit_with_code(DIAG_ERROR, span, TUR_E0106_CYCLIC_LIFETIME,
+            "function '%s': lifetime constraints form a cycle "
+            "('%c and '%c each required to outlive the other)",
+            (fn->binding && fn->binding->name) ? fn->binding->name->name : "?",
+            'a' + (a ? a - 1 : 0), 'a' + (b ? b - 1 : 0));
+        return false;
+    }
+    return true;
+}
+
+bool lifetime_check_program(const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return true;
+    bool ok = true;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *item = program->as.program.items[i];
+        if (item && item->kind == EX_FN_DEF && item->as.fn_def_.fn) {
+            if (!lifetime_check_fn_def(item->as.fn_def_.fn)) ok = false;
+        }
+    }
+    return ok;
+}
+
 /* Check a variable reference */
 static bool borrow_check_var(BorrowCheckCtx *ctx, const Expr *e) {
     const Binding *b = e->as.var.binding;
@@ -639,6 +684,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_expr_recursive(ctx, e->as.any_type_of_.value);
         case EX_ANY_CAST:
             return borrow_check_expr_recursive(ctx, e->as.any_cast_.value);
+        case EX_ANY_IS:
+            return borrow_check_expr_recursive(ctx, e->as.any_is_.value);
         /* GF1: Generator forms -- check sub-expressions */
         case EX_GEN:
             return e->as.gen_.def && e->as.gen_.def->body

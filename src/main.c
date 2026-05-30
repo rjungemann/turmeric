@@ -413,6 +413,8 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase P19-7: Always-on check that handler case bodies do not
              * capture borrow-typed variables from the enclosing scope. */
             if (!borrow_check_effect_handler_captures(ctx->prog)) return 1;
+            /* TY4: Always-on lifetime pass -- elision + outlives cycle check. */
+            if (!lifetime_check_program(ctx->prog)) return 1;
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info preserved after borrow-check */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_BORROW_CHECK");
