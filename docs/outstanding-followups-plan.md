@@ -27,7 +27,7 @@ work and its disposition.
 | E -- Arbitrary-arity kinds | **DONE** | E1-E4 already landed; E5 completed here -- added `tur_kind_arity_unit` C unit test (round-trip through arity 15 + >15 boundary); docs already current. |
 | F -- Monomorphize closures | **OUTSTANDING** | Closure/non-global guard still bails in `emit_module.c`; F1/F2/F3 not started. |
 | G -- Cross-module specialization | **IN PROGRESS** | J1-J5, J7 DONE; J6 (persistent-cache *read* + `--no-abi-cache` + invalidation) outstanding. |
-| H -- Tooling (`tur run` / `tur new`) | **IN PROGRESS** | Most RN*/NW* done; NW0 (length + reserved-name validation) + NW6 (bootstrap CI test) outstanding. |
+| H -- Tooling (`tur run` / `tur new`) | **IN PROGRESS** | Most RN*/NW* done. NW0 (length + reserved-name validation) completed here, plus a `tur check <dir>` directory-mode fix (was crashing on a directory arg). NW6 (bootstrap CI gate) is **blocked on larger work** -- see note below. |
 
 ---
 
@@ -486,10 +486,12 @@ The PKG-1 `cmd_pkg_new` predates this spec. Reconcile:
 
 - Audit `cmd_pkg_new` output against the plan's "Generated layout"
   block. Track gaps in the order below.
-- **NW0 -- validation.** Spice-name and target-path rules
-  (`tur/new/validate`): lowercase ASCII + digits + `-`, leads with a
-  letter, 2--64 chars, reject reserved names (`tur`, `build`, `test`).
-  Reused by `build.tur`'s `:name` parser.
+- **NW0 -- validation.** *DONE (2026-05-30).* `valid_project_name`
+  (`src/compiler/pkg.c`) now enforces the full rule: `[a-z][a-z0-9-]*`,
+  2--64 chars, leads with a letter, and rejects the reserved names
+  `tur` / `build` / `test` (`is_reserved_project_name`). All three
+  `tur new` / `tur init` call sites share it, and their error messages
+  spell out the complete rule.
 - **NW1 -- templates.** Embed every scaffold file as a string
   constant. Substitutions resolved at scaffold time:
   `{{ spice_name }}`, `{{ author }}`, `{{ year }}`, `{{ license }}`.
@@ -518,6 +520,34 @@ The PKG-1 `cmd_pkg_new` predates this spec. Reconcile:
   exit 0. **Acceptance gate** for the whole theme: until a freshly
   scaffolded spice passes its own CI recipe end-to-end, `tur new` is
   not done.
+
+  > **Status (2026-05-30): BLOCKED -- larger than a test fixture.** A
+  > freshly scaffolded spice does *not* pass `tur run ci` today, for
+  > reasons that are prerequisites, not test wiring:
+  >
+  > 1. **The standard Justfile recipes invoke commands that don't work as
+  >    written.** `build:`/`check:`/`test:` call `tur build` / `tur check`
+  >    / `tur test` with no argument, but those subcommands require a
+  >    target (a bare invocation prints usage and exits non-zero). They
+  >    need `tur build .`, `tur check src/`, `tur test tests/`.
+  >    (`tur check <dir>` now works -- this plan added directory-mode
+  >    support; it previously crashed reading the directory as a file.)
+  > 2. **`tur docs` is not a subcommand at all.** The `docs:` recipe and
+  >    the `ci: clean check test docs` chain assume a `tur docs`
+  >    generator that does not exist (only `tur doc <symbol>` lookup
+  >    exists). NW6 as specified presumes `tur docs` ships first.
+  > 3. **`tur fmt` strips `;;;` docstrings inside a `defmodule`** and
+  >    collapses short forms onto one line, so any richly-documented
+  >    scaffold fails `tur fmt --check` unless it is pre-collapsed. The
+  >    scaffold source/test templates would have to be written in
+  >    fmt-canonical form (module docstring only, no in-module defn
+  >    docstrings), which is in tension with the docstring standard.
+  >
+  > Closing NW6 therefore requires: (a) a recipe overhaul in the shared
+  > `JUSTFILE_TEMPLATE` (kept byte-identical between `justrun.c` and
+  > `pkg.c` per NW1), (b) a real `tur docs` command or a redefinition of
+  > the CI contract, and (c) fmt-clean scaffold templates. This is its
+  > own change-set, tracked here rather than forced into a partial fix.
 - **NW7 -- docs.** `docs/guides/tur-new-guide.md` already exists;
   confirm it covers the new flag set, the generated layout, and the
   "evolve a spice past the template" guidance from the source plan.

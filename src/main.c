@@ -2841,6 +2841,45 @@ static int cmd_test(const char *dir) {
     return failed == 0 ? 0 : 1;
 }
 
+/* Type-check every .tur file under a directory (no codegen kept).
+ * Mirrors cmd_test's discovery so `tur check src/` works inside a spice
+ * without a per-file path. Resolves intra-spice include dirs from the
+ * nearest build.tur, exactly like cmd_test. Returns 0 iff all files pass. */
+static int cmd_check_dir(const char *dir) {
+    int n_files = 0;
+    char **tur_files = collect_tur_files(dir, &n_files);
+    if (!tur_files || n_files == 0) {
+        fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
+        free_tur_files(tur_files, n_files);
+        return 1;
+    }
+    qsort(tur_files, (size_t)n_files, sizeof(char *), compare_cstr_ptrs);
+
+    const char **inc = NULL;
+    int          n_inc = 0;
+    resolve_project_include_dirs(dir, &inc, &n_inc);
+
+    int failed = 0;
+    if (use_json_output) diag_lsp_begin();
+    for (int i = 0; i < n_files; i++) {
+        int rm_n = 0;
+        char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
+        Buf out;
+        buf_init(&out);
+        int rc = compile_to_c(tur_files[i], &out, inc, n_inc,
+                              (const char **)rm_p, rm_n);
+        buf_free(&out);
+        free_reader_macro_paths(rm_p, rm_n);
+        if (rc != 0) failed++;
+    }
+    if (use_json_output) { diag_lsp_flush(stdout); diag_lsp_end(); }
+
+    free_tur_files(tur_files, n_files);
+    for (int j = 0; j < n_inc; j++) free((char *)inc[j]);
+    free(inc);
+    return failed == 0 ? 0 : 1;
+}
+
 /* Build a project from multiple .tur files. Generates .h and .c for each,
  * plus a _main.c that includes all headers. */
 /* RP0: `shared` selects shared-library build (skip _main.c, link with
@@ -7390,6 +7429,12 @@ int main(int argc, char **argv) {
             free(check_inc); return usage_check();
         }
         if (!input) { free(check_inc); return usage_check(); }
+        /* A directory argument checks every .tur file under it (project /
+         * spice mode), mirroring `tur test <dir>`. */
+        if (is_directory(input)) {
+            free(check_inc);
+            return cmd_check_dir(input);
+        }
         char **ck_owned = NULL; int n_ck_owned = 0;
         Ls2ResolverCtx ck_ls2 = {0};
         auto_append_spice_includes(input, &check_inc, &n_check_inc,
