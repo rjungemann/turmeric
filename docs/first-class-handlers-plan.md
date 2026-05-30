@@ -214,7 +214,9 @@ Write the operational spec before code so FH5's behavior is unambiguous.
 > only (it falls back to `type_from_kind` when a function's full parameter types
 > aren't threaded through), so it does not yet exercise the row-precise
 > `type_eq`; that is pre-existing plumbing, independent of the type-level FH4.1
-> operations, which are correct.
+> operations, which are correct. This caveat, together with the related
+> mixed-ownership `type_name` diagnostic leak, is tracked in
+> [handler-typecheck-and-typename-followups-plan.md](handler-typecheck-and-typename-followups-plan.md).
 
 - **FH4.1** Extend `TY_HANDLER` to carry an `EffectRow` (handled set) rather
   than a single `effect_name`, keeping the single-effect constructor as a
