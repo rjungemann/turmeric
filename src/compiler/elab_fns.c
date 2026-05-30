@@ -1467,6 +1467,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
         body = elab_coerce_to_any(e, body);
     }
 
+    /* TY4: reject returning a borrow of a function-local (would dangle).  The
+     * inner scope is still current here; binding depths were stamped at
+     * creation, so the check only reads the elaborated body. */
+    if (!check_no_borrow_escape(body, fn_local_depth, name_f->as.sym)) {
+        e->scope = inner.parent;
+        scope_free(&inner);
+        return NULL;
+    }
+
     /* CT1: Inject contract checks into body.
      * Determine whether to emit checks based on build mode. */
     {

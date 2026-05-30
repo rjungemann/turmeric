@@ -540,6 +540,21 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        /* TY4: borrow-escape at a let binding.  If the init is a borrow of a
+         * referent that lives in a deeper (shorter-lived) scope than this
+         * binding, the borrow would outlive the value it points to. */
+        {
+            const Binding *ref = borrow_referent_binding(init);
+            if (ref && !ref->is_global && ref->scope_depth > b->scope_depth) {
+                diag_emit_with_code(DIAG_ERROR, init->span,
+                    TUR_E0105_BORROW_ESCAPES_SCOPE,
+                    "`%s` borrows `%s`, which does not live long enough "
+                    "(the borrow outlives the value it points to)",
+                    name->name, ref->name->name);
+                rc = -1;
+                break;
+            }
+        }
         b->is_persistent = is_persistent;
         /* LT0: Mark binding as linear if annotated with ^linear or if initializer
          * type has CK_LINEAR (e.g., returned from a function returning lref<T>). */
