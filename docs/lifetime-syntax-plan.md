@@ -34,9 +34,9 @@ an enforced discipline.
 
 | Concern | Location | State |
 |---|---|---|
-| Apostrophe lexing | `src/compiler/lexer.c:214` (`lex_symbol_char`) | `'` is a **valid symbol char**, so `'a` already lexes as a single symbol token named `'a`. **No new token / lexer change needed.** There is no reader quote-macro (`reader.c` has zero `quote` handling). |
-| Lifetime fields on `Type` | `src/compiler/types.h:118-121` | `uint8_t n_lifetimes; LifetimeId lifetimes[2]; bool has_explicit_lifetime;` already exist. Note the storage cap is **2**, while `MAX_LIFETIMES` (lifetimes.h) is 8. |
-| Borrow type constructors | `src/compiler/types.c` `type_ref_immut` / `type_ref_mut` | Build `&T` / `&mut T` with `n_lifetimes == 0`; nothing attaches a lifetime. |
+| Apostrophe lexing | `src/compiler/reader.c:160` (`is_sym_start`), `:179` (`is_sym_cont`) | `'` (ASCII 39) is a **valid symbol char**, so `'a` already lexes as a single symbol token named `'a` (via `read_symbol_or_minus`). **No new token / lexer change needed.** Note `reader.c:509` (`read_quote`) handles the *quote macro* `'x` -> `(quote x)` only at the start of an expression, not mid-symbol. |
+| Lifetime fields on `Type` | `src/compiler/types.h:365-378` | `LifetimeId lifetimes[MAX_TYPE_LIFETIMES]; uint8_t n_lifetimes;` already exist (`MAX_TYPE_LIFETIMES == 4`). Helpers `type_has_lifetime` / `type_first_lifetime` at lines 547-554. There is **no** `has_explicit_lifetime` flag -- `n_lifetimes > 0` is the "has a lifetime" predicate. (Separately, `MAX_LIFETIMES` in lifetimes.h is 8, the per-function cap.) |
+| Borrow type constructors | `src/compiler/types.c` / `types.h:879-917` | `type_ref_immut` / `type_ref_mut` build `&T` / `&mut T` with `n_lifetimes == 0`. Lifetime-carrying variants **already exist**: `type_ref_immut_lifetime` / `type_ref_mut_lifetime` (types.h:900/910) set `lifetimes[0]` + `n_lifetimes = 1` -- LS1 calls these. |
 | Param/return type parsing | `src/compiler/elab_types.c`, `src/compiler/elab_fns.c` (`elab_defn`) | Where `&T`, `&mut T`, `:ref` types are built. A trailing/leading `'a` is not consumed. **Borrow *return* types currently hard-error** ("unsupported return type keyword 'ref<int>'") -- a prerequisite gap. |
 | Per-function lifetime context | `src/compiler/expr.h` `struct FnDef` -- `LifetimeContext lifetime_ctx`, `Type *param_types` | `lifetime_ctx` holds IDs + constraints but has **no name→ID map**. |
 | Machinery | `src/passes/lifetime_elision.c`, `src/passes/lifetimes.c`, `src/passes/borrow_check.c` (`lifetime_check_program`) | Complete and wired; runs from `src/main.c` in the `PASS_BORROW_CHECK` case. |
@@ -58,9 +58,9 @@ an enforced discipline.
    kind/type-param list in `elab_defn`)? Recommend **implicit quantification**
    to start -- every distinct `'a` in a signature is a fresh function lifetime
    parameter -- matching how type variables already work.
-3. **Storage cap.** `Type.lifetimes[2]` vs `MAX_LIFETIMES == 8`. Two named
-   lifetimes per type is enough for `&'a &'b T`; decide whether to lift the
-   array to 8 for uniformity or document the cap.
+3. **Storage cap.** `Type.lifetimes[MAX_TYPE_LIFETIMES]` is currently sized 4
+   (types.h); `MAX_LIFETIMES` (lifetimes.h, the per-function cap) is 8. `&'a &'b T`
+   needs only 2, so 4 is likely plenty -- decide whether to keep 4 or unify on 8.
 
 > These three are genuine product/语言-surface choices. Resolve them (an
 > `AskUserQuestion` at kickoff) before writing code -- they change the parser
@@ -80,8 +80,9 @@ an enforced discipline.
   borrow type (`&T`, `&mut T`, `:ref`) is followed by (or prefixed with, per the
   LS-design decision) a symbol whose name begins with `'`, intern it via the
   enclosing function's `LifetimeContext` and store the `LifetimeId` in
-  `Type.lifetimes[0]`, setting `n_lifetimes = 1` and
-  `has_explicit_lifetime = true`. Thread the active `LifetimeContext` into the
+  `Type.lifetimes[0]` and setting `n_lifetimes = 1` -- preferably by calling the
+  existing `type_ref_immut_lifetime` / `type_ref_mut_lifetime` constructors.
+  Thread the active `LifetimeContext` into the
   type-annotation parser (currently it has no access to it).
   *Done when:* `(defn f [x : &'a int] : int ...)` elaborates with
   `param_types[0].lifetimes[0]` populated; a fixture asserts via `emit-c` /
@@ -98,7 +99,8 @@ an enforced discipline.
 - **LS3 -- Feed explicit lifetimes into elision + solving.** With
   `param_types` / return `Type` now carrying explicit lifetimes,
   `lifetime_elision_apply` (already rewritten in TY4) will skip Rule 1 for
-  borrows that have `has_explicit_lifetime`, and the constraints it derives will
+  borrows that already carry a lifetime (`n_lifetimes > 0`), and the constraints
+  it derives will
   reflect the programmer's intent. Verify `lifetime_check_program` rejects a
   signature whose explicit lifetimes form a cycle (TUR-E0106) and accepts a
   well-formed one. Add the outlives constraints implied by an output lifetime
@@ -141,7 +143,7 @@ an enforced discipline.
 
 ## Risks
 
-- **Disambiguation.** `'a` is already a legal symbol everywhere (lexer.c:214).
+- **Disambiguation.** `'a` is already a legal symbol everywhere (reader.c:160/179).
   Restricting lifetime interpretation to *type-annotation position* avoids
   breaking any existing program that happens to use a `'`-prefixed identifier as
   a value symbol. LS1 must be careful to only treat `'a` specially inside the
