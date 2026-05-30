@@ -164,10 +164,28 @@ static check and (2) is a memory-hygiene defect.
   Convert or free as appropriate per PH0.1. *Done when:* no diagnostic path
   leaks a `type_name` result; the broad refactor (if strategy (a)/(c)) is either
   completed or explicitly scoped out with a tracked remainder.
+
+  **Status: done for `elab_call.c` arg-check diagnostics.** Converted the three
+  composite-leaking sites in the call-site argument loop to `type_print`-into-`Buf`:
+  the arg-mismatch formatter (PH2.1), the IT3 intersection-member mismatch, and
+  the LT2 linear-function mismatch. Also fixed `type_name_buf`'s `TY_HANDLER`
+  case to format the full handled-effect *row* (it previously printed only the
+  single `effect_name`, so `type_print` would have regressed the PH1.3 message
+  to `handler<?, ...>`); it now matches `type_name`. **Tracked remainder
+  (scoped out):** the broad strategy-(a) conversion of the remaining ~150
+  borrow-only `type_name` sites is deferred; most name primitive/atomic types
+  on hot or non-leaking paths. The ownership rule is documented at the
+  `type_name` declaration so new diagnostic sites reach for `type_print`.
 - **PH2.3** (If strategy (a)) make `type_name` return owned strings uniformly
   and update all sites; add a brief contract comment on `type_name` stating the
   ownership rule so new call sites do the right thing. *Done when:* the ownership
   rule is documented at the declaration and there is no mixed static/heap return.
+
+  **Status: contract comment added; uniform-ownership conversion N/A (strategy
+  (b)).** Since PH0.1 chose strategy (b), `type_name` keeps its mixed
+  static/heap return by design. An OWNERSHIP CONTRACT comment now sits above the
+  `type_name` definition in `src/compiler/types.c`, directing new
+  composite-type diagnostic sites to `type_print(Buf*, Type)` instead.
 
 ---
 
