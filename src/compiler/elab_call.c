@@ -1816,6 +1816,25 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             }
         }
 
+        /* PH1.2: Row-precise handler argument checking. When both expected and
+         * actual argument types are handlers, the kind-only `arg_ok` above is
+         * not enough -- any handler would satisfy any handler parameter. Refine
+         * it with `type_is_subtype` (PH0.2) so the handled-effect row and
+         * value/result kinds must be compatible (FH4.1 relation: set-equality +
+         * TY_UNKNOWN wildcards). The declared handler type is threaded into
+         * arg_full_types by PH1.1. */
+        if (arg_ok && g_effect_types_enabled &&
+            expected_arg_kind == TY_HANDLER && args[i]->type.kind == TY_HANDLER) {
+            uint32_t fn_arg_idx_h = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx_h < fn_type.as.fn.arity) {
+                Type *expected_h = fn_type.as.fn.arg_full_types[fn_arg_idx_h];
+                if (expected_h && expected_h->kind == TY_HANDLER) {
+                    arg_ok = type_is_subtype(args[i]->type, *expected_h);
+                }
+            }
+        }
+
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */
@@ -1829,7 +1848,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * arg_full_types, look it up there so the name includes member types. */
             const char *expected_str;
             if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION ||
-                 expected_arg_kind == TY_APP) &&
+                 expected_arg_kind == TY_APP || expected_arg_kind == TY_HANDLER) &&
                 fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
                 Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
