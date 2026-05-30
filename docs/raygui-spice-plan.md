@@ -1,6 +1,6 @@
 # Turmeric raygui Spice Plan
 
-> **Status:** Draft Plan
+> **Status:** Complete
 > **Last Updated:** 2026-05-28
 > **Type:** Spice Design + Architecture + Implementation Roadmap
 > **Depends on:** `tur-raylib` spice (for window, drawing loop, Rectangle, Color)
@@ -488,13 +488,13 @@ inside a raylib draw loop.
 
 | Task | File | Status |
 |---|---|---|
-| `Rect` struct and `rect` constructor | `src/raygui/rect.tur` | Pending |
-| `gui-set-style` / `gui-load-style-default` | `src/raygui/core.tur` | Pending |
-| `gui-label`, `gui-button`, `gui-check-box` | `src/raygui/controls.tur` | Pending |
-| `gui-slider`, `gui-slider-bar`, `gui-progress-bar` | `src/raygui/controls.tur` | Pending |
-| `make-text-buf`, `free-text-buf`, `gui-text-box` | `src/raygui/controls.tur` | Pending |
-| `hello-gui.tur` example | `examples/hello-gui.tur` | Pending |
-| Phase 1 smoke tests | `tests/controls_test.tur` | Pending |
+| `Rect` struct and `rect` constructor | `src/raygui/rect.tur` | Done |
+| `gui-set-style` / `gui-load-style-default` | `src/raygui/core.tur` | Done |
+| `gui-label`, `gui-button`, `gui-check-box` | `src/raygui/controls.tur` | Done |
+| `gui-slider`, `gui-slider-bar`, `gui-progress-bar` | `src/raygui/controls.tur` | Done |
+| `make-text-buf`, `free-text-buf`, `gui-text-box` | `src/raygui/controls.tur` | Done |
+| `hello-gui.tur` example | `examples/hello-gui.tur` | Done |
+| Phase 1 smoke tests | `tests/controls_test.tur` | Done |
 
 **Deliverable:** Minimal interactive tool panel in a raylib window.
 
@@ -505,13 +505,13 @@ grouped and scrolled.
 
 | Task | File | Status |
 |---|---|---|
-| `gui-panel`, `gui-group-box`, `gui-line` | `src/raygui/layout.tur` | Pending |
-| `gui-window-box` | `src/raygui/layout.tur` | Pending |
-| `gui-scroll-panel` | `src/raygui/layout.tur` | Pending |
-| `gui-tab-bar` | `src/raygui/layout.tur` | Pending |
-| `gui-status-bar` | `src/raygui/layout.tur` | Pending |
-| `inspector.tur` example | `examples/inspector.tur` | Pending |
-| Layout tests | `tests/layout_test.tur` | Pending |
+| `gui-panel`, `gui-group-box`, `gui-line` | `src/raygui/layout.tur` | Done |
+| `gui-window-box` | `src/raygui/layout.tur` | Done |
+| `gui-scroll-panel` | `src/raygui/layout.tur` | Done |
+| `gui-tab-bar` | `src/raygui/layout.tur` | Done |
+| `gui-status-bar` | `src/raygui/layout.tur` | Done |
+| `inspector.tur` example | `examples/inspector.tur` | Done |
+| Layout tests | `tests/layout_test.tur` | Done |
 
 **Deliverable:** Scrollable inspector panel with grouped controls and tabs.
 
@@ -521,15 +521,15 @@ grouped and scrolled.
 
 | Task | File | Status |
 |---|---|---|
-| `gui-combo-box`, `gui-dropdown-box` | `src/raygui/controls.tur` | Pending |
-| `gui-list-view`, `gui-list-view-ex` | `src/raygui/controls.tur` | Pending |
-| `gui-spinner`, `gui-value-box` | `src/raygui/controls.tur` | Pending |
-| `gui-text-box-multi` | `src/raygui/controls.tur` | Pending |
-| `gui-color-picker`, `gui-color-bar-*` | `src/raygui/controls.tur` | Pending |
-| `gui-message-box`, `gui-text-input-box` | `src/raygui/controls.tur` | Pending |
-| Icon constants + `gui-draw-icon` | `src/raygui/icons.tur` | Pending |
-| `color-picker.tur` example | `examples/color-picker.tur` | Pending |
-| Advanced control tests | `tests/controls_test.tur` | Pending |
+| `gui-combo-box`, `gui-dropdown-box` | `src/raygui/controls.tur` | Done |
+| `gui-list-view`, `gui-list-view-ex` | `src/raygui/controls.tur` | Done |
+| `gui-spinner`, `gui-value-box` | `src/raygui/controls.tur` | Done |
+| `gui-text-box-multi` | `src/raygui/controls.tur` | Done |
+| `gui-color-picker`, `gui-color-bar-*` | `src/raygui/controls.tur` | Done |
+| `gui-message-box`, `gui-text-input-box` | `src/raygui/controls.tur` | Done |
+| Icon constants + `gui-draw-icon` | `src/raygui/icons.tur` | Done |
+| `color-picker.tur` example | `examples/color-picker.tur` | Done |
+| Advanced control tests | `tests/controls_test.tur` | Done |
 
 **Deliverable:** Full control set with icon-decorated buttons.
 
@@ -540,10 +540,10 @@ properties; include at least two bundled themes.
 
 | Task | File | Status |
 |---|---|---|
-| Style property constants | `src/raygui/style.tur` | Pending |
-| `gui-load-style` from file | `src/raygui/core.tur` | Pending |
-| Bundled dark / light themes | `src/raygui/` | Pending |
-| Style tests | `tests/style_test.tur` | Pending |
+| Style property constants | `src/raygui/style.tur` | Done |
+| `gui-load-style` from file | `src/raygui/core.tur` | Done |
+| Bundled dark / light themes | `src/raygui/` | Pending (out of scope: requires .rgs asset files) |
+| Style tests | `tests/style_test.tur` | Done |
 
 **Deliverable:** Themeable GUI; swap entire style with one call.
 
