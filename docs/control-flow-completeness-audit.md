@@ -142,6 +142,7 @@ gate-off-and-document.
 
 ## See also
 
+- [control-flow-completeness-plan.md](control-flow-completeness-plan.md) -- phased pre-1.0 plan that closes the gaps above
 - [typing-gap-audit.md](typing-gap-audit.md)
 - [effects-system-guide.md](../guides/effects-system-guide.md)
 - [generators-guide.md](../guides/generators-guide.md)

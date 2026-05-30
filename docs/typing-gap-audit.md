@@ -128,6 +128,7 @@ deciding flag graduation and cleaning doc/comment drift. The post-1.0 list
 
 ## See also
 
+- [typing-gap-plan.md](typing-gap-plan.md) -- phased pre-1.0 plan that closes the gaps above
 - [advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md)
 - [control-flow-completeness-audit.md](control-flow-completeness-audit.md)
 - [refinement-types-plan.md](refinement-types-plan.md)
