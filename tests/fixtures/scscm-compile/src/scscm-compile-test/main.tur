@@ -1,0 +1,227 @@
+;; scscm-compile-test/main -- round-trip tests: compile known scscm snippets,
+;; compare sclang output.
+
+(defmodule scscm-compile-test/main
+  (import scscm/compile :refer [compile-text])
+  (import scscm/lexer   :refer [tokenize lex-ok? lex-err? lex-ok-val
+                                 scscm-int-as-cstr])
+
+  (defn print-pass [label :cstr] #{Unsafe} :void
+    ```c
+    printf("PASS %s\n", (const char*)(intptr_t)label);
+    ```)
+
+  (defn print-fail [label :cstr got :cstr expected :cstr] #{Unsafe} :void
+    ```c
+    printf("FAIL %s\ngot:      %s\nexpected: %s\n",
+      (const char*)(intptr_t)label,
+      (const char*)(intptr_t)got,
+      (const char*)(intptr_t)expected);
+    ```)
+
+  (defn cstr-eq? [a :cstr b :cstr] #{Unsafe} :bool
+    ```c
+    const char *ca = (const char*)(intptr_t)a;
+    const char *cb = (const char*)(intptr_t)b;
+    if (!ca || !cb) return ca == cb;
+    return strcmp(ca, cb) == 0;
+    ```)
+
+  (defn check [label :cstr source :cstr expected :cstr] #{Unsafe} :void
+    (let [res (compile-text source)]
+      (if (lex-err? res)
+        (print-fail label "(compile error)" expected)
+        (let [got (scscm-int-as-cstr (lex-ok-val res))]
+          (if (cstr-eq? got expected)
+            (print-pass label)
+            (print-fail label got expected))))))
+
+  (defn main [] #{Unsafe} :int
+
+    ;; ---- lexer / tokenizer tests ----
+
+    (let [res (tokenize "(+ 1 2)")]
+      (if (lex-ok? res)
+        (print-pass "tokenize-basic")
+        (print-fail "tokenize-basic" "(lex error)" "ok")))
+
+    (let [res (tokenize "(defn my-fn [x y] (+ x y))")]
+      (if (lex-ok? res)
+        (print-pass "tokenize-defn")
+        (print-fail "tokenize-defn" "(lex error)" "ok")))
+
+    (let [res (tokenize "\"hello world\"")]
+      (if (lex-ok? res)
+        (print-pass "tokenize-string")
+        (print-fail "tokenize-string" "(lex error)" "ok")))
+
+    (let [res (tokenize "; comment\n(foo 1)")]
+      (if (lex-ok? res)
+        (print-pass "tokenize-comment")
+        (print-fail "tokenize-comment" "(lex error)" "ok")))
+
+    ;; ---- codegen round-trip tests ----
+
+    (check "compile-number"
+      "440"
+      "440")
+
+    (check "compile-float"
+      "0.5"
+      "0.5")
+
+    (check "compile-atom-nil"
+      "nil"
+      "nil")
+
+    (check "compile-atom-true"
+      "true"
+      "true")
+
+    (check "compile-string"
+      "\"hello\""
+      "\"hello\"")
+
+    (check "compile-symbol"
+      "foo-bar"
+      "foo_bar")
+
+    (check "compile-symbol-pred"
+      "done?"
+      "done_p")
+
+    (check "compile-keyword"
+      ":freq"
+      "\\freq")
+
+    (check "compile-add"
+      "(+ 1 2)"
+      "1 + 2")
+
+    (check "compile-sub"
+      "(- 10 3)"
+      "10 - 3")
+
+    (check "compile-mul"
+      "(* 4 5)"
+      "4 * 5")
+
+    (check "compile-eq"
+      "(= x 0)"
+      "x == 0")
+
+    (check "compile-call"
+      "(foo 1 2 3)"
+      "foo(1, 2, 3)")
+
+    (check "compile-call-nested"
+      "(foo (bar 1) 2)"
+      "foo(bar(1), 2)")
+
+    (check "compile-dot-access"
+      "(. obj msg)"
+      "obj.msg")
+
+    (check "compile-dot-call"
+      "(. obj msg 1 2)"
+      "obj.msg(1, 2)")
+
+    (check "compile-dotdot"
+      "(.dot SynthDef new :foo)"
+      "SynthDef.new(\\foo)")
+
+    (check "compile-vector"
+      "[1 2 3]"
+      "[1, 2, 3]")
+
+    (check "compile-fn"
+      "(fn [x y] (+ x y))"
+      "{ |x, y| x + y }")
+
+    (check "compile-fn-noparams"
+      "(fn [] 42)"
+      "{ 42 }")
+
+    (check "compile-var"
+      "(var x 10)"
+      "var x = 10")
+
+    (check "compile-set"
+      "(set! x 20)"
+      "x = 20")
+
+    (check "compile-if-full"
+      "(if true 1 2)"
+      "if(true, { 1 }, { 2 })")
+
+    (check "compile-if-then"
+      "(if true 1)"
+      "if(true, { 1 })")
+
+    (check "compile-do"
+      "(do 1 2 3)"
+      "1;\n2;\n3")
+
+    (check "compile-let"
+      "(let [x 1 y 2] (+ x y))"
+      "var x = 1;\nvar y = 2;\nx + y")
+
+    (check "compile-multiple-forms"
+      "(var x 1)\n(var y 2)"
+      "var x = 1;\nvar y = 2")
+
+    ;; ---- expander tests ----
+
+    (check "expand-when"
+      "(when true 42)"
+      "if(true, { 42 }, { nil })")
+
+    (check "expand-unless"
+      "(unless false 99)"
+      "if(not(false), { 99 }, { nil })")
+
+    (check "expand-thread-first"
+      "(-> 10 (+ 5))"
+      "10 + 5")
+
+    (check "expand-pbind"
+      "(pbind :freq 440)"
+      "Pbind(\\freq, 440)")
+
+    (check "expand-pseq"
+      "(pseq [1 2 3] 2)"
+      "Pseq([1, 2, 3], 2)")
+
+    (check "expand-prand"
+      "(prand [1 2 3] 1)"
+      "Prand([1, 2, 3], 1)")
+
+    (check "expand-midi-hz"
+      "(midi->hz 60)"
+      "60.midicps")
+
+    (check "expand-hz-midi"
+      "(hz->midi 440)"
+      "440.cpsmidi")
+
+    (check "expand-db-amp"
+      "(db->amp -6)"
+      "-6.dbamp")
+
+    (check "expand-amp-db"
+      "(amp->db 0.5)"
+      "0.5.ampdb")
+
+    (check "expand-adsr"
+      "(adsr 0.01 0.1 0.5 0.5)"
+      "Env.adsr(0.01, 0.1, 0.5, 0.5)")
+
+    (check "expand-perc"
+      "(perc 0.01 0.5)"
+      "Env.perc(0.01, 0.5)")
+
+    (check "expand-quote-sym"
+      "'foo"
+      "\\foo")
+
+    0))

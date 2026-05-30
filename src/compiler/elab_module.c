@@ -754,6 +754,7 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                                     if (strcmp(kn, "int") == 0) fwd_result_kind = TY_INT;
                                     else if (strcmp(kn, "bool") == 0) fwd_result_kind = TY_BOOL;
                                     else if (strcmp(kn, "float") == 0) fwd_result_kind = TY_FLOAT;
+                                    else if (strcmp(kn, "cstr") == 0) fwd_result_kind = TY_CSTR;
                                     else if (strcmp(kn, "nil") == 0
                                           || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
                                     else if (strcmp(kn, "ptr") == 0

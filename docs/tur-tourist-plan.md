@@ -1,4 +1,4 @@
-# Plan: `tur-turist` -- Scotty-style HTTP Micro-Framework
+# Plan: `tur-tourist` -- Scotty-style HTTP Micro-Framework
 
 > **Status:** Draft Plan
 > **Last Updated:** 2026-05-28
@@ -12,7 +12,7 @@
 
 ## Overview
 
-`tur-turist` layers routing, response helpers, middleware, and static file
+`tur-tourist` layers routing, response helpers, middleware, and static file
 serving on top of `tur-httpd`. It provides the idiom from Haskell's
 [scotty](https://hackage.haskell.org/package/scotty) -- a small DSL for
 declaring routes and writing handlers.
@@ -24,7 +24,7 @@ Turmeric:
 |---|---|---|
 | `tur-template` | ERB / EJS | (none -- pure Turmeric) |
 | `tur-httpd` | Mongoose / Civetweb | (none -- POSIX sockets + pthreads) |
-| `tur-turist` | Haskell's scotty | `tur-httpd`, `tur-template` |
+| `tur-tourist` | Haskell's scotty | `tur-httpd`, `tur-template` |
 
 The three are deliberately separate so any layer can be used independently.
 
@@ -33,7 +33,7 @@ The three are deliberately separate so any layer can be used independently.
 ## Motivation
 
 `tur-httpd` delivers raw requests to a single handler function. That forces
-every application to write its own dispatch table. `tur-turist` provides the
+every application to write its own dispatch table. `tur-tourist` provides the
 idiom from Haskell's scotty:
 
 ```haskell
@@ -50,11 +50,11 @@ main = scotty 3000 $ do
 The Turmeric equivalent, using the same vocabulary:
 
 ```turmeric
-(import turist/app   :refer [turist])
-(import turist/dsl   :refer [get! post! put! delete! text json-body redirect])
-(import turist/param :refer [param capture])
+(import tourist/app   :refer [tourist])
+(import tourist/dsl   :refer [get! post! put! delete! text json-body redirect])
+(import tourist/param :refer [param capture])
 
-(turist 3000
+(tourist 3000
   (get! "/hello/:name"
     (fn [req]
       (text (str-concat "Hello " (capture req "name")))))
@@ -90,7 +90,7 @@ Patterns are matched in declaration order; first match wins.
 | `any!` | any | `(any! "/catch-all" handler)` |
 | `serve-static!` | GET | `(serve-static! "/assets" "./public")` |
 
-Each returns a `Route` value. `turist` collects routes, builds a dispatch
+Each returns a `Route` value. `tourist` collects routes, builds a dispatch
 table, starts `tur-httpd`, and routes incoming requests.
 
 `serve-static!` is a route that matches `GET <url-prefix>/*`. It strips
@@ -123,11 +123,11 @@ through to the next route, so dynamic routes can shadow static paths.
 
 ## Template Integration
 
-When `tur-template` is present as a dependency, `tur-turist` exposes a
+When `tur-template` is present as a dependency, `tur-tourist` exposes a
 convenience helper:
 
 ```turmeric
-(import turist/template :refer [render-template])
+(import tourist/template :refer [render-template])
 
 (get! "/greet/:name"
   (fn [req]
@@ -150,7 +150,7 @@ Middleware is a function `Request -> option<Response>`:
 - Return `(some resp)` to short-circuit and respond immediately.
 
 ```turmeric
-(import turist/middleware :refer [use!])
+(import tourist/middleware :refer [use!])
 
 ;; Log every request
 (def logger
@@ -158,7 +158,7 @@ Middleware is a function `Request -> option<Response>`:
     (println (str-concat (req-method req) " " (req-path req)))
     (none)))
 
-(turist 3000
+(tourist 3000
   (use! logger)
   (get! "/" (fn [_] (text "ok"))))
 ```
@@ -170,11 +170,11 @@ Middleware runs in declaration order before routes.
 ## Module Layout
 
 ```
-tur-turist/
+tur-tourist/
   build.tur
   src/
-    turist/
-      app.tur        -- turist entry point; server lifecycle
+    tourist/
+      app.tur        -- tourist entry point; server lifecycle
       dsl.tur        -- get!, post!, put!, delete!, any!, Route type
       router.tur     -- pattern compilation and dispatch
       param.tur      -- param, capture; query-string parser
@@ -198,8 +198,8 @@ tur-turist/
 ## `build.tur`
 
 ```turmeric
-(defpackage tur-turist
-  :name        "tur-turist"
+(defpackage tur-tourist
+  :name        "tur-tourist"
   :version     "0.1.0"
   :description "Sinatra/scotty-style HTTP micro-framework"
   :license     "MIT"
@@ -217,13 +217,13 @@ tur-turist/
                :optional true}
   }
   :exports #{
-    "turist/app"        ["turist"]
-    "turist/dsl"        ["get!" "post!" "put!" "delete!" "any!"]
-    "turist/param"      ["param" "capture"]
-    "turist/helpers"    ["text" "html" "json-body" "redirect" "status"]
-    "turist/middleware" ["use!"]
-    "turist/static"     ["serve-static!"]
-    "turist/template"   ["render-template"]
+    "tourist/app"        ["tourist"]
+    "tourist/dsl"        ["get!" "post!" "put!" "delete!" "any!"]
+    "tourist/param"      ["param" "capture"]
+    "tourist/helpers"    ["text" "html" "json-body" "redirect" "status"]
+    "tourist/middleware" ["use!"]
+    "tourist/static"     ["serve-static!"]
+    "tourist/template"   ["render-template"]
   })
 ```
 
@@ -233,13 +233,13 @@ tur-turist/
 
 | Step | Task |
 |---|---|
-| S1 | Scaffold `tur-turist` in `../turmeric-spices/spices/turist/` |
+| S1 | Scaffold `tur-tourist` in `../turmeric-spices/spices/tourist/` |
 | S2 | `router.tur`: compile route patterns to a match function; `:name` and `*` segments |
 | S3 | `dsl.tur`: `Route` type; `get!`, `post!`, `put!`, `delete!`, `any!` |
 | S4 | `param.tur`: query-string parser; `param`, `capture` |
 | S5 | `helpers.tur`: `text`, `html`, `json-body`, `redirect`, `status` |
 | S6 | `middleware.tur`: `use!`, middleware chain runner |
-| S7 | `app.tur`: `turist` entry point -- collects routes + middleware, starts `tur-httpd` |
+| S7 | `app.tur`: `tourist` entry point -- collects routes + middleware, starts `tur-httpd` |
 | S8 | `static.tur`: `serve-static!`; mime table; path-traversal guard (reject `..` and symlink escapes) |
 | S9 | `template.tur`: `render-template` wrapper (compile-time optional dep) |
 | S10 | Fixture tests: hello-world, path-capture, query-param, middleware, post-echo, static-files, template |
@@ -252,12 +252,12 @@ tur-turist/
 A complete application using all three spices:
 
 ```turmeric
-(import turist/app        :refer [turist])
-(import turist/dsl        :refer [get! post!])
-(import turist/param      :refer [param capture])
-(import turist/helpers    :refer [text html json-body])
-(import turist/middleware :refer [use!])
-(import turist/template   :refer [render-template])
+(import tourist/app        :refer [tourist])
+(import tourist/dsl        :refer [get! post!])
+(import tourist/param      :refer [param capture])
+(import tourist/helpers    :refer [text html json-body])
+(import tourist/middleware :refer [use!])
+(import tourist/template   :refer [render-template])
 (import template/env      :refer [make-env])
 
 ;; Middleware: simple request logger
@@ -266,7 +266,7 @@ A complete application using all three spices:
     (println (str-concat (req-method req) " " (req-path req)))
     (none)))
 
-(turist 3000
+(tourist 3000
   (use! logger)
 
   (get! "/"

@@ -1,6 +1,6 @@
 # Plan: Local Cross-Spice Development Workflow
 
-> **Status:** Draft Plan
+> **Status:** Complete (LS1-LS8 done)
 > **Last Updated:** 2026-05-29
 > **Type:** Tooling / Compiler UX
 > **Related:**
@@ -294,13 +294,13 @@ Both ship in LS6 of this plan; neither is deferred.
 
 ## Implementation phases
 
-- [ ] **LS1** -- Make `:path` deps populate the module search path.
+- [x] **LS1** -- Make `:path` deps populate the module search path.
   Smallest possible change: in the spice-resolution code, when
   iterating `:spices` entries, branch on `:path` vs `:url` and add
   `<:path>/src` directly. No lockfile interaction. Add a single test
   fixture that imports a sibling spice purely via `:path`.
 
-- [ ] **LS2** -- Teach the resolver to read the parent `build.tur`'s
+- [x] **LS2** -- Teach the resolver to read the parent `build.tur`'s
   `:members` and auto-add sibling-member `src/` directories. Ship
   on by default (no gating flag) -- the behavior is additive and
   there is no plausible workflow that *wants* a sibling to be
@@ -323,39 +323,78 @@ Both ship in LS6 of this plan; neither is deferred.
   / `pkg_workspace_member_path` are the public helpers behind both
   decisions.
 
-- [ ] **LS5** -- Isolate partial fetch failures so one broken URL
-  cannot remove unrelated deps from the search path. Add a regression
-  test where `test@test-v0.1.0` is intentionally broken and
-  `tur check` on a file that only uses `ansi` keeps passing.
+- [x] **LS5** -- Isolate partial fetch failures so one broken URL
+  cannot remove unrelated deps from the search path.  `pkg_fetch_all`
+  already continued past per-dep failures, but `cmd_run`'s project-mode
+  path aborted the whole build the moment any URL fetch returned
+  non-zero, which cascaded to dropping every healthy dep from the
+  search list.  The fix in `cmd_run` warns ("one or more dependencies
+  failed to fetch; continuing with healthy deps on disk") and writes
+  whatever lock entries `pkg_fetch_all` managed to populate, then falls
+  through to `resolve_include_dirs_from_manifest` -- whose existing
+  per-dep stat-and-skip already omits the missing dir, so only files
+  that actually `(import broken-dep/...)` see a `module not found`.
+  Regression coverage in `tests/spice-resolver-tests.sh`:
+  - LS5-A: `tur check` on a healthy-only entry succeeds with a
+    `:url "file:///nonexistent..."` sibling dep declared.
+  - LS5-B: `tur run --release` in the same project produces a binary
+    whose exit code is the healthy dep's return value (42).
+  - LS5-C: a file that *does* import the broken dep still fails
+    (isolation, not silence).
 
-- [ ] **LS6** -- Add `tur add --workspace <name>` shortcut and
+- [x] **LS6** -- Add `tur add --workspace <name>` shortcut and
   `tur fetch --dry-run` reporting. Update `tur-add`'s help text.
+  `cmd_pkg_add` now accepts `--workspace <name>`, validates membership
+  via `pkg_is_workspace_member(".", name)`, prints a "no manifest
+  entry needed" hint, and exits without touching `build.tur`. Mixing
+  `--workspace` with `--path` / `--ref` / `--subdir` / `--optional` /
+  `--name`, or passing a URL/path-shaped name, is rejected up front.
+  `cmd_pkg_fetch` gained `--dry-run`, which iterates direct
+  `:spices` / `:cmake-deps` entries and reports each one as `fetch
+  URL`, `fetch cmake`, `skip :path`, or `skip workspace member`
+  (using `pkg_is_workspace_member` / `pkg_workspace_member_path`),
+  then prints a one-line summary. No network calls; `tur.lock` is
+  never opened. Top-level usage now lists `tur add --workspace
+  <name>` and `tur fetch [--update|--dry-run]`. Regression coverage
+  in `tests/spice-resolver-tests.sh`:
+  - LS6-A: `tur add --workspace alpha` from a sibling member exits 0,
+    prints the "workspace sibling" hint, and leaves `build.tur`
+    byte-identical.
+  - LS6-B: `tur add --workspace nope` fails with a diagnostic naming
+    the unknown member.
+  - LS6-C: `tur fetch --dry-run` classifies a mix of URL / `:path` /
+    workspace-member deps, never writes `tur.lock`, and never emits
+    the `spice: fetching '...'` line that would indicate a real
+    fetch attempt (proved by including a bogus `:url` that would
+    otherwise hard-fail).
 
-- [ ] **LS7** -- Documentation refresh:
+- [x] **LS7** -- Documentation refresh:
   - `docs/guides/developing-spices-guide.md` -- new "Cross-spice
     development in a workspace" section showing the one-edit workflow.
   - Update `CLAUDE.md` (this repo) and
     `../turmeric-spices/CLAUDE.md` to drop the "fetch first" caveat.
-  - Remove the stub-lockfile + symlink workaround currently used in
-    `spices/notebook/spices/watch-main` (delete the symlink, drop the
-    stub `tur.lock` row, switch the dep declaration over to `:path`
-    or rely on workspace resolution).
-    - **Blocker for the "rely on workspace resolution" option:**
-      `spices/watch/build.tur` currently declares `:name "tur-watch"`,
-      but `spices/notebook/build.tur` declares the dep as `"watch"`.
-      Workspace resolution (LS2/LS4) matches sibling members by their
-      manifest `:name` (with a basename fallback only when `:name` is
-      absent), so it does not bridge this mismatch. Before LS7 can
-      drop the workaround, either rename the watch member to
-      `:name "watch"` (preferred -- the bin/module names already use
-      `watch/...`), or have notebook's dep entry use `"tur-watch"`,
-      or switch notebook to a `:path "../watch"` declaration (which
-      bypasses the name match entirely).
+  - Remove the stub-lockfile + symlink workaround previously used in
+    `spices/notebook/spices/watch-main`:
+    - Deleted the `watch-main` symlink.
+    - Removed the all-zero stub row from `spices/notebook/tur.lock`.
+    - Switched `spices/notebook/build.tur` watch dep from `:url` to
+      `:path "../watch"` (bypasses the `:name "tur-watch"` vs `"watch"`
+      name mismatch that blocked workspace-resolution).
 
-- [ ] **LS8** -- Migration sweep: any spice that currently leans on a
-  URL dep purely for in-workspace access (none today, but watch
-  cutover would have used one) switches to `:path` or workspace-member
-  resolution.
+- [x] **LS8** -- Migration sweep: any spice that currently leans on a
+  URL dep purely for in-workspace access switches to `:path` or
+  workspace-member resolution.
+  - Audited all 20 workspace members for URL deps pointing to workspace
+    siblings.
+  - **`notebook/watch`** -- the one "purely in-workspace" dep; converted
+    to `:path "../watch"` in LS7.
+  - **Pinned-release deps** (`test-v0.1.0`, `math-v0.1.0`,
+    `plutovg-v0.1.0`, `scscm-v0.1.0`): serve external consumers; remain
+    as URL. (`tur-scscm` dep in tidal already resolves via workspace
+    because its dep name matches scscm's manifest `:name`.)
+  - **`notebook/png`** (`:ref "main"`): real SHA in lock, needed by
+    external notebook consumers for image functionality; remains as URL.
+  - Result: no further conversions beyond LS7.
 
 ---
 

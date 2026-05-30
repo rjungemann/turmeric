@@ -1,6 +1,6 @@
 # Plan: scscm Spice Import Refactor + `scscm-compile` Fixture Repair
 
-> **Status:** Draft Plan
+> **Status:** Complete (all checklist items done)
 > **Last Updated:** 2026-05-29
 > **Type:** Spice refactor + test-fixture repair
 > **Related:**
@@ -226,14 +226,17 @@ So no `defmodule` cycles to worry about.
 
 Before declaring this plan done:
 
-- [ ] `tur build ../turmeric-spices/spices/scscm` exits 0.
-- [ ] `tur emit-c` on every individual file in the spice exits 0,
+- [x] `tur build ../turmeric-spices/spices/scscm` exits 0. (Auto-library
+      detection in `cmd_build_project` auto-enables `--shared` when no
+      source file defines `(defn main`; see manifest-driven-build-descent-plan.)
+- [x] `tur emit-c` on every individual file in the spice exits 0,
       with no duplicate-symbol or unbound-symbol diagnostics.
-- [ ] A smoke program inside the spice that calls `compile-text "(+ 1 2)"`
-      prints the expected sclang output.
-- [ ] `bash tests/run.sh` passes with 0 failures.
-- [ ] `ctest -R scscm` passes.
-- [ ] `bash tests/run.sh` still reports scscm-compile as PASS (skipped)
+- [x] A smoke program inside the spice that calls `compile-text "(+ 1 2)"`
+      prints the expected sclang output. (Covered by `tests/fixtures/scscm-compile/`
+      + `tests/run-scscm-compile.sh`; `tur_scscm_compile` ctest target passes.)
+- [x] `bash tests/run.sh` passes with 0 failures.
+- [x] `ctest -R scscm` passes (tur_scscm_compile added; `bash tests/run-scscm-compile.sh` passes).
+- [x] `bash tests/run.sh` still reports scscm-compile as PASS (skipped via dedicated-runner)
       when `../turmeric-spices` is absent.
 
 ## Out of scope but worth flagging

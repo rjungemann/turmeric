@@ -2865,12 +2865,19 @@ static bool pkg_build_tur_add_spice(const char *build_path,
 
 int cmd_pkg_add(int argc, char **argv) {
     /* Usage: tur add <url-or-path> [--ref <ref>] [--name <name>]
-     *                              [--path] [--subdir <dir>] [--optional] */
+     *                              [--path] [--subdir <dir>] [--optional]
+     *        tur add --workspace <name>
+     *
+     * LS6 (local-spice-dev-workflow): --workspace asserts that <name> is
+     * a sibling member of the enclosing workspace and exits without
+     * touching build.tur, since workspace siblings are auto-resolved by
+     * the LS2/LS4 machinery and do not need a `:spices` entry. */
     const char *url_or_path   = NULL;
     const char *ref           = NULL;
     const char *name_override = NULL;
     const char *subdir        = NULL;
     bool        is_path       = false;
+    bool        is_workspace  = false;
     bool        optional      = false;
 
     for (int i = 2; i < argc; i++) {
@@ -2880,6 +2887,8 @@ int cmd_pkg_add(int argc, char **argv) {
             name_override = argv[++i];
         } else if (strcmp(argv[i], "--path") == 0) {
             is_path = true;
+        } else if (strcmp(argv[i], "--workspace") == 0) {
+            is_workspace = true;
         } else if (strcmp(argv[i], "--subdir") == 0 && i + 1 < argc) {
             subdir = argv[++i];
         } else if (strcmp(argv[i], "--optional") == 0) {
@@ -2894,8 +2903,54 @@ int cmd_pkg_add(int argc, char **argv) {
     }
     if (!url_or_path) {
         fprintf(stderr, "usage: tur add <url> [--ref <ref>] [--name <name>] [--subdir <dir>]\n"
-                        "       tur add <path> --path\n");
+                        "       tur add <path> --path\n"
+                        "       tur add --workspace <name>\n");
         return 1;
+    }
+
+    /* LS6: --workspace <name> -- assert membership and exit without
+     * modifying build.tur.  Workspace siblings resolve implicitly via
+     * the parent manifest's :members list, so no :spices entry is
+     * needed for sibling access.  Mixing --workspace with --path /
+     * --ref / --url-shaped args is an error. */
+    if (is_workspace) {
+        if (is_path || ref || subdir || optional || name_override) {
+            fprintf(stderr,
+                "tur add --workspace: --workspace is exclusive with "
+                "--path / --ref / --subdir / --optional / --name\n");
+            return 1;
+        }
+        /* Disallow obvious URL/path values; --workspace takes a bare name. */
+        if (strchr(url_or_path, '/') || strchr(url_or_path, ':')) {
+            fprintf(stderr,
+                "tur add --workspace: expected a bare workspace member "
+                "name, got '%s'\n",
+                url_or_path);
+            return 1;
+        }
+        struct stat ws_st;
+        if (stat("build.tur", &ws_st) != 0) {
+            fprintf(stderr,
+                "tur add --workspace: no build.tur found in current "
+                "directory; run from inside a workspace member\n");
+            return 1;
+        }
+        if (!pkg_is_workspace_member(".", url_or_path)) {
+            fprintf(stderr,
+                "tur add --workspace: '%s' is not a member of the "
+                "enclosing workspace.\n"
+                "  Check the parent build.tur's :members list, or add "
+                "'%s' as a member there first.\n",
+                url_or_path, url_or_path);
+            return 1;
+        }
+        printf("'%s' is a workspace sibling; no manifest entry needed.\n",
+               url_or_path);
+        printf("  workspace resolution adds its src/ to the include path "
+               "automatically.\n");
+        printf("  declare it in :spices later for external (URL) "
+               "publication.\n");
+        return 0;
     }
 
     /* Handle spice/<pkg> registry shorthand */
@@ -3131,9 +3186,11 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
 /* ================================================================== */
 
 int cmd_pkg_fetch(int argc, char **argv) {
-    bool update = false;
+    bool update  = false;
+    bool dry_run = false;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--update") == 0) update = true;
+        else if (strcmp(argv[i], "--dry-run") == 0) dry_run = true;
     }
 
     struct stat st;
@@ -3145,6 +3202,51 @@ int cmd_pkg_fetch(int argc, char **argv) {
     PkgManifest m;
     memset(&m, 0, sizeof(m));
     if (!pkg_manifest_read("build.tur", &m)) return 1;
+
+    /* LS6 (local-spice-dev-workflow): --dry-run classifies each direct
+     * dep without performing any fetches or touching tur.lock.  Useful
+     * for "did I wire this workspace up right?" sanity checks. */
+    if (dry_run) {
+        printf("spice: dry-run (no fetches will be performed, "
+               "tur.lock untouched)\n");
+        int n_url = 0, n_path = 0, n_ws = 0, n_cmake = 0;
+        for (int i = 0; i < m.n_spices; i++) {
+            const PkgSpice *s = &m.spices[i];
+            if (s->path) {
+                printf("  skip   :path             %-20s %s\n",
+                       s->name, s->path);
+                n_path++;
+            } else if (pkg_is_workspace_member(".", s->name)) {
+                char *wp = pkg_workspace_member_path(".", s->name);
+                printf("  skip   workspace member  %-20s %s\n",
+                       s->name, wp ? wp : "(unknown path)");
+                free(wp);
+                n_ws++;
+            } else {
+                printf("  fetch  URL               %-20s %s%s%s\n",
+                       s->name,
+                       s->url ? s->url : "(no url)",
+                       s->ref ? " @ "    : "",
+                       s->ref ? s->ref   : "");
+                n_url++;
+            }
+        }
+        for (int i = 0; i < m.n_cmake_deps; i++) {
+            const PkgCmakeDep *d = &m.cmake_deps[i];
+            printf("  fetch  cmake             %-20s %s%s%s\n",
+                   d->name,
+                   d->url ? d->url : "(no url)",
+                   d->ref ? " @ "    : "",
+                   d->ref ? d->ref   : "");
+            n_cmake++;
+        }
+        printf("summary: %d to fetch (%d URL, %d cmake), "
+               "%d skipped (%d :path, %d workspace member)\n",
+               n_url + n_cmake, n_url, n_cmake,
+               n_path + n_ws, n_path, n_ws);
+        pkg_manifest_free(&m);
+        return 0;
+    }
 
     PkgLockFile lock;
     memset(&lock, 0, sizeof(lock));

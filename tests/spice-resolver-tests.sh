@@ -539,6 +539,260 @@ fi
 rm -f "$LS4_D_ERR"
 rm -rf "$LS4_D"
 
+# LS5 (local-spice-dev-workflow §5): partial-fetch failure is isolated.
+# A single broken URL dep must not strip healthy deps from the search
+# path.  `tur check` and `tur run` on files that only reference healthy
+# deps keep working; files that actually import from the broken dep
+# still fail with a normal "module not found" diagnostic.
+LS5_ABS_TUR="$PWD/$TUR"
+
+# LS5 case A: `tur check` on a file that only imports from a healthy
+# :path dep succeeds even when a sibling :url dep is bogus.
+LS5_A=$(mktemp -d)
+mkdir -p "$LS5_A/sib/src/sib" "$LS5_A/consumer/src/consumer"
+cat >"$LS5_A/sib/build.tur" <<'EOF'
+(defpackage sib :name "sib")
+EOF
+cat >"$LS5_A/sib/src/sib/api.tur" <<'EOF'
+(defmodule sib/api
+  (export answer)
+  (defn answer [] :int 42))
+EOF
+cat >"$LS5_A/consumer/build.tur" <<EOF
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "sib"    #{:path "../sib"}
+    "broken" #{:url "file:///nonexistent-ls5a-$$.git" :ref "v0.0.0"}
+  })
+EOF
+cat >"$LS5_A/consumer/src/consumer/main.tur" <<'EOF'
+(defmodule consumer/main
+  (import sib/api :refer [answer])
+  (defn main [] :int (answer)))
+EOF
+LS5_A_ERR=$(mktemp)
+( cd "$LS5_A/consumer" && "$LS5_ABS_TUR" check src/consumer/main.tur ) \
+    >/dev/null 2>"$LS5_A_ERR"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    echo "PASS LS5: tur check on healthy-only imports ignores broken URL dep"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS5: tur check failed despite using only healthy deps"
+    echo "  exit: $rc (want 0)"
+    echo "  stderr:"; sed 's/^/    /' "$LS5_A_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS5: tur check isolates broken URL dep")
+fi
+rm -f "$LS5_A_ERR"
+rm -rf "$LS5_A"
+
+# LS5 case B: `tur run` in project mode used to abort on any
+# pkg_fetch_all failure ("dependency fetch failed").  After LS5 it
+# warns and continues; the binary produced from the healthy-only entry
+# file runs and returns its value.
+LS5_B=$(mktemp -d)
+mkdir -p "$LS5_B/sib/src/sib" "$LS5_B/consumer/src"
+cat >"$LS5_B/sib/build.tur" <<'EOF'
+(defpackage sib :name "sib")
+EOF
+cat >"$LS5_B/sib/src/sib/api.tur" <<'EOF'
+(defmodule sib/api
+  (export answer)
+  (defn answer [] :int 42))
+EOF
+cat >"$LS5_B/consumer/build.tur" <<EOF
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "sib"    #{:path "../sib"}
+    "broken" #{:url "file:///nonexistent-ls5b-$$.git" :ref "v0.0.0"}
+  })
+EOF
+cat >"$LS5_B/consumer/src/main.tur" <<'EOF'
+(defmodule main
+  (import sib/api :refer [answer])
+  (defn main [] :int (answer)))
+EOF
+LS5_B_ERR=$(mktemp)
+( cd "$LS5_B/consumer" && "$LS5_ABS_TUR" run --release ) \
+    >/dev/null 2>"$LS5_B_ERR"
+rc=$?
+if [ "$rc" -eq 42 ]; then
+    echo "PASS LS5: tur run continues past broken URL; healthy dep value (42) propagates"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS5: tur run aborted on partial fetch failure"
+    echo "  exit: $rc (want 42)"
+    echo "  stderr:"; sed 's/^/    /' "$LS5_B_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS5: tur run isolates broken URL dep")
+fi
+rm -f "$LS5_B_ERR"
+rm -rf "$LS5_B"
+
+# LS5 case C: a file that DOES import from the broken dep still fails.
+# Isolation does not mean silent ignore -- only that healthy deps stay
+# usable.  The diagnostic is the standard "module not found", scoped to
+# the import that actually needs the missing source.
+LS5_C=$(mktemp -d)
+mkdir -p "$LS5_C/consumer/src/consumer"
+cat >"$LS5_C/consumer/build.tur" <<EOF
+(defpackage consumer
+  :name "consumer"
+  :spices #{
+    "broken" #{:url "file:///nonexistent-ls5c-$$.git" :ref "v0.0.0"}
+  })
+EOF
+cat >"$LS5_C/consumer/src/consumer/main.tur" <<'EOF'
+(defmodule consumer/main
+  (import broken/missing :refer [whatever])
+  (defn main [] :int (whatever)))
+EOF
+LS5_C_ERR=$(mktemp)
+( cd "$LS5_C/consumer" && "$LS5_ABS_TUR" check src/consumer/main.tur ) \
+    >/dev/null 2>"$LS5_C_ERR"
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "PASS LS5: file importing the broken dep still fails (isolation, not silence)"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS5: file importing the broken dep should have failed"
+    echo "  exit: $rc (want non-zero)"
+    echo "  stderr:"; sed 's/^/    /' "$LS5_C_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS5: file importing broken dep still fails")
+fi
+rm -f "$LS5_C_ERR"
+rm -rf "$LS5_C"
+
+# LS6 (local-spice-dev-workflow §6): CLI ergonomics.
+#   - `tur add --workspace <name>` asserts <name> is a workspace member
+#     of the enclosing workspace and exits without modifying build.tur.
+#   - `tur fetch --dry-run` classifies each :spices entry as
+#     fetch/skip(:path)/skip(workspace member) without performing any
+#     fetches or writing tur.lock.
+LS6_ABS_TUR="$PWD/$TUR"
+
+# LS6 case A: `tur add --workspace alpha` from beta succeeds, prints
+# the "no manifest entry needed" hint, and leaves build.tur untouched.
+LS6_A=$(mktemp -d)
+mkdir -p "$LS6_A/ws/alpha" "$LS6_A/ws/beta"
+cat >"$LS6_A/ws/build.tur" <<'EOF'
+(defpackage ws :name "ws" :members ["alpha" "beta"])
+EOF
+cat >"$LS6_A/ws/alpha/build.tur" <<'EOF'
+(defpackage alpha :name "alpha")
+EOF
+cat >"$LS6_A/ws/beta/build.tur" <<'EOF'
+(defpackage beta :name "beta")
+EOF
+LS6_A_BEFORE=$(cat "$LS6_A/ws/beta/build.tur")
+LS6_A_OUT=$(mktemp); LS6_A_ERR=$(mktemp)
+( cd "$LS6_A/ws/beta" && "$LS6_ABS_TUR" add --workspace alpha ) \
+    >"$LS6_A_OUT" 2>"$LS6_A_ERR"
+rc=$?
+LS6_A_AFTER=$(cat "$LS6_A/ws/beta/build.tur")
+if [ "$rc" -eq 0 ] \
+   && grep -qF 'workspace sibling' "$LS6_A_OUT" \
+   && [ "$LS6_A_BEFORE" = "$LS6_A_AFTER" ]; then
+    echo "PASS LS6-A: tur add --workspace <member> exits 0 without writing build.tur"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS6-A: tur add --workspace happy path"
+    echo "  exit: $rc"
+    echo "  stdout:"; sed 's/^/    /' "$LS6_A_OUT"
+    echo "  stderr:"; sed 's/^/    /' "$LS6_A_ERR"
+    [ "$LS6_A_BEFORE" = "$LS6_A_AFTER" ] || echo "  build.tur was MODIFIED"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS6-A: tur add --workspace happy path")
+fi
+rm -f "$LS6_A_OUT" "$LS6_A_ERR"
+rm -rf "$LS6_A"
+
+# LS6 case B: `tur add --workspace <unknown>` errors with a clear
+# diagnostic naming the unknown member.
+LS6_B=$(mktemp -d)
+mkdir -p "$LS6_B/ws/alpha" "$LS6_B/ws/beta"
+cat >"$LS6_B/ws/build.tur" <<'EOF'
+(defpackage ws :name "ws" :members ["alpha" "beta"])
+EOF
+cat >"$LS6_B/ws/alpha/build.tur" <<'EOF'
+(defpackage alpha :name "alpha")
+EOF
+cat >"$LS6_B/ws/beta/build.tur" <<'EOF'
+(defpackage beta :name "beta")
+EOF
+LS6_B_ERR=$(mktemp)
+( cd "$LS6_B/ws/beta" && "$LS6_ABS_TUR" add --workspace nope ) \
+    >/dev/null 2>"$LS6_B_ERR"
+rc=$?
+if [ "$rc" -ne 0 ] && grep -qF "'nope' is not a member" "$LS6_B_ERR"; then
+    echo "PASS LS6-B: tur add --workspace errors on non-member name"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS6-B: tur add --workspace should reject unknown member"
+    echo "  exit: $rc (want non-zero)"
+    echo "  stderr:"; sed 's/^/    /' "$LS6_B_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS6-B: tur add --workspace unknown member error")
+fi
+rm -f "$LS6_B_ERR"
+rm -rf "$LS6_B"
+
+# LS6 case C: `tur fetch --dry-run` classifies each dep and writes no
+# lock file.  The bogus URL would error out on a real fetch; --dry-run
+# proves it was never contacted.
+LS6_C=$(mktemp -d)
+mkdir -p "$LS6_C/ws/alpha" "$LS6_C/ws/beta" "$LS6_C/sib"
+cat >"$LS6_C/ws/build.tur" <<'EOF'
+(defpackage ws :name "ws" :members ["alpha" "beta"])
+EOF
+cat >"$LS6_C/ws/alpha/build.tur" <<'EOF'
+(defpackage alpha :name "alpha")
+EOF
+cat >"$LS6_C/sib/build.tur" <<'EOF'
+(defpackage sib :name "sib")
+EOF
+cat >"$LS6_C/ws/beta/build.tur" <<EOF
+(defpackage beta
+  :name "beta"
+  :spices #{
+    "alpha"  #{:url "https://example.invalid/alpha" :ref "v9.9.9"}
+    "remote" #{:url "https://example.invalid/ls6c-$$" :ref "v0.0.0"}
+    "sib"    #{:path "../../sib"}
+  })
+EOF
+LS6_C_OUT=$(mktemp); LS6_C_ERR=$(mktemp)
+( cd "$LS6_C/ws/beta" && "$LS6_ABS_TUR" fetch --dry-run ) \
+    >"$LS6_C_OUT" 2>"$LS6_C_ERR"
+rc=$?
+LS6_C_OK=1
+[ "$rc" -eq 0 ] || LS6_C_OK=0
+[ -f "$LS6_C/ws/beta/tur.lock" ] && LS6_C_OK=0
+grep -qF "workspace member" "$LS6_C_OUT" || LS6_C_OK=0
+grep -qF ":path" "$LS6_C_OUT" || LS6_C_OK=0
+grep -qF "fetch  URL" "$LS6_C_OUT" || LS6_C_OK=0
+grep -qF "summary:" "$LS6_C_OUT" || LS6_C_OK=0
+# critically: no actual fetch attempt (`spice: fetching ...`) and the
+# bogus URL never errors out.
+grep -qF "fetching '" "$LS6_C_ERR" && LS6_C_OK=0
+if [ "$LS6_C_OK" -eq 1 ]; then
+    echo "PASS LS6-C: tur fetch --dry-run classifies deps without fetching or writing tur.lock"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL LS6-C: tur fetch --dry-run behavior"
+    echo "  exit: $rc"
+    echo "  lock present: $([ -f "$LS6_C/ws/beta/tur.lock" ] && echo yes || echo no)"
+    echo "  stdout:"; sed 's/^/    /' "$LS6_C_OUT"
+    echo "  stderr:"; sed 's/^/    /' "$LS6_C_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("LS6-C: tur fetch --dry-run")
+fi
+rm -f "$LS6_C_OUT" "$LS6_C_ERR"
+rm -rf "$LS6_C"
+
 # SC4: works the same way when invoked from a deeply-nested unrelated
 # cwd, since find_spice_root canonicalizes via realpath() and walks
 # ancestors of the *file*, not the cwd.
