@@ -1105,9 +1105,21 @@ Expr *elab_compose_handlers(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Return a nil-typed placeholder expression */
-    Expr *out = expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
-    return out;
+    /* CF3 (control-flow-completeness-plan): the arguments type-check and do not
+     * overlap, but first-class handler *composition* has no runtime
+     * representation yet -- handler values cannot be created or applied, so a
+     * composed handler cannot run.  Rather than return a silent nil placeholder
+     * (audit item 2), gate the form with a loud diagnostic.  The static checks
+     * above (TUR-E0251 overlap, handler-value typing) still fire first so users
+     * get the most specific error.  Implementation is tracked separately; the
+     * pre/post-1.0 decision is deferred. */
+    diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0704_HANDLER_COMPOSE_UNIMPL,
+        "compose-handlers: first-class handler composition is not yet "
+        "implemented and is gated for now");
+    diag_emit(DIAG_HELP, call->span,
+        "compose two effects with nested (handle ...) forms instead; see "
+        "docs/first-class-handlers-plan.md for the implementation plan");
+    return NULL;
 }
 
 /* LC1/LC2: Pre-check a continuation binding for double-use before elaborating k.

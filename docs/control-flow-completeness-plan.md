@@ -6,10 +6,14 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF2 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF3 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
 > lowering shipped; CF2: `shift`/`shift0` result typing replaces the
-> `body->type` placeholder); CF3 next. Companion to
+> `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
+> after discovering handler values have no runtime representation -- real
+> implementation tracked in
+> [first-class-handlers-plan.md](first-class-handlers-plan.md)); CF4 next.
+> Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -68,7 +72,7 @@ Non-goals (deferred to post-1.0, tracked in the audit):
 | CF0 | -- | Decision + tracking | Records implement/lower/gate per item before code moves |
 | CF1 | 5 | Lower | Self-tail-call TCO; independent, high user value |
 | CF2 | 3 | Implement | `shift`/`shift0` result typing; small, unblocks clean diagnostics |
-| CF3 | 2 | Implement | `compose-handlers` semantics |
+| CF3 | 2 | ~~Implement~~ -> Gate | `compose-handlers` gated (`TUR-E0704`); real impl deferred to [first-class-handlers-plan.md](first-class-handlers-plan.md) |
 | CF4 | 1 | Gate (`-Xcallcc`) | `call/cc`/`escape` real capture is post-1.0 |
 | CF5 | 4 | Gate-off-and-document | Generator `yield`-in-`match` / recursion limits |
 | CF6 | 6 | Scope down | Async Send-across-await soundness |
@@ -132,18 +136,19 @@ The experimental opt-in flag follows the existing `-X<feature>` convention in
 | `escape` | CF4 | `-Xcallcc` (default off) | `TUR-E0701` | `'escape' has no real early-exit semantics yet (unsound) and is gated; pass -Xcallcc to experiment. Real capture requires the post-1.0 CPS pass.` |
 | `yield` / `yield*` inside a `match` arm | CF5 | always rejected | `TUR-E0702` | `'yield' is not supported inside a 'match' arm (1.0 limitation); this requires the post-1.0 CPS pass.` |
 | `yield` / `yield*` inside a recursive generator | CF5 | always rejected | `TUR-E0703` | `'yield' is not supported inside a recursive generator (1.0 limitation); this requires the post-1.0 CPS pass.` |
+| `compose-handlers` (first-class handler composition) | CF3 | always rejected | `TUR-E0704` | `compose-handlers: first-class handler composition is not yet implemented and is gated for now` (help points at `docs/first-class-handlers-plan.md`) |
 
 `-Xcallcc` help text (CF4.1): `enable experimental call/cc / escape -- no real
 capture yet (unsound); requires the post-1.0 CPS pass`.
 
 Notes:
 
-- CF5 diagnostics (`E0702`/`E0703`) are *always-on* rejections, not flag-gated:
-  there is no experimental path for unsupported `yield` placement, since
-  mis-lowering would be silently wrong.
-- These four codes are reserved here so the enum additions in
-  `src/compiler/diag.h` / `diag.c` (CF4, CF5) do not collide and so the
-  changelog can reference them before the code lands.
+- CF5 diagnostics (`E0702`/`E0703`) and the CF3 `compose-handlers` gate
+  (`E0704`) are *always-on* rejections, not flag-gated: there is no experimental
+  path, since the underlying feature has no correct lowering yet.
+- `E0704` is **implemented** (CF3, shipped). `E0700`-`E0703` remain reserved
+  here so the enum additions in `src/compiler/diag.h` / `diag.c` (CF4, CF5) do
+  not collide and so the changelog can reference them before the code lands.
 
 ### CF0.3 outcome -- at-risk fixture inventory
 
@@ -281,22 +286,43 @@ The `body->type` placeholder is replaced with the receiver's result type.
 
 ## Phase CF3 -- `compose-handlers` (audit item 2)
 
-`compose-handlers` currently elaborates to a nil placeholder ("runtime
-semantics TBD"). **Decision (2026-05-30): implement real composition for
-1.0.**
+`compose-handlers` elaborated to a nil placeholder ("runtime semantics TBD").
+**Decision (2026-05-30, revised): gate, do not implement, for now.** The
+original ratified disposition was "implement real composition for 1.0", but
+implementation reconnaissance found that handler *values* have **no runtime
+representation at all** -- `(handler E V R)` is only a type annotation, no form
+*creates* or *applies* a handler value, and `compose-handlers` had never
+actually run. "Real composition" therefore means building first-class effect
+handlers (creation + application + composition) from scratch, which is a
+substantial, fiber-level feature whose pre/post-1.0 placement is undecided. For
+1.0 the placeholder is replaced with a loud gate, and the implementation is
+specified separately.
 
-- **CF3.1** Specify composition semantics: handler order, effect-row union,
-  and resume/discontinue behavior of the composed handler. *Done when:* a
-  one-paragraph operational spec exists with at least two worked examples.
-- **CF3.2** Replace the nil placeholder with an elaboration that produces the
-  composed handler per the spec. *Done when:* a fixture composing two effect
-  handlers produces the spec's expected stdout.
-- **CF3.3** Fixtures: compose two independent effects; compose with an
-  overlapping effect (define the precedence outcome from CF3.1). *Done when:*
-  both run green and are snapshotted.
-- **CF3.4** Update `effects-system-guide.md` to document the composition
-  semantics (no silent-nil description remains). *Done when:* the guide
-  reflects the shipped behavior.
+- **CF3.1** ~~Specify composition semantics in this phase.~~ Moved to the
+  dedicated plan: [first-class-handlers-plan.md](first-class-handlers-plan.md)
+  Phase FH0 carries the full operational spec (precedence, effect-row union,
+  continuation discipline).
+- **CF3.2** **(done -- gated)** Replace the nil placeholder with a hard
+  diagnostic `TUR-E0704` (`elab_compose_handlers`, `src/compiler/elab_effects.c`).
+  The static checks before it still fire first: handler-value typing, and the
+  same-effect overlap `TUR-E0251`. *Done.*
+- **CF3.3** **(done)** Fixtures: `tests/fixtures/errors/compose-handlers-gated`
+  (two disjoint effects -> `TUR-E0704`, expect-error). The existing
+  `tests/fixtures/errors/effect-handler-overlap` (overlap -> `TUR-E0251`) and
+  `tests/fixtures/effect-handler-type` (handler-typed params, no
+  `compose-handlers` call) are unchanged. *Done.*
+- **CF3.4** **(done)** `effects-system-guide.md` documents that
+  `compose-handlers` is gated (no silent-nil description remains) and links the
+  first-class-handlers plan. *Done.*
+
+### CF3 outcome (complete -- 2026-05-30)
+
+`compose-handlers` is gated with `TUR-E0704` instead of returning a silent nil,
+closing audit item 2 for 1.0 (the stub no longer "runs only because it is never
+exercised"). The real feature is fully specified in
+[first-class-handlers-plan.md](first-class-handlers-plan.md) (FH0-FH7), whose
+FH5.3 removes this gate when implemented. The pre/post-1.0 decision for that
+work is explicitly deferred.
 
 ---
 
