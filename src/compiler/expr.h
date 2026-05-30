@@ -48,6 +48,10 @@ struct Binding {
     bool          is_param;      /* function/extern parameter binding */
     uint32_t      id;            /* unique within the program */
     Span          span;
+    /* TY4: lexical scope depth at declaration (0 = outermost). Stamped by
+     * binding_new from the live scope chain; the borrow-escape check compares
+     * a borrow referent's depth against where the borrow lands. */
+    uint32_t      scope_depth;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
     /* Returned-closure metadata: if evaluating this binding yields a closure value,

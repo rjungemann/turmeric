@@ -1396,6 +1396,16 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->is_global = is_global;
     b->id = e->next_id++;
     b->span = span;
+    /* TY4: stamp the lexical scope depth at which this binding is introduced,
+     * walked from the live scope chain.  The borrow-escape check compares a
+     * borrow referent's depth against where the borrow lands: a borrow may not
+     * outlive its referent (flow into a shallower/longer-lived binding or out
+     * of the function frame). */
+    {
+        uint32_t depth = 0;
+        for (const Scope *s = e->scope; s; s = s->parent) depth++;
+        b->scope_depth = depth;
+    }
     b->closure_fn_binding = NULL;
     b->returns_closure_fn_binding = NULL;
     b->is_moved = false;  /* Phase 5: move semantics */
@@ -1408,6 +1418,41 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
      * code that later shadows them gets a hard diagnostic. */
     b->is_from_stdlib = is_global && e->in_stdlib_load;
     return b;
+}
+
+/* TY4: borrow referent extraction -- see elab_internal.h.
+ *
+ * Looks through result-position wrappers (do/let/letrec bodies and both `if`
+ * branches) so a borrow produced inside a nested block is still attributed to
+ * its referent.  For an `if`, the *shorter-lived* (deeper) of the two branch
+ * referents is returned, since that is the one that would dangle first. */
+const Binding *borrow_referent_binding(const Expr *e) {
+    if (!e) return NULL;
+    switch (e->kind) {
+        case EX_BORROW_IMMUT: {
+            const Expr *inner = e->as.borrow_immut_.expr;
+            return (inner && inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+        }
+        case EX_BORROW_MUT: {
+            const Expr *inner = e->as.borrow_mut_.expr;
+            return (inner && inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+        }
+        case EX_DO:
+            return e->as.do_.n ? borrow_referent_binding(e->as.do_.items[e->as.do_.n - 1])
+                               : NULL;
+        case EX_LET:
+        case EX_LETREC:
+            return borrow_referent_binding(e->as.let_.body);
+        case EX_IF: {
+            const Binding *t = borrow_referent_binding(e->as.if_.then_);
+            const Binding *f = borrow_referent_binding(e->as.if_.else_or_null);
+            if (!t) return f;
+            if (!f) return t;
+            return (f->scope_depth > t->scope_depth) ? f : t;
+        }
+        default:
+            return NULL;
+    }
 }
 
 Binding *expr_closure_fn_binding(const Expr *expr) {

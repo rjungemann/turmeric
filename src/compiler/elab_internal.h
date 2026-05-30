@@ -729,6 +729,10 @@ Expr *elab_gensym(Elab *e, const Form *call);
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
 
+/* TY4: if `e` is a borrow (&x / &mut x) of a named binding, return that
+ * binding (the referent); otherwise NULL.  Used by the borrow-escape check. */
+const Binding *borrow_referent_binding(const Expr *e);
+
 /* elab_unsafe.c */
 Expr *elab_ptr_deref(Elab *e, const Form *call);
 Expr *elab_ptr_write(Elab *e, const Form *call);

@@ -1,0 +1,9 @@
+;; TY4: borrow-escape through an if. Each branch borrows a value from its own
+;; inner let; binding `r` outlives both. Expect TUR-E0105.
+(defn bad [b :bool] :int
+  (let [r (if b (let [x 1] (& x)) (let [y 2] (& y)))]
+    (deref r)))
+
+(defn main [] :int
+  (println (bad true))
+  0)

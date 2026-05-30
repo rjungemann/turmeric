@@ -35,25 +35,47 @@ void lifetime_context_add_constraint(LifetimeContext *ctx, LifetimeId parent, Li
     ctx->n_constraints++;
 }
 
-/* Check if there's a transitive path from a to b (a outlives b) */
-bool lifetime_outlives(const LifetimeContext *ctx, LifetimeId a, LifetimeId b) {
+/* Cycle-safe transitive reachability from `a` to `b` over the outlives graph.
+ * `visited` marks lifetime IDs already on the current search so a constraint
+ * cycle terminates instead of recursing forever. */
+static bool outlives_dfs(const LifetimeContext *ctx, LifetimeId a, LifetimeId b,
+                         bool *visited) {
     if (a == b) return true;
     if (a == LIFETIME_NONE || b == LIFETIME_NONE) return false;
-    
-    /* Simple O(n^2) check for direct and transitive constraints */
-    /* For a production implementation, we'd use a more efficient algorithm */
-    for (uint8_t i = 0; i < ctx->n_constraints; i++) {
-        if (ctx->constraints[i].parent == a && ctx->constraints[i].child == b) {
-            return true;
-        }
+    if (a <= MAX_LIFETIMES) {
+        if (visited[a]) return false;   /* already exploring a -- cycle guard */
+        visited[a] = true;
     }
-    /* Check transitive: if a outlives c and c outlives b, then a outlives b */
     for (uint8_t i = 0; i < ctx->n_constraints; i++) {
         if (ctx->constraints[i].parent == a) {
             LifetimeId mid = ctx->constraints[i].child;
-            if (lifetime_outlives(ctx, mid, b)) {
-                return true;
-            }
+            if (mid == b) return true;
+            if (outlives_dfs(ctx, mid, b, visited)) return true;
+        }
+    }
+    return false;
+}
+
+/* Check if there's a transitive path from a to b (a outlives b). */
+bool lifetime_outlives(const LifetimeContext *ctx, LifetimeId a, LifetimeId b) {
+    bool visited[MAX_LIFETIMES + 1];
+    memset(visited, 0, sizeof(visited));
+    return outlives_dfs(ctx, a, b, visited);
+}
+
+/* TY4.2: cycle detection over the outlives-constraint graph.  A cycle exists
+ * iff some lifetime can reach itself through one or more constraint edges. */
+bool lifetime_has_cycle(const LifetimeContext *ctx, LifetimeId *out_a, LifetimeId *out_b) {
+    for (uint8_t i = 0; i < ctx->n_constraints; i++) {
+        LifetimeId p = ctx->constraints[i].parent;
+        LifetimeId c = ctx->constraints[i].child;
+        /* If the child can reach back to the parent, p->...->c->p is a cycle. */
+        bool visited[MAX_LIFETIMES + 1];
+        memset(visited, 0, sizeof(visited));
+        if (outlives_dfs(ctx, c, p, visited)) {
+            if (out_a) *out_a = p;
+            if (out_b) *out_b = c;
+            return true;
         }
     }
     return false;

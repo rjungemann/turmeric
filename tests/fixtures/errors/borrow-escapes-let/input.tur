@@ -1,0 +1,10 @@
+;; TY4: a borrow must not outlive the value it points to.
+;; `r` (outer let) borrows `x`, which lives only in the inner let -- the borrow
+;; would dangle once the inner scope ends. Expect TUR-E0105.
+(defn bad [] :int
+  (let [r (let [x 42] (& x))]
+    (deref r)))
+
+(defn main [] :int
+  (println (bad))
+  0)

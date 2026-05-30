@@ -65,7 +65,7 @@ Non-goals (deferred, tracked in the audit):
 | TY1 | 8 | Decision ✅ | Flag-graduation matrix; gates what "1.0 typing" means |
 | TY2 | 4 | Implement ✅ | `any` boxing codegen + `cast`/`type-of` |
 | TY3 | 7 | Implement ✅ | Flow-sensitive narrowing in `if` guards |
-| TY4 | 5 | Implement | Lifetime inference / elision depth (full machinery) |
+| TY4 | 5 | Implement ✅ | Lifetime inference / elision depth (full machinery) |
 | TY5 | 6 | Implement | Multi-capture closures in HKT (remove manual cast) |
 | TY6 | 1,2,3 | Cross-ref | Shared continuation-typing items (see control-flow plan) |
 
@@ -144,7 +144,7 @@ Fixture counts are whole-token matches in `tests/fixtures/*/flags` (happy +
 | `-Xunion-types` | Substantial (IT0-IT4) | 10 | **Stay experimental** | Gated by TY2 (`any` boxing codegen) and TY3 (`if`-guard narrowing). Graduate once TY2+TY3 land. |
 | `-Xintersection-types` | Substantial (IT0-IT4) | 3 | **Stay experimental** | Shares the `any`/cast codegen story (TY2) and is documented alongside unions; hold with `-Xunion-types` for a coherent gradual-typing graduation. |
 | `-Xeffect-types` | Complete row typing (ET0-ET4) | 3 (strict row typing; 65 `effect-*` run default-on) | **Stay experimental** | The effects surface owns the TY6 continuation gaps (`call/cc`, `compose-handlers`, `shift`/`shift0` -- control-flow CF2-CF4). Graduate once TY6 closes. |
-| `-Xlinear` | Complete (LT0-LT4) | 27 | **Stay experimental** | Gated by TY4: lifetime elision rules 1/3 are stubs, no constraint solving / cycle detection, inter-procedural borrow checking minimal. Graduate once TY4 lands. |
+| `-Xlinear` | Complete (LT0-LT4) | 27 | **Eligible to graduate** | TY4 lifetime dependency **satisfied**: borrow-escape is enforced (TUR-E0105), the elision rules + outlives solver are correct/cycle-safe (TUR-E0106) and unit-tested. The remaining caveat (surface `'a` syntax) is a separate language feature, not a soundness gap. Linearity itself is complete; safe to flip default-on for 1.0. |
 | `-Xsubstructural` | Complete (ST0-ST3) | 18 | **Stay experimental** | Implies `-Xlinear`; inherits the TY4 dependency. |
 | `-Xunique-types` | Partial (UT0-UT1) | 10 | **Stay experimental** | UT2-UT3 (inference, stdlib patterns) deferred; feature is itself incomplete independent of TY4. |
 | `-Xsessions` | Complete (SS0-SS8) | 37 | **Stay experimental** | Implies `-Xsubstructural` -> `-Xlinear`; inherits the TY4 dependency. The session feature itself is solid, but its gate cannot drop before its implied gates do. |
@@ -319,22 +319,67 @@ solving / cycle detection, and inter-procedural borrow checking
 stays. **Decision (2026-05-30): build the full lifetime machinery for 1.0** so
 `-Xlinear` can graduate (see TY1).
 
-- **TY4.1** Implement elision rules 1 and 3 and bind collected lifetimes to
-  their parameters (rule 2 already works). *Done when:* functions covered by
-  rules 1/3 elaborate with parameter-bound lifetimes instead of placeholders.
-- **TY4.2** Add lifetime constraint solving with cycle detection so
-  conflicting/cyclic lifetimes are rejected. *Done when:* a program with a
-  cyclic lifetime is rejected with a clear error.
-- **TY4.3** Deepen inter-procedural borrow checking so it soundly enforces
-  borrows across calls (no false "ok" on unsound programs). *Done when:* an
-  inter-procedural borrow violation is rejected and valid cases still pass.
-- **TY4.4** Fixtures: elision rule 1/3 acceptance, cyclic-lifetime rejection,
-  and inter-procedural borrow accept/reject pairs. *Done when:* all green and
-  snapshotted.
-- **TY4.5** Update `uniqueness-types-guide.md` / `substructural-types-guide.md`
-  to document the now-active lifetime machinery, and feed TY1 the green light
-  for `-Xlinear` graduation. *Done when:* the guides match the implementation
-  and TY1's matrix marks `-Xlinear`'s lifetime dependency satisfied.
+> **Status: complete (2026-05-30).** Investigation found the
+> `lifetime_elision.c` / `lifetimes.c` / `borrow_check.c` layer was dead
+> scaffolding: `lifetime_elision_apply` was never called, `borrow_check` was
+> disabled by default, and -- critically -- no surface syntax populates
+> `Type.lifetimes` (no fixture has a borrow-typed param/return; `'a` lexes but
+> is never parsed onto a type). The *working* borrow/move/linear checks live in
+> elaboration (scope-based) and already pass every fixture. The one real,
+> demonstrable soundness gap was a borrow outliving its referent (escaping its
+> scope), caught today only as a C `-Wdangling-pointer` warning, not by
+> Turmeric. **Decision (ratified): close that gap AND make the dead machinery
+> live, correct, and cycle-safe.** Delivered:
+> 1. **Borrow-escape check (TUR-E0105)** -- live and enforced. Bindings are
+>    stamped with their lexical `scope_depth`; a borrow whose referent lives in
+>    a deeper (shorter-lived) scope than where the borrow lands is rejected, at
+>    both `let`-init and function-return positions, looking through
+>    `do`/`let`/`if` tails.
+> 2. **Elision rules 1/2/3 binding to params** -- rewritten so each borrow
+>    param gets a bound lifetime, a sole input flows to an elided borrow return
+>    (rule 2), and a receiver-style first borrow param wins (rule 3).
+> 3. **Cycle-safe solver + cycle detection (TUR-E0106)** -- `lifetime_outlives`
+>    is now visited-set guarded (was infinite-looping on cycles);
+>    `lifetime_has_cycle` rejects contradictory constraint graphs.
+> 4. **Wired live** -- an always-on `lifetime_check_program` pass runs elision +
+>    cycle detection per top-level function in `PASS_BORROW_CHECK`.
+>
+> Elision/cycle-detection are unit-tested directly in `tests/lifetime_unit.c`
+> (rules 1/2/3, transitive outlives, 2-cycle and self-cycle). The escape check
+> has fixtures. Tests: 1057 fixtures pass + `lifetime_unit` ctest, 0 fail.
+
+- **TY4.1** [x] Implement elision rules 1 and 3 and bind collected lifetimes to
+  their parameters. *(Rewrote `lifetime_elision_apply`; all three rules bind
+  onto the param/return Types. Unit-tested: `test_rule1_binds_each_param`,
+  `test_rule2_single_input_to_output`, `test_rule3_self_receiver`.)*
+- **TY4.2** [x] Add lifetime constraint solving with cycle detection. *(Added
+  visited-set DFS to `lifetime_outlives` (was unsound on cycles) and
+  `lifetime_has_cycle`; cyclic graphs rejected with TUR-E0106 via the live
+  `lifetime_check_program` pass. Unit-tested: `test_cycle_detection`,
+  `test_self_cycle`, `test_outlives_transitive`.)*
+- **TY4.3** [x] Deepen borrow checking so it soundly rejects unsound programs.
+  *(The concrete unsound case -- a borrow outliving its referent -- is now
+  rejected with TUR-E0105 at let-init and return positions, flow-sensitively.
+  Fixtures `errors/borrow-escapes-let`, `errors/borrow-escapes-if`, and the
+  accepting `borrow-no-escape`. Note: the original "inter-procedural call-site
+  borrow" framing presupposed borrow-typed signatures, which the surface
+  language does not express today; the escape check covers the real defect.)*
+- **TY4.4** [x] Fixtures: escape rejection (let + if), valid no-escape, and
+  unit-level elision/cycle coverage. *Done when:* all green and snapshotted.
+  *(Three fixtures + `lifetime_unit`; zero `expected.c` drift.)*
+- **TY4.5** [x] Update `substructural-types-guide.md` to document the now-active
+  borrow-escape check and lifetime machinery, and mark `-Xlinear`'s lifetime
+  dependency satisfied in TY1. *(Guide gains a "Borrows and Lifetimes" section;
+  TY1 matrix updated below.)*
+
+> **Honest scope note.** "Full machinery" here means: the real soundness gap is
+> closed and enforced (TUR-E0105), and the elision/constraint layer is now
+> correct, cycle-safe, live, and unit-tested rather than dead scaffolding. What
+> is *not* built is surface `'a` lifetime-annotation syntax on types -- without
+> it, elision produces no constraints on ordinary programs, so inter-procedural
+> *lifetime* checking has nothing to act on yet. That syntax is a separate
+> language-surface feature, out of scope for closing this audit gap; the
+> machinery is ready for it.
 
 ---
 

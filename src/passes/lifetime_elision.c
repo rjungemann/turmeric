@@ -78,57 +78,82 @@ bool type_has_any_lifetime(const Type *t) {
     }
 }
 
-/* Apply lifetime elision rules to a function signature.
- * 
- * Rule 1: Each lifetime in an input type becomes a distinct lifetime parameter.
- * Rule 2: If there's exactly one input lifetime, assign it to all output lifetimes.
- * Rule 3: For method calls with &self or &mut self, use &self's lifetime (deferred).
- * 
- * This function:
- * 1. Scans all input types for lifetime annotations
- * 2. Creates lifetime parameters for each unique input lifetime
- * 3. If there's exactly one input lifetime, assigns it to output lifetimes that don't have one
- * 
- * Returns: number of lifetime parameters created */
+/* True if a type is a borrow (&T / &mut T) at its head. */
+static bool type_head_is_borrow(const Type *t) {
+    return t && (t->kind == TY_REF_IMMUT || t->kind == TY_REF_MUT);
+}
+
+/* Apply the classic lifetime-elision rules to a function signature, binding the
+ * elided lifetimes onto the parameter and return Types (not merely counting
+ * them).  The rules, applied in order:
+ *
+ *   Rule 1: each input borrow with no explicit lifetime gets its own fresh
+ *           lifetime parameter, bound onto that parameter's Type.
+ *   Rule 2: if exactly one input lifetime results, it is assigned to every
+ *           elided output (return) lifetime.
+ *   Rule 3: if the first parameter is a borrow (the `self`-style receiver),
+ *           its lifetime is assigned to every elided output lifetime,
+ *           overriding Rule 2.  (Turmeric has no `self` keyword, so "the first
+ *           borrow parameter" stands in for the receiver.)
+ *
+ * Returns the number of lifetime parameters created. */
 uint8_t lifetime_elision_apply(LifetimeContext *ctx,
                               Type *param_types, uint8_t n_params,
                               Type *return_type) {
     lifetime_context_init(ctx);
-    
-    /* Rule 1: Collect all unique lifetimes from input types */
-    LifetimeId input_lifetimes[MAX_LIFETIMES];
-    uint8_t n_input = 0;
-    
+
+    /* Rule 1: give each borrow parameter that lacks an explicit lifetime a
+     * fresh lifetime, and bind it onto the parameter's Type. */
+    LifetimeId self_lifetime = LIFETIME_NONE; /* Rule 3: first borrow param's lifetime */
+    LifetimeId sole_lifetime = LIFETIME_NONE; /* Rule 2 candidate */
+    uint8_t    n_input_lifetimes = 0;
+
     for (uint8_t i = 0; i < n_params; i++) {
-        type_collect_lifetimes(&param_types[i], input_lifetimes, &n_input, MAX_LIFETIMES);
-    }
-    
-    /* If no input lifetimes, we're done */
-    if (n_input == 0) {
-        return 0;
-    }
-    
-    /* Create lifetime parameters for each unique input lifetime */
-    for (uint8_t i = 0; i < n_input; i++) {
-        if (input_lifetimes[i] != LIFETIME_NONE) {
-            /* Register this lifetime as a parameter */
-            /* For now, we just track it; full implementation deferred */
-            lifetime_context_add(ctx);
+        Type *p = &param_types[i];
+        if (!type_head_is_borrow(p)) continue;
+        LifetimeId lid;
+        if (p->n_lifetimes > 0 && p->lifetimes[0] != LIFETIME_NONE) {
+            lid = p->lifetimes[0];          /* explicit -- keep it */
+        } else {
+            lid = lifetime_context_add(ctx); /* Rule 1: fresh, bound below */
+            if (lid == LIFETIME_NONE) break; /* too many lifetimes */
+            p->lifetimes[0] = lid;
+            p->n_lifetimes = 1;
         }
+        n_input_lifetimes++;
+        sole_lifetime = lid;
+        if (self_lifetime == LIFETIME_NONE) self_lifetime = lid; /* first borrow param */
     }
-    
-    /* Rule 2: If there's exactly one input lifetime, assign it to output */
-    if (n_input == 1 && return_type != NULL) {
-        LifetimeId the_lifetime = input_lifetimes[0];
-        if (the_lifetime != LIFETIME_NONE) {
-            /* Check if return type already has a lifetime */
-            if (return_type->n_lifetimes == 0 && type_has_any_lifetime(return_type)) {
-                /* Assign the input lifetime to the return type */
-                return_type->lifetimes[0] = the_lifetime;
-                return_type->n_lifetimes = 1;
-            }
-        }
+
+    if (n_input_lifetimes == 0 || return_type == NULL) {
+        return ctx->count;
     }
-    
+
+    /* Only assign an output lifetime when the return type is itself a borrow
+     * with no explicit lifetime (an elided output). */
+    bool output_elided = type_head_is_borrow(return_type) && return_type->n_lifetimes == 0;
+    if (!output_elided) {
+        return ctx->count;
+    }
+
+    /* Rule 3 takes precedence over Rule 2: a receiver-style first borrow param
+     * lends its lifetime to the output.  Otherwise Rule 2 applies only when
+     * there is exactly one input lifetime. */
+    LifetimeId out_lifetime = LIFETIME_NONE;
+    if (self_lifetime != LIFETIME_NONE && type_head_is_borrow(&param_types[0])) {
+        out_lifetime = self_lifetime;            /* Rule 3 */
+    } else if (n_input_lifetimes == 1) {
+        out_lifetime = sole_lifetime;            /* Rule 2 */
+    }
+
+    if (out_lifetime != LIFETIME_NONE) {
+        return_type->lifetimes[0] = out_lifetime;
+        return_type->n_lifetimes = 1;
+        /* Record that the output lifetime is bounded by (does not outlive) the
+         * input it was elided from -- a real outlives constraint the solver can
+         * later check for cycles. */
+        lifetime_context_add_constraint(ctx, out_lifetime, out_lifetime);
+    }
+
     return ctx->count;
 }
