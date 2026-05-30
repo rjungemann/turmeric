@@ -1,0 +1,11 @@
+;; LS4: a borrow returned from a call is tied (by lifetime) to its argument.
+;; `idb` returns its &'a int argument, so (idb (& a)) is a borrow of `a`.
+;; Returning it from `bad` lets that borrow outlive the local `a` -- TUR-E0105.
+(defn idb [x : &'a int] : &'a int
+  x)
+
+(defn bad [] : &int
+  (let [a 5]
+    (idb (& a))))
+
+(defn main [] :int 0)

@@ -1,0 +1,8 @@
+;; LS3: a signature whose nested borrows impose contradictory outlives
+;; constraints is rejected.  &'a &'b int requires 'b: 'a (the inner reference
+;; must outlive the outer); &'b &'a int requires 'a: 'b.  Together they form a
+;; lifetime cycle -- TUR-E0106.
+(defn bad [x : &'a &'b int y : &'b &'a int] : int
+  0)
+
+(defn main [] :int 0)

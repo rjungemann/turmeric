@@ -1,6 +1,6 @@
 # Lifetime-Annotation Syntax Plan (`'a` on types)
 
-> **Status:** Not started (planning). Companion to
+> **Status:** Implemented (LS0-LS5). Companion to
 > [typing-gap-plan.md](typing-gap-plan.md) Phase TY4, which closed the real
 > borrow-escape soundness gap (TUR-E0105) and made the lifetime *machinery*
 > (`lifetime_elision_apply`, `lifetime_outlives`, `lifetime_has_cycle`,

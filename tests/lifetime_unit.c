@@ -143,6 +143,25 @@ static void test_intern_name_to_id(void) {
     printf("ok intern_name_to_id\n");
 }
 
+static void test_explicit_lifetime_kept(void) {
+    /* LS3: a borrow param that already carries an explicit lifetime keeps it --
+     * elision's Rule 1 must not overwrite it with a fresh one, and an explicit
+     * output lifetime equal to the input is preserved (not reassigned). */
+    Type params[1] = { type_ref_immut_lifetime(TY_INT, 7) };
+    Type ret = type_ref_immut_lifetime(TY_INT, 7);
+    LifetimeContext ctx;
+    lifetime_elision_apply(&ctx, params, 1, &ret);
+    assert(params[0].n_lifetimes == 1 && params[0].lifetimes[0] == 7 &&
+           "explicit input lifetime is not clobbered by Rule 1");
+    assert(ret.n_lifetimes == 1 && ret.lifetimes[0] == 7 &&
+           "explicit output lifetime is preserved");
+    /* No spurious self-constraint -> no cycle. */
+    LifetimeId x, y;
+    assert(!lifetime_has_cycle(&ctx, &x, &y) &&
+           "explicit input==output lifetime is not a cycle");
+    printf("ok explicit_lifetime_kept\n");
+}
+
 static void test_self_cycle(void) {
     /* a: a is a trivial self-cycle.  Detection must terminate either way. */
     LifetimeContext ctx;
@@ -162,6 +181,7 @@ int main(void) {
     test_outlives_transitive();
     test_cycle_detection();
     test_intern_name_to_id();
+    test_explicit_lifetime_kept();
     test_self_cycle();
     printf("all lifetime unit tests passed\n");
     return 0;

@@ -1,0 +1,15 @@
+;; LS1-LS4: explicit 'a lifetime annotations on borrow types.
+;;
+;; `longer` takes two &'a int borrows (both quantified over the same lifetime
+;; 'a, implicitly) and returns a &'a int.  The returned borrow is tied to the
+;; input lifetime, so the inter-procedural borrow checker treats the call result
+;; as a borrow of one of the arguments.  Here the arguments outlive the use, so
+;; it type-checks and runs.
+(defn longer [x : &'a int y : &'a int] : &'a int
+  (if (> @x @y) x y))
+
+(defn main [] :int
+  (let [a 3]
+    (let [b 7]
+      (println @(longer (& a) (& b)))
+      0)))
