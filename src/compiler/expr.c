@@ -397,6 +397,23 @@ void expr_print(Buf *b, const Expr *e) {
             }
             buf_putc(b, ')');
             break;
+        case EX_HANDLER_LIT:
+            buf_puts(b, "(handler ...)");
+            break;
+        case EX_WITH_HANDLER:
+            buf_puts(b, "(with-handler ");
+            expr_print(b, e->as.with_handler_.handler);
+            buf_putc(b, ' ');
+            expr_print(b, e->as.with_handler_.body);
+            buf_putc(b, ')');
+            break;
+        case EX_COMPOSE_HANDLERS:
+            buf_puts(b, "(compose-handlers ");
+            expr_print(b, e->as.compose_handlers_.h1);
+            buf_putc(b, ' ');
+            expr_print(b, e->as.compose_handlers_.h2);
+            buf_putc(b, ')');
+            break;
         case EX_RESUME:
             buf_puts(b, "(resume ");
             expr_print(b, e->as.resume_.resume->k);

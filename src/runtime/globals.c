@@ -75,6 +75,11 @@ bool g_intersection_types_enabled = false;
 /* ET4: -Xeffect-types flag — enable full effect typing */
 bool g_effect_types_enabled = false;  /* ET4: -Xeffect-types */
 
+/* FH5: enable runtime first-class handler composition (compose-handlers).
+ * Until FH5 lands its fixtures + CF-plan update, compose-handlers stays gated
+ * (TUR-E0704). */
+bool g_fh_compose_enabled = false;
+
 /* CT3: Contract checking configuration */
 bool g_contracts_enabled = true;          /* contracts always active by default */
 bool g_keep_contracts_in_release = false; /* --keep-contracts: retain in release builds */

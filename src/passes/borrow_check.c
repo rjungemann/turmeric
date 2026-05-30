@@ -586,6 +586,27 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 }
             }
             return true;
+        case EX_HANDLER_LIT:
+            /* FH2: handler literal -- check each case body inside handler-case ctx. */
+            for (uint8_t i = 0; i < e->as.handler_lit_.handle->n_cases; i++) {
+                const HandleCase *hc = &e->as.handler_lit_.handle->cases[i];
+                const HandleCase *prev_hc = ctx->handler_case;
+                ctx->handler_case = hc;
+                bool ok = borrow_check_expr_recursive(ctx, hc->body);
+                ctx->handler_case = prev_hc;
+                if (!ok) return false;
+            }
+            return true;
+        case EX_WITH_HANDLER:
+            /* FH3: check the handler value and the handled body. */
+            if (!borrow_check_expr_recursive(ctx, e->as.with_handler_.handler)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.with_handler_.body)) return false;
+            return true;
+        case EX_COMPOSE_HANDLERS:
+            /* FH5: check both handler values. */
+            if (!borrow_check_expr_recursive(ctx, e->as.compose_handlers_.h1)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.compose_handlers_.h2)) return false;
+            return true;
         case EX_RESUME:
             /* Check continuation and value */
             if (!borrow_check_expr_recursive(ctx, e->as.resume_.resume->k)) return false;

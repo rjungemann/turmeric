@@ -238,6 +238,10 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
 char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e);
+/* FH2-FH5: first-class handler values */
+char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_compose_handlers(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e);
 /* Region A -- delimited / cloneable / serial continuations */

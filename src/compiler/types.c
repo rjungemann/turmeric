@@ -1832,9 +1832,11 @@ const char *type_c_name(Type t) {
         /* IT4: any — tagged union struct (same as TY_UNION; tag is TypeKind of stored value) */
         case TY_ANY:
             return "tur_tagged_t";
-        /* ET3: Handler type — struct with env pointer and function pointer */
+        /* ET3/FH1: Handler value — pointer to an effect-keyed dispatch table.
+         * (Was the type-only tur_handler_t struct before first-class handlers;
+         * handler values are now created/passed/applied as tur_handler_table_t*.) */
         case TY_HANDLER:
-            return "tur_handler_t";
+            return "tur_handler_table_t *";
         /* CT0: Contract type — same C representation as its base type */
         case TY_CONTRACT:
             return t.as.contract_.base_type

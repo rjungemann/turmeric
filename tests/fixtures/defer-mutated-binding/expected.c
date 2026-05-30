@@ -104,23 +104,24 @@ typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tu
 /* FH1: first-class handler dispatch-table entry */
 typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;
 /* FH1: first-class handler value -- effect-keyed dispatch table */
-typedef struct { tur_handler_entry_t *entries; int n_entries; uint8_t owns_env; } tur_handler_table_t;
+typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;
 static tur_handler_table_t *tur_handler_table_new(int n) {
     tur_handler_table_t *t = (tur_handler_table_t *)calloc(1, sizeof(tur_handler_table_t));
     t->entries = (tur_handler_entry_t *)calloc((size_t)(n > 0 ? n : 1), sizeof(tur_handler_entry_t));
-    t->n_entries = n; t->owns_env = 1; return t;
+    t->n_entries = n; return t;
 }
 static tur_handler_table_t *tur_handler_table_concat(tur_handler_table_t *a, tur_handler_table_t *b) {
     int na = a ? a->n_entries : 0, nb = b ? b->n_entries : 0;
     tur_handler_table_t *t = tur_handler_table_new(na + nb);
-    t->owns_env = 0;
     for (int i = 0; i < na; i++) t->entries[i] = a->entries[i];
     for (int i = 0; i < nb; i++) t->entries[na + i] = b->entries[i];
+    if (a) { free(a->entries); free(a); }
+    if (b) { free(b->entries); free(b); }
     return t;
 }
 static void tur_handler_table_free(tur_handler_table_t *t) {
     if (!t) return;
-    if (t->owns_env) { for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env); }
+    for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env);
     free(t->entries); free(t);
 }
 /* IT4: tagged union runtime representation */
@@ -556,6 +557,7 @@ struct TurEffectCaptureCtx {
     int eff_n_args;
     int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);
     void *body_env;  /* heap-allocated env for body captures */
+    void *table;     /* FH3: tur_handler_table_t* for value-based dispatch (else NULL) */
 };
 
 typedef struct EffectHandlerCase EffectHandlerCase;
@@ -1679,6 +1681,48 @@ static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
         frame = frame->parent;
     }
     fprintf(stderr, "Unhandled effect: %s\n", name);
+    abort();
+    return 0;
+}
+
+struct __tur_msdyn_env { void *ctx; int64_t k_int; };
+static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __tur_msdyn_cont(void *__env, int64_t __v) {
+    struct __tur_msdyn_env *__e = (struct __tur_msdyn_env *)__env;
+    return tur_handler_dispatch(__e->ctx, __e->k_int, __v);
+}
+static void *__tur_msdyn_clone(const void *__env) {
+    const struct __tur_msdyn_env *__o = (const struct __tur_msdyn_env *)__env;
+    struct __tur_msdyn_env *__c = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));
+    if (__c) *__c = *__o;
+    return __c;
+}
+static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
+    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
+    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
+    if (__fiber->done) { return __fiber->result; }
+    if (!__dcap->has_pending_effect) return __r;
+    tur_handler_table_t *__tbl = (tur_handler_table_t *)__dcap->table;
+    for (int __i = 0; __tbl && __i < __tbl->n_entries; __i++) {
+        if (strcmp(__dcap->eff_name, __tbl->entries[__i].eff_name) == 0) {
+            tur_handler_entry_t *__en = &__tbl->entries[__i];
+            return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_int, __en->env);
+        }
+    }
+    FiberBlock *__outer_f = tur_current_fiber;
+    if (__outer_f && __outer_f->eff_ctx) {
+        TurEffectCaptureCtx *__oc = (TurEffectCaptureCtx *)__outer_f->eff_ctx;
+        __oc->eff_name = __dcap->eff_name;
+        int __bn = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;
+        for (int __bi = 0; __bi < __bn; __bi++) __oc->eff_args[__bi] = __dcap->eff_args[__bi];
+        __oc->eff_n_args = __dcap->eff_n_args;
+        __oc->has_pending_effect = true;
+        tur_fiber_block_yield(0);
+        __oc->has_pending_effect = false;
+        return tur_handler_dispatch(__ctx_void, __k_int, __outer_f->arg);
+    }
+    fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
     abort();
     return 0;
 }

@@ -726,6 +726,9 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_GEN_DONE:
         case EX_PERFORM:
         case EX_HANDLE:
+        case EX_HANDLER_LIT:
+        case EX_WITH_HANDLER:
+        case EX_COMPOSE_HANDLERS:
         case EX_RESUME:
         case EX_DISCONTINUE:
         case EX_MAKE_STRUCT:

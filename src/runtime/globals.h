@@ -68,6 +68,8 @@ extern bool g_intersection_types_enabled;
 
 /* ET4: -Xeffect-types enables full effect typing (TY_HANDLER, handler typing, ET4 checks) */
 extern bool g_effect_types_enabled;
+/* FH5: runtime first-class handler composition (compose-handlers). */
+extern bool g_fh_compose_enabled;
 
 /* CT3: Contract checking configuration */
 extern bool g_contracts_enabled;          /* -Xcontracts: enable contract syntax (always on in debug) */

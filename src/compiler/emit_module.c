@@ -1668,27 +1668,31 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "/* FH1: first-class handler dispatch-table entry */\n");
     buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;\n");
     buf_puts(out, "/* FH1: first-class handler value -- effect-keyed dispatch table */\n");
-    buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; uint8_t owns_env; } tur_handler_table_t;\n");
+    buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;\n");
     buf_puts(out, "static tur_handler_table_t *tur_handler_table_new(int n) {\n");
     buf_puts(out, "    tur_handler_table_t *t = (tur_handler_table_t *)calloc(1, sizeof(tur_handler_table_t));\n");
     buf_puts(out, "    t->entries = (tur_handler_entry_t *)calloc((size_t)(n > 0 ? n : 1), sizeof(tur_handler_entry_t));\n");
-    buf_puts(out, "    t->n_entries = n; t->owns_env = 1; return t;\n");
+    buf_puts(out, "    t->n_entries = n; return t;\n");
     buf_puts(out, "}\n");
     /* FH5: concatenate two tables (h1's entries first; h1 is the outer handler
-     * per FH0.1).  The result borrows the source entries verbatim and does NOT
-     * own their envs (owns_env = 0) so freeing the composed table never double-
-     * frees an env still owned by h1/h2. */
+     * per FH0.1).  Consumes a and b: their entries (including env ownership) are
+     * transferred into the new owning table, and their now-empty struct+array
+     * shells are freed.  A composed table is therefore a single owning object
+     * that tur_handler_table_free fully reclaims. */
     buf_puts(out, "static tur_handler_table_t *tur_handler_table_concat(tur_handler_table_t *a, tur_handler_table_t *b) {\n");
     buf_puts(out, "    int na = a ? a->n_entries : 0, nb = b ? b->n_entries : 0;\n");
     buf_puts(out, "    tur_handler_table_t *t = tur_handler_table_new(na + nb);\n");
-    buf_puts(out, "    t->owns_env = 0;\n");
     buf_puts(out, "    for (int i = 0; i < na; i++) t->entries[i] = a->entries[i];\n");
     buf_puts(out, "    for (int i = 0; i < nb; i++) t->entries[na + i] = b->entries[i];\n");
+    buf_puts(out, "    if (a) { free(a->entries); free(a); }\n");
+    buf_puts(out, "    if (b) { free(b->entries); free(b); }\n");
     buf_puts(out, "    return t;\n");
     buf_puts(out, "}\n");
+    /* FH1.2: deep-free a handler value -- its entries' envs, the entries array,
+     * then the struct.  Single owner frees; ASan/LSan-clean. */
     buf_puts(out, "static void tur_handler_table_free(tur_handler_table_t *t) {\n");
     buf_puts(out, "    if (!t) return;\n");
-    buf_puts(out, "    if (t->owns_env) { for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env); }\n");
+    buf_puts(out, "    for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env);\n");
     buf_puts(out, "    free(t->entries); free(t);\n");
     buf_puts(out, "}\n");
     /* IT4: Tagged union runtime representation.
@@ -2232,6 +2236,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int eff_n_args;\n");
     buf_puts(out, "    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);\n");
     buf_puts(out, "    void *body_env;  /* heap-allocated env for body captures */\n");
+    buf_puts(out, "    void *table;     /* FH3: tur_handler_table_t* for value-based dispatch (else NULL) */\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
     buf_puts(out, "struct EffectHandlerCase {\n");
@@ -3360,6 +3365,70 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        frame = frame->parent;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"Unhandled effect: %s\\n\", name);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n\n");
+
+    /* FH3/FH5: generic dispatch loop for first-class handler values.
+     * Identical in shape to the per-handle __dispatch_<id> emitted by
+     * emit_effects_handle, but it scans a runtime tur_handler_table_t instead
+     * of compile-time inline cases.  with-handler installs this as the
+     * TurEffectCaptureCtx.dispatch fn and points ctx.table at the handler
+     * value's table.  Multishot entries (cont_kind == CK_MULTISHOT) wrap the
+     * fiber continuation in a cloneable cont, mirroring the inline path. */
+    buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; };\n");
+    buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n");
+    buf_puts(out, "static int64_t __tur_msdyn_cont(void *__env, int64_t __v) {\n");
+    buf_puts(out, "    struct __tur_msdyn_env *__e = (struct __tur_msdyn_env *)__env;\n");
+    buf_puts(out, "    return tur_handler_dispatch(__e->ctx, __e->k_int, __v);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void *__tur_msdyn_clone(const void *__env) {\n");
+    buf_puts(out, "    const struct __tur_msdyn_env *__o = (const struct __tur_msdyn_env *)__env;\n");
+    buf_puts(out, "    struct __tur_msdyn_env *__c = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
+    buf_puts(out, "    if (__c) *__c = *__o;\n");
+    buf_puts(out, "    return __c;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {\n");
+    buf_puts(out, "    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;\n");
+    buf_puts(out, "    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;\n");
+    buf_puts(out, "    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);\n");
+    buf_puts(out, "    if (__fiber->done) { return __fiber->result; }\n");
+    buf_puts(out, "    if (!__dcap->has_pending_effect) return __r;\n");
+    buf_puts(out, "    tur_handler_table_t *__tbl = (tur_handler_table_t *)__dcap->table;\n");
+    buf_puts(out, "    for (int __i = 0; __tbl && __i < __tbl->n_entries; __i++) {\n");
+    buf_puts(out, "        if (strcmp(__dcap->eff_name, __tbl->entries[__i].eff_name) == 0) {\n");
+    buf_puts(out, "            tur_handler_entry_t *__en = &__tbl->entries[__i];\n");
+    /* The multishot branch references the cloneable-continuation runtime, which
+     * is only emitted when the program uses multishot/cloneable continuations.
+     * Gate it on the same predicate; otherwise multishot dispatch is unreachable
+     * (a multishot handler literal makes the predicate true via
+     * expr_has_multishot_handler). */
+    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
+    buf_printf(out, "            if (__en->cont_kind == %d) { /* CK_MULTISHOT */\n", (int)CK_MULTISHOT);
+    buf_puts(out, "                struct __tur_msdyn_env *__ms = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
+    buf_puts(out, "                if (!__ms) abort();\n");
+    buf_puts(out, "                __ms->ctx = __ctx_void; __ms->k_int = __k_int;\n");
+    buf_puts(out, "                int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__tur_msdyn_cont, __ms, __tur_msdyn_clone, free);\n");
+    buf_puts(out, "                return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __en->env);\n");
+    buf_puts(out, "            }\n");
+    }
+    buf_puts(out, "            return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_int, __en->env);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    /* Bubble unhandled effect to the outer fiber, mirroring the per-handle path. */
+    buf_puts(out, "    FiberBlock *__outer_f = tur_current_fiber;\n");
+    buf_puts(out, "    if (__outer_f && __outer_f->eff_ctx) {\n");
+    buf_puts(out, "        TurEffectCaptureCtx *__oc = (TurEffectCaptureCtx *)__outer_f->eff_ctx;\n");
+    buf_puts(out, "        __oc->eff_name = __dcap->eff_name;\n");
+    buf_puts(out, "        int __bn = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;\n");
+    buf_puts(out, "        for (int __bi = 0; __bi < __bn; __bi++) __oc->eff_args[__bi] = __dcap->eff_args[__bi];\n");
+    buf_puts(out, "        __oc->eff_n_args = __dcap->eff_n_args;\n");
+    buf_puts(out, "        __oc->has_pending_effect = true;\n");
+    buf_puts(out, "        tur_fiber_block_yield(0);\n");
+    buf_puts(out, "        __oc->has_pending_effect = false;\n");
+    buf_puts(out, "        return tur_handler_dispatch(__ctx_void, __k_int, __outer_f->arg);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"dispatch: unhandled effect: %s\\n\", __dcap->eff_name);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "    return 0;\n");
     buf_puts(out, "}\n\n");

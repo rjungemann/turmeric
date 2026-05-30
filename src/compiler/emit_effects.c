@@ -621,6 +621,336 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     return atom_nil();
 }
 
+/* FH2: emit a handler literal as a runtime tur_handler_table_t* value.
+ * Emits the single case as a static __effect_handler_<id> function (same ABI
+ * and capture-via-__env scheme as emit_effects_handle), heap-allocates the
+ * capture env at the creation site, and builds a one-entry owning table. */
+char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
+    HandleExpr *h = e->as.handler_lit_.handle;
+    HandleCase *c = &h->cases[0];
+    int id = ctx->tmp_n++;
+    Buf *hbuf = ctx->pending_handler_fns;
+
+    /* Collect captures from the case body, excluding k + effect params. */
+    uint32_t n_caps = 0;
+    Binding **caps = collect_handle_captures(c->body, &n_caps);
+    uint32_t filtered = 0;
+    for (uint32_t j = 0; j < n_caps; j++) {
+        Binding *b = caps[j];
+        bool is_local = (c->k_binding && b == c->k_binding);
+        for (uint8_t p = 0; p < c->n_params && !is_local; p++)
+            if (c->param_bindings && c->param_bindings[p] == b) is_local = true;
+        if (!is_local) caps[filtered++] = b;
+    }
+    n_caps = filtered;
+    bool has_caps = (n_caps > 0);
+
+    char env_type[64], hfn_name[64], env_var[64];
+    snprintf(env_type, sizeof(env_type), "__HLEnv_%d", id);
+    snprintf(hfn_name, sizeof(hfn_name), "__effect_handler_%d", id);
+    snprintf(env_var, sizeof(env_var), "__hlenv_%d", id);
+
+    if (has_caps) {
+        buf_printf(hbuf, "typedef struct %s %s;\n", env_type, env_type);
+        buf_printf(hbuf, "struct %s {\n", env_type);
+        for (uint32_t j = 0; j < n_caps; j++) {
+            Binding *b = caps[j];
+            char *raw = raw_name_for_binding(b);
+            const char *ft = b->is_poly_fn ? "tur_poly_fn_t" : type_c_name(b->type);
+            buf_printf(hbuf, "    %s %s;\n", ft, raw);
+            free(raw);
+        }
+        buf_printf(hbuf, "};\n\n");
+    }
+
+    /* Emit the case function (mirrors emit_effects_handle Step 4). */
+    {
+        Buf fn; buf_init(&fn);
+        Buf pend; buf_init(&pend);
+        if (has_caps)
+            buf_printf(&fn, "    %s *%s = (%s *)__env;\n", env_type, env_var, env_type);
+        for (uint8_t j = 0; j < c->n_params; j++) {
+            if (c->param_bindings && c->param_bindings[j]) {
+                const char *ct = type_c_name(c->param_bindings[j]->type);
+                char *raw = raw_name_for_binding(c->param_bindings[j]);
+                buf_printf(&fn, "    %s %s_%u = (%s)__effect_args[%d];\n",
+                           ct, raw, (unsigned)c->param_bindings[j]->id, ct, j);
+                free(raw);
+            }
+        }
+        if (c->k_binding) {
+            char *raw = raw_name_for_binding(c->k_binding);
+            buf_printf(&fn, "    int64_t %s_%u = __k;\n", raw, (unsigned)c->k_binding->id);
+            free(raw);
+        }
+        EmitCtx hc = *ctx;
+        hc.file = &fn; hc.pending_handler_fns = &pend; hc.indent = 4;
+        hc.fn_params = NULL; hc.n_fn_params = 0; hc.closure = NULL;
+        hc.env_var_name = has_caps ? env_var : NULL;
+        hc.defer_captures = NULL; hc.n_defer_captures = 0; hc.frame_var = NULL;
+        hc.return_emitted = false;
+        hc.handle_captures = has_caps ? caps : NULL;
+        hc.n_handle_captures = has_caps ? n_caps : 0;
+        hc.handle_env_name = has_caps ? env_var : NULL;
+        if (!c->body) {
+            buf_puts(&fn, "    return 0;\n");
+        } else if (c->body->type.kind == TY_NEVER) {
+            emit_stmt(&hc, &fn, c->body);
+            buf_puts(&fn, "    return 0; /* unreachable */\n");
+        } else {
+            char *hret = emit_value(&hc, &fn, c->body);
+            if (strcmp(hret, "((void)0)") == 0) {
+                free(hret);
+                buf_puts(&fn, "    return 0;\n");
+            } else {
+                buf_printf(&fn, "    return (int64_t)%s;\n", hret);
+                free(hret);
+            }
+        }
+        ctx->tmp_n = hc.tmp_n;
+        if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
+        buf_free(&pend);
+        buf_printf(hbuf, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+                         " int64_t __k, void *__env);\n", hfn_name);
+        buf_printf(hbuf, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+                         " int64_t __k, void *__env) {\n", hfn_name);
+        buf_write(hbuf, fn.data, fn.len);
+        buf_puts(hbuf, "}\n\n");
+        buf_free(&fn);
+    }
+
+    /* Inline: heap-alloc the capture env, build a one-entry owning table. */
+    char env_inl[64];
+    snprintf(env_inl, sizeof(env_inl), "__hlenv_inl_%d", id);
+    if (has_caps) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                   env_type, env_inl, env_type, env_type);
+        for (uint32_t j = 0; j < n_caps; j++) {
+            Binding *b = caps[j];
+            char *raw = raw_name_for_binding(b);
+            char *cur = name_for_binding(ctx, b);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s->%s = %s;\n", env_inl, raw, cur);
+            free(raw); free(cur);
+        }
+    }
+    char *tbl = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_handler_table_t *%s = tur_handler_table_new(1);\n", tbl);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s->entries[0].eff_name = \"%s\";\n", tbl, c->effect_name->name);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s->entries[0].fn = %s;\n", tbl, hfn_name);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s->entries[0].env = %s;\n", tbl, has_caps ? env_inl : "NULL");
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s->entries[0].cont_kind = %d;\n", tbl, (int)c->cont_kind);
+    free(caps);
+    return tbl;
+}
+
+/* FH5: emit (compose-handlers h1 h2) as table concatenation (h1 outer). */
+char *emit_effects_compose_handlers(EmitCtx *ctx, Buf *body, const Expr *e) {
+    char *a = emit_value(ctx, body, e->as.compose_handlers_.h1);
+    char *b = emit_value(ctx, body, e->as.compose_handlers_.h2);
+    char *t = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_handler_table_t *%s = tur_handler_table_concat(%s, %s);\n", t, a, b);
+    free(a); free(b);
+    return t;
+}
+
+/* FH3: emit (with-handler hv body) -- run body in a fiber that dispatches
+ * performed effects against hv's runtime table via the generic
+ * tur_handler_dispatch.  Mirrors emit_effects_handle Steps 5-7 with the table
+ * supplied at runtime instead of compile-time inline cases. */
+char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e) {
+    Expr *hv = e->as.with_handler_.handler;
+    Expr *hbody = e->as.with_handler_.body;
+    bool returns_value = (e->type.kind != TY_NIL);
+    int id = ctx->tmp_n++;
+    Buf *hbuf = ctx->pending_handler_fns;
+
+    /* The handler table is a temporary (owned here, free after use) only when
+     * the argument is a literal/compose expression; a bound var is owned by its
+     * binding scope and must not be freed here. */
+    bool owns_table = (hv->kind == EX_HANDLER_LIT || hv->kind == EX_COMPOSE_HANDLERS);
+
+    /* Evaluate the handler value -> tur_handler_table_t*. */
+    char *hv_val = emit_value(ctx, body, hv);
+    char tbl_var[64];
+    snprintf(tbl_var, sizeof(tbl_var), "__wh_tbl_%d", id);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_handler_table_t *%s = %s;\n", tbl_var, hv_val);
+    free(hv_val);
+
+    /* Collect captures from the body for the fiber body function. */
+    uint32_t n_caps = 0;
+    Binding **caps = collect_handle_captures(hbody, &n_caps);
+    bool has_caps = (n_caps > 0);
+
+    char env_type[64], env_var[64], body_fn[64], cap_var[64], fiber_var[64];
+    snprintf(env_type, sizeof(env_type), "__WHEnv_%d", id);
+    snprintf(env_var, sizeof(env_var), "__whenv_%d", id);
+    snprintf(body_fn, sizeof(body_fn), "__wh_body_%d", id);
+    snprintf(cap_var, sizeof(cap_var), "__wh_cap_%d", id);
+    snprintf(fiber_var, sizeof(fiber_var), "__wh_fiber_%d", id);
+
+    if (has_caps) {
+        buf_printf(hbuf, "typedef struct %s %s;\n", env_type, env_type);
+        buf_printf(hbuf, "struct %s {\n", env_type);
+        for (uint32_t j = 0; j < n_caps; j++) {
+            Binding *bd = caps[j];
+            char *raw = raw_name_for_binding(bd);
+            const char *ft = bd->is_poly_fn ? "tur_poly_fn_t" : type_c_name(bd->type);
+            buf_printf(hbuf, "    %s %s;\n", ft, raw);
+            free(raw);
+        }
+        buf_printf(hbuf, "};\n\n");
+    }
+
+    /* Emit the body fiber function (mirrors emit_effects_handle Step 5). */
+    {
+        Buf fn; buf_init(&fn);
+        Buf pend; buf_init(&pend);
+        if (has_caps) {
+            buf_puts(&fn, "    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)tur_current_fiber->eff_ctx;\n");
+            buf_printf(&fn, "    %s *%s = (%s *)__cap->body_env;\n", env_type, env_var, env_type);
+        }
+        EmitCtx bc = *ctx;
+        bc.file = &fn; bc.pending_handler_fns = &pend; bc.indent = 4;
+        bc.fn_params = NULL; bc.n_fn_params = 0; bc.closure = NULL;
+        bc.env_var_name = has_caps ? env_var : NULL;
+        bc.defer_captures = NULL; bc.n_defer_captures = 0; bc.frame_var = NULL;
+        bc.return_emitted = false;
+        bc.handle_captures = has_caps ? caps : NULL;
+        bc.n_handle_captures = has_caps ? n_caps : 0;
+        bc.handle_env_name = has_caps ? env_var : NULL;
+        if (hbody->type.kind == TY_NIL || hbody->type.kind == TY_NEVER) {
+            emit_stmt(&bc, &fn, hbody);
+            buf_puts(&fn, "    tur_current_fiber->result = 0;\n");
+        } else {
+            char *bret = emit_value(&bc, &fn, hbody);
+            buf_printf(&fn, "    tur_current_fiber->result = (int64_t)%s;\n", bret);
+            free(bret);
+        }
+        ctx->tmp_n = bc.tmp_n;
+        if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
+        buf_free(&pend);
+        buf_printf(hbuf, "static void %s(void);\n", body_fn);
+        buf_printf(hbuf, "static void %s(void) {\n", body_fn);
+        buf_write(hbuf, fn.data, fn.len);
+        buf_puts(hbuf, "}\n\n");
+        buf_free(&fn);
+    }
+
+    /* Inline setup (mirrors emit_effects_handle Step 7). */
+    char *result = fresh_tmp(ctx);
+    if (has_caps) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                   env_type, env_var, env_type, env_type);
+        for (uint32_t j = 0; j < n_caps; j++) {
+            Binding *bd = caps[j];
+            char *raw = raw_name_for_binding(bd);
+            char *cur = name_for_binding(ctx, bd);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s->%s = %s;\n", env_var, raw, cur);
+            free(raw); free(cur);
+        }
+    }
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "TurEffectCaptureCtx %s;\n", cap_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.has_pending_effect = false;\n", cap_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.eff_name = NULL;\n", cap_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.eff_n_args = 0;\n", cap_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.dispatch = tur_handler_dispatch;\n", cap_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.body_env = %s;\n", cap_var, has_caps ? env_var : "NULL");
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.table = %s;\n", cap_var, tbl_var);
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "FiberBlock *%s = tur_fiber_block_new(%s, 0);\n", fiber_var, body_fn);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s->eff_ctx = &%s;\n", fiber_var, cap_var);
+
+    /* Intercept frame: populate cases from the runtime table (cap at 8). */
+    char frame_var[64], parent_var[64];
+    snprintf(frame_var, sizeof(frame_var), "__wh_frame_%d", id);
+    snprintf(parent_var, sizeof(parent_var), "__wh_parent_%d", id);
+    indent_buf(body, ctx->indent);
+    buf_printf(body,
+        "EffectHandlerFrame *%s = (tur_current_fiber"
+        " ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain"
+        " : global_effect_handler_chain);\n", parent_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "EffectHandlerFrame %s;\n", frame_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.parent = %s;\n", frame_var, parent_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "int __wh_nf_%d = %s->n_entries < 8 ? %s->n_entries : 8;\n",
+               id, tbl_var, tbl_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.n_cases = __wh_nf_%d;\n", frame_var, id);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "for (int __wi = 0; __wi < __wh_nf_%d; __wi++) {\n", id);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "    %s.cases[__wi].effect_name = %s->entries[__wi].eff_name;\n", frame_var, tbl_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "    %s.cases[__wi].handler_fn = NULL;\n", frame_var);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "    %s.cases[__wi].env = NULL;\n", frame_var);
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s->effect_handler_chain = &%s;\n", fiber_var, frame_var);
+
+    indent_buf(body, ctx->indent);
+    if (returns_value) {
+        buf_printf(body, "%s %s = (%s)tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0);\n",
+                   type_c_name(e->type), result, type_c_name(e->type), cap_var, fiber_var);
+    } else {
+        buf_printf(body, "tur_handler_dispatch(&%s, (int64_t)(intptr_t)%s, 0);\n",
+                   cap_var, fiber_var);
+    }
+
+    if (has_caps) {
+        for (uint32_t j = 0; j < n_caps; j++) {
+            Binding *bd = caps[j];
+            char *raw = raw_name_for_binding(bd);
+            char *cur = name_for_binding(ctx, bd);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s->%s;\n", cur, env_var, raw);
+            free(raw); free(cur);
+        }
+    }
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s->done) { free(%s->stack); free(%s); }\n",
+               fiber_var, fiber_var, fiber_var);
+    if (has_caps) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "if (%s->done) { free(%s); }\n", fiber_var, env_var);
+    }
+    /* FH1.2: free the handler table iff it is a temporary owned here. */
+    if (owns_table) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "tur_handler_table_free(%s);\n", tbl_var);
+    }
+
+    free(caps);
+    if (returns_value) return result;
+    free(result);
+    return atom_nil();
+}
+
 char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (resume k value) - resume continuation with value.
      *

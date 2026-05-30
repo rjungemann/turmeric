@@ -1,0 +1,10 @@
+;; FH2/FH3: a handler value created by a (handler ...) literal and applied to a
+;; body with (with-handler hv body).  The body performs Write twice; the
+;; handler prints each and resumes.
+(defeffect Write [s :cstr] :nil)
+(defn main [] :int
+  (with-handler
+    (handler (Write [s] k) (do (println s) (resume k nil)))
+    (do (perform (Write "hello"))
+        (perform (Write "world"))
+        0)))
