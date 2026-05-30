@@ -29,6 +29,13 @@ Every advanced type system feature was measured against four tests:
 concrete use cases from actual Turmeric programs. One with Low complexity can
 ship even if demand is speculative.
 
+> **A note on flags.** Most features below are gated behind an `-X`
+> experimental flag (`-Xlinear`, `-Xsubstructural`, `-Xunique-types`,
+> `-Xsessions`, `-Xeffect-types`, `-Xgadt`, `-Xunion-types`,
+> `-Xintersection-types`, `-Xcontracts`, `-Xdynamic-vars`). Higher-kinded
+> types / higher-ranked types and existential types are the exceptions:
+> they are enabled by default and have no `-X` flag.
+
 ---
 
 ## Ownership and linearity
@@ -271,7 +278,7 @@ at API boundaries.
 
 ## Existential types
 
-Existential types (`-Xexistentials`) hide a concrete type behind an opaque
+Existential types hide a concrete type behind an opaque
 boundary while still allowing operations on it through typeclass constraints.
 They are the dual of higher-ranked `forall`: where `forall` lets the caller
 pick the type, `exists` lets the callee pick the type and expose only what the
@@ -412,7 +419,7 @@ Algebraic effects (Phase 19)
 
 Linear Types (-Xlinear)
   ├── Substructural Types (-Xsubstructural)
-  │     └── Uniqueness Types (-Xunique)
+  │     └── Uniqueness Types (-Xunique-types)
   └── Session Types (-Xsessions)
 
 GADTs (-Xgadt)
@@ -422,8 +429,8 @@ Union/Intersection Types (-Xunion-types, -Xintersection-types)
 
 Contract Types (-Xcontracts)
 
-HKT (-Xhkt) -- forall, Rank-2
-  └── Existential Types (-Xexistentials) -- exists, pack/open
+HKT (default-on) -- forall, Rank-2
+  └── Existential Types (default-on) -- exists, pack/open
 ```
 
 Each feature in the graph uses the one above it without requiring anything from
@@ -453,3 +460,4 @@ risk of dependent unification or SMT integration.
 - [contract-types-guide.md](contract-types-guide.md) -- Contract types
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) -- Union and intersection types
 - [effects-vs-monads.md](effects-vs-monads.md) -- Why effects instead of monads
+- [typing-gap-audit.md](../upcoming/typing-gap-audit.md) -- where the implementation currently diverges from the intent described here
