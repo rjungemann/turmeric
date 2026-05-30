@@ -6,16 +6,19 @@ description: Phased plan to finish the sized-types implementation -- lift size i
 
 # Sized Types -- Completion Plan (SZ4--SZ9)
 
-> **Status:** Not started. The SZ0--SZ3 runtime layer is shipped and tested
+> **Status:** SZ4--SZ9 complete. The SZ0--SZ3 runtime layer was already shipped
 > (see [archive/history/sized-types-plan.md](../archive/history/sized-types-plan.md),
 > marked "SZ3 Complete") -- `stdlib/sized.tur`, `sized-buf.tur`,
-> `sized-matrix.tur`, `sized-bits.tur`, and ~20 `sized-*` fixtures. What is
-> *not* done is the part the user-facing docs already promise: a real
-> `-Xsized-types` flag, and **static** (type-level) size checking. Today the
-> `SizedVec` index is a phantom -- every constructor returns
-> `(SizedVec Size int)` regardless of length -- and size equality is a
-> *runtime* panic (`size-assert-eq!` -> `(= (size-eval s1) (size-eval s2))`).
-> This plan closes that gap.
+> `sized-matrix.tur`, `sized-bits.tur`, and ~20 `sized-*` fixtures. This plan
+> added: a real `-Xsized-types` flag implying `-Xgadt` (SZ4); reconciled docs
+> (SZ5); a type-level size index (`SizeTerm`) that constructors refine instead
+> of a phantom (SZ6, see [sized-types-index-spec.md](sized-types-index-spec.md));
+> a **static** size check with diagnostic `TUR-E0260` and a documented runtime
+> fallback (SZ7); index inference + `--dump-sizes` (SZ8); and a recorded 1.0
+> disposition in the typing-gap matrix (SZ9). The remaining static-checking gap
+> (type-index mismatch at arbitrary boundaries; inference through wrappers) is
+> why `-Xsized-types` stays experimental for now -- see the SZ9 row in the
+> matrix.
 >
 > **Prerequisites:** GADTs (G0--G4, `-Xgadt`). Sized types reuse the GADT
 > skolem/index machinery (`SkolemEnv` in `src/compiler/types.h:182`,
@@ -243,7 +246,7 @@ did not exist. Once SZ6--SZ8 land, record an explicit 1.0 disposition for
 `-Xsized-types`.
 
 - **SZ9.1** Add `-Xsized-types` as a row in
-  [typing-gap-plan.md](../typing-gap-plan.md) TY1 matrix with fixture coverage
+  [typing-gap-plan.md](archive/typing-gap-plan.md) TY1 matrix with fixture coverage
   and current state. *Done when:* the matrix lists the flag.
 - **SZ9.2** Record its 1.0 disposition (graduate-default-on vs. stay
   experimental) with a rationale tied to whether SZ6--SZ8 have closed the
@@ -278,5 +281,5 @@ did not exist. Once SZ6--SZ8 land, record an explicit 1.0 disposition for
 - [archive/history/sized-types-plan.md](../archive/history/sized-types-plan.md) -- the shipped SZ0--SZ3 runtime layer
 - [sized-types-guide.md](../guides/sized-types-guide.md) -- user guide (to be reconciled in SZ5)
 - [advanced-type-system-rationale.md](../guides/advanced-type-system-rationale.md) -- the intended sized-types design
-- [typing-gap-plan.md](../typing-gap-plan.md) -- flag-graduation matrix (SZ9 feeds it)
+- [typing-gap-plan.md](archive/typing-gap-plan.md) -- flag-graduation matrix (SZ9 feeds it)
 - [refinement-types-plan.md](refinement-types-plan.md) -- the SMT-backed static-checking story sized types deliberately avoid

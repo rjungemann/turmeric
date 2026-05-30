@@ -150,6 +150,7 @@ Fixture counts are whole-token matches in `tests/fixtures/*/flags` (happy +
 | `-Xsubstructural` | Complete (ST0-ST3) | 18 | **Stay experimental** | Implies `-Xlinear`; inherits the TY4 dependency. |
 | `-Xunique-types` | Partial (UT0-UT1) | 10 | **Stay experimental** | UT2-UT3 (inference, stdlib patterns) deferred; feature is itself incomplete independent of TY4. |
 | `-Xsessions` | Complete (SS0-SS8) | 37 | **Stay experimental** | Implies `-Xsubstructural` -> `-Xlinear`; inherits the TY4 dependency. The session feature itself is solid, but its gate cannot drop before its implied gates do. |
+| `-Xsized-types` | Partial (SZ0-SZ8) | 10 (`sized-sz4`..`sz8` + migrated `sized-sz3-shape-mismatch`) | **Stay experimental** | Implies `-Xgadt`. The runtime layer ships and SZ6-SZ8 lift size indices to the type level with a real static check (TUR-E0260) -- but the static-checking gap is only *narrowed*, not closed: SZ7 folds constant `size-assert-eq!`/`size-assert-le!` at the assertion call site, and SZ8 inference covers literal/linear shapes; type-index mismatch at arbitrary boundaries and inference through wrapper functions still fall back to runtime. Graduate once the static-checking story is complete (per the SZ6-SZ9 plan), not before. See [sized-types-completion-plan.md](../sized-types-completion-plan.md). |
 | HKT / HRT / existentials *(no flag)* | Complete | 37 / 20 / 1 | **N/A -- already default-on** | No `-X` flag exists; documented here only to close the enumeration. |
 
 ### TY1.3 -- Cross-dependencies (graduation sequencing)
@@ -166,6 +167,10 @@ Fixture counts are whole-token matches in `tests/fixtures/*/flags` (happy +
   (`call/cc`, `compose-handlers`, `shift`/`shift0`) must close first.
 - **`-Xunique-types` is self-gated.** UT2-UT3 are independent of TY4 but still
   incomplete; it stays experimental regardless of the linearity chain.
+- **`-Xsized-types` implies `-Xgadt`** (SZ4), so its graduation tracks
+  `-Xgadt`'s: it can graduate no earlier than `-Xgadt` (already slated to
+  graduate, so that floor is satisfied), but it is self-gated on closing its
+  own static-checking gap (SZ6-SZ9). It stays experimental until then.
 - **No dependency:** `-Xgadt`, `-Xcontracts`, `-Xdynamic-vars` graduate
   immediately -- each is additive and gap-free.
 
