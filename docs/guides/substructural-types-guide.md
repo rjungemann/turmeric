@@ -265,21 +265,65 @@ fires at two positions: a `let` binding whose initializer is an escaping borrow,
 and a function whose result is a borrow of one of its own locals. A borrow of an
 equal-or-outer-scope binding is always fine.
 
+### Borrow types and explicit `'a` lifetimes
+
+Borrows are first-class **type annotations**, written Rust-style with the
+lifetime immediately after the borrow sigil:
+
+```turmeric
+;; &'a int        -- immutable borrow with lifetime 'a
+;; &mut 'a int    -- mutable borrow with lifetime 'a
+;; &int           -- borrow with an elided (implicitly fresh) lifetime
+```
+
+Lifetimes are **implicitly quantified**: every distinct `'a` in a signature is a
+fresh lifetime parameter, and a repeated `'a` refers to the same one (just like
+type variables). A borrow may also be a **return type**, which is how an output
+borrow is tied back to an input:
+
+```turmeric
+;; The result borrows from x and y (both 'a), so it is valid for as long as
+;; the shorter of the two arguments.
+(defn longer [x : &'a int y : &'a int] : &'a int
+  (if (> @x @y) x y))
+```
+
+### Inter-procedural borrow checking
+
+Because the return lifetime is tied to a parameter, the borrow checker follows
+the relationship **across calls**. A borrow returned from a call is treated as a
+borrow of the corresponding argument, so it cannot outlive that argument's
+referent:
+
+```turmeric
+(defn idb [x : &'a int] : &'a int x)
+
+;; ERROR (TUR-E0105): (idb (& a)) borrows the local `a`; returning it lets that
+;; borrow escape `bad`, where `a` no longer exists.
+(defn bad [] : &int
+  (let [a 5]
+    (idb (& a))))
+```
+
+This reuses the same TUR-E0105 escape machinery as the direct case, so a single
+diagnostic is reported (no double-reporting).
+
 ### Lifetime elision and outlives constraints
 
-For borrow-carrying function signatures the compiler applies the classic
-lifetime-elision rules -- each borrow parameter gets its own lifetime (rule 1),
-a sole input lifetime flows to an elided borrow return (rule 2), and a
-receiver-style first borrow parameter lends its lifetime to the return
-(rule 3). The resulting outlives constraints are solved with cycle detection: a
-contradictory, cyclic constraint set is rejected (TUR-E0106) rather than
-looping. The elision rules and the cycle-safe solver are unit-tested in
-`tests/lifetime_unit.c`.
+A borrow parameter or return that omits a lifetime gets one by the classic
+elision rules -- each borrow parameter gets its own lifetime (rule 1), a sole
+input lifetime flows to an elided borrow return (rule 2), and a receiver-style
+first borrow parameter lends its lifetime to the return (rule 3). Explicit `'a`
+annotations override elision for the borrows that carry them.
 
-> **Note.** Explicit `'a` lifetime-annotation syntax on types is not yet wired,
-> so on ordinary programs elision currently produces no constraints; the
-> machinery is active and ready for when that syntax lands. The borrow-escape
-> check above does **not** depend on it -- it is fully enforced today.
+Nested borrows imply outlives constraints: `&'a &'b T` requires the inner
+reference to outlive the outer, i.e. `'b` outlives `'a`. The resulting
+constraints are solved with cycle detection, so a contradictory, cyclic
+signature -- e.g. one parameter `&'a &'b int` paired with another `&'b &'a int`
+-- is rejected (TUR-E0106) rather than looping. The elision rules, the
+name-to-id interning, and the cycle-safe solver are unit-tested in
+`tests/lifetime_unit.c`; end-to-end fixtures live in `tests/fixtures/lifetime-*`
+and `tests/fixtures/errors/lifetime-*`.
 
 ## See also
 

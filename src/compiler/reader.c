@@ -689,6 +689,25 @@ static Form *read_borrow(Reader *r) {
     /* Allow whitespace between operator and operand (e.g. &mut x) */
     skip_ws_and_comments(r);
 
+    /* LS1: Rust-style lifetime prefix on a borrow *type*, e.g. &'a int or
+     * &mut 'a int.  An apostrophe here begins a lifetime symbol ('a, 'b, ...);
+     * read it as a distinct token and thread it into the produced list as a
+     * middle element -- (& 'a int) / (&mut 'a int).  The lifetime is only
+     * meaningful in type-annotation position; elab_types.c interprets it there,
+     * and the borrow-expression path ignores a stray lifetime element. */
+    Form *lifetime = NULL;
+    if (peek(r) == '\'') {
+        uint32_t lt_line = r->line;
+        uint32_t lt_col = r->col;
+        size_t lt_off = r->pos;
+        advance(r); /* consume the apostrophe */
+        while (is_sym_cont(peek(r))) advance(r);
+        Span lt_span = span_from_to(r, lt_line, lt_col, lt_off, r->pos);
+        const Symbol *lt_sym = symtab_intern(r->st, strslice(r->src + lt_off, r->pos - lt_off));
+        lifetime = form_sym(r->arena, lt_span, lt_sym);
+        skip_ws_and_comments(r);
+    }
+
     if (peek(r) == -1 || peek(r) == ')' || peek(r) == ']' || peek(r) == '}') {
         Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
         diag_emit(DIAG_ERROR, s, "%s requires an expression after it", op_str);
@@ -700,6 +719,14 @@ static Form *read_borrow(Reader *r) {
     if (!inner) return NULL;
 
     const Symbol *op_sym = symtab_intern(r->st, strslice(op_str, op_len));
+    if (lifetime != NULL) {
+        Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+        items[0] = form_sym(r->arena, op_span, op_sym);
+        items[1] = lifetime;
+        items[2] = inner;
+        Span span = span_from_to(r, start_line, start_col, start_off, inner->span.off_end);
+        return form_list(r->arena, span, items, 3);
+    }
     Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
     items[0] = form_sym(r->arena, op_span, op_sym);
     items[1] = inner;

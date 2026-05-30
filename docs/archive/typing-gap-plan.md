@@ -374,15 +374,18 @@ stays. **Decision (2026-05-30): build the full lifetime machinery for 1.0** so
   dependency satisfied in TY1. *(Guide gains a "Borrows and Lifetimes" section;
   TY1 matrix updated below.)*
 
-> **Honest scope note.** "Full machinery" here means: the real soundness gap is
-> closed and enforced (TUR-E0105), and the elision/constraint layer is now
-> correct, cycle-safe, live, and unit-tested rather than dead scaffolding. What
-> is *not* built is surface `'a` lifetime-annotation syntax on types -- without
-> it, elision produces no constraints on ordinary programs, so inter-procedural
-> *lifetime* checking has nothing to act on yet. That syntax is a separate
-> language-surface feature, out of scope for closing this audit gap; the
-> machinery is ready for it. That follow-up is specified in
-> [lifetime-syntax-plan.md](lifetime-syntax-plan.md).
+> **Honest scope note (resolved).** "Full machinery" here means: the real
+> soundness gap is closed and enforced (TUR-E0105), and the elision/constraint
+> layer is correct, cycle-safe, live, and unit-tested rather than dead
+> scaffolding. The follow-up that was *not* built at the time of this audit --
+> surface `'a` lifetime-annotation syntax on types -- has since been implemented
+> per [lifetime-syntax-plan.md](lifetime-syntax-plan.md) (phases LS0-LS5):
+> borrow types now parse as type annotations with Rust-style `&'a T` / `&mut 'a T`
+> lifetimes (implicitly quantified), borrow return types are allowed end-to-end,
+> explicit lifetimes feed the elision/outlives solver (a cyclic signature is
+> rejected with TUR-E0106), and call sites check inter-procedural borrow escape
+> by tying a returned borrow to its source argument. So elision is no longer
+> inert on ordinary programs and inter-procedural lifetime checking is live.
 
 ---
 

@@ -283,6 +283,10 @@ struct FnDef {
     Binding       **params;      /* param bindings */
     uint8_t        n_params;
     Type          *param_types;  /* param types (for codegen) */
+    /* LS2: full declared return Type, including borrow lifetimes (&'a T).  The
+     * binding's TY_FN only carries result_kind (a bare TypeKind), which loses
+     * the lifetime IDs the lifetime pass needs; this preserves them. */
+    Type           return_type;
     Expr          *body;
     bool           is_variadic;  /* not yet supported in phase 2 */
     /* Phase 3: For closure thunks, store the closure info */

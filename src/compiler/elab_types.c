@@ -394,6 +394,81 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* LS1: borrow *type* annotation -- &T / &mut T, optionally carrying a
+         * Rust-style lifetime: &'a T / &mut 'a T.  The reader produces these as
+         * a list whose head is the borrow operator (& or &mut):
+         *   (& T)         (&mut T)         -- no lifetime
+         *   (& 'a T)      (&mut 'a T)      -- lifetime in the middle slot
+         * (An intersection type `A & B` instead carries `&` in a *middle* slot,
+         * so keying on items[0] keeps the two unambiguous.) */
+        if (form->as.list.len >= 2 && form->as.list.items[0]->tag == F_SYM
+                && (form->as.list.items[0]->as.sym == e->sym_ampersand
+                    || form->as.list.items[0]->as.sym == e->sym_borrow_mut)) {
+            bool is_mut = (form->as.list.items[0]->as.sym == e->sym_borrow_mut);
+
+            /* An optional lifetime sits between the operator and the target. */
+            Form *lt_f = NULL;
+            Form *target_f = NULL;
+            if (form->as.list.len == 2) {
+                target_f = form->as.list.items[1];
+            } else if (form->as.list.len == 3
+                       && form->as.list.items[1]->tag == F_SYM
+                       && form->as.list.items[1]->as.sym->len >= 1
+                       && form->as.list.items[1]->as.sym->name[0] == '\'') {
+                lt_f = form->as.list.items[1];
+                target_f = form->as.list.items[2];
+            } else {
+                diag_emit(DIAG_ERROR, form->span,
+                          "malformed borrow type: expected (& T), (&mut T), or a "
+                          "lifetime-annotated &'a T / &mut 'a T");
+                return NULL;
+            }
+
+            Type *target = type_expr_from_form(e, target_f, rec_name,
+                                               type_params, type_param_kinds, n_type_params);
+            if (!target) return NULL;
+
+            /* Resolve the optional lifetime to a stable per-function LifetimeId.
+             * Implicit quantification: each distinct 'a in the signature is a
+             * fresh lifetime; a repeated 'a resolves to the same ID. */
+            LifetimeId lid = LIFETIME_NONE;
+            if (lt_f != NULL && e->cur_lifetime_ctx != NULL) {
+                lid = lifetime_context_intern(e->cur_lifetime_ctx, lt_f->as.sym->name);
+                if (lid == LIFETIME_NONE) {
+                    diag_emit(DIAG_ERROR, lt_f->span,
+                              "too many distinct lifetimes in this signature "
+                              "(maximum %d)", MAX_LIFETIMES);
+                    return NULL;
+                }
+            }
+
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = is_mut ? type_ref_mut_lifetime(target->kind, lid)
+                        : type_ref_immut_lifetime(target->kind, lid);
+
+            /* LS3: well-formedness of a nested borrow &'a &'b T.  The outer
+             * reference (lifetime 'a) points at the inner reference (lifetime
+             * 'b); for the outer to be valid for 'a, the inner must live at
+             * least as long, so 'b must outlive 'a.  Record that outlives edge
+             * ('b : 'a) on the signature's lifetime context.  Two opposing
+             * nested borrows in one signature (&'a &'b ... and &'b &'a ...) then
+             * form a constraint cycle the solver rejects as TUR-E0106.
+             * (Type.lifetimes only carries the head's own lifetime, so the inner
+             * lifetime is also surfaced on the outer Type's lifetimes[1] for
+             * collectors that walk a single Type.) */
+            if (lid != LIFETIME_NONE && e->cur_lifetime_ctx != NULL
+                    && (target->kind == TY_REF_IMMUT || target->kind == TY_REF_MUT)
+                    && target->n_lifetimes > 0
+                    && target->lifetimes[0] != LIFETIME_NONE) {
+                LifetimeId inner = target->lifetimes[0];
+                lifetime_context_add_constraint(e->cur_lifetime_ctx, inner, lid);
+                if (t->n_lifetimes < MAX_TYPE_LIFETIMES) {
+                    t->lifetimes[t->n_lifetimes++] = inner;
+                }
+            }
+            return t;
+        }
+
         /* IT0: (A | B | C) — union type expression.
          * Detect by scanning for any element that is the "|" pipe symbol.
          * Only active when -Xunion-types is enabled. */

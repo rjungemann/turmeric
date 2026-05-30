@@ -149,10 +149,11 @@ uint8_t lifetime_elision_apply(LifetimeContext *ctx,
     if (out_lifetime != LIFETIME_NONE) {
         return_type->lifetimes[0] = out_lifetime;
         return_type->n_lifetimes = 1;
-        /* Record that the output lifetime is bounded by (does not outlive) the
-         * input it was elided from -- a real outlives constraint the solver can
-         * later check for cycles. */
-        lifetime_context_add_constraint(ctx, out_lifetime, out_lifetime);
+        /* The elided output lifetime IS the input lifetime (same LifetimeId), so
+         * there is no separate outlives edge to record -- they are identical.  An
+         * earlier version added a self-constraint (out: out) here, which
+         * lifetime_has_cycle correctly reports as a (trivial) cycle and which
+         * spuriously failed every borrow-returning function.  Don't add it. */
     }
 
     return ctx->count;

@@ -1156,6 +1156,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_pipe = intern_cstr(st, "|");
     /* IT2: Intersection type ampersand separator */
     e->sym_ampersand = intern_cstr(st, "&");
+    /* LS1: no signature lifetime context active until a defn opens one */
+    e->cur_lifetime_ctx = NULL;
     /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
     e->g2_skolem_env = NULL;
     /* KB-025: no enclosing fn signature type variables at top level */

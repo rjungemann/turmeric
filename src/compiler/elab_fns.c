@@ -56,6 +56,11 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
         if (head == e->sym_forall || head == e->sym_exists ||
             head == e->sym_forall_u || head == e->sym_exists_u ||
             head == e->sym_arrow || head == e->sym_fn ||
+            /* LS1: borrow *type* heads -- &T / &mut T (and lifetime-annotated
+             * &'a T / &mut 'a T) are type-constructor forms, not generic
+             * applications.  `&`-headed lists are also caught by has_amp below,
+             * but &mut needs its own routing. */
+            head == e->sym_ampersand || head == e->sym_borrow_mut ||
             head == e->sym_lref || head == e->sym_handler_type ||
             head == e->sym_session_type ||
             head == e->sym_session_Send || head == e->sym_session_Recv ||
@@ -332,6 +337,24 @@ static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
             }
             return true;
         }
+        case EX_CALL: {
+            /* LS4: inter-procedural borrow escape.  A call that returns a
+             * lifetime-tied borrow (&'a T) yields a borrow of whatever the
+             * tied argument borrows.  Follow the escape check into that
+             * argument: if it ultimately borrows a caller-local, the returned
+             * borrow dangles just as a direct (& local) would.  The callee's
+             * result_borrow_arg names the parameter the return is tied to. */
+            const Binding *cb = tail->as.call_.fn_binding;
+            if (cb && cb->type.kind == TY_FN) {
+                int8_t bi = cb->type.as.fn.result_borrow_arg;
+                if (bi >= 0 && (uint32_t)bi < tail->as.call_.n_args
+                        && tail->as.call_.args) {
+                    return check_no_borrow_escape(tail->as.call_.args[bi],
+                                                  fn_local_depth, fn_name);
+                }
+            }
+            return true;
+        }
         default:
             return true;
     }
@@ -479,6 +502,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                   "defn: parameter list must be a vector [name1 name2 ...]");
         return NULL;
     }
+
+    /* LS1: open a lifetime context for this signature so borrow-type
+     * annotations (&'a int, &mut 'a int) in the params and return type intern
+     * their lifetimes into shared, stable per-function LifetimeIds.  Restored to
+     * the saved value before the body is elaborated (a nested defn gets its own).
+     */
+    LifetimeContext sig_ltctx;
+    lifetime_context_init(&sig_ltctx);
+    LifetimeContext *saved_ltctx = e->cur_lifetime_ctx;
+    e->cur_lifetime_ctx = &sig_ltctx;
 
     const Form *implicit_ret_f = NULL;
     if (n_fn_type_params == 0) {
@@ -1111,6 +1144,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_exists_type = NULL; /* F1-1: full TY_EXISTS/TY_FORALL return type so callers see the forall_ payload (without it elab_open SEGVs reading body) */
     Type *return_fn_type = NULL; /* Issue 1b: full TY_FN return type so callers see the complete function signature (arity, result_kind) rather than a zeroed TY_FN shell */
     Type *return_tyvar_type = NULL; /* GS4: full TY_TYVAR return type for call-site substitution */
+    Type *return_borrow_type = NULL; /* LS2: full borrow return type (&'a T) so lifetime IDs survive */
     uint32_t body_start = params_idx + 1;  /* params_idx = params vector */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -1298,6 +1332,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     if (ann->kind == TY_FN) {
                         return_fn_type = ann;
                     }
+                    /* LS2: capture full borrow return type (&'a T / &mut 'a T)
+                     * so its lifetime IDs reach the lifetime pass via
+                     * FnDef.return_type. */
+                    if (ann->kind == TY_REF_IMMUT || ann->kind == TY_REF_MUT) {
+                        return_borrow_type = ann;
+                    }
                     /* F2-1: a `:linear` existential cannot escape past the
                      * scope that packs it -- the linear discipline relies on
                      * a single `open` in the same scope freeing the bare
@@ -1345,6 +1385,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
 
     /* CT1: Param contract predicates will be injected as pre-checks below. */
+
+    /* LS1: signature parsing is done; the body must not intern signature
+     * lifetimes.  Restore the enclosing context (NULL at top level). */
+    e->cur_lifetime_ctx = saved_ltctx;
 
     /* Elaborate body */
     if (call->as.list.len < body_start + 1) {
@@ -1862,6 +1906,43 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (return_exists_type) {
         fn_type.as.fn.result_full_type = return_exists_type;
     }
+    /* LS2: attach the full borrow return type so a call site's result carries
+     * the borrow target (and lifetime), letting @ deref recover the pointee
+     * type instead of falling back to an unknown/void C type. */
+    if (return_borrow_type && !fn_type.as.fn.result_full_type) {
+        fn_type.as.fn.result_full_type = return_borrow_type;
+    }
+    /* LS4: precompute which parameter the borrow return is tied to so call
+     * sites can check inter-procedural borrow escape.  A returned &'a T aliases
+     * the argument bound to the param sharing lifetime 'a; an elided borrow
+     * return follows the elision rules (the receiver-style first borrow param,
+     * which also covers the single-borrow-param case). */
+    if (return_borrow_type) {
+        int8_t tied = -1;
+        LifetimeId rlid = (return_borrow_type->n_lifetimes > 0)
+                        ? return_borrow_type->lifetimes[0] : LIFETIME_NONE;
+        if (rlid != LIFETIME_NONE) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                if ((params[i]->type.kind == TY_REF_IMMUT
+                     || params[i]->type.kind == TY_REF_MUT)
+                        && params[i]->type.n_lifetimes > 0
+                        && params[i]->type.lifetimes[0] == rlid) {
+                    tied = (int8_t)i;
+                    break;
+                }
+            }
+        }
+        if (tied < 0) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                if (params[i]->type.kind == TY_REF_IMMUT
+                        || params[i]->type.kind == TY_REF_MUT) {
+                    tied = (int8_t)i;
+                    break;
+                }
+            }
+        }
+        fn_type.as.fn.result_borrow_arg = tied;
+    }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
     {
@@ -1992,10 +2073,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
         } else if (param_kinds[i] == TY_STRUCT && params[i]->type.kind == TY_STRUCT) {
             /* LT4: preserve StructDef so emit.c emits the struct name, not int64_t. */
             fd->param_types[i] = params[i]->type;
+        } else if ((param_kinds[i] == TY_REF_IMMUT || param_kinds[i] == TY_REF_MUT)
+                   && (params[i]->type.kind == TY_REF_IMMUT
+                       || params[i]->type.kind == TY_REF_MUT)) {
+            /* LS1: preserve borrow target + lifetime IDs so the lifetime pass and
+             * borrow checker see the programmer's &'a T annotation, not a
+             * lifetime-stripped type_from_kind() shell. */
+            fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
         }
     }
+    /* LS1: carry the interned signature lifetimes into the FnDef so the always-on
+     * lifetime pass (borrow_check.c) can solve over the programmer's lifetimes. */
+    fd->lifetime_ctx = sig_ltctx;
+    /* LS2: record the full declared return Type so borrow lifetimes survive.
+     * For a borrow return we have the parsed Type (with lifetime IDs); otherwise
+     * the bare kind is sufficient for the lifetime pass. */
+    fd->return_type = return_borrow_type ? *return_borrow_type
+                                         : type_from_kind(return_kind);
     /* Phase 15: Store collected constraints */
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
@@ -2461,6 +2557,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     /* Phase 15: Initialize constraints */
     constraint_set_init(&fd->constraints);
+    /* LS2: lambdas carry no surface borrow-return lifetimes; record the bare
+     * return kind and an empty lifetime context so the lifetime pass reads a
+     * defined (not garbage) return Type. */
+    lifetime_context_init(&fd->lifetime_ctx);
+    fd->return_type = type_from_kind(return_kind);
 
     /* Create the FN_DEF expression that will be emitted at file scope */
     Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);

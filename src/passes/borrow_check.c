@@ -116,20 +116,64 @@ bool borrow_check_effect_handler_captures(const Expr *program) {
  * finds nothing; the pass is wired and ready so that lifetime-annotated
  * signatures are checked the moment that syntax lands.  The elision + solver
  * logic is unit-tested directly in tests/lifetime_unit.c. */
+/* LS3: a borrow Type that is a nested borrow carries its inner lifetime in
+ * lifetimes[1] (the head's own lifetime is lifetimes[0]).  &'a &'b T means the
+ * outer reference ('a) points at an inner reference ('b), so 'b must outlive 'a:
+ * record that edge ('b: 'a).  Derived purely from the Type so it is robust even
+ * when a FnDef's parse-time lifetime context was never populated. */
+static void collect_borrow_constraints(LifetimeContext *lc, const Type *t) {
+    if (!t) return;
+    if ((t->kind == TY_REF_IMMUT || t->kind == TY_REF_MUT)
+            && t->n_lifetimes >= 2
+            && t->lifetimes[0] != LIFETIME_NONE
+            && t->lifetimes[1] != LIFETIME_NONE) {
+        lifetime_context_add_constraint(lc, t->lifetimes[1], t->lifetimes[0]);
+    }
+}
+
 static bool lifetime_check_fn_def(FnDef *fn) {
     if (!fn || fn->n_params == 0 || !fn->param_types) return true;
 
-    /* Recover the function's declared return Type from its TY_FN binding. */
-    Type return_type = type_simple(TY_NIL, CK_COPY);
-    if (fn->binding && fn->binding->type.kind == TY_FN) {
-        return_type.kind = fn->binding->type.as.fn.result_kind;
+    /* LS2: use the full declared return Type, which preserves borrow lifetime
+     * IDs (&'a T).  The TY_FN binding only carries result_kind, so reconstructing
+     * from it would silently drop the programmer's output lifetime.  A FnDef
+     * synthesised outside the surface parser (typeclass methods, partial-app
+     * wrappers) records TY_NIL here -- no borrow lifetimes to check. */
+    Type return_type = fn->return_type;
+    if (return_type.kind == TY_UNKNOWN) {
+        return_type = type_simple(TY_NIL, CK_COPY);
+        if (fn->binding && fn->binding->type.kind == TY_FN) {
+            return_type.kind = fn->binding->type.as.fn.result_kind;
+        }
     }
 
-    lifetime_elision_apply(&fn->lifetime_ctx, fn->param_types, fn->n_params,
+    /* Rebuild the explicit-lifetime outlives graph directly from the borrow
+     * Types (params + return).  This does not trust fn->lifetime_ctx, which may
+     * be an uninitialised value for a synthetic FnDef. */
+    LifetimeContext lc;
+    lifetime_context_init(&lc);
+    for (uint8_t i = 0; i < fn->n_params; i++) {
+        collect_borrow_constraints(&lc, &fn->param_types[i]);
+    }
+    collect_borrow_constraints(&lc, &return_type);
+
+    /* Run elision on a scratch context for the elided path (it binds fresh
+     * lifetimes onto elided borrow params and flows them to elided borrow
+     * returns, mutating the Types in place). */
+    LifetimeContext scratch;
+    lifetime_elision_apply(&scratch, fn->param_types, fn->n_params,
                            &return_type);
 
+    /* Leave a clean, correct lifetime context on the FnDef for downstream
+     * borrow checking. */
+    fn->lifetime_ctx = lc;
+
     LifetimeId a = LIFETIME_NONE, b = LIFETIME_NONE;
-    if (lifetime_has_cycle(&fn->lifetime_ctx, &a, &b)) {
+    /* Reject a cyclic explicit signature (TUR-E0106) as well as any cycle the
+     * elided path produced (defensive; elision cannot manufacture one today). */
+    bool cyclic = lifetime_has_cycle(&lc, &a, &b);
+    if (!cyclic) cyclic = lifetime_has_cycle(&scratch, &a, &b);
+    if (cyclic) {
         Span span = fn->binding ? fn->binding->span : SPAN_UNKNOWN;
         diag_emit_with_code(DIAG_ERROR, span, TUR_E0106_CYCLIC_LIFETIME,
             "function '%s': lifetime constraints form a cycle "

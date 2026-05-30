@@ -457,6 +457,11 @@ typedef struct Elab {
     const Symbol *sym_pipe;        /* "|" -- used in (A | B | C) union type expressions */
     /* IT2: Intersection type ampersand separator "&" */
     const Symbol *sym_ampersand;   /* "&" -- used in (A & B & C) intersection type expressions */
+    /* LS1: the lifetime context of the signature currently being elaborated, so
+     * that a borrow *type* annotation like &'a int can intern its 'a into stable
+     * per-function LifetimeIds.  NULL outside defn signature parsing (a borrow
+     * type encountered with no active context simply gets no lifetime). */
+    LifetimeContext *cur_lifetime_ctx;
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G2: GADT constructor whose arm is currently being elaborated.

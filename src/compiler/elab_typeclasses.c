@@ -921,6 +921,10 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             def_fd->may_capture    = false;
             def_fd->inferred_effect_row = NULL;
             constraint_set_init(&def_fd->constraints);
+            /* LS2/LS3: no surface borrow lifetimes on a synthesised default
+             * method; give the lifetime pass a clean context + return Type. */
+            lifetime_context_init(&def_fd->lifetime_ctx);
+            def_fd->return_type = type_simple(TY_UNKNOWN, CK_COPY);
 
             scope_add(&e->global, def_b);
             Expr *def_expr = expr_new(e->arena, EX_FN_DEF, fn_t, method_form->span);
@@ -1887,6 +1891,10 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         method_fd->may_capture = false;
         method_fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
         constraint_set_init(&method_fd->constraints);
+        /* LS2/LS3: instance methods carry no surface borrow lifetimes; give the
+         * lifetime pass a clean context + return Type rather than garbage. */
+        lifetime_context_init(&method_fd->lifetime_ctx);
+        method_fd->return_type = type_simple(TY_UNKNOWN, CK_COPY);
         
         /* Register the method function at file scope */
         scope_add(&e->global, method_binding);

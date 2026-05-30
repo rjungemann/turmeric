@@ -410,6 +410,11 @@ typedef struct Type {
              * NULL for primitive rest (`& rest :int`, etc.), in which case the
              * fast-path TypeKind comparison on rest_kind is used. */
             struct Type *rest_full_type;
+            /* LS4: index of the parameter whose lifetime the borrow return is
+             * tied to (the returned &'a T aliases this argument's storage), or
+             * -1 when the return is not a lifetime-tied borrow.  Used by the
+             * inter-procedural borrow-escape check at call sites. */
+            int8_t result_borrow_arg;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -875,6 +880,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_affine[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
+    t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
     t.as.fn.rest_full_type = NULL; /* typed-variadic: NULL = primitive rest */
     return t;
