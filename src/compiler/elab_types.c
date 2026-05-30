@@ -445,6 +445,27 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = is_mut ? type_ref_mut_lifetime(target->kind, lid)
                         : type_ref_immut_lifetime(target->kind, lid);
+
+            /* LS3: well-formedness of a nested borrow &'a &'b T.  The outer
+             * reference (lifetime 'a) points at the inner reference (lifetime
+             * 'b); for the outer to be valid for 'a, the inner must live at
+             * least as long, so 'b must outlive 'a.  Record that outlives edge
+             * ('b : 'a) on the signature's lifetime context.  Two opposing
+             * nested borrows in one signature (&'a &'b ... and &'b &'a ...) then
+             * form a constraint cycle the solver rejects as TUR-E0106.
+             * (Type.lifetimes only carries the head's own lifetime, so the inner
+             * lifetime is also surfaced on the outer Type's lifetimes[1] for
+             * collectors that walk a single Type.) */
+            if (lid != LIFETIME_NONE && e->cur_lifetime_ctx != NULL
+                    && (target->kind == TY_REF_IMMUT || target->kind == TY_REF_MUT)
+                    && target->n_lifetimes > 0
+                    && target->lifetimes[0] != LIFETIME_NONE) {
+                LifetimeId inner = target->lifetimes[0];
+                lifetime_context_add_constraint(e->cur_lifetime_ctx, inner, lid);
+                if (t->n_lifetimes < MAX_TYPE_LIFETIMES) {
+                    t->lifetimes[t->n_lifetimes++] = inner;
+                }
+            }
             return t;
         }
 
