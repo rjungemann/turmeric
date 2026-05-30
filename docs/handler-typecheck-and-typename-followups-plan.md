@@ -6,7 +6,7 @@ description: Two follow-ups surfaced by the first-class-handlers work -- making 
 
 # Handler Arg-Checking + `type_name` Ownership -- Follow-up Plan
 
-> **Status:** Not started. Captures the two caveats called out at the end of
+> **Status:** PH0 decided; PH1-PH3 in progress. Captures the two caveats called out at the end of
 > [first-class-handlers-plan.md](first-class-handlers-plan.md) FH4.1. Both are
 > pre-existing and **independent of** the first-class-handler *feature* (which
 > is complete and correct); they surfaced because handler types now appear in
@@ -94,6 +94,16 @@ static check and (2) is a memory-hygiene defect.
   *Recommendation:* **(b)** for the diagnostic sites that currently leak (small,
   surgical, no global churn), optionally followed by **(c)** if a broader
   cleanup is wanted. *Done when:* the strategy is recorded here.
+
+  **Decision (PH0.1): strategy (b) -- caller-provided buffer.** The existing
+  `type_name_buf(Buf*, Type)` is promoted to a public API (declared in
+  `types.h`, no longer `static`) and used at the leaking diagnostic sites in
+  `elab_call.c`. Each site builds the type name into a local `Buf`, passes
+  `buf.data` to `diag_emit*`, and frees the `Buf` afterward -- no `tur_strdup`
+  result is leaked. `type_name` keeps its mixed static/heap contract for the
+  ~150 borrow-and-never-free call sites (a full strategy-(a) conversion is
+  explicitly scoped out as optional follow-up to avoid a large mechanical
+  diff). The known-leaking handler arg-mismatch path is the required scope.
 - **PH0.2** Handler subtyping variance. FH4.1 implemented handler comparison as
   effect-set **equality** with `TY_UNKNOWN` value/result kinds as wildcards.
   Decide whether argument checking should use strict `type_eq` (equality) or
@@ -101,6 +111,13 @@ static check and (2) is a memory-hygiene defect.
   a subset is required, with the documented value/result variance). *Done when:*
   the intended relation for PH1 is chosen (default: `type_is_subtype`, matching
   how `TY_FN` args already use `fn_type_subtype`).
+
+  **Decision (PH0.2): use `type_is_subtype`.** PH1's handler argument check
+  calls `type_is_subtype(args[i]->type, *expected_full)`, matching how `TY_FN`
+  args use `fn_type_subtype`. The relation stays exactly the FH4.1 one
+  (effect-set equality + `TY_UNKNOWN` value/result wildcards) as implemented in
+  `type_is_subtype`'s `TY_HANDLER` branch; effect-superset subtyping is *not*
+  introduced here (see Risks).
 
 ---
 
