@@ -1126,6 +1126,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_exists_type = NULL; /* F1-1: full TY_EXISTS/TY_FORALL return type so callers see the forall_ payload (without it elab_open SEGVs reading body) */
     Type *return_fn_type = NULL; /* Issue 1b: full TY_FN return type so callers see the complete function signature (arity, result_kind) rather than a zeroed TY_FN shell */
     Type *return_tyvar_type = NULL; /* GS4: full TY_TYVAR return type for call-site substitution */
+    Type *return_borrow_type = NULL; /* LS2: full borrow return type (&'a T) so lifetime IDs survive */
     uint32_t body_start = params_idx + 1;  /* params_idx = params vector */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -1312,6 +1313,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                      * the complete function signature (arity, result_kind). */
                     if (ann->kind == TY_FN) {
                         return_fn_type = ann;
+                    }
+                    /* LS2: capture full borrow return type (&'a T / &mut 'a T)
+                     * so its lifetime IDs reach the lifetime pass via
+                     * FnDef.return_type. */
+                    if (ann->kind == TY_REF_IMMUT || ann->kind == TY_REF_MUT) {
+                        return_borrow_type = ann;
                     }
                     /* F2-1: a `:linear` existential cannot escape past the
                      * scope that packs it -- the linear discipline relies on
@@ -1881,6 +1888,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (return_exists_type) {
         fn_type.as.fn.result_full_type = return_exists_type;
     }
+    /* LS2: attach the full borrow return type so a call site's result carries
+     * the borrow target (and lifetime), letting @ deref recover the pointee
+     * type instead of falling back to an unknown/void C type. */
+    if (return_borrow_type && !fn_type.as.fn.result_full_type) {
+        fn_type.as.fn.result_full_type = return_borrow_type;
+    }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
     {
@@ -2025,6 +2038,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* LS1: carry the interned signature lifetimes into the FnDef so the always-on
      * lifetime pass (borrow_check.c) can solve over the programmer's lifetimes. */
     fd->lifetime_ctx = sig_ltctx;
+    /* LS2: record the full declared return Type so borrow lifetimes survive.
+     * For a borrow return we have the parsed Type (with lifetime IDs); otherwise
+     * the bare kind is sufficient for the lifetime pass. */
+    fd->return_type = return_borrow_type ? *return_borrow_type
+                                         : type_from_kind(return_kind);
     /* Phase 15: Store collected constraints */
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
@@ -2490,6 +2508,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     /* Phase 15: Initialize constraints */
     constraint_set_init(&fd->constraints);
+    /* LS2: lambdas carry no surface borrow-return lifetimes; record the bare
+     * return kind and an empty lifetime context so the lifetime pass reads a
+     * defined (not garbage) return Type. */
+    lifetime_context_init(&fd->lifetime_ctx);
+    fd->return_type = type_from_kind(return_kind);
 
     /* Create the FN_DEF expression that will be emitted at file scope */
     Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);

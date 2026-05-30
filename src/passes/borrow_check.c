@@ -119,10 +119,16 @@ bool borrow_check_effect_handler_captures(const Expr *program) {
 static bool lifetime_check_fn_def(FnDef *fn) {
     if (!fn || fn->n_params == 0 || !fn->param_types) return true;
 
-    /* Recover the function's declared return Type from its TY_FN binding. */
-    Type return_type = type_simple(TY_NIL, CK_COPY);
-    if (fn->binding && fn->binding->type.kind == TY_FN) {
-        return_type.kind = fn->binding->type.as.fn.result_kind;
+    /* LS2: use the full declared return Type, which preserves borrow lifetime
+     * IDs (&'a T).  The TY_FN binding only carries result_kind, so reconstructing
+     * from it would silently drop the programmer's output lifetime. */
+    Type return_type = fn->return_type;
+    if (return_type.kind == TY_UNKNOWN) {
+        /* Defensive: a FnDef built without a recorded return Type. */
+        return_type = type_simple(TY_NIL, CK_COPY);
+        if (fn->binding && fn->binding->type.kind == TY_FN) {
+            return_type.kind = fn->binding->type.as.fn.result_kind;
+        }
     }
 
     lifetime_elision_apply(&fn->lifetime_ctx, fn->param_types, fn->n_params,
