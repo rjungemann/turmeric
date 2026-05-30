@@ -1,0 +1,12 @@
+; TY2.2/TY2.3/TY2.4: box a cstr into `any` across a function boundary
+; (return-position widening), then read its runtime tag with type-of and
+; recover the value with a checked cast.
+
+(defn box-cstr [] : any
+  "hello world")
+
+(defn main [] :int
+  (let [a (box-cstr)]
+    (println (type-of a))
+    (println (cast a cstr)))
+  0)

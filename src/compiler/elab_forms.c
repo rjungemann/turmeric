@@ -1480,6 +1480,13 @@ Expr *elab_if(Elab *e, const Form *call) {
             result_t = else_->type;
         } else if (else_div) {
             result_t = then_->type;
+        } else if (then_->type.kind == TY_ANY || else_->type.kind == TY_ANY) {
+            /* TY2.2: branch widening to `any`.  When one branch is `any`, box
+             * the other (a narrower subtype) so both arms share the tagged
+             * representation and the if yields `any`. */
+            then_ = elab_coerce_to_any(e, then_);
+            else_ = elab_coerce_to_any(e, else_);
+            result_t = then_->type;
         } else if (!type_eq(then_->type, else_->type)) {
             free(then_states);
             free(move_bindings);

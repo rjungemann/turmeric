@@ -725,6 +725,9 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args);
 Expr *elab_defmacro(Elab *e, const Form *call);
 Expr *elab_gensym(Elab *e, const Form *call);
 
+/* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
+Expr *elab_coerce_to_any(Elab *e, Expr *value);
+
 /* elab_unsafe.c */
 Expr *elab_ptr_deref(Elab *e, const Form *call);
 Expr *elab_ptr_write(Elab *e, const Form *call);

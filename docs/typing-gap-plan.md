@@ -6,8 +6,9 @@ description: Phased implementation plan that closes (or explicitly re-scopes) th
 
 # Advanced Typing -- Pre-v1.0.0 Gap-Closure Plan
 
-> **Status:** Phases TY0 (doc/comment drift) and TY1 (flag-graduation
-> decision) complete. TY2 is the next implementation phase. Companion to
+> **Status:** Phases TY0 (doc/comment drift), TY1 (flag-graduation
+> decision), and TY2 (`any` boxing + `cast`/`type-of`) complete. TY3
+> (`if`-guard narrowing) is the next implementation phase. Companion to
 > [typing-gap-audit.md](typing-gap-audit.md); every phase maps to a numbered
 > item in that audit's "Pre-v1.0.0 gaps" section. Post-1.0 work (refinement
 > types, dependent/Pi types, typeclass-system extensions, `-O`
@@ -61,7 +62,7 @@ Non-goals (deferred, tracked in the audit):
 |---|---|---|---|
 | TY0 | 9 | Cleanup ✅ | Doc/comment drift; cheap, unblocks honest flag decision |
 | TY1 | 8 | Decision ✅ | Flag-graduation matrix; gates what "1.0 typing" means |
-| TY2 | 4 | Implement | `any` boxing codegen + `cast`/`type-of` |
+| TY2 | 4 | Implement ✅ | `any` boxing codegen + `cast`/`type-of` |
 | TY3 | 7 | Implement | Flow-sensitive narrowing in `if` guards |
 | TY4 | 5 | Implement | Lifetime inference / elision depth (full machinery) |
 | TY5 | 6 | Implement | Multi-capture closures in HKT (remove manual cast) |
@@ -193,25 +194,66 @@ not a blocker for closing TY1).
 payloads (cstr/struct/ADT) have no boxing wrapper, and `(cast x : T)` /
 `(type-of x)` are not emitted for them.
 
-- **TY2.1** Specify the `any` boxing representation for pointer-sized payloads
-  (tag + payload) and how it coexists with the cases that currently reuse ADT
-  machinery. *Done when:* the representation is written down with the tag
-  scheme.
-- **TY2.2** Emit the boxing wrapper when a cstr/struct/ADT value is widened to
-  `any`. *Done when:* widening such a value compiles and round-trips.
-- **TY2.3** Emit `(cast x : T)` as a checked downcast against the box tag
+> **Status: complete (2026-05-30).** The root cause turned out to be broader
+> than "pointer-sized payloads": widening-to-`any` injection only happened at
+> *call-argument* sites, so returning **any** narrower value (even `int`) as
+> `: any`, or yielding it from an `if` branch, leaked the raw value into a
+> `tur_tagged_t` slot and broke C compilation. The fix is a single
+> `elab_coerce_to_any` helper applied at every widening site (call args,
+> `: any` return position, `if`-branch unification). The `tur_tagged_t`
+> `{ tag; val }` *is* the box: immediates ride the carrier, floats are stored
+> by IEEE-754 bit pattern (an integer cast truncated them -- a latent bug,
+> now fixed), cstr/ptr/ADT store the pointer, and by-value structs are
+> heap-boxed (`malloc` + copy). `cast` is now a *checked* downcast that
+> `tur_panic`s on tag mismatch (ratified failure behavior); `type-of` covers
+> all payload kinds at *kind* granularity (`"struct"`/`"adt"`). General
+> `struct{int tag; union{...}}` union emission stays deferred (TY2.5). Tests:
+> 1051 pass (1046 + 5 new fixtures), 0 fail, all snapshots regenerated.
+>
+> *Known tradeoff:* the struct heap-box is tied to the `any` value's untracked
+> lifetime, so widening a struct to `any` leaks one `malloc` in the generated
+> program (documented in the guide). The compiler/codegen path itself stays
+> arena-allocated and ASan/LSan-clean, so `tests/run.sh` is unaffected.
+
+- **TY2.1** [x] Specify the `any` boxing representation for pointer-sized
+  payloads (tag + payload) and how it coexists with the cases that currently
+  reuse ADT machinery. *Done when:* the representation is written down with the
+  tag scheme. *(`tur_tagged_t { int64_t tag; int64_t val }`; tag = payload's
+  `TypeKind`; documented in the union-intersection guide's "Boxing, cast, and
+  type-of" section.)*
+- **TY2.2** [x] Emit the boxing wrapper when a cstr/struct/ADT value is widened
+  to `any`. *Done when:* widening such a value compiles and round-trips.
+  *(Structs heap-boxed; cstr/ADT pointer-carried; floats bit-reinterpreted.
+  Fixtures `any-box-cstr`, `any-box-struct`, `any-box-adt`.)*
+- **TY2.3** [x] Emit `(cast x : T)` as a checked downcast against the box tag
   (with the agreed failure behavior on tag mismatch). *Done when:* a correct
   cast returns the value and a wrong cast fails per the agreed behavior.
-- **TY2.4** Emit `(type-of x)` for boxed `any`. *Done when:* `type-of` returns
-  the stored tag's type for each supported payload kind.
-- **TY2.5** Decide 1.0 scope for general tagged-union C emission: implement, or
-  document the supported subset and reject the rest with a clear diagnostic.
+  *(Ratified: panic via `__tur_any_cast_check` -> `tur_panic`. Fixtures
+  `any-cast-checked`, `any-cast-mismatch-panic`.)*
+- **TY2.4** [x] Emit `(type-of x)` for boxed `any`. *Done when:* `type-of`
+  returns the stored tag's type for each supported payload kind. *(Extended
+  `__tur_any_type_name` to cover struct/adt tags, emitted from the enum
+  constants so they track the `TypeKind` enum.)*
+- **TY2.5** [x] Decide 1.0 scope for general tagged-union C emission: implement,
+  or document the supported subset and reject the rest with a clear diagnostic.
   *Done when:* the scope is recorded and unsupported cases fail loudly rather
-  than mis-emitting.
-- **TY2.6** Fixtures: box/unbox round-trip per payload kind (cstr/struct/ADT),
-  correct cast, failing cast, `type-of` on each. *Done when:* all green and
-  snapshotted; the union-intersection guide's "Deferred" table is updated to
-  match what now ships.
+  than mis-emitting. *(Scope: the `any` top type ships fully via `tur_tagged_t`;
+  general `struct{int tag; union{...}}` emission for `(A | B)` unions stays
+  deferred and is recorded in the guide's Deferred table. `type-of`/`cast`
+  granularity is kind-level, also documented.)*
+- **TY2.6** [x] Fixtures: box/unbox round-trip per payload kind
+  (cstr/struct/ADT), correct cast, failing cast, `type-of` on each. *Done
+  when:* all green and snapshotted; the union-intersection guide's "Deferred"
+  table is updated to match what now ships. *(Five new fixtures; guide's
+  Deferred table replaced with a "Shipped in TY2" table plus the residual
+  deferred items.)*
+
+> **Boundary not closed by TY2 (documented):** an `if` whose *two* branches are
+> both narrower than `any` and only share `any` via the *enclosing* `: any`
+> return type does not widen -- elaboration is bottom-up with no expected-type
+> threading, so the branches mismatch before the return context is known.
+> Wrapping one branch so it is already `any` (or casting) works today; full
+> expected-type propagation is left to the narrowing work in TY3.
 
 ---
 

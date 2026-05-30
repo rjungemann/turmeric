@@ -709,10 +709,21 @@ struct Expr {
         struct {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
+            /* TY2.2: when the injected value is a by-value struct it cannot ride
+             * the int64_t carrier; box_struct names the StructDef so codegen
+             * emits a heap copy (malloc + store) and stores the pointer. NULL
+             * for carrier-compatible payloads (int/bool/float/nil/cstr/ptr/ADT). */
+            const struct StructDef *box_struct;
         } union_inject_;
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
-        struct { struct Expr *value; TypeKind target_kind; } any_cast_;  /* (cast x T) — unbox any as T */
+        /* TY2.3: (cast x T) — checked downcast; panics on tag mismatch.
+         * target_struct is non-NULL when T is a struct (heap-unbox via deref). */
+        struct {
+            struct Expr *value;
+            TypeKind     target_kind;
+            const struct StructDef *target_struct;
+        } any_cast_;
         /* DV0: Dynamic var declaration */
         struct {
             DynVarEntry        *entry;      /* the registered dynvar (name, value_type, index) */

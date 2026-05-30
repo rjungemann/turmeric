@@ -8,8 +8,11 @@ description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual ty
 
 > **Feature flags:** `-Xunion-types` and `-Xintersection-types`
 >
-> IT0--IT4 are complete. Some IT4 items are deferred (boxing codegen, `cast`, `type-of`,
-> tagged union C emission). See [Deferred](#deferred) below.
+> IT0--IT4 are complete. As of TY2, `any` boxing codegen, the checked `cast`,
+> and `type-of` ship for every payload kind (int/bool/float/nil/cstr/ptr, ADTs,
+> and heap-boxed structs). The remaining deferred item is general
+> `struct { int tag; union { ... } }` tagged-union C emission. See
+> [Deferred](#deferred) below.
 
 Union types (`A | B`) and intersection types (`A & B`) extend the Turmeric type system with
 structural type combinations. Together they enable gradual typing, flexible APIs, and
@@ -233,8 +236,14 @@ debug-print("hello") ;; ok
 debug-print(true)    ;; ok
 ```
 
-`any`-typed values are represented as `int64_t` at codegen level. Pointer-sized payloads
-(`cstr`, struct, ADT) require a boxing wrapper -- this is deferred (see below).
+`any`-typed values are represented at codegen as a `tur_tagged_t`
+(`{ int64_t tag; int64_t val; }`): the `tag` is the payload's `TypeKind` and
+the `val` carries the payload. Immediate values (int/bool/nil) ride the
+carrier directly, floats are stored as their IEEE-754 bit pattern, pointer
+payloads (`cstr`, `ptr`, ADT handles) store the pointer, and by-value structs
+are heap-boxed (a `malloc`'d copy whose pointer rides the carrier). A value is
+boxed automatically wherever it is widened to `any` -- at a call argument, a
+function's `: any` return position, or an `if` branch facing an `any` sibling.
 
 Union simplification: `(int | cstr | any)` simplifies to `any`.
 
@@ -263,6 +272,43 @@ defn debug-print [x : any] : unit
 defn typed-print [x : (int | cstr)] : unit
   debug-print(x)
 ```
+
+---
+
+## Boxing, `cast`, and `type-of`
+
+A value widened to `any` is boxed into a `tur_tagged_t` that records the
+payload's runtime type. Two forms read that box back:
+
+- **`(type-of x)`** returns the payload's type name as a `cstr`:
+  `"int"`, `"bool"`, `"float"`, `"cstr"`, `"ptr"`, `"struct"`, or `"adt"`. The
+  tag has *kind* granularity -- every struct reports `"struct"` and every ADT
+  `"adt"`, not the specific struct/ADT name.
+- **`(cast x : T)`** is a *checked* downcast. It verifies the box tag matches
+  `T` and returns the unboxed value; on a mismatch it **panics** (aborts with a
+  message like `cast: any holds cstr, not int`). `T` may be a primitive type
+  name or a struct/ADT name.
+
+```turmeric
+(defn box-it [] : any "hello")
+
+(defn main [] : int
+  (let [a (box-it)]
+    (println (type-of a))    ;; => cstr
+    (println (cast a cstr))  ;; => hello
+    ;; (cast a int)          ;; would panic: any holds cstr, not int
+    0))
+```
+
+By-value structs are heap-boxed on widening (a `malloc`'d copy) and unboxed by
+dereference on `cast`; ADTs and `cstr` are pointer-carried and ride the carrier
+directly; floats are stored by their bit pattern so no precision is lost.
+
+> **Note:** the struct heap-box is owned by the `any` value's (untracked)
+> lifetime, so the `malloc`'d copy is not freed -- widening a struct to `any`
+> leaks one allocation per widen. This is acceptable for the gradual-typing
+> use cases `any` targets; if you need a struct in `any` on a hot path, prefer
+> a pointer/ADT payload, which is carrier-resident and allocation-free.
 
 ---
 
@@ -347,16 +393,22 @@ default.
 
 ---
 
+## Shipped in TY2
+
+| Item | Notes |
+|---|---|
+| `any` boxing codegen | All payload kinds box: immediates ride the carrier, floats by bit pattern, cstr/ptr/ADT by pointer, by-value structs heap-boxed. Boxing happens at every widening site (call arg, `: any` return, `if` branch). |
+| `(cast x : T)` | Checked downcast from `any`; verifies the box tag and panics on mismatch. `T` may be a primitive, struct, or ADT name. |
+| `(type-of x)` | Returns the payload's type name (`"int"`, ..., `"struct"`, `"adt"`) at kind granularity. |
+
 ## Deferred
 
 The following IT4 items are not yet implemented:
 
 | Item | Notes |
 |---|---|
-| Boxing codegen | Pointer-sized `any` payloads (cstr, struct, ADT) need a boxing wrapper struct |
-| `(cast x : T)` | Runtime downcast from `any`; returns `(option T)` |
-| `(type-of x)` | Returns a runtime type tag |
-| Tagged union C codegen | `struct { int tag; union { A a; B b; } data; }` emission |
+| Tagged union C codegen | General `struct { int tag; union { A a; B b; } data; }` emission for `(A \| B)` unions (the `any` top type ships via `tur_tagged_t`) |
+| Per-name `type-of`/`cast` granularity | `type-of` reports `"struct"`/`"adt"`, not the specific struct/ADT name; `cast` checks at that same granularity |
 | ADT-as-union sugar | `defdata` desugaring to union (tracked in GADT plan G4) |
 | Instance intersection on unions | Deferred failure during instance resolution may be hard to diagnose |
 

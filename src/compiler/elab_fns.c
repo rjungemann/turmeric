@@ -1458,6 +1458,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
 
+    /* TY2.2: return-position widening to `any`.  A function declared `: any`
+     * whose body yields a narrower type must box the result, otherwise the
+     * raw value leaks into a tur_tagged_t slot and breaks C codegen.  Mirror
+     * the call-argument widening via the shared coercion helper. */
+    if (return_kind == TY_ANY && body && body->type.kind != TY_ANY &&
+        body->type.kind != TY_NEVER) {
+        body = elab_coerce_to_any(e, body);
+    }
+
     /* CT1: Inject contract checks into body.
      * Determine whether to emit checks based on build mode. */
     {
