@@ -62,7 +62,7 @@ Non-goals (deferred, tracked in the audit):
 | TY1 | 8 | Decision | Flag-graduation matrix; gates what "1.0 typing" means |
 | TY2 | 4 | Implement | `any` boxing codegen + `cast`/`type-of` |
 | TY3 | 7 | Implement | Flow-sensitive narrowing in `if` guards |
-| TY4 | 5 | Implement/scope | Lifetime inference / elision depth |
+| TY4 | 5 | Implement | Lifetime inference / elision depth (full machinery) |
 | TY5 | 6 | Implement | Multi-capture closures in HKT (remove manual cast) |
 | TY6 | 1,2,3 | Cross-ref | Shared continuation-typing items (see control-flow plan) |
 
@@ -173,28 +173,25 @@ Lifetime elision implements only rule 2; rules 1 and 3 are placeholders, and
 collected lifetimes are not bound to parameters. There is no constraint
 solving / cycle detection, and inter-procedural borrow checking
 (`-Xlinear`-gated) is minimal. The handler-borrow-capture check is fine and
-stays.
+stays. **Decision (2026-05-30): build the full lifetime machinery for 1.0** so
+`-Xlinear` can graduate (see TY1).
 
-- **TY4.1** Decide the 1.0 ambition honestly: full elision rules 1/2/3 +
-  binding + constraint solving, OR a clearly-scoped subset with the rest
-  documented as post-1.0. (Feeds TY1's `-Xlinear` graduation decision.)
-  *Done when:* the scope is recorded.
-- **TY4.2 (if implementing)** Implement elision rules 1 and 3 and bind
-  collected lifetimes to their parameters. *Done when:* functions covered by
+- **TY4.1** Implement elision rules 1 and 3 and bind collected lifetimes to
+  their parameters (rule 2 already works). *Done when:* functions covered by
   rules 1/3 elaborate with parameter-bound lifetimes instead of placeholders.
-- **TY4.3 (if implementing)** Add lifetime constraint solving with cycle
-  detection so conflicting/cyclic lifetimes are rejected. *Done when:* a
-  program with a cyclic lifetime is rejected with a clear error.
-- **TY4.4** Either deepen inter-procedural borrow checking to the agreed scope
-  or document its limits and ensure it does not give false "ok" on unsound
-  programs within that scope. *Done when:* the borrow checker's guarantees
-  match its documentation.
-- **TY4.5** Fixtures matching the chosen scope: elision rule 1/3 acceptance,
-  cyclic-lifetime rejection (if implemented), and inter-procedural
-  borrow accept/reject pairs. *Done when:* all green and snapshotted.
-- **TY4.6** Update `uniqueness-types-guide.md` / `substructural-types-guide.md`
-  to state exactly which lifetime machinery is active at 1.0. *Done when:* the
-  guides match the implementation.
+- **TY4.2** Add lifetime constraint solving with cycle detection so
+  conflicting/cyclic lifetimes are rejected. *Done when:* a program with a
+  cyclic lifetime is rejected with a clear error.
+- **TY4.3** Deepen inter-procedural borrow checking so it soundly enforces
+  borrows across calls (no false "ok" on unsound programs). *Done when:* an
+  inter-procedural borrow violation is rejected and valid cases still pass.
+- **TY4.4** Fixtures: elision rule 1/3 acceptance, cyclic-lifetime rejection,
+  and inter-procedural borrow accept/reject pairs. *Done when:* all green and
+  snapshotted.
+- **TY4.5** Update `uniqueness-types-guide.md` / `substructural-types-guide.md`
+  to document the now-active lifetime machinery, and feed TY1 the green light
+  for `-Xlinear` graduation. *Done when:* the guides match the implementation
+  and TY1's matrix marks `-Xlinear`'s lifetime dependency satisfied.
 
 ---
 

@@ -65,8 +65,8 @@ Non-goals (deferred to post-1.0, tracked in the audit):
 | CF0 | -- | Decision + tracking | Records implement/lower/gate per item before code moves |
 | CF1 | 5 | Lower | Self-tail-call TCO; independent, high user value |
 | CF2 | 3 | Implement | `shift`/`shift0` result typing; small, unblocks clean diagnostics |
-| CF3 | 2 | Implement-or-remove | `compose-handlers` semantics |
-| CF4 | 1 | Gate-off-and-document | `call/cc`/`escape` real capture is post-1.0 |
+| CF3 | 2 | Implement | `compose-handlers` semantics |
+| CF4 | 1 | Gate (`-Xcallcc`) | `call/cc`/`escape` real capture is post-1.0 |
 | CF5 | 4 | Gate-off-and-document | Generator `yield`-in-`match` / recursion limits |
 | CF6 | 6 | Scope down | Async Send-across-await soundness |
 | CF7 | 7, 8 | Implement / tighten | Cloneable deep clone + capture precision |
@@ -144,48 +144,47 @@ cannot silently mistype.
 ## Phase CF3 -- `compose-handlers` (audit item 2)
 
 `compose-handlers` currently elaborates to a nil placeholder ("runtime
-semantics TBD"). Per CF0 it is either implemented with real composition
-semantics or removed from the 1.0 surface.
+semantics TBD"). **Decision (2026-05-30): implement real composition for
+1.0.**
 
-- **CF3.1 (path A: implement)** Specify composition semantics: handler order,
-  effect-row union, and resume/discontinue behavior of the composed handler.
-  *Done when:* a one-paragraph operational spec exists with at least two
-  worked examples.
-- **CF3.2 (path A)** Replace the nil placeholder with an elaboration that
-  produces the composed handler per the spec. *Done when:* a fixture composing
-  two effect handlers produces the spec's expected stdout.
-- **CF3.3 (path A)** Fixtures: compose two independent effects; compose with
-  overlapping effect (define precedence outcome). *Done when:* both run green.
-- **CF3.1 (path B: remove)** If not implementing for 1.0, remove
-  `compose-handlers` from the surface and emit a clear "not available"
-  diagnostic if referenced. *Done when:* referencing it fails with that
-  diagnostic; any existing fixture is converted to expect-error or deleted.
-- **CF3.4** Update `effects-system-guide.md` to match the chosen path (no
-  silent-nil description remains). *Done when:* the guide reflects reality.
+- **CF3.1** Specify composition semantics: handler order, effect-row union,
+  and resume/discontinue behavior of the composed handler. *Done when:* a
+  one-paragraph operational spec exists with at least two worked examples.
+- **CF3.2** Replace the nil placeholder with an elaboration that produces the
+  composed handler per the spec. *Done when:* a fixture composing two effect
+  handlers produces the spec's expected stdout.
+- **CF3.3** Fixtures: compose two independent effects; compose with an
+  overlapping effect (define the precedence outcome from CF3.1). *Done when:*
+  both run green and are snapshotted.
+- **CF3.4** Update `effects-system-guide.md` to document the composition
+  semantics (no silent-nil description remains). *Done when:* the guide
+  reflects the shipped behavior.
 
 ---
 
-## Phase CF4 -- Gate `call/cc` / `escape` (audit item 1)
+## Phase CF4 -- Gate `call/cc` / `escape` behind `-Xcallcc` (audit item 1)
 
-Real first-class capture needs the CPS pass (post-1.0). For 1.0, stop
-shipping a `call/cc`/`escape` that hands the user the integer `0` as a
-"continuation". Gate the forms so misuse fails loudly instead of silently
-returning nonsense.
+Real first-class capture needs the CPS pass (post-1.0). **Decision
+(2026-05-30): gate behind an experimental `-Xcallcc` flag.** Ungated,
+`call/cc`/`escape` raise a compile error; with `-Xcallcc` the current
+(no-real-capture) desugar is unlocked for experimentation and clearly
+documented as unsound. This avoids shipping a form that silently hands the
+user the integer `0` as a "continuation".
 
-- **CF4.1** Decide the gate mechanism: a hard elaboration error by default,
-  optionally unlockable behind an explicit experimental flag (e.g.
-  `-Xcallcc`) that documents "no real capture yet". *Done when:* mechanism is
-  agreed and recorded in CF0.2.
-- **CF4.2** Replace the degenerate desugar so that, ungated, `call/cc` and
-  `escape` raise the agreed diagnostic pointing at the CPS post-1.0 plan.
-  *Done when:* a program calling the captured `k` no longer compiles silently;
-  it errors (or requires the flag).
-- **CF4.3** Convert `continuation-callcc` / `continuation-escape` fixtures to
-  expect-error (or move behind the flag). *Done when:* suite stays green with
-  the new expectation and snapshots are updated.
-- **CF4.4** Document `call/cc`/`escape` status in the relevant guide and link
-  the control-flow audit's post-1.0 CPS entry. *Done when:* docs no longer
-  imply working capture.
+- **CF4.1** Add the `-Xcallcc` experimental flag (default off) and record it in
+  CF0.2 with its diagnostic wording. *Done when:* the flag is recognized and
+  its help text states "no real capture yet (unsound); requires the post-1.0
+  CPS pass".
+- **CF4.2** Make ungated `call/cc`/`escape` raise an elaboration error that
+  points at the post-1.0 CPS entry; under `-Xcallcc`, retain the current
+  desugar unchanged. *Done when:* a program using `call/cc` fails to compile
+  without the flag and compiles (with the documented caveat) with it.
+- **CF4.3** Move `continuation-callcc` / `continuation-escape` fixtures behind
+  `-Xcallcc`, and add an expect-error fixture for the ungated case. *Done
+  when:* suite stays green with the new expectations and snapshots are updated.
+- **CF4.4** Document `call/cc`/`escape` status and the `-Xcallcc` flag in the
+  relevant guide, linking the control-flow audit's post-1.0 CPS entry. *Done
+  when:* docs state the flag and that capture is unsound until CPS lands.
 
 ---
 
