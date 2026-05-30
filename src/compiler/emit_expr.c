@@ -161,11 +161,25 @@ static int reinterpret_kind_size_bytes(TypeKind kind) {
 }
 
 /* Phase F: Returns true for sub-64-bit integer kinds eligible for concrete
- * typed poly dispatch on x86-64 SysV ABI.  These types zero-extend into
- * 64-bit registers, so a call through a narrower function pointer type
- * still delivers the correct bit pattern after the callee's truncation. */
+ * typed poly dispatch on x86-64 SysV ABI.  These types are passed in the
+ * low bits of a 64-bit integer register (zero-/sign-extended by the caller)
+ * and returned in rax, so a call through a narrower function pointer type
+ * still delivers the correct bit pattern after the callee's truncation --
+ * for both native closure thunks and the generic int64_t-carrier wrapper.
+ *
+ * Signed and unsigned narrow ints share this property: the meaningful bits
+ * occupy the low byte/half/word of the register regardless of the extension
+ * discipline, and the concrete cast at the call site truncates back to the
+ * declared width.  Full-width (u)int64 already coincides with the carrier,
+ * so there is nothing to specialize.  Floats are deliberately excluded: the
+ * generic carrier wrapper returns int64_t in rax, but a float-returning
+ * signature reads xmm0, so the value would not survive the wrapper round
+ * trip (a native float thunk would be fine, but the call site cannot always
+ * tell the two apart). */
 static bool type_kind_is_poly_concrete(TypeKind k) {
-    return k == TY_BOOL || k == TY_INT8 || k == TY_INT16 || k == TY_INT32;
+    return k == TY_BOOL ||
+           k == TY_INT8  || k == TY_INT16  || k == TY_INT32 ||
+           k == TY_UINT8 || k == TY_UINT16 || k == TY_UINT32;
 }
 
 static Binding *emit_expr_closure_fn_binding(const Expr *expr) {
