@@ -750,7 +750,8 @@ static void cps_emit_capture_environment_expr(Arena *a, Expr *e,
                         && inst->method_impls[0]->binding->name) {
                         clone_fns[i] = inst->method_impls[0]->binding->name->name;
                     }
-                    /* Drop typeclass not yet implemented; leave NULL. */
+                    /* CF7.2: Drop handled by type-kind dispatch in emit_effects.c;
+                     * drop_fns slot left NULL (no formal Drop typeclass yet). */
                 }
                 e->as.cloneable_shift_.capture_clone_fns = clone_fns;
                 e->as.cloneable_shift_.capture_drop_fns  = drop_fns;

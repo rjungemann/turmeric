@@ -225,6 +225,37 @@ produces the unique solution to the given puzzle.
 
 ---
 
+## Residual Liveness Imprecision (1.0 limitation)
+
+The compile-time capture check (`TUR-E0014`) is conservative: it flags every
+binding in scope at a `cloneable-shift` site inside the **same function** that
+lacks a Clone instance, even if that binding is not actually used in the
+continuation body.  Bindings from **enclosing functions** (outer lambdas or
+defns) are excluded from the check (CF7.3), but same-function bindings that
+are merely in lexical scope -- not live -- may be falsely rejected.
+
+**Workaround:** move non-Clone values out of scope before the shift:
+
+```turmeric
+;; Instead of:
+(let [nc (make-struct NoClone x)]
+  (cloneable-reset
+    (let [k (cloneable-shift k-fn 0)]
+      ...)))  ;; nc is in scope even if unused => TUR-E0014
+
+;; Do:
+(let [nc (make-struct NoClone x)
+      result (extract nc)]   ;; consume nc before the reset
+  (cloneable-reset
+    (let [k (cloneable-shift k-fn 0)]
+      result)))               ;; only `result` (Clone-able) is in scope
+```
+
+Full liveness precision is gated on the post-1.0 CPS pass (tracked in
+[control-flow-completeness-plan.md](../control-flow-completeness-plan.md) CF7.5).
+
+---
+
 ## See Also
 
 - `stdlib/backtrack.tur` -- standard library implementation

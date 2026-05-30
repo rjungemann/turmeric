@@ -524,6 +524,11 @@ typedef struct Elab {
     /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
      * detecting cloneable-shift outside any reset boundary. */
     int              cloneable_reset_depth;
+    /* CF7.3: the scope that was active immediately before the current function
+     * body's inner scope was pushed (i.e., e->scope just before scope_init in
+     * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
+     * from outer function scopes are not falsely flagged as needing Clone. */
+    struct Scope    *fn_entry_outer_scope;
     /* Phase 21: tracks nesting depth of serial-reset for detecting
      * serial-shift outside any serial-reset boundary. */
     int              serial_reset_depth;

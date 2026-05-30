@@ -6,7 +6,7 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 
 # Control Flow -- Pre-v1.0.0 Completeness Plan
 
-> **Status:** Phases CF0-CF6 complete (CF0: disposition ratified + diagnostics
+> **Status:** Phases CF0-CF7 complete (CF0: disposition ratified + diagnostics
 > namespace reserved + at-risk fixtures inventoried; CF1: self-tail-call -> loop
 > lowering shipped; CF2: `shift`/`shift0` result typing replaces the
 > `body->type` placeholder; CF3: `compose-handlers` **gated** (`TUR-E0704`)
@@ -16,8 +16,11 @@ description: Phased implementation plan that closes (or explicitly gates) the pr
 > `call/cc`/`escape` **gated** behind `-Xcallcc` (`TUR-E0700`/`TUR-E0701`);
 > CF5: `yield`-in-`match` (`TUR-E0702`) and recursive-generator (`TUR-E0703`)
 > are hard compile errors with diagnostic guidance; CF6: non-Send bindings
-> live across `await` in inline async closures rejected (`TUR-E0022`));
-> CF7 next. Companion to
+> live across `await` in inline async closures rejected (`TUR-E0022`);
+> CF7: cloneable continuation deep clone (CF7.1) confirmed, Drop typeclass
+> path implemented (CF7.2), capture check tightened to outer-function boundary
+> (CF7.3), fixtures added (CF7.4), residual imprecision documented (CF7.5)).
+> Companion to
 > [control-flow-completeness-audit.md](control-flow-completeness-audit.md);
 > every phase below maps to a numbered gap in that audit's "Pre-v1.0.0 gaps"
 > section. Post-1.0 work (full CPS pass, MT scheduler bridge, trampolining)
@@ -517,6 +520,29 @@ the full CPS pass.
 - **CF7.5** Note the remaining liveness imprecision (full precision is gated on
   CPS) in the backtracking / serializable-continuations guides. *Done when:*
   the residual limitation is documented and linked to the post-1.0 CPS entry.
+
+### CF7 Outcome
+
+- **CF7.1** (confirmed): `__clenv_N_clone()` in `src/compiler/emit_effects.c`
+  already performs per-field deep clone using Clone typeclass instances recorded
+  by `cps_emit_capture_environment_expr()` in `src/passes/cps.c`. No change needed.
+- **CF7.2** (implemented): `__clenv_N_drop()` in `src/compiler/emit_effects.c`
+  now emits `rc_strong_decrement(s->field); rc_free_queue_drain();` for each
+  captured `rc<T>` field before `free(s)`. Previously it was a bare `free(p)`,
+  leaking the rc block. Fixture: `tests/fixtures/cloneable-drop-rc/`.
+- **CF7.3** (implemented): `check_cloneable_capture()` in
+  `src/compiler/elab_effects.c` now stops the scope walk at
+  `fn_entry_outer_scope` (set in `elab_fns.c` when each `fn`/`defn` body is
+  elaborated) instead of `&e->global`. Bindings from enclosing functions are
+  no longer falsely flagged. Same-function bindings remain checked (sound).
+  Fixture accept case: `tests/fixtures/cloneable-capture-precision/`;
+  existing reject cases: `errors/cloneable-non-clone-capture/` and
+  `errors/backtrack-clone-non-clone-capture/` continue to pass.
+- **CF7.4** (fixtures added): `cloneable-drop-rc` (clone-and-drop, leak-clean)
+  and `cloneable-capture-precision` (CF7.3 accept case). All suite-green.
+- **CF7.5** (documented): Residual same-function liveness imprecision noted in
+  `docs/guides/backtracking-guide.md` and
+  `docs/guides/serializable-continuations-guide.md`, linked to post-1.0 CPS.
 
 ---
 

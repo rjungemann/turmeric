@@ -1054,6 +1054,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * (^f → TY_TYVAR/KIND_ARROW) are visible when the return-type annotation
      * is parsed below.  Regular parameter bindings are added to this same
      * scope after the annotation is parsed (see "Push params" below). */
+    /* CF7.3: record the scope just before this function's inner scope is pushed,
+     * so check_cloneable_capture can stop at the function boundary. */
+    struct Scope *saved_fn_entry_outer_scope = e->fn_entry_outer_scope;
+    e->fn_entry_outer_scope = e->scope;
     Scope inner;
     scope_init(&inner, e->scope);
     e->scope = &inner;
@@ -1407,6 +1411,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->current_fn_name = NULL;
+                e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -1419,6 +1424,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 /* Phase R6: Reset current function name */
                 e->current_fn_name = NULL;
+                e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -1433,6 +1439,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->n_sig_tyvars = saved_n_sig_tyvars;
                     /* Phase R6: Reset current function name */
                     e->current_fn_name = NULL;
+                    e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
                     scope_free(&inner);
                     return NULL;
@@ -1457,6 +1464,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->n_sig_tyvars = saved_n_sig_tyvars;
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
+    e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
     /* CT1: Inject contract checks into body.
      * Determine whether to emit checks based on build mode. */
@@ -2177,6 +2185,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
 
     /* Push a new scope for the function body with params bound */
+    /* CF7.3: record the scope just before this lambda's inner scope is pushed. */
+    struct Scope *saved_fn_entry_outer_scope = e->fn_entry_outer_scope;
+    e->fn_entry_outer_scope = e->scope;
     Scope inner;
     scope_init(&inner, e->scope);
     e->scope = &inner;
@@ -2207,6 +2218,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -2217,6 +2229,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
+                e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -2229,6 +2242,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
+                    e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
                     scope_free(&inner);
                     return NULL;
@@ -2242,6 +2256,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
     e->n_sig_tyvars = saved_n_sig_tyvars;
+    e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */

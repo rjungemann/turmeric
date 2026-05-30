@@ -1059,8 +1059,23 @@ char *emit_effects_cloneable_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(hb,
             "    return copy;\n"
             "}\n"
-            "static void __clenv_%d_drop(void *p) { free(p); }\n\n",
-            cont_id);
+            "static void __clenv_%d_drop(void *p) {\n"
+            "    __clenv_%d *s = (__clenv_%d *)p;\n",
+            cont_id, cont_id, cont_id);
+        /* CF7.2: emit per-field drop for owned types before freeing env */
+        for (uint32_t ci = 0;
+             ci < e->as.cloneable_shift_.n_live_captures; ci++) {
+            Binding *cap = e->as.cloneable_shift_.live_captures[ci];
+            if (cap->type.kind == TY_RC) {
+                char *rn = raw_name_for_binding(cap);
+                buf_printf(hb,
+                    "    if (s->%s) { rc_strong_decrement(s->%s);"
+                    " rc_free_queue_drain(); }\n",
+                    rn, rn);
+                free(rn);
+            }
+        }
+        buf_printf(hb, "    free(s);\n}\n\n");
 
         /* Alloc env in function body */
         env_var = fresh_tmp(ctx);

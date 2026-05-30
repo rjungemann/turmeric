@@ -1,0 +1,40 @@
+;; CF7.3: Outer-function binding that is NOT captured by the continuation
+;; should not be flagged for Clone, even if it lacks a Clone instance.
+;;
+;; Prior to CF7.3, check_cloneable_capture walked the full lexical scope chain
+;; up to &e->global, so a non-Clone parameter of an enclosing defn would be
+;; falsely rejected at a cloneable-shift site inside a nested fn.
+;; With CF7.3, the walk stops at fn_entry_outer_scope (the scope active before
+;; the innermost fn body's scope was pushed), so outer params are not checked.
+;;
+;; CloneToken has a Clone instance (to ensure clone_tc is registered, triggering
+;; the capture check).  NoToken has no Clone instance.  nc (NoToken) lives only
+;; in the outer function scope and is never referenced inside the inner lambda.
+;; This program must compile and run without error.
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+;; CloneToken: a wrapper with a Clone instance.
+(defstruct CloneToken :copy [tag :int])
+
+(definstance Clone [CloneToken]
+  (clone [t] :int 0))
+
+;; NoToken: no Clone instance.
+(defstruct NoToken :copy [tag :int])
+
+(defn k-identity [k] :int k)
+
+;; nc (NoToken) is a parameter of the outer defn.
+;; The inner lambda's cloneable-shift does not reference nc.
+;; With CF7.3, nc is outside fn_entry_outer_scope and is not flagged.
+(defn make-resumable [nc :NoToken result :int] :int
+  (let [f (fn []
+             (cloneable-reset
+               (cloneable-shift k-identity 0)))]
+    (tur_cloneable_cont_resume (f) result)))
+
+(defn main [] :nil
+  (println (make-resumable (make-struct NoToken 0) 42))
+  nil)
