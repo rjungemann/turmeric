@@ -394,6 +394,60 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* LS1: borrow *type* annotation -- &T / &mut T, optionally carrying a
+         * Rust-style lifetime: &'a T / &mut 'a T.  The reader produces these as
+         * a list whose head is the borrow operator (& or &mut):
+         *   (& T)         (&mut T)         -- no lifetime
+         *   (& 'a T)      (&mut 'a T)      -- lifetime in the middle slot
+         * (An intersection type `A & B` instead carries `&` in a *middle* slot,
+         * so keying on items[0] keeps the two unambiguous.) */
+        if (form->as.list.len >= 2 && form->as.list.items[0]->tag == F_SYM
+                && (form->as.list.items[0]->as.sym == e->sym_ampersand
+                    || form->as.list.items[0]->as.sym == e->sym_borrow_mut)) {
+            bool is_mut = (form->as.list.items[0]->as.sym == e->sym_borrow_mut);
+
+            /* An optional lifetime sits between the operator and the target. */
+            Form *lt_f = NULL;
+            Form *target_f = NULL;
+            if (form->as.list.len == 2) {
+                target_f = form->as.list.items[1];
+            } else if (form->as.list.len == 3
+                       && form->as.list.items[1]->tag == F_SYM
+                       && form->as.list.items[1]->as.sym->len >= 1
+                       && form->as.list.items[1]->as.sym->name[0] == '\'') {
+                lt_f = form->as.list.items[1];
+                target_f = form->as.list.items[2];
+            } else {
+                diag_emit(DIAG_ERROR, form->span,
+                          "malformed borrow type: expected (& T), (&mut T), or a "
+                          "lifetime-annotated &'a T / &mut 'a T");
+                return NULL;
+            }
+
+            Type *target = type_expr_from_form(e, target_f, rec_name,
+                                               type_params, type_param_kinds, n_type_params);
+            if (!target) return NULL;
+
+            /* Resolve the optional lifetime to a stable per-function LifetimeId.
+             * Implicit quantification: each distinct 'a in the signature is a
+             * fresh lifetime; a repeated 'a resolves to the same ID. */
+            LifetimeId lid = LIFETIME_NONE;
+            if (lt_f != NULL && e->cur_lifetime_ctx != NULL) {
+                lid = lifetime_context_intern(e->cur_lifetime_ctx, lt_f->as.sym->name);
+                if (lid == LIFETIME_NONE) {
+                    diag_emit(DIAG_ERROR, lt_f->span,
+                              "too many distinct lifetimes in this signature "
+                              "(maximum %d)", MAX_LIFETIMES);
+                    return NULL;
+                }
+            }
+
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = is_mut ? type_ref_mut_lifetime(target->kind, lid)
+                        : type_ref_immut_lifetime(target->kind, lid);
+            return t;
+        }
+
         /* IT0: (A | B | C) — union type expression.
          * Detect by scanning for any element that is the "|" pipe symbol.
          * Only active when -Xunion-types is enabled. */

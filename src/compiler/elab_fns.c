@@ -56,6 +56,11 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
         if (head == e->sym_forall || head == e->sym_exists ||
             head == e->sym_forall_u || head == e->sym_exists_u ||
             head == e->sym_arrow || head == e->sym_fn ||
+            /* LS1: borrow *type* heads -- &T / &mut T (and lifetime-annotated
+             * &'a T / &mut 'a T) are type-constructor forms, not generic
+             * applications.  `&`-headed lists are also caught by has_amp below,
+             * but &mut needs its own routing. */
+            head == e->sym_ampersand || head == e->sym_borrow_mut ||
             head == e->sym_lref || head == e->sym_handler_type ||
             head == e->sym_session_type ||
             head == e->sym_session_Send || head == e->sym_session_Recv ||
@@ -479,6 +484,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
                   "defn: parameter list must be a vector [name1 name2 ...]");
         return NULL;
     }
+
+    /* LS1: open a lifetime context for this signature so borrow-type
+     * annotations (&'a int, &mut 'a int) in the params and return type intern
+     * their lifetimes into shared, stable per-function LifetimeIds.  Restored to
+     * the saved value before the body is elaborated (a nested defn gets its own).
+     */
+    LifetimeContext sig_ltctx;
+    lifetime_context_init(&sig_ltctx);
+    LifetimeContext *saved_ltctx = e->cur_lifetime_ctx;
+    e->cur_lifetime_ctx = &sig_ltctx;
 
     const Form *implicit_ret_f = NULL;
     if (n_fn_type_params == 0) {
@@ -1346,6 +1361,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* CT1: Param contract predicates will be injected as pre-checks below. */
 
+    /* LS1: signature parsing is done; the body must not intern signature
+     * lifetimes.  Restore the enclosing context (NULL at top level). */
+    e->cur_lifetime_ctx = saved_ltctx;
+
     /* Elaborate body */
     if (call->as.list.len < body_start + 1) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1992,10 +2011,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
         } else if (param_kinds[i] == TY_STRUCT && params[i]->type.kind == TY_STRUCT) {
             /* LT4: preserve StructDef so emit.c emits the struct name, not int64_t. */
             fd->param_types[i] = params[i]->type;
+        } else if ((param_kinds[i] == TY_REF_IMMUT || param_kinds[i] == TY_REF_MUT)
+                   && (params[i]->type.kind == TY_REF_IMMUT
+                       || params[i]->type.kind == TY_REF_MUT)) {
+            /* LS1: preserve borrow target + lifetime IDs so the lifetime pass and
+             * borrow checker see the programmer's &'a T annotation, not a
+             * lifetime-stripped type_from_kind() shell. */
+            fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
         }
     }
+    /* LS1: carry the interned signature lifetimes into the FnDef so the always-on
+     * lifetime pass (borrow_check.c) can solve over the programmer's lifetimes. */
+    fd->lifetime_ctx = sig_ltctx;
     /* Phase 15: Store collected constraints */
     fd->constraints.constraints = constraint_list;
     fd->constraints.n_constraints = n_constraints;
