@@ -1,0 +1,21 @@
+#lang sweet-exp
+
+;; DL2: data literals must work transparently under sweet-exp -- the reader
+;; dispatch is below the sweet-exp layer.  Exercises #map{...}, [...], and
+;; #set{...} alongside neoteric calls and curly-infix arithmetic.
+
+(defn build-payload [] :int
+  (let [m #map{:name 1 :age 2 :active 1}]
+    map-count(m)))
+
+(defn three-points [] :int
+  (let [v [10 20 30]]
+    {vec-len(v) + vec-get(v 0)}))
+
+(defn watched-tags [] :int
+  (let [s #set{10 20 10}]
+    set-count(s)))
+
+(println (build-payload))
+(println (three-points))
+(println (watched-tags))

@@ -1,8 +1,9 @@
 # Map / Vec / Set Data Literals -- Plan (DL0--DL6)
 
-> **Status:** DL0--DL1 complete. Reader dispatch + `#map{...}` / `#set{...}`
+> **Status:** DL0--DL2 complete. Reader dispatch + `#map{...}` / `#set{...}`
 > forms and error codes (DL0); elaboration lowering for all three literals
-> plus the `hamt-of` / `set-of` stdlib macros (DL1).
+> plus the `hamt-of` / `set-of` stdlib macros (DL1); sweet-exp interaction
+> verified with a fixture (DL2).
 >
 > **Implementation note (DL1):** `#map{...}` keys are normalized in the
 > elaborator -- int keys pass through, keyword/string keys lower to
