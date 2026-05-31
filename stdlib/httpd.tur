@@ -60,7 +60,6 @@
 ;;   httpd-req-body-len [conn :ptr<void>]                -- int
 ;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
-
 ;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
 ;;; Also hoists the file-scope httpd_tls_ops struct and instance used by the H5
 ;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
@@ -71,7 +70,6 @@
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   return 0;
   ```)
-
 ;;; httpd-register-tls-impl -- install TLS function pointers into the H5 hook table.
 ;;;
 ;;; Called once by user code after importing tur/tls (the spice provides a
@@ -88,26 +86,44 @@
 ;;;   free-fn   -- (int64_t)(intptr_t)&tls-free
 ;;;
 ;;; Since: Phase H5
-(defn httpd-register-tls-impl [wrap-fd :int handshake :int read-fn :int write-fn :int shutdown :int free-fn :int] :nil
-  ```c
-  httpd_tls_ops.wrap_fd   = (int64_t)wrap_fd;
+
+(defn httpd-register-tls-impl [wrap-fd
+                               :int
+                               handshake
+                               :int
+                               read-fn
+                               :int
+                               write-fn
+                               :int
+                               shutdown
+                               :int
+                               free-fn
+                               :int] :nil
+  ```c httpd_tls_ops.wrap_fd   = (int64_t)wrap_fd;
   httpd_tls_ops.handshake = (int64_t)handshake;
   httpd_tls_ops.read_fn   = (int64_t)read_fn;
   httpd_tls_ops.write_fn  = (int64_t)write_fn;
   httpd_tls_ops.shutdown  = (int64_t)shutdown;
   httpd_tls_ops.free_fn   = (int64_t)free_fn;
   ```)
-
 ;; ---- libturi reactor C surface ----
 
-(extern-c tur_reactor_new      []                                     :ptr)
-(extern-c tur_reactor_free     [r :ptr]                               :void)
-(extern-c tur_reactor_add_fd   [r :ptr fd :int events :int cb :int user-data :ptr] :int)
-(extern-c tur_reactor_remove   [r :ptr id :int]                       :int)
-(extern-c tur_reactor_run      [r :ptr]                               :void)
-(extern-c tur_reactor_stop     [r :ptr]                               :void)
-(extern-c tur_reactor_wake     [r :ptr]                               :void)
 
+(extern-c tur_reactor_new [] :ptr)
+
+(extern-c tur_reactor_free [r :ptr] :void)
+
+(extern-c tur_reactor_add_fd
+  [r :ptr fd :int events :int cb :int user-data :ptr]
+  :int)
+
+(extern-c tur_reactor_remove [r :ptr id :int] :int)
+
+(extern-c tur_reactor_run [r :ptr] :void)
+
+(extern-c tur_reactor_stop [r :ptr] :void)
+
+(extern-c tur_reactor_wake [r :ptr] :void)
 ;;; httpd-handle -- internal: serve one or more HTTP requests on fd, then
 ;;; close fd. Loops while the client keeps the connection alive.
 ;;;
@@ -121,9 +137,9 @@
 ;;; routed through the registered TLS ops instead of recv/send.
 ;;;
 ;;; Since: Phase H1 (TLS path: Phase H5)
+
 (defn httpd-handle [fd :int handler :int tls :int] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd;
       int64_t handler;
       char method[16];
@@ -317,16 +333,15 @@
   }
   close((int)fd);
   ```)
-
 ;;; httpd-worker -- internal: worker thread function.
 ;;;
 ;;; Pops fds from the shared queue and processes them sequentially via
 ;;; httpd-handle. Exits when the queue is closed and drained.
 ;;;
 ;;; Since: Phase H3
+
 (defn httpd-worker [arg :ptr<void>] :ptr<void>
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -372,7 +387,6 @@
   }
   return NULL;
   ```)
-
 ;;; httpd-accept-cb -- internal reactor READ callback for the listen fd.
 ;;;
 ;;; Drains the listen queue, pushing each accepted fd onto the shared
@@ -380,9 +394,9 @@
 ;;; HttpdBlock pointer (synthetic fat closure built in httpd-new).
 ;;;
 ;;; Since: Phase H2
+
 (defn httpd-accept-cb [env :ptr<void> id :int events :int user :ptr<void>] :nil
-  ```c
-  (void)id; (void)events; (void)user;
+  ```c (void)id; (void)events; (void)user;
   typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
@@ -433,7 +447,6 @@
       pthread_mutex_unlock(&hb->fdq_mtx);
   }
   ```)
-
 ;;; httpd-new-pool -- create an httpd instance with a configurable worker count.
 ;;;
 ;;; Parameters:
@@ -445,9 +458,9 @@
 ;;;   ptr<void> -- opaque Httpd handle, or nil on error
 ;;;
 ;;; Since: Phase H3
+
 (defn httpd-new-pool [port :int workers :int handler :int] :ptr<void>
-  ```c
-  #include <fcntl.h>
+  ```c #include <fcntl.h>
   /* Ignore SIGPIPE so a peer closing early returns EPIPE from send()
    * instead of terminating the process. signal() is declared manually
    * to avoid pulling <signal.h> into this function-body scope. */
@@ -523,7 +536,6 @@
   }
   return (void *)hb;
   ```)
-
 ;;; httpd-new -- create a new httpd instance with the default worker pool size (4).
 ;;;
 ;;; Parameters:
@@ -541,9 +553,9 @@
 ;;;     (httpd-free h))
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-new [port :int handler :int] :ptr<void>
   (httpd-new-pool port 4 handler))
-
 ;;; httpd-new-tls -- create an httpd instance with TLS termination.
 ;;;
 ;;; The accept loop is identical to the plaintext path; each accepted fd
@@ -578,9 +590,9 @@
 ;;;       (tls-ctx-free ctx)))
 ;;;
 ;;; Since: Phase H5
+
 (defn httpd-new-tls [port :int workers :int handler :int ctx :int] :ptr<void>
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -609,7 +621,6 @@
   hb->tls_ctx = (void *)(intptr_t)ctx;
   return (void *)hb;
   ```)
-
 ;;; httpd-port -- return the port the server is listening on.
 ;;;
 ;;; Useful when httpd-new was called with port 0 (kernel-assigned).
@@ -621,9 +632,9 @@
 ;;;   int -- the actual listening port, or -1 on error
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-port [h :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -640,13 +651,12 @@
   if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
   return (int64_t)ntohs(addr.sin_port);
   ```)
-
 ;;; httpd-run -- run the listener reactor until httpd-stop is called.
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-run [h :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -660,16 +670,15 @@
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
   ```)
-
 ;;; httpd-stop -- signal the listener to stop accepting new connections.
 ;;;
 ;;; Thread-safe. Stops the listener reactor and closes the shared queue
 ;;; so workers exit when drained.
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-stop [h :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -691,7 +700,6 @@
   pthread_cond_broadcast(&hb->fdq_cv);
   pthread_mutex_unlock(&hb->fdq_mtx);
   ```)
-
 ;;; httpd-free -- free all resources after httpd-run returns.
 ;;;
 ;;; Joins the worker threads, removes the reactor source, frees the
@@ -699,9 +707,9 @@
 ;;; drains and frees the shared queue, and frees the HttpdBlock.
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-free [h :ptr<void>] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int listen_fd; int64_t handler;
       void *reactor; int listen_src_id; void *accept_clos;
       pthread_t *workers; int n_workers;
@@ -737,13 +745,12 @@
   pthread_cond_destroy(&hb->fdq_cv);
   free(hb);
   ```)
-
 ;;; httpd-req-method -- return the HTTP method from the parsed request.
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-req-method [conn :ptr<void>] :cstr
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -752,13 +759,12 @@
   } HttpdConn;
   return ((HttpdConn *)conn)->method;
   ```)
-
 ;;; httpd-req-path -- return the request-target path from the parsed request.
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-req-path [conn :ptr<void>] :cstr
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -767,16 +773,15 @@
   } HttpdConn;
   return ((HttpdConn *)conn)->path;
   ```)
-
 ;;; httpd-req-version -- return the HTTP version from the parsed request line.
 ;;;
 ;;; Returns:
 ;;;   cstr -- "HTTP/1.0", "HTTP/1.1", etc., or "" if unparsed
 ;;;
 ;;; Since: Phase H4
+
 (defn httpd-req-version [conn :ptr<void>] :cstr
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -785,7 +790,6 @@
   } HttpdConn;
   return ((HttpdConn *)conn)->version;
   ```)
-
 ;;; httpd-req-body -- return the request body (NUL-terminated copy).
 ;;;
 ;;; Returns the body bytes read after the headers, sized by the
@@ -796,9 +800,9 @@
 ;;;   cstr -- the request body bytes (NUL-terminated)
 ;;;
 ;;; Since: Phase H4
+
 (defn httpd-req-body [conn :ptr<void>] :cstr
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -808,16 +812,15 @@
   HttpdConn *c = (HttpdConn *)conn;
   return c->body ? c->body : "";
   ```)
-
 ;;; httpd-req-body-len -- return the request body length in bytes.
 ;;;
 ;;; Returns:
 ;;;   int -- number of bytes in the body (0 if no body)
 ;;;
 ;;; Since: Phase H4
+
 (defn httpd-req-body-len [conn :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -826,16 +829,15 @@
   } HttpdConn;
   return (int64_t)((HttpdConn *)conn)->body_len;
   ```)
-
 ;;; httpd-resp-status-get -- return the currently-set response status code.
 ;;;
 ;;; Returns 0 if no status has been set yet (the default applied during
 ;;; response writing is 200 OK).
 ;;;
 ;;; Since: Phase H6
+
 (defn httpd-resp-status-get [conn :ptr<void>] :int
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -844,13 +846,12 @@
   } HttpdConn;
   return (int64_t)((HttpdConn *)conn)->resp_status;
   ```)
-
 ;;; httpd-resp-status! -- set the HTTP response status code.
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-resp-status! [conn :ptr<void> status :int] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -859,13 +860,12 @@
   } HttpdConn;
   ((HttpdConn *)conn)->resp_status = (int)status;
   ```)
-
 ;;; httpd-resp-body! -- set the HTTP response body (copies the string).
 ;;;
 ;;; Since: Phase H1
+
 (defn httpd-resp-body! [conn :ptr<void> body :cstr] :nil
-  ```c
-  typedef struct {
+  ```c typedef struct {
       int fd; int64_t handler;
       char method[16]; char path[1024]; char version[16];
       char *body; int body_len;
@@ -881,7 +881,6 @@
   memcpy(c->resp_body, body, len + 1);
   c->resp_body_len = (int)len;
   ```)
-
 ;; =============================================================================
 ;; H6: Routing DSL
 ;; =============================================================================
@@ -902,22 +901,21 @@
 ;; Route layout:     { char method[16]; char pattern[1024];
 ;;                     int64_t handler; void *next; }
 ;; RouteParam:       { char name[64]; char value[256]; void *next; }
-
 ;;; router-new -- create an empty router.
 ;;;
 ;;; Returns:
 ;;;   ptr<void> -- opaque Router handle
 ;;;
 ;;; Since: Phase H6
+
+
 (defn router-new [] :ptr<void>
-  ```c
-  typedef struct { void *routes; } Router;
+  ```c typedef struct { void *routes; } Router;
   Router *r = (Router *)malloc(sizeof(Router));
   if (!r) return NULL;
   r->routes = NULL;
   return (void *)r;
   ```)
-
 ;;; router-add -- register a route with the given method, pattern, and handler.
 ;;;
 ;;; The handler closure is called when an incoming request's method matches
@@ -932,9 +930,9 @@
 ;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
 ;;;
 ;;; Since: Phase H6
+
 (defn router-add [r :ptr<void> method :cstr pattern :cstr handler :int] :nil
-  ```c
-  typedef struct Route Route;
+  ```c typedef struct Route Route;
   struct Route {
       char method[16];
       char pattern[1024];
@@ -961,16 +959,15 @@
       cur->next = route;
   }
   ```)
-
 ;;; router-free -- free a router and all registered routes.
 ;;;
 ;;; Parameters:
 ;;;   r -- router handle
 ;;;
 ;;; Since: Phase H6
+
 (defn router-free [r :ptr<void>] :nil
-  ```c
-  typedef struct Route Route;
+  ```c typedef struct Route Route;
   struct Route { char method[16]; char pattern[1024]; int64_t handler; Route *next; };
   typedef struct { Route *routes; } Router;
   Router *router = (Router *)r;
@@ -982,7 +979,6 @@
   }
   free(router);
   ```)
-
 ;;; router-dispatch -- match the current request against the router's table.
 ;;;
 ;;; On match: attaches captured path params to conn, calls the route's
@@ -994,9 +990,9 @@
 ;;;   conn -- connection handle (the one passed to the httpd handler)
 ;;;
 ;;; Since: Phase H6
+
 (defn router-dispatch [r :ptr<void> conn :ptr<void>] :nil
-  ```c
-  typedef struct Route Route;
+  ```c typedef struct Route Route;
   struct Route { char method[16]; char pattern[1024]; int64_t handler; Route *next; };
   typedef struct { Route *routes; } Router;
   typedef struct RouteParam RouteParam;
@@ -1075,7 +1071,6 @@
       c->resp_body_len = (int)nflen;
   }
   ```)
-
 ;;; httpd-param -- read a captured route parameter set by router-dispatch.
 ;;;
 ;;; Parameters:
@@ -1090,9 +1085,9 @@
 ;;;   (httpd-param conn "id")  ; => "42"
 ;;;
 ;;; Since: Phase H6
+
 (defn httpd-param [conn :ptr<void> name :cstr] :cstr
-  ```c
-  typedef struct RouteParam RouteParam;
+  ```c typedef struct RouteParam RouteParam;
   struct RouteParam { char name[64]; char value[256]; RouteParam *next; };
   typedef struct {
       int fd; int64_t handler;
@@ -1110,7 +1105,6 @@
   }
   return "";
   ```)
-
 ;; =============================================================================
 ;; H7: Middleware -- composable request/response transformations
 ;; =============================================================================
@@ -1133,7 +1127,6 @@
 ;;
 ;;   (let [base (fn [c :ptr<void>] :nil (httpd-resp-body! c "ok"))]
 ;;     (httpd-new 0 (mw-log base)))
-
 ;;; httpd-call -- invoke a Turmeric handler closure on a connection.
 ;;;
 ;;; The closure must follow the fat-closure calling convention (i.e. it
@@ -1145,19 +1138,20 @@
 ;;;   conn    -- connection handle from the worker
 ;;;
 ;;; Since: Phase H7
+
+
 (defn httpd-call [handler :int conn :ptr<void>] :nil
-  ```c
-  if (!handler) return;
+  ```c if (!handler) return;
   int64_t *fat = (int64_t *)(intptr_t)handler;
   typedef void (*fn1_t)(void *, int64_t);
   ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
   ```)
-
 ;;; defroute -- macro sugar for (router-add router method pattern handler).
 ;;;
 ;;; Example:
 ;;;   (defroute r "GET" "/" (fn [c :ptr<void>] :nil ...))
 ;;;
 ;;; Since: Phase H6
+
 (defmacro defroute [router method pattern handler]
-  `(router-add ,router ,method ,pattern ,handler))
+  `(router-add ~router ~method ~pattern ~handler))

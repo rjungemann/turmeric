@@ -272,8 +272,8 @@
   (if (empty? kvs)
     m
     (list hamt-assoc-each__
-          (list map-assoc m (first kvs) (second kvs))
-          ~@(rest (rest kvs)))))
+      (list map-assoc m (first kvs) (second kvs))
+      ~@(rest (rest kvs)))))
 ;;; hamt-of -- variadic Map literal: alternating key/value arguments.
 ;;;
 ;;; Parameters:
@@ -296,6 +296,4 @@
 ;;; Since: DL1 (data-literals-plan)
 
 (defmacro hamt-of [& kvs]
-  (if (empty? kvs)
-    (list map-new)
-    (list hamt-assoc-each__ (list map-new) ~@kvs)))
+  (if (empty? kvs) (list map-new) (list hamt-assoc-each__ (list map-new) ~@kvs)))
