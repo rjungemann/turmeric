@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.15.0` -- adds `tur fmt`, `tur run`, first-class handler values with `compose-handlers`, explicit lifetime syntax (`&'a T`), static `-Xsized-types` checking, `letrec`/`named-let`/`define` forms, typed variadic rest for user-defined types, and cross-module ABI specialization.
+**Latest release:** `v0.16.0` -- adds `tur/reactor`, a single-threaded epoll/kqueue event loop for multiplexing file descriptors, timers, signals, and channels without the fiber scheduler; extends Phase F poly-dispatch to unsigned narrow ints.
 
 ## What
 

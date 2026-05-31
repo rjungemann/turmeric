@@ -2,6 +2,38 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.16.0] -- 2026-05-30
+
+### Added
+
+- **`tur/reactor` event loop (R1-R8)** -- `stdlib/reactor.tur` adds a
+  lightweight single-threaded reactor for multiplexing file descriptors,
+  timers (one-shot and interval), OS signals (`reactor-add-signal`), and
+  cross-thread channels (`reactor-add-chan`) without requiring the fiber
+  scheduler. Backed by epoll on Linux and kqueue on macOS/BSD. Includes
+  `docs/guides/reactor-guide.md` and `docs/tur-httpd-plan.md`.
+
+### Changed
+
+- **Phase F poly-dispatch extended to unsigned narrow ints** -- `uint8`,
+  `uint16`, and `uint32` now use the concrete-cast fast path for
+  `(forall [a] (-> a a))` calls, avoiding the `int64_t` carrier
+  round-trip on x86-64.
+
+### Fixed
+
+- **`tur new` scaffold Justfile** -- scaffolded recipes now pass the
+  correct targets (`tur build .`, `tur test tests/`, `tur check src/`);
+  the CI contract was updated to `clean check test`.
+- **`handler` name shadowing (FH2)** -- the `handler` special form no
+  longer shadows higher-order parameters named `handler` when a local
+  binding is in scope.
+- **Reactor fixture leak markers** -- nine reactor test fixtures are
+  tagged `requires.no-leak-check` to suppress false-positive
+  LeakSanitizer reports from process-lifetime callback closures.
+- **LS5 spice resolver memory leak** -- `cmd_run` now frees the
+  strdup'd directory strings before freeing the `spice_inc_dirs` array.
+
 ## [0.15.0] -- 2026-05-30
 
 ### Added
