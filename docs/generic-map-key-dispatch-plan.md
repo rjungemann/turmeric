@@ -1,6 +1,10 @@
 # Generic Map Key Dispatch -- `hamt-of` / `#map{...}` over typed keys (GMK0--GMK4)
 
-> **Status:** Not started. Follow-up to TCE4 (see
+> **Status:** Done via **Approach B** (compiler-level lowering dispatch). The
+> one-line goal is delivered: `#map{"name" 1}` and `(hamt-of "a" 1)` now build
+> content-keyed string maps. GMK0/GMK1 (generic `Hash`/`Eq` dispatch for
+> Approach A) were investigated and deferred -- see the **Decision note
+> (GMK1)** appended at the end. Follow-up to TCE4 (see
 > [typed-collection-elements-plan.md](typed-collection-elements-plan.md#tce4--polymorphic-map-keys-via-hashkeqk)).
 >
 > **Type:** Compiler + stdlib. No new runtime: the content-equality primitive
@@ -197,3 +201,67 @@ and all `expected.c` snapshots. Acceptance: `bash tests/run.sh` zero `FAIL`.
   literals built from string literals are fine (static storage); document
   that runtime-built keys must outlive the map, as the `smap-*` docs already
   note.
+
+## Decision note (GMK1) -- committed to Approach B
+
+**Date:** 2026-05-31.
+
+**Decision:** implement **Approach B** (compiler-level lowering dispatch) and
+defer Approach A (constrained-generic `map-assoc-g` over `Hash`/`Eq`). Rationale
+below; this resolves the `<eq-closure-for-K>` open question by routing through
+the already-correct, hand-written `tur-cstr-key-eq?` in the `smap-*` layer
+instead of synthesizing per-type eq closures.
+
+**Why not Approach A (GMK0 root-cause).** GMK0 turned out to be wider than the
+plan's probe suggested. Bare typeclass-method calls are **not wired to instance
+dispatch at all** in the normal compile path -- `(hash 5)`, `(hash "a")`,
+`(show 5)`, and `(clone 5)` *all* fail identically, and a genuinely-undefined
+`(notamethod 5)` produces the *same* `'<name>_<gensym>' undeclared` C error.
+That is, bare method names fall through to the eval-mode "assume-native"
+fallback (`elab_call.c`, the `EX_DICT`/unbound path) rather than resolving to
+`__inst_Hash_hash_int`. The dot form `(.clone a)` dispatches, but `(.hash a)`
+reports "no typeclass method found" because it consults the per-receiver
+instance table, which has no `Hash` registration on that path. So GMK0 is not a
+one-line emission fix -- it is "make bare-name typeclass methods dispatch on
+their argument's static type," a core-call-elaboration feature with blast radius
+across *every* typeclass. That is disproportionate to (and riskier than) the
+map-key goal, which Approach B delivers directly.
+
+**What Approach B did.**
+
+- `stdlib/map.tur`: new `smap-of` content-keyed string-map literal macro (plus
+  `smap-assoc-each__` / `smap-homog-chain__` helpers), threading the existing
+  `smap-assoc` (`cstr-hash` + `tur-cstr-key-eq?`).
+- `src/compiler/elab_toplevel.c` (`F_MAP_LITERAL`): when every key is a string
+  literal, lower to `smap-of` (raw `:cstr` keys, no hash normalization). Keyword
+  keys keep the historical `(hamt/hash-str ...)` -> `hamt-of` lowering; int keys
+  stay byte-for-byte identical (zero snapshot churn on the int path).
+- `src/compiler/elab_call.c`: a direct `(hamt-of "k" v ...)` whose leading key
+  is a string literal is rewritten to `smap-of`, so string keys are always
+  content-keyed. `(hamt-of 1 ...)` (the only pre-existing usage; string
+  *values* keep an int key in slot 1) is untouched.
+- Fixture `tests/fixtures/gmk-map-literal-cstr-key` proves distinct-pointer
+  equality through both surfaces (literal + direct call). `bash tests/run.sh`
+  is green; the only snapshot regen was `fat-shim` (the new `smap-*`/`*-eq`
+  stdlib bodies join the preamble, exactly as the Risks section permits).
+
+**Reads (GMK3).** Content-keyed `#map{...}` maps round-trip through the existing
+`smap-get` / `smap-has?` / `smap-dissoc` and through `map-count` / `map-merge`
+(runtime `tur_hamt_merge` preserves the stored `(content-hash, cstr-key)`
+triples; `*-eq` reads then match by content). No new read surface was required.
+
+**Follow-up (deferred, not a release gate).** Approach A / GMK0 -- wiring
+bare-name (and `.method`) typeclass dispatch to static-argument-type
+monomorphization -- remains the path to *uniform* content keys for any
+`Hash`/`Eq` scalar type (Approach C collapses the `:cstr` special-case onto it
+once it lands). Aggregate (multi-word) keys remain a non-goal.
+
+## Phase status
+
+| Phase | Status |
+|---|---|
+| GMK0 (generic `Hash` resolution) | Deferred -- root-caused as a broad bare-method-dispatch gap; see decision note |
+| GMK1 (eq-threading mechanism)     | Done -- committed to Approach B (reuse `tur-cstr-key-eq?` via `smap-*`) |
+| GMK2 (route `hamt-of`/`#map{...}`)| Done -- string-key literals + direct `hamt-of` string calls lower to `smap-of` |
+| GMK3 (reads / rest of surface)    | Done -- existing `smap-get`/`has?`/`dissoc` + `map-count`/`map-merge` round-trip |
+| GMK4 (docs + snapshot regen)      | Done -- guide + `hamt-of` docstring + `docstrings.tur` + `fat-shim` snapshot |

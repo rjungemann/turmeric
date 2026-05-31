@@ -359,8 +359,25 @@ Expr *elab_form(Elab *e, Form *f) {
         /* DL1: data literals lower to their stdlib constructor macros. */
         case F_MAP_LITERAL: {
             uint32_t n = f->as.list.len; /* even -- validated by reader */
+            /* GMK2 (generic-map-key-dispatch-plan): if every key is a string
+             * literal, lower to the content-keyed smap-of builder so distinct
+             * string pointers with equal text collapse to one key.  Keyword
+             * and int keys keep the historical hamt-of lowering (keywords are
+             * still hash-normalized; int keys pass through, zero overhead). */
+            bool all_str_keys = (n > 0);
+            for (uint32_t i = 0; i + 1 < n; i += 2) {
+                if (f->as.list.items[i]->tag != F_STR) { all_str_keys = false; break; }
+            }
             Form **kvs = (n == 0) ? NULL
                 : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            if (all_str_keys) {
+                for (uint32_t i = 0; i + 1 < n; i += 2) {
+                    kvs[i]     = f->as.list.items[i];     /* raw :cstr key */
+                    kvs[i + 1] = f->as.list.items[i + 1];
+                }
+                Form *call = dl_build_call(e, f->span, "smap-of", kvs, n);
+                return elab_form(e, call);
+            }
             for (uint32_t i = 0; i + 1 < n; i += 2) {
                 kvs[i]     = dl_normalize_map_key(e, f->as.list.items[i]);
                 kvs[i + 1] = f->as.list.items[i + 1];

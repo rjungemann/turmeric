@@ -1,0 +1,35 @@
+;; GMK2 (generic-map-key-dispatch-plan): the #map{"k" v ...} data literal and
+;; a direct (hamt-of "k" v ...) call with string keys build CONTENT-keyed maps
+;; -- two distinct string pointers with equal text are one key.
+;;
+;; Proves what the old hash-as-key normalization could not:
+;;   1. a #map{...} string literal round-trips through smap-get/has?/dissoc;
+;;   2. updating a key through a freshly-allocated, distinct-pointer copy
+;;      replaces the entry (count stays 2) instead of inserting a third;
+;;   3. a direct (hamt-of "x" ...) string-keyed call is content-keyed too.
+
+;; dup-str -- allocate a fresh copy of s, so the result is a DISTINCT pointer
+;; from any literal with the same text.
+(defn dup-str [s :cstr] :cstr
+  ```c const char *src = (const char *)(intptr_t)s;
+  size_t n = 0; while (src[n]) n++;
+  char *d = (char *)malloc(n + 1);
+  for (size_t i = 0; i <= n; i++) d[i] = src[i];
+  return (const char *)d;
+  ```)
+
+(defn main [] :int
+  (let [m  #map{"name" 1 "age" 2}
+        ;; update "name" through a distinct-pointer copy -> replace, not insert
+        m2 (smap-assoc m (dup-str "name") 99)
+        ;; direct hamt-of with a leading string key is rewritten to smap-of
+        h  (hamt-of "x" 10 "y" 20)]
+    (println (:: (smap-get m "name") :int))             ; 1
+    (println (:: (smap-get m "age") :int))              ; 2
+    (println (:: (smap-get m2 (dup-str "name")) :int))  ; 99
+    (println (map-count m2))                            ; 2 (update, not insert)
+    (println (:: (smap-get h "x") :int))                ; 10
+    (println (:: (smap-get h "y") :int))                ; 20
+    (println (if (smap-has? m "age") 1 0))              ; 1
+    (println (if (smap-has? (smap-dissoc m "age") "age") 1 0)) ; 0
+    0))

@@ -58,8 +58,11 @@ recover the type with an ascription:
 (:: (map-get m 1 1) :cstr)    ; => "one"
 ```
 
-Map keys remain int-valued (the `#map{...}` literal normalizes keyword and
-string keys to a content hash). Aggregate (multi-word struct/ADT) element
+Map keys may be **int**, **keyword**, or **string**. Int and keyword keys are
+int-valued (a keyword normalizes to a content hash). A literal whose keys are
+all **string literals** lowers to a *content-keyed* map (`smap-of`): two
+distinct string pointers with equal text are the same key. See
+[`#map{...}` keys](#map-keys) below. Aggregate (multi-word struct/ADT) element
 types are not yet supported in these collections.
 
 Slots are arbitrary expressions -- variable references, calls, nested
@@ -87,18 +90,33 @@ else (a variable, a call) is rejected at read time with `TUR-E0282`. Computed
 keys are intentionally disallowed so a reader can tell keys from values at a
 glance.
 
-Keys are normalized to the int key the typed `Map` expects:
+How a key lowers depends on its form:
 
-- An **int** key passes through unchanged.
-- A **keyword** or **string** key lowers to `(hamt/hash-str "name")`, so two
-  equal keyword/string keys hash identically (content equality). To look a
-  keyword/string key back up, hash it the same way:
+- An **int** key passes through unchanged (identity-keyed, zero overhead).
+- A **keyword** key lowers to `(hamt/hash-str "name")` -- the keyword's content
+  hash *is* the int key, so two equal keywords collide deliberately. Look a
+  keyword key back up by hashing it the same way:
 
-```turmeric
-(let [m #map{:name 1 :age 2}
-      k (hamt/hash-str "name")]
-  (map-get m k k))            ; => 1
-```
+  ```turmeric
+  (let [m #map{:name 1 :age 2}
+        k (hamt/hash-str "name")]
+    (map-get m k k))            ; => 1
+  ```
+
+- A literal whose keys are all **string literals** lowers to `smap-of`, a
+  *content-keyed* map. The string itself is the key (compared by content, not
+  by pointer or hash), so two distinct pointers with equal text are one key.
+  Look string keys up with `smap-get` / `smap-has?` / `smap-dissoc`:
+
+  ```turmeric
+  (let [m #map{"name" 1 "age" 2}]
+    (:: (smap-get m "name") :int))   ; => 1
+  ```
+
+  A direct `(hamt-of "k" v ...)` call with a leading string key is rewritten
+  to `smap-of` for the same content-keyed behavior. (Runtime-built string
+  keys must outlive the map -- the HAMT does not copy keys; see
+  [GMK / TCE4](../typed-collection-elements-plan.md).)
 
 An odd number of slot forms is a `TUR-E0280` read error.
 
