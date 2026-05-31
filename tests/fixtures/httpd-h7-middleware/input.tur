@@ -1,0 +1,106 @@
+;; Phase H7: httpd-h7-middleware -- middleware composition with httpd-call.
+;;
+;; Two middlewares wrap a base handler. Each prints a pre/post line so the
+;; final ordering proves that nesting (outer (inner base)) gives the
+;; expected "onion" execution model: outer pre, inner pre, base, inner
+;; post, outer post.
+;;
+;; A single HTTP request fires the wrapped chain once.
+;;
+;; Expected output:
+;;   outer-pre
+;;   inner-pre
+;;   base
+;;   inner-post
+;;   outer-post
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [tag :cstr] :nil
+  ```c printf("%s\n", tag); ```)
+
+(defn print-pre [tag :cstr] :nil
+  ```c printf("%s-pre\n", tag); ```)
+
+(defn print-post [tag :cstr] :nil
+  ```c printf("%s-post\n", tag); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req = "GET / HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+;; Middleware: capture a tag so the closure becomes a fat closure, then
+;; print "<tag>-pre", call next, print "<tag>-post".
+(defn mw-tag [tag :cstr next :int] :ptr<void>
+  (let [_t tag]
+    (fn [conn :ptr<void>] :nil
+      (print-pre _t)
+      (httpd-call next conn)
+      (print-post _t))))
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        ;; The base handler prints "base" and sends to donech.
+        base   (fn [conn :ptr<void>] :nil
+                 (print-tag "base")
+                 (httpd-resp-status! conn 200)
+                 (httpd-resp-body! conn "ok")
+                 (chan-send donech 1))
+        ;; Wrap: inner first, then outer.
+        inner  (mw-tag "inner" base)
+        outer  (mw-tag "outer" inner)
+        h      (httpd-new-pool 0 1 outer)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

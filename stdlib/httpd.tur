@@ -955,6 +955,48 @@
   return "";
   ```)
 
+;; =============================================================================
+;; H7: Middleware -- composable request/response transformations
+;; =============================================================================
+;;
+;; A "middleware" is a function `(fn [next :int] :int (fn [conn :ptr<void>] :nil
+;; ... (httpd-call next conn) ...))`: given a downstream handler closure, it
+;; returns a new handler closure that wraps it. Pre-processing runs before
+;; (httpd-call next conn); post-processing runs after.
+;;
+;; Multiple middlewares compose by nesting: `(outer (inner base-handler))`
+;; produces a chain where outer's pre-hook runs first and outer's post-hook
+;; runs last. The optional `compose-middleware` helper applies a list of
+;; middlewares in left-to-right order.
+;;
+;; Example:
+;;   (defn mw-log [next :int] :int
+;;     (fn [c :ptr<void>] :nil
+;;       (println (str-concat "REQ " (httpd-req-path c)))
+;;       (httpd-call next c)))
+;;
+;;   (let [base (fn [c :ptr<void>] :nil (httpd-resp-body! c "ok"))]
+;;     (httpd-new 0 (mw-log base)))
+
+;;; httpd-call -- invoke a Turmeric handler closure on a connection.
+;;;
+;;; The closure must follow the fat-closure calling convention (i.e. it
+;;; must capture at least one variable -- the same constraint as for the
+;;; top-level handler passed to httpd-new).
+;;;
+;;; Parameters:
+;;;   handler -- handler closure value (int)
+;;;   conn    -- connection handle from the worker
+;;;
+;;; Since: Phase H7
+(defn httpd-call [handler :int conn :ptr<void>] :nil
+  ```c
+  if (!handler) return;
+  int64_t *fat = (int64_t *)(intptr_t)handler;
+  typedef void (*fn1_t)(void *, int64_t);
+  ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+  ```)
+
 ;;; defroute -- macro sugar for (router-add router method pattern handler).
 ;;;
 ;;; Example:
