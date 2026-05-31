@@ -167,8 +167,10 @@ stack is freed; no cleanup hooks run).
 
 This is also the path where a future rewrite of `src/async/scheduler.c`
 would land -- the scheduler becomes "the global reactor's fiber driver"
-without an API break. That migration is out of scope here; see
-`docs/reactor-run-fibers-plan.md`.
+without an API break. The driver itself shipped via
+`docs/archive/reactor-run-fibers-plan.md`; that scheduler migration is
+tracked separately in
+`docs/upcoming/scheduler-on-local-fiber-group-plan.md`.
 
 ## API reference
 
