@@ -194,29 +194,42 @@ revealTargets.forEach((el, i) => {
 
 // ── SYNTAX TOGGLE ──────────────────────────────────────────────────────────
 
+const SYNTAX_PREF_KEY = 'tur-syntax-pref';
+const DEFAULT_SYNTAX  = 'sweet-exp';
+
+function applySyntaxToToggle(toggle, syntax) {
+  const card = toggle.closest('.code-card');
+  toggle.querySelectorAll('.seg-btn').forEach(btn => {
+    const active = btn.dataset.syntax === syntax;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const filenameEl = card?.querySelector('.code-card-filename');
+  if (filenameEl) {
+    const key = syntax.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (filenameEl.dataset[key]) filenameEl.textContent = filenameEl.dataset[key];
+  }
+  card?.querySelectorAll('.code-version').forEach(v => {
+    v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+  });
+}
+
+// Apply stored preference (or default) to every toggle on the page
+const storedSyntax = localStorage.getItem(SYNTAX_PREF_KEY) ?? DEFAULT_SYNTAX;
+document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
+  // Only apply if the toggle actually has a button for this syntax
+  if (toggle.querySelector(`[data-syntax="${storedSyntax}"]`)) {
+    applySyntaxToToggle(toggle, storedSyntax);
+  }
+});
+
 // Supports multiple independent toggles per page
 document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
   toggle.addEventListener('click', (e) => {
     if (!e.target.classList.contains('seg-btn')) return;
     const syntax = e.target.dataset.syntax;
-    const card = toggle.closest('.code-card');
-
-    toggle.querySelectorAll('.seg-btn').forEach(btn => {
-      btn.classList.toggle('active', btn === e.target);
-      btn.setAttribute('aria-selected', btn === e.target ? 'true' : 'false');
-    });
-
-    // Update filename using data attributes on the filename element
-    const filenameEl = card.querySelector('.code-card-filename');
-    if (filenameEl) {
-      const key = syntax.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      if (filenameEl.dataset[key]) filenameEl.textContent = filenameEl.dataset[key];
-    }
-
-    // Show/hide code versions scoped to this card
-    card.querySelectorAll('.code-version').forEach(v => {
-      v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
-    });
+    applySyntaxToToggle(toggle, syntax);
+    localStorage.setItem(SYNTAX_PREF_KEY, syntax);
   });
 
   // Arrow-key navigation within the tablist

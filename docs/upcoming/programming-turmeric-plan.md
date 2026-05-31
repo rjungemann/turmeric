@@ -1,6 +1,6 @@
 # Programming Turmeric -- Book Outline Plan
 
-NOTE: This plan is up-to-date with tumeric v0.7.0. If the version is later than this, then revisit the features and adjust the outline accordingly.
+NOTE: This plan is up-to-date with turmeric v0.16.0. If the version is later than this, then revisit the features and adjust the outline accordingly.
 
 Inspired by *Programming Ruby* (the Pickaxe), adapted for Turmeric's character:
 functional-first, Lisp syntax, typeclasses, linear types, effects, inline C,
@@ -176,12 +176,52 @@ One of Turmeric's strongest suits; gets a full tutorial chapter.
 - Marshaling values across the boundary: `:int` for pointers, `:cstr`, `:ptr`
 - When to reach for inline C vs. keeping things pure Turmeric
 
-### Chapter 18 -- Linear Types and Resource Safety
+### Chapter 18 -- Linear and Substructural Types
 
 - What "linear" means: a value must be consumed exactly once
 - `lref`, move semantics, and the `TUR-E0100` diagnostic
 - Linear structs in practice: `Socket`, `FileHandle`, `MutexGuard`
+- Affine vs. linear: the substructural lattice
+- Uniqueness types (`:unique`) and how they differ from linearity
 - Patterns for guaranteed cleanup without `try/finally`
+- *See also: `substructural-types-guide.md`, `uniqueness-types-guide.md`*
+
+### Chapter 18a -- Contract and Refinement Types
+
+- Contract types: `{ x : T | p }` syntax and the `-Xcontracts` flag
+- Predicate-as-`Form` storage; runtime checks at boundaries
+- Refinement types (`-Xrefinements`): the compiler proves predicates statically
+- Worked example: ridding a codebase of defensive `require!` guards
+- Limits: what the prover can and cannot discharge; SMT fallback
+- *See also: `contract-types-guide.md`, `upcoming/refinement-types-plan.md`*
+
+### Chapter 18b -- Union, Intersection, and Existential Types
+
+- Union types (`(or T1 T2)`): typed sums without a wrapping ADT
+- Intersection types (`(and T1 T2)`): combining capabilities
+- Narrowing in `match` and conditional contexts
+- Existential types (`exists T. ...`): hiding implementation type
+- Existential vectors and heterogeneous collections (`vec-existential.tur`)
+- Type erasure: when to forget structure on purpose
+- *See also: `union-intersection-types-guide.md`, `existential-types-guide.md`, `type-erasure-guide.md`*
+
+### Chapter 18c -- GADTs and Higher-Rank Types
+
+- Generalized Algebraic Data Types: indexing constructors by their result type
+- Worked example: a tag-safe expression evaluator
+- `gadt-vec.tur`: length-indexed vectors as a GADT in stdlib
+- Higher-rank types (HRT): `forall a. ...` inside a parameter position
+- When HRT lets you write APIs you cannot write with prenex polymorphism
+- *See also: `gadts-guide.md`, `gadts-cookbook.md`, `hrt-guide.md`*
+
+### Chapter 18d -- Sized Types
+
+- The motivation: tracking dimensions in the type system
+- Sized primitives: `:i8`, `:i16`, `:i32`, `:i64`, `:u8`-`:u64`, `:f32`, `:f64`
+- Sized containers: `sized.tur`, `sized-buf.tur`, `sized-matrix.tur`, `sized-bits.tur`
+- Length-indexed APIs: catch off-by-one at compile time
+- Interop with linalg, frames, and FFI buffers
+- *See also: `sized-types-guide.md`, `sized-primitives-guide.md`*
 
 ### Chapter 19 -- Metaprogramming with Macros
 
@@ -220,6 +260,87 @@ One of Turmeric's strongest suits; gets a full tutorial chapter.
 
 ---
 
+## Part III.5 -- Data, Plots, and Notebooks *(applied)*
+
+The book pivots here from language internals to the spice ecosystem that makes
+Turmeric usable for day-to-day data work. Each chapter focuses on one spice
+from `../turmeric-spices/` and how it composes with the others.
+
+### Chapter 23a -- Dataframes with `tur-frame`
+
+- Columnar in-memory dataframes modeled on R's `data.frame` and pandas
+- Backed by Apache Arrow's C Data Interface for zero-copy interop with
+  Python, R, DuckDB, and Polars
+- Building frames: `frame-from-cols`, `frame-from-rows`
+- Columns and types: `column-int64`, `column-float64`, `column-utf8`,
+  `type-int64`, `type-float64`, `type-utf8`
+- Selecting and projecting: `select-cols`, `drop-cols`, `rename`,
+  `with-col`, `map-col`, `mutate`
+- Filtering, sorting, sampling: `filter`, `drop-nulls`, `distinct`,
+  `sample`, `arrange`
+- Grouping and aggregation: `group-by`, `agg-sum`, `agg-mean`, `agg-count`,
+  `agg-min`, `agg-max`, `summarize`
+- Joins: `inner-join`, `left-join`, `join`
+- Reshape: `melt`
+- *See also: `frame-guide.md`*
+
+### Chapter 23b -- Statistics and Formulas
+
+- `tur-stats`: descriptive statistics, OLS, t-tests, on `tur-frame` inputs
+- Wilkinson-style formula DSL (`y ~ x1 * x2 + I(x3^2)`) via `tur-stats-formula`
+- Pairing formulas with `frame-from-cols` outputs
+- *See also: `stats-guide.md`, `upcoming/stats-formula-plan.md`*
+
+### Chapter 23c -- Plotting with `tur-plot`
+
+- Tier-1 spice for 2D data visualization, rendered via `tur-plutovg`
+- Function plots, scatter points, intervals, histograms, contours
+- Legends, axes, titles
+- Output paths: PNG file or a plutovg surface for further composition
+- Pairing plots with frames: `plot-frame-col`, sampled curves from typed `defn`s
+- Composing several plots into one image with `plot-into-canvas`
+- *See also: `tur-plot` spice README*
+
+### Chapter 23d -- Generating Images
+
+The image-generation stack is a small, composable set of spices: draw with
+plutovg, read/write pixels with png, and (optionally) generate procedural
+shapes with SDFs.
+
+- **`tur-plutovg`** -- 2D vector graphics engine (the same that backs LunaSVG
+  and PlutoSVG): canvases, paths, fills, strokes, gradients, patterns, fonts,
+  PNG export. Good for SVG-style rendering, icons, plotting backends, and
+  print-quality output.
+- **`tur-png`** -- libpng wrapper for `png-read` / `png-write`, plus per-pixel
+  RGBA accessors. The pixel-level I/O layer that pairs naturally with
+  `tur-plutovg` for generative art.
+- **`tur-sdf-raylib`** -- signed-distance-field primitives plus marching-cubes
+  meshing, rendered through raylib. Phase 1 ships CPU SDF + MC; Phase 2 adds
+  colored SDFs.
+- **`tur-raylib`** / **`tur-raygui`** -- real-time windowed graphics and an
+  immediate-mode GUI on top.
+- **`tur-opengl`** / **`tur-glsl`** -- low-level GPU access for shader-driven
+  generation.
+- Worked example: rendering a parameterized poster with plutovg, exporting
+  it via png, and re-using the same renderer headlessly in a notebook.
+
+### Chapter 23e -- Notebooks with `tur-notebook`
+
+- Literate `.tur.md` notebooks -- Markdown prose with `turmeric` code fences
+- Session-backed evaluation: each cell runs in a persistent evaluator
+- The TUI (`tur nb tui`): cell editing, insert/delete/paste, dirty-save
+  quit handling, search (`/`, `n`, `N`), help overlay (`?`),
+  focused-output toggling (`o`), user keybinding overrides
+- Standalone HTML export with the vendored docs-site stylesheet
+- The `exec` subcommand for scripted, headless notebook execution
+- The image-hook display system: returning a plutovg/png artifact from a
+  cell renders it inline
+- Pairing notebooks with frames + plot + plutovg for end-to-end data
+  notebooks
+- *See also: `notebook-guide.md`*
+
+---
+
 ## Part IV -- Language Reference
 
 ### Chapter 24 -- Syntax Reference
@@ -236,10 +357,17 @@ One of Turmeric's strongest suits; gets a full tutorial chapter.
 ### Chapter 25 -- Type System Reference
 
 - Primitive types: `:int`, `:bool`, `:cstr`, `:ptr`, `:void`
+- Sized primitives: `:i8`/`:i16`/`:i32`/`:i64`, `:u8`-`:u64`, `:f32`, `:f64`
 - Struct field syntax and field access notation
-- Linear types: `:linear`, lref, move semantics, `TUR-E0100`
+- Substructural qualifiers: `:linear`, `:unique`, lref, move semantics, `TUR-E0100`
+- Contract types `{ x : T | p }` (`-Xcontracts`)
+- Refinement types and static predicate proof (`-Xrefinements`)
+- Union (`(or T1 T2)`) and intersection (`(and T1 T2)`) types
+- Existential types and type erasure
+- GADT constructors and HRT (`forall`) parameter positions
+- Sized type constructors and length indexing
 - Type annotations on `defn` parameters and return types
-- Typeclass constraints
+- Typeclass constraints and higher-kinded type variables
 
 ### Chapter 26 -- Macro Reference
 
@@ -256,18 +384,35 @@ One of Turmeric's strongest suits; gets a full tutorial chapter.
 - `option.tur` -- optional values
 - `result.tur` -- error handling
 - `pair.tur` -- generic two-element pairs
+- `tuple.tur` -- fixed-arity tuples
 - `str.tur` -- UTF-8 string views
 - `vec.tur` -- growable arrays
+- `set.tur` -- persistent sets
 - `map.tur` / `hamt.tur` -- persistent hash maps
+- `mutmap.tur` -- mutable hash map
+- `ref.tur` / `rc.tur` -- references and reference-counted boxes
+- `hash.tur` -- general-purpose hashing
+- `equal.tur` -- structural equality
+- `range.tur` / `float-range.tur` -- integer and float ranges
 
 ### Chapter 28 -- Collections and Algorithms
 
 - `slice.tur` -- array slices
 - `zipper.tur` -- list zippers for cursor-style traversal
 - `gadt-vec.tur` -- length-indexed vectors
+- `vec-existential.tur` -- existentially-typed heterogeneous vectors
 - `bits.tur` / `sized-bits.tur` -- bitset operations
 - `sized.tur` / `sized-buf.tur` / `sized-matrix.tur` -- size-typed containers
+- `grid.tur` -- 2D grids
 - `parsec.tur` -- parser combinators
+- `re.tur` -- regular expressions
+- `backtrack.tur` -- backtracking search
+- `logic.tur` -- miniKanren-style relational programming
+- `gen.tur` -- generators
+- `csv.tur` -- CSV reading and writing
+- `json.tur` -- JSON parsing and serialization
+- `schema.tur` -- structural data validation
+- `digest.tur` -- cryptographic digests
 
 ### Chapter 29 -- I/O, Files, and Networking
 
@@ -298,22 +443,76 @@ One of Turmeric's strongest suits; gets a full tutorial chapter.
 ### Chapter 31 -- System and Utilities
 
 - `args.tur` -- CLI argument parser
+- `env.tur` -- environment variables
+- `process.tur` -- process management
+- `path.tur` / `fs.tur` -- paths and high-level filesystem
 - `signal/` -- POSIX signal handling
 - `time.tur` / `timer.tur` -- wall clock and timers
 - `math.tur` -- numeric functions
 - `random.tur` -- random number generation
 - `log.tur` -- structured logging
+- `term.tur` -- terminal control and TUI primitives
+- `serial.tur` -- serializable continuations
+- `workflow.tur` -- durable workflows
+- `reactor.tur` -- event-loop reactor
+- `httpd.tur` -- embedded HTTP server
 
 ### Chapter 32 -- Advanced Type Machinery
 
 - `fix.tur` -- fixed-point of a functor
 - `free.tur` -- Free Monad
+- `arrow.tur` -- Arrow abstraction
+- `comonad.tur` -- Comonad abstraction
+- `nat.tur` -- type-level naturals
 - `typeclass.tur` -- typeclass dispatch infrastructure
+- `typeclass-eq.tur` / `typeclass-clone.tur` / `typeclass-functor.tur` -- canonical instances
+- `existential.tur` -- existential type machinery
+- `safe.tur` -- safe-cast helpers for substructural types
 - `session.tur` -- session types
 - `dynvar.tur` -- dynamic variables
 - `effects.tur` -- algebraic effects
 - `capability.tur` -- capability structs
 - `contract.tur` -- runtime assertions
+
+---
+
+## Part VI -- Spice Ecosystem Reference
+
+A short reference index of the first-party spices in `../turmeric-spices/`,
+cross-referenced from the applied chapters in Part III.5.
+
+### Chapter 33 -- Data and Analytics Spices
+
+- `tur-frame` -- columnar dataframes, Arrow C Data Interface
+- `tur-stats` -- statistics on frames
+- `tur-stats-formula` -- Wilkinson-style formula DSL *(planned)*
+- `tur-linalg` -- linear algebra
+- `tur-math` -- extended math routines
+
+### Chapter 34 -- Graphics and Image Spices
+
+- `tur-plutovg` -- 2D vector graphics (paths, fills, gradients, text, PNG)
+- `tur-png` -- libpng read/write with per-pixel access
+- `tur-plot` -- 2D plotting on top of plutovg
+- `tur-sdf-raylib` -- signed-distance fields with raylib rendering
+- `tur-raylib` / `tur-raygui` -- real-time windowed graphics and immediate-mode GUI
+- `tur-opengl` / `tur-glsl` -- low-level GPU and shader access
+
+### Chapter 35 -- Notebooks and Tooling Spices
+
+- `tur-notebook` -- `.tur.md` literate notebooks (TUI, HTML export, exec mode)
+- `tur-template` -- text templating
+- `tur-watch` -- file-watcher driven workflows
+- `tur-test` -- extended test runner
+
+### Chapter 36 -- I/O and Integration Spices
+
+- `tur-httpd` / `tur-http` / `tur-tls` -- HTTP server, client, TLS
+- `tur-postgres` / `tur-sqlite` / `tur-valkey` -- databases
+- `tur-json` / `tur-regex` / `tur-ansi` -- text and protocol helpers
+- `tur-osc` / `tur-rtmidi` / `tur-rtaudio` / `tur-wav` / `tur-tidal` / `tur-signal` -- audio and music
+- `tur-c-dsl` -- declarative inline-C DSL
+- `tur-tourist` -- guided-tour packaging for spices
 
 ---
 
