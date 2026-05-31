@@ -56,6 +56,9 @@ bool g_data_literals_enabled = false;
  * Opt-in; off by default so programs that don't use the syntax are unaffected. */
 bool g_json_reader_enabled = false;
 
+/* RD: -Xschema-reader — enable #json-str<T>(...) typed-decode reader macros. */
+bool g_schema_reader_enabled = false;
+
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 bool g_sized_types_enabled = false;
 
