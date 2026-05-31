@@ -37,6 +37,18 @@ if [ ! -x "$TUR" ]; then
     exit 1
 fi
 
+# LeakSanitizer is Linux-only: on macOS (and other platforms without LSan)
+# AddressSanitizer aborts at startup with "detect_leaks is not supported on
+# this platform" before `tur` runs, so the gate cannot execute there.  Probe
+# once and skip cleanly rather than reporting spurious failures.  (Detected at
+# runtime via the diagnostic re-run added in run-leak-gate; see commit history.)
+probe=$(ASAN_OPTIONS="detect_leaks=1:exitcode=23" "$TUR" --version 2>&1)
+if printf '%s' "$probe" | grep -q "detect_leaks is not supported"; then
+    echo "PASS leak-gate (skipped: LeakSanitizer unsupported on this platform)"
+    echo "leak-gate summary: skipped -- no LSan on this platform"
+    exit 0
+fi
+
 # Each case: <fixture-dir> <expected-diag-substring>
 check_leak_clean() {
     local name="$1" input="$2" needle="$3"
