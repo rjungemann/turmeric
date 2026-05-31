@@ -531,22 +531,25 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         indent_buf(file, ctx->indent);
         buf_puts(file, "__tur_tailcall:;\n");
         emit_tail(ctx, file, e, fd, fd->body, result_kind, is_main);
+    } else if (fd->body->type.kind == TY_NIL) {
+        /* Body is nil-typed (e.g. a bare void call like (show 99)) but the
+         * function expects a return value -- typically (defn main [] :int
+         * (some-void-call)).  Emit the body as a STATEMENT so its side effects
+         * (and the call itself) actually execute; emit_value would only return
+         * the call string for a caller to consume, and the discard below would
+         * drop the call.  Then return the default for result_kind. */
+        emit_stmt(ctx, file, fd->body);
+        indent_buf(file, ctx->indent);
+        const char *dflt = (result_kind == TY_BOOL) ? "false" : "0";
+        if (is_main && result_kind == TY_INT) {
+            buf_printf(file, "return (int)%s;\n", dflt);
+        } else {
+            buf_printf(file, "return %s;\n", dflt);
+        }
     } else {
         /* Function with return value */
         char *ret_val = emit_value(ctx, file, fd->body);
         indent_buf(file, ctx->indent);
-        /* If the body returns nil but the function expects a non-nil type,
-         * emit a default value. This can happen with e.g. (defn main [] :int (println 42)) */
-        if (fd->body->type.kind == TY_NIL) {
-            /* Body is nil-typed, but function expects a return value.
-             * Emit default based on return type. */
-            free(ret_val);
-            switch (result_kind) {
-                case TY_INT:   ret_val = strdup("0"); break;
-                case TY_BOOL:  ret_val = strdup("false"); break;
-                default:       ret_val = strdup("0"); break;
-            }
-        }
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);

@@ -62,14 +62,14 @@
 
 (defn lequal [t1 t2] :ptr<void>
   (let [lt1 t1 lt2 t2]
-    (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state)))))
+    (fn [state] (unify-goal-impl lt1 lt2 state))))
 
 (defn disjoined-impl [lg1 lg2 state] :int
   (mplus (apply-goal lg1 state) (apply-goal lg2 state)))
 
 (defn disjoined [g1 g2] :ptr<void>
   (let [lg1 g1 lg2 g2]
-    (fn [state] (let [_ lg1] (disjoined-impl lg1 lg2 state)))))
+    (fn [state] (disjoined-impl lg1 lg2 state))))
 
 (defn take-n [n lst] :int
   ```c typedef struct { int64_t value; int64_t next; } Cell;

@@ -2102,6 +2102,51 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             args[i] = wrap;
         }
 
+        /* A#1: ^fat parameter -- auto-shim a bare (non-capturing) fn into a fat
+         * closure so a fat-call consumer (reactor cb, free-bind kont, ...) reads a
+         * valid { thunk, env } layout instead of a bare function pointer.  A
+         * capturing closure (TY_PTR_VOID) is already fat and passes through; nil is
+         * a null callback.  Any other argument kind to a ^fat parameter is the
+         * diagnostic half of A#1 -- a typed error instead of a runtime segfault.
+         * EX_FN_TO_FAT carries TY_PTR_VOID, mirroring EX_CLOSURE, so it reuses the
+         * same arg-emission casts that already feed closures to :fn/:int/:ptr. */
+        if (!is_rank2_param && fn_type.kind == TY_FN) {
+            uint32_t fn_arg_idx_fat = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_arg_idx_fat < fn_type.as.fn.arity &&
+                fn_type.as.fn.arg_fat[fn_arg_idx_fat]) {
+                TypeKind ak = args[i]->type.kind;
+                if (ak == TY_FN) {
+                    uint8_t inner_arity = args[i]->type.as.fn.arity;
+                    if (inner_arity > 5) {
+                        diag_emit(DIAG_ERROR, args[i]->span,
+                            "fat (^fat) parameter of '%s' cannot shim an arity-%u "
+                            "function (auto-shim supports up to 5 arguments)",
+                            fn_binding->name->name, (unsigned)inner_arity);
+                        return NULL;
+                    }
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                          args[i]->span);
+                    shim->as.fn_to_fat_.inner = args[i];
+                    args[i] = shim;
+                } else if (ak == TY_PTR_VOID || ak == TY_NIL ||
+                           (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
+                            args[i]->as.i == 0)) {
+                    /* already a fat closure, nil, or a null (0) callback -- pass
+                     * through unchanged */
+                } else {
+                    Buf gb; buf_init(&gb);
+                    type_print(&gb, args[i]->type);
+                    buf_putc(&gb, '\0');
+                    diag_emit(DIAG_ERROR, args[i]->span,
+                        "argument %u to fat (^fat) parameter of '%s' must be a "
+                        "function or closure, got %s",
+                        i + 1, fn_binding->name->name, gb.data);
+                    buf_free(&gb);
+                    return NULL;
+                }
+            }
+        }
+
         /* UT1: TUR_E0200 -- reject aliased value passed to ^unique parameter */
         if (g_unique_enabled && fn_type.kind == TY_FN &&
             i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique[i] &&

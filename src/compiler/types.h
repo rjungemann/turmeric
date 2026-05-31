@@ -427,6 +427,13 @@ typedef struct Type {
             bool arg_unique_mut[MAX_FN_ARITY]; /* UT2: true if the i-th param is ^unique ^mut */
             bool arg_affine[MAX_FN_ARITY];     /* ST0: true if the i-th param is ^affine */
             bool arg_relevant[MAX_FN_ARITY];   /* ST0: true if the i-th param is ^relevant */
+            /* A#1: true if the i-th param is ^fat -- it consumes its argument via
+             * the fat-closure calling convention (thunk = slot 0, env = the heap
+             * struct).  A bare non-capturing fn passed here is auto-shimmed into a
+             * fat closure at the call site (see EX_FN_TO_FAT); a non-fn argument is
+             * a typed error.  Distinguishes fat consumers (reactor cb, free-bind
+             * kont) from raw-C-callback params (hamt fn) that share the same kind. */
+            bool arg_fat[MAX_FN_ARITY];
             /* AR6: variadic rest-param support (& rest :type) */
             bool is_variadic;                  /* true if this fn has a & rest parameter */
             TypeKind rest_kind;                /* type of the rest cons-list elements (fast-path) */
@@ -943,6 +950,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique_mut[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_affine[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_fat[i] = false;
     t.as.fn.is_variadic = false;  /* AR6: default non-variadic */
     t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */

@@ -68,7 +68,7 @@
 
 (defn pchar [c] :ptr<void>
   (let [_c c]
-    (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+    (fn [inp] (pchar-impl _c inp))))
 
 (defn run-parser [p s :cstr] :int
   (let [inp (input-new s 0)]

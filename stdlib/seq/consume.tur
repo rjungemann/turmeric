@@ -234,7 +234,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/reduce [f :int s :int] :int
+(defn seq/reduce [^fat f :int s :int] :int
   (let [g (seq-iter s)]
     (if (seq-gen-done g)
       (seq-make-none)
@@ -263,7 +263,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/foldl [init :int f :int s :int] :int
+(defn seq/foldl [init :int ^fat f :int s :int] :int
   (let [g (seq-iter s) ^mut acc init]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -282,7 +282,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/for-each [f :int s :int] :void
+(defn seq/for-each [^fat f :int s :int] :void
   (let [g (seq-iter s)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -355,7 +355,7 @@
 ;;; Since: LZ3
 
 
-(defn seq/find [pred :int s :int] :int
+(defn seq/find [^fat pred :int s :int] :int
   (let [g (seq-iter s)]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]
@@ -378,7 +378,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/find-index [pred :int s :int] :int
+(defn seq/find-index [^fat pred :int s :int] :int
   (let [g (seq-iter s) ^mut idx 0]
     (while (not (seq-gen-done g))
       (let [v (seq-gen-next g)]

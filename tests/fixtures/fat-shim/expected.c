@@ -2295,10 +2295,6 @@ extern void * tur_hamt_set(void *, int64_t, void *, void *);
 extern void * tur_hamt_del(void *, int64_t, void *);
 extern bool tur_hamt_has(void *, int64_t, void *);
 extern void * tur_hamt_get(void *, int64_t, void *);
-extern void * tur_hamt_set_eq(void *, int64_t, void *, void *, void *);
-extern void * tur_hamt_del_eq(void *, int64_t, void *, void *);
-extern bool tur_hamt_has_eq(void *, int64_t, void *, void *);
-extern void * tur_hamt_get_eq(void *, int64_t, void *, void *);
 extern void * tur_hamt_merge(void *, void *);
 extern int64_t tur_hamt_hash_str(const char *);
 extern int64_t tur_hamt_hash_ptr(void *);
@@ -2331,26 +2327,28 @@ static bool __inst_Eq_eq__uint64(uint64_t, uint64_t);
 static bool __inst_Eq_eq__float32(float, float);
 static int64_t __inst_Clone_clone_int(int64_t);
 static int64_t __inst_Clone_clone_T(void *);
-static bool __fn_475(int64_t, int64_t);
+static bool __fn_415(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_499(int64_t, int64_t);
+static bool __fn_435(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_526(int64_t, int64_t);
+static bool __fn_462(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_548(int64_t, int64_t);
-static bool __fn_552(int64_t, int64_t);
+static bool __fn_484(int64_t, int64_t);
+static bool __fn_488(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_568(int64_t, int64_t);
-static bool __fn_572(int64_t, int64_t);
+static bool __fn_504(int64_t, int64_t);
+static bool __fn_508(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_653(int64_t, int64_t);
-static bool __fn_657(int64_t, int64_t);
+static bool __fn_589(int64_t, int64_t);
+static bool __fn_593(int64_t, int64_t);
 static bool __inst_Eq_eq__Tuple2(int64_t, int64_t);
-static bool __fn_675(int64_t, int64_t);
+static bool __fn_611(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_754(int64_t, int64_t);
+static bool __fn_690(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
+static int64_t __fn_699(int64_t);
+static int64_t __fn_704(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2398,19 +2396,8 @@ static int64_t map_get(int64_t, int64_t, int64_t);
 static bool map_has_(int64_t, int64_t, int64_t);
 static int64_t map_count(int64_t);
 static int64_t map_merge(int64_t, int64_t);
-static int64_t cstr_hash(const char *);
-static bool tur_cstr_key_eq_(const char *, const char *);
-static int64_t map_assoc_eq(int64_t, int64_t, int64_t, int64_t, int64_t);
-static int64_t map_get_eq(int64_t, int64_t, int64_t, int64_t);
-static bool map_has_eq_(int64_t, int64_t, int64_t, int64_t);
-static int64_t map_dissoc_eq(int64_t, int64_t, int64_t, int64_t);
-static int64_t smap_assoc(int64_t, const char *, int64_t);
-static int64_t smap_get(int64_t, const char *);
-static bool smap_has_(int64_t, const char *);
-static int64_t smap_dissoc(int64_t, const char *);
 static void map_free(int64_t);
 static bool map_eq_(int64_t, int64_t, int64_t);
-static void tur_map_homog__(int64_t, int64_t);
 static int64_t vec_new();
 static int64_t vec_len(int64_t);
 static int64_t vec_get(int64_t, int64_t);
@@ -2418,7 +2405,6 @@ static void vec_push_(int64_t, int64_t);
 static int64_t vec_pop_(int64_t);
 static void vec_set_(int64_t, int64_t, int64_t);
 static void vec_free(int64_t);
-static void tur_vec_homog__(int64_t, int64_t);
 static bool vec_eq_(int64_t, int64_t, int64_t);
 static int64_t slice_new(void *, int64_t);
 static int64_t slice_len(int64_t);
@@ -2483,14 +2469,8 @@ static bool mutmap_has_(int64_t, int64_t, int64_t);
 static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, int64_t);
 static void mutmap_free(int64_t);
-
-struct __defer_env_2 {int64_t i; };
-
-static void __defer_3(void *__env) {
-    struct __defer_env_2 *__e = (struct __defer_env_2 *)__env;
-    printf("%lld\n", (long long)(__e->i));
-}
-
+static int64_t apply1(int64_t, int64_t);
+static int64_t apply2(int64_t, int64_t, int64_t);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -2669,12 +2649,12 @@ static dict_Clone_T dict_Clone_T_singleton = {
     .clone = __inst_Clone_clone_T,
 };
 
-static bool __fn_475(int64_t a, int64_t b) {
+static bool __fn_415(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_475));
+        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_415));
 }
 
 typedef struct dict_Eq_Map {
@@ -2685,12 +2665,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_499(int64_t a, int64_t b) {
+static bool __fn_435(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_499));
+        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_435));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2701,12 +2681,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_526(int64_t a, int64_t b) {
+static bool __fn_462(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_526));
+        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_462));
 }
 
 typedef struct dict_Eq_Option {
@@ -2717,16 +2697,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_548(int64_t a, int64_t b) {
+static bool __fn_484(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_552(int64_t a, int64_t b) {
+static bool __fn_488(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_548), (int64_t)(intptr_t)(__fn_552));
+        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_484), (int64_t)(intptr_t)(__fn_488));
 }
 
 typedef struct dict_Eq_Result {
@@ -2737,16 +2717,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_568(int64_t a, int64_t b) {
+static bool __fn_504(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_572(int64_t a, int64_t b) {
+static bool __fn_508(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_568), (int64_t)(intptr_t)(__fn_572));
+        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_504), (int64_t)(intptr_t)(__fn_508));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2757,16 +2737,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_653(int64_t a, int64_t b) {
+static bool __fn_589(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_657(int64_t a, int64_t b) {
+static bool __fn_593(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_653), (int64_t)(intptr_t)(__fn_657));
+        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_589), (int64_t)(intptr_t)(__fn_593));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -2777,12 +2757,12 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_ = __inst_Eq_eq__Tuple2,
 };
 
-static bool __fn_675(int64_t a, int64_t b) {
+static bool __fn_611(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_675));
+        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_611));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2805,12 +2785,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_754(int64_t a, int64_t b) {
+static bool __fn_690(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_754));
+        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_690));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -2820,6 +2800,14 @@ typedef struct dict_Eq_MutableMap {
 static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
+
+static int64_t __fn_699(int64_t v) {
+        return (v) * (INT64_C(10));
+}
+
+static int64_t __fn_704(int64_t a, int64_t b) {
+        return (a) + (b);
+}
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -3090,70 +3078,6 @@ static int64_t map_merge(int64_t a, int64_t b) {
   
 }
 
-static int64_t cstr_hash(const char * s) {
-        return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); 
-}
-
-static bool tur_cstr_key_eq_(const char * a, const char * b) {
-        const char *p = (const char *)(intptr_t)a;
-  const char *q = (const char *)(intptr_t)b;
-  while (*p && (*p == *q)) { p++; q++; }
-  return *(const unsigned char *)p == *(const unsigned char *)q;
-  
-}
-
-static int64_t map_assoc_eq(int64_t m, int64_t h, int64_t key, int64_t val, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                   (void *)(intptr_t)val,
-                                   (void *)(intptr_t)keyeq);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t map_get_eq(int64_t m, int64_t h, int64_t key, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
-                                            (void *)(intptr_t)key,
-                                            (void *)(intptr_t)keyeq);
-  
-}
-
-static bool map_has_eq_(int64_t m, int64_t h, int64_t key, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                         (void *)(intptr_t)keyeq);
-  
-}
-
-static int64_t map_dissoc_eq(int64_t m, int64_t h, int64_t key, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                   (void *)(intptr_t)keyeq);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t smap_assoc(int64_t m, const char * key, int64_t val) {
-        return map_assoc_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, val, (int64_t)(intptr_t)(tur_cstr_key_eq_));
-}
-
-static int64_t smap_get(int64_t m, const char * key) {
-        return map_get_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
-}
-
-static bool smap_has_(int64_t m, const char * key) {
-        return map_has_eq_(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
-}
-
-static int64_t smap_dissoc(int64_t m, const char * key) {
-        return map_dissoc_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
-}
-
 static void map_free(int64_t m) {
         free((void*)(intptr_t)m);
   
@@ -3178,10 +3102,6 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
   tur_hamt_iter_free((void*)iter_buf);
   return true;
   
-}
-
-static void tur_map_homog__(int64_t a, int64_t b) {
-        (void)a; (void)b; 
 }
 
 static int64_t vec_new() {
@@ -3242,10 +3162,6 @@ static void vec_free(int64_t v) {
   if (vec->data) free(vec->data);
   free(vec);
   
-}
-
-static void tur_vec_homog__(int64_t a, int64_t b) {
-        (void)a; (void)b; 
 }
 
 static bool vec_eq_(int64_t v1, int64_t v2, int64_t cmp_fn) {
@@ -4000,6 +3916,112 @@ static void mutmap_free(int64_t m) {
   
 }
 
+static int64_t apply1(int64_t cb, int64_t x) {
+        int64_t *fat = (int64_t *)(intptr_t)cb;
+  int64_t (*thunk)(void *, int64_t) =
+      (int64_t (*)(void *, int64_t))(intptr_t)fat[0];
+  return thunk((void *)fat, x);
+  
+}
+
+static int64_t apply2(int64_t cb, int64_t x, int64_t y) {
+        int64_t *fat = (int64_t *)(intptr_t)cb;
+  int64_t (*thunk)(void *, int64_t, int64_t) =
+      (int64_t (*)(void *, int64_t, int64_t))(intptr_t)fat[0];
+  return thunk((void *)fat, x, y);
+  
+}
+
+static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_701 = __k;
+    return 0;
+}
+
+static void __handle_body_1(void);
+static void __handle_body_1(void) {
+    int64_t *__t3 = (int64_t *)malloc(2 * sizeof(int64_t));
+    __t3[0] = (int64_t)(intptr_t)__tur_fatshim1;
+    __t3[1] = (int64_t)(intptr_t)__fn_699;
+    void *__t4 = __t3;
+    printf("%lld\n", (long long)(apply1((int64_t)(intptr_t)(__t4), INT64_C(5))));
+    tur_current_fiber->result = 0;
+}
+
+static int64_t __dispatch_1(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __dispatch_1(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
+    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
+    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
+    if (__fiber->done) { return __fiber->result; }
+    if (!__dcap->has_pending_effect) return __r;
+    if (strcmp(__dcap->eff_name, "Unsafe") == 0) {
+        return __effect_handler_2(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+    } else {
+        /* Phase 19D: bubble up unhandled effect to outer fiber */
+        FiberBlock *__outer_f = tur_current_fiber;
+        if (__outer_f && __outer_f->eff_ctx) {
+            TurEffectCaptureCtx *__outer_cap = (TurEffectCaptureCtx *)__outer_f->eff_ctx;
+            __outer_cap->eff_name = __dcap->eff_name;
+            int __bun = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;
+            for (int __bi = 0; __bi < __bun; __bi++) __outer_cap->eff_args[__bi] = __dcap->eff_args[__bi];
+            __outer_cap->eff_n_args = __dcap->eff_n_args;
+            __outer_cap->has_pending_effect = true;
+            tur_fiber_block_yield(0);
+            __outer_cap->has_pending_effect = false;
+            return __dispatch_1(__ctx_void, __k_int, __outer_f->arg);
+        }
+        fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
+        abort();
+    }
+    return 0;
+}
+
+static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_706 = __k;
+    return 0;
+}
+
+static void __handle_body_6(void);
+static void __handle_body_6(void) {
+    int64_t *__t8 = (int64_t *)malloc(2 * sizeof(int64_t));
+    __t8[0] = (int64_t)(intptr_t)__tur_fatshim2;
+    __t8[1] = (int64_t)(intptr_t)__fn_704;
+    void *__t9 = __t8;
+    printf("%lld\n", (long long)(apply2((int64_t)(intptr_t)(__t9), INT64_C(20), INT64_C(22))));
+    tur_current_fiber->result = 0;
+}
+
+static int64_t __dispatch_6(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __dispatch_6(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
+    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
+    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
+    if (__fiber->done) { return __fiber->result; }
+    if (!__dcap->has_pending_effect) return __r;
+    if (strcmp(__dcap->eff_name, "Unsafe") == 0) {
+        return __effect_handler_7(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+    } else {
+        /* Phase 19D: bubble up unhandled effect to outer fiber */
+        FiberBlock *__outer_f = tur_current_fiber;
+        if (__outer_f && __outer_f->eff_ctx) {
+            TurEffectCaptureCtx *__outer_cap = (TurEffectCaptureCtx *)__outer_f->eff_ctx;
+            __outer_cap->eff_name = __dcap->eff_name;
+            int __bun = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;
+            for (int __bi = 0; __bi < __bun; __bi++) __outer_cap->eff_args[__bi] = __dcap->eff_args[__bi];
+            __outer_cap->eff_n_args = __dcap->eff_n_args;
+            __outer_cap->has_pending_effect = true;
+            tur_fiber_block_yield(0);
+            __outer_cap->has_pending_effect = false;
+            return __dispatch_6(__ctx_void, __k_int, __outer_f->arg);
+        }
+        fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
+        abort();
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
         /* *args*: build cons list from argv[1..argc-1] */
         g_tur_args = 0;
@@ -4010,23 +4032,45 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        {
-            int64_t i_757 = INT64_C(0);
-            (void)i_757;
-            while (1) {
-                if (!((i_757) < (INT64_C(3)))) break;
-                tur_frame __frame_1;
-                tur_frame_init(&__frame_1, NULL);
-                struct __defer_env_2 __t4 = {.i = i_757};
-                tur_frame_push_defer(&__frame_1, __defer_3, &__t4);
-                i_757 = (i_757) + (INT64_C(1));
-                tur_frame_fire_lifo(&__frame_1);
-            }
-            puts("loop done");
-        }
-        int64_t __t5;
-        __t5 = INT64_C(0);
-        return (int)__t5;
+        TurEffectCaptureCtx __cap_1;
+        __cap_1.has_pending_effect = false;
+        __cap_1.eff_name = NULL;
+        __cap_1.eff_n_args = 0;
+        __cap_1.dispatch = __dispatch_1;
+        __cap_1.body_env = NULL;
+        FiberBlock *__fiber_1 = tur_fiber_block_new(__handle_body_1, 0);
+        __fiber_1->eff_ctx = &__cap_1;
+        EffectHandlerFrame *__parent_chain_1 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
+        EffectHandlerFrame __eff_frame_1;
+        __eff_frame_1.parent = __parent_chain_1;
+        __eff_frame_1.n_cases = 1;
+        __eff_frame_1.cases[0].effect_name = "Unsafe";
+        __eff_frame_1.cases[0].handler_fn = NULL;
+        __eff_frame_1.cases[0].env = NULL;
+        __fiber_1->effect_handler_chain = &__eff_frame_1;
+        __dispatch_1(&__cap_1, (int64_t)(intptr_t)__fiber_1, 0);
+        if (__fiber_1->done) { free(__fiber_1->stack); free(__fiber_1); }
+        TurEffectCaptureCtx __cap_6;
+        __cap_6.has_pending_effect = false;
+        __cap_6.eff_name = NULL;
+        __cap_6.eff_n_args = 0;
+        __cap_6.dispatch = __dispatch_6;
+        __cap_6.body_env = NULL;
+        FiberBlock *__fiber_6 = tur_fiber_block_new(__handle_body_6, 0);
+        __fiber_6->eff_ctx = &__cap_6;
+        EffectHandlerFrame *__parent_chain_6 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
+        EffectHandlerFrame __eff_frame_6;
+        __eff_frame_6.parent = __parent_chain_6;
+        __eff_frame_6.n_cases = 1;
+        __eff_frame_6.cases[0].effect_name = "Unsafe";
+        __eff_frame_6.cases[0].handler_fn = NULL;
+        __eff_frame_6.cases[0].env = NULL;
+        __fiber_6->effect_handler_chain = &__eff_frame_6;
+        __dispatch_6(&__cap_6, (int64_t)(intptr_t)__fiber_6, 0);
+        if (__fiber_6->done) { free(__fiber_6->stack); free(__fiber_6); }
+        int64_t __t11;
+        __t11 = INT64_C(0);
+        return (int)__t11;
 }
 
 

@@ -14,7 +14,7 @@
   ```)
 
 (extern-c tur_reactor_new [] :ptr)
-(extern-c tur_reactor_add_fd [r :ptr fd :int events :int cb :int ud :int] :int)
+(extern-c tur_reactor_add_fd [r :ptr fd :int events :int ^fat cb :int ud :int] :int)
 (extern-c tur_reactor_run [r :ptr] :void)
 (extern-c tur_reactor_stop [r :ptr] :void)
 (extern-c tur_reactor_free [r :ptr] :void)
@@ -53,16 +53,11 @@
 (defn thread-join [t :ptr<void>] :nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn use-val [v :int] :nil
-  ```c (void)((int64_t)v); ```)
-
 (defn main [] :int
   (let [r       (tur_reactor_new)
         p       (make-pipe)
-        sentinel 1
         _src    (tur_reactor_add_fd r (pipe-read-fd p) 1   ;; READ = 1
                    (fn [id events ud] :nil
-                     (use-val sentinel)
                      (println "fd fired (unexpected)"))
                    0)
         stopper (spawn-stopper r)]

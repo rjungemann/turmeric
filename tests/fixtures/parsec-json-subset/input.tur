@@ -80,7 +80,7 @@
 
 (defn pdigit [] :ptr<void>
   (let [dummy 0]
-    (fn [inp] (let [_ dummy] (pdigit-impl dummy inp)))))
+    (fn [inp] (pdigit-impl dummy inp))))
 
 (defn many-c-impl [p_raw inp] :int
   ```c
@@ -124,7 +124,7 @@
 
 (defn many1 [p] :ptr<void>
   (let [_p p]
-    (fn [inp] (let [_ _p] (many1-impl _p inp)))))
+    (fn [inp] (many1-impl _p inp))))
 
 (defn run-parser [p s :cstr] :int
   (let [inp (input-new s 0)]

@@ -142,6 +142,27 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_APPLY4(f, a, b, c, d) \
     (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
         ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))
+static int64_t __tur_fatshim0(void *__e) {
+    return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();
+}
+static int64_t __tur_fatshim1(void *__e, int64_t a0) {
+    return ((int64_t (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0);
+}
+static int64_t __tur_fatshim2(void *__e, int64_t a0, int64_t a1) {
+    return ((int64_t (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
+}
+static int64_t __tur_fatshim3(void *__e, int64_t a0, int64_t a1, int64_t a2) {
+    return ((int64_t (*)(int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2);
+}
+static int64_t __tur_fatshim4(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
+    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);
+}
+static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
+    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);
+}
+static void *__tur_fatshim_keep[] __attribute__((unused)) = {
+    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,
+    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5 };
 static const char *__tur_any_type_name(int64_t tag) {
     switch (tag) {
         case 1: return "nil";

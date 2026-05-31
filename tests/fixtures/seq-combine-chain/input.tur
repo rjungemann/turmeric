@@ -5,7 +5,6 @@
 (load "stdlib/seq/combine.tur")
 
 (defn main [] :void
-  (let [_d 0
-        mk (fn [x] (let [_ _d] (seq/range x (+ x 3))))]
+  (let [mk (fn [x] (seq/range x (+ x 3)))]
     (seq-for-each println
       (seq/chain (seq/map mk (seq/range 0 2))))))

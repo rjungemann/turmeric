@@ -4,7 +4,6 @@
 (load "stdlib/seq/consume.tur")
 
 (defn main [] :void
-  (let [zero 0
-        sum (fn [a b] (let [_ zero] (+ a b)))]
+  (let [sum (fn [a b] (+ a b))]
     (println (seq-opt-unwrap (seq/reduce sum (seq/range 1 5))))
     (println (seq-opt-some? (seq/reduce sum (empty-seq))))))

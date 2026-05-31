@@ -121,6 +121,12 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v);
             return;
         }
+        case EX_FN_TO_FAT: { /* A#1: only ever an argument; if discarded, still
+                              * materialize the shim so codegen stays valid. */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
         case EX_PANIC_WITH: {
             /* Diverging - emit the panic */
             char *v = emit_value(ctx, body, e);

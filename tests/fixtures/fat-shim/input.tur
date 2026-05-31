@@ -1,0 +1,25 @@
+;; A#1: ^fat auto-shim. A non-capturing fn passed to a ^fat parameter is shimmed
+;; into a fat closure at the call site, so the inline-C fat-call protocol works
+;; without the historical capture-forcing dummy ((let [_ x] (fn ...))).
+
+(defn apply1 [^fat cb :int x :int] #{Unsafe} :int
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)cb;
+  int64_t (*thunk)(void *, int64_t) =
+      (int64_t (*)(void *, int64_t))(intptr_t)fat[0];
+  return thunk((void *)fat, x);
+  ```)
+
+(defn apply2 [^fat cb :int x :int y :int] #{Unsafe} :int
+  ```c
+  int64_t *fat = (int64_t *)(intptr_t)cb;
+  int64_t (*thunk)(void *, int64_t, int64_t) =
+      (int64_t (*)(void *, int64_t, int64_t))(intptr_t)fat[0];
+  return thunk((void *)fat, x, y);
+  ```)
+
+(defn main [] :int
+  ;; bare non-capturing fns of arity 1 and 2 -- both auto-shimmed, no dummy
+  (unsafe (println (apply1 (fn [v] (* v 10)) 5)))
+  (unsafe (println (apply2 (fn [a b] (+ a b)) 20 22)))
+  0)

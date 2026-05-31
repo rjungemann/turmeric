@@ -199,6 +199,7 @@ typedef struct Elab {
     /* ST0: Substructural types */
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
     const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
+    const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */
     const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
     /* LC0: multi-shot continuation annotations */
     const Symbol *sym_caret_unsafe_multishot; /* ^unsafe-multishot -- multi-shot k (ownership not tracked) */

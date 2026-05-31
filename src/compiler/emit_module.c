@@ -1723,6 +1723,29 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
     buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
     buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))\n");
+    /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
+     * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
+     * fn passed to a ^fat parameter is invoked through the standard fat-closure
+     * protocol (thunk = slot 0, env = the struct).  Each shim ignores the thunk
+     * slot, reads the original fn pointer from slot 1, and forwards its arguments
+     * using the int64_t carrier ABI (matching TUR_APPLY and the reactor casts).
+     * This retires the historical capture-forcing dummy ((let [_ x] (fn ...))). */
+    buf_puts(out, "static int64_t __tur_fatshim0(void *__e) {\n");
+    buf_puts(out, "    return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim1(void *__e, int64_t a0) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim2(void *__e, int64_t a0, int64_t a1) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim3(void *__e, int64_t a0, int64_t a1, int64_t a2) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim4(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);\n}\n");
+    buf_puts(out, "static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {\n");
+    buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);\n}\n");
+    /* Suppress -Wunused-function for shim arities a program does not use. */
+    buf_puts(out, "static void *__tur_fatshim_keep[] __attribute__((unused)) = {\n");
+    buf_puts(out, "    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,\n");
+    buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5 };\n");
     /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
      * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
      * struct/ADT cases are emitted from the actual enum constants rather than

@@ -84,6 +84,7 @@ struct Binding {
     /* ST0: Substructural annotations — ^affine and ^relevant */
     bool          is_affine;       /* true if annotated with ^affine (no duplication) */
     bool          is_relevant;     /* true if annotated with ^relevant (must be used) */
+    bool          is_fat;          /* A#1: ^fat -- param consumes a fat closure */
     /* ST1: Usage tracking for substructural discipline checking */
     UsageState    usage_state;     /* how many times this binding has been referenced */
     /* UT1: alias tracking -- current alias state for this binding */
@@ -252,6 +253,7 @@ typedef enum ExprKind {
     EX_SET_LIT,        /* #s(e1 e2 ...) - set literal */
     /* Phase HRT1: Rank-2 higher-ranked types */
     EX_POLY_WRAP,      /* wraps a fn/closure as tur_poly_fn_t for rank-2 param passing */
+    EX_FN_TO_FAT,      /* A#1: auto-shim a bare fn into a fat closure for a ^fat param */
     EX_ASCRIBE,        /* (:: expr type) — inline type ascription; erased at codegen */
     /* Phase HRT2: Existential types */
     EX_EXISTS_PACK,    /* (pack expr (exists [a] T)) — boxes value as existential */
@@ -700,6 +702,10 @@ struct Expr {
             bool            is_closure;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
+        /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;
+         * the emitter generates an env-ignoring wrapper thunk and a heap fat
+         * struct { thunk, orig_fn_ptr } so a ^fat consumer can fat-call it. */
+        struct { struct Expr *inner; } fn_to_fat_;
         /* Phase HRT2: Existential types.
          * Phase EX1c: optional resolved constraint witnesses (one per constraint
          * in the target existential type).  NULL when the target has no
