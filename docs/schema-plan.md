@@ -1,6 +1,26 @@
 # `tur/schema` -- Runtime Schema Validation Plan (SC0--SC6)
 
-> **Status:** Not started.
+> **Status:** SC0--SC4 and SC6 shipped in `stdlib/schema.tur`
+> (scalar/literal/object/array/optional/union/transform/recursive schemas;
+> accumulating, dot-path-tagged errors; `schema-decode` /`schema-decode!` and
+> the error/result accessors; docstrings + `docs/guides/schema-guide.md`).
+> Fixtures: `tests/fixtures/schema-decode-{object,array,optional,union,
+> literal,errors,recursive}`. SC5 (`HasSchema` typeclass + generic `decode`
+> + the `#json-str<T>` reader-macro family) and SC7 (`Functor`/`Applicative`/
+> `Alternative` instances) are **not started** -- they need return-type-directed
+> typeclass dispatch and reader-table support, which are compiler-level changes
+> beyond the pure-stdlib core. **The compiler work and the remaining SC5/SC7
+> stdlib are designed in
+> [docs/return-type-dispatch-and-schema-sc5-sc7-plan.md](return-type-dispatch-and-schema-sc5-sc7-plan.md).**
+>
+> **Implementation note:** decoding is anchored on the tagged JSON node
+> representation from `tur/json` rather than a raw HAMT map. JSON nodes carry a
+> runtime type tag, which is what makes genuine "expected :cstr, got :int"
+> validation possible; a bare HAMT value carries no tag (see the "No runtime
+> type tags" design note below). Object schemas are built incrementally
+> (`schema/object-new` + `schema/field`) instead of from a nested-vector
+> literal, because a field list mixes `:cstr` keys with schema pointers and a
+> homogeneous `Vec` cannot hold both.
 >
 > **Location:** `stdlib/schema.tur` (pure Turmeric over existing stdlib
 > primitives; no new C required until SC5).
@@ -16,7 +36,7 @@
 >   schemas validate data at dynamic boundaries (the two complement each other)
 > - `stdlib/result.tur`, `stdlib/hamt.tur`, `stdlib/vec.tur`
 >
-> **Last updated:** 2026-05-31
+> **Last updated:** 2026-05-31 (SC0--SC4, SC6 implemented)
 
 ---
 
