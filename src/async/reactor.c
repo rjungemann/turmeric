@@ -603,3 +603,123 @@ void tur_reactor_wake(void *rp) {
     if (!r) return;
     io_wake(r->backend);
 }
+
+/* ================================================================== */
+/* Local fiber driver (Phase F2-F7)                                    */
+/*                                                                      */
+/* A LocalFiberGroup runs cooperative fibers on top of one reactor      */
+/* using the TurFiber stackful-coroutine primitive (fiber.c). It is     */
+/* deliberately not thread-safe -- the group, its reactor, and every    */
+/* fiber it owns live on a single OS thread (same rule as TurReactor).  */
+/* ================================================================== */
+
+/* Per-fiber park sentinels (mirror the documented stdlib contract). */
+#define TUR_LOCAL_PARK_TIMEOUT (-2)
+#define TUR_LOCAL_NOT_IN_FIBER (-1)
+
+typedef struct LocalFiber {
+    int64_t            id;
+    TurFiber          *fiber;       /* underlying stackful coroutine */
+    int64_t            tur_body;    /* Turmeric fat-closure (user)->nil */
+    void              *user_data;
+    bool               done;        /* ran to completion */
+    bool               in_ready;    /* currently linked into the ready queue */
+    struct LocalFiberGroup *group;  /* owning group (for park callbacks) */
+    /* Park state. The park callback is a C fat-closure shaped to match the
+     * reactor's 3-arg fat-pointer convention: park_cb_fat[0] is the C handler
+     * and park_cb_fat[1] is this LocalFiber*, recovered as `self`. */
+    int64_t            park_cb_fat[2];
+    int64_t            park_fd_src;     /* reactor source id, or -1 */
+    int64_t            park_timer_src;  /* reactor source id, or -1 */
+    int64_t            park_chan_src;   /* reactor source id, or -1 */
+    int64_t            park_result;     /* value handed back from park */
+    struct LocalFiber *ready_next;      /* ready-queue link */
+    struct LocalFiber *all_next;        /* group-wide list link */
+} LocalFiber;
+
+struct LocalFiberGroup {
+    TurReactor *reactor;        /* borrowed; not owned */
+    LocalFiber *all_head;       /* every spawned fiber, done or not */
+    LocalFiber *ready_head;     /* FIFO ready-queue head */
+    LocalFiber *ready_tail;     /* FIFO ready-queue tail */
+    LocalFiber *current;        /* fiber currently being resumed, or NULL */
+    int64_t     next_id;
+    int64_t     completed;      /* fibers that ran to completion */
+    int         running;        /* re-entrancy guard for run-fibers */
+};
+typedef struct LocalFiberGroup LocalFiberGroup;
+
+/* The group whose pump is currently active on this thread. Used by the fiber
+ * trampoline (which only receives a TurFiber*) to recover the LocalFiber it is
+ * running via group->current. */
+static __thread LocalFiberGroup *tl_current_group __attribute__((unused)) = NULL;
+
+/* ---- ready-queue helpers (FIFO) ---- */
+
+__attribute__((unused))
+static void ready_push(LocalFiberGroup *g, LocalFiber *lf) {
+    if (lf->in_ready) return;
+    lf->in_ready   = true;
+    lf->ready_next = NULL;
+    if (g->ready_tail)
+        g->ready_tail->ready_next = lf;
+    else
+        g->ready_head = lf;
+    g->ready_tail = lf;
+}
+
+__attribute__((unused))
+static LocalFiber *ready_pop(LocalFiberGroup *g) {
+    LocalFiber *lf = g->ready_head;
+    if (!lf) return NULL;
+    g->ready_head = lf->ready_next;
+    if (!g->ready_head) g->ready_tail = NULL;
+    lf->ready_next = NULL;
+    lf->in_ready   = false;
+    return lf;
+}
+
+/* Remove any reactor sources a parked fiber is waiting on. */
+static void local_fiber_clear_park(LocalFiber *lf) {
+    LocalFiberGroup *g = lf->group;
+    if (lf->park_fd_src >= 0) {
+        tur_reactor_remove(g->reactor, lf->park_fd_src);
+        lf->park_fd_src = -1;
+    }
+    if (lf->park_timer_src >= 0) {
+        tur_reactor_remove(g->reactor, lf->park_timer_src);
+        lf->park_timer_src = -1;
+    }
+    if (lf->park_chan_src >= 0) {
+        tur_reactor_remove(g->reactor, lf->park_chan_src);
+        lf->park_chan_src = -1;
+    }
+}
+
+void *tur_local_fiber_group_new(void *rp) {
+    TurReactor *r = (TurReactor *)rp;
+    if (!r) return NULL;
+    LocalFiberGroup *g = (LocalFiberGroup *)calloc(1, sizeof(LocalFiberGroup));
+    if (!g) return NULL;
+    g->reactor = r;
+    g->next_id = 0;
+    return g;
+}
+
+void tur_local_fiber_group_free(void *gp) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g) return;
+    LocalFiber *lf = g->all_head;
+    while (lf) {
+        LocalFiber *next = lf->all_next;
+        /* Cancel any still-parked fiber: drop its reactor sources and free its
+         * stack without resuming it (no cleanup hooks -- see local_fiber.h). */
+        if (!lf->done)
+            local_fiber_clear_park(lf);
+        if (lf->fiber)
+            tur_fiber_free(lf->fiber);
+        free(lf);
+        lf = next;
+    }
+    free(g);
+}
