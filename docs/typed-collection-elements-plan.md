@@ -103,13 +103,41 @@ gain. Reproduce with `./build/tur run <file>`.
    The `EX_REINTERPRET` node produced by `::` on a tyvar does not survive
    specialization once `A` is bound to a concrete scalar, so the value is
    passed by C numeric conversion (truncation for `:float`, pointer-to-int
-   warning + crash for `:cstr`).
+   warning + crash for `:cstr`). Root cause: `type_size_bytes(TY_TYVAR)`
+   returns 0 (`src/compiler/elab_core.c:79`), so `elab_ascribe` produces an
+   erased `EX_ASCRIBE` instead of a reinterpret.
 
-**Conclusion.** The single blocking gap is (3): the compiler must preserve
-(or re-insert) a per-instance size-equal reinterpret when a scalar generic
-value crosses the `int64_t` carrier boundary -- in the argument-into-carrier
-direction and the carrier-result-to-typed direction. Everything else (TS2
-codegen, struct-app monomorphization, typed thunks) is already in place.
+4. **An `[A]`-generic *inline-C* function sidesteps the whole problem.**
+   When the body is inline-C, the function is **not** monomorphized -- it is
+   emitted once on the `int64_t` carrier ABI (inline-C forces an `int64_t`
+   signature). The concrete-into-tyvar call boundary then rides the existing
+   TS4P1 reinterpret path, and a `:A` result ascribed with `::` rides the
+   TS3.3 path. Both directions round-trip `:float` and `:cstr` with **no
+   compiler change**:
+
+   ```turmeric
+   (defn box-push! [A] [v :int x :A] :nil
+     ```c ... vec->data[vec->len++] = x; ```)   ; emitted as (int64_t v, int64_t x)
+   (box-push! vf 1.5)
+   ;; emits: box_push_(vf, ((union { double s; int64_t d; }){.s = 1.5}).d)
+   (:: (box-get vf 0) :float)
+   ;; emits: ((union { int64_t s; double d; }){.s = box_get(...)}).d  -- prints 1.5
+   ```
+
+**Conclusion (revised 2026-05-31).** Findings (2)/(3) only bite for
+*specialized* (non-inline-C) generic wrappers. Finding (4) shows the
+inline-C primitives -- which is exactly what `vec.tur` / `map.tur` already
+are -- stay on the carrier and bridge correctly today. **No compiler change
+is required.** Approach B reduces to a pure-stdlib change: give the existing
+inline-C ops `[A]` / `[K V]` binders and let the call-boundary reinterpret
+machinery do the rest. TCE0 is therefore a validation phase, not a compiler
+phase.
+
+Caveat (measured): a `:A`-returning generic does **not** infer `A` from the
+surrounding context -- an unconstrained `(vec-get v i)` defaults `A` to
+`:int`. Typed reads need an explicit `(:: (vec-get v i) :float)` or a typed
+binding. This preserves int back-compat (existing int callers are
+unaffected) at the cost of one ascription on non-int reads.
 
 ---
 
@@ -121,8 +149,11 @@ codegen, struct-app monomorphization, typed thunks) is already in place.
    type-check and run for element types `:int`, `:cstr`, `:bool`, `:nil`,
    and `:float`, with the element type inferred and enforced (all elements
    must unify to one `A`).
-2. `vec-get` / `map-get` return the element at its real static type, so
-   downstream code needs no manual `::`.
+2. `vec-get` / `map-get` are declared to return the element type
+   (`:A` / `:V`), so a typed read is expressible. Because return-type-param
+   inference does not flow from context (measured), an unconstrained read
+   defaults `A` to `:int`; non-int reads use `(:: (vec-get v i) :float)` or
+   a typed binding.
 3. Preserve today's homogeneity guarantee: mixed-type literals stay a
    `TUR-E0001` on the offending element.
 4. Keep the change additive -- the existing monomorphic `int64_t` ABI of
@@ -153,11 +184,12 @@ codegen, struct-app monomorphization, typed thunks) is already in place.
 | Scalar elements (`:cstr/:bool/:nil/:float`) | supported | supported |
 | Aggregate elements (multi-word structs/ADTs) | not supported | supported |
 | `:float` storage | bit-reinterpret through `int64_t` | native `double` slot |
-| Compiler work | one boundary-reinterpret fix (the TCE0 gap) | layout specialization for Vec + HAMT |
+| Compiler work | **none** (see finding 4) | layout specialization for Vec + HAMT |
 
-TCE is the right first step: it closes the user-visible fact with a single
-focused compiler fix plus a stdlib surface, and it leaves TS3b as a clean
-follow-on for aggregate elements without re-doing any of this work.
+TCE is the right first step: it closes the user-visible fact as a pure
+stdlib change (no compiler work, per empirical finding 4), and it leaves
+TS3b as a clean follow-on for aggregate elements without re-doing any of
+this work.
 
 ---
 
@@ -166,67 +198,60 @@ follow-on for aggregate elements without re-doing any of this work.
 Each phase leaves the tree green (`bash tests/run.sh` with zero `FAIL`)
 and regenerates fixture snapshots per the CLAUDE.md codegen-snapshot rule.
 
-### TCE0 -- Scalar generic carrier-boundary reinterpret (the enabler)
+### TCE0 -- Validate the carrier-generic inline-C pattern (no compiler change)
 
-**Goal.** When a value whose static type is a generic `A` (instantiated to
-a concrete same-size scalar) crosses into an `int64_t` carrier parameter,
-or a carrier result is consumed at type `A`, the monomorphizer emits a TS2
-`EX_REINTERPRET` in the *specialized* instance.
+**Goal.** Confirm that an `[A]`-generic function with an inline-C body
+stays on the `int64_t` carrier ABI and bridges scalar element types
+correctly in both directions, with no compiler change. (Done -- empirical
+finding 4 above.)
 
-**Compiler changes.**
+**Mechanism.** An inline-C body forces an `int64_t` C signature
+(`emit_fns.c:345-350`), so the function is emitted once and not
+monomorphized. A concrete scalar argument flowing into the `:A` parameter
+rides the TS4P1 concrete-into-tyvar reinterpret (`elab_call.c:1762`); a
+`:A` result read with `::` rides the TS3.3 ascribe reinterpret
+(`elab_types.c:1770`). Both emit the size-equal `union` bitcast.
 
-- `src/compiler/elab_call.c` (~1738) -- accept a scalar tyvar argument
-  against an `:int` carrier parameter (and vice versa) by inserting an
-  `EX_REINTERPRET` at the call boundary, rather than emitting
-  `TUR-E0001 ... got tyvar`. Gate strictly on
-  `type_size_bytes(A) == 8 || A` being a single-word scalar.
-- Specialization path (the `*__spec__*` emission that backs
-  `vpush___spec__...`) -- ensure an `EX_REINTERPRET` whose source is a
-  now-concrete scalar tyvar is *preserved*, not folded away, when the
-  instance is generated. This is the direct fix for empirical finding (3);
-  today the node is dropped and the value is passed by C numeric
-  conversion.
-- Reuse the existing `EX_REINTERPRET` codegen
-  (`src/compiler/emit_expr.c`, the size-equal union trick) unchanged.
+**Acceptance (probe).** `tests/fixtures/tce0-carrier-generic-probe/`
+-- a self-contained `[A]` inline-C push/get pair exercised at `:float` and
+`:cstr`, asserting the emitted C contains the `union` bitcasts and the
+run output round-trips `1.5` / a string. No stdlib dependency, so it
+documents the technique in isolation.
 
-**Acceptance.** `tests/fixtures/typed-slots/scalar-tyvar-carrier/` -- a
-hand-written `(defn id-thru [A] [v :int x :A] :A ...)` that pushes `x`
-into and reads it back from the carrier, asserted for `:float` (`1.5`
-survives, not `1`) and `:cstr` (pointer survives, no crash). The emitted
-specialization must contain a `union { ... }` bitcast, not a bare
-`vec_push_(v, x)`.
-
-> This phase is the whole compiler cost of Approach B. TCE1+ are stdlib +
-> macro work that ride on it.
+> This phase has no compiler cost. TCE1+ apply the validated pattern to the
+> real `vec.tur` / `map.tur` ops.
 
 ### TCE1 -- Polymorphic Vec operation surface
 
 **Goal.** Element-typed `vec-push!` / `vec-get` / `vec-set!` / `vec-pop!`
-without touching the inline-C primitives.
+by adding `[A]` binders to the existing inline-C functions, bodies
+unchanged.
 
 **Stdlib changes (`stdlib/vec.tur`).**
 
-- Keep the existing inline-C functions as monomorphic `int64_t`
-  primitives; rename to a `*-raw` suffix (e.g. `vec-push-raw!`,
-  `vec-get-raw`) to make the carrier explicit. They remain `#{Unsafe}`-free
-  and unchanged in body.
-- Add the polymorphic public surface that bridges via TCE0:
+- Add an `[A]` binder and retype the element parameter/result of the
+  existing inline-C ops; the inline-C body is **unchanged** (it keeps
+  writing to the `int64_t` buffer):
 
   ```turmeric
-  (defn vec-push! [A] [v :int val :A] :nil (vec-push-raw! v val))
-  (defn vec-get  [A] [v :int i :int] :A   (vec-get-raw v i))
-  (defn vec-set! [A] [v :int i :int val :A] :void (vec-set-raw! v i val))
-  (defn vec-pop! [A] [v :int] :A          (vec-pop-raw! v))
+  (defn vec-push! [A] [v :int val :A] :nil ...)   ; body unchanged
+  (defn vec-get  [A] [v :int i :int]  :A   ...)   ; body unchanged
+  (defn vec-set! [A] [v :int i :int val :A] :void ...)
+  (defn vec-pop! [A] [v :int] :A ...)
   ```
 
-  With TCE0 landed, the `val :A -> :int` and `:int -> :A` crossings emit
-  the per-instance reinterpret automatically; no user `::` is required.
+  No `*-raw` split is needed -- the inline-C function *is* the carrier
+  primitive, and the `[A]` binder only changes its type surface. `A`
+  defaults to `:int` when unconstrained, so existing int callers and
+  `vec-get` reads are unaffected; non-int reads use
+  `(:: (vec-get v i) :float)`.
 - Restrict `A` to scalar element types (see Non-goals). A non-scalar `A`
-  produces a clear diagnostic pointing at TS3b.
+  (aggregate struct/ADT) would not fit the 8-byte slot; that is the TS3b
+  boundary. Document the restriction and cover scalars only.
 
-**Acceptance.** `tests/fixtures/typed-slots/vec-float/`,
-`tests/fixtures/typed-slots/vec-cstr/`,
-`tests/fixtures/typed-slots/vec-bool/` -- push/get round-trips per type.
+**Acceptance.** `tests/fixtures/tce1-vec-float/`,
+`tests/fixtures/tce1-vec-cstr/`,
+`tests/fixtures/tce1-vec-bool/` -- push/get round-trips per type.
 
 ### TCE2 -- `vec-of` element inference + homogeneity check
 
@@ -244,7 +269,7 @@ arguments and instantiates the TCE1 ops at `A`; a mixed-type literal is a
   the polymorphic `vec-push!` signature. Confirm the diagnostic still
   points at the offending element span (`vec-of 1 "x"` underlines `"x"`).
 
-**Acceptance.** `tests/fixtures/typed-slots/vec-of-infer/` (homogeneous
+**Acceptance.** `tests/fixtures/tce2-vec-of-infer/` (homogeneous
 float/cstr literals) and a negative fixture asserting
 `(vec-of 1 "x" 3.14)` reports `TUR-E0001` on `"x"`.
 
@@ -255,21 +280,22 @@ float/cstr literals) and a negative fixture asserting
 
 **Stdlib changes (`stdlib/map.tur`).**
 
-- As in TCE1: keep the inline-C HAMT bridges as `*-raw` `int64_t`
-  primitives; add a polymorphic value surface:
+- As in TCE1: add `[K V]` binders to the existing inline-C ops, bodies
+  unchanged:
 
   ```turmeric
   (defn map-assoc [K V] [m :int key :K val :V] :int ...)
   (defn map-get   [K V] [m :int h :int key :K] :V ...)
   ```
 
-- Values bridge through TCE0 exactly like Vec elements.
+- Values bridge through the carrier-generic pattern exactly like Vec
+  elements; `V` defaults to `:int` for back-compat.
 
 **Keys** are handled in TCE4 (they need hashing/equality, not just
 storage). For TCE3, keep keys on the `:int` carrier and the explicit-hash
 primitives (`map-assoc-h`, `map-get` with precomputed `h`) unchanged.
 
-**Acceptance.** `tests/fixtures/typed-slots/map-cstr-val/` (int keys,
+**Acceptance.** `tests/fixtures/tce3-map-cstr-val/` (int keys,
 cstr/float values).
 
 ### TCE4 -- Polymorphic Map keys via Hash[K]/Eq[K]
@@ -288,7 +314,7 @@ precomputing the hash.
 - Constrain `K` to types with `Hash`/`Eq` instances; a missing instance is
   a typeclass-resolution error, not a silent bit-hash.
 
-**Acceptance.** `tests/fixtures/typed-slots/map-cstr-key/` -- string keys
+**Acceptance.** `tests/fixtures/tce4-map-cstr-key/` -- string keys
 round-trip with collisions exercised.
 
 ### TCE5 -- Data-literal lowering
@@ -303,7 +329,7 @@ transparently.
   TCE2/TCE3/TCE4 land. Add fixtures that exercise the literal forms at
   non-int element types under `-Xdata-literals`.
 
-**Acceptance.** `tests/fixtures/typed-slots/data-literal-cstr/`
+**Acceptance.** `tests/fixtures/tce5-data-literal-cstr/`
 (`["a" "b"]` and `#map{:k "v"}`).
 
 ### TCE6 -- Docs + snapshot regeneration
@@ -323,11 +349,10 @@ transparently.
 
 | Phase | File | Change |
 |---|---|---|
-| TCE0 | `src/compiler/elab_call.c` | Accept scalar tyvar <-> `:int` carrier crossings; insert `EX_REINTERPRET` |
-| TCE0 | specialization emit path | Preserve `EX_REINTERPRET` on concretized scalar tyvars |
-| TCE1 | `stdlib/vec.tur` | `*-raw` primitives + polymorphic `[A]` op surface |
+| TCE0 | (fixtures only) | Validate carrier-generic inline-C pattern; no compiler change |
+| TCE1 | `stdlib/vec.tur` | Add `[A]` binders to existing inline-C ops; bodies unchanged |
 | TCE2 | `stdlib/vec.tur` | `vec-of` expands onto polymorphic `vec-push!` |
-| TCE3 | `stdlib/map.tur` | `*-raw` HAMT bridges + polymorphic value surface |
+| TCE3 | `stdlib/map.tur` | Add `[K V]` binders to value-side inline-C ops |
 | TCE4 | `stdlib/map.tur` | Hash[K]/Eq[K]-driven polymorphic keys; int fast path |
 | TCE5 | (fixtures only) | Literal-form coverage; lowering already in place |
 | TCE6 | docstrings, `docs/api/`, fixtures | Doc + snapshot regen |
@@ -336,7 +361,7 @@ transparently.
 
 ## Test plan
 
-- New fixtures under `tests/fixtures/typed-slots/` per phase (listed
+- New fixtures as direct children of `tests/fixtures/` (named `tceN-*`, so the compiled `run.sh` harness picks them up -- it does not descend into nested fixture dirs) per phase (listed
   above). Each asserts both `tur run` output and, where the boundary
   matters, an emitted-C assertion (presence of the `union` reinterpret,
   absence of a bare truncating store).
@@ -344,17 +369,18 @@ transparently.
   `TUR-E0001` on the right span.
 - Full `bash tests/run.sh` green at the end of every phase.
 - `tests/fixtures/*/expected.c` snapshots regenerated and committed with
-  the codegen-affecting phases (TCE0 changes call-site emission).
+  any phase that shifts call-site emission for existing int-typed fixtures.
 
 ---
 
 ## Open design decisions
 
-1. **`*-raw` naming vs an `#{Unsafe}` carrier module.** Splitting into
-   `vec-push-raw!` exposes the carrier primitive in the public namespace.
-   Alternative: keep the inline-C private and have the polymorphic surface
-   inline the C via a fixed-arity helper. Leaning `*-raw` for clarity and
-   because it mirrors the existing `map-assoc` / `map-assoc-h` split.
+1. **Typed reads ergonomics.** `vec-get` / `map-get` return `:A`/`:V`
+   which defaults to `:int` when unconstrained (measured), so non-int
+   reads need `(:: (vec-get v i) :float)`. Alternatives if this proves
+   annoying: a `vec-get-as` helper taking an explicit type witness, or
+   improving return-type-param inference from the consuming context (a
+   compiler change, out of scope here).
 2. **Scalar restriction enforcement.** Where to reject a non-scalar `A` --
    in `elab_call.c` at the reinterpret-insertion site (uniform, early), vs
    a dedicated diagnostic on the vec/map signatures (clearer message). The

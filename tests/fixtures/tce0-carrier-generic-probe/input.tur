@@ -1,0 +1,41 @@
+;; TCE0: carrier-generic inline-C pattern (no compiler change).
+;;
+;; An [A]-generic function with an inline-C body is NOT monomorphized: it is
+;; emitted once on the int64_t carrier ABI. A concrete scalar argument flowing
+;; into the :A parameter rides the concrete-into-tyvar reinterpret (TS4P1); a
+;; :A result read with `::` rides the ascribe reinterpret (TS3.3). Both emit a
+;; size-equal `union` bitcast, so :float and :cstr round-trip through the
+;; shared int64_t slot with no truncation.
+;;
+;; This probe is self-contained (no stdlib container dependency) so it pins the
+;; technique in isolation. See docs/typed-collection-elements-plan.md (TCE0).
+
+(defn box-new [] :int
+  ```c
+  int64_t *buf = (int64_t *)malloc(sizeof(int64_t) * 8);
+  return (int64_t)(intptr_t)buf;
+  ```)
+
+(defn box-set! [A] [b :int i :int x :A] :nil
+  ```c
+  int64_t *buf = (int64_t *)(intptr_t)b;
+  buf[i] = x;
+  ```)
+
+(defn box-get [A] [b :int i :int] :A
+  ```c
+  int64_t *buf = (int64_t *)(intptr_t)b;
+  return buf[i];
+  ```)
+
+(defn main [] :int
+  (let [b (box-new)]
+    ;; :float element -- bits survive the carrier crossing
+    (box-set! b 0 1.5)
+    (box-set! b 1 2.25)
+    ;; :cstr element -- pointer survives the carrier crossing
+    (box-set! b 2 "hello")
+    (println (:: (box-get b 0) :float))
+    (println (:: (box-get b 1) :float))
+    (println (:: (box-get b 2) :cstr))
+    0))
