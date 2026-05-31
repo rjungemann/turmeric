@@ -1,0 +1,44 @@
+;; Phase F7: reactor-fibers-stop-mid-run -- reactor-stop unwinds the driver.
+;;
+;; Three fibers are queued. The first calls reactor-stop; the driver must
+;; return cleanly after the current fiber finishes its tick, WITHOUT running
+;; the two still-queued fibers. reactor-run-fibers reports 1 completion.
+;; The unrun fibers are then reclaimed by local-fiber-group-free.
+;;
+;; Expected output:
+;;   first stopped
+;;   ran=1
+;;   done
+
+(load "stdlib/reactor.tur")
+
+(defn say [msg :cstr] :nil
+  ```c printf("%s\n", (const char *)msg); ```)
+
+(defn print-ran [n :int] :nil
+  ```c printf("ran=%lld\n", (long long)n); ```)
+
+(defn null-ptr [] :ptr<void>
+  ```c return NULL; ```)
+
+(defn main [] :int
+  (let [r (reactor-new)
+        g (local-fiber-group-new r)]
+    ;; First fiber: stop the pump mid-tick.
+    (local-spawn g
+      (fn [user] :nil
+        (say "first stopped")
+        (reactor-stop r))
+      (null-ptr))
+    ;; These two are queued behind it and must NOT run.
+    (local-spawn g
+      (fn [user] :nil (say "second -- should not run"))
+      (null-ptr))
+    (local-spawn g
+      (fn [user] :nil (say "third -- should not run"))
+      (null-ptr))
+    (print-ran (reactor-run-fibers g))
+    (local-fiber-group-free g)
+    (say "done")
+    (reactor-free r)
+    0))
