@@ -41,6 +41,20 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
     0))
 ```
 
+```sweet-exp
+import reactor
+
+defn main [] :int
+  let [r reactor-new()]
+    reactor-add-timer r 0
+      fn [id user] :nil
+        println "hello from timer"
+      nil
+    reactor-run r
+    reactor-free r
+    0
+```
+
 ## Programming styles
 
 ### Style 1 -- Pure callback (no scheduler needed)
@@ -69,6 +83,29 @@ This is the pattern used by the `tur/httpd` listener thread.
     ;; Block until stopped.
     (reactor-run r)
     (reactor-free r)))
+```
+
+```sweet-exp
+import reactor
+
+;; accept-loop is a plain OS thread entry point -- no fibers required.
+defn start-listener [listen-fd :int stop-ch :ptr<void>] :nil
+  let [r reactor-new()]
+    ;; Accept connections: each READ event means accept() will not block.
+    reactor-add-fd r listen-fd READ
+      fn [id events user]
+        let [client accept-conn(listen-fd)]
+          when {client != -1}
+            pool-submit worker-pool client
+      nil
+    ;; Shutdown: one value on stop-ch ends the loop (one-shot).
+    reactor-add-chan r stop-ch
+      fn [id v user] :nil
+        reactor-stop r
+      nil
+    ;; Block until stopped.
+    reactor-run r
+    reactor-free r
 ```
 
 ### Style 2 -- Reactor + channels (cross-thread coordination)
@@ -100,6 +137,30 @@ promptly.
   (reactor-wake r))
 ```
 
+```sweet-exp
+import reactor
+import chan
+
+;; In the reactor thread:
+defn run-with-stop [stop-ch :ptr<void>] :nil
+  let [r reactor-new()]
+    ;; ... register fd sources, timers, etc. ...
+
+    ;; Register one-shot shutdown watcher.
+    reactor-add-chan r stop-ch
+      fn [id v user] :nil
+        reactor-stop r
+      nil
+
+    reactor-run r
+    reactor-free r
+
+;; From any other thread (safe because reactor-wake is thread-safe):
+defn request-shutdown [stop-ch :ptr<void> r :ptr<void>] :nil
+  chan-send stop-ch 1
+  reactor-wake r
+```
+
 The key constraint: `reactor-add-chan` is one-shot. If you need a
 persistent channel watcher, re-register from inside the callback:
 
@@ -111,6 +172,16 @@ persistent channel watcher, re-register from inside the callback:
       ;; Re-register to watch the next value.
       (watch-chan-loop r ch))
     nil))
+```
+
+```sweet-exp
+defn watch-chan-loop [r :ptr<void> ch :ptr<void>] :nil
+  reactor-add-chan r ch
+    fn [id v user] :nil
+      handle-message v
+      ;; Re-register to watch the next value.
+      watch-chan-loop r ch
+    nil
 ```
 
 ### Style 3 -- Reactor drives a local fiber group
@@ -266,6 +337,15 @@ Programs that import `reactor` must link against `libturi`:
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```)
+```
+
+```sweet-exp
+;; The autolink hint is included when you import reactor.
+;; For standalone files without import, add this defn:
+defn reactor-link [] :int
+  ```c /* __tur_autolink__: -lturi */
+  return 0;
+  ```
 ```
 
 When running `tur build`, this is handled automatically by the

@@ -1665,6 +1665,15 @@ static const char *cmake_dep_link_lib(const PkgCmakeDep *d) {
     return d->name;
 }
 
+/* Strip a "Namespace::" prefix off a CMake target name.
+ *   "MbedTLS::mbedtls" -> "mbedtls"
+ *   "mbedtls"          -> "mbedtls"
+ * Returns a pointer into the input string; do not free. */
+static const char *cmake_target_basename(const char *target) {
+    const char *sep = strrchr(target, ':');
+    return (sep && sep[1]) ? sep + 1 : target;
+}
+
 bool pkg_gen_cmake_deps(const char *project_dir,
                         const PkgManifest *manifest) {
     if (manifest->n_cmake_deps == 0) return true;
@@ -1763,15 +1772,44 @@ bool pkg_gen_cmake_deps(const char *project_dir,
         fprintf(f, "  \"  \\\"%s\\\": {\\n\"\n", d->name);
         fprintf(f, "  \"    \\\"include_dirs\\\": [\\\"${_spice_%s_inc}\\\"],\\n\"\n",
                 d->name);
-        fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
-                d->name);
-        fprintf(f, "  \"    \\\"link_libs\\\":    [\\\"%s\\\"]\\n\"\n", link_lib);
+        if (d->n_targets > 0) {
+            /* :targets present -- derive link_dirs from $<TARGET_FILE_DIR:tgt>
+             * (one per target, deduped at the linker level) and link_libs from
+             * the target basenames. Generator expressions evaluate at
+             * file(GENERATE) time, so the real .a paths land in the JSON even
+             * when the dep's build dir layout is nested (e.g. mbedTLS puts its
+             * .a files in <BINARY_DIR>/library/, not <BINARY_DIR>/ directly). */
+            fprintf(f, "  \"    \\\"link_dirs\\\":    [");
+            for (int j = 0; j < d->n_targets; j++) {
+                const char *bn = cmake_target_basename(d->targets[j]);
+                fprintf(f, "%s\\\"$<TARGET_FILE_DIR:%s>\\\"",
+                        j ? ", " : "", bn);
+            }
+            fprintf(f, "],\\n\"\n");
+            fprintf(f, "  \"    \\\"link_libs\\\":    [");
+            for (int j = 0; j < d->n_targets; j++) {
+                const char *bn = cmake_target_basename(d->targets[j]);
+                fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", bn);
+            }
+            fprintf(f, "]\\n\"\n");
+        } else {
+            /* No :targets -- fall back to the dep's BINARY_DIR and a single
+             * link_lib derived via cmake_dep_link_lib(). Works for libraries
+             * that drop their .a directly into BINARY_DIR. */
+            fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
+                    d->name);
+            fprintf(f, "  \"    \\\"link_libs\\\":    [\\\"%s\\\"]\\n\"\n",
+                    link_lib);
+        }
         fprintf(f, "  \"  }\")\n\n");
     }
 
     fprintf(f, "string(APPEND _spice_manifest \"\\n}\\n\")\n");
-    fprintf(f, "file(WRITE \"${_spice_manifest_path}\" \"${_spice_manifest}\")\n");
-    fprintf(f, "message(STATUS \"spice: wrote cmake/spice-deps-manifest.json\")\n");
+    /* file(GENERATE) evaluates generator expressions in CONTENT at generation
+     * time -- required for $<TARGET_FILE_DIR:...> to expand to a real path. */
+    fprintf(f, "file(GENERATE OUTPUT \"${_spice_manifest_path}\" "
+               "CONTENT \"${_spice_manifest}\")\n");
+    fprintf(f, "message(STATUS \"spice: will write cmake/spice-deps-manifest.json at generate time\")\n");
 
     fclose(f);
     fprintf(stderr, "spice: generated %s\n", out_path);

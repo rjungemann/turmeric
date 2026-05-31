@@ -37,7 +37,7 @@ surrounding scope.
 
 ```turmeric
 ;; Literal shape, computed values -- no quasiquote needed.
-(def payload ##{:name name :age (+ age 1) :active 1})
+(def payload #map{:name name :age (+ age 1) :active 1})
 (def points  [(make-point 0 0) (make-point 1 1) origin])
 ```
 
@@ -54,7 +54,7 @@ entirely in favor of writing the map literal directly.
 | Syntax | Produces |
 |---|---|
 | `[e1 e2 e3 ...]` *(expression position)* | Vec: `(vec-of e1 e2 e3 ...)` |
-| `##{k1 v1 k2 v2 ...}` | HAMT map: `(hamt-of k1 v1 k2 v2 ...)` |
+| `#map{k1 v1 k2 v2 ...}` | HAMT map: `(hamt-of k1 v1 k2 v2 ...)` |
 
 The vec form reuses the existing `[...]` reader -- `F_VEC` -- and adds
 context-sensitive elaboration (see below). The map form is a brand-new
@@ -77,23 +77,30 @@ The change here is purely **elaboration**: when an `F_VEC` appears in
 expression position (i.e. it wasn't grabbed by a binding-form macro
 first), lower it to `(vec-of ...)`. No reader change required.
 
-### Why `##{...}` for maps
+### Why `#map{...}` for maps
 
 The `{...}` slot in expression position is already claimed by
 **curly-infix** arithmetic (`{a + b}` -> `(+ a b)`), and `#{...}`
 already produces `F_MAP` for effect rows. Both are load-bearing and
 should not be touched.
 
-`##{...}` is a fresh dispatch with no current meaning -- the reader
-sees `#`, dispatches on the next char, sees another `#`, then `{`,
-and reads a delimited sequence. Visually it reads as "doubly
-literal" / "definitely a data literal," which matches its meaning.
+`#map{...}` is a fresh dispatch with no current meaning -- the reader
+sees `#`, reads the tag `map`, then `{`, and reads a delimited
+sequence. The named-tag spelling pairs symmetrically with `#set{...}`
+(see Future work) so both collection literals follow the same
+`#<tag>{...}` shape. A reader sees `#map{` and `#set{` and immediately
+knows which collection they are getting -- there is no shorthand-vs-named
+asymmetry to remember.
 
 Alternatives considered and rejected:
 
-- **`#m{...}`** -- works, but requires a per-collection tag letter and
-  invites bikeshedding (`#m`? `#hamt`? `#dict`?). `##` is type-agnostic
-  and shorter.
+- **`##{...}`** -- type-agnostic and one char shorter, but pairs
+  awkwardly with `#set{...}` (the only other reserved collection
+  literal). Symmetry between the two outweighs the saved character.
+- **`#m{...}` / `#hamt{...}` / `#dict{...}`** -- single-letter `#m`
+  is cryptic; the longer forms commit to an implementation detail
+  (HAMT) or a non-Turmeric vocabulary word (dict). `#map` matches
+  the conceptual type name and is the same length as `#set`.
 - **Bare `{...}` with parity disambiguation** (even count -> map,
   odd count -> infix) -- clean in the common case, but the 2-element
   edge case (`{- x}` unary infix vs `{:k v}` map) requires a
@@ -108,9 +115,9 @@ Alternatives considered and rejected:
 |---|---|
 | `[1 2 3]` *(expr position)* | `(vec-of 1 2 3)` |
 | `[]` *(expr position)* | `(vec-of)` |
-| `##{:a 1 :b x}` | `(hamt-of :a 1 :b x)` |
-| `##{}` | `(hamt-of)` |
-| `[##{:k v} ##{:k w}]` | `(vec-of (hamt-of :k v) (hamt-of :k w))` |
+| `#map{:a 1 :b x}` | `(hamt-of :a 1 :b x)` |
+| `#map{}` | `(hamt-of)` |
+| `[#map{:k v} #map{:k w}]` | `(vec-of (hamt-of :k v) (hamt-of :k w))` |
 
 Slots are arbitrary expressions -- variable references, calls, nested
 literals, etc. The normal typechecker handles them; the literal is
@@ -134,7 +141,7 @@ The allow-list lives in the elaborator and is the single source of
 truth for "what is a binding form." Adding a new binding-form macro
 means appending one entry; the rest of the language remains uniform.
 
-### Key forms in `##{...}`
+### Key forms in `#map{...}`
 
 Keys must be one of:
 
@@ -162,9 +169,12 @@ form exists.
 
 Two pieces of work:
 
-1. **`##{...}` dispatch** in `src/compiler/reader.c`: peek for `#`
-   after the initial `#`, then `{`, then read a delimited sequence
-   under a new `F_MAP_LITERAL` tag. ~15 lines.
+1. **`#map{...}` dispatch** in `src/compiler/reader.c`: after the
+   initial `#`, read the tag identifier (`map`), then require `{`,
+   then read a delimited sequence under a new `F_MAP_LITERAL` tag.
+   ~15 lines. Structuring this as a tag-dispatch table (rather than
+   a hard-coded `map` branch) leaves room for `#set{...}` to slot
+   in later without touching this code.
 2. **No vec reader change** -- existing `F_VEC` is reused. All work
    for `[...]` happens in the elaborator.
 
@@ -175,9 +185,9 @@ distinguishable from `F_MAP` during elaboration.
 
 ## Phases
 
-### DL0 -- Reader dispatch for `##{...}`
+### DL0 -- Reader dispatch for `#map{...}`
 
-Add `##{...}` to the `#`-dispatch table in `src/compiler/reader.c`.
+Add `#map{...}` to the `#`-dispatch table in `src/compiler/reader.c`.
 Introduce `F_MAP_LITERAL` in `src/compiler/forms.h`.
 
 - Parse errors (odd map slot count, missing `}`) become `TUR-E0280` /
@@ -217,7 +227,7 @@ to lock in the behavior:
 #lang sweet-exp
 
 defn build-payload [name :cstr age :int] :ptr<void>
-  ##{:name name :age age :active 1}
+  #map{:name name :age age :active 1}
 
 defn three-points [] :ptr<void>
   [make-point(0 0) make-point(1 1) origin]
@@ -227,22 +237,22 @@ defn three-points [] :ptr<void>
 
 Add test fixtures under `tests/fixtures/`:
 
-- `data-literal-map-basic` -- `##{:a 1 :b 2}` round-trips
+- `data-literal-map-basic` -- `#map{:a 1 :b 2}` round-trips
 - `data-literal-vec-basic` -- `[1 2 3]` in expression position round-trips
 - `data-literal-vec-in-defn` -- confirms `[x y]` in `defn`/`let` still
   works as a binding spec (regression guard)
-- `data-literal-computed-values` -- `##{:k (+ 1 2)}` evaluates slot
-- `data-literal-nested` -- `[##{:k 1} ##{:k 2}]`
-- `data-literal-empty` -- `##{}` and `[]` (expression position)
-- `data-literal-bad-key` -- `##{x 1}` produces `TUR-E0282`
-- `data-literal-odd-slots` -- `##{:a 1 :b}` produces `TUR-E0280`
+- `data-literal-computed-values` -- `#map{:k (+ 1 2)}` evaluates slot
+- `data-literal-nested` -- `[#map{:k 1} #map{:k 2}]`
+- `data-literal-empty` -- `#map{}` and `[]` (expression position)
+- `data-literal-bad-key` -- `#map{x 1}` produces `TUR-E0282`
+- `data-literal-odd-slots` -- `#map{:a 1 :b}` produces `TUR-E0280`
 - `data-literal-sweet-exp` -- works inside `.tursweet`
 
 ### DL4 -- Docstrings, guide, and JSON-reader relationship
 
 - `;;;` docstrings on `hamt-of` and `vec-of` if not already present;
   reference the literal syntax from each.
-- `docs/guides/data-literals-guide.md` covering `##{...}`, `[...]` in
+- `docs/guides/data-literals-guide.md` covering `#map{...}`, `[...]` in
   expression position, key-form rules, type inference notes, and the
   interplay with `#json(...)` (if that plan also lands -- otherwise
   note that data literals supersede it for non-JSON-sourced cases).
@@ -269,9 +279,9 @@ should surface any miss.
 
 | Code | Condition |
 |---|---|
-| `TUR-E0280` | Odd number of slot forms in `##{...}` (unmatched key) |
-| `TUR-E0281` | Unexpected EOF inside `##{...}` |
-| `TUR-E0282` | Invalid key form in `##{...}` (must be keyword, string, or int literal) |
+| `TUR-E0280` | Odd number of slot forms in `#map{...}` (unmatched key) |
+| `TUR-E0281` | Unexpected EOF inside `#map{...}` |
+| `TUR-E0282` | Invalid key form in `#map{...}` (must be keyword, string, or int literal) |
 
 ---
 
@@ -279,7 +289,7 @@ should surface any miss.
 
 - **Set literals** -- reserved as `#set{...}` (see Future work). Out of
   scope for DL0--DL5 because `Set` is not yet a stdlib collection type.
-- **Computed keys** in `##{...}` -- restricted to literal keys; revisit
+- **Computed keys** in `#map{...}` -- restricted to literal keys; revisit
   if a real use case emerges.
 - **Quasiquote / unquote-splicing** -- a separate, larger feature. Data
   literals cover the common "literal shape, computed values" case
@@ -287,7 +297,7 @@ should surface any miss.
 - **Type annotation on literals** -- e.g. `##<MySchema>{...}`. The JSON
   reader plan reserves analogous syntax (JR2); the same reservation
   can apply here, but is not in this plan.
-- **Pattern matching against literals** -- `(match x [##{:k v} ...])`
+- **Pattern matching against literals** -- `(match x [#map{:k v} ...])`
   is appealing but lives with the pattern-matching subsystem, not the
   reader.
 
@@ -303,7 +313,7 @@ code-like structures. The standard Lisp approach is backtick + comma +
 comma-at:
 
 ```turmeric
-`(:event :user-created :payload ##{:id ~user-id :name ~user-name})
+`(:event :user-created :payload #map{:id ~user-id :name ~user-name})
 ```
 
 This is a larger language change (reader rules for unquote, splicing
@@ -322,16 +332,16 @@ effects -- so the original meaning still earns its spelling.
 Rather than migrate effect rows off `#{...}` (a wide fixture-surface
 refactor for marginal payoff), reserve **`#set{...}`** as the
 spelling for set literals when a `Set` collection type lands in
-stdlib. Same dispatch pattern as `##{...}`; lowers to `(set-of ...)`.
+stdlib. Same dispatch pattern as `#map{...}`; lowers to `(set-of ...)`.
 
-The asymmetry (`##{...}` for maps, `#set{...}` for sets) is honest
-about the history: maps got the shorthand because their slot was
-free; sets get the named form because their slot was already
-meaningfully taken.
+The two collection literals share the `#<tag>{...}` shape on purpose:
+`#map{...}` and `#set{...}` look like siblings, and a future
+`#<tag>{...}` (e.g. `#bag{...}`, `#ordmap{...}`) drops into the same
+slot without further bikeshedding.
 
 ### Reader-macro plugin API
 
-If the project grows several literal forms (`##{`, `#set{`, `#json(`,
+If the project grows several literal forms (`#map{`, `#set{`, `#json(`,
 `#sql`, `#html`...), it may be worth exposing a registration API
 rather than continuing to hand-code branches into `reader.c`. Not
 urgent -- the dispatch table is small and a handful more entries is

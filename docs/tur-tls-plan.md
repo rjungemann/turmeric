@@ -272,14 +272,14 @@ knows the spice is missing.
 
 ## Phases
 
-| Step | Task |
-|---|---|
-| T1 | Scaffold `../turmeric-spices/spices/tls/` with `build.tur`, README, autolink hint; verify `tur fetch` resolves mbedTLS via `:cmake-deps` |
-| T2 | `tls/ctx`: `tls-ctx-new`, `tls-ctx-free`, `tls-ctx-load-cert-pem`, `tls-ctx-load-key-pem`; smoke test that constructs a context and frees it |
-| T3 | `tls/conn`: `tls-wrap-fd`, `tls-handshake`, `tls-read`, `tls-write`, `tls-shutdown`, `tls-free`; tls-roundtrip fixture connects to a server thread and exchanges one record |
-| T4 | Add weak TLS hooks + `tls` / `tls_ctx` fields to `stdlib/httpd.tur`; verify all existing httpd fixtures still pass (no behavioural change when `tls` is NULL) |
-| T5 | Implement `httpd-new-tls` and route accepted fds through the TLS wrappers; add `httpd-h5-tls` fixture (analogous to httpd-h1-basic but over TLS) |
-| T6 | Document client cert generation in `spices/tls/README.md` and link from `docs/guides/httpd-tls-guide.md` |
+| Step | Task | Status |
+|---|---|---|
+| T1 | Scaffold `../turmeric-spices/spices/tls/` with `build.tur`, README, autolink hint; verify `tur fetch` resolves mbedTLS via `:cmake-deps` | Done |
+| T2 | `tls/ctx`: `tls-ctx-new`, `tls-ctx-free`, `tls-ctx-load-cert-pem`, `tls-ctx-load-key-pem`; smoke test that constructs a context and frees it | Done -- `tests/fixtures/ctx-lifecycle/` exercises ctx-new + load-cert + load-key + ctx-free. Required tooling fixes that landed alongside: (a) `pkg.c::pkg_gen_cmake_deps` now emits per-target link_dirs via `$<TARGET_FILE_DIR:...>` and a list of link_libs from `:targets`; (b) `__tur_include__` hoisting works in multi-file builds; (c) `find_project_root` callers now `realpath()` the start so spice-deps-manifest.json is found when invoked from a relative path like `.` or `main.tur`. |
+| T3 | `tls/conn`: `tls-wrap-fd`, `tls-handshake`, `tls-read`, `tls-write`, `tls-shutdown`, `tls-free`; tls-roundtrip fixture connects to a server thread and exchanges one record | Pending |
+| T4 | Add weak TLS hooks + `tls` / `tls_ctx` fields to `stdlib/httpd.tur`; verify all existing httpd fixtures still pass (no behavioural change when `tls` is NULL) | Pending |
+| T5 | Implement `httpd-new-tls` and route accepted fds through the TLS wrappers; add `httpd-h5-tls` fixture (analogous to httpd-h1-basic but over TLS) | Pending |
+| T6 | Document client cert generation in `spices/tls/README.md` and link from `docs/guides/httpd-tls-guide.md` | Pending |
 
 T1-T3 ship the spice independently; T4-T6 ship the httpd integration.
 A user only needs T1-T3 to use raw TLS for other protocols (e.g. SMTP);

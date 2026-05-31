@@ -1264,6 +1264,46 @@ static int cmd_build(const char *input, const char *out_path,
                      int n_reader_macro_paths);
 static char *find_project_root(const char *start);
 
+/* Scan generated C source for "__tur_include__" comments and prepend each
+ * captured line to the top of the buffer so the include lands at file
+ * scope. The literal marker is the comment "__tur_include__: LINE" inside
+ * a C block comment. Required for headers that declare top-level static
+ * inline functions (mbedTLS, anything that uses psa/crypto.h); a plain
+ * #include placed inside a function body would put those declarations at
+ * block scope, which is not legal C.
+ *
+ * In-place: replaces *csrc with a new buffer containing
+ * [hoisted-includes] + [original csrc]. No-op when no markers exist. */
+static void hoist_tur_include_directives(Buf *csrc) {
+    /* Buf is not guaranteed NUL-terminated; append a sentinel before
+     * any strstr() then drop it back off the logical length when done. */
+    buf_putc(csrc, '\0');
+    csrc->len--;
+
+    const char *inc_mark = "/* __tur_include__: ";
+    size_t inc_mlen = strlen(inc_mark);
+    const char *p = csrc->data;
+    Buf hdr;
+    buf_init(&hdr);
+    while (p && (p = strstr(p, inc_mark)) != NULL) {
+        p += inc_mlen;
+        const char *end = strstr(p, " */");
+        if (!end) break;
+        buf_write(&hdr, p, (size_t)(end - p));
+        buf_putc(&hdr, '\n');
+        p = end + 3;
+    }
+    if (hdr.len > 0) {
+        Buf new_csrc;
+        buf_init(&new_csrc);
+        buf_write(&new_csrc, hdr.data, hdr.len);
+        buf_write(&new_csrc, csrc->data, csrc->len);
+        buf_free(csrc);
+        *csrc = new_csrc;
+    }
+    buf_free(&hdr);
+}
+
 /* T2: resolve the turmeric source root -- the directory that holds both
  * `stdlib/` and `src/runtime/`.  It is the parent of the located stdlib
  * root (`<root>/stdlib` in the dev layout, `<prefix>/share/turmeric/stdlib`
@@ -1375,32 +1415,8 @@ static int cmd_build(const char *input, const char *out_path,
         memcpy(tmpl, fallback, sizeof(fallback));
     }
     /* Phase S2: scan for __tur_include__ directives and inject them at the
-     * top of the generated C so stdlib modules can add file-level includes.
-     * The marker format is: slash-star __tur_include__: LINE star-slash */
-    {
-        const char *inc_mark = "/* __tur_include__: ";
-        size_t inc_mlen = strlen(inc_mark);
-        const char *p = csrc.data;
-        Buf hdr;
-        buf_init(&hdr);
-        while (p && (p = strstr(p, inc_mark)) != NULL) {
-            p += inc_mlen;
-            const char *end = strstr(p, " */");
-            if (!end) break;
-            buf_write(&hdr, p, (size_t)(end - p));
-            buf_putc(&hdr, '\n');
-            p = end + 3;
-        }
-        if (hdr.len > 0) {
-            Buf new_csrc;
-            buf_init(&new_csrc);
-            buf_write(&new_csrc, hdr.data, hdr.len);
-            buf_write(&new_csrc, csrc.data, csrc.len);
-            buf_free(&csrc);
-            csrc = new_csrc;
-        }
-        buf_free(&hdr);
-    }
+     * top of the generated C so stdlib modules can add file-level includes. */
+    hoist_tur_include_directives(&csrc);
 
     if (!tf || fwrite(csrc.data, 1, csrc.len, tf) != csrc.len) {
         fprintf(stderr, "tur: write failed\n");
@@ -1468,13 +1484,21 @@ static int cmd_build(const char *input, const char *out_path,
     Buf cmake_flags;
     buf_init(&cmake_flags);
     {
-        /* Walk up from the input file's directory to find project root */
+        /* Walk up from the input file's directory to find project root.
+         * Resolve to an absolute path first -- find_project_root walks via
+         * strrchr('/'), so a bare "." or "foo.tur" would stop after one
+         * step and miss the enclosing spice. */
         char input_dir[4096];
         strncpy(input_dir, input, sizeof(input_dir) - 1);
         input_dir[sizeof(input_dir) - 1] = '\0';
         char *slash = strrchr(input_dir, '/');
         if (slash) *slash = '\0';
         else strncpy(input_dir, ".", sizeof(input_dir));
+        char abs_input_dir[4096];
+        if (realpath(input_dir, abs_input_dir)) {
+            strncpy(input_dir, abs_input_dir, sizeof(input_dir) - 1);
+            input_dir[sizeof(input_dir) - 1] = '\0';
+        }
         char *proj_root = find_project_root(input_dir);
         if (proj_root) {
             char manifest_path[4096];
@@ -3079,6 +3103,11 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_tur_files(tur_files, n_files);
             return 1;
         }
+        /* Hoist `__tur_include__` directives to file scope (same treatment
+         * as the single-file cmd_build path) -- required for spice modules
+         * that include headers with top-level `static inline` declarations
+         * such as mbedTLS. */
+        hoist_tur_include_directives(&c_out);
         if (buf_to_path(&c_out, c_files[i]) != 0) {
             fprintf(stderr, "tur: failed to write %s\n", c_files[i]);
             buf_free(&c_out);
@@ -3189,6 +3218,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
             free_tur_files(tur_files, n_files);
             return 1;
         }
+        hoist_tur_include_directives(&c_out);
         if (buf_to_path(&c_out, c_files[i]) != 0) {
             fprintf(stderr, "tur: failed to write %s (pass 2)\n", c_files[i]);
             buf_free(&c_out);
