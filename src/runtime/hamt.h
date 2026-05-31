@@ -114,6 +114,20 @@ bool tur_hamt_has(Hamt *m, uint64_t hash, void *key);
  * Returns: value pointer, or NULL if not found */
 void *tur_hamt_get(Hamt *m, uint64_t hash, void *key);
 
+/* Key-equality-aware variants (TCE4).
+ *
+ * These behave exactly like set/del/has/get above, except keys are compared
+ * with `eq` instead of pointer identity. `eq` is an opaque word interpreted
+ * as `bool (*)(int64_t, int64_t)` -- e.g. a Turmeric closure handle -- and is
+ * consulted only when two keys share the same 64-bit hash. Passing eq == NULL
+ * is identical to the plain entry point. Use these for content-typed keys
+ * (e.g. strings) where equal text may live at distinct addresses. */
+typedef bool (*tur_hamt_keyeq_fn)(int64_t, int64_t);
+Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq);
+Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
+bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
+void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
+
 /* Get the number of key/value pairs in the map. O(1). */
 uint32_t tur_hamt_count(Hamt *m);
 

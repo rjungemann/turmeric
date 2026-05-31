@@ -1,15 +1,14 @@
 # Typed Collection Elements -- Polymorphic Vec/Map carriers (TCE0--TCE6)
 
-> **Status:** In progress -- TCE0, TCE1, TCE2, TCE3, TCE5, TCE6 landed.
-> TCE4 (polymorphic Map *keys*) is the only remaining phase and is gated on
-> a HAMT runtime change (see its section). What ships today: `vec-of` /
-> `[...]` over any scalar element type; `hamt-of` / `#map{...}` with int
-> keys and any scalar *value* type; element homogeneity enforced; reads via
-> `(:: (vec-get v i) :T)`.
+> **Status:** All phases landed (TCE0-TCE6). `vec-of` / `[...]` over any
+> scalar element type; `hamt-of` / `#map{...}` with int keys and any scalar
+> *value* type; element homogeneity enforced; reads via
+> `(:: (vec-get v i) :T)`. Content-keyed (string) maps land via a runtime
+> HAMT equality callback plus the `map-*-eq` / `smap-*` stdlib layer (TCE4).
 >
-> **Type:** Compiler + stdlib (no new runtime *for TCE0-TCE3,TCE5,TCE6*; the
-> existing `int64_t` carrier buffer is reused. TCE4 would add a runtime
-> HAMT equality callback).
+> **Type:** Compiler + stdlib for TCE0-TCE3,TCE5,TCE6 (no new runtime; the
+> existing `int64_t` carrier buffer is reused). TCE4 additionally adds a
+> runtime HAMT key-equality callback (`tur_hamt_*_eq`).
 >
 > **Approach:** "Approach B" from the vec/map element-type investigation --
 > make the `Vec[A]` / `Map[K V]` *operations* polymorphic over a scalar
@@ -348,17 +347,39 @@ need a real change, not just a `[K]` binder.
 - Constrain `K` to types with `Hash`/`Eq` instances; a missing instance is
   a typeclass-resolution error.
 
-**Why it is separated out.** TCE0-TCE3/TCE5/TCE6 are pure
-type-surface/stdlib changes riding existing machinery (no runtime change).
-TCE4 alters the core HAMT comparison semantics and threads typeclass
-dispatch into the runtime -- a meaningfully larger, higher-risk change. It
-should be scoped and reviewed on its own rather than bundled with the
-type-surface work. Until it lands, non-int keys remain expressible only via
-the hash-as-key normalization (with its collision caveat).
+**What landed.** Rather than thread full `Hash[K]` / `Eq[K]` typeclass
+dictionaries into the runtime (which would require a `Hash` typeclass that
+does not yet exist plus dictionary-passing into inline-C), TCE4 adds the
+missing *primitive* and a focused stdlib layer on top:
+
+- Runtime (`src/runtime/hamt.{c,h}`): the five collision-node key
+  comparisons now go through `keys_equal`, which consults a thread-local
+  override `g_hamt_key_eq` and falls back to pointer identity when none is
+  set. New public entry points `tur_hamt_{set,del,has,get}_eq` install the
+  override (saved/restored, so nested map ops compose) for one call. The
+  hash is still caller-supplied, so content hashing already worked; the eq
+  callback is the genuinely new capability. `eq == NULL` is byte-for-byte
+  the old behaviour, so existing int-keyed maps and all snapshots are
+  unaffected (the only codegen delta is the new stdlib function bodies).
+- Stdlib (`stdlib/map.tur`, `stdlib/hamt.tur`): `map-{assoc,get,has?,dissoc}-eq`
+  expose the `[K V]`-generic ops taking an explicit hash and a key-equality
+  closure (passed as an int handle, invoked from C via a function-pointer
+  cast -- the same mechanism `map-eq?` uses for its value comparator). The
+  `smap-*` layer specializes them for `:cstr` keys, filling in `cstr-hash`
+  (xxHash64 of contents) and `tur-cstr-key-eq?` (content compare).
+
+**Known limitation / follow-up.** `hamt-of` and the `#map{...}` literal still
+use the int-identity path (keyword/string keys are normalized to a content
+hash *stored as the key*, with the historical collision caveat). Routing
+those literals to the content-keyed `smap-*` path for `:cstr` keys needs
+key-type dispatch in the macro/lowering and a real `Hash` typeclass; that
+generic auto-dispatch is left as future work. Today, correct string-keyed
+maps use the explicit `smap-*` API.
 
 **Acceptance.** `tests/fixtures/tce4-map-cstr-key/` -- string keys
 round-trip, including two distinct string instances of equal content
-resolving to the same entry, plus a hash-collision case.
+resolving to the same entry (update, not insert -- count stays fixed) and a
+forced hash-collision chain that keeps distinct keys distinct.
 
 ### TCE5 -- Data-literal lowering
 
@@ -397,7 +418,9 @@ transparently.
 | TCE2 | `src/compiler/elab_call.c` | Polymorphic-tyvar variadic rest unifies all args to one type |
 | TCE2 | `stdlib/vec.tur` | `vec-of` emits a pairwise homogeneity check before the pushes |
 | TCE3 | `stdlib/map.tur` | Add `[K V]` binders to value-side inline-C ops |
-| TCE4 | `stdlib/map.tur` | Hash[K]/Eq[K]-driven polymorphic keys; int fast path |
+| TCE4 | `src/runtime/hamt.{c,h}` | Thread-local key-eq override; `tur_hamt_*_eq` entry points |
+| TCE4 | `stdlib/hamt.tur` | `extern-c` decls for the `_eq` variants |
+| TCE4 | `stdlib/map.tur` | `map-*-eq` (explicit hash + eq closure) + `smap-*` cstr layer |
 | TCE5 | (fixtures only) | Literal-form coverage; lowering already in place |
 | TCE6 | docstrings, `docs/api/`, fixtures | Doc + snapshot regen |
 

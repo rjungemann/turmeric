@@ -1,0 +1,38 @@
+;; TCE4: content-keyed (string) maps via the *-eq HAMT layer.
+;;
+;; Proves the two properties identity-keyed maps could not give:
+;;   1. two distinct string pointers with equal text resolve to ONE entry
+;;      (update, not insert), so map-count does not grow;
+;;   2. a forced hash collision keeps distinct keys distinct, and an update
+;;      inside the collision chain still matches by content.
+
+;; dup-str -- allocate a fresh copy of s, so the result is a DISTINCT pointer
+;; from any literal with the same text.
+(defn dup-str [s :cstr] :cstr
+  ```c const char *src = (const char *)(intptr_t)s;
+  size_t n = 0; while (src[n]) n++;
+  char *d = (char *)malloc(n + 1);
+  for (size_t i = 0; i <= n; i++) d[i] = src[i];
+  return (const char *)d;
+  ```)
+
+(defn main [] :int
+  (let [m  (smap-assoc (smap-assoc (map-new) "alpha" 1) "beta" 2)
+        ;; update "beta" through a freshly-allocated, distinct-pointer copy
+        m2 (smap-assoc m (dup-str "beta") 99)
+        ;; force a hash collision: two distinct keys, both hashed to 0
+        c  (map-assoc-eq (map-assoc-eq (map-new) 0 "x" 10 tur-cstr-key-eq?)
+                         0 "y" 20 tur-cstr-key-eq?)
+        ;; update "x" in the collision chain via a distinct pointer
+        c2 (map-assoc-eq c 0 (dup-str "x") 11 tur-cstr-key-eq?)]
+    (println (:: (smap-get m "alpha") :int))           ; 1
+    (println (:: (smap-get m2 (dup-str "beta")) :int))     ; 99
+    (println (map-count m2))                           ; 2 (not 3)
+    (println (:: (map-get-eq c 0 "x" tur-cstr-key-eq?) :int)) ; 10
+    (println (:: (map-get-eq c 0 "y" tur-cstr-key-eq?) :int)) ; 20
+    (println (map-count c))                            ; 2
+    (println (:: (map-get-eq c2 0 "x" tur-cstr-key-eq?) :int)) ; 11
+    (println (map-count c2))                           ; 2
+    (println (if (smap-has? m2 "alpha") 1 0))          ; 1
+    (println (if (smap-has? (smap-dissoc m2 "alpha") "alpha") 1 0)) ; 0
+    0))
