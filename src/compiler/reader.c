@@ -1340,11 +1340,44 @@ static Form *try_read_json(Reader *r) {
           peek_at(r, 3) == 'o' && peek_at(r, 4) == 'n')) {
         return NULL;
     }
-    if (peek_at(r, 5) != '(') return NULL;
+    /* The form is #json(...) or, with a type hint, #json<Type>(...). */
+    if (peek_at(r, 5) != '(' && peek_at(r, 5) != '<') return NULL;
 
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
     advance(r); advance(r); advance(r); advance(r); advance(r); /* "#json" */
+
+    /* JR2: optional <Type> hint.  Reserved syntax for future typed decoding
+     * (json-reader-macro-plan "Future work"); for now the hint is parsed,
+     * validated as a well-formed type name, and otherwise ignored -- the
+     * result is still an untyped HAMT / vec / literal. */
+    if (peek(r) == '<') {
+        advance(r); /* consume '<' */
+        size_t name_off = r->pos;
+        while (peek(r) != '>' && peek(r) != '(' && peek(r) != ')' &&
+               peek(r) != '\n' && peek(r) != -1) {
+            advance(r);
+        }
+        size_t name_len = r->pos - name_off;
+        if (name_len == 0) {
+            diag_emit(DIAG_ERROR, span_point(r),
+                      "#json<...>: expected a type name after '<' (TUR-E0270)");
+            r->error = true; return NULL;
+        }
+        if (peek(r) != '>') {
+            diag_emit(DIAG_ERROR, span_point(r),
+                      "#json<...>: expected '>' to close the type hint (TUR-E0270)");
+            r->error = true; return NULL;
+        }
+        advance(r); /* consume '>' */
+    }
+
+    if (peek(r) != '(') {
+        Span s = span_from_to(r, sl, sc, so, r->pos);
+        diag_emit(DIAG_ERROR, s,
+                  "#json must be followed by '(' (TUR-E0270)");
+        r->error = true; return NULL;
+    }
     advance(r); /* consume '(' */
 
     Form *val = json_read_value(r);
