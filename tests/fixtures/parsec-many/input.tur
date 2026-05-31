@@ -71,7 +71,7 @@
 
 (defn pchar [c] :ptr<void>
   (let [_c c]
-    (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+    (fn [inp] (pchar-impl _c inp))))
 
 (defn many-c-impl [p_raw inp] :int
   ```c
@@ -107,7 +107,7 @@
 
 (defn many [p] :ptr<void>
   (let [_p p]
-    (fn [inp] (let [_ _p] (many-c-impl _p inp)))))
+    (fn [inp] (many-c-impl _p inp))))
 
 (defn run-parser [p s :cstr] :int
   (let [inp (input-new s 0)]

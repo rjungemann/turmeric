@@ -62,7 +62,7 @@
 
 (defn lequal [t1 t2] :ptr<void>
   (let [lt1 t1 lt2 t2]
-    (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state)))))
+    (fn [state] (unify-goal-impl lt1 lt2 state))))
 
 (defn take-n [n lst] :int
   ```c typedef struct { int64_t value; int64_t next; } Cell;

@@ -84,14 +84,14 @@
 
 (defn pchar [c] :ptr<void>
   (let [_c c]
-    (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+    (fn [inp] (pchar-impl _c inp))))
 
 (defn or-parser-impl [lp lq inp] :int
   (mplus (apply-parser lp inp) (apply-parser lq inp)))
 
 (defn or-parser [p q] :ptr<void>
   (let [lp p lq q]
-    (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
+    (fn [inp] (or-parser-impl lp lq inp))))
 
 (defn run-parser [p s :cstr] :int
   (let [inp (input-new s 0)]

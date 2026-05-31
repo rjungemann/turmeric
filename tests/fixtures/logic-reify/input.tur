@@ -78,7 +78,7 @@
 
 (defn lequal [t1 t2] :ptr<void>
   (let [lt1 t1 lt2 t2]
-    (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state)))))
+    (fn [state] (unify-goal-impl lt1 lt2 state))))
 
 (defn conjoined-inner [lg22 s] :int
   (let [lg2 lg22] (apply-goal lg2 s)))
@@ -86,11 +86,11 @@
 (defn conjoined-impl [lg1 lg2 state] :int
   (let [lg22 lg2]
     (mbind (apply-goal lg1 state)
-           (fn [s] (let [_ lg22] (conjoined-inner lg22 s))))))
+           (fn [s] (conjoined-inner lg22 s)))))
 
 (defn conjoined [g1 g2] :ptr<void>
   (let [lg1 g1 lg2 g2]
-    (fn [state] (let [_ lg1] (conjoined-impl lg1 lg2 state)))))
+    (fn [state] (conjoined-impl lg1 lg2 state))))
 
 (defn fresh-impl [lf state] :int
   (let [nv (term-var (lvar-next))
@@ -99,7 +99,7 @@
 
 (defn fresh [f] :ptr<void>
   (let [lf f]
-    (fn [state] (let [_ lf] (fresh-impl lf state)))))
+    (fn [state] (fresh-impl lf state))))
 
 (defn take-n [n lst] :int
   ```c typedef struct { int64_t value; int64_t next; } Cell;
@@ -123,7 +123,7 @@
 ;; make-inner-fn: given lx (term), returns fat closure (y -> goal)
 (defn make-inner-fn [lx] :ptr<void>
   (let [lx2 lx]
-    (fn [y] (let [_ lx2] (inner-goal lx2 y)))))
+    (fn [y] (inner-goal lx2 y))))
 
 ;; outer-body: given x (term), produce the inner fresh goal
 (defn outer-body [x] :ptr<void>
