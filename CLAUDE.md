@@ -346,6 +346,24 @@ let [area {width * height}]
 let [hyp sqrt({*(a a) + *(b b)})]
 ```
 
+### Data literals -- `#map{...}`, `#set{...}`, `[...]`
+
+Under `-Xdata-literals`, map/vec/set construction has a literal syntax that
+works transparently inside sweet-exp files (the reader dispatch sits below the
+sweet-exp layer). Slot values are ordinary expressions, so neoteric and
+curly-infix compose inside the literal:
+
+```turmeric
+let [m #map{:name name :age {age + 1} :active 1}]
+let [pts [make-point(0 0) make-point(1 1) origin]]
+let [tags #set{1 2 3}]
+```
+
+`[...]` lowers to `(vec-of ...)` only in expression position; in `defn`/`let`
+binding position it stays a binding spec. `#map{...}` keys must be a keyword,
+string, or int literal. See
+[docs/guides/data-literals-guide.md](docs/guides/data-literals-guide.md).
+
 ### What still uses traditional parens
 
 A few forms are cleaner in traditional syntax:

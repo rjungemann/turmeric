@@ -1,9 +1,10 @@
 # Map / Vec / Set Data Literals -- Plan (DL0--DL6)
 
-> **Status:** DL0--DL3 complete. Reader dispatch + `#map{...}` / `#set{...}`
+> **Status:** DL0--DL4 complete. Reader dispatch + `#map{...}` / `#set{...}`
 > forms and error codes (DL0); elaboration lowering for all three literals
 > plus the `hamt-of` / `set-of` stdlib macros (DL1); sweet-exp interaction
-> verified (DL2); happy-path + error fixtures (DL3).
+> verified (DL2); happy-path + error fixtures (DL3); docstrings, guide, and
+> CLAUDE.md / JSON-reader cross-references (DL4).
 >
 > **Implementation note (DL1):** `#map{...}` keys are normalized in the
 > elaborator -- int keys pass through, keyword/string keys lower to
