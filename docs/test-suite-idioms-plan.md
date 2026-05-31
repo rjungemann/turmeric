@@ -240,6 +240,17 @@ workaround from the fixtures listed above. A phase is "done" when
 `let [_ `, nested-`let` pyramids of depth >=4) returns the expected
 near-zero count.
 
+## Implementation status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| **B.** `let*` (#3) | **Done** | Implemented natively as a desugaring special form (`elab_letstar`), so both the compiled (`tur`) and tree-walking (`turi`) paths get it via the shared `EX_LET` tree. An earlier macro attempt was abandoned: the compile-time macro evaluator force-evaluates `fn`/`if`/`let` forms found inside a binding-vector literal, so any closure-valued binding broke expansion. Fixed a latent `elab_let` NULL-`memcpy` crash for empty binding vectors (now reachable via `(let* [] ...)`). Swept `hamt-lisp-show`, `hkt-free-stdlib`; added the `let-star` fixture (turi-allowlisted). |
+| **A #6.** `TUR_APPLY*` macros | **Done** | `TUR_APPLY1..4` + `TUR_CLOSURE_FN` ship in the runtime preamble. Swept 25 inline-C fixtures (parsec/logic/backtrack/hkt families) plus `stdlib-arrow`'s `tur-call-closure1`, dropping the now-dead `thunk`/`fn_ptr` intermediates. All 75 `expected.c` snapshots regenerated for the new preamble. |
+| **C item 2.** `:void` inline-C returns | **Already satisfied** | A `:void` defn with an inline-C body needs no `return` today; verified. Only the `:Option`/`:Result` ABI (#2 items 1/3) and tag-accessor sweep remain. |
+| **A #1.** Fat-closure auto-shim | **Not started** | The flagship cleanup (~52 capture-forcing dummies) is blocked on this. A non-capturing `fn` lowers to a bare C function pointer (`EX_VAR`/`TY_FN`); a fat-call site (`TY_PTR_VOID`, `emit_expr.c:1737-1774`) reads slot 0 as a thunk and calls `thunk(env, args)`, so a bare pointer crashes. The fix needs per-(arity,type) env-ignoring wrapper thunks generated at each fat-call argument site (model: `EX_POLY_WRAP`, `emit_expr.c:3182`). Deep, segfault-prone codegen; deferred. Removing the dummies is unsafe until it lands. |
+| **C #1/#3, D, E.** | **Not started** | Each is a substantial reader/codegen/ABI change with broad snapshot churn; deferred to dedicated efforts. |
+| **F.** F3 dictionary passing (#7) | Tracking only | Owned by the typeclass roadmap; no new work here. |
+
 ## Out of scope
 
 - Performance work on the closure representation itself.
