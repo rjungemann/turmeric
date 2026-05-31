@@ -27,6 +27,8 @@
  */
 
 #include "reactor.h"
+#include "local_fiber.h"
+#include "fiber.h"
 
 #include <stdlib.h>
 #include <string.h>
