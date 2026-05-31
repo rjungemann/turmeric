@@ -327,8 +327,7 @@
 ;;; computed element is evaluated once and is not subject to the let-binding
 ;;; move check that a doubled (set-add s e e) would trip.
 
-(defn set-add1 [s :int x :int] :int
-  (set-add s x x))
+(defn set-add1 [s :int x :int] :int (set-add s x x))
 ;;; set-add-each__ -- internal helper for the set-of macro.
 ;;;
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears
@@ -362,6 +361,4 @@
 ;;; Since: DL1 (data-literals-plan)
 
 (defmacro set-of [& xs]
-  (if (empty? xs)
-    (list set-new)
-    (list set-add-each__ (list set-new) ~@xs)))
+  (if (empty? xs) (list set-new) (list set-add-each__ (list set-new) ~@xs)))

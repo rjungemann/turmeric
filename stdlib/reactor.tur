@@ -460,7 +460,9 @@
 ;;;
 ;;; Since: Phase F2
 
-(defn local-fiber-group-new [r :ptr<void>] #{} :ptr<void>
+(defn local-fiber-group-new [r :ptr<void>]
+  #{}
+  :ptr<void>
   (tur_local_fiber_group_new r))
 ;;; local-fiber-group-free -- free a fiber group and cancel any parked fibers.
 ;;;
@@ -476,7 +478,9 @@
 ;;;
 ;;; Since: Phase F2
 
-(defn local-fiber-group-free [g :ptr<void>] #{} :nil
+(defn local-fiber-group-free [g :ptr<void>]
+  #{}
+  :nil
   (tur_local_fiber_group_free g))
 ;;; local-spawn -- spawn a fiber into a group.
 ;;;
@@ -498,7 +502,9 @@
 ;;;
 ;;; Since: Phase F3
 
-(defn local-spawn [g :ptr<void> body :int user-data :ptr<void>] #{} :int
+(defn local-spawn [g :ptr<void> body :int user-data :ptr<void>]
+  #{}
+  :int
   (tur_local_spawn g body user-data))
 ;;; reactor-run-fibers -- drive the reactor and pump the group's fibers.
 ;;;
@@ -522,8 +528,7 @@
 ;;;
 ;;; Since: Phase F3
 
-(defn reactor-run-fibers [g :ptr<void>] #{} :int
-  (tur_reactor_run_fibers g))
+(defn reactor-run-fibers [g :ptr<void>] #{} :int (tur_reactor_run_fibers g))
 ;;; local-park-fd -- park the running fiber until an fd is ready.
 ;;;
 ;;; Registers fd on the bound reactor for events (a READ/WRITE bitmask) and
@@ -548,7 +553,9 @@
 ;;;
 ;;; Since: Phase F4
 
-(defn local-park-fd [g :ptr<void> fd :int events :int timeout-ms :int] #{} :int
+(defn local-park-fd [g :ptr<void> fd :int events :int timeout-ms :int]
+  #{}
+  :int
   (tur_local_park_fd g fd events timeout-ms))
 ;;; local-park-chan -- park the running fiber until a channel has a value.
 ;;;
@@ -572,5 +579,7 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn local-park-chan [g :ptr<void> ch :ptr<void>] #{} :int
+(defn local-park-chan [g :ptr<void> ch :ptr<void>]
+  #{}
+  :int
   (tur_local_park_chan g ch))
