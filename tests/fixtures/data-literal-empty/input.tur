@@ -1,0 +1,4 @@
+;; DL3: empty literals -- #map{}, #set{}, and [] (expression position).
+(println (map-count #map{}))
+(println (set-count #set{}))
+(println (vec-len []))
