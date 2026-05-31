@@ -7,6 +7,29 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     uint32_t *out_body_start,
     const Symbol **class_type_params, uint8_t n_class_type_params);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
+static bool rt_type_mentions_tyvar(const Type *t, const char *name);
+
+/* Phase RT: is class method `m` of class `c` a return-only-dispatch method --
+ * one of the class's type parameters appears in the return type but in no
+ * parameter type?  Such methods select their instance from the expected result
+ * type, so their parameters must NOT be coerced to the instance type the way
+ * an ordinary receiver-dispatched method's first int parameter is. */
+static bool method_is_return_dispatch(const TypeClass *c, const TypeClassMethod *m) {
+    for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
+        const Symbol *tp = c->type_params[ti];
+        if (!tp) continue;
+        if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
+        bool in_param = false;
+        for (uint8_t pi = 0; pi < m->n_params; pi++) {
+            if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                in_param = true;
+                break;
+            }
+        }
+        if (!in_param) return true;
+    }
+    return false;
+}
 
 /* KB-030: designated home file (basename) for a built-in primitive type that
  * has no StructDef of its own (e.g. `str`, `rc`).  The orphan-instance check
@@ -1655,7 +1678,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Form *impl_params_form = impl_form->as.list.items[1];
         uint32_t impl_body_start = 2;
         Type return_type = tc->methods[i].return_type;  /* Default from typeclass */
-        
+
+        /* Phase RT: substitute a tyvar return type (the dispatch variable) with
+         * the instance's concrete type argument, so the emitted impl returns
+         * the instance type (e.g. (decode! [raw :int] : a) becomes : User for
+         * HasSchema[User]).  An explicit annotation below still wins. */
+        if (return_type.kind == TY_TYVAR && return_type.as.tyvar_.name) {
+            for (uint8_t ti = 0; ti < tc->n_type_params && ti < n_type_args; ti++) {
+                if (tc->type_params[ti] &&
+                    strcmp(tc->type_params[ti]->name,
+                           return_type.as.tyvar_.name) == 0) {
+                    return_type = type_args[ti];
+                    break;
+                }
+            }
+        }
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
@@ -1766,7 +1803,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     /* CS1b: elab_param_type is the type used for scope bindings and body
                      * elaboration; param_type is the ABI type used for the emitted signature. */
                     Type elab_param_type = param_type;
-                    if (param_type.kind == TY_INT && n_type_args > 0) {
+                    /* Phase RT: for a return-only-dispatch method, parameters
+                     * are genuine (concrete) inputs, not the dispatch receiver,
+                     * so do not rewrite an int parameter to the instance type. */
+                    if (param_type.kind == TY_INT && n_type_args > 0 &&
+                        !method_is_return_dispatch(tc, &tc->methods[i])) {
                         elab_param_type = type_args[0];
                         /* PTC4: KIND_ARROW struct type-constructors (have type params) are
                          * applied as TY_APP at call sites, which lowers to int64_t in C.
@@ -2095,9 +2136,26 @@ static bool rt_type_mentions_tyvar(const Type *t, const char *name) {
     }
 }
 
-static bool rt_kind_is_primitive(TypeKind tk) {
-    return (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
-            tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID);
+/* Phase RT: walk a method's declared return type in parallel with the expected
+ * type, binding the dispatch tyvar `rv` to the corresponding subtree of the
+ * expected type.  Handles the bare case (return == `a`, binds a := expected)
+ * and structured returns ((Result a E) vs (Result User E), binds a := User).
+ * Returns true and writes *out_bound when `rv` was located; false otherwise. */
+static bool rt_unify_return(const Type *ret, const Type *expected,
+                            const char *rv, Type *out_bound) {
+    if (!ret || !expected) return false;
+    if (ret->kind == TY_TYVAR && ret->as.tyvar_.name &&
+        strcmp(ret->as.tyvar_.name, rv) == 0) {
+        *out_bound = *expected;
+        return true;
+    }
+    if (ret->kind == TY_APP && expected->kind == TY_APP) {
+        if (rt_unify_return(ret->as.app.arg, expected->as.app.arg, rv, out_bound))
+            return true;
+        if (rt_unify_return(ret->as.app.fn, expected->as.app.fn, rv, out_bound))
+            return true;
+    }
+    return false;
 }
 
 Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
@@ -2107,12 +2165,14 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
 
     TypeClassEnv *env = &e->typeclass_env;
 
-    /* Find a return-only-dispatch method named `name`: its return type is a
-     * bare TY_TYVAR naming one of the class's type parameters, and no
-     * parameter type mentions that tyvar. */
+    /* Find a return-only-dispatch method named `name`: one of the class's type
+     * parameters appears in the method's return type but in none of its
+     * parameter types, so the instance can only be picked from the expected
+     * result type. */
     TypeClass *tc = NULL;
     uint8_t midx = 0;
     const TypeClassMethod *meth = NULL;
+    const char *disp_tv = NULL;
     for (TypeClass *c = env->typeclasses; c != NULL && !meth; c = c->next) {
         for (uint8_t mi = 0; mi < c->n_methods; mi++) {
             const TypeClassMethod *m = &c->methods[mi];
@@ -2120,30 +2180,22 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                   memcmp(m->name->name, name->name, name->len) == 0)) {
                 continue;
             }
-            if (m->return_type.kind != TY_TYVAR ||
-                !m->return_type.as.tyvar_.name) {
-                continue;
-            }
-            const char *rv = m->return_type.as.tyvar_.name;
-            bool is_class_tp = false;
             for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
-                if (c->type_params[ti] &&
-                    strcmp(c->type_params[ti]->name, rv) == 0) {
-                    is_class_tp = true;
-                    break;
+                const Symbol *tp = c->type_params[ti];
+                if (!tp) continue;
+                if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
+                bool in_param = false;
+                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                    if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                        in_param = true;
+                        break;
+                    }
                 }
+                if (in_param) continue;
+                tc = c; midx = mi; meth = m; disp_tv = tp->name;
+                break;
             }
-            if (!is_class_tp) continue;
-            bool in_param = false;
-            for (uint8_t pi = 0; pi < m->n_params; pi++) {
-                if (rt_type_mentions_tyvar(&m->param_types[pi], rv)) {
-                    in_param = true;
-                    break;
-                }
-            }
-            if (in_param) continue;
-            tc = c; midx = mi; meth = m;
-            break;
+            if (meth) break;
         }
     }
     if (!meth) return NULL;  /* not a return-only-dispatch method */
@@ -2157,12 +2209,19 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
         return NULL;
     }
 
-    /* The method's whole return is the dispatch tyvar, so the expected type
-     * binds it directly. */
-    Type bound = *e->expected_type;
-    Kind ck = rt_kind_is_primitive(bound.kind) ? KIND_STAR : KIND_ARROW;
-    TypeClassDispatchKey key = { tc, &bound, 1, ck };
-    TypeClassInstance *inst = typeclass_env_lookup_instance_by_key(env, &key);
+    /* Bind the dispatch tyvar from the expected type (bare or structured). */
+    Type bound;
+    if (!rt_unify_return(&meth->return_type, e->expected_type, disp_tv, &bound)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "ascribed type does not match the result shape of '%s'",
+                  name->name);
+        return NULL;
+    }
+    /* Use the typed lookup so struct instances are discriminated by identity
+     * (HasSchema[User] vs HasSchema[Post]); it matches primitives by kind and
+     * structs by StructDef pointer. */
+    TypeClassInstance *inst =
+        typeclass_env_lookup_instance(env, tc, &bound, 1);
     if (!inst) {
         diag_emit(DIAG_ERROR, call->span,
                   "no instance '%s %s'", tc->name->name, type_name(bound));
