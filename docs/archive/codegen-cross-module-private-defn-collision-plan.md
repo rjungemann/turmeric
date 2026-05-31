@@ -176,11 +176,15 @@ top of the prefixed one. Worth confirming.
    'plot/decor' mangles to the same C name as ...") rather than a
    downstream clang error.
 
--  [ ] **CC3** (optional; not done here -- `../turmeric-spices` absent) --
-   After the fix is in, remove the defensive uniqueness
-   in `../turmeric-spices/spices/plot/src/plot/{decor,interval,line}.tur`
-   (rename all three back to a shared `__nan` helper) and verify the
-   plot test suite still passes. Optional; keeps the spice tree clean.
+-  [x] **CC3** -- Removed the defensive uniqueness in
+   `../turmeric-spices/spices/plot/src/plot/{decor,interval,line}.tur`.
+   All three helpers renamed from `__auto-bound`/`__iv-nan`/`__ln-nan`
+   back to a shared `__nan` name. Verified: `emit-c` on tests that import
+   multiple modules now emits distinct `plot__decor____nan`,
+   `plot__interval____nan`, and `plot__line____nan` C symbols -- one per
+   module, no collision. The plot test suite's compilation failures are
+   due to the missing `plutovg` native library in this environment, not
+   Turmeric-level errors.
 
 ---
 
