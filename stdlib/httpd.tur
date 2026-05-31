@@ -43,7 +43,8 @@
 ;;     char method[16]; char path[1024]; char version[16];
 ;;     char *body; int body_len;
 ;;     int resp_status; char *resp_body; int resp_body_len;
-;;     int client_keep_alive; }
+;;     int client_keep_alive;
+;;     void *route_params;   // RouteParam linked list (H6) }
 ;;
 ;; API:
 ;;   httpd-new          [port :int handler :int]         -- ptr<void>
@@ -99,6 +100,7 @@
       char *resp_body;
       int resp_body_len;
       int client_keep_alive;
+      void *route_params;
   } HttpdConn;
   /* 5 second receive timeout bounds idle keep-alive connections. */
   struct timeval tv;
@@ -669,6 +671,24 @@
   return (int64_t)((HttpdConn *)conn)->body_len;
   ```)
 
+;;; httpd-resp-status-get -- return the currently-set response status code.
+;;;
+;;; Returns 0 if no status has been set yet (the default applied during
+;;; response writing is 200 OK).
+;;;
+;;; Since: Phase H6
+(defn httpd-resp-status-get [conn :ptr<void>] :int
+  ```c
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+  } HttpdConn;
+  return (int64_t)((HttpdConn *)conn)->resp_status;
+  ```)
+
 ;;; httpd-resp-status! -- set the HTTP response status code.
 ;;;
 ;;; Since: Phase H1
@@ -705,3 +725,241 @@
   memcpy(c->resp_body, body, len + 1);
   c->resp_body_len = (int)len;
   ```)
+
+;; =============================================================================
+;; H6: Routing DSL
+;; =============================================================================
+;;
+;; Router holds a linked list of (method, pattern, handler) tuples. Patterns
+;; are slash-separated segments; a segment starting with ':' captures the
+;; corresponding path segment into a named parameter that the handler can
+;; read with httpd-param.
+;;
+;; Example:
+;;   (let [r (router-new)]
+;;     (router-add r "GET"  "/"            home-h)
+;;     (router-add r "GET"  "/users/:id"   show-h)
+;;     (router-add r "POST" "/users"       create-h)
+;;     (httpd-new 0 (fn [c :ptr<void>] :nil (router-dispatch r c))))
+;;
+;; Router layout:    { void *routes; }   (head of Route list)
+;; Route layout:     { char method[16]; char pattern[1024];
+;;                     int64_t handler; void *next; }
+;; RouteParam:       { char name[64]; char value[256]; void *next; }
+
+;;; router-new -- create an empty router.
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Router handle
+;;;
+;;; Since: Phase H6
+(defn router-new [] :ptr<void>
+  ```c
+  typedef struct { void *routes; } Router;
+  Router *r = (Router *)malloc(sizeof(Router));
+  if (!r) return NULL;
+  r->routes = NULL;
+  return (void *)r;
+  ```)
+
+;;; router-add -- register a route with the given method, pattern, and handler.
+;;;
+;;; The handler closure is called when an incoming request's method matches
+;;; and its path matches the pattern. Path segments starting with ':' capture
+;;; the corresponding request segment; the value can be read inside the
+;;; handler via httpd-param.
+;;;
+;;; Parameters:
+;;;   r       -- router handle
+;;;   method  -- HTTP method ("GET", "POST", etc.)
+;;;   pattern -- path pattern (e.g. "/users/:id")
+;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;
+;;; Since: Phase H6
+(defn router-add [r :ptr<void> method :cstr pattern :cstr handler :int] :nil
+  ```c
+  typedef struct Route Route;
+  struct Route {
+      char method[16];
+      char pattern[1024];
+      int64_t handler;
+      Route *next;
+  };
+  typedef struct { Route *routes; } Router;
+  Router *router = (Router *)r;
+  Route *route = (Route *)malloc(sizeof(Route));
+  if (!route) return;
+  size_t mlen = strlen(method); if (mlen > 15) mlen = 15;
+  memcpy(route->method, method, mlen); route->method[mlen] = '\0';
+  size_t plen = strlen(pattern); if (plen > 1023) plen = 1023;
+  memcpy(route->pattern, pattern, plen); route->pattern[plen] = '\0';
+  route->handler = (int64_t)handler;
+  /* Append at tail so registration order is preserved. */
+  if (!router->routes) {
+      route->next = NULL;
+      router->routes = route;
+  } else {
+      Route *cur = router->routes;
+      while (cur->next) cur = cur->next;
+      route->next = NULL;
+      cur->next = route;
+  }
+  ```)
+
+;;; router-free -- free a router and all registered routes.
+;;;
+;;; Parameters:
+;;;   r -- router handle
+;;;
+;;; Since: Phase H6
+(defn router-free [r :ptr<void>] :nil
+  ```c
+  typedef struct Route Route;
+  struct Route { char method[16]; char pattern[1024]; int64_t handler; Route *next; };
+  typedef struct { Route *routes; } Router;
+  Router *router = (Router *)r;
+  Route *cur = router->routes;
+  while (cur) {
+      Route *nx = cur->next;
+      free(cur);
+      cur = nx;
+  }
+  free(router);
+  ```)
+
+;;; router-dispatch -- match the current request against the router's table.
+;;;
+;;; On match: attaches captured path params to conn, calls the route's
+;;; handler with conn, then frees the params. On no match: sets a 404
+;;; response with body "Not Found".
+;;;
+;;; Parameters:
+;;;   r    -- router handle
+;;;   conn -- connection handle (the one passed to the httpd handler)
+;;;
+;;; Since: Phase H6
+(defn router-dispatch [r :ptr<void> conn :ptr<void>] :nil
+  ```c
+  typedef struct Route Route;
+  struct Route { char method[16]; char pattern[1024]; int64_t handler; Route *next; };
+  typedef struct { Route *routes; } Router;
+  typedef struct RouteParam RouteParam;
+  struct RouteParam { char name[64]; char value[256]; RouteParam *next; };
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+  } HttpdConn;
+  Router *router = (Router *)r;
+  HttpdConn *c   = (HttpdConn *)conn;
+  for (Route *route = router->routes; route; route = route->next) {
+      if (strcmp(route->method, c->method) != 0) continue;
+      /* Match path segment by segment. */
+      const char *pp = route->pattern;
+      const char *pc = c->path;
+      RouteParam *params = NULL;
+      int matched = 1;
+      while (1) {
+          while (*pp == '/') pp++;
+          while (*pc == '/') pc++;
+          if (!*pp && !*pc) break;
+          if ((!*pp) != (!*pc)) { matched = 0; break; }
+          const char *seg_pp = pp;
+          while (*seg_pp && *seg_pp != '/') seg_pp++;
+          const char *seg_pc = pc;
+          while (*seg_pc && *seg_pc != '/' && *seg_pc != '?') seg_pc++;
+          if (*pp == ':') {
+              int name_len = (int)(seg_pp - pp - 1);
+              int val_len  = (int)(seg_pc - pc);
+              if (val_len <= 0) { matched = 0; break; }
+              RouteParam *p = (RouteParam *)malloc(sizeof(RouteParam));
+              if (!p) { matched = 0; break; }
+              if (name_len > 63) name_len = 63;
+              if (val_len  > 255) val_len  = 255;
+              memcpy(p->name,  pp + 1, (size_t)name_len);  p->name[name_len]  = '\0';
+              memcpy(p->value, pc,     (size_t)val_len);   p->value[val_len]  = '\0';
+              p->next = params;
+              params = p;
+          } else {
+              int pp_len = (int)(seg_pp - pp);
+              int pc_len = (int)(seg_pc - pc);
+              if (pp_len != pc_len || memcmp(pp, pc, (size_t)pp_len) != 0) {
+                  matched = 0;
+                  break;
+              }
+          }
+          pp = seg_pp;
+          pc = seg_pc;
+      }
+      if (matched) {
+          c->route_params = (void *)params;
+          int64_t *fat = (int64_t *)(intptr_t)route->handler;
+          typedef void (*fn1_t)(void *, int64_t);
+          ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)c);
+          /* Free params after handler returns. */
+          RouteParam *cur = params;
+          while (cur) { RouteParam *nx = cur->next; free(cur); cur = nx; }
+          c->route_params = NULL;
+          return;
+      }
+      /* Free partial params from failed match. */
+      RouteParam *cur = params;
+      while (cur) { RouteParam *nx = cur->next; free(cur); cur = nx; }
+  }
+  /* No route matched: 404. */
+  c->resp_status = 404;
+  const char *nf = "Not Found";
+  size_t nflen = strlen(nf);
+  c->resp_body = (char *)malloc(nflen + 1);
+  if (c->resp_body) {
+      memcpy(c->resp_body, nf, nflen + 1);
+      c->resp_body_len = (int)nflen;
+  }
+  ```)
+
+;;; httpd-param -- read a captured route parameter set by router-dispatch.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle passed to the route handler
+;;;   name -- parameter name (e.g. "id" for a ":id" pattern segment)
+;;;
+;;; Returns:
+;;;   cstr -- the captured value, or "" if no parameter with that name
+;;;
+;;; Example:
+;;;   ;; pattern "/users/:id" matched against "/users/42"
+;;;   (httpd-param conn "id")  ; => "42"
+;;;
+;;; Since: Phase H6
+(defn httpd-param [conn :ptr<void> name :cstr] :cstr
+  ```c
+  typedef struct RouteParam RouteParam;
+  struct RouteParam { char name[64]; char value[256]; RouteParam *next; };
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+  } HttpdConn;
+  HttpdConn *c = (HttpdConn *)conn;
+  RouteParam *p = (RouteParam *)c->route_params;
+  while (p) {
+      if (strcmp(p->name, name) == 0) return p->value;
+      p = p->next;
+  }
+  return "";
+  ```)
+
+;;; defroute -- macro sugar for (router-add router method pattern handler).
+;;;
+;;; Example:
+;;;   (defroute r "GET" "/" (fn [c :ptr<void>] :nil ...))
+;;;
+;;; Since: Phase H6
+(defmacro defroute [router method pattern handler]
+  `(router-add ,router ,method ,pattern ,handler))

@@ -1,0 +1,130 @@
+;; Phase H6: httpd-h6-routing -- routing DSL with method guards and path
+;; parameters. The router holds three routes:
+;;
+;;   GET  /         -> "home"
+;;   GET  /users/:id-> "user N" (echoes captured id)
+;;   POST /users    -> "created"
+;;
+;; The client fires four pipelined HTTP/1.1 requests on a single
+;; keep-alive connection, including one that matches no route (expects 404).
+;;
+;; Expected output:
+;;   home
+;;   user 42
+;;   created
+;;   404
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-line [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn print-user [id :cstr] :nil
+  ```c printf("user %s\n", id); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd); return NULL;
+  }
+  /* Four pipelined requests, last one closes the connection. */
+  const char *reqs[4] = {
+      "GET / HTTP/1.1\r\nHost: x\r\n\r\n",
+      "GET /users/42 HTTP/1.1\r\nHost: x\r\n\r\n",
+      "POST /users HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+      "GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+  };
+  struct timespec gap = { 0, 30000000L };
+  for (int i = 0; i < 4; i++) {
+      send(fd, reqs[i], strlen(reqs[i]), 0);
+      nanosleep(&gap, NULL);
+  }
+  char drain[4096];
+  while (recv(fd, drain, sizeof(drain), 0) > 0) { /* drain */ }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 8)
+        router (router-new)]
+    ;; GET / -- prints "home"
+    (defroute router "GET" "/"
+      (fn [conn :ptr<void>] :nil
+        (print-line "home")
+        (httpd-resp-status! conn 200)
+        (httpd-resp-body! conn "home")
+        (chan-send donech 1)))
+    ;; GET /users/:id -- prints "user N"
+    (defroute router "GET" "/users/:id"
+      (fn [conn :ptr<void>] :nil
+        (print-user (httpd-param conn "id"))
+        (httpd-resp-status! conn 200)
+        (httpd-resp-body! conn "user")
+        (chan-send donech 1)))
+    ;; POST /users -- prints "created"
+    (defroute router "POST" "/users"
+      (fn [conn :ptr<void>] :nil
+        (print-line "created")
+        (httpd-resp-status! conn 201)
+        (httpd-resp-body! conn "created")
+        (chan-send donech 1)))
+    ;; Dispatching handler -- looks up route then signals 404 if missed.
+    (let [h      (httpd-new-pool 0 1
+                    (fn [conn :ptr<void>] :nil
+                      (router-dispatch router conn)
+                      (when (= 404 (httpd-resp-status-get conn))
+                        (do
+                          (print-line "404")
+                          (chan-send donech 1)))))
+          port   (httpd-port h)
+          server (spawn-server h)
+          client (spawn-client port)]
+      (chan-recv donech)
+      (chan-recv donech)
+      (chan-recv donech)
+      (chan-recv donech)
+      (httpd-stop h)
+      (join-thread server)
+      (join-thread client)
+      (println "done")
+      (httpd-free h)
+      (router-free router)
+      (chan-free donech)
+      0)))
