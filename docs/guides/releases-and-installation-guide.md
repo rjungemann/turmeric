@@ -245,9 +245,6 @@ failed attempt's history is preserved.
 
 ## See also
 
-- [`docs/release-binaries-plan.md`](../release-binaries-plan.md) --
-  the original plan; documents the trade-offs (why arm64-only on macOS,
-  why sibling-stdlib over embedded, what's still out of scope).
 - `Formula/turmeric.rb` -- the Homebrew formula.
 - `.github/workflows/release.yml` -- the release pipeline.
 - `src/main.c:188` (`resolve_stdlib_root`) -- the stdlib-discovery logic

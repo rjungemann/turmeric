@@ -498,4 +498,3 @@ Unlike Prolog's stack-based choice points, Turmeric's cloneable continuations al
 - [Effects System Guide](effects-system-guide.md) -- Algebraic effects foundation
 - [Async/Await Guide](async-await-guide.md) -- Single-shot continuations for I/O
 - [Checkpointing with Serializable Continuations](checkpointing-guide.md) -- Persisting computations
-- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations

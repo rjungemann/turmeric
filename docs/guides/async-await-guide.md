@@ -267,4 +267,3 @@ async
 - [Effects System Guide](effects-system-guide.md) -- Effects foundation
 - [Threading Guide](threading-guide.md) -- OS-level threads and primitives
 - [STM Tutorial](stm-tutorial.md) -- Composable concurrent transactions
-- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations (foundation)

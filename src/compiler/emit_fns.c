@@ -311,7 +311,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 const char *cap_ctype = captured->is_poly_fn
                                           ? "tur_poly_fn_t"
                                           : type_c_name(captured->type);
-                buf_printf(file, "%s %s; ", cap_ctype, captured->name->name);
+                char *field = raw_name_for_binding(captured);
+                buf_printf(file, "%s %s; ", cap_ctype, field);
+                free(field);
             }
             buf_puts(file, "};\n");
             free(thunk_typedef);

@@ -258,7 +258,6 @@ Full liveness precision is gated on the post-1.0 CPS pass (tracked in
 
 ## See Also
 
-- `stdlib/backtrack.tur` -- standard library implementation
+- [tur/backtrack API](../api/tur-backtrack.html) -- standard library implementation
 - `tests/fixtures/backtrack-*/` -- test fixtures for all backtracking features
 - `benchmarks/bench-backtrack-*.tur` -- performance benchmarks
-- `docs/archive/backtracking-cloneable-continuations-plan.md` -- design history

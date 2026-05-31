@@ -137,5 +137,4 @@ variables (variables already in the environment win).
 
 - `tur new --help` -- scaffold a new spice with the standard Justfile
 - `tur run --init` -- add the standard Justfile to an existing spice
-- [docs/tur-run-plan.md](../tur-run-plan.md) -- design document
 - [https://just.systems](https://just.systems) -- upstream `just` binary

@@ -468,4 +468,3 @@ risk of dependent unification or SMT integration.
 - [contract-types-guide.md](contract-types-guide.md) -- Contract types
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) -- Union and intersection types
 - [effects-vs-monads.md](effects-vs-monads.md) -- Why effects instead of monads
-- [typing-gap-audit.md](../upcoming/typing-gap-audit.md) -- where the implementation currently diverges from the intent described here

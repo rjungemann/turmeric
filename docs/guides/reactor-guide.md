@@ -224,9 +224,6 @@ must compile for multiple targets.
 
 ## See also
 
-- `stdlib/reactor.tur` -- module source and full API docstrings
-- `docs/archive/tur-reactor-plan.md` -- design rationale and phase roadmap (R1-R8 shipped)
-- `docs/upcoming/reactor-run-fibers-plan.md` -- planned local fiber driver (Style 3)
-- `docs/tur-httpd-plan.md` -- first consumer; shows the listener-thread pattern
-- `stdlib/chan.tur` -- channel creation (`chan-new`, `chan-send`, `chan-recv`)
-- `docs/guides/async-await-guide.md` -- fiber-based async I/O (alternative for fiber code)
+- [tur/reactor API](../api/tur-reactor.html) -- module reference and full API docstrings
+- [tur/chan API](../api/tur-chan.html) -- channel creation (`chan-new`, `chan-send`, `chan-recv`)
+- [Async/Await Guide](async-await-guide.md) -- fiber-based async I/O (alternative for fiber code)

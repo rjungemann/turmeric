@@ -701,7 +701,9 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint8_t j = 0; j < n_captures; j++) {
                         if (j > 0) buf_puts(body, ", ");
                         char *cn = name_for_binding(ctx, captures[j]);
-                        buf_printf(body, ".%s = %s", captures[j]->name->name, cn);
+                        char *field = raw_name_for_binding(captures[j]);
+                        buf_printf(body, ".%s = %s", field, cn);
+                        free(field);
                         free(cn);
                     }
                     buf_puts(body, "};\n");
@@ -771,11 +773,13 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint8_t j = 0; j < n_captures; j++) {
                     if (j > 0) buf_puts(body, ", ");
                     char *cn = name_for_binding(ctx, captures[j]);
-                    buf_printf(body, ".%s = %s", captures[j]->name->name, cn);
+                    char *field = raw_name_for_binding(captures[j]);
+                    buf_printf(body, ".%s = %s", field, cn);
+                    free(field);
                     free(cn);
                 }
                 buf_puts(body, "};\n");
-                
+
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
                 free(env_tmp);
@@ -2202,8 +2206,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 for (uint8_t i = 0; i < closure->n_captures; i++) {
                     Binding *captured = closure->captures[i];
+                    char *field = raw_name_for_binding(captured);
                     buf_printf(ctx->file, "%s %s; ",
-                               type_c_name(captured->type), captured->name->name);
+                               type_c_name(captured->type), field);
+                    free(field);
                 }
                 buf_puts(ctx->file, "};\n");
                 free(thunk_typedef);
@@ -2235,8 +2241,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             for (uint8_t i = 0; i < closure->n_captures; i++) {
                 Binding *captured = closure->captures[i];
                 char *cn = name_for_binding(ctx, captured);
+                char *field = raw_name_for_binding(captured);
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "%s->%s = %s;\n", fat_tmp, captured->name->name, cn);
+                buf_printf(body, "%s->%s = %s;\n", fat_tmp, field, cn);
+                free(field);
                 free(cn);
             }
             char *ptr_tmp = fresh_tmp(ctx);

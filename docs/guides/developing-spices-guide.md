@@ -873,6 +873,5 @@ for the full design sketch.
 - [Consuming spices](consuming-spices-guide.md) -- adding and using spices in a project
 - [Package management guide](package-management-guide.md) -- full `build.tur` manifest reference and `tur` CLI
 - [C integration guide](c-integration-guide.md) -- `extern-c`, `include-c`, inline-C blocks
-- [CMake/CPM integration notes](../archive/cmake-cpm-integration-plan.md) -- cmake-deps internals, generated files, hash locking, security
 - [Using a Turmeric library from CMake](using-turmeric-from-cmake.md) -- step-by-step guide for `tur emit-cmake`
 - [Test runner contract](test-runner-contract.md) -- full testing API

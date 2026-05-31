@@ -224,7 +224,9 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                         for (uint8_t j = 0; j < n_captures; j++) {
                             if (j > 0) buf_puts(body, ", ");
                             char *cn = name_for_binding(ctx, captures[j]);
-                            buf_printf(body, ".%s = %s", captures[j]->name->name, cn);
+                            char *field = raw_name_for_binding(captures[j]);
+                            buf_printf(body, ".%s = %s", field, cn);
+                            free(field);
                             free(cn);
                         }
                         buf_puts(body, "};\n");

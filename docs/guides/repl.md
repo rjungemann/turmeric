@@ -391,5 +391,5 @@ printf ':reload myfile.tur\n:quit\n' | tur repl 2>/dev/null \
 
 ## See also
 
-- `docs/eval-api.md` -- C embedding API for programmatic use of libturi.
+- [eval-api.md](eval-api.md) -- C embedding API for programmatic use of libturi.
 - `man tur-repl` -- man page with a concise option reference.

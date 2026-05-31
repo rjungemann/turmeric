@@ -113,5 +113,4 @@ Every spice scaffolded by `tur new` supports these recipes:
 
 - `tur run --help` -- Justfile task runner
 - `tur run --init` -- add the Justfile to an existing spice
-- [docs/tur-run-guide.md](tur-run-guide.md) -- task runner guide
-- [docs/tur-run-plan.md](../tur-run-plan.md) -- design document
+- [tur-run-guide.md](tur-run-guide.md) -- task runner guide

@@ -723,5 +723,4 @@ and `free-run`.
 
 ## See also
 
-- `docs/gadts-guide.md` -- GADTs, `defgadt`, and equality witnesses
-- `docs/archive/hkt-deferred-tasks.md` -- completed and open items for the HKT implementation
+- [gadts-guide.md](gadts-guide.md) -- GADTs, `defgadt`, and equality witnesses

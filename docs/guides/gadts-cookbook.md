@@ -421,9 +421,8 @@ defn main [] :int
 
 ## See also
 
-- `docs/gadts-guide.md` -- Full language reference for GADTs and union types
-- `docs/gadts-plan.md` -- Implementation plan and phase history
-- `stdlib/gadt-vec.tur` -- Production-quality length-indexed vector stdlib
-- `stdlib/equal.tur` -- `Equal` witness, `sym`, `trans`, `subst`
+- [gadts-guide.md](gadts-guide.md) -- Full language reference for GADTs and union types
+- [tur/gadt-vec API](../api/tur-gadt-vec.html) -- Production-quality length-indexed vector stdlib
+- [tur/equal API](../api/tur-equal.html) -- `Equal` witness, `sym`, `trans`, `subst`
 - `tests/fixtures/gadt-*/` -- All GADT test fixtures
 - `tests/fixtures/union-types-*/` -- Union type and gradual typing fixtures

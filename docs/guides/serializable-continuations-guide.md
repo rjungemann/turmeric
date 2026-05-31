@@ -654,4 +654,3 @@ or restructure so only Serializable bindings remain in scope.
 - [Async/Await Guide](async-await-guide.md) -- One-shot continuations for async I/O
 - [Logic Programming Guide](logic-programming-guide.md) -- Cloneable continuations for backtracking
 - [Effects System Guide](effects-system-guide.md) -- Algebraic effects and custom control flow
-- [turmeric-plan.md](../turmeric-plan.md) §18 -- Delimited continuations (foundation)

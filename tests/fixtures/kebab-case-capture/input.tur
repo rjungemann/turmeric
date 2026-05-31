@@ -1,0 +1,13 @@
+;; Regression: kebab-case bindings must survive capture into defer thunks
+;; and HKT fat-closure env structs. Before the fix, the C field name was
+;; emitted raw (e.g. `int64_t base-val;`), producing invalid C.
+
+(defn make-adder [base-val] :ptr
+  (fn [x] :int (+ base-val x)))
+
+(defn main [] :int
+  (let [^mut my-x 10]
+    (defer (println my-x))
+    (set! my-x 20))
+  (println (make-adder 100 5))
+  0)

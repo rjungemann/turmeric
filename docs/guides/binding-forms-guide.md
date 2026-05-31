@@ -225,4 +225,4 @@ that are too specific to lift to top level.
 ## See also
 
 - [Style Guide](style-guide.md) -- indentation rules for `let` / `do` bodies
-- `stdlib/macros.tur` -- `for`, `cond`, `when`, and other loop/control macros
+- [tur/macros API](../api/tur-macros.html) -- `for`, `cond`, `when`, and other loop/control macros

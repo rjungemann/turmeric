@@ -427,5 +427,4 @@ tur test
 - [Package management guide](package-management-guide.md) -- full `build.tur` manifest reference and `tur` CLI
 - [Developing spices](developing-spices-guide.md) -- creating and publishing your own spice
 - [C integration guide](c-integration-guide.md) -- `extern-c`, `include-c`, inline-C blocks
-- [CMake/CPM integration notes](../archive/cmake-cpm-integration-plan.md) -- cmake-deps internals, generated files, outbound CPM publishing
 - [Using a Turmeric library from CMake](using-turmeric-from-cmake.md) -- publishing a Turmeric library for C/C++ consumers

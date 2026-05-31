@@ -361,8 +361,10 @@ void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
             for (uint8_t i = 0; i < thunk->n_captures; i++) {
                 if (i > 0) buf_puts(out, "; ");
                 Binding *captured = thunk->captures[i];
+                char *field = raw_name_for_binding(captured);
                 buf_printf(out, "%s %s",
-                           type_c_name(captured->type), captured->name->name);
+                           type_c_name(captured->type), field);
+                free(field);
             }
             buf_puts(out, "; };\n\n");
         }

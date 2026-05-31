@@ -651,10 +651,9 @@ defn show-type [x : any] :int
 
 ## See also
 
-- `docs/guides/hrt-guide.md` -- Higher-ranked types; bidirectional checking
+- [hrt-guide.md](hrt-guide.md) -- Higher-ranked types; bidirectional checking
   that enables GADT skolem propagation
-- `docs/guides/hkt-guide.md` -- Higher-kinded types; used by `equal-cong`
+- [hkt-guide.md](hkt-guide.md) -- Higher-kinded types; used by `equal-cong`
   and polymorphic GADT indices
-- `docs/gadts-plan.md` -- Full implementation plan and phase history
 - `tests/fixtures/gadt-*/` -- Working GADT examples
 - `tests/fixtures/union-types-*/` -- Union type and gradual typing examples

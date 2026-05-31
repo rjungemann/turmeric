@@ -1177,4 +1177,3 @@ and confirmed clean, the flag will be restored.
 - [STM Guide](stm-guide.md) -- Software transactional memory
 - [STM Tutorial](stm-tutorial.md) -- Composable transactions (alternative to locks)
 - [Effects System Guide](effects-system-guide.md) -- Dependency injection and exception handling
-- [turmeric-plan.md](../turmeric-plan.md) §19 -- Thread primitives architecture
