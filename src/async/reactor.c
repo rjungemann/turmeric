@@ -872,3 +872,25 @@ int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
     tur_fiber_yield(lf->fiber, NULL);
     return lf->park_result;
 }
+
+int64_t tur_local_park_chan(void *gp, void *chan) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g) return TUR_LOCAL_NOT_IN_FIBER;
+    LocalFiber *lf = g->current;
+    if (!lf) return TUR_LOCAL_NOT_IN_FIBER; /* not inside a fiber */
+
+    lf->park_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_cb;
+    lf->park_cb_fat[1] = (int64_t)(intptr_t)lf;
+    int64_t cb = (int64_t)(intptr_t)lf->park_cb_fat;
+
+    lf->park_result   = TUR_LOCAL_NOT_IN_FIBER;
+    lf->park_chan_src = tur_reactor_add_chan(g->reactor, chan, cb, NULL);
+    if (lf->park_chan_src < 0)
+        return TUR_LOCAL_NOT_IN_FIBER;
+
+    /* Yield to the driver; resumed by local_park_wake_cb with the value.
+     * Like all reactor channel watchers, prompt delivery on the same thread
+     * needs a reactor-wake after the chan-send (see reactor-add-chan). */
+    tur_fiber_yield(lf->fiber, NULL);
+    return lf->park_result;
+}

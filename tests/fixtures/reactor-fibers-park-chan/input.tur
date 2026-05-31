@@ -1,0 +1,48 @@
+;; Phase F5: reactor-fibers-park-chan -- park on a channel, unpark on send.
+;;
+;; A receiver fiber parks on a channel; a sender fiber sends a value and then
+;; calls reactor-wake so the driver's blocking poll returns promptly and the
+;; channel bridge delivers the value (the documented same-thread pattern).
+;;
+;; Expected output:
+;;   sent 99
+;;   got 99
+;;   completed=2
+
+(load "stdlib/reactor.tur")
+(load "stdlib/chan.tur")
+
+(defn print-sent [n :int] :nil
+  ```c printf("sent %lld\n", (long long)n); ```)
+
+(defn print-got [n :int] :nil
+  ```c printf("got %lld\n", (long long)n); ```)
+
+(defn print-completed [n :int] :nil
+  ```c printf("completed=%lld\n", (long long)n); ```)
+
+(defn null-ptr [] :ptr<void>
+  ```c return NULL; ```)
+
+(defn main [] :int
+  (let [r  (reactor-new)
+        g  (local-fiber-group-new r)
+        ch (chan-new 4)]
+    ;; Receiver: park until a value arrives.
+    (local-spawn g
+      (fn [user] :nil
+        (print-got (local-park-chan g ch)))
+      (null-ptr))
+    ;; Sender: send then wake so the poll returns and the bridge fires.
+    (local-spawn g
+      (fn [user] :nil
+        (chan-send ch 99)
+        (print-sent 99)
+        (reactor-wake r))
+      (null-ptr))
+    (let [n (reactor-run-fibers g)]
+      (print-completed n)
+      (local-fiber-group-free g)
+      (chan-free ch)
+      (reactor-free r)
+      0)))

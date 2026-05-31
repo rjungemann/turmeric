@@ -550,3 +550,27 @@
 
 (defn local-park-fd [g :ptr<void> fd :int events :int timeout-ms :int] #{} :int
   (tur_local_park_fd g fd events timeout-ms))
+;;; local-park-chan -- park the running fiber until a channel has a value.
+;;;
+;;; Registers ch on the bound reactor (one-shot) and suspends the current
+;;; fiber. The fiber resumes with the received value when one is available.
+;;; As with reactor-add-chan, prompt same-thread delivery requires the sender
+;;; to call reactor-wake after chan-send (the driver otherwise blocks in poll).
+;;;
+;;; Must be called from inside a fiber spawned into g. Outside of one it
+;;; returns -1 and leaves the caller running.
+;;;
+;;; Parameters:
+;;;   g  -- group handle
+;;;   ch -- channel handle (ptr<void> from chan-new or async-chan-new)
+;;;
+;;; Returns:
+;;;   int -- the received value, or -1 if not in a fiber
+;;;
+;;; Example:
+;;;   (local-park-chan g ch)  ; => the next value sent on ch
+;;;
+;;; Since: Phase F5
+
+(defn local-park-chan [g :ptr<void> ch :ptr<void>] #{} :int
+  (tur_local_park_chan g ch))
