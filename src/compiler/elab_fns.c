@@ -1238,6 +1238,20 @@ Expr *elab_defn(Elab *e, const Form *call) {
         scope_add(&inner, kvb);
     }
 
+    /* A#1 (return position): an optional ^fat marker may precede the return
+     * type, marking a fat-closure RESULT.  A non-capturing fn returned from
+     * this function is auto-shimmed into a fat closure (EX_FN_TO_FAT) at the
+     * tail, symmetric with the ^fat parameter marker.  Consume the marker here
+     * and advance past it so the return-type parser sees the real type form. */
+    bool result_fat = false;
+    if (call->as.list.len >= (body_start + 1)) {
+        Form *fat_f = call->as.list.items[body_start];
+        if (fat_f->tag == F_SYM && fat_f->as.sym == e->sym_caret_fat) {
+            result_fat = true;
+            body_start++;
+        }
+    }
+
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
         Form *ret_f = call->as.list.items[body_start];
@@ -2140,6 +2154,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* A#1 (return position): propagate the ^fat result marker into fn_type so
+     * the emitter shims a returned non-capturing fn into a fat closure. */
+    fn_type.as.fn.result_fat = result_fat;
 
     /* Create/update binding for the function.
      * Reuse pass-1 forward bindings in place so subsequent lookups observe
