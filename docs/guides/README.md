@@ -130,6 +130,12 @@ see the task plan for progress.
 - **[datalog/03-query-api.md](datalog/03-query-api.md)** -- Walk through `query.tur` additions
 - **[datalog/04-indexing.md](datalog/04-indexing.md)** -- Why indexing matters and how `indexed.tur` works
 
+## Networking
+
+- **[httpd-guide.md](httpd-guide.md)** -- `stdlib/httpd`: HTTP/1.1 server with handlers, routing, middleware, keep-alive
+- **[httpd-tls-guide.md](httpd-tls-guide.md)** -- HTTPS termination on `stdlib/httpd` via the `tur-tls` spice
+- **[reactor-guide.md](reactor-guide.md)** -- `tur/reactor`: lightweight evented reactor for fds, timers, signals, channels
+
 ## Spices and Libraries
 
 - **[frame-guide.md](frame-guide.md)** -- `tur-frame` dataframes: tabular data, columns, joins, aggregations

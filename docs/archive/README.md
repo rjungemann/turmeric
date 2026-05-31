@@ -140,6 +140,11 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [binding-forms-guide.md](../guides/binding-forms-guide.md) | `internal-define-plan.md` (history); `letrec-and-named-let-plan.md` (history) |
 | [tur-watch-guide.md](../guides/tur-watch-guide.md) | `tur-watch-spice-plan.md` (history; v0.2.0); `tur-watch-tree-per-file-naming-plan.md` (history) |
 | [web-stack-guide.md](../guides/web-stack-guide.md) | `tur-httpd-plan.md` (history); `tur-template-plan.md` (history); `tur-tourist-plan.md` (history) |
+| [httpd-guide.md](../guides/httpd-guide.md) | `tur-httpd-stdlib-plan.md` (history; H1-H7 shipped) |
+| [data-literals-guide.md](../guides/data-literals-guide.md) | `data-literals-plan.md` (history; DL0-DL6 complete) |
+| [reactor-guide.md](../guides/reactor-guide.md) | `tur-reactor-plan.md` (history; R1-R8 shipped); `reactor-run-fibers-plan.md` (history; F1-F8 shipped) |
+| [httpd-tls-guide.md](../guides/httpd-tls-guide.md) | `tur-tls-plan.md` (history; T1-T6 complete) |
+| [developing-spices-guide.md](../guides/developing-spices-guide.md) | augmented by `tur-fetch-system-first-plan.md` (history; SF0-SF4 complete) |
 
 ## Historical Documents
 
@@ -188,6 +193,16 @@ Post-v0.14.6 sweep:
 - **[tur-tourist-plan.md](history/tur-tourist-plan.md)** -- `tur-tourist` Scotty-style micro-framework spice; complete (v0.1.0); see [web-stack-guide.md](../guides/web-stack-guide.md)
 - **[tur-fmt-plan.md](history/tur-fmt-plan.md)** -- `tur fmt` in-place formatter with directory walking; complete (see `tur fmt --help`); see also [formatter-guide.md](../guides/formatter-guide.md)
 - **[solid-modeling-sdf-raylib-plan.md](history/solid-modeling-sdf-raylib-plan.md)** -- `tur-sdf-raylib` SDF + raylib solid modeling spice; Phase 1 complete (v0.1.0 in turmeric-spices)
+
+Post-v0.16.0 sweep:
+
+- **[tur-reactor-plan.md](history/tur-reactor-plan.md)** -- `tur/reactor` lightweight evented reactor; R1-R8 shipped; see [reactor-guide.md](../guides/reactor-guide.md)
+- **[reactor-run-fibers-plan.md](history/reactor-run-fibers-plan.md)** -- Local fiber driver on top of `tur/reactor`; F1-F8 shipped; F9 (global-scheduler rewrite) split out to `docs/upcoming/scheduler-on-local-fiber-group-plan.md`
+- **[tur-httpd-stdlib-plan.md](history/tur-httpd-stdlib-plan.md)** -- `stdlib/httpd` lightweight HTTP/1.1 server (was `tur-httpd-plan.md`); H1-H7 shipped; see [httpd-guide.md](../guides/httpd-guide.md)
+- **[tur-tls-plan.md](history/tur-tls-plan.md)** -- `tur-tls` spice + httpd H5 integration; T1-T6 complete; see [httpd-tls-guide.md](../guides/httpd-tls-guide.md)
+- **[data-literals-plan.md](history/data-literals-plan.md)** -- `#map{...}` / `#set{...}` / `[...]` data literals (`-Xdata-literals`); DL0-DL6 complete; see [data-literals-guide.md](../guides/data-literals-guide.md)
+- **[tur-fetch-system-first-plan.md](history/tur-fetch-system-first-plan.md)** -- `:prefer-system` resolution for `tur fetch :cmake-deps`; SF0-SF4 complete; documented in [developing-spices-guide.md](../guides/developing-spices-guide.md)
+- **[list-quasiquote-plan.md](history/list-quasiquote-plan.md)** -- Runtime list quasiquote (`` #` ``); rejected (Option D / "not now")
 
 Earlier additions:
 

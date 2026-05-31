@@ -13,7 +13,7 @@ spice. This guide shows how to wire the two together so a one-line
 change converts an `httpd-new` server into an `httpd-new-tls` server.
 
 The integration was designed under the constraints in
-[`docs/tur-tls-plan.md`](../tur-tls-plan.md):
+[`docs/archive/history/tur-tls-plan.md`](../archive/history/tur-tls-plan.md):
 
 - Zero TLS dependency in a default `tur` install. Programs that do not
   import the spice still link cleanly.

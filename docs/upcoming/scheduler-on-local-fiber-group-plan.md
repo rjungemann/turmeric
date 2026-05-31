@@ -2,11 +2,11 @@
 
 > **Status:** Not started. This is the F9 follow-up unblocked by the now-shipped
 > `reactor-run-fibers` building block (see
-> `docs/archive/reactor-run-fibers-plan.md`, F1-F8).
+> `docs/archive/history/reactor-run-fibers-plan.md`, F1-F8).
 > **Last Updated:** 2026-05-31
 > **Type:** Runtime refactor (internal); no public API change intended
 > **Related:**
-> - `docs/archive/reactor-run-fibers-plan.md` -- delivered the `LocalFiberGroup`
+> - `docs/archive/history/reactor-run-fibers-plan.md` -- delivered the `LocalFiberGroup`
 >   driver this plan builds on (F1-F8); F9 was anchored there as out-of-scope
 > - `src/async/reactor.c` -- houses `LocalFiberGroup` + the fiber pump + park bridge
 > - `src/async/scheduler.c`, `src/async/scheduler.h` -- the global work-stealing

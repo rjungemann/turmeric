@@ -10,7 +10,7 @@
 > **Last Updated:** 2026-05-31
 > **Type:** Stdlib Design + Implementation Roadmap
 > **Related:**
-> - `docs/archive/tur-reactor-plan.md` -- parent plan; R1-R8 shipped, this plan covers the stretch R9 item
+> - `docs/archive/history/tur-reactor-plan.md` -- parent plan; R1-R8 shipped, this plan covers the stretch R9 item
 > - `stdlib/reactor.tur` -- the reactor module this builds on
 > - `src/async/scheduler.c`, `src/async/timer_wheel.c` -- the existing global fiber scheduler
 > - `stdlib/async_socket.tur`, `stdlib/async_file.tur`, `stdlib/async_pipe.tur` -- fiber-blocking I/O
@@ -46,7 +46,7 @@ fiber driver" without an API break for either layer.
 ## Why split this out from the reactor plan
 
 The parent reactor plan delivered the I/O multiplexer (R1-R8 are
-complete; see `docs/archive/tur-reactor-plan.md`). R9 was flagged there
+complete; see `docs/archive/history/tur-reactor-plan.md`). R9 was flagged there
 as explicitly out-of-scope and listed only to anchor the API. Promoting
 it to its own plan lets us:
 
