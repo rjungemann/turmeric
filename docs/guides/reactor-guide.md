@@ -124,7 +124,7 @@ thin convenience layer that:
 
 This is the path where a future rewrite of `src/async/scheduler.c` would
 land -- the scheduler becomes "the global reactor's fiber driver." This is
-not yet implemented; see `docs/tur-reactor-plan.md` (Phase R9).
+not yet implemented; see `docs/upcoming/reactor-run-fibers-plan.md`.
 
 ## API reference
 
@@ -225,7 +225,8 @@ must compile for multiple targets.
 ## See also
 
 - `stdlib/reactor.tur` -- module source and full API docstrings
-- `docs/tur-reactor-plan.md` -- design rationale and phase roadmap
+- `docs/archive/tur-reactor-plan.md` -- design rationale and phase roadmap (R1-R8 shipped)
+- `docs/upcoming/reactor-run-fibers-plan.md` -- planned local fiber driver (Style 3)
 - `docs/tur-httpd-plan.md` -- first consumer; shows the listener-thread pattern
 - `stdlib/chan.tur` -- channel creation (`chan-new`, `chan-send`, `chan-recv`)
 - `docs/guides/async-await-guide.md` -- fiber-based async I/O (alternative for fiber code)

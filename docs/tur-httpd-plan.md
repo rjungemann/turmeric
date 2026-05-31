@@ -4,7 +4,8 @@
 > **Last Updated:** 2026-05-30
 > **Type:** Stdlib Design + Implementation Roadmap
 > **Related:**
-> - `docs/tur-reactor-plan.md` -- event loop backing the listener thread
+> - `docs/archive/tur-reactor-plan.md` -- event loop backing the listener thread (R1-R8 shipped)
+> - `docs/upcoming/reactor-run-fibers-plan.md` -- planned local fiber driver on top of the reactor
 > - `stdlib/reactor.tur` -- `tur/reactor` module (R1-R6 complete)
 > - `src/async/io.h`, `src/async/io_epoll.c`, `src/async/io_kqueue.c` -- platform I/O backend
 > - `stdlib/chan.tur`, `stdlib/select.tur` -- cross-thread coordination
@@ -151,7 +152,7 @@ The listener thread uses these reactor operations (all in `stdlib/reactor.tur`):
 | `reactor-wake` | Called by any thread that wants prompt shutdown notification |
 | `reactor-free` | Clean up after run returns |
 
-See `docs/tur-reactor-plan.md` for the reactor API reference and the
+See `docs/archive/tur-reactor-plan.md` for the reactor API reference and the
 threading model. The key constraint: a `TurReactor` is not thread-safe;
 the listener reactor is owned exclusively by the listener thread.
 
