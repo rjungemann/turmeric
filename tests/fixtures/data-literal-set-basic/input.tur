@@ -1,0 +1,7 @@
+;; DL3: #set{1 2 3} round-trips through set-count / set-member?.
+(defn count- [] :int (set-count #set{1 2 3}))
+(defn has2 [] :bool (set-member? #set{1 2 3} 2 2))
+(defn has9 [] :bool (set-member? #set{1 2 3} 9 9))
+(println (count-))
+(println (has2))
+(println (has9))

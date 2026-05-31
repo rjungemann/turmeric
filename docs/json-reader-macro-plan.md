@@ -1,6 +1,14 @@
 # `#json{...}` Reader Macro -- Plan (JR0--JR5)
 
-> **Status:** Not started.
+> **Status:** Scoped down -- superseded for the mixed-value case by data
+> literals ([data-literals-plan.md](data-literals-plan.md), landed through DL3).
+> `#map{...}` / `#set{...}` / `[...]` already construct collections whose slot
+> values are arbitrary Turmeric expressions, which covers the "literal shape,
+> computed values" need a JSON-only reader cannot. This plan is now narrowed to
+> the **JSON-source-paste only** use case: validating and embedding a verbatim
+> JSON blob copy-pasted from an external source. If that narrower need does not
+> materialize, the feature can be dropped in favor of writing the data literal
+> directly.
 >
 > **Flag:** `-Xjson-reader` (opt-in; no effect on programs that don't use the
 > macro). All phases gated behind this flag so the feature can land

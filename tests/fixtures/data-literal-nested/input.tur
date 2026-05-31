@@ -1,0 +1,10 @@
+;; DL3: nested literals -- a vec of maps, and a map whose value is a set.
+(defn vec-of-maps [] :int
+  (let [v [#map{:k 1} #map{:k 2}]]
+    (vec-len v)))
+(defn map-with-set [] :int
+  (let [m #map{:tags #set{1 2 3}}
+        kt (hamt/hash-str "tags")]
+    (set-count (map-get m kt kt))))
+(println (vec-of-maps))
+(println (map-with-set))

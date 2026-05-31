@@ -156,6 +156,33 @@ Expr *elab_is_q(Elab *e, const Form *call) {
     return out;
 }
 
+/* DL1: build a synthetic (head arg0 arg1 ...) call form for a data literal. */
+static Form *dl_build_call(Elab *e, Span span, const char *head,
+                           Form **items, uint32_t n) {
+    const Symbol *h = symtab_intern(e->st, strslice(head, (uint32_t)strlen(head)));
+    Form **call_items = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+    call_items[0] = form_sym(e->arena, span, h);
+    for (uint32_t i = 0; i < n; i++) call_items[i + 1] = items[i];
+    return form_list(e->arena, span, call_items, n + 1);
+}
+
+/* DL1: normalize a #map{...} key form to the int key the typed Map expects.
+ * Int keys pass through; keyword/string keys lower to (hamt/hash-str "name")
+ * so equal keyword/string keys hash identically (content equality).  The
+ * reader (TUR-E0282) guarantees the key is one of these three forms. */
+static Form *dl_normalize_map_key(Elab *e, Form *key) {
+    if (key->tag == F_INT) return key;
+    Form *str;
+    if (key->tag == F_KEYWORD) {
+        str = form_str(e->arena, key->span, key->as.sym->name,
+                       (uint32_t)key->as.sym->len);
+    } else { /* F_STR */
+        str = form_str(e->arena, key->span, key->as.s.p, key->as.s.len);
+    }
+    Form *items[1] = { str };
+    return dl_build_call(e, key->span, "hamt/hash-str", items, 1);
+}
+
 Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
@@ -313,6 +340,15 @@ Expr *elab_form(Elab *e, Form *f) {
             return out;
         }
         case F_VEC:
+            /* DL1: in expression position (i.e. not consumed structurally by a
+             * binding form), a [...] vector lowers to (vec-of ...).  Binding
+             * forms (defn/fn/let/loop/...) grab their F_VEC slot before it ever
+             * reaches elab_form, so reaching here means expression position. */
+            if (g_data_literals_enabled) {
+                Form *call = dl_build_call(e, f->span, "vec-of",
+                                           f->as.list.items, f->as.list.len);
+                return elab_form(e, call);
+            }
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: vector literals are only allowed in let bindings");
             return NULL;
@@ -320,6 +356,23 @@ Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: map literals are parsed but not yet supported by elaboration");
             return NULL;
+        /* DL1: data literals lower to their stdlib constructor macros. */
+        case F_MAP_LITERAL: {
+            uint32_t n = f->as.list.len; /* even -- validated by reader */
+            Form **kvs = (n == 0) ? NULL
+                : (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            for (uint32_t i = 0; i + 1 < n; i += 2) {
+                kvs[i]     = dl_normalize_map_key(e, f->as.list.items[i]);
+                kvs[i + 1] = f->as.list.items[i + 1];
+            }
+            Form *call = dl_build_call(e, f->span, "hamt-of", kvs, n);
+            return elab_form(e, call);
+        }
+        case F_SET_LITERAL: {
+            Form *call = dl_build_call(e, f->span, "set-of",
+                                       f->as.list.items, f->as.list.len);
+            return elab_form(e, call);
+        }
         case F_SET: {
             /* Phase X3: Elaborate set literal #s(e1 e2 ...) -> EX_SET_LIT */
             uint32_t n = f->as.list.len;

@@ -1,0 +1,7 @@
+;; DL3: #set{x (+ x x) y} evaluates each element slot exactly once.
+(defn run [] :int
+  (let [x 5
+        y 6
+        s #set{x (+ x x) y}]
+    (set-count s)))
+(println (run))

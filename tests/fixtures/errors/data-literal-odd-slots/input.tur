@@ -1,0 +1,4 @@
+(defn main [] :int
+  (do
+    #map{:a 1 :b}
+    0))

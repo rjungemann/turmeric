@@ -319,3 +319,49 @@
 ;; Constraint (Eq A) ensures elements are comparable; HAMT uses hash-based lookup.
 
 (definstance Eq [Set] [(Eq A)] (eq? [x y] (set-eq? x y)))
+;;; set-add1 -- insert one element, using it as its own hash.
+;;;
+;;; The identity-hash convention the typed Set[A] uses everywhere
+;;; (e.g. (set-add s 42 42)).  Taking the element as a single :int parameter
+;;; lets the set-of macro mention each element expression exactly once, so a
+;;; computed element is evaluated once and is not subject to the let-binding
+;;; move check that a doubled (set-add s e e) would trip.
+
+(defn set-add1 [s :int x :int] :int
+  (set-add s x x))
+;;; set-add-each__ -- internal helper for the set-of macro.
+;;;
+;;; Threads (set-add1 s x) over the elements in xs.  Each element appears
+;;; once in the expansion (set-add1 supplies the duplicate hash slot), so a
+;;; computed element is evaluated exactly once.  Recursive: each step nests
+;;; one more set-add1.
+
+(defmacro set-add-each__ [s & xs]
+  (if (empty? xs)
+    s
+    (list set-add-each__ (list set-add1 s (first xs)) ~@(rest xs))))
+;;; set-of -- variadic Set literal.
+;;;
+;;; Parameters:
+;;;   & xs -- zero or more elements of a single type A.  Each element is used
+;;;           as its own hash (identity-hash), matching the typed Set[A]
+;;;           convention; scalar element types (int, etc.) dedupe by value.
+;;;
+;;; Returns:
+;;;   A fresh Set[A] containing xs; duplicate elements collapse to one.
+;;;
+;;; Note: this is the lowering target of the #set{...} data literal
+;;;   (-Xdata-literals).  Writing #set{1 2 3} is preferred over calling
+;;;   set-of directly.
+;;;
+;;; Example:
+;;;   (set-of)        ; => empty Set
+;;;   (set-of 1 2 3)  ; => Set {1, 2, 3}
+;;;   (set-of 1 1 2)  ; => Set {1, 2}
+;;;
+;;; Since: DL1 (data-literals-plan)
+
+(defmacro set-of [& xs]
+  (if (empty? xs)
+    (list set-new)
+    (list set-add-each__ (list set-new) ~@xs)))

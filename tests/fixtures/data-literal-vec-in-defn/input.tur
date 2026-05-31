@@ -1,0 +1,9 @@
+;; DL3 regression: with -Xdata-literals on, [...] in binding position is still
+;; a binding spec (defn params, let bindings), NOT lowered to (vec-of ...).
+(defn add [x :int y :int] :int (+ x y))
+(defn via-let [] :int
+  (let [a 3
+        b 4]
+    (add a b)))
+(println (add 1 2))
+(println (via-let))

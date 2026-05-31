@@ -1,12 +1,29 @@
 # Map / Vec / Set Data Literals -- Plan (DL0--DL6)
 
-> **Status:** Not started.
+> **Status:** DL0--DL6 complete (landed). Reader dispatch + `#map{...}` /
+> `#set{...}` forms and error codes (DL0); elaboration lowering for all three
+> literals plus the `hamt-of` / `set-of` stdlib macros (DL1); sweet-exp
+> interaction verified (DL2); happy-path + error fixtures (DL3); docstrings,
+> guide, and CLAUDE.md / JSON-reader cross-references (DL4); set-eq? regression
+> guard (DL5); regenerated codegen snapshots + docstring table, full suite
+> green at 1142 passed / 0 failed (DL6). The DL5 bulk single-shot set
+> constructor is deferred -- no profiling justification yet; set-of mirrors
+> vec-of/hamt-of's per-element threading.
+>
+> **Implementation note (DL1):** `#map{...}` keys are normalized in the
+> elaborator -- int keys pass through, keyword/string keys lower to
+> `(hamt/hash-str "name")` so equal keys hash identically. `#set{...}` uses
+> the typed `Set[A]` identity-hash convention (each element is its own hash,
+> via the `set-add1` helper); the `(hash x)` typeclass-method injection the
+> original design sketched is not used because the `Hash[A]` method does not
+> monomorphize in compiled codegen. Consequently the `data-literal-set-no-hash`
+> guard fixture from DL3 is omitted (no Hash constraint is enforced).
 >
 > **Flag:** `-Xdata-literals` (opt-in; no effect on programs that don't use the
 > syntax). All phases gated behind this flag so the feature can land
 > incrementally.
 >
-> **Last updated:** 2026-05-30
+> **Last updated:** 2026-05-31
 
 ---
 

@@ -262,3 +262,40 @@
 
 (definstance Eq [Map] [(Eq K) (Eq V)]
   (eq? [x y] (map-eq? x y (fn [a b] (= a b)))))
+;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
+;;;
+;;; Threads (map-assoc m k v) over the kv-pairs in xs, returning the final
+;;; map.  Recursive: each step wraps the accumulator in one more map-assoc,
+;;; so the last pair wins on duplicate keys.
+
+(defmacro hamt-assoc-each__ [m & kvs]
+  (if (empty? kvs)
+    m
+    (list hamt-assoc-each__
+          (list map-assoc m (first kvs) (second kvs))
+          ~@(rest (rest kvs)))))
+;;; hamt-of -- variadic Map literal: alternating key/value arguments.
+;;;
+;;; Parameters:
+;;;   & kvs -- an even number of arguments, alternating key then value.
+;;;            Keys are int-valued (the same carrier map-assoc expects); the
+;;;            #map{...} data literal normalizes keyword/string keys to their
+;;;            content hash before reaching this macro.
+;;;
+;;; Returns:
+;;;   A fresh Map populated with the given entries; later duplicate keys win.
+;;;
+;;; Note: this is the lowering target of the #map{...} data literal
+;;;   (-Xdata-literals).  Writing #map{:a 1 :b 2} is preferred over calling
+;;;   hamt-of directly.
+;;;
+;;; Example:
+;;;   (hamt-of)            ; => empty Map
+;;;   (hamt-of 1 10 2 20)  ; => Map {1 -> 10, 2 -> 20}
+;;;
+;;; Since: DL1 (data-literals-plan)
+
+(defmacro hamt-of [& kvs]
+  (if (empty? kvs)
+    (list map-new)
+    (list hamt-assoc-each__ (list map-new) ~@kvs)))

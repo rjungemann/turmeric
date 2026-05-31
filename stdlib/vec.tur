@@ -176,9 +176,14 @@
 ;;;   (vec-of 1 "x" 3.14) -- is a type error (TUR-E0001 on the offending
 ;;;   element). For heterogeneous fixed-arity collections, use tupleN.
 ;;;
+;;; Note: under -Xdata-literals, a [...] vector in expression position lowers
+;;;   to this macro, so [1 2 3] is sugar for (vec-of 1 2 3).  See
+;;;   docs/guides/data-literals-guide.md.
+;;;
 ;;; Example:
 ;;;   (vec-of)        ; => empty Vec
 ;;;   (vec-of 1 2 3)  ; => Vec containing 1, 2, 3
+;;;   [1 2 3]         ; => same, with -Xdata-literals
 ;;;
 ;;; Since: Phase 2 cons-in-docs cleanup
 
