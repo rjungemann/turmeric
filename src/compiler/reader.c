@@ -1011,9 +1011,18 @@ static Form *try_read_data_literal(Reader *r) {
 /* JR0 (json-reader-macro-plan): #json(...) compile-time reader macro.       */
 /*                                                                           */
 /* Parses a verbatim JSON value at compile time and emits the equivalent     */
-/* Turmeric S-expression -- objects -> (hamt-of k v ...), arrays ->          */
-/* (vec-of ...), strings/ints/floats -> literals, true/false -> 1/0, null -> */
-/* (nil-value).  The emitted forms are elaborated by the normal typechecker. */
+/* tur/json tagged-node constructor calls:                                   */
+/*   object -> (json/object-put (json/object-put (json/object-new) k v) ...) */
+/*   array  -> (json/array-push (json/array-push (json/array-new) e0) ...)   */
+/*   string -> (json/string "..."),  int -> (json/int n)                     */
+/*   float  -> (json/float f),       true/false -> (json/bool 1|0)           */
+/*   null   -> (json/null)                                                   */
+/* Every node is a uniform :int handle, so heterogeneous and nested JSON     */
+/* compose -- the type variation lives in each node's runtime tag, queryable */
+/* via json/type + json/get-*.  This is the same node tree json/decode       */
+/* produces, so #json(...) is a compile-time-validated json/decode. The      */
+/* emitted forms are elaborated by the normal typechecker; json.tur is       */
+/* auto-loaded when -Xjson-reader is on so the constructors resolve.         */
 /* Errors: TUR-E0270 (malformed JSON), TUR-E0271 (unexpected EOF).           */
 /* Gated behind -Xjson-reader (g_json_reader_enabled).                       */
 /* ------------------------------------------------------------------------ */
@@ -1060,7 +1069,10 @@ static int json_hex_digit(int c) {
     return -1;
 }
 
-/* Read a JSON string starting at the opening '"'.  Emits an F_STR literal. */
+/* Read a JSON string starting at the opening '"'.  Emits a raw F_STR literal
+ * (the :cstr payload).  json_read_value wraps it in (json/string ...) for a
+ * string *value*; object keys use the raw F_STR directly (json/object-put
+ * takes a :cstr key). */
 static Form *json_read_string(Reader *r) {
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
@@ -1131,8 +1143,8 @@ static Form *json_read_string(Reader *r) {
     return f;
 }
 
-/* Read a JSON number.  Emits F_INT for integers, F_FLOAT when a fraction or
- * exponent is present. */
+/* Read a JSON number.  Emits (json/int n) for integers, (json/float f) when a
+ * fraction or exponent is present. */
 static Form *json_read_number(Reader *r) {
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
@@ -1162,34 +1174,32 @@ static Form *json_read_number(Reader *r) {
     tmp[len] = '\0';
 
     Span span = span_from_to(r, sl, sc, so, r->pos);
-    if (is_float) return form_float(r->arena, span, strtod(tmp, NULL));
-    return form_int(r->arena, span, (int64_t)strtoll(tmp, NULL, 10));
+    if (is_float) {
+        Form *lit = form_float(r->arena, span, strtod(tmp, NULL));
+        return json_call(r, span, "json/float", &lit, 1);
+    }
+    Form *lit = form_int(r->arena, span, (int64_t)strtoll(tmp, NULL, 10));
+    return json_call(r, span, "json/int", &lit, 1);
 }
 
-/* Read a JSON array starting at '['.  Emits (vec-of e0 e1 ...). */
+/* Read a JSON array starting at '['.  Left-folds into
+ *   (json/array-push (json/array-push (json/array-new) e0) e1) ...
+ * so each element is appended in source order. */
 static Form *json_read_array(Reader *r) {
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
     advance(r); /* consume '[' */
 
-    Form **elems = NULL;
-    size_t cap = 0, n = 0;
+    Span open_sp = span_from_to(r, sl, sc, so, r->pos);
+    Form *acc = json_call(r, open_sp, "json/array-new", NULL, 0);
 
     json_skip_ws(r);
-    if (peek(r) == ']') {
-        advance(r);
-        Span sp = span_from_to(r, sl, sc, so, r->pos);
-        return json_call(r, sp, "vec-of", NULL, 0);
-    }
+    if (peek(r) == ']') { advance(r); return acc; }
     for (;;) {
         Form *v = json_read_value(r);
-        if (!v) { free(elems); return NULL; }
-        if (n == cap) {
-            cap = cap ? cap * 2 : 4;
-            elems = (Form **)realloc(elems, cap * sizeof(Form *));
-            if (!elems) { fprintf(stderr, "tur: oom\n"); abort(); }
-        }
-        elems[n++] = v;
+        if (!v) return NULL;
+        Form *push_args[2] = { acc, v };
+        acc = json_call(r, v->span, "json/array-push", push_args, 2);
         json_skip_ws(r);
         int c = peek(r);
         if (c == ',') { advance(r); continue; }
@@ -1198,33 +1208,29 @@ static Form *json_read_array(Reader *r) {
             Span s = span_from_to(r, sl, sc, so, r->pos);
             diag_emit(DIAG_ERROR, s,
                       "#json: unexpected end of input inside array (TUR-E0271)");
-            r->error = true; free(elems); return NULL;
+            r->error = true; return NULL;
         }
         diag_emit(DIAG_ERROR, span_point(r),
                   "#json: expected ',' or ']' in array (TUR-E0270)");
-        r->error = true; free(elems); return NULL;
+        r->error = true; return NULL;
     }
-    Span sp = span_from_to(r, sl, sc, so, r->pos);
-    Form *call = json_call(r, sp, "vec-of", elems, (uint32_t)n);
-    free(elems);
-    return call;
+    return acc;
 }
 
-/* Read a JSON object starting at '{'.  Emits (hamt-of k0 v0 k1 v1 ...). */
+/* Read a JSON object starting at '{'.  Left-folds into
+ *   (json/object-put (json/object-put (json/object-new) "k0" v0) "k1" v1) ...
+ * Keys are passed as raw :cstr (json/object-put takes a string key), so a
+ * value is retrieved with (json/get node "key"). */
 static Form *json_read_object(Reader *r) {
     uint32_t sl = r->line, sc = r->col;
     size_t   so = r->pos;
     advance(r); /* consume '{' */
 
-    Form **kvs = NULL;
-    size_t cap = 0, n = 0;
+    Span open_sp = span_from_to(r, sl, sc, so, r->pos);
+    Form *acc = json_call(r, open_sp, "json/object-new", NULL, 0);
 
     json_skip_ws(r);
-    if (peek(r) == '}') {
-        advance(r);
-        Span sp = span_from_to(r, sl, sc, so, r->pos);
-        return json_call(r, sp, "hamt-of", NULL, 0);
-    }
+    if (peek(r) == '}') { advance(r); return acc; }
     for (;;) {
         json_skip_ws(r);
         if (peek(r) != '"') {
@@ -1236,30 +1242,21 @@ static Form *json_read_object(Reader *r) {
                 diag_emit(DIAG_ERROR, span_point(r),
                           "#json: object key must be a string (TUR-E0270)");
             }
-            r->error = true; free(kvs); return NULL;
+            r->error = true; return NULL;
         }
         Form *key_str = json_read_string(r);
-        if (!key_str) { free(kvs); return NULL; }
-        /* hamt-of expects int keys; hash the JSON string key the same way the
-         * #map{...} data literal does, so values are retrievable via
-         * (map-get m (hamt/hash-str "key") default). */
-        Form *key = json_call(r, key_str->span, "hamt/hash-str", &key_str, 1);
+        if (!key_str) return NULL;
         json_skip_ws(r);
         if (peek(r) != ':') {
             diag_emit(DIAG_ERROR, span_point(r),
                       "#json: expected ':' after object key (TUR-E0270)");
-            r->error = true; free(kvs); return NULL;
+            r->error = true; return NULL;
         }
         advance(r); /* consume ':' */
         Form *val = json_read_value(r);
-        if (!val) { free(kvs); return NULL; }
-        if (n + 2 > cap) {
-            cap = cap ? cap * 2 : 8;
-            kvs = (Form **)realloc(kvs, cap * sizeof(Form *));
-            if (!kvs) { fprintf(stderr, "tur: oom\n"); abort(); }
-        }
-        kvs[n++] = key;
-        kvs[n++] = val;
+        if (!val) return NULL;
+        Form *put_args[3] = { acc, key_str, val };
+        acc = json_call(r, val->span, "json/object-put", put_args, 3);
         json_skip_ws(r);
         int c = peek(r);
         if (c == ',') { advance(r); continue; }
@@ -1268,16 +1265,13 @@ static Form *json_read_object(Reader *r) {
             Span s = span_from_to(r, sl, sc, so, r->pos);
             diag_emit(DIAG_ERROR, s,
                       "#json: unexpected end of input inside object (TUR-E0271)");
-            r->error = true; free(kvs); return NULL;
+            r->error = true; return NULL;
         }
         diag_emit(DIAG_ERROR, span_point(r),
                   "#json: expected ',' or '}' in object (TUR-E0270)");
-        r->error = true; free(kvs); return NULL;
+        r->error = true; return NULL;
     }
-    Span sp = span_from_to(r, sl, sc, so, r->pos);
-    Form *call = json_call(r, sp, "hamt-of", kvs, (uint32_t)n);
-    free(kvs);
-    return call;
+    return acc;
 }
 
 /* Match a bare JSON keyword (true/false/null) at the cursor, consuming it on
@@ -1300,21 +1294,31 @@ static Form *json_read_value(Reader *r) {
     switch (c) {
         case '{': return json_read_object(r);
         case '[': return json_read_array(r);
-        case '"': return json_read_string(r);
+        case '"': {
+            Form *str = json_read_string(r);
+            if (!str) return NULL;
+            return json_call(r, str->span, "json/string", &str, 1);
+        }
         case 't':
-            if (json_match_kw(r, "true"))
-                return form_int(r->arena, span_from_to(r, sl, sc, so, r->pos), 1);
+            if (json_match_kw(r, "true")) {
+                Span sp = span_from_to(r, sl, sc, so, r->pos);
+                Form *one = form_int(r->arena, sp, 1);
+                return json_call(r, sp, "json/bool", &one, 1);
+            }
             break;
         case 'f':
-            if (json_match_kw(r, "false"))
-                return form_int(r->arena, span_from_to(r, sl, sc, so, r->pos), 0);
+            if (json_match_kw(r, "false")) {
+                Span sp = span_from_to(r, sl, sc, so, r->pos);
+                Form *zero = form_int(r->arena, sp, 0);
+                return json_call(r, sp, "json/bool", &zero, 1);
+            }
             break;
         case 'n':
-            /* JSON null maps to the nil sentinel (0).  `nil-value` returns 0
-             * but is only registered in the interpreter prelude, so we emit the
-             * 0 literal directly -- identical value, and it also compiles. */
+            /* JSON null becomes a real, type-distinct (json/null) node -- not a
+             * 0 sentinel. */
             if (json_match_kw(r, "null"))
-                return form_int(r->arena, span_from_to(r, sl, sc, so, r->pos), 0);
+                return json_call(r, span_from_to(r, sl, sc, so, r->pos),
+                                 "json/null", NULL, 0);
             break;
         case '-': case '0': case '1': case '2': case '3':
         case '4': case '5': case '6': case '7': case '8': case '9':
@@ -1350,7 +1354,7 @@ static Form *try_read_json(Reader *r) {
     /* JR2: optional <Type> hint.  Reserved syntax for future typed decoding
      * (json-reader-macro-plan "Future work"); for now the hint is parsed,
      * validated as a well-formed type name, and otherwise ignored -- the
-     * result is still an untyped HAMT / vec / literal. */
+     * result is still a tur/json node tree. */
     if (peek(r) == '<') {
         advance(r); /* consume '<' */
         size_t name_off = r->pos;

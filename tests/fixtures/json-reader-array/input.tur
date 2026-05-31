@@ -1,8 +1,10 @@
-;; JR3: #json([...]) builds a Vec; length and elements round-trip.
+;; #json([...]) builds a tagged JSON array node; elements may be heterogeneous.
 (defn len- [] :int
-  (vec-len #json([10, 20, 30])))
-(defn elem [i :int] :int
-  (vec-get #json([10, 20, 30]) i))
+  (json/array-len #json([10, "x", 2.5, true])))
+(defn first-int [] :int
+  (json/get-int (json/array-get #json([10, "x", 2.5, true]) 0)))
+(defn second-str [] :cstr
+  (json/get-string (json/array-get #json([10, "x", 2.5, true]) 1)))
 (println (len-))
-(println (elem 0))
-(println (elem 2))
+(println (first-int))
+(println (second-str))

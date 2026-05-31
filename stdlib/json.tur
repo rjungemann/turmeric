@@ -6,9 +6,11 @@
 ;;;
 ;;; Compile-time JSON: the #json(...) reader macro (opt-in via -Xjson-reader)
 ;;; parses a verbatim JSON blob at compile time and emits the equivalent
-;;; Turmeric value -- objects become (hamt-of ...) HAMT maps, arrays become
-;;; (vec-of ...) vecs, and scalars become literals. Unlike json/decode it is
-;;; validated by the compiler and needs no runtime parse step. See
+;;; tagged-node constructor calls from this module (json/object-put,
+;;; json/array-push, json/string, json/int, json/bool, json/null, ...). The
+;;; result is the same node tree json/decode produces -- so #json(...) is a
+;;; compile-time-validated json/decode that needs no runtime parse step, and
+;;; null is a genuine null node (json/type == 0), not a 0 sentinel. See
 ;;; docs/guides/json-guide.md.
 ;;;
 ;;; Since: Phase B1
@@ -389,25 +391,25 @@
 
 (defn json/encode [node :int] :cstr
   ```c struct buf_s { char *data; size_t len; size_t cap; };
-  static void buf_ensure(struct buf_s *b, size_t extra) {
+  void buf_ensure(struct buf_s *b, size_t extra) {
     if (b->len + extra + 1 > b->cap) {
       b->cap = (b->len + extra + 1) * 2 + 64;
       b->data = realloc(b->data, b->cap);
     }
   }
-  static void buf_append_s(struct buf_s *b, const char *s) {
+  void buf_append_s(struct buf_s *b, const char *s) {
     size_t slen = strlen(s);
     buf_ensure(b, slen);
     memcpy(b->data + b->len, s, slen);
     b->len += slen;
     b->data[b->len] = '\0';
   }
-  static void buf_append_c(struct buf_s *b, char c) {
+  void buf_append_c(struct buf_s *b, char c) {
     buf_ensure(b, 1);
     b->data[b->len++] = c;
     b->data[b->len] = '\0';
   }
-  static void encode_str(struct buf_s *b, const char *s) {
+  void encode_str(struct buf_s *b, const char *s) {
     buf_append_c(b, '"');
     for (; *s; s++) {
       if (*s == '"')       { buf_append_s(b, "\\\""); }
@@ -419,7 +421,7 @@
     }
     buf_append_c(b, '"');
   }
-  static void encode_node(int64_t n, struct buf_s *b) {
+  void encode_node(int64_t n, struct buf_s *b) {
     if (!n) { buf_append_s(b, "null"); return; }
     int64_t *np = (int64_t*)(intptr_t)n;
     int type = (int)np[0];
@@ -486,11 +488,11 @@
 
 (defn json/decode [s :cstr] :int
   ```c struct ctx_s { const char *s; size_t pos; int err; };
-  static void skip_ws(struct ctx_s *c) {
+  void skip_ws(struct ctx_s *c) {
     while (c->s[c->pos] == ' ' || c->s[c->pos] == '\n' ||
            c->s[c->pos] == '\r' || c->s[c->pos] == '\t') c->pos++;
   }
-  static char *parse_string_val(struct ctx_s *c) {
+  char *parse_string_val(struct ctx_s *c) {
     if (c->s[c->pos] != '"') { c->err = 1; return NULL; }
     c->pos++;
     size_t cap = 64, len = 0;
@@ -520,7 +522,7 @@
     buf[len] = '\0';
     return buf;
   }
-  static int64_t parse_value(struct ctx_s *c) {
+  int64_t parse_value(struct ctx_s *c) {
     skip_ws(c);
     char ch = c->s[c->pos];
     /* null */
@@ -637,7 +639,7 @@
 ;;; Since: Phase B2
 
 (defn json/free [node :int] :void
-  ```c static void free_node(int64_t n) {
+  ```c void free_node(int64_t n) {
     if (!n) return;
     int64_t *np = (int64_t*)(intptr_t)n;
     int type = (int)np[0];

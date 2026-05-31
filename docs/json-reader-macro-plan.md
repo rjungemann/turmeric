@@ -59,8 +59,35 @@ adding `#json(` is a single new dispatch branch.
 
 ### What the reader produces
 
-The reader parses the JSON at compile time and emits a Turmeric S-expression
-equivalent:
+> **Implemented design (supersedes the table below).** The original plan
+> lowered objects/arrays to `hamt-of` / `vec-of`. That was abandoned during
+> implementation: `hamt-of` / `vec-of` are **monomorphic `:int` collections**
+> (one carrier type for all elements -- see the `vec-of` docstring), so any
+> heterogeneous JSON -- a string value, a bool, a float, a `null`, or mixed
+> element types -- fails to typecheck. `null` only "worked" because a bare `0`
+> slips through as an int, which conflated null with zero.
+>
+> Instead the reader emits **`tur/json` tagged-node constructors**, the same
+> node tree `json/decode` builds at runtime:
+>
+> | JSON | Emitted |
+> |---|---|
+> | `{"a": 1}` | `(json/object-put (json/object-new) "a" (json/int 1))` |
+> | `[1, 2, 3]` | `(json/array-push (json/array-push (json/array-new) (json/int 1)) ...)` |
+> | `"hello"` | `(json/string "hello")` |
+> | `42` | `(json/int 42)` |
+> | `3.14` | `(json/float 3.14)` |
+> | `true` / `false` | `(json/bool 1)` / `(json/bool 0)` |
+> | `null` | `(json/null)` -- a real null node (`json/type` == 0) |
+>
+> Every node is a uniform `:int` handle, so heterogeneous and nested JSON
+> compose; the type variation lives in each node's runtime tag (`json/type` +
+> `json/get-*`). `json.tur` is auto-loaded only under `-Xjson-reader`. (Fixing
+> `json.tur` to compile required removing the `static` keyword from the nested
+> helper functions in `json/encode` / `json/decode` / `json/free` -- a latent
+> bug, as no fixture had ever compiled that module.)
+
+The original (abandoned) S-expression table:
 
 | JSON | Turmeric equivalent |
 |---|---|
