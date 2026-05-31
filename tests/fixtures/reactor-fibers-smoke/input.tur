@@ -1,0 +1,35 @@
+;; Phase F3: reactor-fibers-smoke -- one fiber prints and exits.
+;;
+;; Spawns a single fiber into a local group bound to a reactor, then drives
+;; the group with reactor-run-fibers. The fiber does no I/O: it prints once
+;; and returns. The driver must run it to completion and return a count of 1.
+;;
+;; Expected output:
+;;   fiber ran
+;;   completed=1
+
+(load "stdlib/reactor.tur")
+
+(defn say [msg :cstr] :nil
+  ```c printf("%s\n", (const char *)msg); ```)
+
+(defn print-completed [n :int] :nil
+  ```c printf("completed=%lld\n", (long long)n); ```)
+
+(defn null-ptr [] :ptr<void>
+  ```c return NULL; ```)
+
+(defn main [] :int
+  (let [sentinel 1
+        r        (reactor-new)
+        g        (local-fiber-group-new r)]
+    ;; Capture sentinel so the body is emitted as a real fat closure.
+    (local-spawn g
+      (fn [user] :nil
+        (say (if (= sentinel 1) "fiber ran" "unreachable")))
+      (null-ptr))
+    (let [n (reactor-run-fibers g)]
+      (print-completed n)
+      (local-fiber-group-free g)
+      (reactor-free r)
+      0)))

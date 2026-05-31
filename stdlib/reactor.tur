@@ -412,3 +412,165 @@
 ;;; Since: Phase R1
 
 (defn reactor-wake [r :ptr<void>] #{} :nil (tur_reactor_wake r))
+;; ---- Local fiber driver (Phase F2-F7) ----
+;;
+;; A local fiber group runs cooperative fibers on top of one reactor without
+;; starting the global scheduler. The group handle is an opaque ptr<void>
+;; (same convention as the reactor handle). One group is bound to one reactor
+;; for its lifetime and must not be shared across threads.
+;;
+;; API:
+;;   local-fiber-group-new   [r]                       -- ptr<void> (group)
+;;   local-fiber-group-free  [g]                        -- nil
+;;   local-spawn             [g body user-data]         -- int (fiber id)
+;;   reactor-run-fibers      [g]                         -- int (completed)
+;;   local-park-fd           [g fd events timeout-ms]    -- int (events|-2|-1)
+;;   local-park-chan         [g ch]                      -- int (value|-1)
+
+
+(extern-c tur_local_fiber_group_new [r :ptr] :ptr)
+
+(extern-c tur_local_fiber_group_free [g :ptr] :void)
+
+(extern-c tur_local_spawn [g :ptr body :int user-data :ptr] :int)
+
+(extern-c tur_reactor_run_fibers [g :ptr] :int)
+
+(extern-c tur_local_park_fd [g :ptr fd :int events :int timeout-ms :int] :int)
+
+(extern-c tur_local_park_chan [g :ptr ch :ptr] :int)
+;;; local-fiber-group-new -- create a fiber group bound to a reactor.
+;;;
+;;; The group borrows the reactor; do not free the reactor while the group
+;;; is alive. One group is bound to one reactor for its lifetime and is not
+;;; thread-safe (same rule as the reactor itself).
+;;;
+;;; Parameters:
+;;;   r -- reactor handle returned by reactor-new
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque local-fiber-group handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [r (reactor-new)
+;;;         g (local-fiber-group-new r)]
+;;;     (reactor-run-fibers g)
+;;;     (local-fiber-group-free g)
+;;;     (reactor-free r))
+;;;
+;;; Since: Phase F2
+
+(defn local-fiber-group-new [r :ptr<void>] #{} :ptr<void>
+  (tur_local_fiber_group_new r))
+;;; local-fiber-group-free -- free a fiber group and cancel any parked fibers.
+;;;
+;;; Any fiber still parked is cancelled: its park source is removed from the
+;;; bound reactor and its stack is freed without unwinding (no cleanup hooks).
+;;; The bound reactor is not freed.
+;;;
+;;; Parameters:
+;;;   g -- group handle returned by local-fiber-group-new
+;;;
+;;; Example:
+;;;   (local-fiber-group-free g)
+;;;
+;;; Since: Phase F2
+
+(defn local-fiber-group-free [g :ptr<void>] #{} :nil
+  (tur_local_fiber_group_free g))
+;;; local-spawn -- spawn a fiber into a group.
+;;;
+;;; The fiber first runs on the next reactor-run-fibers tick. The body is a
+;;; closure taking the user-data pointer; its return value is ignored.
+;;;
+;;; Parameters:
+;;;   g         -- group handle
+;;;   body      -- closure: (fn [user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to body as its only argument
+;;;
+;;; Returns:
+;;;   int -- fiber id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (local-spawn g
+;;;     (fn [user] :nil (println "hello from a fiber"))
+;;;     nil)
+;;;
+;;; Since: Phase F3
+
+(defn local-spawn [g :ptr<void> body :int user-data :ptr<void>] #{} :int
+  (tur_local_spawn g body user-data))
+;;; reactor-run-fibers -- drive the reactor and pump the group's fibers.
+;;;
+;;; Runs until either the group is empty and the bound reactor has no
+;;; remaining sources, or reactor-stop is called on the bound reactor.
+;;; Resumed fibers run until they park or return; parked fibers wake when
+;;; their reactor source fires.
+;;;
+;;; Calling this re-entrantly from inside a fiber of the same group is a
+;;; hard error and returns -1 immediately (it would deadlock the pump).
+;;;
+;;; Parameters:
+;;;   g -- group handle
+;;;
+;;; Returns:
+;;;   int -- number of fibers that ran to completion, or -1 on re-entry/error
+;;;
+;;; Example:
+;;;   (local-spawn g (fn [u] :nil (println "hi")) nil)
+;;;   (reactor-run-fibers g)  ; => 1
+;;;
+;;; Since: Phase F3
+
+(defn reactor-run-fibers [g :ptr<void>] #{} :int
+  (tur_reactor_run_fibers g))
+;;; local-park-fd -- park the running fiber until an fd is ready.
+;;;
+;;; Registers fd on the bound reactor for events (a READ/WRITE bitmask) and
+;;; suspends the current fiber. The fiber resumes when the reactor fires the
+;;; source; the source is removed before it runs again (one-shot). If
+;;; timeout-ms is >= 0 and elapses first, the fiber resumes with -2.
+;;;
+;;; Must be called from inside a fiber spawned into g. Outside of one it
+;;; returns -1 and leaves the caller running.
+;;;
+;;; Parameters:
+;;;   g          -- group handle
+;;;   fd         -- file descriptor to wait on
+;;;   events     -- event bitmask (READ | WRITE)
+;;;   timeout-ms -- timeout in milliseconds, or -1 to wait forever
+;;;
+;;; Returns:
+;;;   int -- the fired event mask (>= 0), -2 on timeout, or -1 if not in a fiber
+;;;
+;;; Example:
+;;;   (local-park-fd g read-fd READ -1)  ; => 1 when readable
+;;;
+;;; Since: Phase F4
+
+(defn local-park-fd [g :ptr<void> fd :int events :int timeout-ms :int] #{} :int
+  (tur_local_park_fd g fd events timeout-ms))
+;;; local-park-chan -- park the running fiber until a channel has a value.
+;;;
+;;; Registers ch on the bound reactor (one-shot) and suspends the current
+;;; fiber. The fiber resumes with the received value when one is available.
+;;; As with reactor-add-chan, prompt same-thread delivery requires the sender
+;;; to call reactor-wake after chan-send (the driver otherwise blocks in poll).
+;;;
+;;; Must be called from inside a fiber spawned into g. Outside of one it
+;;; returns -1 and leaves the caller running.
+;;;
+;;; Parameters:
+;;;   g  -- group handle
+;;;   ch -- channel handle (ptr<void> from chan-new or async-chan-new)
+;;;
+;;; Returns:
+;;;   int -- the received value, or -1 if not in a fiber
+;;;
+;;; Example:
+;;;   (local-park-chan g ch)  ; => the next value sent on ch
+;;;
+;;; Since: Phase F5
+
+(defn local-park-chan [g :ptr<void> ch :ptr<void>] #{} :int
+  (tur_local_park_chan g ch))

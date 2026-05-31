@@ -1,0 +1,4 @@
+writer done
+reader woke events=1
+reader got 42
+completed=2

@@ -1,7 +1,13 @@
 # Plan: `reactor-run-fibers` -- Local Fiber Driver on Top of `tur/reactor`
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-05-30
+> **Status:** SHIPPED (F1-F8). Archived 2026-05-31.
+> F1-F8 landed `LocalFiberGroup` + `local-spawn` + `reactor-run-fibers` +
+> `local-park-{fd,chan}` in `src/async/reactor.c` / `stdlib/reactor.tur`,
+> with the five fixtures listed under "Module layout" all passing. F9 (the
+> global-scheduler rewrite) was always out of scope here and is now tracked
+> separately in
+> `docs/upcoming/scheduler-on-local-fiber-group-plan.md`.
+> **Last Updated:** 2026-05-31
 > **Type:** Stdlib Design + Implementation Roadmap
 > **Related:**
 > - `docs/archive/tur-reactor-plan.md` -- parent plan; R1-R8 shipped, this plan covers the stretch R9 item

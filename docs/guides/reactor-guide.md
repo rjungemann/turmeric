@@ -113,18 +113,64 @@ persistent channel watcher, re-register from inside the callback:
     nil))
 ```
 
-### Style 3 -- Reactor drives a local fiber group (future milestone)
+### Style 3 -- Reactor drives a local fiber group
 
 For libraries that want fibers but don't want to take over the global
-scheduler, `reactor-run-fibers` (a planned future addition) will be a
-thin convenience layer that:
+scheduler, `reactor-run-fibers` is a thin convenience layer that:
 
-- pumps a local fiber queue between `reactor-poll` calls
-- maps fiber park/unpark to `reactor-add-fd` / source removal
+- pumps a local fiber ready-queue between `reactor-poll` calls
+- maps fiber park/unpark onto `reactor-add-fd` / `reactor-add-chan` and
+  source removal (one-shot, like the scheduler's park today)
 
-This is the path where a future rewrite of `src/async/scheduler.c` would
-land -- the scheduler becomes "the global reactor's fiber driver." This is
-not yet implemented; see `docs/upcoming/reactor-run-fibers-plan.md`.
+You own a `Reactor` (one per thread, as always), create a
+`LocalFiberGroup` bound to it, spawn fibers with `local-spawn`, and call
+`reactor-run-fibers` to drive them. Inside a fiber, block with
+`local-park-fd` / `local-park-chan` instead of the global-scheduler
+`await`. The pump returns when the group is empty and the reactor has no
+remaining sources, or when `reactor-stop` is called.
+
+```turmeric
+(load "stdlib/reactor.tur")
+
+;; Echo one line from each of two pipe read-ends, concurrently, on a single
+;; thread -- no global scheduler involved.
+(defn serve [r :ptr<void> g :ptr<void> read-fd :int] :nil
+  ;; Park until the fd is readable (or 5s elapses), then handle it.
+  (let [ev (local-park-fd g read-fd READ 5000)]
+    (if (= ev -2)
+      (handle-timeout read-fd)
+      (handle-readable read-fd))))
+
+(defn main [] :int
+  (let [r (reactor-new)
+        g (local-fiber-group-new r)]
+    (local-spawn g (fn [u] :nil (serve r g conn-a)) nil)
+    (local-spawn g (fn [u] :nil (serve r g conn-b)) nil)
+    ;; Drives both fibers: each runs until it parks on its fd, the reactor
+    ;; polls, and whichever fd fires first resumes its fiber.
+    (reactor-run-fibers g)
+    (local-fiber-group-free g)
+    (reactor-free r)
+    0))
+```
+
+`local-park-fd` returns the fired event mask, `-2` on timeout, or `-1`
+if called outside a group fiber. `local-park-chan` returns the received
+value (same `-1` out-of-fiber rule); as with `reactor-add-chan`, a
+same-thread sender should call `reactor-wake` after `chan-send` so the
+pump's blocking poll returns promptly.
+
+A `LocalFiberGroup` follows the same threading rules as the reactor: the
+group, its reactor, and every fiber live on one thread. Freeing the
+group cancels any still-parked fiber (its source is unregistered and its
+stack is freed; no cleanup hooks run).
+
+This is also the path where a future rewrite of `src/async/scheduler.c`
+would land -- the scheduler becomes "the global reactor's fiber driver"
+without an API break. The driver itself shipped via
+`docs/archive/reactor-run-fibers-plan.md`; that scheduler migration is
+tracked separately in
+`docs/upcoming/scheduler-on-local-fiber-group-plan.md`.
 
 ## API reference
 
@@ -153,8 +199,19 @@ not yet implemented; see `docs/upcoming/reactor-run-fibers-plan.md`.
 |---|---|
 | `reactor-poll` | Single iteration; blocks up to `timeout-ms` (-1 = forever, 0 = non-blocking). |
 | `reactor-run` | Loop until stopped or all sources removed. |
-| `reactor-stop` | Thread-safe. Causes `reactor-run` to return after the current dispatch round. |
+| `reactor-stop` | Thread-safe. Causes `reactor-run` / `reactor-run-fibers` to return after the current dispatch round. |
 | `reactor-wake` | Thread-safe. Interrupts a blocking `reactor-poll` / `reactor-run`. |
+
+### Local fiber driver
+
+| Function | Returns | Notes |
+|---|---|---|
+| `local-fiber-group-new` | group | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. |
+| `local-fiber-group-free` | nil | Free the group; cancels any still-parked fiber (source removed, stack freed). |
+| `local-spawn` | fiber-id / -1 | Spawn a fiber `(fn [user :ptr<void>] :nil)`; runs on the next pump tick. |
+| `reactor-run-fibers` | #completed / -1 | Pump the group until empty + no sources, or `reactor-stop`. -1 if re-entered. |
+| `local-park-fd` | events / -2 / -1 | Park the running fiber on an fd; -2 on timeout, -1 if not in a group fiber. |
+| `local-park-chan` | value / -1 | Park the running fiber on a channel; -1 if not in a group fiber. |
 
 ### Event mask constants
 
@@ -178,6 +235,9 @@ Each source type uses a distinct callback arity:
 
 ;; reactor-add-chan:
 (fn [id :int value :int user :ptr<void>] :nil ...)
+
+;; local-spawn (fiber body):
+(fn [user :ptr<void>] :nil ...)
 ```
 
 `id` is the source id returned at registration. `events` is a bitmask of

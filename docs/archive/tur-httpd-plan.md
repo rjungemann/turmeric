@@ -5,7 +5,7 @@
 > **Type:** Stdlib Design + Implementation Roadmap
 > **Related:**
 > - `docs/archive/tur-reactor-plan.md` -- event loop backing the listener thread (R1-R8 shipped)
-> - `docs/upcoming/reactor-run-fibers-plan.md` -- planned local fiber driver on top of the reactor
+> - `docs/archive/reactor-run-fibers-plan.md` -- local fiber driver on top of the reactor (shipped, F1-F8)
 > - `stdlib/reactor.tur` -- `tur/reactor` module (R1-R6 complete)
 > - `src/async/io.h`, `src/async/io_epoll.c`, `src/async/io_kqueue.c` -- platform I/O backend
 > - `stdlib/chan.tur`, `stdlib/select.tur` -- cross-thread coordination
