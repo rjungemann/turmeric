@@ -62,9 +62,40 @@
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
 
 ;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
+;;; Also hoists the file-scope httpd_tls_ops struct and instance used by the H5
+;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
 (defn httpd/autolink-hint [] :int
   ```c /* __tur_autolink__: -lturi -pthread */
+  /* __tur_include__: #include <stdint.h> */
+  /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
+  /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   return 0;
+  ```)
+
+;;; httpd-register-tls-impl -- install TLS function pointers into the H5 hook table.
+;;;
+;;; Called once by user code after importing tur/tls (the spice provides a
+;;; one-liner helper that captures these pointers and forwards them here).
+;;; Without this call, httpd-new-tls fails cleanly because the function
+;;; pointer table is all zeros.
+;;;
+;;; Parameters:
+;;;   wrap-fd   -- (int64_t)(intptr_t)&tls-wrap-fd
+;;;   handshake -- (int64_t)(intptr_t)&tls-handshake
+;;;   read-fn   -- (int64_t)(intptr_t)&tls-read
+;;;   write-fn  -- (int64_t)(intptr_t)&tls-write
+;;;   shutdown  -- (int64_t)(intptr_t)&tls-shutdown
+;;;   free-fn   -- (int64_t)(intptr_t)&tls-free
+;;;
+;;; Since: Phase H5
+(defn httpd-register-tls-impl [wrap-fd :int handshake :int read-fn :int write-fn :int shutdown :int free-fn :int] :nil
+  ```c
+  httpd_tls_ops.wrap_fd   = (int64_t)wrap_fd;
+  httpd_tls_ops.handshake = (int64_t)handshake;
+  httpd_tls_ops.read_fn   = (int64_t)read_fn;
+  httpd_tls_ops.write_fn  = (int64_t)write_fn;
+  httpd_tls_ops.shutdown  = (int64_t)shutdown;
+  httpd_tls_ops.free_fn   = (int64_t)free_fn;
   ```)
 
 ;; ---- libturi reactor C surface ----
@@ -85,8 +116,12 @@
 ;;;   - HTTP/1.0: connection closed unless Connection: keep-alive.
 ;;;   - A SO_RCVTIMEO of 5 seconds bounds idle keep-alive holding time.
 ;;;
-;;; Since: Phase H1
-(defn httpd-handle [fd :int handler :int] :nil
+;;; When `tls` is non-zero it is an opaque TLS connection handle obtained
+;;; from the spice's tls-wrap-fd + tls-handshake; reads and writes are
+;;; routed through the registered TLS ops instead of recv/send.
+;;;
+;;; Since: Phase H1 (TLS path: Phase H5)
+(defn httpd-handle [fd :int handler :int tls :int] :nil
   ```c
   typedef struct {
       int fd;
@@ -101,7 +136,10 @@
       int resp_body_len;
       int client_keep_alive;
       void *route_params;
+      int64_t tls;
   } HttpdConn;
+  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  typedef void    (*httpd_tls_void_fn)(int64_t);
   /* 5 second receive timeout bounds idle keep-alive connections. */
   struct timeval tv;
   tv.tv_sec = 5; tv.tv_usec = 0;
@@ -113,14 +151,21 @@
       memset(conn, 0, sizeof(HttpdConn));
       conn->fd = (int)fd;
       conn->handler = (int64_t)handler;
+      conn->tls = (int64_t)tls;
       /* Read until end-of-headers, then read any indicated body. */
       char buf[8192];
       int total = 0;
       ssize_t n;
       char *hdr_end = NULL;
       while (!hdr_end) {
-          n = recv(conn->fd, buf + total,
-                   (size_t)(sizeof(buf) - 1 - (size_t)total), 0);
+          if (conn->tls && httpd_tls_ops.read_fn) {
+              n = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
+                      conn->tls, (int64_t)(intptr_t)(buf + total),
+                      (int64_t)(sizeof(buf) - 1 - (size_t)total));
+          } else {
+              n = recv(conn->fd, buf + total,
+                       (size_t)(sizeof(buf) - 1 - (size_t)total), 0);
+          }
           if (n <= 0) break;
           total += (int)n;
           buf[total] = '\0';
@@ -214,7 +259,13 @@
               int need = content_len - body_in_buf;
               int got  = body_in_buf;
               while (need > 0) {
-                  ssize_t r = recv(conn->fd, conn->body + got, (size_t)need, 0);
+                  ssize_t r;
+                  if (conn->tls && httpd_tls_ops.read_fn) {
+                      r = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
+                              conn->tls, (int64_t)(intptr_t)(conn->body + got), (int64_t)need);
+                  } else {
+                      r = recv(conn->fd, conn->body + got, (size_t)need, 0);
+                  }
                   if (r <= 0) break;
                   got  += (int)r;
                   need -= (int)r;
@@ -243,11 +294,26 @@
       int hlen = snprintf(hbuf, sizeof(hbuf),
           "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n",
           ver, status, stxt, blen, chdr);
-      send(conn->fd, hbuf, (size_t)hlen, 0);
-      if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
+      if (conn->tls && httpd_tls_ops.write_fn) {
+          ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+              conn->tls, (int64_t)(intptr_t)hbuf, (int64_t)hlen);
+          if (blen > 0) {
+              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  conn->tls, (int64_t)(intptr_t)body, (int64_t)blen);
+          }
+      } else {
+          send(conn->fd, hbuf, (size_t)hlen, 0);
+          if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
+      }
       keep_going = conn->client_keep_alive;
       if (conn->body)      free(conn->body);
       if (conn->resp_body) free(conn->resp_body);
+  }
+  if (tls && httpd_tls_ops.shutdown) {
+      ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
+  }
+  if (tls && httpd_tls_ops.free_fn) {
+      ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.free_fn)((int64_t)tls);
   }
   close((int)fd);
   ```)
@@ -269,7 +335,11 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
+  typedef int64_t (*httpd_tls_wrap_fn)(int64_t, int64_t);
+  typedef int64_t (*httpd_tls_handshake_fn)(int64_t);
+  typedef void    (*httpd_tls_void_fn)(int64_t);
   HttpdBlock *hb = (HttpdBlock *)arg;
   for (;;) {
       int fd = -1;
@@ -284,7 +354,21 @@
       hb->fdq_head = (hb->fdq_head + 1) % hb->fdq_cap;
       hb->fdq_count--;
       pthread_mutex_unlock(&hb->fdq_mtx);
-      httpd_handle((int64_t)fd, hb->handler);
+      int64_t tls = 0;
+      if (hb->tls_ctx && httpd_tls_ops.wrap_fd && httpd_tls_ops.handshake) {
+          tls = ((httpd_tls_wrap_fn)(intptr_t)httpd_tls_ops.wrap_fd)(
+                    (int64_t)(intptr_t)hb->tls_ctx, (int64_t)fd);
+          if (tls == 0) { close(fd); continue; }
+          int hrc = (int)((httpd_tls_handshake_fn)(intptr_t)httpd_tls_ops.handshake)(tls);
+          if (hrc != 0) {
+              if (httpd_tls_ops.free_fn) {
+                  ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.free_fn)(tls);
+              }
+              close(fd);
+              continue;
+          }
+      }
+      httpd_handle((int64_t)fd, hb->handler, tls);
   }
   return NULL;
   ```)
@@ -308,6 +392,7 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
   int64_t *fat = (int64_t *)env;
   HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
@@ -379,6 +464,7 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -458,6 +544,72 @@
 (defn httpd-new [port :int handler :int] :ptr<void>
   (httpd-new-pool port 4 handler))
 
+;;; httpd-new-tls -- create an httpd instance with TLS termination.
+;;;
+;;; The accept loop is identical to the plaintext path; each accepted fd
+;;; is wrapped with tls-wrap-fd + driven through tls-handshake on the
+;;; worker that pops it. Reads and writes inside httpd-handle then go
+;;; through the registered TLS ops instead of recv/send.
+;;;
+;;; Prerequisites:
+;;;   * The tur/tls spice must be linked (otherwise the function-pointer
+;;;     table is all zeros and this constructor returns NULL).
+;;;   * The user must call (tls-httpd-init) once -- exported by the
+;;;     spice's tls/httpd module -- before calling httpd-new-tls.
+;;;
+;;; Parameters:
+;;;   port    -- TCP port to listen on (0 = kernel-assigned)
+;;;   workers -- number of worker threads (must be > 0)
+;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   ctx     -- TLS context handle from tls-ctx-new with cert + key loaded
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Httpd handle, or nil if ctx is 0 or TLS ops
+;;;   have not been registered.
+;;;
+;;; Example:
+;;;   (tls-httpd-init)
+;;;   (let [ctx (tls-ctx-new)]
+;;;     (tls-ctx-load-cert-pem ctx "cert.pem")
+;;;     (tls-ctx-load-key-pem  ctx "key.pem")
+;;;     (let [h (httpd-new-tls 8443 4 my-handler ctx)]
+;;;       (httpd-run h)
+;;;       (httpd-free h)
+;;;       (tls-ctx-free ctx)))
+;;;
+;;; Since: Phase H5
+(defn httpd-new-tls [port :int workers :int handler :int ctx :int] :ptr<void>
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+  } HttpdBlock;
+  if (ctx == 0) {
+      fprintf(stderr, "httpd-new-tls: ctx is 0\n");
+      return NULL;
+  }
+  if (!httpd_tls_ops.wrap_fd || !httpd_tls_ops.handshake ||
+      !httpd_tls_ops.read_fn || !httpd_tls_ops.write_fn) {
+      fprintf(stderr,
+          "httpd-new-tls: TLS ops not registered "
+          "-- did you forget to import tls/httpd and call tls-httpd-init?\n");
+      return NULL;
+  }
+  HttpdBlock *hb = (HttpdBlock *)httpd_new_pool((int64_t)port,
+                                                (int64_t)workers,
+                                                (int64_t)handler);
+  if (!hb) return NULL;
+  hb->tls_ctx = (void *)(intptr_t)ctx;
+  return (void *)hb;
+  ```)
+
 ;;; httpd-port -- return the port the server is listening on.
 ;;;
 ;;; Useful when httpd-new was called with port 0 (kernel-assigned).
@@ -480,6 +632,7 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   struct sockaddr_in addr;
@@ -502,6 +655,7 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
@@ -524,6 +678,7 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
@@ -555,6 +710,7 @@
       pthread_mutex_t fdq_mtx;
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
+      void *tls_ctx;
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   if (hb->workers) {
