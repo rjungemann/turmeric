@@ -434,6 +434,13 @@ typedef struct Type {
              * a typed error.  Distinguishes fat consumers (reactor cb, free-bind
              * kont) from raw-C-callback params (hamt fn) that share the same kind. */
             bool arg_fat[MAX_FN_ARITY];
+            /* A#1 (return position): true when the result type carries the
+             * ^fat marker.  A bare non-capturing fn returned from this
+             * function is auto-shimmed into a fat closure (EX_FN_TO_FAT) at
+             * every tail/return leaf, so a fat-call consumer that reads the
+             * returned value sees a valid { thunk, env } layout instead of a
+             * bare function pointer.  Symmetric with arg_fat[]. */
+            bool result_fat;
             /* AR6: variadic rest-param support (& rest :type) */
             bool is_variadic;                  /* true if this fn has a & rest parameter */
             TypeKind rest_kind;                /* type of the rest cons-list elements (fast-path) */

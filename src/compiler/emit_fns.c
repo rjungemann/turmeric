@@ -145,6 +145,26 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     buf_puts(body, "goto __tur_tailcall;\n");
 }
 
+/* A#1 (return position): emit a tail/return value, wrapping it in EX_FN_TO_FAT
+ * when the enclosing function carries the ^fat result marker and the value is a
+ * bare non-capturing fn (TY_FN).  This makes the returned value a heap fat
+ * closure { thunk, env } so a fat-call consumer reads a valid layout instead of
+ * a bare function pointer -- symmetric with the ^fat parameter auto-shim.  A
+ * capturing closure (already TY_PTR_VOID) or any non-fn value passes through. */
+static char *emit_fat_return_value(EmitCtx *ctx, Buf *body, const Expr *fn_e,
+                                   const Expr *e) {
+    if (fn_e && fn_e->type.kind == TY_FN && fn_e->type.as.fn.result_fat &&
+        e->type.kind == TY_FN) {
+        Expr shim = {0};
+        shim.kind = EX_FN_TO_FAT;
+        shim.type = e->type;
+        shim.span = e->span;
+        shim.as.fn_to_fat_.inner = (Expr *)e;
+        return emit_value(ctx, body, &shim);
+    }
+    return emit_value(ctx, body, e);
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -217,7 +237,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
     }
 
     /* Default: emit as a value and return it. */
-    char *v = emit_value(ctx, body, e);
+    char *v = emit_fat_return_value(ctx, body, fn_e, e);
     indent_buf(body, ctx->indent);
     if (e->type.kind == TY_NIL) {
         free(v);
@@ -548,7 +568,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         }
     } else {
         /* Function with return value */
-        char *ret_val = emit_value(ctx, file, fd->body);
+        char *ret_val = emit_fat_return_value(ctx, file, e, fd->body);
         indent_buf(file, ctx->indent);
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {

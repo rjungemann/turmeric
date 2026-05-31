@@ -89,9 +89,8 @@
   (lequal x (term-int 99)))
 
 ;; make-fresh-fn: returns fat closure (term -> goal) for fresh
-(defn make-fresh-fn [] :ptr<void>
-  (let [dummy 0]
-    (fn [x] (let [_ dummy] (goal-for-term x)))))
+(defn make-fresh-fn [] ^fat :ptr<void>
+  (fn [x] (goal-for-term x)))
 
 (defn main []
   (let [goal (fresh (make-fresh-fn))

@@ -130,9 +130,8 @@
   (fresh (make-inner-fn x)))
 
 ;; make-outer-fn: returns fat closure (x -> goal) for outer fresh
-(defn make-outer-fn [] :ptr<void>
-  (let [dummy 0]
-    (fn [x] (let [_ dummy] (outer-body x)))))
+(defn make-outer-fn [] ^fat :ptr<void>
+  (fn [x] (outer-body x)))
 
 (defn main []
   (let [goal (fresh (make-outer-fn))
