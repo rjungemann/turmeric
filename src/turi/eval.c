@@ -3386,6 +3386,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_POLY_WRAP:
         return eval_expr(env, frame, e->as.poly_wrap_.inner);
 
+    /* --- A#1: fat-closure shim is transparent in the interpreter ----------- */
+    case EX_FN_TO_FAT:
+        return eval_expr(env, frame, e->as.fn_to_fat_.inner);
+
     /* --- Phase 12: borrows --- */
     case EX_BORROW_IMMUT:
         return eval_expr(env, frame, e->as.borrow_immut_.expr);

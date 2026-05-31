@@ -585,6 +585,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* ST0: ^affine / ^relevant annotations apply to the next parameter */
     bool next_param_affine    = false;
     bool next_param_relevant  = false;
+    /* A#1: ^fat annotation marks the next parameter as a fat-closure consumer */
+    bool next_param_fat       = false;
     /* AR5: variadic rest parameter state */
     bool is_variadic = false;
     TypeKind rest_kind = TY_INT;  /* default rest element type */
@@ -720,6 +722,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* ST0: ^relevant annotation marks the next parameter as relevant (must be used) */
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_relevant) {
             next_param_relevant = true;
+            continue;
+        }
+
+        /* A#1: ^fat annotation marks the next parameter as a fat-closure consumer.
+         * A bare non-capturing fn passed to this parameter is auto-shimmed into a
+         * fat closure at the call site (EX_FN_TO_FAT). */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_fat) {
+            next_param_fat = true;
             continue;
         }
 
@@ -1133,6 +1143,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
             b->is_relevant = true;
             b->type.substruct = SK_RELEVANT;
             next_param_relevant = false;
+        }
+        /* A#1: If the previous ^fat annotation applied to this parameter, mark it
+         * as a fat-closure consumer so call sites auto-shim bare fn arguments. */
+        if (next_param_fat) {
+            b->is_fat = true;
+            next_param_fat = false;
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
@@ -2026,6 +2042,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* A#1: Store arg_fat flags from param bindings into fn_type so call sites
+     * can auto-shim bare fn arguments into fat closures. */
+    {
+        bool any_fat = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_fat) { any_fat = true; break; }
+        }
+        if (any_fat) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_fat[i] = params[i]->is_fat;
+            }
+        }
+    }
 
     /* Create/update binding for the function.
      * Reuse pass-1 forward bindings in place so subsequent lookups observe
@@ -2732,9 +2761,17 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     Binding **params = NULL;
     uint8_t n_params = 0;
     TypeKind param_kinds[MAX_FN_ARITY];
+    /* A#1: ^fat marks the next extern-c parameter as a fat-closure consumer. */
+    bool next_param_fat = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
+        /* A#1: ^fat annotation applies to the next parameter.  Intercept before
+         * the generic ^ctype handling below (which would misparse "fat"). */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_fat) {
+            next_param_fat = true;
+            continue;
+        }
         /* Handle type annotation keyword or F_TYPE_ANN after the previous param */
         if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
             if (n_params == 0) {
@@ -2819,6 +2856,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
             param_kinds[n_params] = ck;
             Binding *b = binding_new(e, name_f->as.sym, type_from_kind(ck), false, false, name_f->span);
             b->is_param = true;
+            b->is_fat = next_param_fat; next_param_fat = false;
             params[n_params++] = b;
             continue;
         }
@@ -2826,6 +2864,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
         b->is_param = true;
+        b->is_fat = next_param_fat; next_param_fat = false;
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
         }
@@ -2875,6 +2914,10 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
 
     /* Create function type */
     Type fn_type = type_fn(param_kinds, n_params, return_kind);
+    /* A#1: propagate ^fat parameter flags into the fn type for call-site shimming. */
+    for (uint8_t i = 0; i < n_params; i++) {
+        if (params[i]->is_fat) fn_type.as.fn.arg_fat[i] = true;
+    }
 
     /* Create a binding for the extern-c function so it can be looked up and called */
     Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, call->span);

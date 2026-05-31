@@ -3241,6 +3241,43 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
+        /* A#1: fat-closure auto-shim.  Build a 2-slot heap fat struct
+         *   { int64_t __fn = wrapper, int64_t __orig = bare_fn_ptr }
+         * plus a file-scope env-ignoring wrapper thunk whose signature mirrors a
+         * real closure thunk ( <ret> (void *env, params...) ).  The wrapper reads
+         * the bare fn pointer from slot 1 and forwards the args, so a fat-call
+         * consumer (reactor cb, free-bind kont) can invoke a non-capturing fn
+         * through the standard { thunk, env } protocol -- retiring the historical
+         * capture-forcing dummy.  The value carries TY_PTR_VOID like EX_CLOSURE, so
+         * the surrounding arg-emission casts treat it identically to a closure. */
+        case EX_FN_TO_FAT: {
+            const Expr *inner = e->as.fn_to_fat_.inner;
+            Type fnty = inner->type;
+            uint8_t arity = (fnty.kind == TY_FN) ? fnty.as.fn.arity : 0;
+
+            /* Emit the bare fn pointer value (typically the lifted fn's C name). */
+            char *fnptr = emit_value(ctx, body, inner);
+
+            /* Heap-allocate { __tur_fatshim<arity>, orig_fn_ptr }.  The shim thunk
+             * lives in the runtime preamble (file scope, always valid) and uses the
+             * int64_t carrier ABI shared with TUR_APPLY and the reactor's fat-call
+             * casts, so no per-site C function is generated. */
+            char *fat_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
+                       fat_tmp);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_fatshim%u;\n",
+                       fat_tmp, (unsigned)arity);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s[1] = (int64_t)(intptr_t)%s;\n", fat_tmp, fnptr);
+            char *ptr_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);
+            free(fnptr);
+            free(fat_tmp);
+            return ptr_tmp;
+        }
         /* Phase HRT1: type ascription — erase type, emit inner expression.
          * ACB (KB-004): when the inner expression is a carrier (int64_t) and
          * the ascribed type is a concrete aggregate, insert the bridge so the

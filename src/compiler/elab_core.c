@@ -1008,6 +1008,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* ST0: Substructural types */
     e->sym_caret_affine    = intern_cstr(st, "^affine");
     e->sym_caret_relevant  = intern_cstr(st, "^relevant");
+    e->sym_caret_fat       = intern_cstr(st, "^fat");  /* A#1: fat-closure param */
     e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
     e->sym_caret_unsafe_multishot = intern_cstr(st, "^unsafe-multishot"); /* LC0 */
     e->sym_caret_multishot        = intern_cstr(st, "^multishot");        /* MS1 */

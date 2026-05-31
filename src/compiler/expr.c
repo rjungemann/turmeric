@@ -517,6 +517,11 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_POLY_WRAP:
             buf_puts(b, "<poly-wrap>");
             break;
+        case EX_FN_TO_FAT:
+            buf_puts(b, "(fn->fat ");
+            expr_print(b, e->as.fn_to_fat_.inner);
+            buf_putc(b, ')');
+            break;
         case EX_ASCRIBE:
             buf_puts(b, "(:: ");
             expr_print(b, e->as.ascribe_.inner);
