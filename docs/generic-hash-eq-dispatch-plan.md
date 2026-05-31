@@ -1,7 +1,7 @@
 # Generic `Hash` / `Eq` Dispatch -- Approach A for typed map keys (GHE0--GHE5)
 
 > **Status:** Not started. This is the deferred **Approach A** from
-> [generic-map-key-dispatch-plan.md](generic-map-key-dispatch-plan.md) (see its
+> [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
 > *Decision note (GMK1)*). GMK shipped content-keyed string maps via
 > **Approach B** (a `:cstr`-specific lowering onto the hand-written `smap-*`
 > layer). Approach A replaces that special-case with *uniform* dispatch: a
@@ -17,6 +17,12 @@
 > and dispatches, so `#map{...}` over *any* `Hash`/`Eq` key type (int, cstr,
 > bool, float32, and user instances) builds a correct content-keyed map through
 > one code path -- collapsing GMK's `:cstr` special-case (Approach C).
+>
+> **Scope note:** GHE unifies *dispatch* but leaves the map handle type-erased
+> to `:int`, so it does not add compile-time key-type safety or remove the
+> `smap-*` vs `map-*` accessor split. That ergonomics/safety layer is planned
+> separately in [typed-map-surface-plan.md](typed-map-surface-plan.md) (TMS),
+> which builds on this plan.
 
 ## Why this is more than a one-line emission fix
 
