@@ -371,10 +371,13 @@ missing *primitive* and a focused stdlib layer on top:
 **Known limitation / follow-up.** `hamt-of` and the `#map{...}` literal still
 use the int-identity path (keyword/string keys are normalized to a content
 hash *stored as the key*, with the historical collision caveat). Routing
-those literals to the content-keyed `smap-*` path for `:cstr` keys needs
-key-type dispatch in the macro/lowering and a real `Hash` typeclass; that
-generic auto-dispatch is left as future work. Today, correct string-keyed
-maps use the explicit `smap-*` API.
+those literals to the content-keyed path for `:cstr` keys needs key-type
+dispatch at the `hamt-of` / `#map{...}` boundary. The `Hash` and `Eq`
+typeclasses and their `cstr` instances already exist
+(`stdlib/typeclass.tur`, `stdlib/typeclass-eq.tur`), so this is a wiring
+problem, planned in
+[generic-map-key-dispatch-plan.md](generic-map-key-dispatch-plan.md). Today,
+correct string-keyed maps use the explicit `smap-*` API.
 
 **Acceptance.** `tests/fixtures/tce4-map-cstr-key/` -- string keys
 round-trip, including two distinct string instances of equal content
