@@ -40,6 +40,8 @@ typedef struct PkgCmakeDep {
     char         *ref;         /* git tag/branch/SHA; NULL for path deps */
     char         *path;        /* local path; NULL for git deps */
     char         *cmake_name;  /* find_package name if different from key */
+    bool          prefer_system;   /* try find_package before FetchContent */
+    char         *cmake_version;   /* optional minimum version for find_package */
     char        **targets;     /* CMake targets to link against */
     int           n_targets;
     PkgCmakeOpt  *opts;
@@ -52,6 +54,8 @@ typedef struct PkgCmakeDep {
 
 typedef struct PkgCmakeManifestEntry {
     char  *name;
+    char  *resolved_via;   /* "system", "fetch", "path", or NULL if absent */
+    char  *system_version; /* find_package version when resolved_via==system */
     char **include_dirs;
     int    n_include_dirs;
     char **link_dirs;
@@ -135,6 +139,8 @@ typedef struct PkgLockEntry {
     char  *resolved;    /* full git commit SHA */
     char  *sha256;      /* SHA-256 of the archive */
     char  *fetched_at;  /* ISO-8601 timestamp */
+    char  *resolved_via;   /* "system" or "fetch"; NULL = legacy/fetch */
+    char  *system_version; /* system pkg version when resolved_via == system */
     char **transitive;  /* "name@ref" strings */
     int    n_transitive;
     bool   is_cmake;    /* true = lives under cmake-deps: section */
