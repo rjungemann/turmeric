@@ -1,0 +1,8 @@
+tls-new-tls-without-ops=NULL
+wrap_fd-called
+handshake-called
+handler-path=/hello
+shutdown-called
+free-called
+client=ok
+done

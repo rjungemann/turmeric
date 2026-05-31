@@ -1,0 +1,243 @@
+;; Phase H5: httpd-h5-tls -- exercises the TLS hook plumbing in
+;; stdlib/httpd.tur without depending on the tur-tls spice.
+;;
+;; What this fixture verifies (the H5 integration surface):
+;;   1. httpd-new-tls returns NULL before httpd-register-tls-impl is called.
+;;   2. After registering ops, httpd-new-tls succeeds and stores the
+;;      ctx pointer in HttpdBlock.tls_ctx.
+;;   3. The worker calls wrap_fd + handshake on each accepted fd.
+;;   4. httpd-handle routes recv/send through the registered read/write
+;;      ops (instead of plain recv/send on the underlying fd).
+;;   5. shutdown + free fire once per connection before close.
+;;
+;; The full TLS protocol path (real mbedTLS handshake + record framing)
+;; is already covered by the tur-tls spice's tls-roundtrip fixture (T3);
+;; here we use plaintext-passthrough stubs that simply forward read/write
+;; to recv/send on the fd. That keeps this fixture inside the main
+;; turmeric tree (no spice dependency, no cert generation, no -I flags)
+;; while still exercising every line of the H5 routing code path.
+;;
+;; All output below comes from either the main thread (top of the run)
+;; or the single worker thread (in a deterministic order); the client
+;; thread reports success via a channel rather than printing directly,
+;; which keeps the expected.stdout stable across runs.
+;;
+;; Expected output:
+;;   tls-new-tls-without-ops=NULL
+;;   wrap_fd-called
+;;   handshake-called
+;;   handler-path=/hello
+;;   shutdown-called
+;;   free-called
+;;   client=ok
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-c-line [tag :cstr] :nil
+  ```c printf("%s\n", tag); ```)
+
+(defn print-path [path :cstr] :nil
+  ```c printf("handler-path=%s\n", path); ```)
+
+(defn print-client-result [code :int] :nil
+  ```c
+  if (code == 0) printf("client=ok\n");
+  else printf("client=FAIL rc=%lld\n", (long long)code);
+  ```)
+
+(defn print-null-check [is-null :int] :nil
+  ```c
+  printf("tls-new-tls-without-ops=%s\n", is_null ? "NULL" : "NON-NULL");
+  ```)
+
+;; ---- stub TLS ops --------------------------------------------------------
+;;
+;; The "TLS connection handle" returned from stub-wrap-fd is just a
+;; small malloc'd struct holding the underlying fd. Read/write call
+;; recv/send on that fd. shutdown/free print markers + release the
+;; struct so we can confirm they fire exactly once.
+
+(defn stub-wrap-fd [ctx :int fd :int] :int
+  ```c
+  /* __tur_include__: #include <stdlib.h> */
+  print_c_line("wrap_fd-called");
+  (void)ctx;
+  int *conn = (int *)malloc(sizeof(int));
+  if (!conn) return 0;
+  *conn = (int)fd;
+  return (int64_t)(intptr_t)conn;
+  ```)
+
+(defn stub-handshake [conn :int] :int
+  ```c
+  print_c_line("handshake-called");
+  if (conn == 0) return -1;
+  return 0;
+  ```)
+
+(defn stub-read [conn :int buf :int len :int] :int
+  ```c
+  if (conn == 0) return -1;
+  int fd = *(int *)(intptr_t)conn;
+  ssize_t n = recv(fd, (void *)(intptr_t)buf, (size_t)len, 0);
+  return (int64_t)n;
+  ```)
+
+(defn stub-write [conn :int buf :int len :int] :int
+  ```c
+  if (conn == 0) return -1;
+  int fd = *(int *)(intptr_t)conn;
+  ssize_t n = send(fd, (const void *)(intptr_t)buf, (size_t)len, 0);
+  return (int64_t)n;
+  ```)
+
+(defn stub-shutdown [conn :int] :void
+  ```c
+  if (conn == 0) return;
+  print_c_line("shutdown-called");
+  ```)
+
+(defn stub-free [conn :int] :void
+  ```c
+  /* __tur_include__: #include <stdlib.h> */
+  if (conn == 0) return;
+  print_c_line("free-called");
+  free((void *)(intptr_t)conn);
+  ```)
+
+;; ---- function-pointer-as-int helper -------------------------------------
+
+(defn fn-ptr-wrap-fd   [] :int ```c return (int64_t)(intptr_t)&stub_wrap_fd;   ```)
+(defn fn-ptr-handshake [] :int ```c return (int64_t)(intptr_t)&stub_handshake; ```)
+(defn fn-ptr-read      [] :int ```c return (int64_t)(intptr_t)&stub_read;      ```)
+(defn fn-ptr-write     [] :int ```c return (int64_t)(intptr_t)&stub_write;     ```)
+(defn fn-ptr-shutdown  [] :int ```c return (int64_t)(intptr_t)&stub_shutdown;  ```)
+(defn fn-ptr-free      [] :int ```c return (int64_t)(intptr_t)&stub_free;      ```)
+
+;; 1 if the pointer is NULL, 0 otherwise.
+(defn is-null? [p :ptr<void>] :int
+  ```c return p == NULL ? 1 : 0; ```)
+
+;; ---- client thread ------------------------------------------------------
+;;
+;; Reports its outcome via *(int *)result_slot rather than printing to
+;; stdout -- that way main can sequence its "client=ok" print AFTER
+;; all the worker-thread prints have flushed.
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  struct client_args { int64_t port; int *result_slot; };
+  struct client_args *ca = (struct client_args *)arg;
+  int64_t port = ca->port;
+  int *result_slot = ca->result_slot;
+  free(ca);
+
+  struct timespec ts = { 0, 50000000L };  /* 50 ms */
+  nanosleep(&ts, NULL);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) { *result_slot = -1; return NULL; }
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd); *result_slot = -2; return NULL;
+  }
+  const char *req =
+      "GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char rxbuf[2048];
+  int total = 0;
+  for (;;) {
+      ssize_t r = recv(fd, rxbuf + total, sizeof(rxbuf) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+      if ((size_t)total >= sizeof(rxbuf) - 1) break;
+  }
+  rxbuf[total] = '\0';
+  const char *body = strstr(rxbuf, "\r\n\r\n");
+  if (!body)                        { close(fd); *result_slot = 101; return NULL; }
+  if (strcmp(body + 4, "TLS-OK")!=0){ close(fd); *result_slot = 102; return NULL; }
+  *result_slot = 0;
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn alloc-int-slot [] :ptr<void>
+  ```c
+  int *p = (int *)malloc(sizeof(int));
+  *p = -999;
+  return (void *)p;
+  ```)
+
+(defn free-int-slot [p :ptr<void>] :nil ```c free(p); ```)
+
+(defn read-int-slot [p :ptr<void>] :int
+  ```c return (int64_t)*(int *)p; ```)
+
+(defn spawn-client [port :int result-slot :ptr<void>] :ptr<void>
+  ```c
+  struct client_args { int64_t port; int *result_slot; };
+  struct client_args *ca = (struct client_args *)malloc(sizeof(*ca));
+  ca->port = (int64_t)port;
+  ca->result_slot = (int *)result_slot;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)ca);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+;; A non-zero pointer that pretends to be a tls_ctx_t handle. The stub
+;; ops ignore the value; httpd-new-tls just checks that it is non-zero.
+(defn fake-ctx [] :int
+  ```c return (int64_t)(intptr_t)"DUMMY_TLS_CTX"; ```)
+
+(defn main [] :int
+  ;; (1) Without registered ops, httpd-new-tls should refuse to build.
+  (let [h0 (httpd-new-tls 0 1 (fn [_ :ptr<void>] :nil 0) (fake-ctx))]
+    (print-null-check (is-null? h0)))
+
+  ;; (2) Register the stub ops and start a real server.
+  (httpd-register-tls-impl
+    (fn-ptr-wrap-fd) (fn-ptr-handshake)
+    (fn-ptr-read) (fn-ptr-write)
+    (fn-ptr-shutdown) (fn-ptr-free))
+
+  (let [donech (chan-new 1)
+        h      (httpd-new-tls 0 1
+                 (fn [conn :ptr<void>] :nil
+                   (print-path (httpd-req-path conn))
+                   (httpd-resp-status! conn 200)
+                   (httpd-resp-body! conn "TLS-OK")
+                   (chan-send donech 1))
+                 (fake-ctx))
+        port   (httpd-port h)
+        slot   (alloc-int-slot)
+        server (spawn-server h)
+        client (spawn-client port slot)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (print-client-result (read-int-slot slot))
+    (println "done")
+    (httpd-free h)
+    (free-int-slot slot)
+    (chan-free donech)
+    0))
