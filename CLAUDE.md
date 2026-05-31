@@ -1,5 +1,23 @@
 # Turmeric 2 -- Claude Code Guide
 
+## Locating Referenced Files -- STRICT RULE
+
+When asked to act on a doc, plan, or file by path, **look before concluding it
+is missing, and fetch before giving up**:
+
+1. Check the working tree (`ls`/`Read` the path). If it is there, proceed.
+2. If it is missing, run `git fetch origin main` (and/or inspect
+   `origin/main:<path>`), then re-check. The container is cloned fresh and
+   pinned to the feature branch at session start, so a doc merged to `main`
+   after the branch diverged genuinely will not be in the tree until fetched.
+3. Only after both steps come up empty may you report the file as not found.
+
+Reading any file and fetching any branch are **always allowed** -- these are
+read operations. The "develop on branch X" rule constrains only where commits
+and pushes land; it never forbids reading or fetching `main` (or any other
+ref). Do not rules-lawyer a write-side instruction into a reason to skip a
+read. "We're on a branch, not main" is never a reason to avoid `git fetch`.
+
 ## Fixture Snapshots -- STRICT RULE
 
 `tests/fixtures/*/expected.c` are codegen snapshots that **must match** before
