@@ -1,0 +1,7 @@
+;; beta -- defines a PRIVATE helper __h (same Turmeric name as alpha's, NOT in
+;; the export list) and an exported function beta-val that calls its own __h.
+;; beta/__h returns 200.
+(defmodule beta
+  (export beta-val)
+  (defn __h [] :int 200)
+  (defn beta-val [] :int (__h)))

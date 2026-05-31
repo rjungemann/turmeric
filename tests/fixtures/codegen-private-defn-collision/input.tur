@@ -1,0 +1,14 @@
+;; codegen-private-defn-collision -- imports two modules that each define a
+;; PRIVATE (non-exported) helper named __h.  alpha/__h returns 100, beta/__h
+;; returns 200.  If name resolution and mangling are correct, this prints:
+;;   100
+;;   200
+;; The bug under test causes a C-level redefinition (both privates mangle to
+;; the same symbol) and/or the wrong helper body being selected.
+(defmodule prog
+  (import alpha :refer [alpha-val])
+  (import beta :refer [beta-val])
+  (defn main [] :int
+    (println (alpha-val))
+    (println (beta-val))
+    0))
