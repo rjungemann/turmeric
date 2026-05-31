@@ -7,6 +7,6 @@
 (defn main [] :void
   (let [two 2
         even? (fn [x] (= (mod x two) 0))
-        sq (fn [x] (let [_ two] (* x x)))]
+        sq (fn [x] (* x x))]
     (seq-for-each println
       (seq/take 5 (seq/map sq (seq/filter even? (seq/range 0 100)))))))

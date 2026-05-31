@@ -29,7 +29,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn mbind [ma fn] :int
+(defn mbind [ma ^fat fn] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
@@ -69,6 +69,6 @@
   ```)
 
 (defn main []
-  (let [xs (mplus (mreturn 1) (mplus (mreturn 2) (mreturn 3)))
-        k 1]
-    (bt-print (mbind xs (fn [x] (let [_ k] (mreturn (* x 2))))))))
+  ;; non-capturing lambda auto-shimmed via mbind's ^fat parameter
+  (let [xs (mplus (mreturn 1) (mplus (mreturn 2) (mreturn 3)))]
+    (bt-print (mbind xs (fn [x] (mreturn (* x 2)))))))

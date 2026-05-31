@@ -4,6 +4,5 @@
 (load "stdlib/seq/consume.tur")
 
 (defn main [] :void
-  (let [zero 0
-        pln (fn [x] (let [_ zero] (println x)))]
+  (let [pln (fn [x] (println x))]
     (seq/for-each pln (seq/range 0 3))))

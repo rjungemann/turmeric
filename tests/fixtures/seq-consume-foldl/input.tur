@@ -4,6 +4,6 @@
 (load "stdlib/seq/consume.tur")
 
 (defn main [] :void
-  (let [zero 0
-        sum (fn [a b] (let [_ zero] (+ a b)))]
+  ;; non-capturing fn auto-shimmed via seq/foldl's ^fat parameter
+  (let [sum (fn [a b] (+ a b))]
     (println (seq/foldl 0 sum (seq/range 1 6)))))

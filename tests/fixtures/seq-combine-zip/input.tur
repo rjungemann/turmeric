@@ -5,8 +5,7 @@
 (load "stdlib/seq/combine.tur")
 
 (defn main [] :void
-  (let [_d 0
-        show (fn [p] (let [_ _d]
-                       (println (seq-pair-first p))
-                       (println (seq-pair-second p))))]
+  (let [show (fn [p]
+               (println (seq-pair-first p))
+               (println (seq-pair-second p)))]
     (seq-for-each show (seq/zip (seq/range 0 3) (seq/range 10 13)))))

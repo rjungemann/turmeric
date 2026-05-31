@@ -95,7 +95,7 @@
 ;;; Since: LZ2
 
 
-(defn seq/map [f :int s :int] :int
+(defn seq/map [^fat f :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s)]
                (gen []
@@ -119,7 +119,7 @@
 ;;;
 ;;; Since: LZ2
 
-(defn seq/filter [pred :int s :int] :int
+(defn seq/filter [^fat pred :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s)]
                (gen []
@@ -196,7 +196,7 @@
 ;;;
 ;;; Since: LZ2
 
-(defn seq/take-while [pred :int s :int] :int
+(defn seq/take-while [^fat pred :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s)]
                (gen []
@@ -224,7 +224,7 @@
 ;;;
 ;;; Since: LZ2
 
-(defn seq/drop-while [pred :int s :int] :int
+(defn seq/drop-while [^fat pred :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s) ^mut dropping true]
                (gen []
@@ -252,7 +252,7 @@
 ;;;
 ;;; Since: LZ2
 
-(defn seq/map-indexed [f :int s :int] :int
+(defn seq/map-indexed [^fat f :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s) ^mut idx 0]
                (gen []
@@ -280,7 +280,7 @@
 ;;;
 ;;; Since: LZ2
 
-(defn seq/filter-map [f :int s :int] :int
+(defn seq/filter-map [^fat f :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s)]
                (gen []
@@ -305,7 +305,7 @@
 ;;;
 ;;; Since: LZ2
 
-(defn seq/flat-map [f :int s :int] :int
+(defn seq/flat-map [^fat f :int s :int] :int
   (seq-new (fn []
              (let [g (seq-iter s) ^mut ig 0]
                (gen []

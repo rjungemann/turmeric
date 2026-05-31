@@ -114,7 +114,7 @@
 ;;;
 ;;; Since: LZ3
 
-(defn seq/zip-with [f :int s1 :int s2 :int] :int
+(defn seq/zip-with [^fat f :int s1 :int s2 :int] :int
   (seq-new (fn []
              (let [g1 (seq-iter s1) g2 (seq-iter s2)]
                (gen []
