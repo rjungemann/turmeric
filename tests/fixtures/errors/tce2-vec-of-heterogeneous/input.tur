@@ -1,0 +1,6 @@
+;; TCE2: vec-of requires all elements to unify to a single type A.
+;; A mixed-type literal is a TUR-E0001 on the offending element.
+
+(defn main [] :int
+  (let [v (vec-of 1 "x" 3.14)]
+    (vec-len v)))

@@ -259,19 +259,32 @@ unchanged.
 arguments and instantiates the TCE1 ops at `A`; a mixed-type literal is a
 `TUR-E0001` on the offending element (today's behaviour, preserved).
 
-**Changes.**
+**Measured surprise.** The pushes do **not** share `A` automatically: each
+`vec-push!` instantiates `A` independently (the vec handle is plain `:int`,
+not `(Vec A)`), so `(vec-of 1 "x")` was wrongly *accepted* after TCE1.
+Phantom-typed handles do not help either -- the checker treats `[A]` params
+as rigid (it rejects `(push (Box ?A) 1)` with "expected tyvar, got int"
+rather than unifying `A := int`), so there is no HM inference threading one
+`A` through the handle.
 
-- `stdlib/vec.tur` -- `vec-of` / `vec-push-each__` expand onto the
-  polymorphic `vec-push!`. Because all pushes target the same `v`, the
-  element type unifies through the shared `A`; a divergent element fails
-  unification with `TUR-E0001` at that element's position.
-- No macro-level type computation is needed -- unification falls out of
-  the polymorphic `vec-push!` signature. Confirm the diagnostic still
-  points at the offending element span (`vec-of 1 "x"` underlines `"x"`).
+**Changes (compiler + stdlib).**
+
+- Compiler (`src/compiler/elab_call.c`, variadic rest path ~1573): a
+  polymorphic-tyvar rest `[& xs :A]` names a single type variable, so all
+  rest args must unify to one type. Bind `A` to the first rest arg and
+  require the rest to `type_eq` it (previously each arg was accepted
+  independently). This is the HM-correct reading and the lever TCE2 uses.
+- `stdlib/vec.tur`: add a fixed-arity, allocation-free pairwise check
+  `tur-vec-homog__ [A] [a :A b :A]` (no-op body) and a `vec-homog-chain__`
+  macro that chains it over adjacent elements; `vec-of` emits the chain
+  before the pushes. A divergent element fails with `TUR-E0001` at its
+  span. (A single variadic check would also work but mallocs a throwaway
+  cons-list per literal -- rejected for the construction hot path.)
 
 **Acceptance.** `tests/fixtures/tce2-vec-of-infer/` (homogeneous
-float/cstr literals) and a negative fixture asserting
-`(vec-of 1 "x" 3.14)` reports `TUR-E0001` on `"x"`.
+float/cstr literals) and `tests/fixtures/errors/tce2-vec-of-heterogeneous/`
+asserting `(vec-of 1 "x" 3.14)` reports `TUR-E0001` on the offending
+element.
 
 ### TCE3 -- Polymorphic Map value surface
 
@@ -351,7 +364,8 @@ transparently.
 |---|---|---|
 | TCE0 | (fixtures only) | Validate carrier-generic inline-C pattern; no compiler change |
 | TCE1 | `stdlib/vec.tur` | Add `[A]` binders to existing inline-C ops; bodies unchanged |
-| TCE2 | `stdlib/vec.tur` | `vec-of` expands onto polymorphic `vec-push!` |
+| TCE2 | `src/compiler/elab_call.c` | Polymorphic-tyvar variadic rest unifies all args to one type |
+| TCE2 | `stdlib/vec.tur` | `vec-of` emits a pairwise homogeneity check before the pushes |
 | TCE3 | `stdlib/map.tur` | Add `[K V]` binders to value-side inline-C ops |
 | TCE4 | `stdlib/map.tur` | Hash[K]/Eq[K]-driven polymorphic keys; int fast path |
 | TCE5 | (fixtures only) | Literal-form coverage; lowering already in place |

@@ -1571,6 +1571,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * uses the fast TypeKind path below. */
             Type *rest_full = fn_type.as.fn.rest_full_type;
             bool rest_err = false;
+            /* Homogeneity: a polymorphic-tyvar rest (`[& xs :A]`) names a
+             * single type variable A, so all rest args must share one type.
+             * Bind A to the first rest arg and require the rest to match it. */
+            Type tyvar_first;
+            bool tyvar_first_set = false;
             for (uint32_t i = 0; i < n_rest; i++) {
                 rest_items[i] = elab_form(e, call->as.list.items[1 + n_required + i]);
                 if (!rest_items[i]) return NULL;
@@ -1583,14 +1588,26 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     rest_ok = type_eq(rest_items[i]->type, *rest_full);
                 } else {
                     rest_ok = (ak == rk);
-                    /* Accept any type for TY_TYVAR / polymorphic rest element kinds */
-                    if (!rest_ok && rk == TY_TYVAR) rest_ok = true;
+                    /* Polymorphic rest element (TY_TYVAR): A is one type
+                     * variable, so all rest args must unify to a single type.
+                     * Bind A to the first arg; compare the rest by identity. */
+                    if (!rest_ok && rk == TY_TYVAR) {
+                        if (!tyvar_first_set) {
+                            tyvar_first = rest_items[i]->type;
+                            tyvar_first_set = true;
+                            rest_ok = true;
+                        } else {
+                            rest_ok = type_eq(rest_items[i]->type, tyvar_first);
+                        }
+                    }
                 }
                 if (!rest_ok) {
                     const char *fn_name = (fn_binding && fn_binding->name) ? fn_binding->name->name : "?";
                     const char *expected = rest_full
                         ? type_name(*rest_full)
-                        : typekind_to_string(rk);
+                        : (rk == TY_TYVAR && tyvar_first_set
+                            ? type_name(tyvar_first)
+                            : typekind_to_string(rk));
                     const char *got = type_name(rest_items[i]->type);
                     diag_emit(DIAG_ERROR,
                               call->as.list.items[1 + n_required + i]->span,

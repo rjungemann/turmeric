@@ -162,6 +162,28 @@
   (if (empty? xs)
     v
     (list do (list vec-push! v (first xs)) (list vec-push-each__ v ~@(rest xs)))))
+;;; tur-vec-homog__ -- internal: compile-time element homogeneity check.
+;;;
+;;; Both parameters share the single type variable A, so a call with two
+;;; differently-typed arguments is a TUR-E0001 at elaboration. The body is a
+;;; no-op; the call exists only to make the type-checker enforce that adjacent
+;;; vec-of elements have the same type. No allocation (fixed arity).
+
+(defn tur-vec-homog__ [A] [a :A b :A] :nil
+  ```c (void)a; (void)b; ```)
+;;; vec-homog-chain__ -- internal: pairwise-chain tur-vec-homog__ over xs.
+;;;
+;;; Emits (tur-vec-homog__ x0 x1), (tur-vec-homog__ x1 x2), ... so all
+;;; elements transitively unify to one type. Zero or one element: no check.
+
+(defmacro vec-homog-chain__ [& xs]
+  (if (empty? xs)
+    0
+    (if (empty? (rest xs))
+      0
+      (list do
+        (list tur-vec-homog__ (first xs) (second xs))
+        (list vec-homog-chain__ ~@(rest xs))))))
 ;;; vec-of -- variadic Vec[A] literal.
 ;;;
 ;;; Parameters:
@@ -190,7 +212,10 @@
 (defmacro vec-of [& xs]
   (if (empty? xs)
     (list vec-new)
-    (list let `[__v (vec-new)] (list vec-push-each__ __v ~@xs))))
+    (list let `[__v (vec-new)]
+      (list do
+        (list vec-homog-chain__ ~@xs)
+        (list vec-push-each__ __v ~@xs)))))
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
