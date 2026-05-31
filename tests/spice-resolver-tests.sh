@@ -979,6 +979,147 @@ else
 fi
 rm -f "$RMC_STDERR"
 
+# ------------------------------------------------------------------
+# SF (tur-fetch-system-first-plan): :prefer-system cmake-deps
+# ------------------------------------------------------------------
+TUR_ABS=$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")
+
+# SF0: :prefer-system true without :cmake-name is a hard manifest error.
+SF0=$(mktemp -d)
+cat >"$SF0/build.tur" <<'EOF'
+(defpackage sf0
+  :name "sf0"
+  :cmake-deps #{
+    "bad" #{:prefer-system true :url "https://example.com/x" :ref "v1"}
+  })
+EOF
+SF0_ERR=$(mktemp)
+( cd "$SF0" && "$TUR_ABS" fetch ) >/dev/null 2>"$SF0_ERR"
+sf0_rc=$?
+if [ "$sf0_rc" -ne 0 ] \
+   && grep -qF ':prefer-system true requires :cmake-name' "$SF0_ERR" \
+   && [ ! -d "$SF0/cmake" ]; then
+    echo "PASS SF0: :prefer-system without :cmake-name errors before codegen"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF0: missing :cmake-name not rejected (exit $sf0_rc)"
+    echo "  stderr:"; sed 's/^/    /' "$SF0_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF0: :prefer-system without :cmake-name")
+fi
+rm -f "$SF0_ERR"; rm -rf "$SF0"
+
+# SF1/SF2: with a system copy available (fake find_package config), the dep
+# resolves via the system path -- no fetch, generated CMakeLists carries the
+# find_package fallback, and resolved_via lands in both the JSON manifest and
+# tur.lock.  Fully hermetic: no network because find_package short-circuits.
+SF1=$(mktemp -d)
+mkdir -p "$SF1/fk/lib/cmake/FakeDep" "$SF1/fk/include"
+: >"$SF1/fk/lib/libfakedep.a"
+cat >"$SF1/fk/lib/cmake/FakeDep/FakeDepConfig.cmake" <<'EOF'
+add_library(FakeDep::fakedep STATIC IMPORTED)
+set_target_properties(FakeDep::fakedep PROPERTIES
+  IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libfakedep.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include")
+set(FakeDep_FOUND TRUE)
+EOF
+cat >"$SF1/build.tur" <<'EOF'
+(defpackage sf1
+  :name "sf1"
+  :cmake-deps #{
+    "fakedep" #{
+      :prefer-system true
+      :cmake-name    "FakeDep"
+      :targets       ["FakeDep::fakedep"]
+      :url           "https://example.invalid/never-fetched"
+      :ref           "v1.0"
+    }
+  })
+EOF
+SF1_ERR=$(mktemp)
+( cd "$SF1" && CMAKE_PREFIX_PATH="$SF1/fk" "$TUR_ABS" fetch ) \
+    >/dev/null 2>"$SF1_ERR"
+sf1_rc=$?
+if [ "$sf1_rc" -eq 0 ] \
+   && grep -qF 'find_package(FakeDep QUIET)' "$SF1/cmake/CMakeLists.txt" \
+   && grep -qF 'if (NOT FakeDep_FOUND)' "$SF1/cmake/CMakeLists.txt" \
+   && grep -qF '"resolved_via": "system"' "$SF1/cmake/spice-deps-manifest.json" \
+   && grep -qF ':resolved-via "system"' "$SF1/tur.lock"; then
+    echo "PASS SF1/SF2: :prefer-system resolves via system find_package"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF1/SF2: system-first resolution did not take the system path"
+    echo "  exit: $sf1_rc"
+    echo "  stderr:"; sed 's/^/    /' "$SF1_ERR"
+    [ -f "$SF1/cmake/spice-deps-manifest.json" ] && \
+      { echo "  manifest:"; sed 's/^/    /' "$SF1/cmake/spice-deps-manifest.json"; }
+    [ -f "$SF1/tur.lock" ] && \
+      { echo "  tur.lock:"; sed 's/^/    /' "$SF1/tur.lock"; }
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF1/SF2: :prefer-system system path")
+fi
+
+# SF3: --refetch forces the source build even when the system copy exists.
+SF3_ERR=$(mktemp)
+rm -rf "$SF1/cmake" "$SF1/tur.lock"
+( cd "$SF1" && CMAKE_PREFIX_PATH="$SF1/fk" "$TUR_ABS" fetch --refetch ) \
+    >/dev/null 2>"$SF3_ERR"
+# A forced fetch hits the bogus :url, so the build is expected to fail; what
+# matters is that the system short-circuit was bypassed (find_package guarded).
+if grep -qF 'if (NOT TUR_FETCH_FORCE_FETCH)' "$SF1/cmake/CMakeLists.txt"; then
+    echo "PASS SF3: --refetch guards find_package behind TUR_FETCH_FORCE_FETCH"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF3: --refetch did not bypass the system path"
+    echo "  stderr:"; sed 's/^/    /' "$SF3_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF3: --refetch bypass")
+fi
+rm -f "$SF1_ERR" "$SF3_ERR"; rm -rf "$SF1"
+
+# SF2b: a system package whose INTERFACE_INCLUDE_DIRECTORIES holds multiple
+# dirs (a CMake ;-list) must expand into separate JSON array elements, not a
+# single "d1;d2" string (which would produce a bogus -Id1;d2 flag).
+SF2B=$(mktemp -d)
+mkdir -p "$SF2B/fk/lib/cmake/MultiDep" "$SF2B/fk/include/a" "$SF2B/fk/include/b"
+: >"$SF2B/fk/lib/libmultidep.a"
+cat >"$SF2B/fk/lib/cmake/MultiDep/MultiDepConfig.cmake" <<'EOF'
+add_library(MultiDep::multidep STATIC IMPORTED)
+set_target_properties(MultiDep::multidep PROPERTIES
+  IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libmultidep.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include/a;${CMAKE_CURRENT_LIST_DIR}/../../../include/b")
+set(MultiDep_FOUND TRUE)
+EOF
+cat >"$SF2B/build.tur" <<'EOF'
+(defpackage sf2b
+  :name "sf2b"
+  :cmake-deps #{
+    "multidep" #{:prefer-system true :cmake-name "MultiDep"
+                 :targets ["MultiDep::multidep"]
+                 :url "https://example.invalid/x" :ref "v1"}
+  })
+EOF
+SF2B_ERR=$(mktemp)
+( cd "$SF2B" && CMAKE_PREFIX_PATH="$SF2B/fk" "$TUR_ABS" fetch ) \
+    >/dev/null 2>"$SF2B_ERR"
+sf2b_rc=$?
+# Expect two distinct quoted include_dirs entries, ending in /include/a and /b.
+if [ "$sf2b_rc" -eq 0 ] \
+   && grep -qF 'include/a", "' "$SF2B/cmake/spice-deps-manifest.json" \
+   && grep -qF 'include/b"]' "$SF2B/cmake/spice-deps-manifest.json"; then
+    echo "PASS SF2b: multi-dir system include path expands to JSON array"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF2b: multi-dir include path not expanded"
+    echo "  exit: $sf2b_rc"
+    [ -f "$SF2B/cmake/spice-deps-manifest.json" ] && \
+      { echo "  manifest:"; sed 's/^/    /' "$SF2B/cmake/spice-deps-manifest.json"; }
+    echo "  stderr:"; sed 's/^/    /' "$SF2B_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF2b: multi-dir include expansion")
+fi
+rm -f "$SF2B_ERR"; rm -rf "$SF2B"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

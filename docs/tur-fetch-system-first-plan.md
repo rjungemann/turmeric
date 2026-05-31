@@ -1,10 +1,12 @@
 # `tur fetch` System-First Resolution -- Plan (SF0--SF4)
 
-> **Status:** Not started.
+> **Status:** Implemented (SF0-SF3 in `tur`; SF4 docs landed, spice-repo
+> migrations tracked separately since spices live in `../turmeric-spices`).
 >
 > **Flag:** None at the language level. Behaviour is opt-in per `:cmake-deps`
 > entry; spices that do not opt in keep their current `FetchContent`-only
-> codegen.
+> codegen. `tur fetch --refetch` (or `TUR_FETCH_FORCE_FETCH=1`) forces the
+> source-build path.
 >
 > **Last updated:** 2026-05-31
 >
@@ -204,15 +206,33 @@ for one-off pinning.
 
 ## Phases
 
-| Step | Task |
-|---|---|
-| SF0 | Add `:prefer-system` and `:cmake-version` keys to the manifest parser (`pkg.c::parse_cmake_deps`). Pure data; no codegen change. Reject combinations that make no sense (`:prefer-system true` without `:cmake-name`). |
-| SF1 | Extend `pkg_gen_cmake_deps` (pkg.c:1668-1718) to emit the hybrid `find_package` -> FetchContent block when `:prefer-system true`. Existing deps unchanged. |
-| SF2 | Extend the JSON-manifest generator (pkg.c:1727-onwards) to record `resolved_via` and to pull paths from system targets when `find_package` succeeded. |
-| SF3 | Extend `tur.lock` writer to record `:resolved-via` and `:system-version`. Add a `tur fetch --refetch` flag to bypass the system path. |
-| SF4 | Update `spices/tls/build.tur` and `spices/raylib/build.tur` to opt in. Document the new keys in `docs/guides/developing-spices-guide.md`. |
+| Step | Task | Status |
+|---|---|---|
+| SF0 | Add `:prefer-system` and `:cmake-version` keys to the manifest parser (`pkg.c::parse_cmake_deps`). Pure data; no codegen change. Reject combinations that make no sense (`:prefer-system true` without `:cmake-name`). | Done |
+| SF1 | Extend `pkg_gen_cmake_deps` to emit the hybrid `find_package` -> FetchContent block when `:prefer-system true`. Existing deps unchanged. | Done |
+| SF2 | Extend the JSON-manifest generator to record `resolved_via` and to pull paths from system targets when `find_package` succeeded. | Done |
+| SF3 | Extend `tur.lock` writer to record `:resolved-via` and `:system-version`. Add a `tur fetch --refetch` flag to bypass the system path. | Done |
+| SF4 | Document the new keys in `docs/guides/developing-spices-guide.md`. Opt `spices/tls`, `spices/raylib` etc. into `:prefer-system` (in `../turmeric-spices`, tracked separately). | Docs done; spice migrations pending |
 
 SF0-SF1 are the meaningful change; SF2-SF4 are polish and rollout.
+
+### Implementation notes
+
+- The system/fetch branch divergence (namespaced `MbedTLS::mbedtls` targets
+  for the system import vs the unaliased `mbedtls` from the FetchContent
+  build) is resolved at CMake configure time via a `_<name>_resolved_via`
+  cache variable, so a single generated `CMakeLists.txt` handles both paths.
+- `resolved_via` / `system_version` flow: `find_package` -> generated
+  `spice-deps-manifest.json` -> `pkg_cmake_manifest_read` -> `tur.lock`.
+- Coverage lives in `tests/spice-resolver-tests.sh` (cases `SF0`, `SF1/SF2`,
+  `SF2b`, `SF3`), exercised hermetically with a fake `find_package` config so
+  no network is required.
+- Multi-dir system includes: a target's `INTERFACE_INCLUDE_DIRECTORIES` is a
+  CMake `;`-list, so the system branch wraps each target's property in
+  `$<JOIN:...,", ">` to rewrite the `;` separators into JSON array element
+  boundaries at `file(GENERATE)` time. A package exporting several include
+  dirs lands as `["d1", "d2"]` rather than a single `"d1;d2"` string that
+  would otherwise produce a bogus `-Id1;d2` flag (regression test `SF2b`).
 
 ---
 

@@ -501,6 +501,66 @@ When the CMake `find_package` name or target name differs from the key in
 }
 ```
 
+### System-first resolution with `:prefer-system`
+
+Heavy native libraries (mbedTLS, raylib, sqlite, libpq) are often already
+installed system-wide via Homebrew / apt / dnf. Building them from source on
+every clean `tur fetch` is slow. Add `:prefer-system true` to try CMake's
+`find_package` first and fall back to the source build only when no system
+copy is found:
+
+```turmeric
+:cmake-deps {
+  "mbedtls" {:prefer-system true                ;; try find_package first
+             :cmake-name    "MbedTLS"           ;; name passed to find_package
+             :cmake-version "3.0"               ;; optional minimum version
+             :targets       ["MbedTLS::mbedtls"
+                             "MbedTLS::mbedx509"
+                             "MbedTLS::mbedcrypto"]
+             :url           "https://github.com/Mbed-TLS/mbedtls"  ;; fallback
+             :ref           "v3.6.2"
+             :options       {:ENABLE_PROGRAMS "OFF"
+                             :USE_STATIC_MBEDTLS_LIBRARY "ON"}}
+}
+```
+
+Behaviour:
+
+- `:prefer-system true` **requires** `:cmake-name` -- it is the name handed to
+  `find_package`. Omitting it is a hard manifest error.
+- `:cmake-version` is optional; when present it becomes the minimum version in
+  `find_package(<name> <version> QUIET)`.
+- When the system copy is found, the dep's include/link flags come from the
+  imported target's `INTERFACE_INCLUDE_DIRECTORIES` and `$<TARGET_FILE_DIR:...>`
+  -- no clone, no source build. Otherwise the existing `FetchContent` block
+  runs exactly as before.
+- The generated `spice-deps-manifest.json` records `"resolved_via": "system"`
+  or `"fetch"` per dep, and `tur.lock` records `:resolved-via "system"` (with
+  no git SHA -- the system package manager owns the version) or the usual
+  `:url`/`:ref`/`:resolved` row for the fetch path.
+
+`:prefer-system` is opt-in; deps without it keep their FetchContent-only
+behaviour unchanged.
+
+#### Forcing the source build (`--refetch`)
+
+To pin a build to the source copy and bypass any system package -- useful for
+reproducible CI artefacts -- pass `--refetch` (or set `TUR_FETCH_FORCE_FETCH=1`
+in the environment):
+
+```sh
+tur fetch --refetch          # ignore system copies, always build from source
+```
+
+This disables the `find_package` short-circuit for every `:prefer-system` dep
+in the manifest.
+
+> **Caveats.** A binary linked against a Homebrew/apt shared library will fail
+> at runtime on a machine without that library installed; pin the source build
+> (or `--refetch`) for portable artefacts. See
+> [tur-fetch-system-first-plan.md](../tur-fetch-system-first-plan.md) for the
+> design rationale and open questions.
+
 For the full `:cmake-deps` field reference, the generated `SpiceDeps.cmake`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
 [CMake/CPM integration notes](../archive/cmake-cpm-integration-plan.md).

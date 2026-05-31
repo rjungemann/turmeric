@@ -265,9 +265,18 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         d->ref        = form_str_dup(map_get_kw(val, "ref"));
         d->path       = form_str_dup(map_get_kw(val, "path"));
         d->cmake_name = form_str_dup(map_get_kw(val, "cmake-name"));
+        d->prefer_system  = form_bool_val(map_get_kw(val, "prefer-system"));
+        d->cmake_version  = form_str_dup(map_get_kw(val, "cmake-version"));
         parse_str_vec(map_get_kw(val, "targets"), &d->targets, &d->n_targets);
         const Form *opts_f = map_get_kw(val, "options");
         parse_cmake_opts(opts_f, &d->opts, &d->n_opts);
+
+        /* :prefer-system needs a :cmake-name to know what to find_package. */
+        if (d->prefer_system && !d->cmake_name) {
+            diag_emit(DIAG_ERROR, key->span,
+                      "build.tur: cmake-dep '%s': :prefer-system true "
+                      "requires :cmake-name", d->name);
+        }
     }
     return true;
 }
@@ -552,6 +561,9 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
                 if (d->ref) fprintf(f, " :ref \"%s\"", d->ref);
             }
             if (d->cmake_name) fprintf(f, " :cmake-name \"%s\"", d->cmake_name);
+            if (d->prefer_system) fprintf(f, " :prefer-system true");
+            if (d->cmake_version)
+                fprintf(f, " :cmake-version \"%s\"", d->cmake_version);
             if (d->n_targets > 0) {
                 fprintf(f, " :targets [");
                 for (int j = 0; j < d->n_targets; j++) {
@@ -655,6 +667,7 @@ void pkg_manifest_free(PkgManifest *m) {
         free(m->cmake_deps[i].ref);
         free(m->cmake_deps[i].path);
         free(m->cmake_deps[i].cmake_name);
+        free(m->cmake_deps[i].cmake_version);
         for (int j = 0; j < m->cmake_deps[i].n_targets; j++)
             free(m->cmake_deps[i].targets[j]);
         free(m->cmake_deps[i].targets);
@@ -780,6 +793,8 @@ bool pkg_lock_read(const char *path, PkgLockFile *out) {
                 e->resolved   = form_str_dup(map_get_kw(ef, "resolved"));
                 e->sha256     = form_str_dup(map_get_kw(ef, "sha256"));
                 e->fetched_at = form_str_dup(map_get_kw(ef, "fetched-at"));
+                e->resolved_via   = form_str_dup(map_get_kw(ef, "resolved-via"));
+                e->system_version = form_str_dup(map_get_kw(ef, "system-version"));
 
                 /* transitive: ["name@ref" ...] */
                 const Form *tr = map_get_kw(ef, "transitive");
@@ -849,11 +864,21 @@ bool pkg_lock_write(const char *path, const PkgLockFile *lock) {
         const PkgLockEntry *e = &lock->entries[i];
         if (!e->is_cmake) continue;
         fprintf(f, "    \"%s\" #{", e->name);
-        if (e->url)        fprintf(f, ":url \"%s\" ", e->url);
-        if (e->ref)        fprintf(f, ":ref \"%s\" ", e->ref);
-        if (e->resolved)   fprintf(f, ":resolved \"%s\" ", e->resolved);
-        if (e->sha256)     fprintf(f, ":sha256 \"%s\" ", e->sha256);
-        if (e->fetched_at) fprintf(f, ":fetched-at \"%s\" ", e->fetched_at);
+        if (e->resolved_via && strcmp(e->resolved_via, "system") == 0) {
+            /* System-resolved: record only the resolution provenance. There
+             * is no git SHA to pin -- the system package manager owns it. */
+            fprintf(f, ":resolved-via \"system\" ");
+            if (e->system_version)
+                fprintf(f, ":system-version \"%s\" ", e->system_version);
+        } else {
+            if (e->url)        fprintf(f, ":url \"%s\" ", e->url);
+            if (e->ref)        fprintf(f, ":ref \"%s\" ", e->ref);
+            if (e->resolved)   fprintf(f, ":resolved \"%s\" ", e->resolved);
+            if (e->sha256)     fprintf(f, ":sha256 \"%s\" ", e->sha256);
+            if (e->fetched_at) fprintf(f, ":fetched-at \"%s\" ", e->fetched_at);
+            if (e->resolved_via)
+                fprintf(f, ":resolved-via \"%s\" ", e->resolved_via);
+        }
         fprintf(f, "}\n");
     }
     fprintf(f, "  })\n");
@@ -876,6 +901,8 @@ void pkg_lock_free(PkgLockFile *lock) {
         free(e->resolved);
         free(e->sha256);
         free(e->fetched_at);
+        free(e->resolved_via);
+        free(e->system_version);
         for (int j = 0; j < e->n_transitive; j++) free(e->transitive[j]);
         free(e->transitive);
     }
@@ -923,6 +950,8 @@ static bool lock_remove(PkgLockFile *lock, const char *name, bool is_cmake) {
         free(e->resolved);
         free(e->sha256);
         free(e->fetched_at);
+        free(e->resolved_via);
+        free(e->system_version);
         for (int j = 0; j < e->n_transitive; j++) free(e->transitive[j]);
         free(e->transitive);
         for (int j = i; j < lock->n_entries - 1; j++)
@@ -1674,6 +1703,80 @@ static const char *cmake_target_basename(const char *target) {
     return (sep && sep[1]) ? sep + 1 : target;
 }
 
+/* Emit the CMake that computes _spice_<name>_inc / _spice_<name>_bld from a
+ * FetchContent-built dependency's SOURCE_DIR / BINARY_DIR. Shared by the
+ * plain (fetch-only) deps and the fetch fallback branch of :prefer-system
+ * deps. */
+static void emit_fetch_inc_bld(FILE *f, const char *name) {
+    fprintf(f, "FetchContent_GetProperties(%s)\n", name);
+    fprintf(f, "if(EXISTS \"${%s_SOURCE_DIR}/include\")\n", name);
+    fprintf(f, "  set(_spice_%s_inc \"${%s_SOURCE_DIR}/include\")\n",
+            name, name);
+    fprintf(f, "else()\n");
+    fprintf(f, "  set(_spice_%s_inc \"${%s_SOURCE_DIR}\")\n", name, name);
+    fprintf(f, "endif()\n");
+    fprintf(f, "set(_spice_%s_bld \"${%s_BINARY_DIR}\")\n", name, name);
+}
+
+/* Emit the JSON "include_dirs" line for one manifest entry.
+ *   from_targets -- when true (the system find_package branch), build the
+ *     array from each target's INTERFACE_INCLUDE_DIRECTORIES. That property
+ *     is a CMake ;-list, so a single target may carry several dirs; the
+ *     $<JOIN:...,", "> genexpr rewrites the ; separators into JSON array
+ *     element boundaries at file(GENERATE) time, so a multi-dir system
+ *     package lands as ["d1", "d2"] instead of a single "d1;d2" string that
+ *     would produce a bogus -Id1;d2 flag downstream. When false (the fetch
+ *     branch, path deps, or non-prefer-system deps), emit the single
+ *     precomputed ${_spice_<name>_inc} dir. */
+static void emit_include_dirs_line(FILE *f, const PkgCmakeDep *d,
+                                   bool from_targets) {
+    if (from_targets && d->n_targets > 0) {
+        fprintf(f, "  \"    \\\"include_dirs\\\": [");
+        for (int j = 0; j < d->n_targets; j++) {
+            fprintf(f,
+                "%s\\\"$<JOIN:$<TARGET_PROPERTY:%s,"
+                "INTERFACE_INCLUDE_DIRECTORIES>,\\\", \\\">\\\"",
+                j ? ", " : "", d->targets[j]);
+        }
+        fprintf(f, "],\\n\"\n");
+    } else {
+        fprintf(f, "  \"    \\\"include_dirs\\\": "
+                   "[\\\"${_spice_%s_inc}\\\"],\\n\"\n", d->name);
+    }
+}
+
+/* Emit the JSON "link_dirs"/"link_libs" lines for one manifest entry.
+ *   use_full_targets -- when true, $<TARGET_FILE_DIR:...> is keyed off the
+ *     fully-qualified target name (e.g. "MbedTLS::mbedtls"), which is what a
+ *     system find_package() imports. When false, the namespace-stripped
+ *     basename ("mbedtls") is used, which is what the FetchContent build
+ *     exports. link_libs is always the basename (the -l name is identical
+ *     either way). When :targets is empty, both branches fall back to the
+ *     dep's BINARY_DIR var and the single cmake_dep_link_lib() name. */
+static void emit_link_lines(FILE *f, const PkgCmakeDep *d,
+                            const char *link_lib, bool use_full_targets) {
+    if (d->n_targets > 0) {
+        fprintf(f, "  \"    \\\"link_dirs\\\":    [");
+        for (int j = 0; j < d->n_targets; j++) {
+            const char *t = use_full_targets
+                                ? d->targets[j]
+                                : cmake_target_basename(d->targets[j]);
+            fprintf(f, "%s\\\"$<TARGET_FILE_DIR:%s>\\\"", j ? ", " : "", t);
+        }
+        fprintf(f, "],\\n\"\n");
+        fprintf(f, "  \"    \\\"link_libs\\\":    [");
+        for (int j = 0; j < d->n_targets; j++) {
+            const char *bn = cmake_target_basename(d->targets[j]);
+            fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", bn);
+        }
+        fprintf(f, "]\\n\"\n");
+    } else {
+        fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
+                d->name);
+        fprintf(f, "  \"    \\\"link_libs\\\":    [\\\"%s\\\"]\\n\"\n", link_lib);
+    }
+}
+
 bool pkg_gen_cmake_deps(const char *project_dir,
                         const PkgManifest *manifest) {
     if (manifest->n_cmake_deps == 0) return true;
@@ -1699,6 +1802,10 @@ bool pkg_gen_cmake_deps(const char *project_dir,
     fprintf(f, "cmake_minimum_required(VERSION 3.20)\n");
     fprintf(f, "project(SpiceDeps)\n\n");
     fprintf(f, "include(FetchContent)\n\n");
+    /* SF3: when set, :prefer-system deps skip find_package and always fetch
+     * from source. `tur fetch --refetch` passes -DTUR_FETCH_FORCE_FETCH=ON. */
+    fprintf(f, "option(TUR_FETCH_FORCE_FETCH "
+               "\"Bypass system find_package for :prefer-system deps\" OFF)\n\n");
 
     /* Declare and make available each dep */
     for (int i = 0; i < manifest->n_cmake_deps; i++) {
@@ -1711,8 +1818,41 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             char build_subdir[4096];
             snprintf(build_subdir, sizeof(build_subdir),
                      "${CMAKE_BINARY_DIR}/_local/%s-build", d->name);
-            fprintf(f, "add_subdirectory(\"%s\" \"%s\")\n\n",
-                    abs_path, build_subdir);
+            fprintf(f, "add_subdirectory(\"%s\" \"%s\")\n", abs_path,
+                    build_subdir);
+            fprintf(f, "set(_%s_resolved_via \"path\" CACHE INTERNAL \"\")\n\n",
+                    d->name);
+        } else if (d->prefer_system) {
+            /* System-first: try find_package, fall back to FetchContent.
+             * The fallback block is emitted verbatim inside the
+             * `if (NOT <cmake-name>_FOUND)` guard so a system copy short-
+             * circuits the clone + source build entirely. */
+            const char *cn = d->cmake_name; /* guaranteed non-NULL (SF0) */
+            fprintf(f, "if (NOT TUR_FETCH_FORCE_FETCH)\n");
+            if (d->cmake_version)
+                fprintf(f, "    find_package(%s %s QUIET)\n", cn,
+                        d->cmake_version);
+            else
+                fprintf(f, "    find_package(%s QUIET)\n", cn);
+            fprintf(f, "endif()\n");
+            fprintf(f, "if (NOT %s_FOUND)\n", cn);
+            fprintf(f, "    FetchContent_Declare(%s\n", d->name);
+            if (d->url) fprintf(f, "      GIT_REPOSITORY %s\n", d->url);
+            if (d->ref) fprintf(f, "      GIT_TAG        %s\n", d->ref);
+            fprintf(f, "    )\n");
+            for (int j = 0; j < d->n_opts; j++) {
+                fprintf(f, "    set(%s %s CACHE BOOL \"\" FORCE)\n",
+                        d->opts[j].key, d->opts[j].val);
+            }
+            fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
+            fprintf(f, "    set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n",
+                    d->name);
+            fprintf(f, "else()\n");
+            fprintf(f, "    set(_%s_resolved_via \"system\" CACHE INTERNAL \"\")\n",
+                    d->name);
+            fprintf(f, "    message(STATUS \"spice: %s resolved via system "
+                       "find_package(%s)\")\n", d->name, cn);
+            fprintf(f, "endif()\n\n");
         } else {
             fprintf(f, "FetchContent_Declare(%s\n", d->name);
             if (d->url) fprintf(f, "  GIT_REPOSITORY %s\n", d->url);
@@ -1722,7 +1862,9 @@ bool pkg_gen_cmake_deps(const char *project_dir,
                 fprintf(f, "set(%s %s CACHE BOOL \"\" FORCE)\n",
                         d->opts[j].key, d->opts[j].val);
             }
-            fprintf(f, "FetchContent_MakeAvailable(%s)\n\n", d->name);
+            fprintf(f, "FetchContent_MakeAvailable(%s)\n", d->name);
+            fprintf(f, "set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n\n",
+                    d->name);
         }
     }
 
@@ -1755,53 +1897,79 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             fprintf(f, "set(_spice_%s_bld "
                        "\"${CMAKE_BINARY_DIR}/_local/%s-build\")\n",
                     d->name, d->name);
-        } else {
-            fprintf(f, "FetchContent_GetProperties(%s)\n", d->name);
-            fprintf(f, "if(EXISTS \"${%s_SOURCE_DIR}/include\")\n", d->name);
-            fprintf(f, "  set(_spice_%s_inc \"${%s_SOURCE_DIR}/include\")\n",
-                    d->name, d->name);
+        } else if (d->prefer_system) {
+            /* System-first: when find_package() resolved the dep, pull the
+             * include dir from the first target's INTERFACE_INCLUDE_DIRECTORIES
+             * (generator expression evaluated at file(GENERATE) time). The
+             * fetch fallback uses the usual SOURCE_DIR/BINARY_DIR layout.
+             * The system branch links via the namespaced targets, so it sets
+             * empty _bld; link_dirs come from $<TARGET_FILE_DIR:...> below. */
+            fprintf(f, "if(_%s_resolved_via STREQUAL \"system\")\n", d->name);
+            if (d->n_targets > 0) {
+                fprintf(f, "  set(_spice_%s_inc "
+                           "\"$<TARGET_PROPERTY:%s,INTERFACE_INCLUDE_DIRECTORIES>\")\n",
+                        d->name, d->targets[0]);
+            } else {
+                fprintf(f, "  set(_spice_%s_inc \"\")\n", d->name);
+            }
+            fprintf(f, "  set(_spice_%s_bld \"\")\n", d->name);
             fprintf(f, "else()\n");
-            fprintf(f, "  set(_spice_%s_inc \"${%s_SOURCE_DIR}\")\n",
-                    d->name, d->name);
+            emit_fetch_inc_bld(f, d->name);
             fprintf(f, "endif()\n");
-            fprintf(f, "set(_spice_%s_bld \"${%s_BINARY_DIR}\")\n",
-                    d->name, d->name);
+        } else {
+            emit_fetch_inc_bld(f, d->name);
         }
 
+        /* Header: open brace + resolved_via (+ system_version for
+         * :prefer-system deps). The include_dirs/link_* lines follow; for
+         * :prefer-system they are emitted per-branch below because the
+         * system and fetch paths key off different target names and include
+         * sources. */
         fprintf(f, "string(APPEND _spice_manifest\n");
         fprintf(f, "  \"  \\\"%s\\\": {\\n\"\n", d->name);
-        fprintf(f, "  \"    \\\"include_dirs\\\": [\\\"${_spice_%s_inc}\\\"],\\n\"\n",
+        fprintf(f, "  \"    \\\"resolved_via\\\": \\\"${_%s_resolved_via}\\\",\\n\"\n",
                 d->name);
-        if (d->n_targets > 0) {
+        /* SF3: capture the find_package version (set by find_package on the
+         * system path) so the lockfile can record :system-version. */
+        if (d->prefer_system)
+            fprintf(f, "  \"    \\\"system_version\\\": \\\"${%s_VERSION}\\\",\\n\"\n",
+                    d->cmake_name);
+        fprintf(f, ")\n");
+
+        /* include_dirs + link_dirs/link_libs. For :prefer-system deps the
+         * genexpr target key differs by branch (namespaced "MbedTLS::mbedtls"
+         * for the system import vs the unaliased "mbedtls" the FetchContent
+         * build exports), and the system branch sources include dirs from the
+         * targets' INTERFACE_INCLUDE_DIRECTORIES, so the two branches are
+         * emitted under a runtime CMake `if`. */
+        if (d->prefer_system) {
+            fprintf(f, "if(_%s_resolved_via STREQUAL \"system\")\n", d->name);
+            fprintf(f, "string(APPEND _spice_manifest\n");
+            emit_include_dirs_line(f, d, /*from_targets=*/true);
+            emit_link_lines(f, d, link_lib, /*use_full_targets=*/true);
+            fprintf(f, ")\n");
+            fprintf(f, "else()\n");
+            fprintf(f, "string(APPEND _spice_manifest\n");
+            emit_include_dirs_line(f, d, /*from_targets=*/false);
+            emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
+            fprintf(f, ")\n");
+            fprintf(f, "endif()\n");
+        } else {
             /* :targets present -- derive link_dirs from $<TARGET_FILE_DIR:tgt>
              * (one per target, deduped at the linker level) and link_libs from
              * the target basenames. Generator expressions evaluate at
              * file(GENERATE) time, so the real .a paths land in the JSON even
              * when the dep's build dir layout is nested (e.g. mbedTLS puts its
-             * .a files in <BINARY_DIR>/library/, not <BINARY_DIR>/ directly). */
-            fprintf(f, "  \"    \\\"link_dirs\\\":    [");
-            for (int j = 0; j < d->n_targets; j++) {
-                const char *bn = cmake_target_basename(d->targets[j]);
-                fprintf(f, "%s\\\"$<TARGET_FILE_DIR:%s>\\\"",
-                        j ? ", " : "", bn);
-            }
-            fprintf(f, "],\\n\"\n");
-            fprintf(f, "  \"    \\\"link_libs\\\":    [");
-            for (int j = 0; j < d->n_targets; j++) {
-                const char *bn = cmake_target_basename(d->targets[j]);
-                fprintf(f, "%s\\\"%s\\\"", j ? ", " : "", bn);
-            }
-            fprintf(f, "]\\n\"\n");
-        } else {
-            /* No :targets -- fall back to the dep's BINARY_DIR and a single
-             * link_lib derived via cmake_dep_link_lib(). Works for libraries
-             * that drop their .a directly into BINARY_DIR. */
-            fprintf(f, "  \"    \\\"link_dirs\\\":    [\\\"${_spice_%s_bld}\\\"],\\n\"\n",
-                    d->name);
-            fprintf(f, "  \"    \\\"link_libs\\\":    [\\\"%s\\\"]\\n\"\n",
-                    link_lib);
+             * .a files in <BINARY_DIR>/library/, not <BINARY_DIR>/ directly).
+             * With no :targets, fall back to the dep's BINARY_DIR + a single
+             * link_lib from cmake_dep_link_lib(). */
+            fprintf(f, "string(APPEND _spice_manifest\n");
+            emit_include_dirs_line(f, d, /*from_targets=*/false);
+            emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
+            fprintf(f, ")\n");
         }
-        fprintf(f, "  \"  }\")\n\n");
+
+        fprintf(f, "string(APPEND _spice_manifest \"  }\")\n\n");
     }
 
     fprintf(f, "string(APPEND _spice_manifest \"\\n}\\n\")\n");
@@ -1846,6 +2014,10 @@ bool pkg_cmake_build(const char *project_dir,
         buf_printf(&cmd, "emcmake cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
     else
         buf_printf(&cmd, "cmake -S '%s' -B '%s'", cmake_src, cmake_bld);
+    /* SF3: honor `tur fetch --refetch` (sets TUR_FETCH_FORCE_FETCH) by
+     * disabling the system find_package short-circuit. */
+    if (getenv("TUR_FETCH_FORCE_FETCH"))
+        buf_printf(&cmd, " -DTUR_FETCH_FORCE_FETCH=ON");
     buf_putc(&cmd, '\0');
     fprintf(stderr, "spice: cmake configure%s ...\n", wasm ? " (wasm)" : "");
     int rc = system(cmd.data);
@@ -1867,17 +2039,55 @@ bool pkg_cmake_build(const char *project_dir,
         return false;
     }
 
+    /* SF3: read which resolution path each :prefer-system dep actually took
+     * (recorded as "resolved_via" in the generated manifest JSON). */
+    PkgCmakeManifest cmkman;
+    memset(&cmkman, 0, sizeof(cmkman));
+    char manifest_json[4096];
+    snprintf(manifest_json, sizeof(manifest_json),
+             "%s/spice-deps-manifest.json", cmake_src);
+    pkg_cmake_manifest_read(manifest_json, &cmkman);
+
     /* Update tur.lock cmake-dep entries with resolved git SHAs */
     for (int i = 0; i < manifest->n_cmake_deps; i++) {
         const PkgCmakeDep *d = &manifest->cmake_deps[i];
         if (!d->url) continue; /* local path deps are not locked */
 
+        /* Determine which path this dep resolved through. */
+        const char *via = NULL;
+        const char *sysver = NULL;
+        for (int k = 0; k < cmkman.n_entries; k++) {
+            if (strcmp(cmkman.entries[k].name, d->name) == 0) {
+                via    = cmkman.entries[k].resolved_via;
+                sysver = cmkman.entries[k].system_version;
+                break;
+            }
+        }
+
         PkgLockEntry *le = lock_upsert(lock, d->name, true);
         if (!le) continue;
+
+        if (via && strcmp(via, "system") == 0) {
+            /* System-resolved: record provenance only, drop any stale
+             * fetch fields so the lock writer emits the system shape. */
+            free(le->url);          le->url          = NULL;
+            free(le->ref);          le->ref          = NULL;
+            free(le->resolved);     le->resolved     = NULL;
+            free(le->sha256);       le->sha256       = NULL;
+            free(le->fetched_at);   le->fetched_at   = NULL;
+            free(le->resolved_via); le->resolved_via = tur_strdup("system");
+            free(le->system_version);
+            le->system_version = (sysver && sysver[0]) ? tur_strdup(sysver)
+                                                       : NULL;
+            continue;
+        }
 
         free(le->url); le->url = tur_strdup(d->url);
         free(le->ref); le->ref = d->ref ? tur_strdup(d->ref) : NULL;
         free(le->fetched_at); le->fetched_at = tur_strdup(iso_now());
+        if (d->prefer_system) {
+            free(le->resolved_via); le->resolved_via = tur_strdup("fetch");
+        }
 
         /* Read git HEAD SHA from cmake's fetched source directory */
         char dep_src[4096];
@@ -1889,6 +2099,7 @@ bool pkg_cmake_build(const char *project_dir,
         }
     }
 
+    pkg_cmake_manifest_free(&cmkman);
     return true;
 }
 
@@ -2048,7 +2259,13 @@ bool pkg_cmake_manifest_read(const char *path, PkgCmakeManifest *out) {
             if (*p != ':') { free(key); if (*p) p++; continue; }
             p++;
 
-            if (strcmp(key, "include_dirs") == 0) {
+            if (strcmp(key, "resolved_via") == 0) {
+                p = json_skip_ws(p);
+                e->resolved_via = json_parse_str(&p);
+            } else if (strcmp(key, "system_version") == 0) {
+                p = json_skip_ws(p);
+                e->system_version = json_parse_str(&p);
+            } else if (strcmp(key, "include_dirs") == 0) {
                 e->include_dirs = json_parse_str_arr(&p, &e->n_include_dirs);
             } else if (strcmp(key, "link_dirs") == 0) {
                 e->link_dirs = json_parse_str_arr(&p, &e->n_link_dirs);
@@ -2080,6 +2297,8 @@ void pkg_cmake_manifest_free(PkgCmakeManifest *m) {
     for (int i = 0; i < m->n_entries; i++) {
         PkgCmakeManifestEntry *e = &m->entries[i];
         free(e->name);
+        free(e->resolved_via);
+        free(e->system_version);
         for (int j = 0; j < e->n_include_dirs; j++) free(e->include_dirs[j]);
         free(e->include_dirs);
         for (int j = 0; j < e->n_link_dirs; j++) free(e->link_dirs[j]);
@@ -3240,10 +3459,16 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
 int cmd_pkg_fetch(int argc, char **argv) {
     bool update  = false;
     bool dry_run = false;
+    bool refetch = false;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--update") == 0) update = true;
         else if (strcmp(argv[i], "--dry-run") == 0) dry_run = true;
+        else if (strcmp(argv[i], "--refetch") == 0) refetch = true;
     }
+    /* SF3: --refetch forces the source-build path for :prefer-system deps,
+     * bypassing any system find_package copy. pkg_cmake_build reads this env
+     * var and passes -DTUR_FETCH_FORCE_FETCH=ON to the cmake configure. */
+    if (refetch) setenv("TUR_FETCH_FORCE_FETCH", "1", 1);
 
     struct stat st;
     if (stat("build.tur", &st) != 0) {
