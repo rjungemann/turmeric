@@ -1,0 +1,398 @@
+;;; tur/httpd -- Lightweight HTTP/1.0 server (H1: blocking thread-per-connection).
+;;;
+;;; Single-process HTTP/1.0 server. Each accepted connection is dispatched
+;;; to a user-supplied handler closure in its own detached OS thread.
+;;; The connection is closed after each response (HTTP/1.0 semantics).
+;;;
+;;; Handler calling convention: the handler closure MUST capture at least
+;;; one variable so it is heap-allocated as a fat closure. Inside the
+;;; handler, use httpd-req-* to read the parsed request and httpd-resp-*!
+;;; to set the response.
+;;;
+;;; Since: Phase H1
+;; stdlib/httpd.tur -- Lightweight HTTP server (Phase H1-H7)
+;;
+;; H1: TCP listener + blocking thread-per-connection (this milestone).
+;; H2-H7: see docs/tur-httpd-plan.md.
+;;
+;; HttpdBlock layout:
+;;   { int listen_fd; int64_t handler; volatile int stop_flag; }
+;;
+;; HttpdConn layout (per-connection, heap-allocated by httpd-run):
+;;   { int fd; int64_t handler;
+;;     char method[16]; char path[1024]; char version[16];
+;;     int resp_status; char *resp_body; int resp_body_len; }
+;;
+;; API:
+;;   httpd-new          [port :int handler :int]         -- ptr<void>
+;;   httpd-port         [h :ptr<void>]                   -- int
+;;   httpd-run          [h :ptr<void>]                   -- nil
+;;   httpd-stop         [h :ptr<void>]                   -- nil
+;;   httpd-free         [h :ptr<void>]                   -- nil
+;;   httpd-req-method   [conn :ptr<void>]                -- cstr
+;;   httpd-req-path     [conn :ptr<void>]                -- cstr
+;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
+;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
+
+;;; httpd/autolink-hint -- ensure programs using httpd link against pthreads.
+(defn httpd/autolink-hint [] :int
+  ```c /* __tur_autolink__: -pthread */
+  return 0;
+  ```)
+
+;;; httpd-new -- create a new httpd instance bound to the given port.
+;;;
+;;; Binds and listens immediately but does not accept connections until
+;;; httpd-run is called. Pass 0 as port to let the kernel assign one;
+;;; query the actual port with httpd-port.
+;;;
+;;; Parameters:
+;;;   port    -- TCP port to listen on (0 = kernel-assigned)
+;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Httpd handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [h (httpd-new 0 (fn [conn :ptr<void>] :nil
+;;;                          (httpd-resp-status! conn 200)
+;;;                          (httpd-resp-body! conn "OK")))]
+;;;     (httpd-run h)
+;;;     (httpd-free h))
+;;;
+;;; Since: Phase H1
+(defn httpd-new [port :int handler :int] :ptr<void>
+  ```c
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      volatile int stop_flag;
+  } HttpdBlock;
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port        = htons((uint16_t)port);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  HttpdBlock *hb = (HttpdBlock *)malloc(sizeof(HttpdBlock));
+  if (!hb) { close(fd); return NULL; }
+  hb->listen_fd  = fd;
+  hb->handler    = (int64_t)handler;
+  hb->stop_flag  = 0;
+  return (void *)hb;
+  ```)
+
+;;; httpd-port -- return the port the server is listening on.
+;;;
+;;; Useful when httpd-new was called with port 0 (kernel-assigned).
+;;;
+;;; Parameters:
+;;;   h -- httpd handle returned by httpd-new
+;;;
+;;; Returns:
+;;;   int -- the actual listening port, or -1 on error
+;;;
+;;; Example:
+;;;   (httpd-port h)  ; => 49234
+;;;
+;;; Since: Phase H1
+(defn httpd-port [h :ptr<void>] :int
+  ```c
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      volatile int stop_flag;
+  } HttpdBlock;
+  HttpdBlock *hb = (HttpdBlock *)h;
+  struct sockaddr_in addr;
+  socklen_t len = sizeof(addr);
+  if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
+  return (int64_t)ntohs(addr.sin_port);
+  ```)
+
+;;; httpd-worker -- internal per-connection worker thread.
+;;;
+;;; Reads the request, parses the request line, dispatches to the handler
+;;; via the fat-closure calling convention, writes the HTTP/1.0 response,
+;;; and closes the socket.
+;;;
+;;; Since: Phase H1
+(defn httpd-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <errno.h>
+  typedef struct {
+      int fd;
+      int64_t handler;
+      char method[16];
+      char path[1024];
+      char version[16];
+      int resp_status;
+      char *resp_body;
+      int resp_body_len;
+  } HttpdConn;
+  HttpdConn *conn = (HttpdConn *)arg;
+  /* Read request into buffer until end-of-headers or buffer full. */
+  char buf[8192];
+  int total = 0;
+  ssize_t n;
+  while ((n = recv(conn->fd, buf + total,
+                   (size_t)(sizeof(buf) - 1 - (size_t)total), 0)) > 0) {
+      total += (int)n;
+      buf[total] = '\0';
+      if (strstr(buf, "\r\n\r\n") || strstr(buf, "\n\n")) break;
+      if (total >= (int)sizeof(buf) - 1) break;
+  }
+  buf[total] = '\0';
+  /* Parse request line: METHOD SP PATH SP VERSION CRLF */
+  char *line_end = strpbrk(buf, "\r\n");
+  if (!line_end || line_end > buf + total) line_end = buf + total;
+  char *p = buf;
+  if (p < line_end) {
+      char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+      if (sp) {
+          int l = (int)(sp - p);
+          if (l > 0 && l < 15) {
+              memcpy(conn->method, p, (size_t)l);
+              conn->method[l] = '\0';
+          }
+          p = sp + 1;
+      }
+  }
+  if (p < line_end) {
+      char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+      int l = sp ? (int)(sp - p) : (int)(line_end - p);
+      if (l > 0 && l < 1023) {
+          memcpy(conn->path, p, (size_t)l);
+          conn->path[l] = '\0';
+      }
+  }
+  /* Dispatch to handler using fat-closure calling convention. */
+  int64_t *fat = (int64_t *)(intptr_t)conn->handler;
+  typedef void (*fn1_t)(void *, int64_t);
+  ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+  /* Write HTTP/1.0 response. */
+  int status = conn->resp_status ? conn->resp_status : 200;
+  const char *stxt = (status == 200) ? "OK" :
+                     (status == 201) ? "Created" :
+                     (status == 204) ? "No Content" :
+                     (status == 400) ? "Bad Request" :
+                     (status == 404) ? "Not Found" :
+                     (status == 500) ? "Internal Server Error" : "OK";
+  const char *body = conn->resp_body ? conn->resp_body : "";
+  int         blen = conn->resp_body ? conn->resp_body_len : 0;
+  char hbuf[256];
+  int hlen = snprintf(hbuf, sizeof(hbuf),
+      "HTTP/1.0 %d %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+      status, stxt, blen);
+  send(conn->fd, hbuf, (size_t)hlen, 0);
+  if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
+  /* Cleanup. */
+  close(conn->fd);
+  if (conn->resp_body) free(conn->resp_body);
+  free(conn);
+  return NULL;
+  ```)
+
+;;; httpd-run -- accept connections and dispatch them to detached worker threads.
+;;;
+;;; Blocks until httpd-stop is called from another thread or from a handler
+;;; (via a captured httpd reference). Each accepted connection runs in its
+;;; own detached OS thread.
+;;;
+;;; Parameters:
+;;;   h -- httpd handle returned by httpd-new
+;;;
+;;; Example:
+;;;   (httpd-run h)   ; returns after httpd-stop
+;;;
+;;; Since: Phase H1
+(defn httpd-run [h :ptr<void>] :nil
+  ```c
+  #include <errno.h>
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      volatile int stop_flag;
+  } HttpdBlock;
+  typedef struct {
+      int fd;
+      int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      int resp_status; char *resp_body; int resp_body_len;
+  } HttpdConn;
+  HttpdBlock *hb = (HttpdBlock *)h;
+  while (!hb->stop_flag) {
+      int cfd = accept(hb->listen_fd, NULL, NULL);
+      if (cfd < 0) {
+          if (hb->stop_flag) break;
+          if (errno == EINTR) continue;
+          break;
+      }
+      HttpdConn *conn = (HttpdConn *)malloc(sizeof(HttpdConn));
+      if (!conn) { close(cfd); continue; }
+      memset(conn, 0, sizeof(HttpdConn));
+      conn->fd      = cfd;
+      conn->handler = hb->handler;
+      pthread_t tid;
+      if (pthread_create(&tid, NULL, (void *(*)(void *))httpd_worker,
+                         (void *)conn) != 0) {
+          close(cfd);
+          free(conn);
+          continue;
+      }
+      pthread_detach(tid);
+  }
+  ```)
+
+;;; httpd-stop -- signal httpd-run to stop accepting new connections.
+;;;
+;;; Thread-safe. Sets the stop flag and closes the listening socket so a
+;;; blocked accept() returns immediately. httpd-run exits after the current
+;;; iteration. In-flight worker threads continue independently.
+;;;
+;;; Parameters:
+;;;   h -- httpd handle returned by httpd-new
+;;;
+;;; Example:
+;;;   (httpd-stop h)
+;;;
+;;; Since: Phase H1
+(defn httpd-stop [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      volatile int stop_flag;
+  } HttpdBlock;
+  HttpdBlock *hb = (HttpdBlock *)h;
+  hb->stop_flag = 1;
+  if (hb->listen_fd >= 0) {
+      close(hb->listen_fd);
+      hb->listen_fd = -1;
+  }
+  ```)
+
+;;; httpd-free -- free all resources associated with an httpd instance.
+;;;
+;;; Must be called after httpd-run returns. Call httpd-stop first to ensure
+;;; the listener has exited.
+;;;
+;;; Parameters:
+;;;   h -- httpd handle returned by httpd-new
+;;;
+;;; Example:
+;;;   (httpd-free h)
+;;;
+;;; Since: Phase H1
+(defn httpd-free [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      volatile int stop_flag;
+  } HttpdBlock;
+  HttpdBlock *hb = (HttpdBlock *)h;
+  if (hb->listen_fd >= 0) close(hb->listen_fd);
+  free(hb);
+  ```)
+
+;;; httpd-req-method -- return the HTTP method from the parsed request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle passed to the handler
+;;;
+;;; Returns:
+;;;   cstr -- "GET", "POST", etc., or "" if unparsed
+;;;
+;;; Example:
+;;;   (httpd-req-method conn)  ; => "GET"
+;;;
+;;; Since: Phase H1
+(defn httpd-req-method [conn :ptr<void>] :cstr
+  ```c
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      int resp_status; char *resp_body; int resp_body_len;
+  } HttpdConn;
+  return ((HttpdConn *)conn)->method;
+  ```)
+
+;;; httpd-req-path -- return the request-target path from the parsed request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle passed to the handler
+;;;
+;;; Returns:
+;;;   cstr -- request path (e.g. "/hello"), or "" if unparsed
+;;;
+;;; Example:
+;;;   (httpd-req-path conn)  ; => "/hello"
+;;;
+;;; Since: Phase H1
+(defn httpd-req-path [conn :ptr<void>] :cstr
+  ```c
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      int resp_status; char *resp_body; int resp_body_len;
+  } HttpdConn;
+  return ((HttpdConn *)conn)->path;
+  ```)
+
+;;; httpd-resp-status! -- set the HTTP response status code.
+;;;
+;;; Defaults to 200 if not set.
+;;;
+;;; Parameters:
+;;;   conn   -- connection handle passed to the handler
+;;;   status -- HTTP status code (200, 404, 500, etc.)
+;;;
+;;; Example:
+;;;   (httpd-resp-status! conn 404)
+;;;
+;;; Since: Phase H1
+(defn httpd-resp-status! [conn :ptr<void> status :int] :nil
+  ```c
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      int resp_status; char *resp_body; int resp_body_len;
+  } HttpdConn;
+  ((HttpdConn *)conn)->resp_status = (int)status;
+  ```)
+
+;;; httpd-resp-body! -- set the HTTP response body (copies the string).
+;;;
+;;; Overwrites any previously set body. The string is copied internally
+;;; and the copy is freed after the response is sent.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle passed to the handler
+;;;   body -- response body string
+;;;
+;;; Example:
+;;;   (httpd-resp-body! conn "Hello, World!")
+;;;
+;;; Since: Phase H1
+(defn httpd-resp-body! [conn :ptr<void> body :cstr] :nil
+  ```c
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      int resp_status; char *resp_body; int resp_body_len;
+  } HttpdConn;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->resp_body) { free(c->resp_body); c->resp_body = NULL; c->resp_body_len = 0; }
+  if (!body) return;
+  size_t len = strlen(body);
+  c->resp_body = (char *)malloc(len + 1);
+  if (!c->resp_body) return;
+  memcpy(c->resp_body, body, len + 1);
+  c->resp_body_len = (int)len;
+  ```)

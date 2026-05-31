@@ -1,0 +1,92 @@
+;; Phase H1: httpd-h1-basic -- basic HTTP/1.0 GET request handling.
+;;
+;; Creates an httpd on a kernel-assigned port, spawns a client thread
+;; that connects after a 20 ms delay and sends GET /hello HTTP/1.0,
+;; verifies method and path in the handler, sets a 200 response, and
+;; shuts down cleanly.
+;;
+;; Expected output:
+;;   method=GET path=/hello
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-method-path [method :cstr path :cstr] :nil
+  ```c printf("method=%s path=%s\n", method, path); ```)
+
+;; client-worker: arg points to an int64_t carrying the port.
+;; Sleeps 20 ms, connects to 127.0.0.1:port, sends a minimal GET, closes.
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 20000000L };  /* 20 ms */
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd);
+      return NULL;
+  }
+  const char *req = "GET /hello HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  /* Drain response so the server can write before we close. */
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+;; run-server: wrap httpd-run for use as a pthread function.
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c
+  httpd_run(h);
+  return NULL;
+  ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        h       (httpd-new 0
+                  (fn [conn :ptr<void>] :nil
+                    (print-method-path (httpd-req-method conn)
+                                       (httpd-req-path conn))
+                    (httpd-resp-status! conn 200)
+                    (httpd-resp-body! conn "Hello")
+                    (chan-send donech 1)))
+        port    (httpd-port h)
+        server  (spawn-server h)
+        client  (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))
