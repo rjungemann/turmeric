@@ -1,6 +1,9 @@
 # Codegen Parentheses Warnings -- Plan (PW0--PW3)
 
-> **Status:** Not started.
+> **Status:** Done (PW0--PW3). BIN_INFIX / PREFIX_UNARY / VARIADIC_FOLD
+> templates trimmed in `emit_core.c`; adversarial fixture added under
+> `tests/fixtures/codegen-paren-precedence/`; all `expected.c` snapshots
+> regenerated.
 >
 > **Flag:** None. Pure codegen change; output stays semantically identical.
 >

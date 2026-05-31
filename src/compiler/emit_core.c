@@ -980,24 +980,27 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
     Buf out; buf_init(&out);
     switch (spec->shape) {
         case BS_BIN_INFIX:
-            buf_printf(&out, "((%s) %s (%s))",
+            buf_printf(&out, "(%s) %s (%s)",
                        arg_strs[0], spec->c_op, arg_strs[1]);
             break;
-        case BS_VARIADIC_FOLD:
-            /* ((a OP b) OP c) OP d ... */
-            for (uint32_t i = 0; i < n - 1; i++) buf_putc(&out, '(');
+        case BS_VARIADIC_FOLD: {
+            /* ((a OP b) OP c) OP d ... -- no redundant outermost wrap */
+            uint32_t group_opens = (n >= 2) ? n - 2 : 0;
+            for (uint32_t i = 0; i < group_opens; i++) buf_putc(&out, '(');
             buf_printf(&out, "(%s)", arg_strs[0]);
             for (uint32_t i = 1; i < n; i++) {
-                buf_printf(&out, " %s (%s))", spec->c_op, arg_strs[i]);
+                buf_printf(&out, " %s (%s)", spec->c_op, arg_strs[i]);
+                if (i < n - 1) buf_putc(&out, ')');
             }
             break;
+        }
         case BS_DIV_CHECK:
             /* Division with zero check: (a / b) checks b != 0 */
             buf_printf(&out, "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
                        arg_strs[1], arg_strs[0], arg_strs[1]);
             break;
         case BS_PREFIX_UNARY:
-            buf_printf(&out, "(%s(%s))", spec->c_op, arg_strs[0]);
+            buf_printf(&out, "%s(%s)", spec->c_op, arg_strs[0]);
             break;
         case BS_PREFIX_UNARY_FREE:
             /* Special case for drop!: free the ref pointer directly

@@ -2443,7 +2443,7 @@ static void __defer_6(void *__env) {
 
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_int {
@@ -2455,7 +2455,7 @@ static dict_Eq_int dict_Eq_int_singleton = {
 };
 
 static bool __inst_Eq_eq__bool(bool x, bool y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_bool {
@@ -2482,7 +2482,7 @@ static dict_Eq_cstr dict_Eq_cstr_singleton = {
 };
 
 static bool __inst_Eq_eq__T(double x, double y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_T {
@@ -2494,7 +2494,7 @@ static dict_Eq_T dict_Eq_T_singleton = {
 };
 
 static bool __inst_Eq_eq__int8(int8_t x, int8_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_int8 {
@@ -2506,7 +2506,7 @@ static dict_Eq_int8 dict_Eq_int8_singleton = {
 };
 
 static bool __inst_Eq_eq__int16(int16_t x, int16_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_int16 {
@@ -2518,7 +2518,7 @@ static dict_Eq_int16 dict_Eq_int16_singleton = {
 };
 
 static bool __inst_Eq_eq__int32(int32_t x, int32_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_int32 {
@@ -2530,7 +2530,7 @@ static dict_Eq_int32 dict_Eq_int32_singleton = {
 };
 
 static bool __inst_Eq_eq__uint8(uint8_t x, uint8_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_uint8 {
@@ -2542,7 +2542,7 @@ static dict_Eq_uint8 dict_Eq_uint8_singleton = {
 };
 
 static bool __inst_Eq_eq__uint16(uint16_t x, uint16_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_uint16 {
@@ -2554,7 +2554,7 @@ static dict_Eq_uint16 dict_Eq_uint16_singleton = {
 };
 
 static bool __inst_Eq_eq__uint32(uint32_t x, uint32_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_uint32 {
@@ -2566,7 +2566,7 @@ static dict_Eq_uint32 dict_Eq_uint32_singleton = {
 };
 
 static bool __inst_Eq_eq__uint64(uint64_t x, uint64_t y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_uint64 {
@@ -2578,7 +2578,7 @@ static dict_Eq_uint64 dict_Eq_uint64_singleton = {
 };
 
 static bool __inst_Eq_eq__float32(float x, float y) {
-        return ((x) == (y));
+        return (x) == (y);
 }
 
 typedef struct dict_Eq_float32 {
@@ -2620,7 +2620,7 @@ static dict_Clone_T dict_Clone_T_singleton = {
 };
 
 static bool __fn_413(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
@@ -2636,7 +2636,7 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
 };
 
 static bool __fn_433(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
@@ -2652,7 +2652,7 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
 };
 
 static bool __fn_460(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
@@ -2668,11 +2668,11 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
 };
 
 static bool __fn_482(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __fn_486(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
@@ -2688,11 +2688,11 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
 };
 
 static bool __fn_502(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __fn_506(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
@@ -2708,11 +2708,11 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
 };
 
 static bool __fn_587(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __fn_591(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
@@ -2728,7 +2728,7 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
 };
 
 static bool __fn_609(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
@@ -2756,7 +2756,7 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
 };
 
 static bool __fn_688(int64_t a, int64_t b) {
-        return ((a) == (b));
+        return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
@@ -3341,7 +3341,7 @@ static int64_t tnil() {
 }
 
 static bool tnil_(int64_t l) {
-        return ((l) == (INT64_C(0)));
+        return (l) == (INT64_C(0));
 }
 
 static int64_t list_length(int64_t l) {

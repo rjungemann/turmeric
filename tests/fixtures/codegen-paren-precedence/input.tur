@@ -1,0 +1,20 @@
+; PW0: adversarial codegen-paren composition test.
+;
+; Exercises BIN_INFIX (=, <) nested as an operand of the and/or
+; VARIADIC_FOLD shapes, all inside an `if` condition (which adds its own
+; paren wrap), plus a nested arithmetic comparison (`(= (+ (* a b) c) 5)`)
+; where a fold result is an operand of another BIN_INFIX. This is exactly
+; the composition where missing operand parens would mis-parse -- so it is
+; the safety net for the "drop the outer paren" codegen change.
+(defn check [a :int b :int c :int] :int
+  (if (and (= a 1) (or (< b c) (= b 2)))
+    (if (= (+ (* a b) c) 5)
+      100
+      200)
+    300))
+
+(defn main [] :int
+  (println (check 1 2 3))   ; and: (= a 1)&(< b c) -> then; (1*2)+3=5 -> 100
+  (println (check 1 9 3))   ; or both false -> else -> 300
+  (println (check 0 2 3))   ; (= a 1) false -> else -> 300
+  0)
