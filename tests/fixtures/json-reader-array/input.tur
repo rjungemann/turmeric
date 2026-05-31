@@ -1,0 +1,8 @@
+;; JR3: #json([...]) builds a Vec; length and elements round-trip.
+(defn len- [] :int
+  (vec-len #json([10, 20, 30])))
+(defn elem [i :int] :int
+  (vec-get #json([10, 20, 30]) i))
+(println (len-))
+(println (elem 0))
+(println (elem 2))

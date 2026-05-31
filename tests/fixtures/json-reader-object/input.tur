@@ -1,0 +1,15 @@
+;; JR3: #json({...}) builds a HAMT map; values are retrievable by hashed key.
+;; Values share the map's int value type (as with the #map{...} literal).
+(defn count- [] :int
+  (map-count #json({"a": 1, "b": 2})))
+(defn get-a [] :int
+  (let [m #json({"a": 1, "b": 2})
+        k (hamt/hash-str "a")]
+    (map-get m k k)))
+(defn get-b [] :int
+  (let [m #json({"a": 1, "b": 2})
+        k (hamt/hash-str "b")]
+    (map-get m k k)))
+(println (count-))
+(println (get-a))
+(println (get-b))

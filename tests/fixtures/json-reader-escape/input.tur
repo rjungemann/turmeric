@@ -1,0 +1,5 @@
+;; JR3: JSON string escapes -- embedded quotes and a tab decode correctly.
+(defn quoted [] :cstr #json("he said \"hi\""))
+(defn tabbed [] :cstr #json("a\tb"))
+(println (quoted))
+(println (tabbed))

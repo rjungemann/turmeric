@@ -1,0 +1,15 @@
+;; JR3: nested objects and arrays compose -- an array of ints inside an
+;; object, and a nested object retrieved by key.
+(defn nums-len [] :int
+  (let [m #json({"nums": [1, 2, 3], "meta": {"ok": 1}})
+        k (hamt/hash-str "nums")
+        v (map-get m k k)]
+    (vec-len v)))
+(defn meta-ok [] :int
+  (let [m   #json({"nums": [1, 2, 3], "meta": {"ok": 1}})
+        mk  (hamt/hash-str "meta")
+        inner (map-get m mk mk)
+        ik  (hamt/hash-str "ok")]
+    (map-get inner ik ik)))
+(println (nums-len))
+(println (meta-ok))

@@ -1,0 +1,7 @@
+;; JR3: JSON null lowers to the nil sentinel (0); true/false lower to 1/0.
+(defn nul [] :int #json(null))
+(defn yes [] :int #json(true))
+(defn no  [] :int #json(false))
+(println (nul))
+(println (yes))
+(println (no))
