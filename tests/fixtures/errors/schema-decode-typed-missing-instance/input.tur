@@ -1,0 +1,23 @@
+;; SC5: ascribing decode! to a type with no HasSchema instance is a
+;; compile-time error (return-type-directed dispatch reports the missing
+;; instance once it resolves `a` from the ascription).
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defstruct User :copy [name :cstr age :int])
+(defstruct Widget :copy [id :int])
+
+(defn user-schema [] :int
+  (schema/field (schema/object-new) "name" (schema/str)))
+
+(definstance HasSchema [User]
+  (decode! [node]
+    (let [v (schema-decode! (user-schema) node)]
+      (make-struct User (json/get-string (json/get! v "name")) 0))))
+
+(defn main [] :int
+  ;; No (HasSchema Widget) instance exists.
+  (let [w (:: (decode! (json/decode "{}")) Widget)]
+    (println (.id w)))
+  0)

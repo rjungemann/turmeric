@@ -743,3 +743,42 @@
     (if (schema-decode-ok? r)
       (schema-decode-value r)
       (schema-decode-abort (schema-decode-errors r)))))
+
+;; ---------------------------------------------------------------------------
+;; SC5 -- HasSchema: return-type-directed typed decoding
+;; ---------------------------------------------------------------------------
+
+;;; HasSchema -- a type that knows how to validate-and-build itself from a
+;;; tagged JSON node.
+;;;
+;;; The single method, decode!, puts its dispatch type variable `a` only in the
+;;; return position, so the concrete instance is selected from the *expected
+;;; type at the use site* (an ascription `(:: (decode! node) T)` or a typed
+;;; binding `(let [x : T (decode! node)] ...)`) rather than from any argument.
+;;; This is return-type-directed dispatch (Phase RT): the elaborator unifies the
+;;; method's `a` against the ascribed type and emits a direct call to the
+;;; matching instance.
+;;;
+;;; An instance pairs a schema (the wire shape) with a builder that turns the
+;;; validated node into the typed value, e.g.
+;;;
+;;;   (definstance HasSchema [User]
+;;;     (decode! [node]
+;;;       (let [v (schema-decode! (user-schema) node)]
+;;;         (make-struct User (json/get-string (json/get! v "name"))
+;;;                           (json/get-int    (json/get! v "age"))))))
+;;;
+;;; and is then driven by an ascription:
+;;;
+;;;   (:: (decode! (json/decode body)) User)   ; => a real User struct
+;;;
+;;; decode! panics (via schema-decode!) on any schema violation; it is for
+;;; trusted data and tests.  For graceful handling, validate first with
+;;; schema-decode against the type's schema and branch on schema-decode-ok?.
+;;;
+;;; Since: Phase SC5
+(defclass HasSchema [a]
+  ;;; decode! -- validate `node` against a's schema and build a typed `a`,
+  ;;; panicking on any violation.  Return-type-directed: resolve `a` from the
+  ;;; ascription at the call site.
+  (decode! [node :int] :a))

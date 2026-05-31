@@ -197,6 +197,15 @@ const char *emit_type_c_name(EmitCtx *ctx, Type t);
 /* KB-021: arbiter of which struct-valued types may use the int64_t carrier ABI
  * (see emit_core.c). */
 bool type_uses_carrier_abi(Type t);
+/* RT/SC5: carrier-return bridge.  A typeclass instance method whose declared
+ * return is the dispatch type variable lowers to the int64_t carrier, but its
+ * body resolves to a concrete by-value struct for that instance.  When the
+ * struct is non-carrier (a plain, non-parametric defstruct), the function must
+ * be emitted with that concrete struct return type so its signature agrees with
+ * the dictionary slot and the resolved (ascribed) call site -- both of which
+ * already use the concrete body type.  Returns the concrete struct Type to emit
+ * in place of the carrier, or a TY_UNKNOWN type when no override applies. */
+Type emit_carrier_return_override(const FnDef *fd);
 void indent_buf(Buf *b, int n);
 bool expr_is_divergent(const Expr *e);
 bool expr_contains_return_or_throw(const Expr *e);
