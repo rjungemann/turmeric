@@ -32,9 +32,8 @@
 (defn fresh [f] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
-  int64_t thunk = fat[0];
   int64_t unbound = INT64_MIN; /* sentinel: unbound logic variable, distinct from any valid value */
-  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, unbound);
+  return TUR_APPLY1(fat, unbound);
   ```)
 
 (defn bt-print [xs]

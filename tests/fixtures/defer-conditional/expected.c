@@ -129,6 +129,19 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
 #define TUR_UNTAG(x)   ((x).val)
 #define TUR_GETTAG(x)  ((x).tag)
+#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]
+#define TUR_APPLY1(f, a) \
+    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (int64_t)(a)))
+#define TUR_APPLY2(f, a, b) \
+    (((int64_t (*)(void *, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b)))
+#define TUR_APPLY3(f, a, b, c) \
+    (((int64_t (*)(void *, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c)))
+#define TUR_APPLY4(f, a, b, c, d) \
+    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))
 static const char *__tur_any_type_name(int64_t tag) {
     switch (tag) {
         case 1: return "nil";

@@ -50,8 +50,7 @@
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
   if (!res || !res->is_ok) return ma;
   /* fn is a closure env struct; first field is the function pointer */
-  int64_t fn_ptr = *(int64_t *)(intptr_t)fn;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fn_ptr)((void*)(intptr_t)fn, res->ok_val);
+  return TUR_APPLY1(fn, res->ok_val);
   ```)
 
 (definstance Monad [result]

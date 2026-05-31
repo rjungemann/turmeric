@@ -54,7 +54,7 @@
 
 (defn apply-goal [g state] :int
   ```c int64_t *fat = (int64_t*)(intptr_t)g;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, state); ```)
+  return TUR_APPLY1(fat, state); ```)
 
 (defn unify-goal-impl [lt1 lt2 state] :int
   (let [ns (logic-unify lt1 lt2 state)]

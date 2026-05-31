@@ -42,8 +42,7 @@
       return fr->val;
   }
   int64_t *fat = (int64_t *)(intptr_t)interp;
-  int64_t thunk = fat[0];
-  return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+  return TUR_APPLY1(fat, fr->val);
   ```)
 
 (defn free-bind [m kont] :int
@@ -52,8 +51,7 @@
       (struct { int tag; int64_t val; } *)(intptr_t)m;
   if (fr->tag == 0) {
       int64_t *fat = (int64_t *)(intptr_t)kont;
-      int64_t thunk = fat[0];
-      return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+      return TUR_APPLY1(fat, fr->val);
   }
   return m;
   ```)
@@ -67,9 +65,8 @@
       (struct { int tag; int64_t val; } *)(intptr_t)m;
   if (fr->tag == 0) {
       int64_t *fat = (int64_t *)(intptr_t)f;
-      int64_t thunk = fat[0];
       int64_t mapped =
-          ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+          TUR_APPLY1(fat, fr->val);
       struct { int tag; int64_t val; } *out = malloc(sizeof(*out));
       out->tag = 0; out->val = mapped;
       return (int64_t)(intptr_t)out;

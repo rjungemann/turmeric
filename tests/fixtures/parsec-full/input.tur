@@ -56,7 +56,7 @@
 (defn apply-parser [p inp] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, inp);
+  return TUR_APPLY1(fat, inp);
   ```)
 
 (defn pchar-impl [_c inp] :int
