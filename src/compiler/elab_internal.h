@@ -463,6 +463,15 @@ typedef struct Elab {
      * per-function LifetimeIds.  NULL outside defn signature parsing (a borrow
      * type encountered with no active context simply gets no lifetime). */
     LifetimeContext *cur_lifetime_ctx;
+    /* Phase RT (return-type-directed dispatch): a narrow, opt-in expected-type
+     * channel.  Pushed by elab_ascribe ((:: e T)) and typed let binders
+     * (let [x : T e]) before elaborating the inner/value expression; read by
+     * elab_call to resolve return-resolved typeclass constraints from the
+     * expected result type.  NULL everywhere it is not explicitly pushed, so
+     * the common path is unaffected.  This is a one-slot stack: the call
+     * elaborator clears it for nested sub-calls so it applies only to the
+     * outermost call of the ascribed expression. */
+    Type *expected_type;
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G2: GADT constructor whose arm is currently being elaborated.

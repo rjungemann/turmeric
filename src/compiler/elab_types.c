@@ -1763,8 +1763,14 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     Type *ascribed = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
     if (!ascribed) return NULL;
 
+    /* Phase RT: push the ascribed type onto the expected-type channel so that
+     * an enclosed call with a return-resolved typeclass constraint can resolve
+     * its instance from T.  Save/restore for proper nesting. */
+    Type *saved_expected = e->expected_type;
+    e->expected_type = ascribed;
     /* Elaborate the expression */
     Expr *inner = elab_form(e, expr_form);
+    e->expected_type = saved_expected;
     if (!inner) return NULL;
 
     /* TS3.3: if both source and target are scalar same-size kinds and they

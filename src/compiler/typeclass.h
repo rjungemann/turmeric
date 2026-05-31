@@ -136,6 +136,13 @@ typedef struct TypeConstraint {
     TypeClass *typeclass;
     Type       type_arg;   /* concrete type (used when param_idx < 0) */
     int8_t     param_idx;  /* >= 0: index into TY_APP elem types; -1: use type_arg directly */
+    /* Phase RT: the type variable this constraint quantifies over (from a
+     * `where (Class tyvar)` clause).  NULL for legacy `^Class`-style
+     * constraints.  return_resolved is true when `tyvar` appears only in the
+     * function's return type (no parameter carries it), so the constraint must
+     * be resolved from the expected result type rather than an argument. */
+    const struct Symbol *tyvar;
+    bool                 return_resolved;
 } TypeConstraint;
 
 /* Constraint set for a function */
