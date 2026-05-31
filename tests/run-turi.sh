@@ -163,6 +163,7 @@ gadt-refine-expr
 gadt-syntax-basic
 gadt-syntax-multi
 kind-inference-adt
+let-star
 match-literal
 match-redundant-arm
 panic-basic

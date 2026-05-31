@@ -19,27 +19,27 @@
 
 ;; Test: show empty map
 (defn test-show-empty [] :int
-  (let [m (hamt/new)]
-    (let [s (hamt/show m)]
-      (let [len (strlen s)]
-        (hamt/free m)
-        (cstr-free s)
-        (if (= len 2) 1 0)))))
+  (let* [m   (hamt/new)
+         s   (hamt/show m)
+         len (strlen s)]
+    (hamt/free m)
+    (cstr-free s)
+    (if (= len 2) 1 0)))
 
 ;; Test: show non-empty map has content > 2 chars
 (defn test-show-nonempty [] :int
-  (let [k1 (alloc-key 1)]
-    (let [v1 (alloc-key 100)]
-      (let [m1 (hamt/new)]
-        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
-          (let [s (hamt/show m2)]
-            (let [len (strlen s)]
-              (hamt/free m1)
-              (hamt/free m2)
-              (free k1)
-              (free v1)
-              (cstr-free s)
-              (if (> len 2) 1 0))))))))
+  (let* [k1  (alloc-key 1)
+         v1  (alloc-key 100)
+         m1  (hamt/new)
+         m2  (hamt/set m1 (hamt/hash-ptr k1) k1 v1)
+         s   (hamt/show m2)
+         len (strlen s)]
+    (hamt/free m1)
+    (hamt/free m2)
+    (free k1)
+    (free v1)
+    (cstr-free s)
+    (if (> len 2) 1 0)))
 
 (println (test-show-empty))
 (println (test-show-nonempty))
