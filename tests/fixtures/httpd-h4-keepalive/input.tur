@@ -1,0 +1,112 @@
+;; Phase H4: httpd-h4-keepalive -- a single TCP connection serves multiple
+;; HTTP/1.1 requests in sequence (persistent connection), then closes when
+;; the client sends Connection: close. Also exercises Content-Length-based
+;; request body parsing.
+;;
+;; The client sends THREE HTTP/1.1 requests back to back on the same fd:
+;;   1) GET /one         (default keep-alive)
+;;   2) POST /two with body "abc"
+;;   3) GET /three  with Connection: close
+;;
+;; The handler prints "path body" for each, then signals via the channel.
+;; After three signals, the main thread shuts down.
+;;
+;; Expected output:
+;;   /one body=
+;;   /two body=abc
+;;   /three body=
+;;   handled=3
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-req [path :cstr body :cstr] :nil
+  ```c printf("%s body=%s\n", path, body); ```)
+
+(defn print-handled [n :int] :nil
+  ```c printf("handled=%lld\n", (long long)n); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };  /* 30 ms */
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd);
+      return NULL;
+  }
+  /* Pipeline three requests on the same TCP connection. */
+  const char *r1 =
+      "GET /one HTTP/1.1\r\nHost: x\r\n\r\n";
+  const char *r2 =
+      "POST /two HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc";
+  const char *r3 =
+      "GET /three HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+  send(fd, r1, strlen(r1), 0);
+  /* Brief wait so the server reads request 1 before we send request 2. */
+  struct timespec wait = { 0, 30000000L };
+  nanosleep(&wait, NULL);
+  send(fd, r2, strlen(r2), 0);
+  nanosleep(&wait, NULL);
+  send(fd, r3, strlen(r3), 0);
+  /* Drain responses. */
+  char drain[2048];
+  while (recv(fd, drain, sizeof(drain), 0) > 0) { /* nothing */ }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech  (chan-new 8)
+        h       (httpd-new-pool 0 1
+                  (fn [conn :ptr<void>] :nil
+                    (print-req (httpd-req-path conn) (httpd-req-body conn))
+                    (httpd-resp-status! conn 200)
+                    (httpd-resp-body! conn "ok")
+                    (chan-send donech 1)))
+        port    (httpd-port h)
+        server  (spawn-server h)
+        client  (spawn-client port)]
+    (chan-recv donech)
+    (chan-recv donech)
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (print-handled 3)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))
