@@ -1,7 +1,17 @@
 # Map / Vec / Set Data Literals -- Plan (DL0--DL6)
 
-> **Status:** DL0 complete (reader dispatch + `#map{...}` / `#set{...}` forms,
-> error codes, `-Xdata-literals` flag).
+> **Status:** DL0--DL1 complete. Reader dispatch + `#map{...}` / `#set{...}`
+> forms and error codes (DL0); elaboration lowering for all three literals
+> plus the `hamt-of` / `set-of` stdlib macros (DL1).
+>
+> **Implementation note (DL1):** `#map{...}` keys are normalized in the
+> elaborator -- int keys pass through, keyword/string keys lower to
+> `(hamt/hash-str "name")` so equal keys hash identically. `#set{...}` uses
+> the typed `Set[A]` identity-hash convention (each element is its own hash,
+> via the `set-add1` helper); the `(hash x)` typeclass-method injection the
+> original design sketched is not used because the `Hash[A]` method does not
+> monomorphize in compiled codegen. Consequently the `data-literal-set-no-hash`
+> guard fixture from DL3 is omitted (no Hash constraint is enforced).
 >
 > **Flag:** `-Xdata-literals` (opt-in; no effect on programs that don't use the
 > syntax). All phases gated behind this flag so the feature can land
