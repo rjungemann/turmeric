@@ -1,0 +1,97 @@
+;; Phase H2: httpd-h2-reactor -- reactor-backed listener handles multiple
+;; concurrent requests and exits cleanly via reactor-stop.
+;;
+;; Spawns 3 client threads that each fire a single GET. The handler counts
+;; the requests; once N have arrived, main calls httpd-stop, which goes
+;; through tur_reactor_stop + tur_reactor_wake to unblock the listener
+;; thread. The reactor accept callback drains all pending accepts on a
+;; single READ wake-up, so this also exercises the non-blocking accept
+;; loop inside the callback.
+;;
+;; Expected output:
+;;   handled=3
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-handled [n :int] :nil
+  ```c printf("handled=%lld\n", (long long)n); ```)
+
+;; client-worker: arg points to int64_t carrying the port.
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };  /* 30 ms -- give server time to start */
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd);
+      return NULL;
+  }
+  const char *req = "GET /ping HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c
+  httpd_run(h);
+  return NULL;
+  ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech  (chan-new 8)
+        h       (httpd-new 0
+                  (fn [conn :ptr<void>] :nil
+                    (httpd-resp-status! conn 200)
+                    (httpd-resp-body! conn "ok")
+                    (chan-send donech 1)))
+        port    (httpd-port h)
+        server  (spawn-server h)
+        c1      (spawn-client port)
+        c2      (spawn-client port)
+        c3      (spawn-client port)]
+    (chan-recv donech)
+    (chan-recv donech)
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread c1)
+    (join-thread c2)
+    (join-thread c3)
+    (print-handled 3)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

@@ -1,8 +1,10 @@
-;;; tur/httpd -- Lightweight HTTP/1.0 server (H1: blocking thread-per-connection).
+;;; tur/httpd -- Lightweight HTTP/1.0 server.
 ;;;
-;;; Single-process HTTP/1.0 server. Each accepted connection is dispatched
-;;; to a user-supplied handler closure in its own detached OS thread.
-;;; The connection is closed after each response (HTTP/1.0 semantics).
+;;; Single-process HTTP/1.0 server. The listener thread runs a tur/reactor
+;;; loop that watches the listen socket for READ events; each accepted
+;;; connection is dispatched to a user-supplied handler closure in its own
+;;; detached OS thread. The connection is closed after each response
+;;; (HTTP/1.0 semantics until keep-alive lands in H4).
 ;;;
 ;;; Handler calling convention: the handler closure MUST capture at least
 ;;; one variable so it is heap-allocated as a fat closure. Inside the
@@ -12,13 +14,18 @@
 ;;; Since: Phase H1
 ;; stdlib/httpd.tur -- Lightweight HTTP server (Phase H1-H7)
 ;;
-;; H1: TCP listener + blocking thread-per-connection (this milestone).
-;; H2-H7: see docs/tur-httpd-plan.md.
+;; H1: TCP listener + blocking thread-per-connection.
+;; H2: Reactor-backed listener (replaces the blocking accept loop).
+;; H3-H7: see docs/tur-httpd-plan.md.
 ;;
 ;; HttpdBlock layout:
-;;   { int listen_fd; int64_t handler; volatile int stop_flag; }
+;;   { int listen_fd; int64_t handler;
+;;     void *reactor;          // owned TurReactor for the listener
+;;     int   listen_src_id;    // reactor source id for the listen fd
+;;     void *accept_clos;      // fake fat-closure { __fn, hb } for the cb
+;;     volatile int stop_flag; }
 ;;
-;; HttpdConn layout (per-connection, heap-allocated by httpd-run):
+;; HttpdConn layout (per-connection, heap-allocated by the accept callback):
 ;;   { int fd; int64_t handler;
 ;;     char method[16]; char path[1024]; char version[16];
 ;;     int resp_status; char *resp_body; int resp_body_len; }
@@ -34,86 +41,21 @@
 ;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
 
-;;; httpd/autolink-hint -- ensure programs using httpd link against pthreads.
+;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
 (defn httpd/autolink-hint [] :int
-  ```c /* __tur_autolink__: -pthread */
+  ```c /* __tur_autolink__: -lturi -pthread */
   return 0;
   ```)
 
-;;; httpd-new -- create a new httpd instance bound to the given port.
-;;;
-;;; Binds and listens immediately but does not accept connections until
-;;; httpd-run is called. Pass 0 as port to let the kernel assign one;
-;;; query the actual port with httpd-port.
-;;;
-;;; Parameters:
-;;;   port    -- TCP port to listen on (0 = kernel-assigned)
-;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
-;;;
-;;; Returns:
-;;;   ptr<void> -- opaque Httpd handle, or nil on error
-;;;
-;;; Example:
-;;;   (let [h (httpd-new 0 (fn [conn :ptr<void>] :nil
-;;;                          (httpd-resp-status! conn 200)
-;;;                          (httpd-resp-body! conn "OK")))]
-;;;     (httpd-run h)
-;;;     (httpd-free h))
-;;;
-;;; Since: Phase H1
-(defn httpd-new [port :int handler :int] :ptr<void>
-  ```c
-  typedef struct {
-      int listen_fd;
-      int64_t handler;
-      volatile int stop_flag;
-  } HttpdBlock;
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return NULL;
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); return NULL; }
-  HttpdBlock *hb = (HttpdBlock *)malloc(sizeof(HttpdBlock));
-  if (!hb) { close(fd); return NULL; }
-  hb->listen_fd  = fd;
-  hb->handler    = (int64_t)handler;
-  hb->stop_flag  = 0;
-  return (void *)hb;
-  ```)
+;; ---- libturi reactor C surface ----
 
-;;; httpd-port -- return the port the server is listening on.
-;;;
-;;; Useful when httpd-new was called with port 0 (kernel-assigned).
-;;;
-;;; Parameters:
-;;;   h -- httpd handle returned by httpd-new
-;;;
-;;; Returns:
-;;;   int -- the actual listening port, or -1 on error
-;;;
-;;; Example:
-;;;   (httpd-port h)  ; => 49234
-;;;
-;;; Since: Phase H1
-(defn httpd-port [h :ptr<void>] :int
-  ```c
-  typedef struct {
-      int listen_fd;
-      int64_t handler;
-      volatile int stop_flag;
-  } HttpdBlock;
-  HttpdBlock *hb = (HttpdBlock *)h;
-  struct sockaddr_in addr;
-  socklen_t len = sizeof(addr);
-  if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
-  return (int64_t)ntohs(addr.sin_port);
-  ```)
+(extern-c tur_reactor_new      []                                     :ptr)
+(extern-c tur_reactor_free     [r :ptr]                               :void)
+(extern-c tur_reactor_add_fd   [r :ptr fd :int events :int cb :int user-data :ptr] :int)
+(extern-c tur_reactor_remove   [r :ptr id :int]                       :int)
+(extern-c tur_reactor_run      [r :ptr]                               :void)
+(extern-c tur_reactor_stop     [r :ptr]                               :void)
+(extern-c tur_reactor_wake     [r :ptr]                               :void)
 
 ;;; httpd-worker -- internal per-connection worker thread.
 ;;;
@@ -198,25 +140,22 @@
   return NULL;
   ```)
 
-;;; httpd-run -- accept connections and dispatch them to detached worker threads.
+;;; httpd-accept-cb -- internal reactor READ callback for the listen fd.
 ;;;
-;;; Blocks until httpd-stop is called from another thread or from a handler
-;;; (via a captured httpd reference). Each accepted connection runs in its
-;;; own detached OS thread.
+;;; Invoked by tur_reactor via the fat-closure calling convention. The
+;;; `env` pointer is a synthetic two-slot closure { __fn, hb } allocated
+;;; in httpd-new; env[1] is the HttpdBlock pointer.
 ;;;
-;;; Parameters:
-;;;   h -- httpd handle returned by httpd-new
-;;;
-;;; Example:
-;;;   (httpd-run h)   ; returns after httpd-stop
-;;;
-;;; Since: Phase H1
-(defn httpd-run [h :ptr<void>] :nil
+;;; Since: Phase H2
+(defn httpd-accept-cb [env :ptr<void> id :int events :int user :ptr<void>] :nil
   ```c
-  #include <errno.h>
+  (void)id; (void)events; (void)user;
   typedef struct {
       int listen_fd;
       int64_t handler;
+      void *reactor;
+      int listen_src_id;
+      void *accept_clos;
       volatile int stop_flag;
   } HttpdBlock;
   typedef struct {
@@ -225,14 +164,13 @@
       char method[16]; char path[1024]; char version[16];
       int resp_status; char *resp_body; int resp_body_len;
   } HttpdConn;
-  HttpdBlock *hb = (HttpdBlock *)h;
-  while (!hb->stop_flag) {
+  /* env is the synthetic fat closure { __fn, hb_ptr }; env[1] is hb. */
+  int64_t *fat = (int64_t *)env;
+  HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
+  /* Drain pending connections so we do not miss any between polls. */
+  for (;;) {
       int cfd = accept(hb->listen_fd, NULL, NULL);
-      if (cfd < 0) {
-          if (hb->stop_flag) break;
-          if (errno == EINTR) continue;
-          break;
-      }
+      if (cfd < 0) break;  /* EAGAIN or listen fd closed */
       HttpdConn *conn = (HttpdConn *)malloc(sizeof(HttpdConn));
       if (!conn) { close(cfd); continue; }
       memset(conn, 0, sizeof(HttpdConn));
@@ -249,11 +187,144 @@
   }
   ```)
 
-;;; httpd-stop -- signal httpd-run to stop accepting new connections.
+;;; httpd-new -- create a new httpd instance bound to the given port.
 ;;;
-;;; Thread-safe. Sets the stop flag and closes the listening socket so a
-;;; blocked accept() returns immediately. httpd-run exits after the current
-;;; iteration. In-flight worker threads continue independently.
+;;; Binds and listens immediately, then sets up a reactor watching the
+;;; listen fd for READ events. The reactor does not start polling until
+;;; httpd-run is called. Pass 0 as port for a kernel-assigned port;
+;;; query the actual port with httpd-port.
+;;;
+;;; Parameters:
+;;;   port    -- TCP port to listen on (0 = kernel-assigned)
+;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Httpd handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [h (httpd-new 0 (fn [conn :ptr<void>] :nil
+;;;                          (httpd-resp-status! conn 200)
+;;;                          (httpd-resp-body! conn "OK")))]
+;;;     (httpd-run h)
+;;;     (httpd-free h))
+;;;
+;;; Since: Phase H1
+(defn httpd-new [port :int handler :int] :ptr<void>
+  ```c
+  #include <fcntl.h>
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      void *reactor;
+      int listen_src_id;
+      void *accept_clos;
+      volatile int stop_flag;
+  } HttpdBlock;
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  /* Make the listen fd non-blocking so the reactor accept callback can
+   * drain it in a loop without ever blocking the listener thread. */
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port        = htons((uint16_t)port);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  HttpdBlock *hb = (HttpdBlock *)malloc(sizeof(HttpdBlock));
+  if (!hb) { close(fd); return NULL; }
+  hb->listen_fd      = fd;
+  hb->handler        = (int64_t)handler;
+  hb->stop_flag      = 0;
+  hb->reactor        = tur_reactor_new();
+  if (!hb->reactor) { close(fd); free(hb); return NULL; }
+  /* Build a synthetic fat closure { __fn, hb_ptr } so the reactor can
+   * dispatch the accept callback with hb available as env[1]. */
+  int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
+  if (!clos) {
+      tur_reactor_free(hb->reactor);
+      close(fd); free(hb); return NULL;
+  }
+  clos[0] = (int64_t)(intptr_t)httpd_accept_cb;
+  clos[1] = (int64_t)(intptr_t)hb;
+  hb->accept_clos = (void *)clos;
+  /* Register listen fd for READ events. Event mask 1 = READ (see reactor.tur). */
+  hb->listen_src_id = (int)tur_reactor_add_fd(hb->reactor, fd, 1,
+      (int64_t)(intptr_t)clos, NULL);
+  if (hb->listen_src_id < 0) {
+      free(clos);
+      tur_reactor_free(hb->reactor);
+      close(fd); free(hb); return NULL;
+  }
+  return (void *)hb;
+  ```)
+
+;;; httpd-port -- return the port the server is listening on.
+;;;
+;;; Useful when httpd-new was called with port 0 (kernel-assigned).
+;;;
+;;; Parameters:
+;;;   h -- httpd handle returned by httpd-new
+;;;
+;;; Returns:
+;;;   int -- the actual listening port, or -1 on error
+;;;
+;;; Example:
+;;;   (httpd-port h)  ; => 49234
+;;;
+;;; Since: Phase H1
+(defn httpd-port [h :ptr<void>] :int
+  ```c
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      void *reactor;
+      int listen_src_id;
+      void *accept_clos;
+      volatile int stop_flag;
+  } HttpdBlock;
+  HttpdBlock *hb = (HttpdBlock *)h;
+  struct sockaddr_in addr;
+  socklen_t len = sizeof(addr);
+  if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
+  return (int64_t)ntohs(addr.sin_port);
+  ```)
+
+;;; httpd-run -- run the reactor event loop until httpd-stop is called.
+;;;
+;;; Each accept-ready event on the listen fd spawns a detached worker
+;;; thread that handles a single HTTP request/response cycle.
+;;;
+;;; Parameters:
+;;;   h -- httpd handle returned by httpd-new
+;;;
+;;; Example:
+;;;   (httpd-run h)   ; returns after httpd-stop
+;;;
+;;; Since: Phase H1
+(defn httpd-run [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int listen_fd;
+      int64_t handler;
+      void *reactor;
+      int listen_src_id;
+      void *accept_clos;
+      volatile int stop_flag;
+  } HttpdBlock;
+  HttpdBlock *hb = (HttpdBlock *)h;
+  tur_reactor_run(hb->reactor);
+  ```)
+
+;;; httpd-stop -- signal the listener to stop accepting new connections.
+;;;
+;;; Thread-safe. Calls reactor-stop + reactor-wake so the listener exits
+;;; promptly even when blocked in poll(). In-flight worker threads
+;;; continue running independently.
 ;;;
 ;;; Parameters:
 ;;;   h -- httpd handle returned by httpd-new
@@ -267,20 +338,25 @@
   typedef struct {
       int listen_fd;
       int64_t handler;
+      void *reactor;
+      int listen_src_id;
+      void *accept_clos;
       volatile int stop_flag;
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
-  if (hb->listen_fd >= 0) {
-      close(hb->listen_fd);
-      hb->listen_fd = -1;
+  if (hb->reactor) {
+      tur_reactor_stop(hb->reactor);
+      tur_reactor_wake(hb->reactor);
   }
   ```)
 
 ;;; httpd-free -- free all resources associated with an httpd instance.
 ;;;
-;;; Must be called after httpd-run returns. Call httpd-stop first to ensure
-;;; the listener has exited.
+;;; Must be called after httpd-run returns. Call httpd-stop first to
+;;; ensure the listener has exited. Removes the reactor source, frees
+;;; the synthetic accept closure, frees the reactor, closes the listen
+;;; socket, and frees the HttpdBlock.
 ;;;
 ;;; Parameters:
 ;;;   h -- httpd handle returned by httpd-new
@@ -294,9 +370,17 @@
   typedef struct {
       int listen_fd;
       int64_t handler;
+      void *reactor;
+      int listen_src_id;
+      void *accept_clos;
       volatile int stop_flag;
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
+  if (hb->reactor) {
+      if (hb->listen_src_id >= 0) tur_reactor_remove(hb->reactor, hb->listen_src_id);
+      tur_reactor_free(hb->reactor);
+  }
+  if (hb->accept_clos) free(hb->accept_clos);
   if (hb->listen_fd >= 0) close(hb->listen_fd);
   free(hb);
   ```)
