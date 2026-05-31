@@ -1,4 +1,4 @@
-# Map / Vec Data Literals -- Plan (DL0--DL5)
+# Map / Vec / Set Data Literals -- Plan (DL0--DL6)
 
 > **Status:** Not started.
 >
@@ -31,14 +31,15 @@ nothing for the more common case: a map/vec with literal *shape* but
 some computed *values*. The deeper gap is the lack of evaluating
 collection literals.
 
-This plan adds reader syntax that constructs HAMT maps and vecs whose slot
-values are normal Turmeric expressions, evaluated at runtime in the
-surrounding scope.
+This plan adds reader syntax that constructs HAMT maps, vecs, and sets
+whose slot values are normal Turmeric expressions, evaluated at runtime
+in the surrounding scope.
 
 ```turmeric
 ;; Literal shape, computed values -- no quasiquote needed.
 (def payload #map{:name name :age (+ age 1) :active 1})
 (def points  [(make-point 0 0) (make-point 1 1) origin])
+(def tags    #set{:alpha :beta current-tag})
 ```
 
 If this lands well, the `#json(...)` reader macro becomes a thin
@@ -49,16 +50,17 @@ entirely in favor of writing the map literal directly.
 
 ## Design
 
-### The two surface forms
+### The three surface forms
 
 | Syntax | Produces |
 |---|---|
 | `[e1 e2 e3 ...]` *(expression position)* | Vec: `(vec-of e1 e2 e3 ...)` |
 | `#map{k1 v1 k2 v2 ...}` | HAMT map: `(hamt-of k1 v1 k2 v2 ...)` |
+| `#set{e1 e2 e3 ...}` | Set: `(set-of e1 e2 e3 ...)` |
 
 The vec form reuses the existing `[...]` reader -- `F_VEC` -- and adds
-context-sensitive elaboration (see below). The map form is a brand-new
-`#`-dispatch entry that avoids every existing collision.
+context-sensitive elaboration (see below). The map and set forms are
+brand-new `#`-dispatch entries that avoid every existing collision.
 
 ### Why `[...]` for vecs (Clojure-style overloading)
 
@@ -77,20 +79,29 @@ The change here is purely **elaboration**: when an `F_VEC` appears in
 expression position (i.e. it wasn't grabbed by a binding-form macro
 first), lower it to `(vec-of ...)`. No reader change required.
 
-### Why `#map{...}` for maps
+### Why `#map{...}` for maps and `#set{...}` for sets
 
 The `{...}` slot in expression position is already claimed by
 **curly-infix** arithmetic (`{a + b}` -> `(+ a b)`), and `#{...}`
 already produces `F_MAP` for effect rows. Both are load-bearing and
 should not be touched.
 
-`#map{...}` is a fresh dispatch with no current meaning -- the reader
-sees `#`, reads the tag `map`, then `{`, and reads a delimited
-sequence. The named-tag spelling pairs symmetrically with `#set{...}`
-(see Future work) so both collection literals follow the same
-`#<tag>{...}` shape. A reader sees `#map{` and `#set{` and immediately
-knows which collection they are getting -- there is no shorthand-vs-named
-asymmetry to remember.
+`#map{...}` and `#set{...}` are fresh dispatches with no current
+meaning -- the reader sees `#`, reads the tag (`map` or `set`), then
+`{`, and reads a delimited sequence. The named-tag spelling pairs the
+two literals symmetrically: both collection literals follow the same
+`#<tag>{...}` shape, so a reader sees `#map{` and `#set{` and
+immediately knows which collection they are getting -- there is no
+shorthand-vs-named asymmetry to remember.
+
+The conventional Lisp/Clojure spelling for sets is `#{...}`, but that
+slot is already taken by effect rows in Turmeric (`#{Unsafe}`,
+`#{IO File}`, etc.). Effect rows were deliberately chosen to *look*
+like a set because an effect row *is* a set of effects, so the
+original meaning earns its spelling. Rather than migrate effect rows
+off `#{...}` (a wide fixture-surface refactor for marginal payoff),
+this plan keeps `#{...}` for effect rows and uses `#set{...}` for
+set literals.
 
 Alternatives considered and rejected:
 
@@ -118,10 +129,13 @@ Alternatives considered and rejected:
 | `#map{:a 1 :b x}` | `(hamt-of :a 1 :b x)` |
 | `#map{}` | `(hamt-of)` |
 | `[#map{:k v} #map{:k w}]` | `(vec-of (hamt-of :k v) (hamt-of :k w))` |
+| `#set{:a :b :c}` | `(set-of :a :b :c)` |
+| `#set{}` | `(set-of)` |
+| `#set{x (compute) :literal}` | `(set-of x (compute) :literal)` |
 
 Slots are arbitrary expressions -- variable references, calls, nested
 literals, etc. The normal typechecker handles them; the literal is
-just sugar over `hamt-of` / `vec-of`.
+just sugar over `hamt-of` / `vec-of` / `set-of`.
 
 ### "Expression position" for `[...]`
 
@@ -155,6 +169,37 @@ make the literal harder to read at a glance ("is `foo` here a key or
 a value?"). If a real use case emerges, add a separate form for it
 (see Future work) rather than overloading the basic literal.
 
+### Element forms in `#set{...}`
+
+Unlike `#map{...}`, set literals do not restrict element forms -- any
+expression that yields a value of the element type is allowed. That
+is the same rule as `#map{}` *values* (not keys), since a set element
+is conceptually a value, not a label.
+
+The expansion uses the `Hash`/`Eq` typeclasses already required by
+`Set[A]` (`stdlib/set.tur`, Phase TC2-C). The `set-of` macro inserts a
+`(hash e)` call per element so the surface literal stays free of
+hashing boilerplate:
+
+```turmeric
+;; Source
+#set{x y z}
+
+;; Expansion (conceptual -- see set-of below)
+(let [__s (set-new)]
+  (set-add __s (hash x) x)
+  (set-add __s (hash y) y)
+  (set-add __s (hash z) z)
+  __s)
+```
+
+Because `set-add` returns a *new* set (the underlying HAMT is
+persistent), the real expansion threads the result, not the
+side-effect form sketched above. See `set-of` in DL1.
+
+The element type is inferred from the first element (same rule as
+`vec-of`). Mixed-type sets are rejected by the typechecker.
+
 ### Vec element types
 
 `[...]` produces a `vec-of` call with no type annotation; the element
@@ -167,39 +212,45 @@ form exists.
 
 ### Reader changes
 
-Two pieces of work:
+Three pieces of work:
 
-1. **`#map{...}` dispatch** in `src/compiler/reader.c`: after the
-   initial `#`, read the tag identifier (`map`), then require `{`,
-   then read a delimited sequence under a new `F_MAP_LITERAL` tag.
-   ~15 lines. Structuring this as a tag-dispatch table (rather than
-   a hard-coded `map` branch) leaves room for `#set{...}` to slot
-   in later without touching this code.
-2. **No vec reader change** -- existing `F_VEC` is reused. All work
+1. **`#<tag>{...}` dispatch table** in `src/compiler/reader.c`: after
+   the initial `#`, read the tag identifier, then require `{`, then
+   read a delimited sequence. Implemented as a small table mapping
+   tag string -> form constructor so additional tags
+   (`#bag{`, `#ordmap{`, ...) drop in without further branches.
+2. **Two new `Form` tags** in `src/compiler/forms.h`:
+   - `F_MAP_LITERAL` -- payload identical to `F_LIST`, distinguishable
+     from `F_MAP` (effect rows).
+   - `F_SET_LITERAL` -- payload identical to `F_LIST`.
+3. **No vec reader change** -- existing `F_VEC` is reused. All work
    for `[...]` happens in the elaborator.
-
-A single new `Form` tag (`F_MAP_LITERAL`) keeps the data literal
-distinguishable from `F_MAP` during elaboration.
 
 ---
 
 ## Phases
 
-### DL0 -- Reader dispatch for `#map{...}`
+### DL0 -- Reader dispatch table + `#map{...}` / `#set{...}`
 
-Add `#map{...}` to the `#`-dispatch table in `src/compiler/reader.c`.
-Introduce `F_MAP_LITERAL` in `src/compiler/forms.h`.
+Wire up the `#<tag>{...}` dispatch table in `src/compiler/reader.c`.
+Land both tags in the same phase so the table proves itself as a table
+(rather than a hard-coded `map` branch retrofitted later). Introduce
+`F_MAP_LITERAL` and `F_SET_LITERAL` in `src/compiler/forms.h`.
 
-- Parse errors (odd map slot count, missing `}`) become `TUR-E0280` /
-  `TUR-E0281` reader errors with line/col pointing into the literal.
-- Key-form validation: keyword / string / int only; anything else is
-  `TUR-E0282`.
+- Parse errors (odd `#map{...}` slot count, missing `}` on either
+  literal) become `TUR-E0280` / `TUR-E0281` reader errors with line/col
+  pointing into the literal.
+- Key-form validation for `#map{...}`: keyword / string / int only;
+  anything else is `TUR-E0282`.
+- `#set{...}` has no key-form rule -- any expression is permitted.
+- Unknown `#<tag>{` tag (e.g. `#bag{`) is `TUR-E0283`.
 
-### DL1 -- Elaboration for both forms
+### DL1 -- Elaboration for all three forms
 
 In the elaborator:
 
 - Lower `F_MAP_LITERAL` to a `hamt-of` call.
+- Lower `F_SET_LITERAL` to a `set-of` call.
 - Lower `F_VEC` to a `vec-of` call **when in expression position**
   (i.e. not consumed by a binding-form macro). Maintain the
   binding-form allow-list described above.
@@ -212,9 +263,28 @@ pattern-match clause lists. Each of these grabs the `F_VEC` slot
 explicitly today; the elaborator change just needs to skip
 expression-position lowering for those slots.
 
-Check whether `hamt-of` and `vec-of` already accept the shapes we need.
-If not, extend them (see JR1 in the JSON reader plan -- the same
-prerequisite applies).
+Check whether `hamt-of`, `vec-of`, and `set-of` already accept the
+shapes we need:
+
+- `vec-of` exists today (`stdlib/vec.tur:185`) and is variadic; reuse.
+- `hamt-of` does **not** yet exist; add it under `stdlib/map.tur` as
+  a variadic `defmacro` that threads `(map-set __m k v)` calls (or the
+  HAMT-native equivalent) over an `__m` started from `(map-new)`.
+- `set-of` does **not** yet exist; add it under `stdlib/set.tur` as a
+  variadic `defmacro` that threads `(set-add __s (hash x) x)` over an
+  `__s` started from `(set-new)`. Mirrors `vec-of`'s `__v`/`vec-push-each__`
+  shape, plus an injected `(hash ...)` per element to satisfy the
+  `Hash[A]` constraint the runtime already requires (see
+  `stdlib/set.tur:46` `set-add` signature).
+
+Because `set-add` is persistent (returns a new set), the macro must
+either:
+
+(a) thread the result through `let`-rebindings, or
+(b) introduce a `set-add-each__` helper analogous to `vec-push-each__`
+    that mutates the wrapper's internal HAMT pointer in place.
+
+Option (b) parallels the existing `vec-of` shape and is preferred.
 
 ### DL2 -- Sweet-exp interaction
 
@@ -231,6 +301,9 @@ defn build-payload [name :cstr age :int] :ptr<void>
 
 defn three-points [] :ptr<void>
   [make-point(0 0) make-point(1 1) origin]
+
+defn watched-tags [extra :Keyword] :ptr<void>
+  #set{:audit :auth extra}
 ```
 
 ### DL3 -- Fixtures
@@ -239,23 +312,34 @@ Add test fixtures under `tests/fixtures/`:
 
 - `data-literal-map-basic` -- `#map{:a 1 :b 2}` round-trips
 - `data-literal-vec-basic` -- `[1 2 3]` in expression position round-trips
+- `data-literal-set-basic` -- `#set{1 2 3}` round-trips through
+  `set-count` / `set-member?`
 - `data-literal-vec-in-defn` -- confirms `[x y]` in `defn`/`let` still
   works as a binding spec (regression guard)
 - `data-literal-computed-values` -- `#map{:k (+ 1 2)}` evaluates slot
-- `data-literal-nested` -- `[#map{:k 1} #map{:k 2}]`
-- `data-literal-empty` -- `#map{}` and `[]` (expression position)
+- `data-literal-set-computed` -- `#set{x (compute) y}` evaluates each slot
+- `data-literal-set-dedupe` -- `#set{1 1 2}` collapses to two elements
+  (drives the HAMT-merge behavior the literal inherits from `set-add`)
+- `data-literal-nested` -- `[#map{:k 1} #map{:k 2}]` and
+  `#map{:tags #set{:a :b}}`
+- `data-literal-empty` -- `#map{}`, `#set{}`, and `[]` (expression position)
 - `data-literal-bad-key` -- `#map{x 1}` produces `TUR-E0282`
 - `data-literal-odd-slots` -- `#map{:a 1 :b}` produces `TUR-E0280`
+- `data-literal-bad-tag` -- `#bag{1 2}` produces `TUR-E0283`
+- `data-literal-set-no-hash` -- `#set{(some-opaque)}` where the element
+  type lacks a `Hash` instance produces the usual constraint-resolution
+  error (regression guard for the auto-inserted `(hash x)` call)
 - `data-literal-sweet-exp` -- works inside `.tursweet`
 
 ### DL4 -- Docstrings, guide, and JSON-reader relationship
 
-- `;;;` docstrings on `hamt-of` and `vec-of` if not already present;
-  reference the literal syntax from each.
-- `docs/guides/data-literals-guide.md` covering `#map{...}`, `[...]` in
-  expression position, key-form rules, type inference notes, and the
-  interplay with `#json(...)` (if that plan also lands -- otherwise
-  note that data literals supersede it for non-JSON-sourced cases).
+- `;;;` docstrings on `hamt-of`, `vec-of`, and `set-of`; reference the
+  literal syntax from each.
+- `docs/guides/data-literals-guide.md` covering `#map{...}`, `#set{...}`,
+  `[...]` in expression position, key-form rules, type inference notes,
+  the `Hash[A]` constraint behind `#set{...}`, and the interplay with
+  `#json(...)` (if that plan also lands -- otherwise note that data
+  literals supersede it for non-JSON-sourced cases).
 - Update [json-reader-macro-plan.md](json-reader-macro-plan.md): either
   mark it as superseded for the mixed-value case, or scope it down to
   "JSON-source-paste only."
@@ -263,15 +347,34 @@ Add test fixtures under `tests/fixtures/`:
   literal forms (since `.tursweet` is the most common place they will
   appear).
 
-### DL5 -- `just docs` + snapshot audit
+### DL5 -- Constrained literal helpers for `#set{...}`
+
+Polish pass on `set-of` once it's exercised by fixtures:
+
+- Confirm the auto-inserted `(hash x)` resolves through the existing
+  `Hash[A]` typeclass dispatch without surfacing the constraint to the
+  caller (the literal should *look* like `#set{1 2 3}`, not require an
+  explicit `Hashable` annotation at every call site).
+- If `Set[A]` ends up wanting a single-shot bulk constructor for
+  efficiency (avoiding N persistent re-allocations), add
+  `set-from-cons-list` / `set-from-vec` and have `set-of` lower
+  through it. Decide based on profiling, not speculation.
+- Confirm `set-eq?` interacts correctly with literal-built sets
+  (regression risk: the literal threads results through a wrapper
+  helper that could expose a different pointer identity).
+
+### DL6 -- `just docs` + snapshot audit
 
 Regenerate codegen snapshots affected by elaboration changes, run
 `bash tests/run.sh`, confirm zero `FAIL` lines.
 
 The biggest regression risk is DL1's binding-form allow-list -- a missed
 entry means a binding spec gets wrongly lowered to `(vec-of ...)`,
-breaking the consuming macro. The fixture suite plus full snapshot run
-should surface any miss.
+breaking the consuming macro. A secondary risk is `set-of`'s expansion
+allocating an unbounded chain of intermediate sets when DL5's bulk
+constructor is not in place; spot-check codegen output for the
+`data-literal-set-basic` fixture. The fixture suite plus full snapshot
+run should surface any miss.
 
 ---
 
@@ -280,17 +383,22 @@ should surface any miss.
 | Code | Condition |
 |---|---|
 | `TUR-E0280` | Odd number of slot forms in `#map{...}` (unmatched key) |
-| `TUR-E0281` | Unexpected EOF inside `#map{...}` |
+| `TUR-E0281` | Unexpected EOF inside `#map{...}` or `#set{...}` |
 | `TUR-E0282` | Invalid key form in `#map{...}` (must be keyword, string, or int literal) |
+| `TUR-E0283` | Unknown `#<tag>{...}` dispatch tag |
 
 ---
 
-## Non-goals for DL0--DL5
+## Non-goals for DL0--DL6
 
-- **Set literals** -- reserved as `#set{...}` (see Future work). Out of
-  scope for DL0--DL5 because `Set` is not yet a stdlib collection type.
 - **Computed keys** in `#map{...}` -- restricted to literal keys; revisit
   if a real use case emerges.
+- **Ordered set literals** -- `#set{...}` lowers to the unordered
+  `Set[A]` from `stdlib/set.tur`. An ordered/sorted-set literal would
+  need its own type and is out of scope.
+- **Multiset / bag literals** -- the `#<tag>{...}` table reserves
+  `#bag{...}` for the day a `Bag` type lands, but neither the type nor
+  the literal are in this plan.
 - **Quasiquote / unquote-splicing** -- a separate, larger feature. Data
   literals cover the common "literal shape, computed values" case
   without needing it.
@@ -320,24 +428,6 @@ This is a larger language change (reader rules for unquote, splicing
 semantics, interaction with the macro system) and worth a dedicated
 plan once a concrete forcing use case appears. Data literals alone
 cover the majority of construction ergonomics without requiring it.
-
-### Set literals (`#set{...}`)
-
-The conventional Lisp/Clojure spelling for sets is `#{...}`, but that
-slot is already taken by **effect rows** in Turmeric (`#{Unsafe}`,
-`#{IO File}`, etc.). The effect-row syntax was deliberately chosen
-to *look* like a set, since an effect row is conceptually a set of
-effects -- so the original meaning still earns its spelling.
-
-Rather than migrate effect rows off `#{...}` (a wide fixture-surface
-refactor for marginal payoff), reserve **`#set{...}`** as the
-spelling for set literals when a `Set` collection type lands in
-stdlib. Same dispatch pattern as `#map{...}`; lowers to `(set-of ...)`.
-
-The two collection literals share the `#<tag>{...}` shape on purpose:
-`#map{...}` and `#set{...}` look like siblings, and a future
-`#<tag>{...}` (e.g. `#bag{...}`, `#ordmap{...}`) drops into the same
-slot without further bikeshedding.
 
 ### Reader-macro plugin API
 
