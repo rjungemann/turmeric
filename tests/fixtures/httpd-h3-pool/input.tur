@@ -1,0 +1,92 @@
+;; Phase H3: httpd-h3-pool -- bounded worker pool serves more requests than
+;; it has workers, proving requests queue and drain through the same workers
+;; instead of spawning one thread per connection.
+;;
+;; Two workers, six concurrent clients. The handler counts each request; the
+;; main thread waits for all six to complete, then shuts down.
+;;
+;; Expected output:
+;;   handled=6
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-handled [n :int] :nil
+  ```c printf("handled=%lld\n", (long long)n); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };  /* 30 ms */
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      close(fd);
+      return NULL;
+  }
+  const char *req = "GET /pool HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech  (chan-new 16)
+        ;; Two-worker pool -- six clients must drain through them.
+        h       (httpd-new-pool 0 2
+                  (fn [conn :ptr<void>] :nil
+                    (httpd-resp-status! conn 200)
+                    (httpd-resp-body! conn "ok")
+                    (chan-send donech 1)))
+        port    (httpd-port h)
+        server  (spawn-server h)
+        c1      (spawn-client port)
+        c2      (spawn-client port)
+        c3      (spawn-client port)
+        c4      (spawn-client port)
+        c5      (spawn-client port)
+        c6      (spawn-client port)]
+    (chan-recv donech) (chan-recv donech) (chan-recv donech)
+    (chan-recv donech) (chan-recv donech) (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread c1) (join-thread c2) (join-thread c3)
+    (join-thread c4) (join-thread c5) (join-thread c6)
+    (print-handled 6)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))
