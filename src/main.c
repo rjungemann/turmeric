@@ -2439,7 +2439,7 @@ static int cmd_run(int argc, char **argv) {
         int _rc = cmd_build((entry_path), out_path, _inc, _n_inc, NULL, rm_paths, n_rm_paths); \
         ls2_resolver_ctx_set(NULL);                                      \
         free(_inc);                                                      \
-        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
+        if (_rc != 0) { unlink(out_path); for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
@@ -2451,6 +2451,7 @@ static int cmd_run(int argc, char **argv) {
         int _sys = system(_cmd.data);                                    \
         buf_free(&_cmd);                                                  \
         unlink(out_path);                                                \
+        for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); \
         free(spice_inc_dirs);                                            \
         free(user_inc);                                                  \
         free_reader_macro_paths(rm_paths_owned, n_rm_paths);             \
@@ -2699,6 +2700,7 @@ static int cmd_run(int argc, char **argv) {
                 fprintf(stderr, "tur run: cmake dependency build failed\n");
                 pkg_lock_free(&lock);
                 pkg_manifest_free(&m);
+                for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]);
                 free(spice_inc_dirs);
                 free(root);
                 return 1;

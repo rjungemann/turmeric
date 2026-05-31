@@ -231,6 +231,12 @@ PASS-skip it under certain conditions:
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
 | `requires.spices` | the sibling `../turmeric-spices/` checkout is absent |
 
+A fixture may also carry `requires.no-leak-check` (not a skip marker): the
+compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for
+fixtures whose program intentionally registers process-lifetime closures the
+caller never frees (e.g. reactor callbacks). The compiler/codegen path
+(`emit-c`/`build`) is still leak-checked; only the spawned program opts out.
+
 ## Optional dependencies
 
 Some fixtures depend on the sibling repo `../turmeric-spices/`. When present,

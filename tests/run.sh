@@ -317,6 +317,16 @@ run_happy() {
         needs_compiled=0
     fi
 
+    # requires.no-leak-check: run the compiled binary with LeakSanitizer
+    # disabled.  Reserved for fixtures whose program intentionally registers
+    # process-lifetime closures (e.g. reactor callbacks) that the caller never
+    # frees -- mirroring the interpreter ASAN policy in CLAUDE.md.  The
+    # compiler/codegen path itself is still leak-checked (emit-c/build above).
+    local run_env=()
+    if [ -f "$dir/requires.no-leak-check" ]; then
+        run_env=(env "ASAN_OPTIONS=${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0")
+    fi
+
     # Stamp fast-path: skip if input, expected.c, and tur binary are all
     # unchanged since the last passing run.
     if stamp_check "$name" "$input"; then
@@ -370,9 +380,9 @@ run_happy() {
             return
         fi
         if [ -f "$dir/input.stdin" ]; then
-            _run_timed "$fixture_timeout" "$exe" "${run_args_arr[@]}" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
+            _run_timed "$fixture_timeout" "${run_env[@]}" "$exe" "${run_args_arr[@]}" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
         else
-            _run_timed "$fixture_timeout" "$exe" "${run_args_arr[@]}" > "$actual_stdout" 2>> "$actual_stderr"
+            _run_timed "$fixture_timeout" "${run_env[@]}" "$exe" "${run_args_arr[@]}" > "$actual_stdout" 2>> "$actual_stderr"
         fi
         rc=$?
         rm -f "$exe"

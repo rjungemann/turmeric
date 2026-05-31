@@ -192,15 +192,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# FT7: bootstrap -- tur fmt --check stdlib/ exits 0
+# FT7: bootstrap -- every hand-authored stdlib file is already self-formatted.
+# docstrings.tur is excluded: it is an auto-generated artifact (gendocs.py
+# --emit-tur) whose inline-C literal bodies the formatter does not round-trip,
+# matching the exclusion in the FT8 idempotence check below.
 # ---------------------------------------------------------------------------
 NAME="fmt-bootstrap-stdlib"
-"$TUR" fmt --check stdlib/ > /dev/null 2>&1
-RC=$?
-if [ "$RC" -eq 0 ]; then
+BOOTSTRAP_DIRTY=""
+while IFS= read -r -d '' f; do
+    if ! "$TUR" fmt --check "$f" > /dev/null 2>&1; then
+        BOOTSTRAP_DIRTY="$BOOTSTRAP_DIRTY $f"
+    fi
+done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0)
+if [ -z "$BOOTSTRAP_DIRTY" ]; then
     pass "$NAME"
 else
-    fail "$NAME" "tur fmt --check stdlib/ exited $RC (stdlib is not self-formatted)"
+    fail "$NAME" "stdlib is not self-formatted:$BOOTSTRAP_DIRTY"
 fi
 
 # ---------------------------------------------------------------------------

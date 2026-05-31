@@ -664,8 +664,11 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_perform)   return elab_perform(e, call);
     if (name == e->sym_handle)       return elab_handle(e, call);
     if (name == e->sym_try_with)     return elab_try_with(e, call);
-    /* FH2: (handler (E [params] k) body) in value position is a handler literal. */
-    if (name == e->sym_handler_type) return elab_handler_lit(e, call);
+    /* FH2: (handler (E [params] k) body) in value position is a handler literal.
+     * A local binding named `handler` (e.g. a higher-order function parameter)
+     * shadows the special form and is dispatched as an ordinary call. */
+    if (name == e->sym_handler_type && !scope_lookup(e->scope, name))
+        return elab_handler_lit(e, call);
     /* FH3: (with-handler hv body) -- exactly two args -- applies a handler value.
      * Any other arity is the T25 inline-handle sugar (body + case/body pairs). */
     if (name == e->sym_with_handler) {
