@@ -228,13 +228,38 @@ static uint32_t hash_chunk(uint64_t hash, uint32_t level) {
 }
 
 /* ============================================================================
+ * Key equality override (TCE4)
+ * ============================================================================
+ *
+ * By default the HAMT treats keys as opaque words and compares them by
+ * identity (`a == b`). That is correct for int-carrier keys, but wrong for
+ * content-typed keys such as strings, where two distinct pointers may hold
+ * equal text. The `_eq` family of public entry points installs a key
+ * equality function for the duration of one operation; comparison sites go
+ * through `keys_equal`, which falls back to identity when no override is set.
+ *
+ * The override is thread-local (each thread has its own current map context)
+ * and saved/restored around each `_eq` call so nested operations -- e.g. a
+ * map whose values are themselves maps -- compose correctly.
+ */
+
+static _Thread_local bool (*g_hamt_key_eq)(int64_t, int64_t) = NULL;
+
+static inline bool keys_equal(void *a, void *b) {
+    if (g_hamt_key_eq) {
+        return g_hamt_key_eq((int64_t)(intptr_t)a, (int64_t)(intptr_t)b);
+    }
+    return a == b;
+}
+
+/* ============================================================================
  * Entry lookup in collision nodes
  * ============================================================================
  */
 
 static HamtEntry *find_entry(HamtEntry *entries, uint64_t hash, void *key) {
     for (HamtEntry *e = entries; e; e = e->next) {
-        if (e->hash == hash && e->key == key) {
+        if (e->hash == hash && keys_equal(e->key, key)) {
             return e;
         }
     }
@@ -465,10 +490,10 @@ static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
 
             /* Same chunk at this level — check for exact key match (update). */
             for (HamtEntry **e = &n->as.collision.entries; *e; e = &(*e)->next) {
-                if ((*e)->hash == hash && (*e)->key == key) {
+                if ((*e)->hash == hash && keys_equal((*e)->key, key)) {
                     HamtNode *new_node = collision_node_copy(n);
                     for (HamtEntry *f = new_node->as.collision.entries; f; f = f->next) {
-                        if (f->hash == hash && f->key == key) {
+                        if (f->hash == hash && keys_equal(f->key, key)) {
                             f->val = val;
                             break;
                         }
@@ -607,11 +632,11 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
 
         case HAMT_NODE_COLLISION: {
             for (HamtEntry *e = n->as.collision.entries; e; e = e->next) {
-                if (e->hash == hash && e->key == key) {
+                if (e->hash == hash && keys_equal(e->key, key)) {
                     HamtNode *new_node = collision_node_copy(n);
                     HamtEntry *new_prev = NULL;
                     for (HamtEntry *new_e = new_node->as.collision.entries; new_e; new_e = new_e->next) {
-                        if (new_e->hash == hash && new_e->key == key) {
+                        if (new_e->hash == hash && keys_equal(new_e->key, key)) {
                             if (new_prev) {
                                 new_prev->next = new_e->next;
                             } else {
@@ -809,6 +834,47 @@ bool tur_hamt_has(Hamt *m, uint64_t hash, void *key) {
 void *tur_hamt_get(Hamt *m, uint64_t hash, void *key) {
     if (!m) return NULL;
     return node_get(m->root, hash, key, 0);
+}
+
+/* ----------------------------------------------------------------------------
+ * Key-equality-aware variants (TCE4)
+ *
+ * Each installs `eq` (a bool(*)(int64_t,int64_t) passed as an opaque word --
+ * e.g. a Turmeric closure handle) as the key comparison for the duration of
+ * the call, then restores the previous override. Passing eq == NULL is
+ * identical to the plain entry point (pointer identity).
+ * --------------------------------------------------------------------------*/
+
+Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq) {
+    tur_hamt_keyeq_fn save = g_hamt_key_eq;
+    g_hamt_key_eq = eq;
+    Hamt *r = tur_hamt_set(m, hash, key, val);
+    g_hamt_key_eq = save;
+    return r;
+}
+
+Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
+    tur_hamt_keyeq_fn save = g_hamt_key_eq;
+    g_hamt_key_eq = eq;
+    Hamt *r = tur_hamt_del(m, hash, key);
+    g_hamt_key_eq = save;
+    return r;
+}
+
+bool tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
+    tur_hamt_keyeq_fn save = g_hamt_key_eq;
+    g_hamt_key_eq = eq;
+    bool r = tur_hamt_has(m, hash, key);
+    g_hamt_key_eq = save;
+    return r;
+}
+
+void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
+    tur_hamt_keyeq_fn save = g_hamt_key_eq;
+    g_hamt_key_eq = eq;
+    void *r = tur_hamt_get(m, hash, key);
+    g_hamt_key_eq = save;
+    return r;
 }
 
 Hamt *tur_hamt_merge(Hamt *a, Hamt *b) {

@@ -643,7 +643,10 @@ Rules for `& rest`:
 - **Typed by the declared element type** -- primitive rest uses a fast
   TypeKind compare; a user-defined rest type compares full type identity.
   A declared type parameter (`(defn f [A] [& xs :A] ...)`) is a polymorphic
-  rest that accepts any argument type.
+  rest: it accepts any element type, but `A` is a single type variable, so
+  all rest args in one call must unify to the same type (a mixed-type call
+  is a `TUR-E0001` on the offending arg). This homogeneity is what backs
+  `vec-of`/`hamt-of` element checking.
 - **Nil when absent** -- calling with zero rest args passes `rest = 0`.
 - **No inline-C in variadic bodies** -- inline-C blocks declare fixed C
   signatures; wrap the inline-C in a fixed-arity helper and call it from

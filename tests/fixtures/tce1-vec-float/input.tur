@@ -1,0 +1,15 @@
+;; TCE1: Vec[float] via the [A]-generic stdlib ops.
+;; vec-of infers A = float; vec-push! stores the double bits through the
+;; int64 carrier; vec-get returns :A, read back with `::`.
+
+(defn main [] :int
+  (let [v (vec-of 1.5 2.25)]
+    (vec-push! v 3.75)
+    (vec-set! v 0 0.5)
+    (println (:: (vec-get v 0) :float))
+    (println (:: (vec-get v 1) :float))
+    (println (:: (vec-get v 2) :float))
+    (println (vec-len v))
+    (println (:: (vec-pop! v) :float))
+    (println (vec-len v))
+    0))

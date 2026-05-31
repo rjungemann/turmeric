@@ -41,6 +41,27 @@ in expression position keeps its pre-existing meaning (a binding spec only).
 #set{:literal x (compute)}    ; (compute) evaluated once
 ```
 
+### Element types
+
+`[...]` and the value slots of `#map{...}` accept any scalar element type --
+`:int`, `:cstr`, `:bool`, `:nil`, or `:float` -- not just `:int`. All
+elements of a vector must unify to one type, and all map values to one type
+(a mixed literal such as `[1 "x"]` is a `TUR-E0001` on the offending
+element). Elements are stored through an `:int` carrier slot, so reads
+recover the type with an ascription:
+
+```turmeric
+[1.5 2.5 3.5]                 ; Vec[float]
+(:: (vec-get fs 0) :float)    ; => 1.5
+
+#map{1 "one" 2 "two"}         ; Map with :cstr values
+(:: (map-get m 1 1) :cstr)    ; => "one"
+```
+
+Map keys remain int-valued (the `#map{...}` literal normalizes keyword and
+string keys to a content hash). Aggregate (multi-word struct/ADT) element
+types are not yet supported in these collections.
+
 Slots are arbitrary expressions -- variable references, calls, nested
 literals -- and the normal typechecker handles them.
 

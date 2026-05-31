@@ -1,7 +1,8 @@
-;; variadic-types-poly -- a declared type parameter rest accepts any arg type.
+;; variadic-types-poly -- a declared type parameter rest accepts any element
+;; type, but A is a single type variable so all args must unify to one type.
 ;;
-;; (defn f [A] [& items :A] ...) -- A is a polymorphic rest element (TY_TYVAR),
-;; so any argument type is accepted.
+;; (defn f [A] [& items :A] ...) -- A is a polymorphic rest element (TY_TYVAR);
+;; a call passes when every arg has the same type (here, all int).
 
 (defn cons-list-len [lst :int] #{Unsafe} :int
   ```c

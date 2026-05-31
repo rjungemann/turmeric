@@ -62,9 +62,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-get [v :int i :int]
+(defn vec-get [A] [v :int i :int]
   #{}
-  :int
+  :A
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
@@ -82,7 +82,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-push! [v :int val :int]
+(defn vec-push! [A] [v :int val :A]
   #{}
   :nil
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -109,9 +109,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-pop! [v :int]
+(defn vec-pop! [A] [v :int]
   #{}
-  :int
+  :A
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
@@ -128,7 +128,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-set! [v :int i :int val :int]
+(defn vec-set! [A] [v :int i :int val :A]
   #{}
   :void
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -162,19 +162,46 @@
   (if (empty? xs)
     v
     (list do (list vec-push! v (first xs)) (list vec-push-each__ v ~@(rest xs)))))
+;;; tur-vec-homog__ -- internal: compile-time element homogeneity check.
+;;;
+;;; Both parameters share the single type variable A, so a call with two
+;;; differently-typed arguments is a TUR-E0001 at elaboration. The body is a
+;;; no-op; the call exists only to make the type-checker enforce that adjacent
+;;; vec-of elements have the same type. No allocation (fixed arity).
+
+(defn tur-vec-homog__ [A] [a :A b :A] :nil
+  ```c (void)a; (void)b; ```)
+;;; vec-homog-chain__ -- internal: pairwise-chain tur-vec-homog__ over xs.
+;;;
+;;; Emits (tur-vec-homog__ x0 x1), (tur-vec-homog__ x1 x2), ... so all
+;;; elements transitively unify to one type. Zero or one element: no check.
+
+(defmacro vec-homog-chain__ [& xs]
+  (if (empty? xs)
+    0
+    (if (empty? (rest xs))
+      0
+      (list do
+        (list tur-vec-homog__ (first xs) (second xs))
+        (list vec-homog-chain__ ~@(rest xs))))))
 ;;; vec-of -- variadic Vec[A] literal.
 ;;;
 ;;; Parameters:
 ;;;   & xs -- zero or more elements, all of type A.
 ;;;
 ;;; Returns:
-;;;   A fresh Vec[A] populated with xs in order. Carrier type is :int
-;;;   (the same handle returned by vec-new), so it composes with all of
-;;;   vec-len, vec-get, vec-push!, vec-eq?, etc.
+;;;   A fresh Vec[A] populated with xs in order. The element type A may be
+;;;   any scalar (:int, :cstr, :bool, :nil, :float); elements are stored
+;;;   through an :int carrier slot, so a :float element round-trips as a
+;;;   bit-reinterpret. The handle composes with vec-len, vec-get, vec-push!,
+;;;   etc. Reads recover the element type: vec-get returns :A, so a non-int
+;;;   element is read with an ascription, e.g. (:: (vec-get v 0) :float).
 ;;;
 ;;; Note: all elements must unify to a single type. Mixing types -- e.g.
 ;;;   (vec-of 1 "x" 3.14) -- is a type error (TUR-E0001 on the offending
 ;;;   element). For heterogeneous fixed-arity collections, use tupleN.
+;;;   Aggregate (multi-word struct/ADT) element types are not supported by
+;;;   the carrier slot; those need a per-element typed layout (see TS3b).
 ;;;
 ;;; Note: under -Xdata-literals, a [...] vector in expression position lowers
 ;;;   to this macro, so [1 2 3] is sugar for (vec-of 1 2 3).  See
@@ -190,7 +217,10 @@
 (defmacro vec-of [& xs]
   (if (empty? xs)
     (list vec-new)
-    (list let `[__v (vec-new)] (list vec-push-each__ __v ~@xs))))
+    (list let `[__v (vec-new)]
+      (list do
+        (list vec-homog-chain__ ~@xs)
+        (list vec-push-each__ __v ~@xs)))))
 ;;; vec-eq? -- compare two Vec[A] element-wise using a comparator.
 ;;;
 ;;; Parameters:
