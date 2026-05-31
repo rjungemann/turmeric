@@ -1,6 +1,7 @@
 #include "reader.h"
 #include "reader_macros.h"
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
+#include "globals.h" /* DL0: g_data_literals_enabled */
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -882,6 +883,10 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
         seq = form_vec(r->arena, span, items, (uint32_t)n);
     } else if (tag == F_SET) {
         seq = form_set(r->arena, span, items, (uint32_t)n);
+    } else if (tag == F_MAP_LITERAL) {
+        seq = form_map_literal(r->arena, span, items, (uint32_t)n);
+    } else if (tag == F_SET_LITERAL) {
+        seq = form_set_literal(r->arena, span, items, (uint32_t)n);
     } else {
         seq = form_map(r->arena, span, items, (uint32_t)n);
     }
@@ -909,6 +914,97 @@ static Form *read_set(Reader *r) {
     advance(r); /* consume '#' */
     advance(r); /* consume 's' */
     return read_seq(r, '(', ')', F_SET, "unterminated set (missing ')')");
+}
+
+/* DL0: Is `f` a valid key form for a #map{...} literal?
+ * Keys must be a keyword, string literal, or int literal. */
+static bool dl_valid_map_key(const Form *f) {
+    return f->tag == F_KEYWORD || f->tag == F_STR || f->tag == F_INT;
+}
+
+/* DL0: Read a #map{...} data literal -> F_MAP_LITERAL.
+ * Slots are key/value pairs; keys must be keyword/string/int literals.
+ *   TUR-E0280 -- odd slot count (unmatched key)
+ *   TUR-E0281 -- unexpected EOF (delegated to read_seq's message)
+ *   TUR-E0282 -- invalid key form */
+static Form *read_map_literal(Reader *r) {
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'm' */
+    advance(r); /* consume 'a' */
+    advance(r); /* consume 'p' */
+    /* peek == '{' guaranteed by caller */
+    Form *lit = read_seq(r, '{', '}', F_MAP_LITERAL,
+                         "unterminated map literal (missing '}') (TUR-E0281)");
+    if (!lit || r->error) return lit;
+
+    uint32_t n = lit->as.list.len;
+    if (n % 2 != 0) {
+        diag_emit(DIAG_ERROR, lit->span,
+                  "#map{...} requires an even number of slot forms "
+                  "(key/value pairs); got %u (TUR-E0280)", n);
+        r->error = true;
+        return NULL;
+    }
+    for (uint32_t i = 0; i < n; i += 2) {
+        Form *key = lit->as.list.items[i];
+        if (!dl_valid_map_key(key)) {
+            diag_emit(DIAG_ERROR, key->span,
+                      "#map{...} key must be a keyword, string, or int literal "
+                      "(TUR-E0282)");
+            r->error = true;
+            return NULL;
+        }
+    }
+    return lit;
+}
+
+/* DL0: Read a #set{...} data literal -> F_SET_LITERAL.
+ * Elements are arbitrary expressions; no key-form restriction.
+ *   TUR-E0281 -- unexpected EOF (delegated to read_seq's message) */
+static Form *read_set_literal(Reader *r) {
+    advance(r); /* consume '#' */
+    advance(r); /* consume 's' */
+    advance(r); /* consume 'e' */
+    advance(r); /* consume 't' */
+    /* peek == '{' guaranteed by caller */
+    return read_seq(r, '{', '}', F_SET_LITERAL,
+                    "unterminated set literal (missing '}') (TUR-E0281)");
+}
+
+/* DL0: Try to read a #<tag>{...} data literal.  Returns NULL (without
+ * consuming) when the input is not a data literal so the caller can fall
+ * through to other '#'-dispatches.  Only invoked when -Xdata-literals is on.
+ *
+ * Recognizes #map{ and #set{ from a small dispatch table.  A #<ident>{ whose
+ * tag is not in the table is reported as TUR-E0283 (unknown dispatch tag). */
+static Form *try_read_data_literal(Reader *r) {
+    /* peek(r) == '#' guaranteed by caller. */
+    if (peek_at(r, 1) == 'm' && peek_at(r, 2) == 'a' &&
+        peek_at(r, 3) == 'p' && peek_at(r, 4) == '{') {
+        return read_map_literal(r);
+    }
+    if (peek_at(r, 1) == 's' && peek_at(r, 2) == 'e' &&
+        peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
+        return read_set_literal(r);
+    }
+    /* Detect a #<ident>{ shape with an unrecognized tag -> TUR-E0283.
+     * Scan a run of identifier characters after '#'; if it is followed by
+     * '{' and the run is non-empty, it looked like a data-literal dispatch. */
+    size_t k = 1;
+    while (is_sym_cont(peek_at(r, k))) k++;
+    if (k > 1 && peek_at(r, k) == '{') {
+        Span s = span_point(r);
+        char tag[32];
+        size_t tlen = k - 1 < sizeof(tag) - 1 ? k - 1 : sizeof(tag) - 1;
+        for (size_t i = 0; i < tlen; i++) tag[i] = (char)peek_at(r, 1 + i);
+        tag[tlen] = '\0';
+        diag_emit(DIAG_ERROR, s,
+                  "unknown data-literal dispatch tag '#%s{...}'; "
+                  "expected '#map{...}' or '#set{...}' (TUR-E0283)", tag);
+        r->error = true;
+        return NULL;
+    }
+    return NULL;
 }
 
 /* RR: Is form an operator symbol (<, <=, >, >=, =)? */
@@ -2040,6 +2136,13 @@ static Form *read_form(Reader *r) {
     }
     if (c == '#' && peek2(r) == 's' && peek3(r) == '(') {
         return read_set(r);
+    }
+    /* DL0: data literals #map{...} / #set{...} (opt-in via -Xdata-literals).
+     * Placed after #{ and #s( so effect rows and #s(...) sets win; the helper
+     * returns NULL without consuming when the input is not a data literal. */
+    if (c == '#' && g_data_literals_enabled) {
+        Form *m = try_read_data_literal(r);
+        if (m || r->error) return m;
     }
     /* RR0: Range literal #r{...} */
     if (c == '#' && peek2(r) == 'r' && peek3(r) == '{') {

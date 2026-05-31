@@ -320,6 +320,12 @@ Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: map literals are parsed but not yet supported by elaboration");
             return NULL;
+        /* DL0: data literals -- elaboration lowering lands in DL1. */
+        case F_MAP_LITERAL:
+        case F_SET_LITERAL:
+            diag_emit(DIAG_ERROR, f->span,
+                      "data-literal elaboration not yet implemented");
+            return NULL;
         case F_SET: {
             /* Phase X3: Elaborate set literal #s(e1 e2 ...) -> EX_SET_LIT */
             uint32_t n = f->as.list.len;

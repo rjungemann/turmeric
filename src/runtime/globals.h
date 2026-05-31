@@ -38,6 +38,10 @@ extern bool g_has_variadics;
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 extern bool g_gadt_enabled;
 
+/* DL0 (data-literals-plan): -Xdata-literals flag — enable map/vec/set data
+ * literal syntax (#map{...}, #set{...}, and [...] in expression position). */
+extern bool g_data_literals_enabled;
+
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 extern bool g_sized_types_enabled;
 

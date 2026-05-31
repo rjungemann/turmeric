@@ -72,6 +72,11 @@ typedef enum FormTag {
     F_READER_COND,     /* #?(:tur <tur-form> :turi <turi-form>) */
     /* RR3: Range literal with variable name preserved for shadowing check */
     F_RANGE_VAR,       /* [var_sym_form, desugared_range_form] */
+    /* DL0: Data literals -- payload identical to F_LIST, distinguished from
+     * F_MAP (effect rows) and F_SET (#s(...) set literal) so the elaborator
+     * can lower them to hamt-of / set-of calls. Gated behind -Xdata-literals. */
+    F_MAP_LITERAL,     /* #map{k1 v1 k2 v2 ...} -- same payload as F_LIST */
+    F_SET_LITERAL,     /* #set{e1 e2 e3 ...}    -- same payload as F_LIST */
 } FormTag;
 
 struct Form;
@@ -109,6 +114,9 @@ Form *form_list   (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_vec    (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_map    (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_set    (Arena *a, Span span, Form **items, uint32_t len);
+/* DL0: data-literal constructors (payload identical to F_LIST) */
+Form *form_map_literal(Arena *a, Span span, Form **items, uint32_t len);
+Form *form_set_literal(Arena *a, Span span, Form **items, uint32_t len);
 Form *form_cblock (Arena *a, Span span, StrSlice code);
 /* Phase 6 */
 Form *form_quote  (Arena *a, Span span, Form *quoted);

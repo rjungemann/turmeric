@@ -1,12 +1,13 @@
 # Map / Vec / Set Data Literals -- Plan (DL0--DL6)
 
-> **Status:** Not started.
+> **Status:** DL0 complete (reader dispatch + `#map{...}` / `#set{...}` forms,
+> error codes, `-Xdata-literals` flag).
 >
 > **Flag:** `-Xdata-literals` (opt-in; no effect on programs that don't use the
 > syntax). All phases gated behind this flag so the feature can land
 > incrementally.
 >
-> **Last updated:** 2026-05-30
+> **Last updated:** 2026-05-31
 
 ---
 

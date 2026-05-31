@@ -45,6 +45,11 @@ bool g_has_variadics = false;
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 bool g_gadt_enabled = false;
 
+/* DL0 (data-literals-plan): -Xdata-literals flag — enable map/vec/set data
+ * literal syntax (#map{...}, #set{...}, and [...] in expression position).
+ * Opt-in; off by default so programs that don't use the syntax are unaffected. */
+bool g_data_literals_enabled = false;
+
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 bool g_sized_types_enabled = false;
 
