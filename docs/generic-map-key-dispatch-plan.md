@@ -254,7 +254,11 @@ triples; `*-eq` reads then match by content). No new read surface was required.
 bare-name (and `.method`) typeclass dispatch to static-argument-type
 monomorphization -- remains the path to *uniform* content keys for any
 `Hash`/`Eq` scalar type (Approach C collapses the `:cstr` special-case onto it
-once it lands). Aggregate (multi-word) keys remain a non-goal.
+once it lands). Aggregate (multi-word) keys remain a non-goal. This follow-up is
+now planned in detail in
+[generic-hash-eq-dispatch-plan.md](generic-hash-eq-dispatch-plan.md) (GHE0--GHE5),
+which root-causes GMK0 as two gaps (Hash/Show not auto-loaded; bare-name calls
+not dispatched).
 
 ## Phase status
 
