@@ -18,10 +18,9 @@
   Cell *cell = (Cell*)(intptr_t)ma;
   if (!cell) return 0;
   int64_t *fat = (int64_t*)(intptr_t)fn;
-  int64_t thunk = fat[0];
   Cell *rev = NULL;
   while (cell) {
-      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      int64_t sub = TUR_APPLY1(fat, cell->value);
       Cell *sc = (Cell*)(intptr_t)sub;
       while (sc) {
           Cell *n = malloc(sizeof(Cell));
@@ -89,7 +88,7 @@
 (defn apply-parser [p inp] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, inp);
+  return TUR_APPLY1(fat, inp);
   ```)
 
 (defn pchar-impl [_c inp] :int

@@ -1,0 +1,31 @@
+; let* -- sequential bindings: each binding sees the ones before it.
+(defn seq-bindings [] :int
+  (let* [a 1
+         b (+ a 1)
+         c (+ b 1)]
+    (println c)))            ; 3
+
+; let* binding can shadow a previous binding in the same vector.
+(defn shadowing [] :int
+  (let* [x 10
+         x (+ x 5)
+         x (* x 2)]
+    (println x)))            ; 30
+
+; A closure bound in let* captures an earlier binding.
+(defn closure-capture [] :int
+  (let* [base 100
+         add  (fn [n] (+ n base))]
+    (println (add 1))))      ; 101
+
+; Empty binding vector is allowed.
+(defn empty-bindings [] :int
+  (let* []
+    (println 42)))           ; 42
+
+(defn main [] :int
+  (seq-bindings)
+  (shadowing)
+  (closure-capture)
+  (empty-bindings)
+  0)

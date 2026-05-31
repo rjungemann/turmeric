@@ -324,6 +324,7 @@ static SpecialForm classify_list(const Form *f) {
     if (sym_eq(h, "defmacro"))    return SF_DEFMACRO;
     if (sym_eq(h, "fn"))          return SF_FN;
     if (sym_eq(h, "let"))         return SF_LET;
+    if (sym_eq(h, "let*"))        return SF_LET;
     if (sym_eq(h, "if"))          return SF_IF;
     if (sym_eq(h, "when"))        return SF_WHEN;
     if (sym_eq(h, "unless"))      return SF_UNLESS;

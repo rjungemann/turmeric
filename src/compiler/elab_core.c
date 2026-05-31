@@ -983,6 +983,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_def       = intern_cstr(st, "def");
     e->sym_define    = intern_cstr(st, "define");
     e->sym_let       = intern_cstr(st, "let");
+    e->sym_letstar   = intern_cstr(st, "let*");
     e->sym_letrec    = intern_cstr(st, "letrec");
     e->sym_if        = intern_cstr(st, "if");
     e->sym_do        = intern_cstr(st, "do");

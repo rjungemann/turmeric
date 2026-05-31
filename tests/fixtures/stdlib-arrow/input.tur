@@ -8,11 +8,11 @@
 (load "stdlib/arrow.tur")
 
 ;; Call a Turmeric closure (heap struct: { int64_t __fn; ...env... }) with
-;; one argument. Reads the __fn field and invokes it with (env, arg).
+;; one argument. TUR_APPLY1 (runtime preamble) reads the __fn slot and invokes
+;; it with (env, arg), replacing the hand-written fat-closure cast.
 (defn tur-call-closure1 [f x] :int
   ```c
-  int64_t fn_ptr = *((int64_t *)(intptr_t)f);
-  return ((int64_t(*)(void *, int64_t))(intptr_t)fn_ptr)((void *)(intptr_t)f, x);
+  return TUR_APPLY1(f, x);
   ```)
 
 ;; Construct / read a heap pair of int64s with the layout that arrow.tur's

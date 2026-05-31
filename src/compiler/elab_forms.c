@@ -997,8 +997,11 @@ Expr *elab_let(Elab *e, const Form *call) {
     if (rc != 0) { free(binds); return NULL; }
 
     Expr *out = expr_new(e->arena, EX_LET, body->type, call->span);
-    LetBinding *bcopy = (LetBinding *)arena_alloc(e->arena, n_binds * sizeof(LetBinding));
-    memcpy(bcopy, binds, n_binds * sizeof(LetBinding));
+    LetBinding *bcopy = NULL;
+    if (n_binds > 0) {
+        bcopy = (LetBinding *)arena_alloc(e->arena, n_binds * sizeof(LetBinding));
+        memcpy(bcopy, binds, n_binds * sizeof(LetBinding));
+    }
     free(binds);
     out->as.let_.bindings = bcopy;
     out->as.let_.n = n_binds;
@@ -1045,6 +1048,112 @@ Expr *elab_do(Elab *e, const Form *call) {
     out->as.do_.items = items;
     out->as.do_.n = n;
     return out;
+}
+
+/* elab_letstar -- (let* [b1 i1 b2 i2 ...] body...)
+ *
+ * Sequential-binding let: each binding sees the bindings that precede it.
+ * Desugars to a right-nested chain of single-binding `let` forms and delegates
+ * to elab_let, so all of let's machinery (annotations, vector destructuring,
+ * move/alias tracking, typed inits) carries over unchanged.
+ *
+ *   (let* [a 1 b (+ a 1)] body)
+ *     => (let [a 1] (let [b (+ a 1)] body))
+ *
+ * A single binding "unit" is: zero or more `^`-prefixed annotation symbols,
+ * followed by a name symbol OR a vector destructuring pattern, followed by one
+ * initializer form.  This mirrors how elab_let parses each entry.
+ */
+Expr *elab_letstar(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span, "let* requires a binding vector");
+        return NULL;
+    }
+    Form *bindings = call->as.list.items[1];
+    if (bindings->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, bindings->span,
+                  "let* bindings must be a vector [name init ...]");
+        return NULL;
+    }
+    Span     sp     = call->span;
+    uint32_t n_body = call->as.list.len - 2;
+    Form   **body   = call->as.list.items + 2;
+    uint32_t blen   = bindings->as.list.len;
+
+    /* Split the binding vector into units, recording (start,len) ranges. */
+    typedef struct { uint32_t start; uint32_t len; } LsUnit;
+    LsUnit  *units   = (blen == 0) ? NULL
+                       : (LsUnit *)arena_alloc(e->arena, blen * sizeof(LsUnit));
+    uint32_t n_units = 0;
+    uint32_t i = 0;
+    while (i < blen) {
+        uint32_t start = i;
+        /* Consume leading `^`-prefixed annotation symbols (^mut, ^linear, ...). */
+        while (i < blen &&
+               bindings->as.list.items[i]->tag == F_SYM &&
+               bindings->as.list.items[i]->as.sym->len > 0 &&
+               bindings->as.list.items[i]->as.sym->name[0] == '^') {
+            i++;
+        }
+        if (i >= blen) {
+            diag_emit(DIAG_ERROR, bindings->as.list.items[start]->span,
+                      "let* trailing annotation with no binding name");
+            return NULL;
+        }
+        i++; /* the name symbol or destructuring pattern */
+        if (i >= blen) {
+            diag_emit(DIAG_ERROR, bindings->as.list.items[i - 1]->span,
+                      "let* binding is missing its initializer");
+            return NULL;
+        }
+        i++; /* the initializer form */
+        units[n_units].start = start;
+        units[n_units].len   = i - start;
+        n_units++;
+    }
+
+    Form *sym_let_f = form_sym(e->arena, sp, e->sym_let);
+
+    /* No bindings: (let* [] body...) == (let [] body...). */
+    if (n_units == 0) {
+        Form  *empty_bv  = form_vec(e->arena, sp, NULL, 0);
+        uint32_t len     = 2 + n_body;
+        Form **items     = (Form **)arena_alloc(e->arena, len * sizeof(Form *));
+        items[0] = sym_let_f;
+        items[1] = empty_bv;
+        for (uint32_t k = 0; k < n_body; k++) items[2 + k] = body[k];
+        return elab_let(e, form_list(e->arena, sp, items, len));
+    }
+
+    /* Build the nested let chain from the innermost unit outward. */
+    Form *inner = NULL;
+    for (int u = (int)n_units - 1; u >= 0; u--) {
+        uint32_t ustart = units[u].start;
+        uint32_t ulen   = units[u].len;
+        Form **bv_items = (Form **)arena_alloc(e->arena, ulen * sizeof(Form *));
+        for (uint32_t k = 0; k < ulen; k++) {
+            bv_items[k] = bindings->as.list.items[ustart + k];
+        }
+        Form *bv = form_vec(e->arena, sp, bv_items, ulen);
+
+        uint32_t  let_len;
+        Form    **let_items;
+        if (u == (int)n_units - 1) {
+            /* Innermost let carries the original body forms. */
+            let_len   = 2 + n_body;
+            let_items = (Form **)arena_alloc(e->arena, let_len * sizeof(Form *));
+            for (uint32_t k = 0; k < n_body; k++) let_items[2 + k] = body[k];
+        } else {
+            /* Outer lets wrap the next-inner let as their single body form. */
+            let_len      = 3;
+            let_items    = (Form **)arena_alloc(e->arena, let_len * sizeof(Form *));
+            let_items[2] = inner;
+        }
+        let_items[0] = sym_let_f;
+        let_items[1] = bv;
+        inner = form_list(e->arena, sp, let_items, let_len);
+    }
+    return elab_let(e, inner);
 }
 
 /* ---- letrec and named let ---- */

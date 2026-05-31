@@ -10,10 +10,9 @@
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma; if (!cell) return 0;
-  int64_t *fat = (int64_t*)(intptr_t)fn; int64_t thunk = fat[0];
-  Cell *rev = NULL;
+  int64_t *fat = (int64_t*)(intptr_t)fn;  Cell *rev = NULL;
   while (cell) {
-      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      int64_t sub = TUR_APPLY1(fat, cell->value);
       Cell *sc = (Cell*)(intptr_t)sub;
       while (sc) { Cell *n = malloc(sizeof(Cell)); n->value = sc->value; n->next = (int64_t)(intptr_t)rev; rev = n; sc = (Cell*)(intptr_t)sc->next; }
       cell = (Cell*)(intptr_t)cell->next;
@@ -67,11 +66,11 @@
 
 (defn apply-fat [f arg] :int
   ```c int64_t *fat = (int64_t*)(intptr_t)f;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, arg); ```)
+  return TUR_APPLY1(fat, arg); ```)
 
 (defn apply-goal [g state] :int
   ```c int64_t *fat = (int64_t*)(intptr_t)g;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, state); ```)
+  return TUR_APPLY1(fat, state); ```)
 
 (defn unify-goal-impl [lt1 lt2 state] :int
   (let [ns (logic-unify lt1 lt2 state)]

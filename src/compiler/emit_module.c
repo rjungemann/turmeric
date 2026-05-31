@@ -1703,6 +1703,26 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
     buf_puts(out, "#define TUR_UNTAG(x)   ((x).val)\n");
     buf_puts(out, "#define TUR_GETTAG(x)  ((x).tag)\n");
+    /* Fat-closure application helpers for inline-C blocks.
+     * A fat closure is a heap struct { int64_t __fn; <captures...> }; the thunk
+     * has signature (void *env, int64_t arg...) -> int64_t.  TUR_APPLYn reads the
+     * thunk pointer from slot 0 and invokes it with the closure as its env, so
+     * inline-C no longer hand-writes the ((int64_t(*)(void*, ...))...)[0] cast.
+     * The closure handle f and the arguments are taken as int64_t (the polymorphic
+     * carrier type used throughout the runtime). */
+    buf_puts(out, "#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]\n");
+    buf_puts(out, "#define TUR_APPLY1(f, a) \\\n");
+    buf_puts(out, "    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a)))\n");
+    buf_puts(out, "#define TUR_APPLY2(f, a, b) \\\n");
+    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b)))\n");
+    buf_puts(out, "#define TUR_APPLY3(f, a, b, c) \\\n");
+    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c)))\n");
+    buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
+    buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))\n");
     /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
      * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
      * struct/ADT cases are emitted from the actual enum constants rather than

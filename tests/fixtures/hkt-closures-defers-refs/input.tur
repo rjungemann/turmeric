@@ -35,7 +35,7 @@
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
   __tur_fat_hdr *fat = (__tur_fat_hdr *)(intptr_t)fn;
-  r->value = ((int64_t(*)(void *, int64_t))(intptr_t)(fat->__fn))((void *)fat, c->value);
+  r->value = TUR_APPLY1(fat, c->value);
   return (int64_t)(intptr_t)r;
   ```)
 

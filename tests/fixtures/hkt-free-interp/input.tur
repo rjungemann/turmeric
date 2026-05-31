@@ -49,8 +49,7 @@
       return fr->val;
   }
   int64_t *fat = (int64_t *)(intptr_t)interp;
-  int64_t thunk = fat[0];
-  return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+  return TUR_APPLY1(fat, fr->val);
   ```)
 
 ;; free-bind: monadic bind (fat-closure kont).
@@ -62,8 +61,7 @@
       (struct { int tag; int64_t val; } *)(intptr_t)m;
   if (fr->tag == 0) {
       int64_t *fat = (int64_t *)(intptr_t)kont;
-      int64_t thunk = fat[0];
-      return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+      return TUR_APPLY1(fat, fr->val);
   }
   return m;
   ```)

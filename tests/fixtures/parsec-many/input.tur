@@ -59,7 +59,7 @@
 (defn apply-parser [p inp] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
-  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, inp);
+  return TUR_APPLY1(fat, inp);
   ```)
 
 (defn pchar-impl [_c inp] :int
@@ -79,11 +79,10 @@
   typedef struct { int64_t first; int64_t second; } Pair;
   typedef struct { int64_t str; int64_t pos; } Input;
   int64_t *fat_p = (int64_t*)(intptr_t)p_raw;
-  int64_t thunk_p = fat_p[0];
   int64_t current_inp = inp;
   Cell *rev_list = NULL;
   for (;;) {
-      int64_t matches = ((int64_t(*)(void*, int64_t))(intptr_t)thunk_p)((void*)fat_p, current_inp);
+      int64_t matches = TUR_APPLY1(fat_p, current_inp);
       if (!matches) break;
       Cell *match_cell = (Cell*)(intptr_t)matches;
       Pair *pr = (Pair*)(intptr_t)match_cell->value;
