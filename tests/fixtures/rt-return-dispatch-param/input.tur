@@ -1,0 +1,20 @@
+;; RT: a return-dispatched method WITH a parameter.  `parse` takes a cstr and
+;; returns a value of the ascribed type.  The parameter is a genuine input
+;; (not the dispatch receiver), so it keeps its declared type rather than being
+;; rewritten to the instance type, and the instance is chosen from the
+;; ascription.
+(defclass Parse [a]
+  (parse [s :cstr] :a))
+
+(definstance Parse [int]
+  (parse [s] 100))
+
+(definstance Parse [bool]
+  (parse [s] 1))
+
+(defn main [] :int
+  (let [n (:: (parse "x") int)
+        b (:: (parse "y") bool)]
+    (println n)
+    (println b))
+  0)

@@ -280,6 +280,22 @@ static const Form *fn_return_annotation_form(const Form *call, uint32_t after_pa
     return NULL;
 }
 
+/* Phase RT: does `t` (or any nested type) reference the named type variable?
+ * Used to classify a `where (Class a)` constraint as argument-resolved (the
+ * tyvar appears in some parameter type) vs return-resolved (it does not). */
+static bool type_mentions_named_tyvar(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return type_mentions_named_tyvar(t->as.app.fn, name) ||
+                   type_mentions_named_tyvar(t->as.app.arg, name);
+        default:
+            return false;
+    }
+}
+
 static uint8_t collect_implicit_fn_type_params(const Form *params_f, const Form *ret_f,
                                                const Symbol **out_params,
                                                Kind *out_kinds) {
@@ -808,6 +824,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 /* We use TYPE_UNKNOWN as a placeholder for the type variable */
                 constraint_list[n_constraints + c].typeclass = pending_constraints[c];
                 constraint_list[n_constraints + c].type_arg = TYPE_UNKNOWN;
+                constraint_list[n_constraints + c].param_idx = -1;
+                constraint_list[n_constraints + c].tyvar = NULL;
+                constraint_list[n_constraints + c].return_resolved = false;
             }
             n_constraints = new_count;
             n_pending = 0;
@@ -1383,6 +1402,72 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             body_start++;
+        }
+    }
+
+    /* Phase RT: parse an optional `where` clause attaching typeclass
+     * constraints to this defn:
+     *
+     *   (defn decode [raw :ptr<void>] : (Result a (Vec SchemaError))
+     *     where (HasSchema a)
+     *     ...)
+     *
+     * The `where` symbol is followed by one or more (Class tyvar) clauses.
+     * Each clause becomes a TypeConstraint appended to constraint_list.  A
+     * constraint whose tyvar appears only in the return type (no parameter
+     * carries it) is flagged return_resolved so the call elaborator resolves
+     * it from the expected result type (RT3).  Absent a `where` clause this
+     * block is a no-op -- existing programs are unaffected. */
+    if (body_start < call->as.list.len) {
+        Form *maybe_where = call->as.list.items[body_start];
+        if (maybe_where->tag == F_SYM &&
+            maybe_where->as.sym->len == 5 &&
+            memcmp(maybe_where->as.sym->name, "where", 5) == 0) {
+            body_start++;  /* consume `where` */
+            /* Parse one or more (Class tyvar) clauses. */
+            while (body_start < call->as.list.len) {
+                Form *clause = call->as.list.items[body_start];
+                if (clause->tag != F_LIST || clause->as.list.len != 2 ||
+                    clause->as.list.items[0]->tag != F_SYM ||
+                    clause->as.list.items[1]->tag != F_SYM) {
+                    break;  /* not a constraint clause -- start of body */
+                }
+                const Symbol *cls_sym = clause->as.list.items[0]->as.sym;
+                const Symbol *tv_sym  = clause->as.list.items[1]->as.sym;
+                TypeClass *tc =
+                    typeclass_env_lookup_typeclass(&e->typeclass_env, cls_sym);
+                if (!tc) {
+                    diag_emit(DIAG_ERROR, clause->span,
+                              "defn: typeclass '%s' in where clause is not defined",
+                              cls_sym->name);
+                    e->scope = inner.parent;
+                    scope_free(&inner);
+                    return NULL;
+                }
+                /* return_resolved when no parameter type mentions the tyvar. */
+                bool in_param = false;
+                for (uint8_t pi = 0; pi < n_params; pi++) {
+                    if (type_mentions_named_tyvar(&params[pi]->type, tv_sym->name)) {
+                        in_param = true;
+                        break;
+                    }
+                }
+                uint8_t new_count = n_constraints + 1;
+                TypeConstraint *new_list = (TypeConstraint *)arena_alloc(
+                    e->arena, new_count * sizeof(TypeConstraint));
+                if (constraint_list && n_constraints > 0) {
+                    memcpy(new_list, constraint_list,
+                           n_constraints * sizeof(TypeConstraint));
+                }
+                constraint_list = new_list;
+                constraint_list[n_constraints].typeclass       = tc;
+                constraint_list[n_constraints].type_arg        = TYPE_UNKNOWN;
+                constraint_list[n_constraints].param_idx       = -1;
+                constraint_list[n_constraints].tyvar           = tv_sym;
+                constraint_list[n_constraints].return_resolved = !in_param;
+                n_constraints = new_count;
+                body_start++;
+            }
         }
     }
 

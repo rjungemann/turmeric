@@ -117,6 +117,12 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                     eff_kind = TY_STRUCT;
                     eff_struct_def = head->as.struct_.def;
                 }
+            } else if (eff_kind == TY_STRUCT) {
+                /* Phase RT: a plain struct lookup type carries its own
+                 * StructDef; record it so the struct-identity check below
+                 * discriminates between distinct struct instances (e.g.
+                 * HasSchema[User] vs HasSchema[Post]). */
+                eff_struct_def = type_args[i].as.struct_.def;
             }
             if (inst->type_args[i].kind != eff_kind) {
                 match = false;
@@ -192,6 +198,8 @@ void constraint_set_add(ConstraintSet *cs, TypeClass *typeclass, Type type_arg) 
     cs->constraints[cs->n_constraints].typeclass = typeclass;
     cs->constraints[cs->n_constraints].type_arg = type_arg;
     cs->constraints[cs->n_constraints].param_idx = -1;
+    cs->constraints[cs->n_constraints].tyvar = NULL;
+    cs->constraints[cs->n_constraints].return_resolved = false;
     cs->n_constraints++;
 }
 

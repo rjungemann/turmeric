@@ -1,8 +1,9 @@
 # Return-Type-Directed Dispatch + Reader-Table `<Type>` Support: Finishing `tur/schema` SC5 & SC7
 
-> **Status:** Not started. This plan covers the compiler work that
-> `docs/schema-plan.md` deferred from SC5 and SC7, plus the two enabling
-> language features those phases depend on.
+> **Status:** Phase RT landed (return-type-directed dispatch). SC5/RD/SC7
+> partially blocked -- see "Implementation status" below. This plan covers the
+> compiler work that `docs/schema-plan.md` deferred from SC5 and SC7, plus the
+> two enabling language features those phases depend on.
 >
 > **Depends on:** `stdlib/schema.tur` SC0--SC4 (shipped),
 > `stdlib/typeclass.tur` (dictionary-passing typeclasses), `tur/json`,
@@ -15,6 +16,63 @@
 > - `docs/guides/schema-guide.md` -- user-facing guide (extend in RD5)
 >
 > **Last updated:** 2026-05-31
+
+---
+
+## Implementation status (2026-05-31)
+
+**Phase RT -- DONE and tested.** Return-type-directed dispatch is implemented
+and exercised by fixtures; the full suite is green (1174 passed, 0 failed).
+
+- **RT1** (`where`-clause parsing): `(defn f [...] : T where (Class a) ...)`
+  parses into `FnDef.constraints`; `TypeConstraint` gained `tyvar` +
+  `return_resolved`. Absent a `where` clause, behavior is unchanged.
+- **RT2** (expected-type channel): `Elab.expected_type`, pushed by
+  `elab_ascribe` around the inner expression of `(:: e T)`. NULL everywhere it
+  is not explicitly pushed.
+- **RT3/RT4** (resolution): typeclass methods may now declare a tyvar
+  return/parameter (`(default-of [] : a)`). `elab_try_return_dispatch`
+  (`elab_typeclasses.c`) intercepts a bare-name call to a method whose dispatch
+  tyvar appears only in the return, unifies the (bare or structured, e.g.
+  `(Result a E)`) return against `Elab.expected_type`, looks up the instance
+  (structs discriminated by `StructDef` identity), and emits a direct call to
+  the impl. Diagnostics cover the unascribed and missing-instance cases.
+  Return-dispatch methods *with* parameters are supported: such a parameter
+  keeps its declared type (it is not rewritten to the instance type), and the
+  instance method's tyvar return is substituted to the instance type.
+- Fixtures: `rt-return-dispatch-basic`, `rt-return-dispatch-param`,
+  `errors/rt-return-dispatch-unascribed`, `errors/rt-missing-instance`.
+
+**SC5 / RD / SC7 -- blocked on a dictionary-ABI constraint.** The headline
+"typed decode to a user struct" (`(:: (decode raw) User)` returning a real
+`User` struct) is blocked because typeclass instance methods are emitted with a
+*uniform `int64`-carrier dictionary ABI*: every method slot in a class's
+dictionary is `int64_t (*)(int64_t...)`, so an instance method that logically
+returns a by-value struct is lowered to an `int64` carrier. The RT machinery
+correctly selects the instance and substitutes the struct return type, but the
+emit layer hands back an `int64` where the call site expects the aggregate,
+producing an "invalid initializer". Making struct-by-value returns flow through
+return-type-directed dispatch needs *call-site carrier-return bridging* in
+`emit_expr.c` (analogous to the existing argument carrier bridge at
+`emit_expr.c:~2018`), which is a separate emit-layer change with its own
+regression surface.
+
+What *does* work today, and what each phase needs:
+
+- Return-dispatch for **int-represented** types (primitives, and any type whose
+  runtime representation is `int64`) works end to end, including methods with
+  parameters -- see `rt-return-dispatch-param`. A `HasSchema`/`decode!` design
+  built on int-represented carriers (e.g. returning the validated JSON node)
+  works with the current machinery.
+- **SC5** (struct-typed `decode`): needs the carrier-return bridge above, or
+  the SC7 phantom `Schema a` wrapper (whose runtime layout is `int`) so the
+  decoded value is int-represented and the ABI is uniform.
+- **RD** (`#json-str<T>` et al.): RD1 (capture `<Type>` and emit
+  `(:: node Type)`) is independent and small; RD2+ desugar to `decode!`/`decode`
+  and therefore inherit the SC5 status. The `<Type>` slot in
+  `try_read_json` (`reader.c:1358`) is still parsed-and-ignored.
+- **SC7** (phantom `Schema a` + Functor/Applicative/Alternative): unblocks SC5
+  representationally (int-backed wrapper) and is the recommended next step.
 
 ---
 

@@ -4,8 +4,32 @@
 
 /* ---- file-local helper forward declarations ---- */
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
-    uint32_t *out_body_start);
+    uint32_t *out_body_start,
+    const Symbol **class_type_params, uint8_t n_class_type_params);
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span);
+static bool rt_type_mentions_tyvar(const Type *t, const char *name);
+
+/* Phase RT: is class method `m` of class `c` a return-only-dispatch method --
+ * one of the class's type parameters appears in the return type but in no
+ * parameter type?  Such methods select their instance from the expected result
+ * type, so their parameters must NOT be coerced to the instance type the way
+ * an ordinary receiver-dispatched method's first int parameter is. */
+static bool method_is_return_dispatch(const TypeClass *c, const TypeClassMethod *m) {
+    for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
+        const Symbol *tp = c->type_params[ti];
+        if (!tp) continue;
+        if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
+        bool in_param = false;
+        for (uint8_t pi = 0; pi < m->n_params; pi++) {
+            if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                in_param = true;
+                break;
+            }
+        }
+        if (!in_param) return true;
+    }
+    return false;
+}
 
 /* KB-030: designated home file (basename) for a built-in primitive type that
  * has no StructDef of its own (e.g. `str`, `rc`).  The orphan-instance check
@@ -346,8 +370,25 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
  * Syntax: (method-name [param1 : type1, param2 : type2, ...] : return-type)
  * or: (method-name [param1 param2 ...] : return-type) - types inferred from usage
  */
+/* Phase RT: resolve a keyword name to a class type-param index, returning the
+ * matching type-param symbol (so a method return/param `:a` becomes TY_TYVAR a
+ * when `a` is one of the class's type parameters). */
+static const Symbol *class_type_param_match(const char *kw_name, uint32_t kw_len,
+                                            const Symbol **class_type_params,
+                                            uint8_t n_class_type_params) {
+    for (uint8_t i = 0; i < n_class_type_params; i++) {
+        const Symbol *tp = class_type_params[i];
+        if (tp && tp->len == kw_len && memcmp(tp->name, kw_name, kw_len) == 0) {
+            return tp;
+        }
+    }
+    return NULL;
+}
+
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
-                                               uint32_t *out_body_start) {
+                                               uint32_t *out_body_start,
+                                               const Symbol **class_type_params,
+                                               uint8_t n_class_type_params) {
     if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
         diag_emit(DIAG_ERROR, span,
                   "typeclass method requires (name [params...] : return-type)");
@@ -419,9 +460,19 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     param_types[prev] = TYPE_PTR_VOID;
                     param_is_fn[prev] = true;
                 } else {
-                    diag_emit(DIAG_ERROR, p->span,
-                              "unsupported type in typeclass method parameter");
-                    return NULL;
+                    /* Phase RT: a parameter typed `:a` naming a class type
+                     * parameter becomes a TY_TYVAR -- this is the dispatch
+                     * witness (e.g. schema-of [_ :a]). */
+                    const Symbol *tp = class_type_param_match(kw->name, kw->len,
+                                                              class_type_params,
+                                                              n_class_type_params);
+                    if (tp) {
+                        param_types[prev] = type_tyvar_named(tp->name);
+                    } else {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "unsupported type in typeclass method parameter");
+                        return NULL;
+                    }
                 }
             } else if (p->tag == F_TYPE_ANN) {
                 if (actual_p == 0) {
@@ -553,9 +604,20 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                        (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
                 return_type = TYPE_PTR_VOID;
             } else {
-                diag_emit(DIAG_ERROR, ret_form->span,
-                          "unsupported return type in typeclass method");
-                return NULL;
+                /* Phase RT: a return type `:a` naming a class type parameter
+                 * becomes a TY_TYVAR.  This is the return-only dispatch case:
+                 * the dispatch variable appears only in the result, so the
+                 * instance must be selected from the call's expected type. */
+                const Symbol *tp = class_type_param_match(kw->name, kw->len,
+                                                          class_type_params,
+                                                          n_class_type_params);
+                if (tp) {
+                    return_type = type_tyvar_named(tp->name);
+                } else {
+                    diag_emit(DIAG_ERROR, ret_form->span,
+                              "unsupported return type in typeclass method");
+                    return NULL;
+                }
             }
         } else if (ret_form->tag == F_TYPE_ANN) {
             /* `: type-expr` compound return type annotation */
@@ -804,7 +866,8 @@ Expr *elab_defclass(Elab *e, const Form *call) {
     for (uint32_t i = 0; i < n_methods; i++) {
         Form *method_form = call->as.list.items[methods_start + i];
         uint32_t body_start = 0;
-        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start);
+        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start,
+                                                         type_params, n_type_params);
         if (!method) return NULL;
         methods[i] = *method;
         method_body_starts[i] = body_start;
@@ -1615,7 +1678,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Form *impl_params_form = impl_form->as.list.items[1];
         uint32_t impl_body_start = 2;
         Type return_type = tc->methods[i].return_type;  /* Default from typeclass */
-        
+
+        /* Phase RT: substitute a tyvar return type (the dispatch variable) with
+         * the instance's concrete type argument, so the emitted impl returns
+         * the instance type (e.g. (decode! [raw :int] : a) becomes : User for
+         * HasSchema[User]).  An explicit annotation below still wins. */
+        if (return_type.kind == TY_TYVAR && return_type.as.tyvar_.name) {
+            for (uint8_t ti = 0; ti < tc->n_type_params && ti < n_type_args; ti++) {
+                if (tc->type_params[ti] &&
+                    strcmp(tc->type_params[ti]->name,
+                           return_type.as.tyvar_.name) == 0) {
+                    return_type = type_args[ti];
+                    break;
+                }
+            }
+        }
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
@@ -1726,7 +1803,11 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     /* CS1b: elab_param_type is the type used for scope bindings and body
                      * elaboration; param_type is the ABI type used for the emitted signature. */
                     Type elab_param_type = param_type;
-                    if (param_type.kind == TY_INT && n_type_args > 0) {
+                    /* Phase RT: for a return-only-dispatch method, parameters
+                     * are genuine (concrete) inputs, not the dispatch receiver,
+                     * so do not rewrite an int parameter to the instance type. */
+                    if (param_type.kind == TY_INT && n_type_args > 0 &&
+                        !method_is_return_dispatch(tc, &tc->methods[i])) {
                         elab_param_type = type_args[0];
                         /* PTC4: KIND_ARROW struct type-constructors (have type params) are
                          * applied as TY_APP at call sites, which lowers to int64_t in C.
@@ -2039,6 +2120,140 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
     }
     snprintf(dst, dstlen, "dict_%s%s", tc->name->name, type_suffix);
     return d;
+}
+
+/* Phase RT: does `t` (or any nested type) reference the named type variable? */
+static bool rt_type_mentions_tyvar(const Type *t, const char *name) {
+    if (!t || !name) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return rt_type_mentions_tyvar(t->as.app.fn, name) ||
+                   rt_type_mentions_tyvar(t->as.app.arg, name);
+        default:
+            return false;
+    }
+}
+
+/* Phase RT: walk a method's declared return type in parallel with the expected
+ * type, binding the dispatch tyvar `rv` to the corresponding subtree of the
+ * expected type.  Handles the bare case (return == `a`, binds a := expected)
+ * and structured returns ((Result a E) vs (Result User E), binds a := User).
+ * Returns true and writes *out_bound when `rv` was located; false otherwise. */
+static bool rt_unify_return(const Type *ret, const Type *expected,
+                            const char *rv, Type *out_bound) {
+    if (!ret || !expected) return false;
+    if (ret->kind == TY_TYVAR && ret->as.tyvar_.name &&
+        strcmp(ret->as.tyvar_.name, rv) == 0) {
+        *out_bound = *expected;
+        return true;
+    }
+    if (ret->kind == TY_APP && expected->kind == TY_APP) {
+        if (rt_unify_return(ret->as.app.arg, expected->as.app.arg, rv, out_bound))
+            return true;
+        if (rt_unify_return(ret->as.app.fn, expected->as.app.fn, rv, out_bound))
+            return true;
+    }
+    return false;
+}
+
+Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
+                               bool *handled) {
+    if (handled) *handled = false;
+    if (!name || call->tag != F_LIST) return NULL;
+
+    TypeClassEnv *env = &e->typeclass_env;
+
+    /* Find a return-only-dispatch method named `name`: one of the class's type
+     * parameters appears in the method's return type but in none of its
+     * parameter types, so the instance can only be picked from the expected
+     * result type. */
+    TypeClass *tc = NULL;
+    uint8_t midx = 0;
+    const TypeClassMethod *meth = NULL;
+    const char *disp_tv = NULL;
+    for (TypeClass *c = env->typeclasses; c != NULL && !meth; c = c->next) {
+        for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+            const TypeClassMethod *m = &c->methods[mi];
+            if (!(m->name->len == name->len &&
+                  memcmp(m->name->name, name->name, name->len) == 0)) {
+                continue;
+            }
+            for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
+                const Symbol *tp = c->type_params[ti];
+                if (!tp) continue;
+                if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
+                bool in_param = false;
+                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                    if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
+                        in_param = true;
+                        break;
+                    }
+                }
+                if (in_param) continue;
+                tc = c; midx = mi; meth = m; disp_tv = tp->name;
+                break;
+            }
+            if (meth) break;
+        }
+    }
+    if (!meth) return NULL;  /* not a return-only-dispatch method */
+    if (handled) *handled = true;
+
+    if (!e->expected_type) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "cannot infer type for return-directed method '%s'; add a "
+                  "type ascription, e.g. (:: (%s ...) T)",
+                  name->name, name->name);
+        return NULL;
+    }
+
+    /* Bind the dispatch tyvar from the expected type (bare or structured). */
+    Type bound;
+    if (!rt_unify_return(&meth->return_type, e->expected_type, disp_tv, &bound)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "ascribed type does not match the result shape of '%s'",
+                  name->name);
+        return NULL;
+    }
+    /* Use the typed lookup so struct instances are discriminated by identity
+     * (HasSchema[User] vs HasSchema[Post]); it matches primitives by kind and
+     * structs by StructDef pointer. */
+    TypeClassInstance *inst =
+        typeclass_env_lookup_instance(env, tc, &bound, 1);
+    if (!inst) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "no instance '%s %s'", tc->name->name, type_name(bound));
+        return NULL;
+    }
+    FnDef *impl = inst->method_impls[midx];
+    if (!impl || !impl->binding) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "instance '%s %s' has no implementation for method '%s'",
+                  tc->name->name, type_name(bound), name->name);
+        return NULL;
+    }
+
+    /* Elaborate any arguments (clearing the expected-type channel so they are
+     * synthesized normally). */
+    uint32_t n_args = call->as.list.len - 1;
+    Expr **args = (n_args == 0) ? NULL
+        : (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    Type *saved_expected = e->expected_type;
+    e->expected_type = NULL;
+    for (uint32_t i = 0; i < n_args; i++) {
+        args[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!args[i]) { e->expected_type = saved_expected; return NULL; }
+    }
+    e->expected_type = saved_expected;
+
+    Expr *out = expr_new(e->arena, EX_CALL, bound, call->span);
+    out->as.call_.fn_binding = impl->binding;
+    out->as.call_.fn_expr    = NULL;
+    out->as.call_.args       = args;
+    out->as.call_.n_args     = n_args;
+    return out;
 }
 
 Expr *elab_method_call(Elab *e, const Form *call) {

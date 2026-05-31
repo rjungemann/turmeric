@@ -1,0 +1,11 @@
+;; RT: ascribing a return-dispatched call to a type that has no instance is a
+;; compile-time error, naming the missing instance.
+(defclass Default [a]
+  (default-of [] :a))
+
+(definstance Default [int]
+  (default-of [] 42))
+
+(defn main [] :int
+  (let [s (:: (default-of) cstr)]
+    0))
