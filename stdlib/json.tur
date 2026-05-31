@@ -2,6 +2,15 @@
 ;;;
 ;;; Pure C implementation. Supports null, boolean, number, string, array, object.
 ;;;
+;;; Runtime parsing/serialization lives here (json/decode, json/encode).
+;;;
+;;; Compile-time JSON: the #json(...) reader macro (opt-in via -Xjson-reader)
+;;; parses a verbatim JSON blob at compile time and emits the equivalent
+;;; Turmeric value -- objects become (hamt-of ...) HAMT maps, arrays become
+;;; (vec-of ...) vecs, and scalars become literals. Unlike json/decode it is
+;;; validated by the compiler and needs no runtime parse step. See
+;;; docs/guides/json-guide.md.
+;;;
 ;;; Since: Phase B1
 ;; stdlib/json.tur -- JSON encode and decode.
 ;;
