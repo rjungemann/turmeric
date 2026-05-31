@@ -2293,25 +2293,25 @@ static bool __inst_Eq_eq__uint64(uint64_t, uint64_t);
 static bool __inst_Eq_eq__float32(float, float);
 static int64_t __inst_Clone_clone_int(int64_t);
 static int64_t __inst_Clone_clone_T(void *);
-static bool __fn_418(int64_t, int64_t);
+static bool __fn_419(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_440(int64_t, int64_t);
+static bool __fn_443(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_467(int64_t, int64_t);
+static bool __fn_470(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_489(int64_t, int64_t);
-static bool __fn_493(int64_t, int64_t);
+static bool __fn_492(int64_t, int64_t);
+static bool __fn_496(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_509(int64_t, int64_t);
-static bool __fn_513(int64_t, int64_t);
+static bool __fn_512(int64_t, int64_t);
+static bool __fn_516(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_594(int64_t, int64_t);
-static bool __fn_598(int64_t, int64_t);
+static bool __fn_597(int64_t, int64_t);
+static bool __fn_601(int64_t, int64_t);
 static bool __inst_Eq_eq__Tuple2(int64_t, int64_t);
-static bool __fn_616(int64_t, int64_t);
+static bool __fn_619(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_695(int64_t, int64_t);
+static bool __fn_698(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
@@ -2362,6 +2362,7 @@ static int64_t map_count(int64_t);
 static int64_t map_merge(int64_t, int64_t);
 static void map_free(int64_t);
 static bool map_eq_(int64_t, int64_t, int64_t);
+static void tur_map_homog__(int64_t, int64_t);
 static int64_t vec_new();
 static int64_t vec_len(int64_t);
 static int64_t vec_get(int64_t, int64_t);
@@ -2616,12 +2617,12 @@ static dict_Clone_T dict_Clone_T_singleton = {
     .clone = __inst_Clone_clone_T,
 };
 
-static bool __fn_418(int64_t a, int64_t b) {
+static bool __fn_419(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_418));
+        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_419));
 }
 
 typedef struct dict_Eq_Map {
@@ -2632,12 +2633,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_440(int64_t a, int64_t b) {
+static bool __fn_443(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_440));
+        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_443));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2648,12 +2649,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_467(int64_t a, int64_t b) {
+static bool __fn_470(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_467));
+        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_470));
 }
 
 typedef struct dict_Eq_Option {
@@ -2664,16 +2665,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_489(int64_t a, int64_t b) {
+static bool __fn_492(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_493(int64_t a, int64_t b) {
+static bool __fn_496(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_489), (int64_t)(intptr_t)(__fn_493));
+        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_492), (int64_t)(intptr_t)(__fn_496));
 }
 
 typedef struct dict_Eq_Result {
@@ -2684,16 +2685,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_509(int64_t a, int64_t b) {
+static bool __fn_512(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_513(int64_t a, int64_t b) {
+static bool __fn_516(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_509), (int64_t)(intptr_t)(__fn_513));
+        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_512), (int64_t)(intptr_t)(__fn_516));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2704,16 +2705,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_594(int64_t a, int64_t b) {
+static bool __fn_597(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_598(int64_t a, int64_t b) {
+static bool __fn_601(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_594), (int64_t)(intptr_t)(__fn_598));
+        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_597), (int64_t)(intptr_t)(__fn_601));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -2724,12 +2725,12 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_ = __inst_Eq_eq__Tuple2,
 };
 
-static bool __fn_616(int64_t a, int64_t b) {
+static bool __fn_619(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_616));
+        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_619));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2752,12 +2753,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_695(int64_t a, int64_t b) {
+static bool __fn_698(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_695));
+        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_698));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3061,6 +3062,10 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
   tur_hamt_iter_free((void*)iter_buf);
   return true;
   
+}
+
+static void tur_map_homog__(int64_t a, int64_t b) {
+        (void)a; (void)b; 
 }
 
 static int64_t vec_new() {
@@ -3914,11 +3919,11 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            void * m_701 = mutex_new();
-            (void)m_701;
-            mutex_lock((void *)(intptr_t)(m_701));
-            mutex_unlock((void *)(intptr_t)(m_701));
-            mutex_free((void *)(intptr_t)(m_701));
+            void * m_704 = mutex_new();
+            (void)m_704;
+            mutex_lock((void *)(intptr_t)(m_704));
+            mutex_unlock((void *)(intptr_t)(m_704));
+            mutex_free((void *)(intptr_t)(m_704));
         }
         int64_t __t1;
         __t1 = INT64_C(0);

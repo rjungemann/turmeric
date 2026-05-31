@@ -61,7 +61,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-assoc [m :int key :int val :int]
+(defn map-assoc [V] [m :int key :int val :V]
   #{}
   :int
   ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -86,7 +86,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-assoc-h [m :int h :int key :int val :int]
+(defn map-assoc-h [V] [m :int h :int key :int val :V]
   #{}
   :int
   ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -134,9 +134,9 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-get [m :int h :int key :int]
+(defn map-get [V] [m :int h :int key :int]
   #{}
-  :int
+  :V
   ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get(map->hamt, h, (void*)(intptr_t)key);
   ```)
@@ -274,6 +274,29 @@
     (list hamt-assoc-each__
       (list map-assoc m (first kvs) (second kvs))
       ~@(rest (rest kvs)))))
+;;; tur-map-homog__ -- internal: compile-time homogeneity check (see vec.tur).
+;;;
+;;; Both parameters share one type variable, so a call with two
+;;; differently-typed arguments is a TUR-E0001 at elaboration. No-op body,
+;;; fixed arity (no allocation).
+
+(defn tur-map-homog__ [A] [a :A b :A] :nil
+  ```c (void)a; (void)b; ```)
+;;; hamt-homog-chain__ -- internal: enforce homogeneous keys and values.
+;;;
+;;; kvs is k0 v0 k1 v1 ...  Chains tur-map-homog__ over adjacent keys and
+;;; adjacent values so all keys unify to one type and all values to another.
+
+(defmacro hamt-homog-chain__ [& kvs]
+  (if (empty? kvs)
+    0
+    (if (empty? (rest (rest kvs)))
+      0
+      (list do
+        (list tur-map-homog__ (first kvs) (first (rest (rest kvs))))
+        (list do
+          (list tur-map-homog__ (second kvs) (second (rest (rest kvs))))
+          (list hamt-homog-chain__ ~@(rest (rest kvs))))))))
 ;;; hamt-of -- variadic Map literal: alternating key/value arguments.
 ;;;
 ;;; Parameters:
@@ -296,4 +319,8 @@
 ;;; Since: DL1 (data-literals-plan)
 
 (defmacro hamt-of [& kvs]
-  (if (empty? kvs) (list map-new) (list hamt-assoc-each__ (list map-new) ~@kvs)))
+  (if (empty? kvs)
+    (list map-new)
+    (list do
+      (list hamt-homog-chain__ ~@kvs)
+      (list hamt-assoc-each__ (list map-new) ~@kvs))))

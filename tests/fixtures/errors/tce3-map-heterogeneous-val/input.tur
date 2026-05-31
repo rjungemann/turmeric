@@ -1,0 +1,4 @@
+;; TCE3: hamt-of requires all values to unify to a single type V.
+(defn main [] :int
+  (let [m (hamt-of 1 "a" 2 99)]
+    (map-count m)))
