@@ -1,9 +1,11 @@
 # Return-Type-Directed Dispatch + Reader-Table `<Type>` Support: Finishing `tur/schema` SC5 & SC7
 
-> **Status:** Phase RT landed (return-type-directed dispatch). SC5/RD/SC7
-> partially blocked -- see "Implementation status" below. This plan covers the
-> compiler work that `docs/schema-plan.md` deferred from SC5 and SC7, plus the
-> two enabling language features those phases depend on.
+> **Status:** Phase RT landed (return-type-directed dispatch). The
+> carrier-return bridge then unblocked SC5 (typed decode to a real by-value
+> struct) and RD (the `#json-str<T>` reader family); both shipped. SC7 remains.
+> See "Implementation status" below. This plan covers the compiler work that
+> `docs/schema-plan.md` deferred from SC5 and SC7, plus the two enabling
+> language features those phases depend on.
 >
 > **Depends on:** `stdlib/schema.tur` SC0--SC4 (shipped),
 > `stdlib/typeclass.tur` (dictionary-passing typeclasses), `tur/json`,
@@ -43,19 +45,27 @@ and exercised by fixtures; the full suite is green (1174 passed, 0 failed).
 - Fixtures: `rt-return-dispatch-basic`, `rt-return-dispatch-param`,
   `errors/rt-return-dispatch-unascribed`, `errors/rt-missing-instance`.
 
-**SC5 / RD / SC7 -- blocked on a dictionary-ABI constraint.** The headline
-"typed decode to a user struct" (`(:: (decode raw) User)` returning a real
-`User` struct) is blocked because typeclass instance methods are emitted with a
-*uniform `int64`-carrier dictionary ABI*: every method slot in a class's
-dictionary is `int64_t (*)(int64_t...)`, so an instance method that logically
-returns a by-value struct is lowered to an `int64` carrier. The RT machinery
-correctly selects the instance and substitutes the struct return type, but the
-emit layer hands back an `int64` where the call site expects the aggregate,
-producing an "invalid initializer". Making struct-by-value returns flow through
-return-type-directed dispatch needs *call-site carrier-return bridging* in
-`emit_expr.c` (analogous to the existing argument carrier bridge at
-`emit_expr.c:~2018`), which is a separate emit-layer change with its own
-regression surface.
+**SC5 / RD -- DONE via the carrier-return bridge.** The headline "typed decode
+to a user struct" (`(:: (decode! raw) User)` returning a real `User` struct)
+now works. The blocker was that a typeclass instance method whose declared
+return is the dispatch tyvar lowered to the `int64` carrier while its body
+resolved to a by-value struct, so the function signature disagreed with the
+dictionary slot and the resolved call site (both already concrete), producing
+"incompatible types ... 'User' but 'int64_t'" / "invalid initializer". The fix
+(`emit_carrier_return_override`, `emit_core.c`) detects a non-carrier by-value
+struct body type and emits that concrete struct type in both the function
+definition (`emit_fns.c`) and its forward declaration (`emit_module.c`), so all
+three sites agree -- no boxing needed, since the dict slot and ascribed call
+site already use the concrete type. ADTs, type-apps and parametric structs keep
+the consistent `int64` carrier untouched. SC5's `HasSchema`/`decode!` and RD's
+`#json-str<T>` reader macro (under `-Xschema-reader`) build on this.
+
+**SC7 -- remaining.** Its original rationale ("unblock SC5 representationally")
+is now satisfied directly by the bridge. What remains is the ergonomic
+`Functor`/`Applicative`/`Alternative` stack over a phantom-typed `Schema a`
+wrapper, which additionally needs `make-struct` to infer (or accept an explicit)
+phantom type parameter -- a small elaborator change (consult the RT
+`expected_type` channel when a type param is absent from all field values).
 
 What *does* work today, and what each phase needs:
 

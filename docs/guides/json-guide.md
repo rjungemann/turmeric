@@ -104,13 +104,14 @@ Malformed JSON is reported at compile time with line/column pointing into the
 | `TUR-E0270` | Malformed JSON inside a `#json(...)` block  |
 | `TUR-E0271` | Unexpected EOF inside a `#json(...)` block  |
 
-### Optional type hint (reserved)
+### Optional type hint
 
-The `#json<Type>(...)` form is parsed and the `<Type>` hint is validated as a
-type name, but it is currently ignored -- the result is still a `tur/json` node
-tree. The syntax is reserved for a future typed-decoding extension that would
-validate the JSON against a named `defstruct` and emit a typed constructor
-call.
+The `#json<Type>(...)` form wraps its node tree in an ascription
+`(:: <node> Type)`. For a literal blob this is a compile-time type check on the
+node's own representation; the typed-decode path lives in the `tur/schema`
+reader family `#json-str<T>(expr)`, which desugars to
+`(:: (decode! (json/decode expr)) T)` under `-Xschema-reader`. See the
+[schema guide](schema-guide.md) for `HasSchema` and typed decoding.
 
 ## Runtime JSON: `tur/json`
 

@@ -7,10 +7,11 @@ description: Validate untyped boundary data (HTTP bodies, config, IPC) with comp
 # Runtime Schema Validation with `tur/schema`
 
 > **Status:** SC0--SC4 shipped (scalar/object/array/optional/union/literal/
-> transform/recursive schemas, accumulating path-tagged errors). The
-> typeclass-driven `HasSchema` / generic `decode` layer (SC5) and the
-> `Functor`/`Applicative`/`Alternative` combinator instances (SC7) are not
-> yet implemented -- see [docs/schema-plan.md](../schema-plan.md).
+> transform/recursive schemas, accumulating path-tagged errors). SC5 shipped:
+> the `HasSchema` typeclass with return-type-directed `decode!` and the
+> `#json-str<T>(...)` reader macro. The `Functor`/`Applicative`/`Alternative`
+> combinator instances (SC7) are not yet implemented -- see
+> [docs/schema-plan.md](../schema-plan.md).
 
 Turmeric's type system enforces invariants *within* a program. The gap is at
 **dynamic boundaries** -- an HTTP response body, a config file, a channel
@@ -178,13 +179,72 @@ The two are complementary: use `tur/schema` to validate data **at the
 boundary**, turning untyped JSON into values you trust, then use `tur/contract`
 to enforce invariants on those values **inside** the program.
 
+## Typed decoding with `HasSchema` (SC5)
+
+`schema-decode` hands back the *validated node* (read fields with `json/get!`);
+to land directly in a typed value, implement the `HasSchema` typeclass. Its one
+method, `decode!`, is **return-type-directed**: the concrete instance is chosen
+from the expected type at the use site (an ascription `(:: e T)` or a typed
+binding), not from any argument.
+
+```turmeric
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defstruct User :copy [name :cstr age :int])
+
+(defn user-schema [] :int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "age" (schema/int)))
+
+(definstance HasSchema [User]
+  (decode! [node]
+    (let [v (schema-decode! (user-schema) node)]
+      (make-struct User
+        (json/get-string (json/get! v "name"))
+        (json/get-int    (json/get! v "age"))))))
+
+;; The ascription drives instance selection; decode! returns a real User.
+(let [u (:: (decode! (json/decode body)) User)]
+  (.name u))
+```
+
+`decode!` returns the typed value directly (a genuine by-value struct -- the
+compiler bridges the typeclass dictionary's `int64` carrier ABI back to the
+concrete struct at the resolved call site). It **panics** on any schema
+violation, like `schema-decode!`; for graceful handling, validate with
+`schema-decode` first and branch on `schema-decode-ok?`.
+
+Ascribing `decode!` to a type with no `HasSchema` instance is a **compile-time**
+error (`no instance 'HasSchema T'`).
+
+## The `#json-str<T>(...)` reader macro
+
+Under `-Xschema-reader` (which implies `-Xjson-reader` and auto-loads
+`json.tur` + `schema.tur`), `#json-str<T>(expr)` desugars to
+`(:: (decode! (json/decode expr)) T)` -- a one-liner from a runtime JSON
+`:cstr` to a typed value:
+
+```turmeric
+(defn parse-user [body :cstr] :User
+  #json-str<User>(body))
+```
+
+Unlike `#json(...)`, the inner is an ordinary Turmeric expression (read with the
+normal reader), not a verbatim JSON blob. The bare `#json<T>(...)` literal form
+now also wraps its node tree in `(:: node T)`.
+
+The panic-on-violation `#json-str<T>` is implemented; the Result-returning
+`#json-str?<T>` and file-reading `#json-file<T>` remain future work
+(`#json-str?` emits a "not yet implemented" diagnostic).
+
 ## Not yet implemented
 
-- **`HasSchema` typeclass + generic `decode`** (SC5) -- dispatching the schema
-  off a target type, and the `#json-str<T>(expr)` reader-macro family. These
-  need return-type-directed typeclass dispatch and reader-table support.
 - **`Functor`/`Applicative`/`Alternative` instances** (SC7) -- writing object
-  schemas applicatively (`(<$> ->User (field "name" ...) <*> ...)`).
+  schemas applicatively (`(<$> ->User (field "name" ...) <*> ...)`). This needs
+  a phantom-typed `Schema a` wrapper and type-parameter inference for phantom
+  struct parameters.
 
 See [docs/schema-plan.md](../schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.
