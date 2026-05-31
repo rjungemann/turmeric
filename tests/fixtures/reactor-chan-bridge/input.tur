@@ -1,0 +1,128 @@
+;; Phase R6: reactor-chan-bridge -- reactor-add-chan fires when a value is sent.
+;;
+;; Creates a buffered channel (capacity 4).
+;; Registers a one-shot reactor-add-chan source that prints the received value.
+;; A sender thread sleeps 20 ms, sends 42 to the channel, then calls
+;; tur_reactor_wake so the blocking io_poll returns and tick_chans dequeues.
+;; tur_reactor_run exits naturally when the chan source deactivates (one-shot).
+;;
+;; Expected output:
+;;   received=42
+;;   done
+
+(defn reactor-link [] :int
+  ```c /* __tur_autolink__: -lturi -pthread */
+  return 0;
+  ```)
+
+(extern-c tur_reactor_new [] :ptr)
+(extern-c tur_reactor_add_chan [r :ptr ch :ptr cb :int ud :int] :int)
+(extern-c tur_reactor_run [r :ptr] :void)
+(extern-c tur_reactor_wake [r :ptr] :void)
+(extern-c tur_reactor_free [r :ptr] :void)
+
+;; ChanBlock helpers -- same struct layout as chan.tur and reactor.c's TurChanBlock.
+(defn make-chan [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) abort();
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * 4);
+  if (!ch->buf) abort();
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = 4;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  return (void *)ch;
+  ```)
+
+(defn chan-send-val [ch :ptr<void> val :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  c->buf[c->tail] = (int64_t)val;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  pthread_mutex_unlock(&c->lock);
+  ```)
+
+(defn chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf); free(c);
+  ```)
+
+;; Worker: unpacks args from a 3-slot int64_t array: [ch, r, val].
+;; Sleeps 20 ms, sends val to chan, wakes the reactor.
+(defn sender-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  int64_t *a = (int64_t *)arg;
+  void    *ch = (void *)(intptr_t)a[0];
+  void    *r  = (void *)(intptr_t)a[1];
+  int64_t  v  = a[2];
+  free(a);
+  struct timespec ts = { 0, 20000000L }; /* 20 ms */
+  nanosleep(&ts, NULL);
+  chan_send_val(ch, v);
+  tur_reactor_wake(r);
+  return NULL;
+  ```)
+
+(defn spawn-sender [ch :ptr<void> r :ptr<void> val :int] :ptr<void>
+  ```c
+  int64_t *a = (int64_t *)malloc(3 * sizeof(int64_t));
+  a[0] = (int64_t)(intptr_t)ch;
+  a[1] = (int64_t)(intptr_t)r;
+  a[2] = (int64_t)val;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))sender_worker, (void *)a);
+  return (void *)t;
+  ```)
+
+(defn thread-join [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn print-received [n :int] :nil
+  ```c printf("received=%lld\n", (long long)n); ```)
+
+(defn use-val [v :int] :nil
+  ```c (void)((int64_t)v); ```)
+
+(defn main [] :int
+  (let [r       (tur_reactor_new)
+        ch      (make-chan)
+        sentinel 1]
+    ;; One-shot channel watcher.
+    (tur_reactor_add_chan r ch
+      (fn [id value ud] :nil
+        (use-val sentinel)
+        (print-received value))
+      0)
+    ;; Sender thread: 20ms delay, send 42, wake reactor.
+    (let [sender (spawn-sender ch r 42)]
+      (tur_reactor_run r)
+      (thread-join sender)
+      (println "done")
+      (tur_reactor_free r)
+      (chan-free ch)
+      0)))

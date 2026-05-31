@@ -1,0 +1,72 @@
+;; Phase R4: reactor-timer -- one-shot and interval timers fire correctly.
+;;
+;; Part 1: Four one-shot timers (delay=0) registered on the same reactor.
+;;   tur_reactor_run exits naturally once all four deactivate.
+;;   Timers fire in registration order (insertion order of sources array).
+;;
+;; Part 2: An interval timer (first=0, interval=0ms) fires on three
+;;   consecutive tur_reactor_poll calls, then is removed.
+;;
+;; Expected output:
+;;   oneshot fired
+;;   tick 1
+;;   tick 2
+;;   tick 3
+;;   interval-tick
+;;   interval-tick
+;;   interval-tick
+
+(defn reactor-link [] :int
+  ```c /* __tur_autolink__: -lturi */
+  return 0;
+  ```)
+
+(extern-c tur_reactor_new [] :ptr)
+(extern-c tur_reactor_add_timer [r :ptr delay-ms :int cb :int ud :int] :int)
+(extern-c tur_reactor_add_interval [r :ptr first-ms :int interval-ms :int cb :int ud :int] :int)
+(extern-c tur_reactor_remove [r :ptr id :int] :int)
+(extern-c tur_reactor_run [r :ptr] :void)
+(extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
+(extern-c tur_reactor_free [r :ptr] :void)
+
+;; use-val: forces fat-closure generation by capturing a value from the outer scope.
+(defn use-val [v :int] :nil
+  ```c (void)((int64_t)v); ```)
+
+(defn main [] :int
+  (let [r       (tur_reactor_new)
+        sentinel 1]
+    ;; Part 1: four one-shot timers; reactor-run exits when all deactivate.
+    (tur_reactor_add_timer r 0
+      (fn [id ud] :nil
+        (use-val sentinel)
+        (println "oneshot fired"))
+      0)
+    (tur_reactor_add_timer r 0
+      (fn [id ud] :nil
+        (use-val sentinel)
+        (println "tick 1"))
+      0)
+    (tur_reactor_add_timer r 0
+      (fn [id ud] :nil
+        (use-val sentinel)
+        (println "tick 2"))
+      0)
+    (tur_reactor_add_timer r 0
+      (fn [id ud] :nil
+        (use-val sentinel)
+        (println "tick 3"))
+      0)
+    (tur_reactor_run r)
+    ;; Part 2: interval timer fires on each poll call; remove after three polls.
+    (let [iv-id (tur_reactor_add_interval r 0 0
+                  (fn [id ud] :nil
+                    (use-val sentinel)
+                    (println "interval-tick"))
+                  0)]
+      (tur_reactor_poll r 0)
+      (tur_reactor_poll r 0)
+      (tur_reactor_poll r 0)
+      (tur_reactor_remove r iv-id)
+      (tur_reactor_free r)
+      0)))

@@ -1,0 +1,63 @@
+;; Phase R3: reactor-fd-remove -- unregistered source never fires.
+;;
+;; Registers a fd for READ, immediately removes the registration, then
+;; writes a byte and polls.  Confirms that the callback is never called
+;; and that poll returns 0.
+;;
+;; Expected output:
+;;   removed ok
+;;   polls-after-remove=0
+
+(defn reactor-link [] :int
+  ```c /* __tur_autolink__: -lturi */
+  return 0;
+  ```)
+
+(extern-c tur_reactor_new [] :ptr)
+(extern-c tur_reactor_add_fd [r :ptr fd :int events :int cb :int ud :int] :int)
+(extern-c tur_reactor_remove [r :ptr id :int] :int)
+(extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
+(extern-c tur_reactor_free [r :ptr] :void)
+
+(defn make-pipe [] :ptr<void>
+  ```c
+  int *fds = (int *)malloc(2 * sizeof(int));
+  if (pipe(fds) < 0) { free(fds); return NULL; }
+  return (void *)fds;
+  ```)
+
+(defn pipe-read-fd [p :ptr<void>] :int
+  ```c return (int64_t)((int *)p)[0]; ```)
+
+(defn pipe-write-byte [p :ptr<void>] :nil
+  ```c char b = 1; write(((int *)p)[1], &b, 1); ```)
+
+(defn pipe-close [p :ptr<void>] :nil
+  ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
+
+(defn print-polls [n :int] :nil
+  ```c printf("polls-after-remove=%lld\n", (long long)n); ```)
+
+(defn use-val [v :int] :nil
+  ```c (void)((int64_t)v); ```)
+
+(defn main [] :int
+  (let [sentinel 1
+        p (make-pipe)
+        r (tur_reactor_new)]
+    ;; Register, then immediately remove.
+    (let [src-id (tur_reactor_add_fd r (pipe-read-fd p) 1   ;; READ = 1
+                   (fn [id events ud] :nil
+                     (use-val sentinel)
+                     (println "should-not-fire"))
+                   0)
+          _rm (tur_reactor_remove r src-id)]
+      (println "removed ok")
+      ;; Write data -- no registered source should see it.
+      (pipe-write-byte p)
+      ;; Poll: expect zero callbacks.
+      (let [n (tur_reactor_poll r 0)]
+        (print-polls n)
+        (tur_reactor_free r)
+        (pipe-close p)
+        0))))

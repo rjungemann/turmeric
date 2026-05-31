@@ -1,0 +1,77 @@
+;; Phase R3: reactor-fd-modify -- reactor-modify-fd changes the watched event set.
+;;
+;; Registers a fd for WRITE events (wrong mask for the read end of a pipe),
+;; then modifies the registration to READ before the data arrives.  Only after
+;; the modify should the callback fire.
+;;
+;; Steps:
+;;   1. Create a pipe.
+;;   2. Register the read end for WRITE (will never fire -- read-end not writable).
+;;   3. Poll once with timeout=0: no callback expected.
+;;   4. Modify the registration to READ.
+;;   5. Write a byte to the write end.
+;;   6. Poll again: callback fires.
+;;
+;; Expected output:
+;;   pre-modify polls=0
+;;   modified
+;;   post-modify polls=1
+
+(defn reactor-link [] :int
+  ```c /* __tur_autolink__: -lturi */
+  return 0;
+  ```)
+
+(extern-c tur_reactor_new [] :ptr)
+(extern-c tur_reactor_add_fd [r :ptr fd :int events :int cb :int ud :int] :int)
+(extern-c tur_reactor_modify_fd [r :ptr id :int events :int] :int)
+(extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
+(extern-c tur_reactor_free [r :ptr] :void)
+
+(defn make-pipe [] :ptr<void>
+  ```c
+  int *fds = (int *)malloc(2 * sizeof(int));
+  if (pipe(fds) < 0) { free(fds); return NULL; }
+  return (void *)fds;
+  ```)
+
+(defn pipe-read-fd [p :ptr<void>] :int
+  ```c return (int64_t)((int *)p)[0]; ```)
+
+(defn pipe-write-byte [p :ptr<void>] :nil
+  ```c char b = 1; write(((int *)p)[1], &b, 1); ```)
+
+(defn pipe-close [p :ptr<void>] :nil
+  ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
+
+(defn print-pre [n :int] :nil
+  ```c printf("pre-modify polls=%lld\n", (long long)n); ```)
+
+(defn print-post [n :int] :nil
+  ```c printf("post-modify polls=%lld\n", (long long)n); ```)
+
+(defn use-val [v :int] :nil
+  ```c (void)((int64_t)v); ```)
+
+(defn main [] :int
+  (let [sentinel 1
+        p (make-pipe)
+        r (tur_reactor_new)]
+    ;; Register read end for WRITE -- read-end is never writable, so no fire.
+    (let [src-id (tur_reactor_add_fd r (pipe-read-fd p) 2   ;; WRITE = 2
+                   (fn [id events ud] :nil
+                     (use-val sentinel)
+                     (println "modified"))
+                   0)]
+      ;; Poll with zero timeout: no events expected.
+      (let [n0 (tur_reactor_poll r 0)]
+        (print-pre n0)
+        ;; Switch to READ, then write data.
+        (tur_reactor_modify_fd r src-id 1)   ;; READ = 1
+        (pipe-write-byte p)
+        ;; Now the callback should fire.
+        (let [n1 (tur_reactor_poll r 200)]
+          (print-post n1)
+          (tur_reactor_free r)
+          (pipe-close p)
+          0)))))

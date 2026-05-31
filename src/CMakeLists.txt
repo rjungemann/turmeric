@@ -131,6 +131,7 @@ set(TUR_CORE_SOURCES
     async/atomic_queue.c
     async/fiber.c
     async/io.c
+    async/reactor.c
     async/scheduler.c
     async/scheduler_common.c
     async/timer_wheel.c

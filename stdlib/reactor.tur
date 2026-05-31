@@ -1,0 +1,395 @@
+;;; tur/reactor -- lightweight evented I/O reactor.
+;;;
+;;; Single-threaded event loop for multiplexing file descriptors, timers,
+;;; OS signals, and channel receives without requiring the cooperative
+;;; scheduler. Create one reactor per thread that needs to poll; reactors
+;;; are not thread-safe. The only thread-safe operations are reactor-stop
+;;; and reactor-wake.
+;;;
+;;; Since: Phase R1
+;; stdlib/reactor.tur -- Lightweight evented reactor (Phase R1-R6)
+;;
+;; Thin Turmeric bindings over tur_reactor_* in src/async/reactor.c.
+;; The reactor wraps the platform IOBackend (epoll on Linux, kqueue on
+;; macOS/BSD) without requiring the cooperative scheduler.
+;;
+;; Event mask constants (mirror IOEventType in src/async/io.h):
+;;   READ  1   -- fd readable / accept ready
+;;   WRITE 2   -- fd writable / connect complete
+;;   ERROR 4   -- error condition
+;;   HUP   8   -- peer hung up / EOF
+;;
+;; Reactor handle: :ptr<void> (create with reactor-new; free with reactor-free)
+;;
+;; API:
+;;   reactor-new           []                                   -- ptr<void>
+;;   reactor-free          [r]                                  -- nil
+;;   reactor-add-fd        [r fd events cb user-data]           -- int  (source id)
+;;   reactor-modify-fd     [r id new-events]                    -- int
+;;   reactor-remove        [r id]                               -- int
+;;   reactor-add-timer     [r delay-ms cb user-data]            -- int  (source id)
+;;   reactor-add-interval  [r first-ms interval-ms cb ud]       -- int  (source id)
+;;   reactor-add-signal    [r signum cb user-data]              -- int  (source id)
+;;   reactor-add-chan      [r ch cb user-data]                  -- int  (source id)
+;;   reactor-poll          [r timeout-ms]                       -- int
+;;   reactor-run           [r]                                  -- nil
+;;   reactor-stop          [r]                                  -- nil
+;;   reactor-wake          [r]                                  -- nil
+
+;; ---- Autolink hint ----
+
+;;; reactor/autolink-hint -- ensure programs importing reactor link against libturi.
+(defn reactor/autolink-hint [] :int
+  ```c /* __tur_autolink__: -lturi */
+  return 0;
+  ```)
+
+;; ---- C surface declarations ----
+
+(extern-c tur_reactor_new [] :ptr)
+
+(extern-c tur_reactor_free [r :ptr] :void)
+
+(extern-c tur_reactor_add_fd
+  [r :ptr fd :int events :int cb :int user-data :ptr]
+  :int)
+
+(extern-c tur_reactor_modify_fd [r :ptr id :int new-events :int] :int)
+
+(extern-c tur_reactor_remove [r :ptr id :int] :int)
+
+(extern-c tur_reactor_add_timer
+  [r :ptr delay-ms :int cb :int user-data :ptr]
+  :int)
+
+(extern-c tur_reactor_add_interval
+  [r :ptr first-ms :int interval-ms :int cb :int user-data :ptr]
+  :int)
+
+(extern-c tur_reactor_add_signal
+  [r :ptr signum :int cb :int user-data :ptr]
+  :int)
+
+(extern-c tur_reactor_add_chan
+  [r :ptr ch :ptr cb :int user-data :ptr]
+  :int)
+
+(extern-c tur_reactor_poll [r :ptr timeout-ms :int] :int)
+
+(extern-c tur_reactor_run [r :ptr] :void)
+
+(extern-c tur_reactor_stop [r :ptr] :void)
+
+(extern-c tur_reactor_wake [r :ptr] :void)
+
+;; ---- Event mask constants ----
+
+;;; READ -- event mask bit: fd is readable or an accept is ready.
+;;;
+;;; Since: Phase R2
+(def READ 1)
+
+;;; WRITE -- event mask bit: fd is writable or a connect has completed.
+;;;
+;;; Since: Phase R2
+(def WRITE 2)
+
+;;; ERROR -- event mask bit: error condition on the fd.
+;;; Always reported; cannot be masked out at registration time.
+;;;
+;;; Since: Phase R2
+(def ERROR 4)
+
+;;; HUP -- event mask bit: the peer hung up or EOF was reached.
+;;;
+;;; Since: Phase R2
+(def HUP 8)
+
+;; ---- Lifecycle ----
+
+;;; reactor-new -- create a new reactor for the current thread.
+;;;
+;;; The underlying I/O backend is chosen at compile time:
+;;; epoll on Linux, kqueue on macOS/BSD. Returns nil on WASM
+;;; or if the backend cannot be initialised.
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque reactor handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [r (reactor-new)]
+;;;     (reactor-run r)
+;;;     (reactor-free r))
+;;;
+;;; Since: Phase R1
+(defn reactor-new [] #{} :ptr<void>
+  (tur_reactor_new))
+
+;;; reactor-free -- free a reactor and unregister all attached sources.
+;;;
+;;; Parameters:
+;;;   r -- reactor handle returned by reactor-new
+;;;
+;;; Example:
+;;;   (reactor-free r)
+;;;
+;;; Since: Phase R1
+(defn reactor-free [r :ptr<void>] #{} :nil
+  (tur_reactor_free r))
+
+;; ---- Source registration ----
+
+;;; reactor-add-fd -- watch a file descriptor for I/O events.
+;;;
+;;; Returns a source id (>= 0) that uniquely identifies this registration.
+;;; Pass the id to reactor-modify-fd or reactor-remove to change or cancel
+;;; the watch. Returns -1 on error.
+;;;
+;;; The callback is invoked as (cb source-id events user-data) each time
+;;; the fd becomes ready. Events is a bitmask of READ, WRITE, ERROR, HUP.
+;;; Callbacks fire on the thread that calls reactor-poll or reactor-run.
+;;;
+;;; Parameters:
+;;;   r         -- reactor handle
+;;;   fd        -- file descriptor to watch (must already be open)
+;;;   events    -- bitmask of event types to watch: READ | WRITE
+;;;   cb        -- closure: (fn [id :int events :int user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to cb as its third argument
+;;;
+;;; Returns:
+;;;   int -- source id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (reactor-add-fd r listen-fd READ
+;;;     (fn [id events user]
+;;;       (handle-accept listen-fd))
+;;;     nil)
+;;;
+;;; Since: Phase R2
+(defn reactor-add-fd
+  [r :ptr<void> fd :int events :int cb :int user-data :ptr<void>]
+  #{} :int
+  (tur_reactor_add_fd r fd events cb user-data))
+
+;;; reactor-modify-fd -- change the watched event mask for a source.
+;;;
+;;; Parameters:
+;;;   r          -- reactor handle
+;;;   id         -- source id returned by reactor-add-fd
+;;;   new-events -- replacement event bitmask
+;;;
+;;; Returns:
+;;;   int -- 0 on success, -1 if id is not found or the modify fails
+;;;
+;;; Example:
+;;;   (reactor-modify-fd r source-id WRITE)
+;;;
+;;; Since: Phase R2
+(defn reactor-modify-fd [r :ptr<void> id :int new-events :int] #{} :int
+  (tur_reactor_modify_fd r id new-events))
+
+;;; reactor-remove -- unregister a source by id.
+;;;
+;;; After this call the fd is no longer watched and the callback will
+;;; not fire again. The fd itself is not closed.
+;;;
+;;; Parameters:
+;;;   r  -- reactor handle
+;;;   id -- source id returned by reactor-add-fd
+;;;
+;;; Returns:
+;;;   int -- 0 on success, -1 if id is not found
+;;;
+;;; Example:
+;;;   (reactor-remove r source-id)
+;;;
+;;; Since: Phase R2
+(defn reactor-remove [r :ptr<void> id :int] #{} :int
+  (tur_reactor_remove r id))
+
+;;; reactor-add-timer -- register a one-shot timer that fires once.
+;;;
+;;; The callback fires after delay-ms milliseconds on the thread that calls
+;;; reactor-poll or reactor-run. After firing the source is automatically
+;;; deactivated; it does not need to be removed manually.
+;;;
+;;; The callback is invoked as (cb source-id user-data).
+;;;
+;;; Parameters:
+;;;   r         -- reactor handle
+;;;   delay-ms  -- milliseconds until the timer fires (>= 0)
+;;;   cb        -- closure: (fn [id :int user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to cb as its second argument
+;;;
+;;; Returns:
+;;;   int -- source id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (reactor-add-timer r 500
+;;;     (fn [id user] :nil (println "fired"))
+;;;     nil)
+;;;
+;;; Since: Phase R4
+(defn reactor-add-timer
+  [r :ptr<void> delay-ms :int cb :int user-data :ptr<void>]
+  #{} :int
+  (tur_reactor_add_timer r delay-ms cb user-data))
+
+;;; reactor-add-interval -- register a repeating interval timer.
+;;;
+;;; The callback fires first after first-ms milliseconds, then every
+;;; interval-ms milliseconds thereafter. The source remains active until
+;;; reactor-remove is called with its id.
+;;;
+;;; The callback is invoked as (cb source-id user-data) on each tick.
+;;;
+;;; Parameters:
+;;;   r           -- reactor handle
+;;;   first-ms    -- delay before the first fire in milliseconds
+;;;   interval-ms -- period between subsequent fires in milliseconds
+;;;   cb          -- closure: (fn [id :int user :ptr<void>] :nil)
+;;;   user-data   -- opaque value forwarded to cb
+;;;
+;;; Returns:
+;;;   int -- source id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (reactor-add-interval r 0 1000
+;;;     (fn [id user] :nil (println "tick"))
+;;;     nil)
+;;;
+;;; Since: Phase R4
+(defn reactor-add-interval
+  [r :ptr<void> first-ms :int interval-ms :int cb :int user-data :ptr<void>]
+  #{} :int
+  (tur_reactor_add_interval r first-ms interval-ms cb user-data))
+
+;; ---- Running ----
+
+;;; reactor-add-signal -- watch an OS signal via the reactor.
+;;;
+;;; Uses signalfd on Linux and a self-pipe + sigaction on macOS/BSD.
+;;; The signal is masked from normal delivery while the source is active;
+;;; calling reactor-remove restores the previous signal disposition.
+;;; Returns -1 on WASM or if registration fails.
+;;;
+;;; The callback is invoked as (cb source-id signum user-data).
+;;;
+;;; Parameters:
+;;;   r         -- reactor handle
+;;;   signum    -- OS signal number (e.g. 2 for SIGINT)
+;;;   cb        -- closure: (fn [id :int signum :int user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to cb
+;;;
+;;; Returns:
+;;;   int -- source id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (reactor-add-signal r 2
+;;;     (fn [id sig user] :nil (println "got SIGINT"))
+;;;     nil)
+;;;
+;;; Since: Phase R5
+(defn reactor-add-signal
+  [r :ptr<void> signum :int cb :int user-data :ptr<void>]
+  #{} :int
+  (tur_reactor_add_signal r signum cb user-data))
+
+;;; reactor-add-chan -- watch a channel for one incoming value (one-shot).
+;;;
+;;; Fires at most once: when a value is available the callback receives
+;;; (source-id, value, user-data) and the source is deactivated. Re-register
+;;; from the callback for a persistent channel watcher.
+;;;
+;;; Delivery latency: the channel is checked on every reactor-poll /
+;;; reactor-run iteration. For prompt wakeup after chan-send, call
+;;; reactor-wake from the sending thread.
+;;;
+;;; Parameters:
+;;;   r         -- reactor handle
+;;;   ch        -- channel handle (ptr<void> from chan-new or async-chan-new)
+;;;   cb        -- closure: (fn [id :int value :int user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to cb
+;;;
+;;; Returns:
+;;;   int -- source id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (reactor-add-chan r stop-chan
+;;;     (fn [id v user] :nil (reactor-stop r))
+;;;     nil)
+;;;
+;;; Since: Phase R6
+(defn reactor-add-chan
+  [r :ptr<void> ch :ptr<void> cb :int user-data :ptr<void>]
+  #{} :int
+  (tur_reactor_add_chan r ch cb user-data))
+
+;; ---- Running ----
+
+;;; reactor-poll -- poll for events once, dispatching ready callbacks.
+;;;
+;;; Blocks up to timeout-ms milliseconds waiting for events.
+;;; Pass -1 to block indefinitely; pass 0 for a non-blocking check.
+;;; Returns after all callbacks for this batch have been dispatched.
+;;;
+;;; Parameters:
+;;;   r          -- reactor handle
+;;;   timeout-ms -- maximum wait in milliseconds (-1 = forever, 0 = non-blocking)
+;;;
+;;; Returns:
+;;;   int -- number of callbacks dispatched (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (reactor-poll r 100)  ; => 0..n
+;;;
+;;; Since: Phase R1
+(defn reactor-poll [r :ptr<void> timeout-ms :int] #{} :int
+  (tur_reactor_poll r timeout-ms))
+
+;;; reactor-run -- run the event loop until stopped or all sources removed.
+;;;
+;;; Calls reactor-poll in a loop until reactor-stop is called from a callback
+;;; or another thread, or until no registered sources remain.
+;;;
+;;; Parameters:
+;;;   r -- reactor handle
+;;;
+;;; Example:
+;;;   (reactor-run r)
+;;;
+;;; Since: Phase R1
+(defn reactor-run [r :ptr<void>] #{} :nil
+  (tur_reactor_run r))
+
+;;; reactor-stop -- ask reactor-run to return after the current dispatch round.
+;;;
+;;; Thread-safe: safe to call from a callback inside reactor-run or from
+;;; another OS thread. reactor-run will return once the current batch of
+;;; callbacks is complete.
+;;;
+;;; Parameters:
+;;;   r -- reactor handle
+;;;
+;;; Example:
+;;;   (reactor-stop r)
+;;;
+;;; Since: Phase R1
+(defn reactor-stop [r :ptr<void>] #{} :nil
+  (tur_reactor_stop r))
+
+;;; reactor-wake -- interrupt a reactor blocked in reactor-poll or reactor-run.
+;;;
+;;; Thread-safe: causes the blocking poll to return immediately so the
+;;; calling thread can check external state (e.g. a new fd to register)
+;;; before re-entering the loop.
+;;;
+;;; Parameters:
+;;;   r -- reactor handle
+;;;
+;;; Example:
+;;;   (reactor-wake r)
+;;;
+;;; Since: Phase R1
+(defn reactor-wake [r :ptr<void>] #{} :nil
+  (tur_reactor_wake r))
