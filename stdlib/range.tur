@@ -367,38 +367,34 @@
 ;;; Since: LZ4
 
 (defn range-encloses? [r :int other :int] :bool
-  (let [rl
-        (range-lower r)
-        ru
-        (range-upper r)
-        ol
-        (range-lower other)
-        ou
-        (range-upper other)]
-    (let [lower-ok
-          (if (= rl 0)
-            true
-            (if (= ol 0)
-              false
-              (let [rv (range-bound-value rl) ov (range-bound-value ol)]
-                (if (< rv ov)
-                  true
-                  (if (= rv ov)
-                    (or (range-bound-inclusive? rl)
-                      (not (range-bound-inclusive? ol)))
-                    false)))))
-          upper-ok
-          (if (= ru 0)
-            true
-            (if (= ou 0)
-              false
-              (let [rv (range-bound-value ru) ov (range-bound-value ou)]
-                (if (> rv ov)
-                  true
-                  (if (= rv ov)
-                    (or (range-bound-inclusive? ru)
-                      (not (range-bound-inclusive? ou)))
-                    false)))))]
+  (let [rl (range-lower r)
+        ru (range-upper r)
+        ol (range-lower other)
+        ou (range-upper other)]
+    (let [lower-ok (if (= rl 0)
+                     true
+                     (if (= ol 0)
+                       false
+                       (let [rv (range-bound-value rl)
+                             ov (range-bound-value ol)]
+                         (if (< rv ov)
+                           true
+                           (if (= rv ov)
+                             (or (range-bound-inclusive? rl)
+                               (not (range-bound-inclusive? ol)))
+                             false)))))
+          upper-ok (if (= ru 0)
+                     true
+                     (if (= ou 0)
+                       false
+                       (let [rv (range-bound-value ru)
+                             ov (range-bound-value ou)]
+                         (if (> rv ov)
+                           true
+                           (if (= rv ov)
+                             (or (range-bound-inclusive? ru)
+                               (not (range-bound-inclusive? ou)))
+                             false)))))]
       (and lower-ok upper-ok))))
 ;;; range-connected? -- true if no gap exists between r1 and r2.
 ;;;
@@ -647,16 +643,11 @@
 (defn range-gap [r1 :int r2 :int] :int
   (if (range-connected? r1 r2)
     (range-abort-connected)
-    (let [u1
-          (range-upper r1)
-          l2
-          (range-lower r2)
-          u2
-          (range-upper r2)
-          l1
-          (range-lower r1)
-          r1-first
-          (range-bound-has-gap? u1 l2)]
+    (let [u1       (range-upper r1)
+          l2       (range-lower r2)
+          u2       (range-upper r2)
+          l1       (range-lower r1)
+          r1-first (range-bound-has-gap? u1 l2)]
       (if r1-first
         (range-new (range-bound-flip u1) (range-bound-flip l2))
         (range-new (range-bound-flip u2) (range-bound-flip l1))))))
@@ -685,20 +676,16 @@
   (let [lo (range-lower r)]
     (if (= lo 0)
       (range-abort-unbounded-lower)
-      (let [start
-            (if (range-bound-inclusive? lo)
-              (range-bound-value lo)
-              (+ (range-bound-value lo) 1))
-            hi
-            (range-upper r)
-            hb
-            (not (= hi 0))
-            he
-            (if hb
-              (if (range-bound-inclusive? hi)
-                (range-bound-value hi)
-                (- (range-bound-value hi) 1))
-              0)]
+      (let [start (if (range-bound-inclusive? lo)
+                    (range-bound-value lo)
+                    (+ (range-bound-value lo) 1))
+            hi    (range-upper r)
+            hb    (not (= hi 0))
+            he    (if hb
+                    (if (range-bound-inclusive? hi)
+                      (range-bound-value hi)
+                      (- (range-bound-value hi) 1))
+                    0)]
         (seq-new (fn []
                    (let [s start b hb e he]
                      (gen []
@@ -727,24 +714,20 @@
   (let [lo (range-lower r)]
     (if (= lo 0)
       (range-abort-unbounded-lower)
-      (let [start
-            (if (range-bound-inclusive? lo)
-              (range-bound-value lo)
-              (if (> step 0)
-                (+ (range-bound-value lo) 1)
-                (- (range-bound-value lo) 1)))
-            hi
-            (range-upper r)
-            hb
-            (not (= hi 0))
-            he
-            (if hb
-              (if (range-bound-inclusive? hi)
-                (range-bound-value hi)
-                (if (> step 0)
-                  (- (range-bound-value hi) 1)
-                  (+ (range-bound-value hi) 1)))
-              0)]
+      (let [start (if (range-bound-inclusive? lo)
+                    (range-bound-value lo)
+                    (if (> step 0)
+                      (+ (range-bound-value lo) 1)
+                      (- (range-bound-value lo) 1)))
+            hi    (range-upper r)
+            hb    (not (= hi 0))
+            he    (if hb
+                    (if (range-bound-inclusive? hi)
+                      (range-bound-value hi)
+                      (if (> step 0)
+                        (- (range-bound-value hi) 1)
+                        (+ (range-bound-value hi) 1)))
+                    0)]
         (seq-new (fn []
                    (let [s start st step b hb e he]
                      (gen []

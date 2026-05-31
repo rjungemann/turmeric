@@ -103,34 +103,26 @@
   (defmacro as-> [expr name & forms]
     (if (empty? forms)
       expr
-      (let [next-form
-            (first forms)
-            next-name
-            (if (< (count forms) 2) name (second forms))
-            remaining-forms
-            (if (< (count forms) 2) (rest forms) (rest (rest forms)))]
+      (let [next-form       (first forms)
+            next-name       (if (< (count forms) 2) name (second forms))
+            remaining-forms (if (< (count forms) 2)
+                              (rest forms)
+                              (rest (rest forms)))]
         `(let [~next-name ~next-form]
            (as-> ~next-name ~next-name ~@remaining-forms)))))
   (defmacro dot [thing method & args] (cons (list '. method) (cons thing args)))
   (defmacro derive-show-rest__ [& fields]
     (if (empty? fields)
       " }"
-      (let [field
-            (first fields)
-            rest-fields
-            (rest fields)
-            is-vec
-            (vec? field)
-            label
-            (if is-vec (first field) (symbol-name field))
-            accessor-sym
-            (if is-vec (second field) field)
-            accessor-form
-            (if is-vec
-              (list accessor-sym __p)
-              (list (dot-sym accessor-sym) __p))
-            prefix
-            (str-append ", " label " = ")]
+      (let [field         (first fields)
+            rest-fields   (rest fields)
+            is-vec        (vec? field)
+            label         (if is-vec (first field) (symbol-name field))
+            accessor-sym  (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            prefix        (str-append ", " label " = ")]
         (list str-concat
           prefix
           (list str-concat
@@ -140,22 +132,15 @@
     (let [type-str (symbol-name TypeName)]
       (if (empty? fields)
         (str-append type-str " { }")
-        (let [field
-              (first fields)
-              rest-fields
-              (rest fields)
-              is-vec
-              (vec? field)
-              label
-              (if is-vec (first field) (symbol-name field))
-              accessor-sym
-              (if is-vec (second field) field)
-              accessor-form
-              (if is-vec
-                (list accessor-sym __p)
-                (list (dot-sym accessor-sym) __p))
-              first-prefix
-              (str-append type-str " { " label " = ")]
+        (let [field         (first fields)
+              rest-fields   (rest fields)
+              is-vec        (vec? field)
+              label         (if is-vec (first field) (symbol-name field))
+              accessor-sym  (if is-vec (second field) field)
+              accessor-form (if is-vec
+                              (list accessor-sym __p)
+                              (list (dot-sym accessor-sym) __p))
+              first-prefix  (str-append type-str " { " label " = ")]
           (list str-concat
             first-prefix
             (list str-concat
@@ -169,22 +154,15 @@
   (defmacro derive-debug-rest__ [& fields]
     (if (empty? fields)
       ")"
-      (let [field
-            (first fields)
-            rest-fields
-            (rest fields)
-            is-vec
-            (vec? field)
-            label
-            (if is-vec (first field) (symbol-name field))
-            accessor-sym
-            (if is-vec (second field) field)
-            accessor-form
-            (if is-vec
-              (list accessor-sym __p)
-              (list (dot-sym accessor-sym) __p))
-            field-prefix
-            (str-append " (" label " ")]
+      (let [field         (first fields)
+            rest-fields   (rest fields)
+            is-vec        (vec? field)
+            label         (if is-vec (first field) (symbol-name field))
+            accessor-sym  (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            field-prefix  (str-append " (" label " ")]
         (list str-concat
           field-prefix
           (list str-concat
@@ -194,22 +172,15 @@
     (let [type-str (symbol-name TypeName)]
       (if (empty? fields)
         (str-append "(" type-str ")")
-        (let [field
-              (first fields)
-              rest-fields
-              (rest fields)
-              is-vec
-              (vec? field)
-              label
-              (if is-vec (first field) (symbol-name field))
-              accessor-sym
-              (if is-vec (second field) field)
-              accessor-form
-              (if is-vec
-                (list accessor-sym __p)
-                (list (dot-sym accessor-sym) __p))
-              first-prefix
-              (str-append "(" type-str " (" label " ")]
+        (let [field         (first fields)
+              rest-fields   (rest fields)
+              is-vec        (vec? field)
+              label         (if is-vec (first field) (symbol-name field))
+              accessor-sym  (if is-vec (second field) field)
+              accessor-form (if is-vec
+                              (list accessor-sym __p)
+                              (list (dot-sym accessor-sym) __p))
+              first-prefix  (str-append "(" type-str " (" label " ")]
           (list str-concat
             first-prefix
             (list str-concat
@@ -223,22 +194,15 @@
   (defmacro derive-display-rest__ [& fields]
     (if (empty? fields)
       " }"
-      (let [field
-            (first fields)
-            rest-fields
-            (rest fields)
-            is-vec
-            (vec? field)
-            label
-            (if is-vec (first field) (symbol-name field))
-            accessor-sym
-            (if is-vec (second field) field)
-            accessor-form
-            (if is-vec
-              (list accessor-sym __p)
-              (list (dot-sym accessor-sym) __p))
-            prefix
-            (str-append ", " label " = ")]
+      (let [field         (first fields)
+            rest-fields   (rest fields)
+            is-vec        (vec? field)
+            label         (if is-vec (first field) (symbol-name field))
+            accessor-sym  (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            prefix        (str-append ", " label " = ")]
         (list str-concat
           prefix
           (list str-concat
@@ -248,22 +212,15 @@
     (let [type-str (symbol-name TypeName)]
       (if (empty? fields)
         (str-append type-str " { }")
-        (let [field
-              (first fields)
-              rest-fields
-              (rest fields)
-              is-vec
-              (vec? field)
-              label
-              (if is-vec (first field) (symbol-name field))
-              accessor-sym
-              (if is-vec (second field) field)
-              accessor-form
-              (if is-vec
-                (list accessor-sym __p)
-                (list (dot-sym accessor-sym) __p))
-              first-prefix
-              (str-append type-str " { " label " = ")]
+        (let [field         (first fields)
+              rest-fields   (rest fields)
+              is-vec        (vec? field)
+              label         (if is-vec (first field) (symbol-name field))
+              accessor-sym  (if is-vec (second field) field)
+              accessor-form (if is-vec
+                              (list accessor-sym __p)
+                              (list (dot-sym accessor-sym) __p))
+              first-prefix  (str-append type-str " { " label " = ")]
           (list str-concat
             first-prefix
             (list str-concat

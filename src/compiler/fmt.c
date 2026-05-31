@@ -385,6 +385,41 @@ static void fmt_fn(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+/* [name1 val1\n name2 val2\n ...]
+ * Pair-per-line layout for let/loop binding vectors. Names are naturally
+ * aligned at the inner column; values are aligned at a common column based
+ * on the widest name (so consecutive `name val` pairs read like a table).
+ * If any value is itself multi-line, it wraps starting at that column. */
+static void fmt_vec_let_bindings_broken(FmtState *s, const Form *f) {
+    uint32_t inner = s->col + 1; /* one past '[' */
+    uint32_t n = f->as.list.len;
+
+    /* Compute the widest flat name across all pairs so values align in a
+     * single column. Single-line names are common; if a name itself spans
+     * lines (unusual), skip it from the width calculation -- the value on
+     * that row will just sit one space after the name's final column. */
+    uint32_t max_name = 0;
+    for (uint32_t i = 0; i + 1 < n; i += 2) {
+        uint32_t w = fmt_measure(f->as.list.items[i]);
+        if (w != UINT32_MAX && w > max_name) max_name = w;
+    }
+    uint32_t value_col = inner + max_name + 1;
+
+    fs_putc(s, '[');
+    uint32_t i = 0;
+    while (i < n) {
+        if (i) fs_newline_indent(s, inner);
+        fmt_form(s, f->as.list.items[i]); i++;
+        if (i < n) {
+            /* Pad to the shared value column; at least one space. */
+            uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
+            for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
+            fmt_form(s, f->as.list.items[i]); i++;
+        }
+    }
+    fs_putc(s, ']');
+}
+
 /* (let [bindings]\n  body...) — also used for loop */
 static void fmt_let(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -393,10 +428,25 @@ static void fmt_let(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    /* Header: let/loop + bindings vector */
-    for (uint32_t i = 0; i < 2 && i < n; i++) {
-        if (i) fs_putc(s, ' ');
-        fmt_form(s, f->as.list.items[i]);
+    /* Head: 'let' / 'loop' */
+    if (n >= 1) fmt_form(s, f->as.list.items[0]);
+
+    /* Bindings vector: try inline; if it overflows the line width, break
+     * pair-per-line rather than letting the generic vector formatter split
+     * every element onto its own line. */
+    if (n >= 2) {
+        fs_putc(s, ' ');
+        const Form *bindings = f->as.list.items[1];
+        if (bindings->tag == F_VEC) {
+            uint32_t w = fmt_measure(bindings);
+            if (w != UINT32_MAX && s->col + w <= s->opts.line_width) {
+                fmt_emit_inline(s, bindings);
+            } else {
+                fmt_vec_let_bindings_broken(s, bindings);
+            }
+        } else {
+            fmt_form(s, bindings);
+        }
     }
 
     for (uint32_t i = 2; i < n; i++) {

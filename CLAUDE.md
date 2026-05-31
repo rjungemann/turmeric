@@ -425,12 +425,46 @@ forms use a fixed 2-space indent for their bodies, regardless of column position
 ### Binding vectors -- align bindings under each other
 
 In `let`, `loop`, etc., each binding pair is aligned so the names line up.
+**Keep each binding pair on its own line** -- never split a name and its value
+(or a name, type, and value triple) across separate lines.
 
 ```turmeric
 (let [x   1
       y   2
       foo (+ x y)]
   foo)
+```
+
+Good -- one pair per line:
+
+```turmeric
+(let [x   1
+      y   2
+      foo (+ x y)]
+  foo)
+```
+
+Bad -- name and value (or name/type/value) split across lines:
+
+```turmeric
+(let [x
+      1
+      y
+      2]
+  ...)
+```
+
+If a single binding's value is too long to fit on one line, indent the
+continuation under the value's starting column rather than breaking before
+the value:
+
+```turmeric
+(let [x   1
+      foo (some-long-fn arg1
+                        arg2
+                        arg3)
+      y   2]
+  ...)
 ```
 
 ### Nesting -- rules compose
