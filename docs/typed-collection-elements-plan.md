@@ -1,9 +1,15 @@
 # Typed Collection Elements -- Polymorphic Vec/Map carriers (TCE0--TCE6)
 
-> **Status:** Not started.
+> **Status:** In progress -- TCE0, TCE1, TCE2, TCE3, TCE5, TCE6 landed.
+> TCE4 (polymorphic Map *keys*) is the only remaining phase and is gated on
+> a HAMT runtime change (see its section). What ships today: `vec-of` /
+> `[...]` over any scalar element type; `hamt-of` / `#map{...}` with int
+> keys and any scalar *value* type; element homogeneity enforced; reads via
+> `(:: (vec-get v i) :T)`.
 >
-> **Type:** Compiler + stdlib (no new runtime; the existing `int64_t`
-> carrier buffer is reused).
+> **Type:** Compiler + stdlib (no new runtime *for TCE0-TCE3,TCE5,TCE6*; the
+> existing `int64_t` carrier buffer is reused. TCE4 would add a runtime
+> HAMT equality callback).
 >
 > **Approach:** "Approach B" from the vec/map element-type investigation --
 > make the `Vec[A]` / `Map[K V]` *operations* polymorphic over a scalar
@@ -311,24 +317,48 @@ primitives (`map-assoc-h`, `map-get` with precomputed `h`) unchanged.
 **Acceptance.** `tests/fixtures/tce3-map-cstr-val/` (int keys,
 cstr/float values).
 
-### TCE4 -- Polymorphic Map keys via Hash[K]/Eq[K]
+### TCE4 -- Polymorphic Map keys via Hash[K]/Eq[K] (NOT a stdlib-only change)
 
-**Goal.** Scalar non-int keys (`:cstr` especially) without callers
-precomputing the hash.
+**Goal.** Scalar non-int keys (`:cstr` especially) with correct content
+semantics: two equal strings at different addresses must be the same key.
 
-**Changes.**
+**Blocker discovered (2026-05-31).** Unlike values, keys cannot ride the
+carrier-generic pattern, because the runtime HAMT compares keys by **word
+identity**: `src/runtime/hamt.c` (lines 237, 468, 610) does
+`e->hash == hash && e->key == key`. So even if `map-assoc` hashed a string
+by content, two distinct `const char*` pointers to equal text would not
+match. The current design side-steps this by storing the *hash* as the key
+(the `#map{...}` literal "normalizes keyword/string keys to their content
+hash"), which conflates hash-colliding keys. True `:cstr` keys therefore
+need a real change, not just a `[K]` binder.
 
-- `stdlib/map.tur` already documents `Map[K V]` as "requiring Hash[K] and
-  Eq[K]". Make the polymorphic `map-assoc` / `map-get` / `hamt-of` derive
-  the hash from the `Hash[K]` instance (`stdlib/hash.tur`) and compare via
-  `Eq[K]`, instead of treating the key bits as the hash.
-- Keep the int-key fast path: for `K = :int` the identity hash matches
-  today's behaviour, so existing int-keyed maps are unaffected.
+**Required changes (larger; spans the runtime).**
+
+- Runtime: extend the HAMT with an **equality callback** (and content hash)
+  so `tur_hamt_{set,get,del}` compare keys by `Eq[K]` rather than word
+  identity. This threads an `eq`/`hash` function (or a per-map vtable) into
+  `hamt.c` and every call site -- the core data-structure change.
+- Compiler/stdlib: make `map-assoc` / `map-get` / `hamt-of` `[K]`-generic
+  and derive `hash`/`eq` from the key type's `Hash[K]` / `Eq[K]` instances
+  (`stdlib/hash.tur`), passing them to the runtime. Inline-C bodies must be
+  restructured to call out to the dispatched hash/eq (or wrap the HAMT call
+  in a fixed-arity helper).
+- Keep the int-key fast path: `K = :int` uses identity hash/eq, so existing
+  int-keyed maps and all current snapshots are unaffected.
 - Constrain `K` to types with `Hash`/`Eq` instances; a missing instance is
-  a typeclass-resolution error, not a silent bit-hash.
+  a typeclass-resolution error.
+
+**Why it is separated out.** TCE0-TCE3/TCE5/TCE6 are pure
+type-surface/stdlib changes riding existing machinery (no runtime change).
+TCE4 alters the core HAMT comparison semantics and threads typeclass
+dispatch into the runtime -- a meaningfully larger, higher-risk change. It
+should be scoped and reviewed on its own rather than bundled with the
+type-surface work. Until it lands, non-int keys remain expressible only via
+the hash-as-key normalization (with its collision caveat).
 
 **Acceptance.** `tests/fixtures/tce4-map-cstr-key/` -- string keys
-round-trip with collisions exercised.
+round-trip, including two distinct string instances of equal content
+resolving to the same entry, plus a hash-collision case.
 
 ### TCE5 -- Data-literal lowering
 
