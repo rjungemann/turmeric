@@ -9,7 +9,9 @@
 > + the `#json-str<T>` reader-macro family) and SC7 (`Functor`/`Applicative`/
 > `Alternative` instances) are **not started** -- they need return-type-directed
 > typeclass dispatch and reader-table support, which are compiler-level changes
-> beyond the pure-stdlib core.
+> beyond the pure-stdlib core. **The compiler work and the remaining SC5/SC7
+> stdlib are designed in
+> [docs/return-type-dispatch-and-schema-sc5-sc7-plan.md](return-type-dispatch-and-schema-sc5-sc7-plan.md).**
 >
 > **Implementation note:** decoding is anchored on the tagged JSON node
 > representation from `tur/json` rather than a raw HAMT map. JSON nodes carry a
