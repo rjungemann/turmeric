@@ -4320,6 +4320,7 @@ static void wk_apply_flags(const char *flags_str) {
     while (tok) {
         if      (strcmp(tok, "-Xgadt")             == 0) g_gadt_enabled            = true;
         else if (strcmp(tok, "-Xdata-literals")     == 0) g_data_literals_enabled = true;
+        else if (strcmp(tok, "-Xjson-reader")       == 0) g_json_reader_enabled = true;
         else if (strcmp(tok, "-Xsized-types")       == 0) { g_sized_types_enabled = true; g_gadt_enabled = true; }
         else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
         else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
@@ -7231,6 +7232,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xdata-literals") == 0) {
             /* DL0: enable map/vec/set data literal syntax */
             g_data_literals_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xjson-reader") == 0) {
+            /* JR0: enable the #json(...) compile-time reader macro */
+            g_json_reader_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

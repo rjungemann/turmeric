@@ -42,6 +42,10 @@ extern bool g_gadt_enabled;
  * literal syntax (#map{...}, #set{...}, and [...] in expression position). */
 extern bool g_data_literals_enabled;
 
+/* JR0 (json-reader-macro-plan): -Xjson-reader flag — enable the #json(...)
+ * compile-time reader macro. */
+extern bool g_json_reader_enabled;
+
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 extern bool g_sized_types_enabled;
 
