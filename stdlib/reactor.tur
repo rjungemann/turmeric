@@ -478,3 +478,49 @@
 
 (defn local-fiber-group-free [g :ptr<void>] #{} :nil
   (tur_local_fiber_group_free g))
+;;; local-spawn -- spawn a fiber into a group.
+;;;
+;;; The fiber first runs on the next reactor-run-fibers tick. The body is a
+;;; closure taking the user-data pointer; its return value is ignored.
+;;;
+;;; Parameters:
+;;;   g         -- group handle
+;;;   body      -- closure: (fn [user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to body as its only argument
+;;;
+;;; Returns:
+;;;   int -- fiber id (>= 0), or -1 on error
+;;;
+;;; Example:
+;;;   (local-spawn g
+;;;     (fn [user] :nil (println "hello from a fiber"))
+;;;     nil)
+;;;
+;;; Since: Phase F3
+
+(defn local-spawn [g :ptr<void> body :int user-data :ptr<void>] #{} :int
+  (tur_local_spawn g body user-data))
+;;; reactor-run-fibers -- drive the reactor and pump the group's fibers.
+;;;
+;;; Runs until either the group is empty and the bound reactor has no
+;;; remaining sources, or reactor-stop is called on the bound reactor.
+;;; Resumed fibers run until they park or return; parked fibers wake when
+;;; their reactor source fires.
+;;;
+;;; Calling this re-entrantly from inside a fiber of the same group is a
+;;; hard error and returns -1 immediately (it would deadlock the pump).
+;;;
+;;; Parameters:
+;;;   g -- group handle
+;;;
+;;; Returns:
+;;;   int -- number of fibers that ran to completion, or -1 on re-entry/error
+;;;
+;;; Example:
+;;;   (local-spawn g (fn [u] :nil (println "hi")) nil)
+;;;   (reactor-run-fibers g)  ; => 1
+;;;
+;;; Since: Phase F3
+
+(defn reactor-run-fibers [g :ptr<void>] #{} :int
+  (tur_reactor_run_fibers g))

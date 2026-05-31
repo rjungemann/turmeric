@@ -652,11 +652,10 @@ typedef struct LocalFiberGroup LocalFiberGroup;
 /* The group whose pump is currently active on this thread. Used by the fiber
  * trampoline (which only receives a TurFiber*) to recover the LocalFiber it is
  * running via group->current. */
-static __thread LocalFiberGroup *tl_current_group __attribute__((unused)) = NULL;
+static __thread LocalFiberGroup *tl_current_group = NULL;
 
 /* ---- ready-queue helpers (FIFO) ---- */
 
-__attribute__((unused))
 static void ready_push(LocalFiberGroup *g, LocalFiber *lf) {
     if (lf->in_ready) return;
     lf->in_ready   = true;
@@ -668,7 +667,6 @@ static void ready_push(LocalFiberGroup *g, LocalFiber *lf) {
     g->ready_tail = lf;
 }
 
-__attribute__((unused))
 static LocalFiber *ready_pop(LocalFiberGroup *g) {
     LocalFiber *lf = g->ready_head;
     if (!lf) return NULL;
@@ -722,4 +720,98 @@ void tur_local_fiber_group_free(void *gp) {
         lf = next;
     }
     free(g);
+}
+
+/* True if the reactor still has at least one active source registered. */
+static bool reactor_has_active_sources(TurReactor *r) {
+    for (size_t i = 0; i < r->sources_len; i++) {
+        if (r->sources[i] && r->sources[i]->active)
+            return true;
+    }
+    return false;
+}
+
+/* TurFiber entry trampoline: recover the LocalFiber currently being resumed
+ * (the driver sets group->current before each resume) and invoke its Turmeric
+ * body fat-closure with the stored user-data pointer. */
+static void local_fiber_trampoline(TurFiber *tf) {
+    (void)tf;
+    LocalFiberGroup *g = tl_current_group;
+    LocalFiber *lf = g ? g->current : NULL;
+    if (!lf || !lf->tur_body) return;
+    int64_t *fat = (int64_t *)(intptr_t)lf->tur_body;
+    typedef int64_t (*fn1_t)(void *, int64_t);
+    ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)lf->user_data);
+}
+
+int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g) return -1;
+    LocalFiber *lf = (LocalFiber *)calloc(1, sizeof(LocalFiber));
+    if (!lf) return -1;
+    lf->fiber = tur_fiber_new(local_fiber_trampoline, 0);
+    if (!lf->fiber) {
+        free(lf);
+        return -1;
+    }
+    lf->id             = g->next_id++;
+    lf->tur_body       = tur_body;
+    lf->user_data      = user_data;
+    lf->group          = g;
+    lf->done           = false;
+    lf->park_fd_src    = -1;
+    lf->park_timer_src = -1;
+    lf->park_chan_src  = -1;
+    /* Link into the group-wide list and the ready queue. */
+    lf->all_next = g->all_head;
+    g->all_head  = lf;
+    ready_push(g, lf);
+    return lf->id;
+}
+
+int64_t tur_reactor_run_fibers(void *gp) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g) return -1;
+    /* Re-entrant invocation from inside one of this group's own fibers would
+     * deadlock the pump -- reject it (open-question resolution: hard error). */
+    if (g->running) return -1;
+
+    g->running = 1;
+    LocalFiberGroup *prev = tl_current_group;
+    tl_current_group = g;
+    /* Mirror tur_reactor_run: clear any stale stop request at entry. */
+    atomic_store(&g->reactor->stop_flag, 0);
+
+    for (;;) {
+        if (atomic_load(&g->reactor->stop_flag)) break;
+
+        /* Drain the ready queue. A resumed fiber runs until it parks (yields)
+         * or returns; parks re-enter the queue via the reactor callbacks. */
+        LocalFiber *lf;
+        while (!atomic_load(&g->reactor->stop_flag) && (lf = ready_pop(g))) {
+            g->current = lf;
+            tur_fiber_resume(lf->fiber, NULL);
+            g->current = NULL;
+            if (tur_fiber_done(lf->fiber)) {
+                lf->done = true;
+                g->completed++;
+            }
+        }
+
+        if (atomic_load(&g->reactor->stop_flag)) break;
+
+        /* Stop when nothing can make further progress: the ready queue is
+         * drained and the reactor has no active source to wake a parked fiber
+         * (this also covers "group empty AND no remaining sources"). */
+        if (!reactor_has_active_sources(g->reactor)) break;
+
+        /* Block until a source fires; its callback re-readies a parked fiber
+         * (or services a non-fiber reactor source). */
+        tur_reactor_poll(g->reactor, -1);
+    }
+
+    g->current = NULL;
+    g->running = 0;
+    tl_current_group = prev;
+    return g->completed;
 }
