@@ -1,0 +1,11 @@
+;; SC7: schema/ap applies a decoded (top-level) function to a decoded argument,
+;; with always backing `pure` and field-of extracting the argument.
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+(defn double-it [x :int] :int (* x 2))
+(defn main [] :int
+  (println
+    (schema-decode! (schema/ap (schema/always double-it)
+                               (schema/field-of "n" (schema/int)))
+                    (json/decode "{\"n\": 21}")))
+  0)

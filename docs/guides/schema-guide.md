@@ -9,9 +9,10 @@ description: Validate untyped boundary data (HTTP bodies, config, IPC) with comp
 > **Status:** SC0--SC4 shipped (scalar/object/array/optional/union/literal/
 > transform/recursive schemas, accumulating path-tagged errors). SC5 shipped:
 > the `HasSchema` typeclass with return-type-directed `decode!` and the
-> `#json-str<T>(...)` reader macro. The `Functor`/`Applicative`/`Alternative`
-> combinator instances (SC7) are not yet implemented -- see
-> [docs/schema-plan.md](../schema-plan.md).
+> `#json-str<T>(...)` reader macro. SC7 shipped its combinator layer
+> (`always`/`never`/`ap`/`field-of`/`fmap`/`alt`, Validation semantics); the
+> `Functor`/`Applicative`/`Alternative` typeclass *instances* remain deferred --
+> see "Applicative combinators" below and [docs/schema-plan.md](../schema-plan.md).
 
 Turmeric's type system enforces invariants *within* a program. The gap is at
 **dynamic boundaries** -- an HTTP response body, a config file, a channel
@@ -239,12 +240,65 @@ The panic-on-violation `#json-str<T>` is implemented; the Result-returning
 `#json-str?<T>` and file-reading `#json-file<T>` remain future work
 (`#json-str?` emits a "not yet implemented" diagnostic).
 
-## Not yet implemented
+## Applicative combinators (SC7)
 
-- **`Functor`/`Applicative`/`Alternative` instances** (SC7) -- writing object
-  schemas applicatively (`(<$> ->User (field "name" ...) <*> ...)`). This needs
-  a phantom-typed `Schema a` wrapper and type-parameter inference for phantom
-  struct parameters.
+Object decoders compose from smaller pieces with the **Validation applicative**:
+`schema/ap` decodes both arms against the same input and **accumulates** their
+errors (it does not fail fast), so a malformed object reports every bad field at
+once.
+
+| Combinator | Role | Notes |
+|---|---|---|
+| `schema/always v` | `pure` | always succeeds with `v` (ignores the node) |
+| `schema/never msg` | `empty` | always fails with `msg`; identity of `schema/union` |
+| `schema/field-of k s` | extract | decode an object, pull key `k` via schema `s` |
+| `schema/ap sf sa` | `<*>` | apply the function decoded by `sf` to the value decoded by `sa`, accumulating errors |
+| `schema/fmap s f` | `<$>` | map `f` over the decoded value (alias for `schema/transform`) |
+| `schema/alt a b` | `<\|>` | two-arm first-match union |
+
+```turmeric
+(defn double-it [x :int] :int (* x 2))
+
+;; pure(double-it) <*> field-of("n", int)  -- on {"n":21} => 42
+(schema-decode! (schema/ap (schema/always double-it)
+                           (schema/field-of "n" (schema/int)))
+                (json/decode "{\"n\": 21}"))
+```
+
+Decoding `{"a": "x", "b": "y"}` against an `ap` of two `int` fields yields **two**
+path-tagged errors (`a: expected :int, got :cstr` and `b: ...`), one per arm.
+
+### Why no `Monad`
+
+The lawful `>>=` for Validation is fail-fast, which contradicts the accumulating
+`<*>`. Per the design, `Monad Schema` is deliberately omitted; if you genuinely
+need to choose a later schema based on a decoded value, decode in two explicit
+steps (decode the discriminant, then dispatch on it) rather than reaching for a
+monad. Note also the O(arms) cost: `ap`/`union` decode every arm.
+
+### Deferred: the typeclass instances
+
+The combinators above are plain functions over the int-carrier schema
+representation. The `Functor`/`Applicative`/`Alternative` **typeclass
+instances** -- so you could write `(<$> f s)` / `(<*> sf sa)` / `(<|> a b)` and
+build a struct field-by-field applicatively -- are not yet available. Three
+compiler obstacles remain, each independent:
+
+1. **By-value aggregate carrier.** A multi-argument applicative build ends in a
+   by-value struct, which the int64 decoder carrier cannot hold without boxing
+   (the SC5 carrier-return bridge solves the *typeclass-method-return* case, not
+   the in-decoder case).
+2. **HKT dispatch over a phantom `Schema a`.** Argument-directed HKT dispatch
+   keys on the container's `(Schema a)` type, but schema constructors return the
+   int carrier, so values do not flow with that type. A phantom-typed `Schema a`
+   wrapper would need parametric-struct by-value return support (the carrier
+   bridge's inverse) and HKT-kind registration for the wrapper. The
+   *type-parameter inference* half of this is done: a phantom struct param is
+   now inferred from an ascription (`(:: (make-struct Schema 0) (Schema cstr))`).
+3. **Closure application in the decoder.** `schema/ap` applies the decoded
+   function with a direct C call, so it only supports top-level (non-capturing)
+   functions; multi-argument currying needs closures the inline-C decoder cannot
+   invoke.
 
 See [docs/schema-plan.md](../schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.

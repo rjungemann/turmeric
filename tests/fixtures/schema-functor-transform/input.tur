@@ -1,0 +1,8 @@
+;; SC7: schema/fmap is the Functor map for schemas (an alias for transform).
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+(defn double-it [x :int] :int (* x 2))
+(defn main [] :int
+  (println (schema-decode! (schema/fmap (schema/int) double-it) (json/int 5)))
+  (println (schema-decode! (schema/transform (schema/int) double-it) (json/int 5)))
+  0)
