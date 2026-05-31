@@ -924,6 +924,18 @@ Expr *elab_call(Elab *e, Form *call) {
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
 
+    /* Phase RT: return-type-directed dispatch for a typeclass method whose
+     * dispatch variable appears only in its return type (e.g. (default-of),
+     * (schema-of)).  Such methods cannot be resolved from arguments; the
+     * instance is selected from the expected-type channel.  These methods did
+     * not exist before tyvar-return parsing was added, so intercepting them
+     * here cannot regress existing programs. */
+    {
+        bool rt_handled = false;
+        Expr *rt = elab_try_return_dispatch(e, call, name, &rt_handled);
+        if (rt_handled) return rt;
+    }
+
     /* Phase G0: constructor call — (Ctor) or (Ctor :T1 ...) */
     if (fn_binding && fn_binding->type.kind == TY_ADT) {
         /* 0-arg constructor */

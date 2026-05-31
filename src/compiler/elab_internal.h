@@ -908,6 +908,15 @@ Expr *elab_open(Elab *e, const Form *call);
 Expr *elab_defclass(Elab *e, const Form *call);
 Expr *elab_definstance(Elab *e, const Form *call);
 Expr *elab_method_call(Elab *e, const Form *call);
+/* Phase RT: if `name` is a typeclass method whose dispatch type variable
+ * appears only in the return type (a return-only-dispatch method, e.g.
+ * `default-of [] : a`), resolve the instance from the expected-type channel
+ * (e->expected_type) and emit a direct call to that instance's impl.  Sets
+ * *handled to true when `name` matched such a method (even if resolution
+ * failed and a diagnostic was emitted), so the caller does not fall through to
+ * the ordinary call path.  Returns NULL when not handled or on error. */
+Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
+                               bool *handled);
 
 /* elab_concurrent.c */
 Expr *elab_thread_spawn(Elab *e, const Form *call);
