@@ -1,0 +1,27 @@
+;; SC5: return-type-directed typed decode to a real defstruct.
+;; HasSchema's decode! puts its dispatch type variable only in the return, so
+;; the ascription `(:: (decode! node) User)` selects the User instance and the
+;; method returns a genuine by-value User struct (carrier-return bridge, RT).
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defstruct User :copy [name :cstr age :int])
+
+(defn user-schema [] :int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "age" (schema/int)))
+
+(definstance HasSchema [User]
+  (decode! [node]
+    (let [v (schema-decode! (user-schema) node)]
+      (make-struct User
+        (json/get-string (json/get! v "name"))
+        (json/get-int    (json/get! v "age"))))))
+
+(defn main [] :int
+  (let [u (:: (decode! (json/decode "{\"name\": \"alice\", \"age\": 30}")) User)]
+    (println (.name u))
+    (println (.age u)))
+  0)

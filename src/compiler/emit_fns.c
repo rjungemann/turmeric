@@ -357,10 +357,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {
         TypeKind result = e->type.as.fn.result_kind;
+        /* RT/SC5: carrier-return bridge for instance methods that resolve a
+         * dispatch tyvar to a non-carrier by-value struct. */
+        Type carrier_override = is_main ? (Type){0} : emit_carrier_return_override(fd);
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
         } else if (use_abi_spec) {
             buf_puts(file, emit_type_c_name(ctx, ctx->current_abi_specialization->result_type));
+        } else if (carrier_override.kind == TY_STRUCT) {
+            buf_puts(file, emit_type_c_name(ctx, carrier_override));
         } else if (e->type.as.fn.result_full_type) {
             bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
             if (!body_is_inline_c) {

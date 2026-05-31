@@ -1,0 +1,9 @@
+;; SC7: schema/alt is the Alternative <|> -- a two-arm first-match union.
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+(defn main [] :int
+  ;; literal-1 arm matches exactly 1
+  (println (schema-decode! (schema/alt (schema/literal-int 1) (schema/int)) (json/int 1)))
+  ;; 5 fails the literal arm, falls through to the int arm
+  (println (schema-decode! (schema/alt (schema/literal-int 1) (schema/int)) (json/int 5)))
+  0)

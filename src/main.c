@@ -671,6 +671,11 @@ static int compile_to_c(const char *path, Buf *out_c,
          * (skipped below otherwise) so default builds and their codegen
          * snapshots are unaffected. */
         "json.tur",
+        /* RD (return-type-dispatch-and-schema plan): schema.tur backs the
+         * #json-str<T>(...) reader family's decode! lowering.  Only loaded
+         * when -Xschema-reader is on (skipped below otherwise) so default
+         * builds and their codegen snapshots are unaffected. */
+        "schema.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -707,6 +712,9 @@ static int compile_to_c(const char *path, Buf *out_c,
             continue;
         /* JR0: json.tur is only auto-loaded under -Xjson-reader (see array). */
         if (!g_json_reader_enabled && strcmp(stdlib_files[i], "json.tur") == 0)
+            continue;
+        /* RD: schema.tur is only auto-loaded under -Xschema-reader (see array). */
+        if (!g_schema_reader_enabled && strcmp(stdlib_files[i], "schema.tur") == 0)
             continue;
         char path_buf[4096];
         tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
@@ -4329,6 +4337,7 @@ static void wk_apply_flags(const char *flags_str) {
         if      (strcmp(tok, "-Xgadt")             == 0) g_gadt_enabled            = true;
         else if (strcmp(tok, "-Xdata-literals")     == 0) g_data_literals_enabled = true;
         else if (strcmp(tok, "-Xjson-reader")       == 0) g_json_reader_enabled = true;
+        else if (strcmp(tok, "-Xschema-reader")     == 0) { g_schema_reader_enabled = true; g_json_reader_enabled = true; }
         else if (strcmp(tok, "-Xsized-types")       == 0) { g_sized_types_enabled = true; g_gadt_enabled = true; }
         else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
         else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
@@ -7247,6 +7256,16 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "-Xjson-reader") == 0) {
             /* JR0: enable the #json(...) compile-time reader macro */
+            g_json_reader_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xschema-reader") == 0) {
+            /* RD: enable the #json-str<T>(...) typed-decode reader family.
+             * Implies -Xjson-reader and auto-loads schema.tur. */
+            g_schema_reader_enabled = true;
             g_json_reader_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];

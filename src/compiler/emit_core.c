@@ -140,6 +140,23 @@ bool type_uses_carrier_abi(Type t) {
     return false;
 }
 
+/* RT/SC5: see emit_internal.h.  A by-value (non-carrier) struct body type is
+ * the signal: the declared return is the dispatch tyvar (which would otherwise
+ * emit the int64_t carrier), but the instance resolves it to a concrete struct.
+ * For carrier-ABI bodies (ADT, type-app, parametric struct) the int64_t carrier
+ * is already consistent, so no override is needed.  For non-struct bodies (int,
+ * cstr, inline-C TY_NIL, type variables) there is nothing to override.  The
+ * override is idempotent for functions that already declare a concrete struct
+ * return (it re-emits the same struct type). */
+Type emit_carrier_return_override(const FnDef *fd) {
+    Type none = (Type){ 0 };
+    none.kind = TY_UNKNOWN;
+    if (!fd || !fd->body) return none;
+    Type bt = fd->body->type;
+    if (bt.kind == TY_STRUCT && !type_uses_carrier_abi(bt)) return bt;
+    return none;
+}
+
 void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
 }

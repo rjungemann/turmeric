@@ -1,9 +1,13 @@
 # Return-Type-Directed Dispatch + Reader-Table `<Type>` Support: Finishing `tur/schema` SC5 & SC7
 
-> **Status:** Phase RT landed (return-type-directed dispatch). SC5/RD/SC7
-> partially blocked -- see "Implementation status" below. This plan covers the
-> compiler work that `docs/schema-plan.md` deferred from SC5 and SC7, plus the
-> two enabling language features those phases depend on.
+> **Status:** Phase RT landed (return-type-directed dispatch). The
+> carrier-return bridge then unblocked SC5 (typed decode to a real by-value
+> struct) and RD (the `#json-str<T>` reader family); both shipped. SC7 shipped
+> its Validation combinator layer + the phantom-param-inference enabler; its
+> `Functor`/`Applicative`/`Alternative` typeclass instances remain deferred. See
+> "Implementation status" below. This plan covers the compiler work that
+> `docs/schema-plan.md` deferred from SC5 and SC7, plus the two enabling
+> language features those phases depend on.
 >
 > **Depends on:** `stdlib/schema.tur` SC0--SC4 (shipped),
 > `stdlib/typeclass.tur` (dictionary-passing typeclasses), `tur/json`,
@@ -43,19 +47,42 @@ and exercised by fixtures; the full suite is green (1174 passed, 0 failed).
 - Fixtures: `rt-return-dispatch-basic`, `rt-return-dispatch-param`,
   `errors/rt-return-dispatch-unascribed`, `errors/rt-missing-instance`.
 
-**SC5 / RD / SC7 -- blocked on a dictionary-ABI constraint.** The headline
-"typed decode to a user struct" (`(:: (decode raw) User)` returning a real
-`User` struct) is blocked because typeclass instance methods are emitted with a
-*uniform `int64`-carrier dictionary ABI*: every method slot in a class's
-dictionary is `int64_t (*)(int64_t...)`, so an instance method that logically
-returns a by-value struct is lowered to an `int64` carrier. The RT machinery
-correctly selects the instance and substitutes the struct return type, but the
-emit layer hands back an `int64` where the call site expects the aggregate,
-producing an "invalid initializer". Making struct-by-value returns flow through
-return-type-directed dispatch needs *call-site carrier-return bridging* in
-`emit_expr.c` (analogous to the existing argument carrier bridge at
-`emit_expr.c:~2018`), which is a separate emit-layer change with its own
-regression surface.
+**SC5 / RD -- DONE via the carrier-return bridge.** The headline "typed decode
+to a user struct" (`(:: (decode! raw) User)` returning a real `User` struct)
+now works. The blocker was that a typeclass instance method whose declared
+return is the dispatch tyvar lowered to the `int64` carrier while its body
+resolved to a by-value struct, so the function signature disagreed with the
+dictionary slot and the resolved call site (both already concrete), producing
+"incompatible types ... 'User' but 'int64_t'" / "invalid initializer". The fix
+(`emit_carrier_return_override`, `emit_core.c`) detects a non-carrier by-value
+struct body type and emits that concrete struct type in both the function
+definition (`emit_fns.c`) and its forward declaration (`emit_module.c`), so all
+three sites agree -- no boxing needed, since the dict slot and ascribed call
+site already use the concrete type. ADTs, type-apps and parametric structs keep
+the consistent `int64` carrier untouched. SC5's `HasSchema`/`decode!` and RD's
+`#json-str<T>` reader macro (under `-Xschema-reader`) build on this.
+
+**SC7 -- combinator layer DONE; typeclass instances deferred.** Its original
+rationale ("unblock SC5 representationally") is satisfied directly by the bridge.
+The Validation combinators shipped as plain functions over the int-carrier
+schema: `schema/always` (pure), `schema/never` (empty), `schema/ap` (accumulating
+applicative), `schema/field-of` (extract), `schema/fmap` (transform alias),
+`schema/alt` (two-arm union), with new `SCHEMA_ALWAYS/NEVER/AP/FIELD`
+discriminants + decoder cases. The phantom-param-inference enabler also landed:
+`make-struct` now fills a type parameter absent from all fields from the RT
+`expected_type` channel (`elab_structs.c`), so `(:: (make-struct Schema 0)
+(Schema cstr))` type-checks.
+
+The `Functor`/`Applicative`/`Alternative` *typeclass instances* (the `<$>`/`<*>`/
+`<|>` operator sugar and applicative *struct* building) remain deferred on three
+independent compiler obstacles, documented in `docs/guides/schema-guide.md`
+("Deferred: the typeclass instances"): (1) a by-value aggregate result cannot
+ride the int64 decoder carrier without boxing; (2) argument-directed HKT dispatch
+needs values that flow with their `(Schema a)` type, which requires
+parametric-struct by-value return support (the carrier bridge's inverse) plus
+HKT-kind registration for the phantom wrapper; (3) `schema/ap` applies the
+decoded function with a direct C call, so multi-argument currying (closures) is
+out of reach for the inline-C decoder.
 
 What *does* work today, and what each phase needs:
 

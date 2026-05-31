@@ -58,6 +58,14 @@
 (def SCHEMA_TRANSFORM 10)
 ;;; SCHEMA_REC -- discriminant for a recursive (self-referential) schema.
 (def SCHEMA_REC       11)
+;;; SCHEMA_ALWAYS -- discriminant for a schema that always succeeds (backs pure).
+(def SCHEMA_ALWAYS    12)
+;;; SCHEMA_NEVER -- discriminant for a schema that always fails (backs empty).
+(def SCHEMA_NEVER     13)
+;;; SCHEMA_AP -- discriminant for the Validation applicative (apply + accumulate).
+(def SCHEMA_AP        14)
+;;; SCHEMA_FIELD -- discriminant for an extract-one-field schema.
+(def SCHEMA_FIELD     15)
 
 ;; ---------------------------------------------------------------------------
 ;; SC0 -- scalar + literal constructors
@@ -338,6 +346,144 @@
   ```c int64_t *p = (int64_t*)(intptr_t)s;
   return p ? p[0] : -1;
   ```)
+
+;; ---------------------------------------------------------------------------
+;; SC7 -- Validation applicative combinators (pure / empty / apply / field)
+;; ---------------------------------------------------------------------------
+;;
+;; These build object decoders compositionally with the *accumulating*
+;; Validation semantics: schema/ap decodes both arms against the same input and
+;; concatenates their error lists rather than failing fast.  They are provided
+;; as plain combinators over the int-carrier schema representation.  The
+;; Functor/Applicative/Alternative *typeclass instances* (so you could write
+;; (<$> f s) / (<*> sf sa) / (<|> a b)) are deferred -- see the schema guide for
+;; the three compiler obstacles (by-value aggregate carrier on a struct result,
+;; HKT dispatch over a phantom Schema wrapper, and closure application inside
+;; the inline-C decoder).
+
+;;; schema/always -- a pure schema that ignores its input, decoding to a fixed value.
+;;;
+;;; Parameters:
+;;;   value -- the value (an int-carrier; e.g. an int, a cstr ptr, or a
+;;;            top-level function pointer) the schema always decodes to
+;;;
+;;; Returns:
+;;;   An always-succeeds schema; decoding it never inspects the node.
+;;;
+;;; Example:
+;;;   (schema-decode! (schema/always 42) (json/null))  ; => 42
+;;;
+;;; Since: Phase SC7
+(defn schema/always [value :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 12; s[1] = value; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/never -- the empty schema: always fails with a fixed message (identity of schema/union).
+;;;
+;;; Parameters:
+;;;   message -- the failure message reported at the current path
+;;;
+;;; Returns:
+;;;   An always-fails schema.
+;;;
+;;; Example:
+;;;   (schema-decode (schema/never "no match") (json/int 1))  ; => err
+;;;
+;;; Since: Phase SC7
+(defn schema/never [message :cstr] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 13;
+  s[1] = (int64_t)(intptr_t)strdup(message);
+  s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/ap -- the Validation applicative: apply sf's decoded function to sa's decoded value, accumulating both arms' errors.
+;;;
+;;; Decodes the function arm `sf` and the argument arm `sa` against the *same*
+;;; input, concatenates their errors left-to-right, and applies the decoded
+;;; function to the decoded argument only when both arms succeed.
+;;;
+;;; Parameters:
+;;;   sf -- a schema decoding to a unary function pointer (a/the result of
+;;;         schema/always over a top-level, non-capturing function)
+;;;   sa -- a schema decoding to that function's argument
+;;;
+;;; Returns:
+;;;   An applicative schema decoding to (f a).  NOTE: the decoded function is
+;;;   applied via a direct C call, so it must be a top-level (non-capturing)
+;;;   function -- multi-argument currying needs closures and is deferred.
+;;;
+;;; Example:
+;;;   ;; double-it is a top-level (defn double-it [x] (* x 2))
+;;;   (schema/ap (schema/always double-it)
+;;;              (schema/field-of "n" (schema/int)))
+;;;
+;;; Since: Phase SC7
+(defn schema/ap [sf :int sa :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 14; s[1] = sf; s[2] = sa; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/field-of -- decode a JSON object and extract one key's decoded value via an inner schema.
+;;;
+;;; Yields the key's decoded value (not the whole object), so it composes with
+;;; schema/ap to assemble values field by field.
+;;;
+;;; Parameters:
+;;;   key   -- the object key to extract
+;;;   inner -- the schema the key's value must satisfy.  Wrap in schema/optional
+;;;            to allow the key to be absent.
+;;;
+;;; Returns:
+;;;   A field-extract schema decoding to the inner decoded value.
+;;;
+;;; Example:
+;;;   (schema/field-of "age" (schema/int))  ; on {"age":30} => 30
+;;;
+;;; Since: Phase SC7
+(defn schema/field-of [key :cstr inner :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 15;
+  s[1] = (int64_t)(intptr_t)strdup(key);
+  s[2] = inner; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/fmap -- the Functor map for schemas: decode with `inner`, then map the result with `f` (alias for schema/transform).
+;;;
+;;; Parameters:
+;;;   inner -- the schema to decode with
+;;;   f     -- a top-level function applied to the decoded value on success
+;;;
+;;; Returns:
+;;;   A schema decoding to (f decoded-inner).
+;;;
+;;; Example:
+;;;   (schema/fmap (schema/int) double-it)
+;;;
+;;; Since: Phase SC7
+(defn schema/fmap [inner :int f] :int
+  (schema/transform inner f))
+
+;;; schema/alt -- the Alternative `<|>`: a two-arm first-match union (try `a`, then `b`).
+;;;
+;;; Parameters:
+;;;   a -- the first schema to try
+;;;   b -- the schema to try if a does not match
+;;;
+;;; Returns:
+;;;   A union schema over the two arms.
+;;;
+;;; Example:
+;;;   (schema/alt (schema/int) (schema/str))
+;;;
+;;; Since: Phase SC7
+(defn schema/alt [a :int b :int] :int
+  (schema/union (vec-of a b)))
 
 ;; ---------------------------------------------------------------------------
 ;; SC3 -- SchemaError accessors + formatting
@@ -648,6 +794,50 @@
         }
         return decode_rec((sch_t*)(intptr_t)s->c, n, path);
       }
+      case 12: { /* always: ignore the node, return the fixed value */
+        return s->a;
+      }
+      case 13: { /* never: always fail */
+        push_err(path, (const char*)(intptr_t)s->a, n);
+        return 0;
+      }
+      case 14: { /* ap: Validation applicative, accumulate both arms' errors */
+        size_t before = errs->len;
+        int64_t fv = decode_rec((sch_t*)(intptr_t)s->a, n, path);
+        int64_t av = decode_rec((sch_t*)(intptr_t)s->b, n, path);
+        if (errs->len != before) return 0;  /* either arm failed */
+        int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)fv;
+        return f(av);
+      }
+      case 15: { /* field-of: extract one key from an object via inner schema */
+        if (jtype(n) != 6) {
+          snprintf(buf, sizeof(buf), "expected :object, got %s",
+                   tyname(jtype(n)));
+          push_err(path, buf, n);
+          return 0;
+        }
+        const char *key = (const char*)(intptr_t)s->a;
+        sch_t *inner = (sch_t*)(intptr_t)s->b;
+        int64_t *on = (int64_t*)(intptr_t)n;
+        int64_t cur = on[1]; int64_t found = 0; int present = 0;
+        while (cur) {
+          int64_t *ent = (int64_t*)(intptr_t)cur;
+          if (strcmp((const char*)(intptr_t)ent[0], key) == 0) {
+            found = ent[1]; present = 1; break;
+          }
+          cur = ent[2];
+        }
+        char *fpath = mkpath(path, key);
+        int64_t result;
+        if (!present) {
+          if (inner && inner->kind == 8) { result = 0; } /* optional absent */
+          else { push_err(fpath, "missing required field", 0); result = 0; }
+        } else {
+          result = decode_rec(inner, found, fpath);
+        }
+        free(fpath);
+        return result;
+      }
       default: return 0;
     }
   }
@@ -743,3 +933,42 @@
     (if (schema-decode-ok? r)
       (schema-decode-value r)
       (schema-decode-abort (schema-decode-errors r)))))
+
+;; ---------------------------------------------------------------------------
+;; SC5 -- HasSchema: return-type-directed typed decoding
+;; ---------------------------------------------------------------------------
+
+;;; HasSchema -- a type that knows how to validate-and-build itself from a
+;;; tagged JSON node.
+;;;
+;;; The single method, decode!, puts its dispatch type variable `a` only in the
+;;; return position, so the concrete instance is selected from the *expected
+;;; type at the use site* (an ascription `(:: (decode! node) T)` or a typed
+;;; binding `(let [x : T (decode! node)] ...)`) rather than from any argument.
+;;; This is return-type-directed dispatch (Phase RT): the elaborator unifies the
+;;; method's `a` against the ascribed type and emits a direct call to the
+;;; matching instance.
+;;;
+;;; An instance pairs a schema (the wire shape) with a builder that turns the
+;;; validated node into the typed value, e.g.
+;;;
+;;;   (definstance HasSchema [User]
+;;;     (decode! [node]
+;;;       (let [v (schema-decode! (user-schema) node)]
+;;;         (make-struct User (json/get-string (json/get! v "name"))
+;;;                           (json/get-int    (json/get! v "age"))))))
+;;;
+;;; and is then driven by an ascription:
+;;;
+;;;   (:: (decode! (json/decode body)) User)   ; => a real User struct
+;;;
+;;; decode! panics (via schema-decode!) on any schema violation; it is for
+;;; trusted data and tests.  For graceful handling, validate first with
+;;; schema-decode against the type's schema and branch on schema-decode-ok?.
+;;;
+;;; Since: Phase SC5
+(defclass HasSchema [a]
+  ;;; decode! -- validate `node` against a's schema and build a typed `a`,
+  ;;; panicking on any violation.  Return-type-directed: resolve `a` from the
+  ;;; ascription at the call site.
+  (decode! [node :int] :a))

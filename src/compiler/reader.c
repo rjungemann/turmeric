@@ -1339,6 +1339,41 @@ static Form *json_read_value(Reader *r) {
 /* JR0: try to read a #json(...) form.  peek(r) == '#' is guaranteed by the
  * caller.  Returns NULL (without consuming) when the input is not a #json
  * form so the dispatcher can fall through to other '#'-branches. */
+/* RD1: build a type Form from the text between the < > of a #json<...> hint.
+ * A single token (User) yields a symbol Form; whitespace-separated tokens
+ * (Result User E) yield an application list (Result User E).  The hint text
+ * never contains parens (the scanner stops at '('), so this simple split
+ * covers the typed-decode cases. */
+static Form *read_type_hint(Reader *r, const char *text, size_t len, Span span) {
+    Form *toks[16];
+    size_t ntoks = 0;
+    size_t i = 0;
+    while (i < len) {
+        while (i < len && (text[i] == ' ' || text[i] == '\t')) i++;
+        size_t start = i;
+        while (i < len && text[i] != ' ' && text[i] != '\t') i++;
+        if (i > start) {
+            if (ntoks == 16) {
+                diag_emit(DIAG_ERROR, span,
+                          "#json<...>: type hint has too many tokens (TUR-E0270)");
+                return NULL;
+            }
+            const Symbol *sym =
+                symtab_intern(r->st, strslice(text + start, (uint32_t)(i - start)));
+            toks[ntoks++] = form_sym(r->arena, span, sym);
+        }
+    }
+    if (ntoks == 0) {
+        diag_emit(DIAG_ERROR, span,
+                  "#json<...>: expected a type name after '<' (TUR-E0270)");
+        return NULL;
+    }
+    if (ntoks == 1) return toks[0];
+    Form **items = (Form **)arena_alloc(r->arena, ntoks * sizeof(Form *));
+    for (size_t k = 0; k < ntoks; k++) items[k] = toks[k];
+    return form_list(r->arena, span, items, (uint32_t)ntoks);
+}
+
 static Form *try_read_json(Reader *r) {
     if (!(peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' &&
           peek_at(r, 3) == 'o' && peek_at(r, 4) == 'n')) {
@@ -1351,10 +1386,12 @@ static Form *try_read_json(Reader *r) {
     size_t   so = r->pos;
     advance(r); advance(r); advance(r); advance(r); advance(r); /* "#json" */
 
-    /* JR2: optional <Type> hint.  Reserved syntax for future typed decoding
-     * (json-reader-macro-plan "Future work"); for now the hint is parsed,
-     * validated as a well-formed type name, and otherwise ignored -- the
-     * result is still a tur/json node tree. */
+    /* RD1: optional <Type> hint.  When present, the emitted json node tree is
+     * wrapped in an ascription (:: <node> Type) so return-type-directed
+     * dispatch (Phase RT) and ordinary type checking can consume it.  The hint
+     * accepts a single type name (User) or a whitespace-separated applied type
+     * (Result User E), which becomes (Result User E). */
+    Form *type_form = NULL;
     if (peek(r) == '<') {
         advance(r); /* consume '<' */
         size_t name_off = r->pos;
@@ -1373,6 +1410,9 @@ static Form *try_read_json(Reader *r) {
                       "#json<...>: expected '>' to close the type hint (TUR-E0270)");
             r->error = true; return NULL;
         }
+        Span tspan = span_from_to(r, sl, sc, name_off, r->pos);
+        type_form = read_type_hint(r, r->src + name_off, name_len, tspan);
+        if (!type_form) { r->error = true; return NULL; }
         advance(r); /* consume '>' */
     }
 
@@ -1401,7 +1441,111 @@ static Form *try_read_json(Reader *r) {
         return NULL;
     }
     advance(r); /* consume ')' */
+
+    /* RD1: wrap in (:: val Type) when a type hint was given. */
+    if (type_form) {
+        const Symbol *asc = symtab_intern(r->st, strslice("::", 2));
+        Span s = span_from_to(r, sl, sc, so, r->pos);
+        Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+        items[0] = form_sym(r->arena, s, asc);
+        items[1] = val;
+        items[2] = type_form;
+        return form_list(r->arena, s, items, 3);
+    }
     return val;
+}
+
+/* RD2: #json-str<T>(expr) -- typed decode of a runtime JSON string.
+ *
+ *   #json-str<T>(e)  ==>  (:: (decode! (json/decode e)) T)
+ *
+ * Unlike #json(...), the inner is an ordinary Turmeric expression (a :cstr at
+ * runtime), read with the normal reader -- no JSON sub-parser is involved.
+ * Gated on -Xschema-reader (g_schema_reader_enabled).  The panic-on-violation
+ * #json-str<T> is implemented here; the Result-returning #json-str?<T> and the
+ * file-reading #json-file<T> remain future work (a clear diagnostic is emitted
+ * for the '?' form). */
+static Form *try_read_json_str(Reader *r) {
+    if (!(peek_at(r, 1) == 'j' && peek_at(r, 2) == 's' && peek_at(r, 3) == 'o' &&
+          peek_at(r, 4) == 'n' && peek_at(r, 5) == '-' && peek_at(r, 6) == 's' &&
+          peek_at(r, 7) == 't' && peek_at(r, 8) == 'r')) {
+        return NULL;
+    }
+    int after = peek_at(r, 9);
+    if (after != '<' && after != '?') return NULL;
+
+    uint32_t sl = r->line, sc = r->col;
+    size_t   so = r->pos;
+    for (int k = 0; k < 9; k++) advance(r); /* "#json-str" */
+
+    if (peek(r) == '?') {
+        Span s = span_from_to(r, sl, sc, so, r->pos);
+        diag_emit(DIAG_ERROR, s,
+                  "#json-str?<...>: the Result-returning typed-decode reader is "
+                  "not yet implemented; use #json-str<...> (panics on a schema "
+                  "violation) or call schema-decode directly");
+        r->error = true; return NULL;
+    }
+
+    /* <Type> hint (required). */
+    if (peek(r) != '<') {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "#json-str must be followed by a <Type> hint (TUR-E0270)");
+        r->error = true; return NULL;
+    }
+    advance(r); /* consume '<' */
+    size_t name_off = r->pos;
+    while (peek(r) != '>' && peek(r) != '(' && peek(r) != ')' &&
+           peek(r) != '\n' && peek(r) != -1) {
+        advance(r);
+    }
+    size_t name_len = r->pos - name_off;
+    if (name_len == 0) {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "#json-str<...>: expected a type name after '<' (TUR-E0270)");
+        r->error = true; return NULL;
+    }
+    if (peek(r) != '>') {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "#json-str<...>: expected '>' to close the type hint (TUR-E0270)");
+        r->error = true; return NULL;
+    }
+    Span tspan = span_from_to(r, sl, sc, name_off, r->pos);
+    Form *type_form = read_type_hint(r, r->src + name_off, name_len, tspan);
+    if (!type_form) { r->error = true; return NULL; }
+    advance(r); /* consume '>' */
+
+    if (peek(r) != '(') {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "#json-str<T> must be followed by '(' (TUR-E0270)");
+        r->error = true; return NULL;
+    }
+    advance(r); /* consume '(' */
+
+    skip_ws_and_comments(r);
+    Form *expr = read_form(r);
+    if (!expr || r->error) { r->error = true; return NULL; }
+    skip_ws_and_comments(r);
+    if (peek(r) != ')') {
+        diag_emit(DIAG_ERROR, span_point(r),
+                  "#json-str<T>(expr): expected ')' to close the expression (TUR-E0271)");
+        r->error = true; return NULL;
+    }
+    advance(r); /* consume ')' */
+
+    Span s = span_from_to(r, sl, sc, so, r->pos);
+    /* (json/decode expr) */
+    Form *decode_arg = expr;
+    Form *json_decode = json_call(r, s, "json/decode", &decode_arg, 1);
+    /* (decode! (json/decode expr)) */
+    Form *decoded = json_call(r, s, "decode!", &json_decode, 1);
+    /* (:: (decode! (json/decode expr)) Type) */
+    const Symbol *asc = symtab_intern(r->st, strslice("::", 2));
+    Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(r->arena, s, asc);
+    items[1] = decoded;
+    items[2] = type_form;
+    return form_list(r->arena, s, items, 3);
 }
 
 /* RR: Is form an operator symbol (<, <=, >, >=, =)? */
@@ -2544,6 +2688,13 @@ static Form *read_form(Reader *r) {
     /* JR0: #json(...) compile-time JSON reader macro (opt-in via -Xjson-reader).
      * Placed alongside the data-literal dispatch; the helper returns NULL
      * without consuming when the input is not a #json( form. */
+    /* RD2: #json-str<T>(...) typed-decode reader family (opt-in via
+     * -Xschema-reader).  Checked before #json so the more specific prefix
+     * wins.  Returns NULL without consuming for non-#json-str input. */
+    if (c == '#' && g_schema_reader_enabled) {
+        Form *m = try_read_json_str(r);
+        if (m || r->error) return m;
+    }
     if (c == '#' && g_json_reader_enabled) {
         Form *m = try_read_json(r);
         if (m || r->error) return m;

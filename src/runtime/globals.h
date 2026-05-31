@@ -46,6 +46,11 @@ extern bool g_data_literals_enabled;
  * compile-time reader macro. */
 extern bool g_json_reader_enabled;
 
+/* RD (return-type-dispatch-and-schema plan): -Xschema-reader flag — enable the
+ * #json-str<T>(...) family of typed-decode reader macros.  Implies
+ * -Xjson-reader and additionally auto-loads schema.tur. */
+extern bool g_schema_reader_enabled;
+
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 extern bool g_sized_types_enabled;
 

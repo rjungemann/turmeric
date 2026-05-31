@@ -839,7 +839,12 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         }
         if (e->type.kind == TY_FN) {
             TypeKind result = e->type.as.fn.result_kind;
-            if (e->type.as.fn.result_full_type) {
+            /* RT/SC5: carrier-return bridge -- must mirror the definition path
+             * in emit_fns.c so the forward declaration agrees with the body. */
+            Type carrier_override = emit_carrier_return_override(fd);
+            if (carrier_override.kind == TY_STRUCT) {
+                buf_puts(out, type_c_name(carrier_override));
+            } else if (e->type.as.fn.result_full_type) {
                 bool body_is_inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
                 const struct Type *rft = e->type.as.fn.result_full_type;
                 if (!body_is_inline_c && rft) {

@@ -3130,12 +3130,43 @@ Expr *elab_make_struct(Elab *e, const Form *call) {
         }
     }
 
+    /* SC7: a phantom type parameter (one that appears in no field, e.g. the
+     * `A` of `(defstruct Schema [A] (raw :int))`) cannot be inferred from the
+     * field values.  Fall back to the return-type-directed expected-type
+     * channel: when the make-struct sits under an ascription `(:: e (Schema T))`
+     * (or any context that pushed `(Schema T)` onto e->expected_type), pull the
+     * missing parameter(s) from that applied type.  This walks the left-nested
+     * TY_APP spine `(((Def a) b) c)` and matches the base struct by identity. */
+    if (have_type_args && def->n_type_params > 0 && e->expected_type) {
+        Type *exp = e->expected_type;
+        /* Collect the app-spine arguments (outermost last). */
+        Type spine_args[16];
+        uint8_t n_spine = 0;
+        Type *cur = exp;
+        while (cur && cur->kind == TY_APP && n_spine < 16) {
+            spine_args[n_spine++] = *cur->as.app.arg;
+            cur = cur->as.app.fn;
+        }
+        if (cur && cur->kind == TY_STRUCT && cur->as.struct_.def == def &&
+            n_spine == def->n_type_params) {
+            for (uint8_t i = 0; i < def->n_type_params; i++) {
+                if (!have_type_args[i]) {
+                    /* spine_args is innermost-first reversed: arg for param i is
+                     * spine_args[n_spine - 1 - i]. */
+                    inferred_type_args[i] = spine_args[n_spine - 1 - i];
+                    have_type_args[i] = true;
+                }
+            }
+        }
+    }
+
     /* Build the result type */
     for (uint8_t i = 0; i < def->n_type_params; i++) {
         if (have_type_args && !have_type_args[i]) {
             diag_emit(DIAG_ERROR, name_form->span,
-                      "make-struct '%s': could not infer type parameter '%s' from field values",
-                      def->name, def->type_params[i]);
+                      "make-struct '%s': could not infer type parameter '%s' from field values "
+                      "(it appears in no field; add a type ascription, e.g. (:: (make-struct %s ...) (%s ...)))",
+                      def->name, def->type_params[i], def->name, def->name);
             return NULL;
         }
     }
