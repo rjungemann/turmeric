@@ -10,6 +10,23 @@
 > materialize, the feature can be dropped in favor of writing the data literal
 > directly.
 >
+> **Phase status (2026-05-31):**
+> - **JR0** -- Done (commit `be5ae9ba`, PR #145). Reader sub-parser in
+>   `src/compiler/reader.c` dispatches `#json(...)`; emits `tur/json`
+>   tagged-node constructors rather than the originally planned
+>   `hamt-of` / `vec-of` (see the "Implemented design" note below).
+> - **JR1** -- Obsolete. The `hamt-of` / `vec-of` lowering was abandoned
+>   during JR0; no separate builtins were added. Skip.
+> - **JR2** -- Done. `#json<Type>(...)` type-hint syntax is parsed by the
+>   reader (`reader.c:1347`); the hint is currently stored but ignored
+>   during elaboration, as planned.
+> - **JR3** -- Done. All five fixtures exist under
+>   `tests/fixtures/json-reader-{object,array,nested,null,escape}/`.
+> - **JR4** -- Done. `docs/guides/json-guide.md` covers the reader macro
+>   alongside the runtime `tur/json` API.
+> - **JR5** -- Done as part of PR #145 (merged green; snapshots regenerated
+>   in the same change).
+>
 > **Flag:** `-Xjson-reader` (opt-in; no effect on programs that don't use the
 > macro). All phases gated behind this flag so the feature can land
 > incrementally.

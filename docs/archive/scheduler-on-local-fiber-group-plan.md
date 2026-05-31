@@ -1,6 +1,7 @@
 # Plan: Rewrite `src/async/scheduler.c` on `LocalFiberGroup` (F9 follow-up)
 
-> **Status:** Not started. This is the F9 follow-up unblocked by the now-shipped
+> **Status:** Not started; design decisions resolved (see "Resolved design
+> decisions" below). This is the F9 follow-up unblocked by the now-shipped
 > `reactor-run-fibers` building block (see
 > `docs/archive/history/reactor-run-fibers-plan.md`, F1-F8).
 > **Last Updated:** 2026-05-31
@@ -121,33 +122,44 @@ requires).
 
 ---
 
-## Open design questions
+## Resolved design decisions
 
-These must be answered during F9-1/F9-2, before the deque is touched:
+Resolved 2026-05-31. Each item below was the corresponding open question;
+the decision is what the implementation should target.
 
-- **Work-stealing vs. flat groups.** A `LocalFiberGroup` is a flat
-  single-thread bag. Stealing means moving a *not-yet-started* fiber from
-  one thread's submission queue to another's group. Decide whether to
-  steal only un-started fibers (simplest -- the body closure + user-data
-  is all that moves) or also parked fibers (harder -- a parked fiber owns
-  a reactor source on its original thread's reactor). Recommendation:
-  steal only un-started fibers; parked fibers stay put and wake on their
-  owning thread.
-- **Cross-thread submission.** `tur_scheduler_mt_spawn` from thread A
-  targeting thread B must enqueue onto B's group and `reactor-wake(r_B)`.
-  This needs a thread-safe submission queue feeding each group
-  (the existing `AtomicQueue` can be repurposed) plus a drain step at the
-  top of each `reactor-run-fibers` tick. May need a small extension to
-  the local-group API (a thread-safe `local-submit`), or a documented
-  reactor-channel-based handoff.
-- **Effect-handler chain.** `FiberBlock`/`TurFiber` carry an
-  `effect_handler_chain` (P19-8). Confirm `local-spawn`'d fibers thread
-  it identically to scheduler-spawned ones, so effects/handlers behave
-  the same after the swap.
-- **Re-entrancy with a live reactor.** Today "reactor and global
-  scheduler on the same thread" is undefined. After the rewrite they are
-  the same object; the parent plan's open question ("park the outer fiber
-  for the duration") should get a concrete answer and a fixture.
+- **Work-stealing scope -- un-started fibers only.** An idle worker pulls
+  a not-yet-started fiber from another thread's submission queue and
+  `local-spawn`s it on itself; only the body closure + user-data moves.
+  Parked fibers stay on their owning thread and wake on that thread's
+  reactor. This avoids cross-thread reactor-source mutation, which would
+  be required to migrate a parked fiber's fd/timer/chan registration.
+- **Cross-thread submission -- repurpose `AtomicQueue` as a per-group
+  inbox.** Each `LocalFiberGroup` gains an `AtomicQueue` inbox (the
+  existing primitive in `src/async/atomic_queue.{h,c}`, already a bounded
+  MPMC ring and already TSan-audited). A new `local-submit(g, fiber)`
+  pushes onto `g.inbox` and calls `reactor-wake(g.reactor)`; the top of
+  each `reactor-run-fibers` tick drains the inbox into the local ready
+  queue before pumping. Cheapest path that does not introduce a new
+  primitive; a bespoke MPSC ring is a possible later optimization if F9-2
+  benchmarks show submission is hot.
+- **Effect-handler chain -- snapshot at spawn time.** `local-spawn` (and
+  `local-submit`) must copy the *spawning* thread's
+  `global_effect_handler_chain` into the new `TurFiber.effect_handler_chain`,
+  matching what `tur_fiber_block_new` already does for scheduler-spawned
+  fibers (`emit_module.c:2423`). This also closes an existing gap:
+  `tur_local_spawn` in `reactor.c:747` currently goes through raw
+  `tur_fiber_new` and leaves `effect_handler_chain` uninitialized -- the
+  rewrite is the right time to fix it. For cross-thread submit, the
+  snapshot is taken on the submitter; the fiber carries its origin
+  handlers across threads.
+- **Re-entrancy with a live reactor -- hard error.** Calling
+  `reactor-run-fibers` (or `reactor-run`) on a group that is already
+  running rejects with the existing `g->running` check at
+  `reactor.c:777`. After the rewrite, "the scheduler is the global
+  reactor's fiber driver" is the documented model; nested pumping on the
+  same group is a programmer error. A fixture asserts the `-1` return
+  path; the parent plan's "park the outer fiber" alternative is
+  explicitly not adopted.
 
 ---
 
