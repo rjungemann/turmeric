@@ -1,5 +1,8 @@
 # Runtime List Quasiquote Plan
 
+Status: Rejected. Looking into the #json reader and tur/schema combination
+first.
+
 ## Scope and non-scope
 
 In scope:
