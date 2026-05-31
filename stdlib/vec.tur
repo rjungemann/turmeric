@@ -62,9 +62,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-get [v :int i :int]
+(defn vec-get [A] [v :int i :int]
   #{}
-  :int
+  :A
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < vec->len) return (int64_t)vec->data[i];
   fprintf(stderr, "tvec index out of bounds\n");
@@ -82,7 +82,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-push! [v :int val :int]
+(defn vec-push! [A] [v :int val :A]
   #{}
   :nil
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
@@ -109,9 +109,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-pop! [v :int]
+(defn vec-pop! [A] [v :int]
   #{}
-  :int
+  :A
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
@@ -128,7 +128,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-set! [v :int i :int val :int]
+(defn vec-set! [A] [v :int i :int val :A]
   #{}
   :void
   ```c struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;

@@ -1,0 +1,10 @@
+;; TCE1: Vec[bool] via the [A]-generic stdlib ops.
+
+(defn main [] :int
+  (let [v (vec-of true false true)]
+    (vec-push! v false)
+    (println (:: (vec-get v 0) :bool))
+    (println (:: (vec-get v 1) :bool))
+    (println (:: (vec-get v 3) :bool))
+    (println (vec-len v))
+    0))
