@@ -1,0 +1,39 @@
+;; SC2: an optional field may be present, null, or absent; a present value
+;; of the wrong type still errors.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defn person-schema [] :int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "nickname" (schema/optional (schema/str))))
+
+;; present optional -> ok
+(defn test-present [] :int
+  (let [r (schema-decode (person-schema)
+                         (json/decode "{\"name\": \"a\", \"nickname\": \"al\"}"))]
+    (if (schema-decode-ok? r) 1 0)))
+
+;; absent optional -> ok
+(defn test-absent [] :int
+  (let [r (schema-decode (person-schema)
+                         (json/decode "{\"name\": \"a\"}"))]
+    (if (schema-decode-ok? r) 1 0)))
+
+;; null optional -> ok
+(defn test-null [] :int
+  (let [r (schema-decode (person-schema)
+                         (json/decode "{\"name\": \"a\", \"nickname\": null}"))]
+    (if (schema-decode-ok? r) 1 0)))
+
+;; present but wrong type -> err
+(defn test-bad [] :cstr
+  (let [r (schema-decode (person-schema)
+                         (json/decode "{\"name\": \"a\", \"nickname\": 7}"))]
+    (schema-error-message (schema-decode-errors r))))
+
+(println (test-present))
+(println (test-absent))
+(println (test-null))
+(println (test-bad))

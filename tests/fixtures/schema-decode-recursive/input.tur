@@ -1,0 +1,32 @@
+;; SC4: a recursive schema validates self-similar (tree) data of arbitrary
+;; depth. The body is forced lazily on first decode via schema/rec.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+;; A tree node: { "value": int, "children": [ <node>, ... ] }
+(defn tree-schema [] :int
+  (schema/rec
+    (fn [self]
+      (schema/field
+        (schema/field (schema/object-new) "value" (schema/int))
+        "children" (schema/array self)))))
+
+;; three levels deep, all valid -> ok
+(defn test-valid [] :int
+  (let [r (schema-decode
+            (tree-schema)
+            (json/decode
+              "{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}, {\"value\": 3, \"children\": [{\"value\": 4, \"children\": []}]}]}"))]
+    (if (schema-decode-ok? r) 1 0)))
+
+;; a deep node has the wrong type for "value" -> error with a deep path
+(defn test-deep-error [] :cstr
+  (let [r (schema-decode
+            (tree-schema)
+            (json/decode
+              "{\"value\": 1, \"children\": [{\"value\": \"oops\", \"children\": []}]}"))]
+    (schema-error-message (schema-decode-errors r))))
+
+(println (test-valid))
+(println (test-deep-error))

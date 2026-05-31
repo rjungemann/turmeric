@@ -1,0 +1,35 @@
+;; SC3: errors accumulate (not fail-fast) and carry dot-separated paths
+;; into nested objects.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defn address-schema [] :int
+  (schema/field
+    (schema/field (schema/object-new) "city" (schema/str))
+    "zip" (schema/str)))
+
+(defn user-schema [] :int
+  (schema/field
+    (schema/field (schema/object-new) "name" (schema/str))
+    "address" (address-schema)))
+
+;; name is an int (should be str) AND address.zip is an int (should be str):
+;; both violations are reported, with nested paths.
+(defn test-nested [] :cstr
+  (let [r (schema-decode
+            (user-schema)
+            (json/decode
+              "{\"name\": 42, \"address\": {\"city\": \"NYC\", \"zip\": 10001}}"))]
+    (schema-error-message (schema-decode-errors r))))
+
+;; the error count is exactly 2
+(defn test-count [] :int
+  (let [r (schema-decode
+            (user-schema)
+            (json/decode
+              "{\"name\": 42, \"address\": {\"city\": \"NYC\", \"zip\": 10001}}"))]
+    (schema-error-count (schema-decode-errors r))))
+
+(println (test-nested))
+(println (test-count))

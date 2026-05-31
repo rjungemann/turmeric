@@ -1,0 +1,30 @@
+;; SC2: array schema decodes to a Vec of decoded element values; a bad
+;; element reports a path-indexed error. schema/transform maps the result.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+;; valid array of ints -> Vec of decoded ints; sum them
+(defn test-sum [] :int
+  (let [r (schema-decode (schema/array (schema/int))
+                         (json/decode "[10, 20, 30]"))]
+    (if (schema-decode-ok? r)
+      (let [v (schema-decode-value r)]
+        (+ (+ (vec-get v 0) (vec-get v 1)) (vec-get v 2)))
+      -1)))
+
+;; element 1 is the wrong type -> error on path "[1]"
+(defn test-bad-elem [] :cstr
+  (let [r (schema-decode (schema/array (schema/int))
+                         (json/decode "[1, \"x\", 3]"))]
+    (schema-error-message (schema-decode-errors r))))
+
+;; transform: decode each int, double it
+(defn test-transform [] :int
+  (let [r (schema-decode (schema/transform (schema/int) (fn [x] (* x 2)))
+                         (json/decode "21"))]
+    (schema-decode-value r)))
+
+(println (test-sum))
+(println (test-bad-elem))
+(println (test-transform))

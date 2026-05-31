@@ -1,0 +1,745 @@
+;;; tur/schema -- runtime schema validation for untyped boundary data.
+;;;
+;;; Schemas are first-class runtime values that describe the expected shape
+;;; of data arriving at a dynamic boundary (an HTTP body, a config file, a
+;;; channel message). Unlike tur/contract (which panics), schema-decode
+;;; returns a Result so callers handle bad data gracefully, and it
+;;; accumulates *all* violations with dot-separated field paths rather than
+;;; failing fast.
+;;;
+;;; Decoding is anchored on the tagged JSON node representation from
+;;; tur/json (json/decode, #json(...)): those nodes carry a runtime type
+;;; tag (0=null 1=bool 2=int 3=float 4=string 5=array 6=object), which is
+;;; what makes genuine "expected :cstr, got :int" validation possible. Raw
+;;; Turmeric int64 values carry no type tag, so the schema decoder reads the
+;;; shape it needs from JSON nodes.
+;;;
+;;; A schema value is a heap-allocated tagged struct:
+;;;   { int64_t kind; int64_t a; int64_t b; int64_t c; }
+;;; The kind is one of the SCHEMA_* discriminants; a/b/c are kind-specific.
+;;; Object schemas are built incrementally (schema/object-new + schema/field)
+;;; because a field list mixes :cstr keys with schema pointers, which a
+;;; homogeneous Vec cannot hold.
+;;;
+;;; Decoded result values:
+;;;   scalar  -> the underlying value (cstr ptr / int / float bits / bool)
+;;;   literal -> the matched value
+;;;   object  -> the validated JSON object node (use json/get to read fields)
+;;;   array   -> a freshly allocated Vec of decoded element values
+;;;   optional, union, transform, rec -> the inner decoded value
+;;;
+;;; Errors are a Vec of SchemaError; schema-decode returns
+;;; Result<ptr<void>, Vec<SchemaError>>.
+;;;
+;;; Since: Phase SC0
+;; tur/schema -- schema discriminants + constructors + decoder.
+
+;;; SCHEMA_STR -- discriminant for the :cstr scalar schema.
+(def SCHEMA_STR       0)
+;;; SCHEMA_INT -- discriminant for the :int scalar schema.
+(def SCHEMA_INT       1)
+;;; SCHEMA_FLOAT -- discriminant for the :float scalar schema.
+(def SCHEMA_FLOAT     2)
+;;; SCHEMA_BOOL -- discriminant for the :bool scalar schema.
+(def SCHEMA_BOOL      3)
+;;; SCHEMA_NIL -- discriminant for the null schema.
+(def SCHEMA_NIL       4)
+;;; SCHEMA_LITERAL -- discriminant for an exact-value schema.
+(def SCHEMA_LITERAL   5)
+;;; SCHEMA_OBJECT -- discriminant for an object (field-list) schema.
+(def SCHEMA_OBJECT    6)
+;;; SCHEMA_ARRAY -- discriminant for a homogeneous array schema.
+(def SCHEMA_ARRAY     7)
+;;; SCHEMA_OPTIONAL -- discriminant for an optional (nullable) schema.
+(def SCHEMA_OPTIONAL  8)
+;;; SCHEMA_UNION -- discriminant for a first-match union schema.
+(def SCHEMA_UNION     9)
+;;; SCHEMA_TRANSFORM -- discriminant for a decode-then-map schema.
+(def SCHEMA_TRANSFORM 10)
+;;; SCHEMA_REC -- discriminant for a recursive (self-referential) schema.
+(def SCHEMA_REC       11)
+
+;; ---------------------------------------------------------------------------
+;; SC0 -- scalar + literal constructors
+;; ---------------------------------------------------------------------------
+
+;;; schema/str -- a schema that matches JSON strings (:cstr).
+;;;
+;;; Returns:
+;;;   A scalar string schema; decodes to the underlying cstr.
+;;;
+;;; Example:
+;;;   (schema-decode (schema/str) (json/string "hi"))  ; => ok("hi")
+;;;
+;;; Since: Phase SC0
+(defn schema/str [] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/int -- a schema that matches JSON integers (:int).
+;;;
+;;; Returns:
+;;;   A scalar int schema; decodes to the underlying int.
+;;;
+;;; Example:
+;;;   (schema-decode (schema/int) (json/int 42))  ; => ok(42)
+;;;
+;;; Since: Phase SC0
+(defn schema/int [] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 1; s[1] = 0; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/float -- a schema that matches JSON floats (:float).
+;;;
+;;; Returns:
+;;;   A scalar float schema; decodes to the underlying float bits.
+;;;
+;;; Since: Phase SC0
+(defn schema/float [] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 2; s[1] = 0; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/bool -- a schema that matches JSON booleans (:bool).
+;;;
+;;; Returns:
+;;;   A scalar bool schema; decodes to 0 or 1.
+;;;
+;;; Since: Phase SC0
+(defn schema/bool [] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 3; s[1] = 0; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/nil -- a schema that matches JSON null.
+;;;
+;;; Returns:
+;;;   A null schema; decodes to 0.
+;;;
+;;; Since: Phase SC0
+(defn schema/nil [] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 4; s[1] = 0; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/literal-int -- a schema matching one exact integer value.
+;;;
+;;; Parameters:
+;;;   v -- the required int value
+;;;
+;;; Returns:
+;;;   A literal schema; decodes to v only when the node is exactly v.
+;;;
+;;; Example:
+;;;   (schema-decode (schema/literal-int 7) (json/int 7))  ; => ok(7)
+;;;
+;;; Since: Phase SC0
+(defn schema/literal-int [v :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 5; s[1] = 2; s[2] = v; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/literal-str -- a schema matching one exact string value.
+;;;
+;;; Parameters:
+;;;   v -- the required cstr value
+;;;
+;;; Returns:
+;;;   A literal schema; decodes to v only when the node string equals v.
+;;;
+;;; Example:
+;;;   (schema-decode (schema/literal-str "active") (json/string "active"))
+;;;
+;;; Since: Phase SC0
+(defn schema/literal-str [v :cstr] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 5; s[1] = 4;
+  s[2] = (int64_t)(intptr_t)strdup(v);
+  s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; SC1/SC2 -- composite + combinator constructors
+;; ---------------------------------------------------------------------------
+
+;;; schema/object-new -- start an empty object schema.
+;;;
+;;; Returns:
+;;;   An object schema with no fields yet; add fields with schema/field.
+;;;
+;;; Example:
+;;;   (schema/field (schema/field (schema/object-new)
+;;;                               "name" (schema/str))
+;;;                 "age" (schema/int))
+;;;
+;;; Since: Phase SC1
+(defn schema/object-new [] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 6; s[1] = 0; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/field -- add a declared field to an object schema.
+;;;
+;;; Parameters:
+;;;   obj   -- an object schema (from schema/object-new)
+;;;   key   -- the field name
+;;;   inner -- the schema the field value must satisfy. Wrap it in
+;;;            schema/optional to allow the field to be absent or null.
+;;;
+;;; Returns:
+;;;   The same object schema, with the field appended (mutated in place).
+;;;
+;;; Example:
+;;;   (schema/field (schema/object-new) "name" (schema/str))
+;;;
+;;; Since: Phase SC1
+(defn schema/field [obj :int key :cstr inner :int] :int
+  ```c int64_t *s = (int64_t*)(intptr_t)obj;
+  int64_t count = s[1];
+  int64_t cap   = s[2];
+  int64_t *data = (int64_t*)(intptr_t)s[3];
+  if (count == cap) {
+    cap = cap ? cap * 2 : 4;
+    data = realloc(data, cap * 2 * sizeof(int64_t));
+    s[2] = cap;
+    s[3] = (int64_t)(intptr_t)data;
+  }
+  data[count * 2]     = (int64_t)(intptr_t)strdup(key);
+  data[count * 2 + 1] = inner;
+  s[1] = count + 1;
+  return obj;
+  ```)
+
+;;; schema/array -- a schema for a homogeneous JSON array.
+;;;
+;;; Parameters:
+;;;   elem -- the schema each element must satisfy
+;;;
+;;; Returns:
+;;;   An array schema; decodes to a Vec of decoded element values.
+;;;
+;;; Example:
+;;;   (schema/array (schema/int))  ; matches [1, 2, 3]
+;;;
+;;; Since: Phase SC2
+(defn schema/array [elem :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 7; s[1] = elem; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/optional -- a schema where null / absent is acceptable.
+;;;
+;;; Parameters:
+;;;   inner -- the schema a present, non-null value must satisfy
+;;;
+;;; Returns:
+;;;   An optional schema; decodes to the inner value, or 0 when null.
+;;;   Inside schema/object, an optional field may also be absent entirely.
+;;;
+;;; Example:
+;;;   (schema/optional (schema/str))
+;;;
+;;; Since: Phase SC2
+(defn schema/optional [inner :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 8; s[1] = inner; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/union -- a schema where the first matching arm wins.
+;;;
+;;; Parameters:
+;;;   arms -- a Vec of schemas; tried left to right
+;;;
+;;; Returns:
+;;;   A union schema; decodes to the value from the first arm that matches.
+;;;   If no arm matches, all arms' errors are reported.
+;;;
+;;; Example:
+;;;   (schema/union (vec-of (schema/int) (schema/str)))
+;;;
+;;; Since: Phase SC2
+(defn schema/union [arms :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 9; s[1] = arms; s[2] = 0; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/transform -- decode with a schema, then map the result.
+;;;
+;;; Parameters:
+;;;   inner -- the schema to decode with
+;;;   f     -- a function applied to the decoded value (only on success)
+;;;
+;;; Returns:
+;;;   A transform schema; decodes to (f decoded-inner).
+;;;
+;;; Example:
+;;;   (schema/transform (schema/int) (fn [x] (* x 2)))
+;;;
+;;; Since: Phase SC2
+(defn schema/transform [inner :int f] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 10; s[1] = inner;
+  s[2] = (int64_t)(intptr_t)f;
+  s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/rec -- a self-referential schema for recursive data.
+;;;
+;;; Parameters:
+;;;   f -- a function taking the recursive schema itself (self) and
+;;;        returning the schema body, e.g.
+;;;        (fn [self] (schema/field (schema/object-new)
+;;;                                 "children" (schema/array self)))
+;;;
+;;; Returns:
+;;;   A recursive schema. The body is forced (by calling f with self) on
+;;;   first decode and memoized thereafter.
+;;;
+;;; Example:
+;;;   (schema/rec (fn [self]
+;;;     (schema/field
+;;;       (schema/field (schema/object-new) "value" (schema/int))
+;;;       "children" (schema/array self))))
+;;;
+;;; Since: Phase SC4
+(defn schema/rec [f] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 11;
+  s[1] = (int64_t)(intptr_t)f;
+  s[2] = 0;  /* memoized body, lazily forced */
+  s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; schema/kind -- return the SCHEMA_* discriminant of a schema value.
+;;;
+;;; Parameters:
+;;;   s -- a schema value
+;;;
+;;; Returns:
+;;;   The integer discriminant (SCHEMA_STR .. SCHEMA_REC).
+;;;
+;;; Since: Phase SC0
+(defn schema/kind [s :int] :int
+  ```c int64_t *p = (int64_t*)(intptr_t)s;
+  return p ? p[0] : -1;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; SC3 -- SchemaError accessors + formatting
+;; ---------------------------------------------------------------------------
+
+;;; schema-error-path -- the dot-separated field path of a SchemaError.
+;;;
+;;; Parameters:
+;;;   e -- a SchemaError value
+;;;
+;;; Returns:
+;;;   The path cstr, e.g. "user.address.zip" (empty string at the root).
+;;;
+;;; Since: Phase SC3
+(defn schema-error-path [e :int] :cstr
+  ```c int64_t *p = (int64_t*)(intptr_t)e;
+  return (char*)(intptr_t)p[0];
+  ```)
+
+;;; schema-error-text -- the human-readable message of a SchemaError.
+;;;
+;;; Parameters:
+;;;   e -- a SchemaError value
+;;;
+;;; Returns:
+;;;   The message cstr, e.g. "expected :cstr, got :int".
+;;;
+;;; Since: Phase SC3
+(defn schema-error-text [e :int] :cstr
+  ```c int64_t *p = (int64_t*)(intptr_t)e;
+  return (char*)(intptr_t)p[1];
+  ```)
+
+;;; schema-error-count -- number of errors in an error Vec.
+;;;
+;;; Parameters:
+;;;   errs -- a Vec of SchemaError (the err payload of schema-decode)
+;;;
+;;; Returns:
+;;;   The error count (0 if errs is null).
+;;;
+;;; Since: Phase SC3
+(defn schema-error-count [errs :int] :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  return v ? (int)v->len : 0;
+  ```)
+
+;;; schema-error-at -- the i-th SchemaError in an error Vec.
+;;;
+;;; Parameters:
+;;;   errs -- a Vec of SchemaError
+;;;   i    -- zero-based index
+;;;
+;;; Returns:
+;;;   The SchemaError at index i (0 if out of bounds).
+;;;
+;;; Since: Phase SC3
+(defn schema-error-at [errs :int i :int] :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  if (!v || i < 0 || (size_t)i >= v->len) return 0;
+  return v->data[i];
+  ```)
+
+;;; schema-error-message -- format an error Vec into one human-readable cstr.
+;;;
+;;; Parameters:
+;;;   errs -- a Vec of SchemaError
+;;;
+;;; Returns:
+;;;   A newline-separated string, one "path: message" line per error
+;;;   (a root-level error omits the leading "path: "). Caller owns the cstr.
+;;;
+;;; Example:
+;;;   (schema-error-message errs)  ; => "user.age: expected :int, got :cstr"
+;;;
+;;; Since: Phase SC3
+(defn schema-error-message [errs :int] :cstr
+  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  if (!v || v->len == 0) {
+    char *empty = malloc(1); empty[0] = 0; return empty;
+  }
+  size_t total = 1;
+  for (size_t i = 0; i < v->len; i++) {
+    int64_t *e = (int64_t*)(intptr_t)v->data[i];
+    const char *path = (const char*)(intptr_t)e[0];
+    const char *msg  = (const char*)(intptr_t)e[1];
+    total += strlen(msg) + 2;
+    if (path && path[0]) total += strlen(path) + 2;
+  }
+  char *out = malloc(total);
+  out[0] = 0;
+  for (size_t i = 0; i < v->len; i++) {
+    int64_t *e = (int64_t*)(intptr_t)v->data[i];
+    const char *path = (const char*)(intptr_t)e[0];
+    const char *msg  = (const char*)(intptr_t)e[1];
+    if (i > 0) strcat(out, "\n");
+    if (path && path[0]) { strcat(out, path); strcat(out, ": "); }
+    strcat(out, msg);
+  }
+  return out;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; SC1-SC4 -- the decoder
+;; ---------------------------------------------------------------------------
+
+;;; schema-decode -- validate a JSON node against a schema.
+;;;
+;;; Parameters:
+;;;   schema -- a schema value (from the constructors above)
+;;;   node   -- a JSON node (from json/decode or #json(...))
+;;;
+;;; Returns:
+;;;   Result<ptr<void>, Vec<SchemaError>>. On success, ok holds the decoded
+;;;   value (see the module docstring for the per-kind result shape). On
+;;;   failure, err holds a Vec of every accumulated SchemaError -- decoding
+;;;   does not stop at the first violation.
+;;;
+;;; Example:
+;;;   (let [s (schema/field (schema/object-new) "age" (schema/int))
+;;;         r (schema-decode s (json/decode "{\"age\":1}"))]
+;;;     (schema-decode-ok? r))  ; => true
+;;;
+;;; Since: Phase SC1
+(defn schema-decode [schema :int node :int] :int
+  ```c
+  typedef struct { int64_t kind; int64_t a; int64_t b; int64_t c; } sch_t;
+  typedef struct { int64_t *data; size_t len; size_t cap; } vec_t;
+
+  /* error vector ------------------------------------------------------- */
+  vec_t *errs = malloc(sizeof(*errs));
+  errs->data = NULL; errs->len = 0; errs->cap = 0;
+
+  void vpush(vec_t *v, int64_t x) {
+    if (v->len == v->cap) {
+      v->cap = v->cap ? v->cap * 2 : 4;
+      v->data = realloc(v->data, v->cap * sizeof(int64_t));
+    }
+    v->data[v->len++] = x;
+  }
+  void push_err(const char *path, const char *msg, int64_t val) {
+    int64_t *e = malloc(3 * sizeof(int64_t));
+    e[0] = (int64_t)(intptr_t)strdup(path ? path : "");
+    e[1] = (int64_t)(intptr_t)strdup(msg);
+    e[2] = val;
+    vpush(errs, (int64_t)(intptr_t)e);
+  }
+  char *mkpath(const char *base, const char *key) {
+    if (!base || !base[0]) return strdup(key);
+    char *out = malloc(strlen(base) + strlen(key) + 2);
+    sprintf(out, "%s.%s", base, key);
+    return out;
+  }
+  char *mkidx(const char *base, int idx) {
+    const char *b = base ? base : "";
+    char *out = malloc(strlen(b) + 24);
+    sprintf(out, "%s[%d]", b, idx);
+    return out;
+  }
+  const char *tyname(int64_t jtype) {
+    switch (jtype) {
+      case 0: return ":nil";   case 1: return ":bool";
+      case 2: return ":int";   case 3: return ":float";
+      case 4: return ":cstr";  case 5: return ":array";
+      case 6: return ":object";default: return ":unknown";
+    }
+  }
+  const char *want_name(int64_t kind) {
+    switch (kind) {
+      case 0: return ":cstr";  case 1: return ":int";
+      case 2: return ":float"; case 3: return ":bool";
+      case 4: return ":nil";   case 6: return ":object";
+      case 7: return ":array"; default: return "value";
+    }
+  }
+  int jtype(int64_t n) {
+    if (!n) return -1;
+    int64_t *p = (int64_t*)(intptr_t)n; return (int)p[0];
+  }
+  int64_t jpayload(int64_t n) {
+    int64_t *p = (int64_t*)(intptr_t)n; return p[1];
+  }
+
+  /* recursive decoder: returns decoded value, pushes errors as it goes - */
+  int64_t decode_rec(sch_t *s, int64_t n, const char *path) {
+    if (!s) return 0;
+    char buf[128];
+    switch (s->kind) {
+      case 0: case 1: case 2: case 3: case 4: { /* scalars */
+        int64_t want = (s->kind == 0) ? 4 : (s->kind == 1) ? 2 :
+                       (s->kind == 2) ? 3 : (s->kind == 3) ? 1 : 0;
+        if (jtype(n) != want) {
+          snprintf(buf, sizeof(buf), "expected %s, got %s",
+                   want_name(s->kind), tyname(jtype(n)));
+          push_err(path, buf, n);
+          return 0;
+        }
+        return jpayload(n);
+      }
+      case 5: { /* literal */
+        if (s->a == 2) { /* int literal */
+          if (jtype(n) != 2 || jpayload(n) != s->b) {
+            snprintf(buf, sizeof(buf), "expected literal %lld",
+                     (long long)s->b);
+            push_err(path, buf, n);
+            return 0;
+          }
+          return s->b;
+        } else { /* string literal */
+          const char *want = (const char*)(intptr_t)s->b;
+          if (jtype(n) != 4 ||
+              strcmp((const char*)(intptr_t)jpayload(n), want) != 0) {
+            snprintf(buf, sizeof(buf), "expected literal \"%s\"", want);
+            push_err(path, buf, n);
+            return 0;
+          }
+          return jpayload(n);
+        }
+      }
+      case 6: { /* object */
+        if (jtype(n) != 6) {
+          snprintf(buf, sizeof(buf), "expected :object, got %s",
+                   tyname(jtype(n)));
+          push_err(path, buf, n);
+          return 0;
+        }
+        int64_t fcount = s->a;
+        int64_t *fdata = (int64_t*)(intptr_t)s->c;
+        if (fdata) {
+          for (int64_t i = 0; i < fcount; i++) {
+            const char *key = (const char*)(intptr_t)fdata[i * 2];
+            sch_t *fsch = (sch_t*)(intptr_t)fdata[i * 2 + 1];
+            /* look up key in the object node (linked list of [k,v,next]) */
+            int64_t *on = (int64_t*)(intptr_t)n;
+            int64_t cur = on[1]; int64_t found = 0; int present = 0;
+            while (cur) {
+              int64_t *ent = (int64_t*)(intptr_t)cur;
+              if (strcmp((const char*)(intptr_t)ent[0], key) == 0) {
+                found = ent[1]; present = 1; break;
+              }
+              cur = ent[2];
+            }
+            char *fpath = mkpath(path, key);
+            if (!present) {
+              if (fsch && fsch->kind == 8) { /* optional: absence is ok */
+                free(fpath); continue;
+              }
+              push_err(fpath, "missing required field", 0);
+            } else {
+              decode_rec(fsch, found, fpath);
+            }
+            free(fpath);
+          }
+        }
+        return n;
+      }
+      case 7: { /* array */
+        if (jtype(n) != 5) {
+          snprintf(buf, sizeof(buf), "expected :array, got %s",
+                   tyname(jtype(n)));
+          push_err(path, buf, n);
+          return 0;
+        }
+        sch_t *elem = (sch_t*)(intptr_t)s->a;
+        vec_t *jarr = (vec_t*)(intptr_t)jpayload(n);
+        vec_t *out = malloc(sizeof(*out));
+        out->data = NULL; out->len = 0; out->cap = 0;
+        if (jarr) {
+          for (size_t i = 0; i < jarr->len; i++) {
+            char *ipath = mkidx(path, (int)i);
+            int64_t dv = decode_rec(elem, jarr->data[i], ipath);
+            free(ipath);
+            vpush(out, dv);
+          }
+        }
+        return (int64_t)(intptr_t)out;
+      }
+      case 8: { /* optional */
+        if (jtype(n) == 0 || n == 0) return 0; /* null/absent -> none */
+        return decode_rec((sch_t*)(intptr_t)s->a, n, path);
+      }
+      case 9: { /* union: first arm that matches wins */
+        vec_t *arms = (vec_t*)(intptr_t)s->a;
+        if (!arms || arms->len == 0) return 0;
+        for (size_t i = 0; i < arms->len; i++) {
+          size_t before = errs->len;
+          int64_t dv = decode_rec((sch_t*)(intptr_t)arms->data[i], n, path);
+          if (errs->len == before) return dv; /* matched, no new errors */
+          errs->len = before; /* discard this arm's errors, try next */
+        }
+        /* no arm matched: re-run last arm to surface a representative error */
+        snprintf(buf, sizeof(buf), "no union arm matched (got %s)",
+                 tyname(jtype(n)));
+        push_err(path, buf, n);
+        return 0;
+      }
+      case 10: { /* transform */
+        size_t before = errs->len;
+        int64_t dv = decode_rec((sch_t*)(intptr_t)s->a, n, path);
+        if (errs->len != before) return 0;
+        int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)s->b;
+        return f(dv);
+      }
+      case 11: { /* recursive */
+        if (s->c == 0) {
+          int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)s->a;
+          s->c = f((int64_t)(intptr_t)s);
+        }
+        return decode_rec((sch_t*)(intptr_t)s->c, n, path);
+      }
+      default: return 0;
+    }
+  }
+
+  sch_t *s = (sch_t*)(intptr_t)schema;
+  int64_t value = decode_rec(s, node, "");
+
+  /* build Result { bool is_ok; int64_t ok_val; int64_t err_val; } */
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  if (errs->len == 0) {
+    r->is_ok = true; r->ok_val = value; r->err_val = 0;
+    free(errs->data); free(errs);
+  } else {
+    r->is_ok = false; r->ok_val = 0;
+    r->err_val = (int64_t)(intptr_t)errs;
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;;; schema-decode-ok? -- whether a schema-decode Result succeeded.
+;;;
+;;; Parameters:
+;;;   r -- the Result from schema-decode
+;;;
+;;; Returns:
+;;;   true if decoding succeeded, false otherwise.
+;;;
+;;; Since: Phase SC1
+(defn schema-decode-ok? [r :int] :bool
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return res && res->is_ok;
+  ```)
+
+;;; schema-decode-value -- the decoded value of a successful Result.
+;;;
+;;; Parameters:
+;;;   r -- the Result from schema-decode (must be ok)
+;;;
+;;; Returns:
+;;;   The decoded value (see the module docstring for per-kind shape).
+;;;
+;;; Since: Phase SC1
+(defn schema-decode-value [r :int] :int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return res ? res->ok_val : 0;
+  ```)
+
+;;; schema-decode-errors -- the error Vec of a failed Result.
+;;;
+;;; Parameters:
+;;;   r -- the Result from schema-decode (must be err)
+;;;
+;;; Returns:
+;;;   The Vec of SchemaError (0 if r is ok).
+;;;
+;;; Since: Phase SC1
+(defn schema-decode-errors [r :int] :int
+  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return res ? res->err_val : 0;
+  ```)
+
+;;; schema-decode-abort -- internal: print an error Vec to stderr and abort.
+(defn schema-decode-abort [errs :int] :int
+  ```c struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)errs;
+  fprintf(stderr, "schema-decode!: validation failed\n");
+  if (v) for (size_t i = 0; i < v->len; i++) {
+    int64_t *e = (int64_t*)(intptr_t)v->data[i];
+    const char *path = (const char*)(intptr_t)e[0];
+    const char *msg  = (const char*)(intptr_t)e[1];
+    if (path && path[0]) fprintf(stderr, "  %s: %s\n", path, msg);
+    else                 fprintf(stderr, "  %s\n", msg);
+  }
+  abort();
+  return 0;
+  ```)
+
+;;; schema-decode! -- decode against a schema, panicking on any violation.
+;;;
+;;; Parameters:
+;;;   schema -- a schema value
+;;;   node   -- a JSON node
+;;;
+;;; Returns:
+;;;   The decoded value. Aborts with the formatted error message if the
+;;;   value does not satisfy the schema -- use only for trusted data / tests.
+;;;
+;;; Example:
+;;;   (schema-decode! (schema/int) (json/int 5))  ; => 5
+;;;
+;;; Since: Phase SC1
+(defn schema-decode! [schema :int node :int] :int
+  (let [r (schema-decode schema node)]
+    (if (schema-decode-ok? r)
+      (schema-decode-value r)
+      (schema-decode-abort (schema-decode-errors r)))))
