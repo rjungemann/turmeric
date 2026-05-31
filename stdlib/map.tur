@@ -301,12 +301,17 @@
 ;;;
 ;;; Parameters:
 ;;;   & kvs -- an even number of arguments, alternating key then value.
-;;;            Keys are int-valued (the same carrier map-assoc expects); the
-;;;            #map{...} data literal normalizes keyword/string keys to their
-;;;            content hash before reaching this macro.
+;;;            Keys are int-valued (the carrier map-assoc hashes by value);
+;;;            the #map{...} data literal normalizes keyword/string keys to
+;;;            their content hash before reaching this macro. Values may be
+;;;            any scalar type V (:int, :cstr, :bool, :nil, :float) -- all
+;;;            values must unify to a single V, and all keys to a single
+;;;            (int) key type, else TUR-E0001 on the offending element.
 ;;;
 ;;; Returns:
 ;;;   A fresh Map populated with the given entries; later duplicate keys win.
+;;;   map-get returns the value type V, so a non-int value is read with an
+;;;   ascription, e.g. (:: (map-get m k k) :cstr).
 ;;;
 ;;; Note: this is the lowering target of the #map{...} data literal
 ;;;   (-Xdata-literals).  Writing #map{:a 1 :b 2} is preferred over calling

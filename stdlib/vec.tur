@@ -190,13 +190,18 @@
 ;;;   & xs -- zero or more elements, all of type A.
 ;;;
 ;;; Returns:
-;;;   A fresh Vec[A] populated with xs in order. Carrier type is :int
-;;;   (the same handle returned by vec-new), so it composes with all of
-;;;   vec-len, vec-get, vec-push!, vec-eq?, etc.
+;;;   A fresh Vec[A] populated with xs in order. The element type A may be
+;;;   any scalar (:int, :cstr, :bool, :nil, :float); elements are stored
+;;;   through an :int carrier slot, so a :float element round-trips as a
+;;;   bit-reinterpret. The handle composes with vec-len, vec-get, vec-push!,
+;;;   etc. Reads recover the element type: vec-get returns :A, so a non-int
+;;;   element is read with an ascription, e.g. (:: (vec-get v 0) :float).
 ;;;
 ;;; Note: all elements must unify to a single type. Mixing types -- e.g.
 ;;;   (vec-of 1 "x" 3.14) -- is a type error (TUR-E0001 on the offending
 ;;;   element). For heterogeneous fixed-arity collections, use tupleN.
+;;;   Aggregate (multi-word struct/ADT) element types are not supported by
+;;;   the carrier slot; those need a per-element typed layout (see TS3b).
 ;;;
 ;;; Note: under -Xdata-literals, a [...] vector in expression position lowers
 ;;;   to this macro, so [1 2 3] is sugar for (vec-of 1 2 3).  See
