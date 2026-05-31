@@ -16,7 +16,7 @@
   ```)
 
 (extern-c tur_reactor_new [] :ptr)
-(extern-c tur_reactor_add_chan [r :ptr ch :ptr cb :int ud :int] :int)
+(extern-c tur_reactor_add_chan [r :ptr ch :ptr ^fat cb :int ud :int] :int)
 (extern-c tur_reactor_run [r :ptr] :void)
 (extern-c tur_reactor_wake [r :ptr] :void)
 (extern-c tur_reactor_free [r :ptr] :void)
@@ -105,17 +105,13 @@
 (defn print-received [n :int] :nil
   ```c printf("received=%lld\n", (long long)n); ```)
 
-(defn use-val [v :int] :nil
-  ```c (void)((int64_t)v); ```)
-
 (defn main [] :int
   (let [r       (tur_reactor_new)
         ch      (make-chan)
-        sentinel 1]
+]
     ;; One-shot channel watcher.
     (tur_reactor_add_chan r ch
       (fn [id value ud] :nil
-        (use-val sentinel)
         (print-received value))
       0)
     ;; Sender thread: 20ms delay, send 42, wake reactor.

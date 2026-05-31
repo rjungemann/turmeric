@@ -2111,8 +2111,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
                     args[i] = shim;
-                } else if (ak == TY_PTR_VOID || ak == TY_NIL) {
-                    /* already a fat closure, or a null callback -- pass through */
+                } else if (ak == TY_PTR_VOID || ak == TY_NIL ||
+                           (ak == TY_INT && args[i]->kind == EX_INT_LIT &&
+                            args[i]->as.i == 0)) {
+                    /* already a fat closure, nil, or a null (0) callback -- pass
+                     * through unchanged */
                 } else {
                     Buf gb; buf_init(&gb);
                     type_print(&gb, args[i]->type);

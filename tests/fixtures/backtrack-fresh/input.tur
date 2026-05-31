@@ -29,7 +29,7 @@
   return (int64_t)(intptr_t)head;
   ```)
 
-(defn fresh [f] :int
+(defn fresh [^fat f] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
   int64_t unbound = INT64_MIN; /* sentinel: unbound logic variable, distinct from any valid value */
@@ -48,6 +48,6 @@
 
 (defn main []
   ;; A fresh variable must not equal 0 (it uses INT64_MIN as unbound sentinel).
-  ;; Capture zero to force a fat-closure (required by fresh's calling convention).
-  (let [zero 0]
-    (bt-print (fresh (fn [x] (let [_ zero] (mreturn (if (= x 0) 0 1))))))))
+  ;; The lambda is non-capturing; fresh's ^fat parameter auto-shims it into a
+  ;; fat closure (no capture-forcing dummy needed).
+  (bt-print (fresh (fn [x] (mreturn (if (= x 0) 0 1))))))

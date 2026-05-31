@@ -19,7 +19,7 @@
   ```)
 
 (extern-c tur_reactor_new [] :ptr)
-(extern-c tur_reactor_add_fd [r :ptr fd :int events :int cb :int ud :int] :int)
+(extern-c tur_reactor_add_fd [r :ptr fd :int events :int ^fat cb :int ud :int] :int)
 (extern-c tur_reactor_run [r :ptr] :void)
 (extern-c tur_reactor_stop [r :ptr] :void)
 (extern-c tur_reactor_free [r :ptr] :void)
@@ -40,9 +40,6 @@
 (defn pipe-close [p :ptr<void>] :nil
   ```c close(((int *)p)[0]); close(((int *)p)[1]); free(p); ```)
 
-(defn use-val [v :ptr<void>] :nil
-  ```c (void)v; ```)
-
 (defn main [] :int
   (let [r       (tur_reactor_new)
         p-ready (make-pipe)    ;; has data -- fires immediately
@@ -55,7 +52,6 @@
     ;; Primary source: callback fires once and stops the reactor.
     (tur_reactor_add_fd r (pipe-read-fd p-ready) 1
       (fn [id events ud] :nil
-        (use-val r)
         (println "callback fired")
         (tur_reactor_stop r))
       0)
