@@ -885,6 +885,23 @@ Expr *elab_call(Elab *e, Form *call) {
         return elab_lower_map_call(e, call, name);
     }
 
+    /* GMK2 (generic-map-key-dispatch-plan): a direct (hamt-of "k" v ...) whose
+     * leading key is a string literal builds a content-keyed string map, so
+     * rewrite the head to smap-of before macro expansion.  hamt-of with an int
+     * leading key (the only existing usage) is untouched -- string *values*
+     * like (hamt-of 1 "alpha") keep an int key in slot 1 and never match. */
+    if (call->as.list.len >= 3 && strcmp(name->name, "hamt-of") == 0 &&
+        call->as.list.items[1]->tag == F_STR) {
+        const Symbol *smap_sym =
+            symtab_intern(e->st, strslice("smap-of", 7));
+        uint32_t n_items = call->as.list.len;
+        Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
+        items[0] = form_sym(e->arena, head->span, smap_sym);
+        for (uint32_t i = 1; i < n_items; i++) items[i] = call->as.list.items[i];
+        Form *rewritten = form_list(e->arena, call->span, items, n_items);
+        return elab_form(e, rewritten);
+    }
+
     /* Phase 6: Check if it's a macro call */
     MacroDef *macro = elab_lookup_macro(e, name);
     if (macro) {
