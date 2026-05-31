@@ -666,6 +666,11 @@ static int compile_to_c(const char *path, Buf *out_c,
         "set.tur",
         /* Phase F5 (cross-plan-followups): mutable open-addressed hash table. */
         "mutmap.tur",
+        /* JR0 (json-reader-macro-plan): json.tur backs the #json(...) reader
+         * macro's tagged-node lowering.  Only loaded when -Xjson-reader is on
+         * (skipped below otherwise) so default builds and their codegen
+         * snapshots are unaffected. */
+        "json.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -699,6 +704,9 @@ static int compile_to_c(const char *path, Buf *out_c,
          * input file IS one of the auto-loaded ones.  Earlier entries still
          * load so the input's transitive dependencies resolve. */
         if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from)
+            continue;
+        /* JR0: json.tur is only auto-loaded under -Xjson-reader (see array). */
+        if (!g_json_reader_enabled && strcmp(stdlib_files[i], "json.tur") == 0)
             continue;
         char path_buf[4096];
         tur_stdlib_path(stdlib_files[i], path_buf, sizeof(path_buf));
@@ -4320,6 +4328,7 @@ static void wk_apply_flags(const char *flags_str) {
     while (tok) {
         if      (strcmp(tok, "-Xgadt")             == 0) g_gadt_enabled            = true;
         else if (strcmp(tok, "-Xdata-literals")     == 0) g_data_literals_enabled = true;
+        else if (strcmp(tok, "-Xjson-reader")       == 0) g_json_reader_enabled = true;
         else if (strcmp(tok, "-Xsized-types")       == 0) { g_sized_types_enabled = true; g_gadt_enabled = true; }
         else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
         else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
@@ -7231,6 +7240,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xdata-literals") == 0) {
             /* DL0: enable map/vec/set data literal syntax */
             g_data_literals_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xjson-reader") == 0) {
+            /* JR0: enable the #json(...) compile-time reader macro */
+            g_json_reader_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

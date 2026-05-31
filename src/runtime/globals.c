@@ -50,6 +50,12 @@ bool g_gadt_enabled = false;
  * Opt-in; off by default so programs that don't use the syntax are unaffected. */
 bool g_data_literals_enabled = false;
 
+/* JR0 (json-reader-macro-plan): -Xjson-reader flag — enable the #json(...)
+ * compile-time reader macro that parses a verbatim JSON blob and emits the
+ * equivalent Turmeric S-expression (hamt-of / vec-of / literals).
+ * Opt-in; off by default so programs that don't use the syntax are unaffected. */
+bool g_json_reader_enabled = false;
+
 /* Phase SZ4: -Xsized-types flag — enable sized types (implies -Xgadt) */
 bool g_sized_types_enabled = false;
 

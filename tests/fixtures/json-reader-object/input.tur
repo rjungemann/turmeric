@@ -1,0 +1,14 @@
+;; #json({...}) builds a tagged JSON object node. Unlike a HAMT, values may
+;; be heterogeneous (string, int, bool); each is retrieved and typed by key.
+(defn name- [] :cstr
+  (json/get-string
+    (json/get! #json({"name": "alice", "age": 30, "admin": true}) "name")))
+(defn age- [] :int
+  (json/get-int
+    (json/get! #json({"name": "alice", "age": 30, "admin": true}) "age")))
+(defn admin- [] :bool
+  (json/get-bool
+    (json/get! #json({"name": "alice", "age": 30, "admin": true}) "admin")))
+(println (name-))
+(println (age-))
+(println (if (admin-) 1 0))

@@ -1,0 +1,10 @@
+;; null -> a real, type-distinct null node (json/type == 0), NOT a 0 sentinel.
+;; true/false -> bool nodes (json/type == 1) carrying their boolean value.
+(defn null-type [] :int (json/type #json(null)))
+(defn true-type [] :int (json/type #json(true)))
+(defn true-val [] :bool (json/get-bool #json(true)))
+(defn false-val [] :bool (json/get-bool #json(false)))
+(println (null-type))
+(println (true-type))
+(println (if (true-val) 1 0))
+(println (if (false-val) 1 0))
