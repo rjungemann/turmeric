@@ -1718,6 +1718,33 @@ static void emit_fetch_inc_bld(FILE *f, const char *name) {
     fprintf(f, "set(_spice_%s_bld \"${%s_BINARY_DIR}\")\n", name, name);
 }
 
+/* Emit the JSON "include_dirs" line for one manifest entry.
+ *   from_targets -- when true (the system find_package branch), build the
+ *     array from each target's INTERFACE_INCLUDE_DIRECTORIES. That property
+ *     is a CMake ;-list, so a single target may carry several dirs; the
+ *     $<JOIN:...,", "> genexpr rewrites the ; separators into JSON array
+ *     element boundaries at file(GENERATE) time, so a multi-dir system
+ *     package lands as ["d1", "d2"] instead of a single "d1;d2" string that
+ *     would produce a bogus -Id1;d2 flag downstream. When false (the fetch
+ *     branch, path deps, or non-prefer-system deps), emit the single
+ *     precomputed ${_spice_<name>_inc} dir. */
+static void emit_include_dirs_line(FILE *f, const PkgCmakeDep *d,
+                                   bool from_targets) {
+    if (from_targets && d->n_targets > 0) {
+        fprintf(f, "  \"    \\\"include_dirs\\\": [");
+        for (int j = 0; j < d->n_targets; j++) {
+            fprintf(f,
+                "%s\\\"$<JOIN:$<TARGET_PROPERTY:%s,"
+                "INTERFACE_INCLUDE_DIRECTORIES>,\\\", \\\">\\\"",
+                j ? ", " : "", d->targets[j]);
+        }
+        fprintf(f, "],\\n\"\n");
+    } else {
+        fprintf(f, "  \"    \\\"include_dirs\\\": "
+                   "[\\\"${_spice_%s_inc}\\\"],\\n\"\n", d->name);
+    }
+}
+
 /* Emit the JSON "link_dirs"/"link_libs" lines for one manifest entry.
  *   use_full_targets -- when true, $<TARGET_FILE_DIR:...> is keyed off the
  *     fully-qualified target name (e.g. "MbedTLS::mbedtls"), which is what a
@@ -1893,6 +1920,11 @@ bool pkg_gen_cmake_deps(const char *project_dir,
             emit_fetch_inc_bld(f, d->name);
         }
 
+        /* Header: open brace + resolved_via (+ system_version for
+         * :prefer-system deps). The include_dirs/link_* lines follow; for
+         * :prefer-system they are emitted per-branch below because the
+         * system and fetch paths key off different target names and include
+         * sources. */
         fprintf(f, "string(APPEND _spice_manifest\n");
         fprintf(f, "  \"  \\\"%s\\\": {\\n\"\n", d->name);
         fprintf(f, "  \"    \\\"resolved_via\\\": \\\"${_%s_resolved_via}\\\",\\n\"\n",
@@ -1902,21 +1934,23 @@ bool pkg_gen_cmake_deps(const char *project_dir,
         if (d->prefer_system)
             fprintf(f, "  \"    \\\"system_version\\\": \\\"${%s_VERSION}\\\",\\n\"\n",
                     d->cmake_name);
-        fprintf(f, "  \"    \\\"include_dirs\\\": [\\\"${_spice_%s_inc}\\\"],\\n\"\n",
-                d->name);
         fprintf(f, ")\n");
 
-        /* link_dirs/link_libs. For :prefer-system deps the genexpr target key
-         * differs by branch (namespaced "MbedTLS::mbedtls" for the system
-         * import vs the unaliased "mbedtls" the FetchContent build exports),
-         * so the two branches are emitted under a runtime CMake `if`. */
+        /* include_dirs + link_dirs/link_libs. For :prefer-system deps the
+         * genexpr target key differs by branch (namespaced "MbedTLS::mbedtls"
+         * for the system import vs the unaliased "mbedtls" the FetchContent
+         * build exports), and the system branch sources include dirs from the
+         * targets' INTERFACE_INCLUDE_DIRECTORIES, so the two branches are
+         * emitted under a runtime CMake `if`. */
         if (d->prefer_system) {
             fprintf(f, "if(_%s_resolved_via STREQUAL \"system\")\n", d->name);
             fprintf(f, "string(APPEND _spice_manifest\n");
+            emit_include_dirs_line(f, d, /*from_targets=*/true);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/true);
             fprintf(f, ")\n");
             fprintf(f, "else()\n");
             fprintf(f, "string(APPEND _spice_manifest\n");
+            emit_include_dirs_line(f, d, /*from_targets=*/false);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
             fprintf(f, ")\n");
             fprintf(f, "endif()\n");
@@ -1930,6 +1964,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * With no :targets, fall back to the dep's BINARY_DIR + a single
              * link_lib from cmake_dep_link_lib(). */
             fprintf(f, "string(APPEND _spice_manifest\n");
+            emit_include_dirs_line(f, d, /*from_targets=*/false);
             emit_link_lines(f, d, link_lib, /*use_full_targets=*/false);
             fprintf(f, ")\n");
         }

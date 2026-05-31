@@ -225,11 +225,14 @@ SF0-SF1 are the meaningful change; SF2-SF4 are polish and rollout.
 - `resolved_via` / `system_version` flow: `find_package` -> generated
   `spice-deps-manifest.json` -> `pkg_cmake_manifest_read` -> `tur.lock`.
 - Coverage lives in `tests/spice-resolver-tests.sh` (cases `SF0`, `SF1/SF2`,
-  `SF3`), exercised hermetically with a fake `find_package` config so no
-  network is required.
-- **Known limitation (per Open questions):** when a system Config package
-  exports multiple include directories in `INTERFACE_INCLUDE_DIRECTORIES`,
-  only the first is threaded into the manifest JSON today.
+  `SF2b`, `SF3`), exercised hermetically with a fake `find_package` config so
+  no network is required.
+- Multi-dir system includes: a target's `INTERFACE_INCLUDE_DIRECTORIES` is a
+  CMake `;`-list, so the system branch wraps each target's property in
+  `$<JOIN:...,", ">` to rewrite the `;` separators into JSON array element
+  boundaries at `file(GENERATE)` time. A package exporting several include
+  dirs lands as `["d1", "d2"]` rather than a single `"d1;d2"` string that
+  would otherwise produce a bogus `-Id1;d2` flag (regression test `SF2b`).
 
 ---
 

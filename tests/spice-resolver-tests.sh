@@ -1077,6 +1077,49 @@ else
 fi
 rm -f "$SF1_ERR" "$SF3_ERR"; rm -rf "$SF1"
 
+# SF2b: a system package whose INTERFACE_INCLUDE_DIRECTORIES holds multiple
+# dirs (a CMake ;-list) must expand into separate JSON array elements, not a
+# single "d1;d2" string (which would produce a bogus -Id1;d2 flag).
+SF2B=$(mktemp -d)
+mkdir -p "$SF2B/fk/lib/cmake/MultiDep" "$SF2B/fk/include/a" "$SF2B/fk/include/b"
+: >"$SF2B/fk/lib/libmultidep.a"
+cat >"$SF2B/fk/lib/cmake/MultiDep/MultiDepConfig.cmake" <<'EOF'
+add_library(MultiDep::multidep STATIC IMPORTED)
+set_target_properties(MultiDep::multidep PROPERTIES
+  IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libmultidep.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include/a;${CMAKE_CURRENT_LIST_DIR}/../../../include/b")
+set(MultiDep_FOUND TRUE)
+EOF
+cat >"$SF2B/build.tur" <<'EOF'
+(defpackage sf2b
+  :name "sf2b"
+  :cmake-deps #{
+    "multidep" #{:prefer-system true :cmake-name "MultiDep"
+                 :targets ["MultiDep::multidep"]
+                 :url "https://example.invalid/x" :ref "v1"}
+  })
+EOF
+SF2B_ERR=$(mktemp)
+( cd "$SF2B" && CMAKE_PREFIX_PATH="$SF2B/fk" "$TUR_ABS" fetch ) \
+    >/dev/null 2>"$SF2B_ERR"
+sf2b_rc=$?
+# Expect two distinct quoted include_dirs entries, ending in /include/a and /b.
+if [ "$sf2b_rc" -eq 0 ] \
+   && grep -qF 'include/a", "' "$SF2B/cmake/spice-deps-manifest.json" \
+   && grep -qF 'include/b"]' "$SF2B/cmake/spice-deps-manifest.json"; then
+    echo "PASS SF2b: multi-dir system include path expands to JSON array"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF2b: multi-dir include path not expanded"
+    echo "  exit: $sf2b_rc"
+    [ -f "$SF2B/cmake/spice-deps-manifest.json" ] && \
+      { echo "  manifest:"; sed 's/^/    /' "$SF2B/cmake/spice-deps-manifest.json"; }
+    echo "  stderr:"; sed 's/^/    /' "$SF2B_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF2b: multi-dir include expansion")
+fi
+rm -f "$SF2B_ERR"; rm -rf "$SF2B"
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

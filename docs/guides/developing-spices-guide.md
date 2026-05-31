@@ -557,9 +557,7 @@ in the manifest.
 
 > **Caveats.** A binary linked against a Homebrew/apt shared library will fail
 > at runtime on a machine without that library installed; pin the source build
-> (or `--refetch`) for portable artefacts. When a system Config package exports
-> several include directories, only the first is currently threaded through the
-> manifest JSON. See
+> (or `--refetch`) for portable artefacts. See
 > [tur-fetch-system-first-plan.md](../tur-fetch-system-first-plan.md) for the
 > design rationale and open questions.
 
