@@ -83,12 +83,12 @@ else
 fi
 
 # --- scenario 3: rerun is a no-op (mtime unchanged) -----------------------
-MT_BEFORE=$(stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
-            || stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so")
+MT_BEFORE=$(stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
+            || stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null)
 sleep 1
 (cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
-MT_AFTER=$(stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
-           || stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so")
+MT_AFTER=$(stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
+           || stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null)
 if [ "$MT_BEFORE" = "$MT_AFTER" ]; then
     pass "repl-spice-load-rerun-skips-rebuild"
 else
@@ -99,8 +99,8 @@ fi
 # --- scenario 4: touching a source rebuilds -------------------------------
 touch "$PROJ/src/smoke.tur"
 (cd "$PROJ" && echo ':quit' | "$TUR_BIN" repl >/dev/null 2>&1)
-MT_REBUILT=$(stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
-             || stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so")
+MT_REBUILT=$(stat -c %Y "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null \
+             || stat -f %m "$PROJ/.tur-repl-cache/lib-0.so" 2>/dev/null)
 if [ "$MT_REBUILT" != "$MT_AFTER" ]; then
     pass "repl-spice-load-rebuild-on-change"
 else

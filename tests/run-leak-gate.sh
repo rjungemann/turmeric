@@ -37,15 +37,56 @@ if [ ! -x "$TUR" ]; then
     exit 1
 fi
 
+# LeakSanitizer is Linux-only: on macOS (and other platforms without LSan)
+# AddressSanitizer aborts at startup with "detect_leaks is not supported on
+# this platform" before `tur` runs, so the gate cannot execute there.  Probe
+# once and skip cleanly rather than reporting spurious failures.  (Detected at
+# runtime via the diagnostic re-run added in run-leak-gate; see commit history.)
+probe=$(ASAN_OPTIONS="detect_leaks=1:exitcode=23" "$TUR" --version 2>&1)
+if printf '%s' "$probe" | grep -q "detect_leaks is not supported"; then
+    echo "PASS leak-gate (skipped: LeakSanitizer unsupported on this platform)"
+    echo "leak-gate summary: skipped -- no LSan on this platform"
+    exit 0
+fi
+
 # Each case: <fixture-dir> <expected-diag-substring>
 check_leak_clean() {
     local name="$1" input="$2" needle="$3"
-    local out
+    local out rc
     out=$(ASAN_OPTIONS="$ASAN_OPTIONS" "$TUR" -Xeffect-types check "$input" 2>&1)
+    rc=$?
 
     # Sanity: we must actually be exercising the diagnostic path.
     if ! printf '%s' "$out" | grep -F -q "$needle"; then
         fail "$name" "expected diagnostic '$needle' not emitted -- not on the error path"
+        # Divergence diagnostics (this has reproduced on macOS CI but not on
+        # Linux).  Surface enough to tell apart the two candidate causes:
+        #   1. the type-checker genuinely accepts the program on this platform
+        #      (a real logic divergence), or
+        #   2. the leak-check exit (exitcode=23 -> _exit) truncates buffered
+        #      stdio before the diagnostic is flushed (the diag was emitted but
+        #      lost from the captured stream).
+        # The re-run with detect_leaks=0 discriminates: if the needle reappears
+        # there, it is (2) -- an output-flush/exit interaction, not a typecheck
+        # divergence; if still absent, it is (1).
+        echo "    exit code : $rc   (ASAN_OPTIONS=$ASAN_OPTIONS)"
+        echo "    output    : ${#out} bytes captured (stdout+stderr)"
+        if printf '%s' "$out" | grep -q "LeakSanitizer"; then
+            echo "    note      : output contains a LeakSanitizer report"
+        fi
+        printf '%s\n' "$out" | sed 's/^/    > /'
+        local out_nolsan
+        out_nolsan=$(ASAN_OPTIONS="detect_leaks=0" "$TUR" -Xeffect-types check "$input" 2>&1)
+        if printf '%s' "$out_nolsan" | grep -F -q "$needle"; then
+            echo "    verdict   : '$needle' DOES appear with detect_leaks=0 --"
+            echo "                cause is the leak-check exit truncating output,"
+            echo "                NOT a type-checker divergence."
+        else
+            echo "    verdict   : '$needle' still absent with detect_leaks=0 --"
+            echo "                genuine diagnostic divergence on this platform."
+            echo "    --- detect_leaks=0 output (${#out_nolsan} bytes) ---"
+            printf '%s\n' "$out_nolsan" | sed 's/^/    > /'
+        fi
         return
     fi
     # The real assertion: no LeakSanitizer report.
