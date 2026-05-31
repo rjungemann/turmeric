@@ -1,6 +1,29 @@
 # Codegen Cross-Module Private-Defn Collision -- Plan (CC0--CC3)
 
-> **Status:** Not started.
+> **Status:** Done (CC0--CC2 landed). CC3 (spice cleanup) is optional and not
+> done here -- `../turmeric-spices` is not checked out in this environment.
+>
+> **Outcome:** Root cause was hypothesis (a), wrong-binding resolution -- but
+> the operative defect was binding *reuse*, not name lookup. In whole-program
+> mode every module elaborates into the single shared `e->global` scope, and
+> `elab_define_fn` reused a same-named private binding from a *different* module
+> as if it were a forward declaration (last-writer-wins on
+> `defining_module_name`), collapsing two distinct private defns onto one
+> mangled C symbol. The "private defns get a NULL module name" side-theory was
+> ruled out: `binding_new` (elab_core.c:1417) stamps `defining_module_name`
+> unconditionally.
+>
+> **Fix:** In `elab_fns.c` (the function-binding creation site), only reuse an
+> existing global `TY_FN` binding when it belongs to the *same* module being
+> defined into (`defining_module_name == e->current_module_name`) or to no
+> module yet (`NULL`, e.g. a pre-module stdlib forward decl). Otherwise a fresh,
+> distinctly-mangled binding is created. Resolution then needs no separate fix:
+> `scope_lookup` reverse-scans the shared scope, and each module's body is
+> elaborated immediately after its own helper is added, so a module's call to
+> its private helper binds to that module's (newest) binding. Same-module
+> recursion, mutual recursion (pass-1 forward decl -> pass-2 reuse), and
+> stdlib forward decls all continue to reuse correctly. Verified: full suite
+> 1152 passed, 0 failed.
 >
 > **Flag:** None. Bug in the codegen / elab pipeline; fix is invisible to
 > well-formed programs.
@@ -123,19 +146,19 @@ top of the prefixed one. Worth confirming.
 
 ## Plan
 
--  [ ] **CC0** -- Land a regression fixture under
+-  [x] **CC0** -- Land a regression fixture under
    `tests/fixtures/codegen-private-defn-collision/` with two minimal
    modules each defining a private `(defn __h [] :int ...)` and a top-level
    that imports both. Expect a clean build today; check it actually fails
    with the current toolchain to lock the symptom in.
 
--  [ ] **CC1** -- Add a small `printf` / span-dump trace in
+-  [x] **CC1** -- Add a small `printf` / span-dump trace in
    `elab_form` for the `(__h)` call sites, and similar trace in the
    defn-emission loop. Confirm which of the two hypotheses (wrong
    binding resolved, or duplicate emission) is actually firing. Record
    findings inline below this list.
 
--  [ ] **CC2** -- Fix. Two likely landing spots:
+-  [x] **CC2** -- Fix. Two likely landing spots:
 
    1. If resolution is at fault: ensure global-scope name lookup
       preferences the *current module's* binding when multiple privates
@@ -153,7 +176,8 @@ top of the prefixed one. Worth confirming.
    'plot/decor' mangles to the same C name as ...") rather than a
    downstream clang error.
 
--  [ ] **CC3** -- After the fix is in, remove the defensive uniqueness
+-  [ ] **CC3** (optional; not done here -- `../turmeric-spices` absent) --
+   After the fix is in, remove the defensive uniqueness
    in `../turmeric-spices/spices/plot/src/plot/{decor,interval,line}.tur`
    (rename all three back to a shared `__nan` helper) and verify the
    plot test suite still passes. Optional; keeps the spice tree clean.

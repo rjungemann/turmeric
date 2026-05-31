@@ -2031,7 +2031,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Reuse pass-1 forward bindings in place so subsequent lookups observe
      * updated arity/types from the real definition. */
     Binding *b = NULL;
-    if (existing && existing->type.kind == TY_FN && existing->is_global) {
+    /* CC2: Only reuse an existing global binding as a forward
+     * declaration/redefinition when it belongs to the *same* module being
+     * defined into (or to no module yet -- e.g. a pre-module stdlib forward
+     * decl).  In whole-program mode every module elaborates into the single
+     * shared global scope, so a same-named *private* defn from a *different*
+     * module would otherwise be reused here, collapsing two distinct functions
+     * onto one mangled C symbol (and stamping it with whichever module came
+     * last).  Creating a fresh binding instead gives each module's private its
+     * own distinctly-mangled C name. */
+    if (existing && existing->type.kind == TY_FN && existing->is_global &&
+        (existing->defining_module_name == NULL ||
+         existing->defining_module_name == e->current_module_name)) {
         b = existing;
         b->type = fn_type;
         b->span = name_f->span;
