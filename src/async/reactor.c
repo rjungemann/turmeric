@@ -815,3 +815,60 @@ int64_t tur_reactor_run_fibers(void *gp) {
     tl_current_group = prev;
     return g->completed;
 }
+
+/* ---- park bridge (Phase F4-F5) ---- */
+
+/*
+ * Wake callback for a parked fiber. Registered with the reactor as a C
+ * fat-closure: park_cb_fat[0] is this handler, park_cb_fat[1] is the
+ * LocalFiber*. The reactor invokes it via the fat-pointer convention --
+ * fd/chan sources call it with 3 args (self, id, events/value, user) and
+ * timer sources with 2 (self, id, user); we only read `arg2` for the
+ * fd/chan path and disambiguate the timeout by source id, so the differing
+ * arity is harmless.
+ */
+static int64_t local_park_wake_cb(void *self, int64_t id, int64_t arg2,
+                                   int64_t user) {
+    (void)user;
+    int64_t *fat = (int64_t *)self;
+    LocalFiber *lf = (LocalFiber *)(intptr_t)fat[1];
+    LocalFiberGroup *g = lf->group;
+
+    if (id == lf->park_timer_src) {
+        lf->park_result = TUR_LOCAL_PARK_TIMEOUT;
+    } else {
+        /* fd: arg2 is the event mask; chan: arg2 is the received value. */
+        lf->park_result = arg2;
+    }
+    /* One-shot: drop the fd/chan source and any companion timeout source. */
+    local_fiber_clear_park(lf);
+    ready_push(g, lf);
+    return 0;
+}
+
+int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
+                          int64_t timeout_ms) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g) return TUR_LOCAL_NOT_IN_FIBER;
+    LocalFiber *lf = g->current;
+    if (!lf) return TUR_LOCAL_NOT_IN_FIBER; /* not inside a fiber */
+
+    lf->park_cb_fat[0] = (int64_t)(intptr_t)local_park_wake_cb;
+    lf->park_cb_fat[1] = (int64_t)(intptr_t)lf;
+    int64_t cb = (int64_t)(intptr_t)lf->park_cb_fat;
+
+    lf->park_result = TUR_LOCAL_NOT_IN_FIBER;
+    lf->park_fd_src = tur_reactor_add_fd(g->reactor, fd, events, cb, NULL);
+    if (lf->park_fd_src < 0)
+        return TUR_LOCAL_NOT_IN_FIBER; /* registration failed */
+
+    if (timeout_ms >= 0) {
+        lf->park_timer_src =
+            tur_reactor_add_timer(g->reactor, timeout_ms, cb, NULL);
+        /* On timer-registration failure just park without a timeout. */
+    }
+
+    /* Yield to the driver; resumed by local_park_wake_cb. */
+    tur_fiber_yield(lf->fiber, NULL);
+    return lf->park_result;
+}

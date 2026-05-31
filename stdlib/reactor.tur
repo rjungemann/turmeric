@@ -524,3 +524,29 @@
 
 (defn reactor-run-fibers [g :ptr<void>] #{} :int
   (tur_reactor_run_fibers g))
+;;; local-park-fd -- park the running fiber until an fd is ready.
+;;;
+;;; Registers fd on the bound reactor for events (a READ/WRITE bitmask) and
+;;; suspends the current fiber. The fiber resumes when the reactor fires the
+;;; source; the source is removed before it runs again (one-shot). If
+;;; timeout-ms is >= 0 and elapses first, the fiber resumes with -2.
+;;;
+;;; Must be called from inside a fiber spawned into g. Outside of one it
+;;; returns -1 and leaves the caller running.
+;;;
+;;; Parameters:
+;;;   g          -- group handle
+;;;   fd         -- file descriptor to wait on
+;;;   events     -- event bitmask (READ | WRITE)
+;;;   timeout-ms -- timeout in milliseconds, or -1 to wait forever
+;;;
+;;; Returns:
+;;;   int -- the fired event mask (>= 0), -2 on timeout, or -1 if not in a fiber
+;;;
+;;; Example:
+;;;   (local-park-fd g read-fd READ -1)  ; => 1 when readable
+;;;
+;;; Since: Phase F4
+
+(defn local-park-fd [g :ptr<void> fd :int events :int timeout-ms :int] #{} :int
+  (tur_local_park_fd g fd events timeout-ms))
