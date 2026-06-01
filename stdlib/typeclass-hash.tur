@@ -1,0 +1,44 @@
+;;; tur/typeclass-hash -- minimal Hash typeclass stub for typed-collection keys.
+;;;
+;;; Auto-loaded so map and other content-keyed collections can resolve
+;;; (Hash K) constraints for primitive key types without importing
+;;; typeclass.tur.  Mirrors typeclass-eq.tur: it declares the Hash class
+;;; plus the four primitive instances most likely to appear as map keys.
+;;; The full typeclass.tur no longer re-declares Hash, so loading it on
+;;; demand stays idempotent against this stub.
+;;;
+;;; Since: Phase GHE0
+;; Phase GHE0: Minimal Hash class stub for typed map keys.
+;; Auto-loaded so that map.tur (and #map{...} / hamt-of lowering) can route
+;; content-keyed maps through (Hash K) for primitive K without requiring the
+;; user to import stdlib/typeclass.tur.
+;;; Hash -- typeclass for hashing a value to an integer.
+;;;
+;;; Parameters:
+;;;   a -- the type to hash
+;;;
+;;; Returns:
+;;;   An :int hash value suitable for use as a HAMT key.
+;;;
+;;; Example:
+;;;   (hash 42)   ; => 42
+;;;   (hash true) ; => 1
+;;;
+;;; Since: Phase TM0
+(defclass Hash [a] (hash [x] :int))
+;;; Hash [int] -- Hash instance for int (identity hash).
+
+(definstance Hash [int] (hash [x] x))
+;;; Hash [bool] -- Hash instance for bool (0 for false, 1 for true).
+
+(definstance Hash [bool] (hash [x] (if x 1 0)))
+;;; Hash [cstr] -- Hash instance for cstr (content hash via tur_hamt_hash_str).
+
+(definstance Hash [cstr] (hash [x] :int ```c return (int64_t)tur_hamt_hash_str(x);
+    ```))
+;;; Hash [float32] -- Hash instance for float32 (bit-cast and hash).
+
+(definstance Hash [float32] (hash [x] :int ```c union { float f; int32_t i; } u;
+    u.f = (float)x;
+    return (int64_t)u.i;
+    ```))

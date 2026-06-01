@@ -526,34 +526,8 @@
 ;; Into[A B] - conversion from A to B (blanket derived from From[A B])
 
 (defclass Into [a b] (into [x] :int))
-;;; Hash -- typeclass for hashing a value to an integer.
-;;;
-;;; Parameters:
-;;;   a -- the type to hash
-;;;
-;;; Returns:
-;;;   An :int hash value suitable for use as a HAMT key.
-;;;
-;;; Example:
-;;;   (hash 42)   ; => 42
-;;;   (hash true) ; => 1
-;;;
-;;; Since: Phase TM0
-
-(defclass Hash [a] (hash [x] :int))
-;;; Hash [int] -- Hash instance for int (identity hash).
-
-(definstance Hash [int] (hash [x] x))
-;;; Hash [bool] -- Hash instance for bool (0 for false, 1 for true).
-
-(definstance Hash [bool] (hash [x] (if x 1 0)))
-;;; Hash [cstr] -- Hash instance for cstr (content hash via tur_hamt_hash_str).
-
-(definstance Hash [cstr] (hash [x] :int ```c return (int64_t)tur_hamt_hash_str(x);
-    ```))
-;;; Hash [float32] -- Hash instance for float32 (bit-cast and hash).
-
-(definstance Hash [float32] (hash [x] :int ```c union { float f; int32_t i; } u;
-    u.f = (float)x;
-    return (int64_t)u.i;
-    ```))
+;;; Hash -- the Hash class and its primitive instances now live in the
+;;; auto-loaded stub stdlib/typeclass-hash.tur (Phase GHE0).  They were
+;;; removed from this module so that loading typeclass.tur on demand does
+;;; not redefine the always-present stub.  Reference `hash` directly; the
+;;; class is in scope by default.

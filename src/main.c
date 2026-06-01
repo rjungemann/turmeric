@@ -650,6 +650,12 @@ static int compile_to_c(const char *path, Buf *out_c,
          * ref.tur can declare (definstance Clone [...]) without importing
          * typeclass.tur. */
         "typeclass-clone.tur",
+        /* Phase GHE0: typeclass-hash.tur declares the Hash class stub plus its
+         * primitive instances (int/bool/cstr/float32) so that map.tur and the
+         * #map{...}/hamt-of lowering can resolve (Hash K) constraints for
+         * content-keyed maps without importing typeclass.tur.  Loaded before
+         * map.tur, which conceptually requires Hash[K]. */
+        "typeclass-hash.tur",
         /* Phase TM0/TC1/TC2/F5: typed parameterized collection stdlib files
          * (now under unprefixed module names). */
         "map.tur",
