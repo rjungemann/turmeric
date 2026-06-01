@@ -62,6 +62,7 @@ see the task plan for progress.
 
 ## Advanced Control Flow
 
+- **[delimited-control-operators-guide.md](delimited-control-operators-guide.md)** -- How `shift`/`reset`, `shift0`/`reset0`, `call/cc`, and `escape` differ
 - **[effects-system-guide.md](effects-system-guide.md)** -- Algebraic effects, dependency injection, custom control flow
 - **[logic-programming-guide.md](logic-programming-guide.md)** -- Backtracking, logic programming, constraint solving with cloneable continuations
 - **[checkpointing-guide.md](checkpointing-guide.md)** -- Cloneable continuations for persistent workflows and checkpointing

@@ -114,6 +114,47 @@ Referenced by: `docs/archive/effect-types-row-polymorphism-plan.md`.
 
 ---
 
+## Delimited Continuations
+
+**Abstracting Control**
+Olivier Danvy and Andrzej Filinski.
+*Abstracting Control.* LFP 1990.
+(Introduces the static `shift`/`reset` semantics.)
+<https://doi.org/10.1145/91556.91622>
+
+Referenced by: `docs/guides/delimited-control-operators-guide.md`.
+
+---
+
+**The Theory and Practice of First-Class Prompts**
+Matthias Felleisen.
+*The Theory and Practice of First-Class Prompts.* POPL 1988.
+(Prompts and the `control`/`prompt` family.)
+<https://doi.org/10.1145/73560.73576>
+
+Referenced by: `docs/guides/delimited-control-operators-guide.md`.
+
+---
+
+**Subtyping Delimited Continuations**
+Marek Materzok and Dariusz Biernacki.
+*Subtyping Delimited Continuations.* ICFP 2011.
+(The `shift0`/`reset0` hierarchy and its relation to `shift`/`reset`.)
+<https://doi.org/10.1145/2034773.2034786>
+
+Referenced by: `docs/guides/delimited-control-operators-guide.md`.
+
+---
+
+**A Monadic Framework for Delimited Continuations**
+R. Kent Dybvig, Simon Peyton Jones, and Amr Sabry.
+*A Monadic Framework for Delimited Continuations.* JFP 2007.
+<https://doi.org/10.1017/S0956796807006259>
+
+Referenced by: `docs/guides/delimited-control-operators-guide.md`.
+
+---
+
 ## Contract Types
 
 **Contracts for Higher-Order Functions**
