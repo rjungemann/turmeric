@@ -1,0 +1,14 @@
+;; defopaque newtype: (:: <int> :Opaque) is a pure type relabel.  A defopaque
+;; has no fields and emits as int64_t, so the ascription must NOT emit a
+;; carrier->concrete dereference (which segfaulted: *(int64_t*)(7)).
+
+(defopaque UserId :int)
+
+(defn uid->int [u :UserId] :int
+  ```c return (int64_t)u; ```)
+
+(defn main [] :int
+  (println (uid->int (:: 7 :UserId)))    ; 7
+  (println (uid->int (:: 42 :UserId)))   ; 42
+  (println (:: (:: 100 :UserId) :int))   ; 100 (relabel int->UserId->int)
+  0)

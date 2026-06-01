@@ -3349,7 +3349,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * stdlib functions (vec-push!, ok, ...) and break mutation/aliasing.
              * Only non-carrier (by-value) aggregates need the carrier->concrete
              * bridge here. */
-            if (e->as.ascribe_.inner->type.kind == TY_INT &&
+            /* An opaque newtype (defopaque) has no fields and emits as int64_t
+             * everywhere, so `(:: <int> :Opaque)` is a pure type relabel -- the
+             * value is already the carrier.  Without this guard the bridge below
+             * would treat it as a heap-pointer aggregate and emit a spurious
+             * `*(int64_t *)(value)` dereference (segfault). */
+            bool ascribe_to_opaque =
+                e->type.kind == TY_STRUCT && e->type.as.struct_.def &&
+                e->type.as.struct_.def->is_opaque;
+            if (!ascribe_to_opaque &&
+                e->as.ascribe_.inner->type.kind == TY_INT &&
                 type_kind_is_aggregate(e->type.kind) &&
                 !type_uses_carrier_abi(e->type)) {
                 return emit_carrier_bridge(ctx, body, inner_val,

@@ -565,6 +565,8 @@
     {"map-free", "map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).\n\nParameters:\n  m -- Map[K V] to free\n\nExample:\n  (map-free my-map)\n\nSince: Phase TM0"},
     {"map-eq-raw?", "map-eq? -- compare two maps for structural equality using a value comparator.\n\nParameters:\n  m1 -- first Map[K V]\n  m2 -- second Map[K V]\n  val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair\n\nReturns:\n  true if both maps have identical keys and all corresponding values satisfy val-cmp.\n\nExample:\n  (map-eq? ma mb (fn [a b] (= a b)))  ; => true\n\nSince: Phase TM0"},
     {"map-eq?", "map-eq? -- typed structural equality over Map[K V] (delegates to map-eq-raw?).\n\nParameters:\n  m1 -- first Map[K V]\n  m2 -- second Map[K V]\n  val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair\n\nReturns:\n  true if both maps have identical keys and all corresponding values satisfy val-cmp.\n\nSince: Phase TM0 (typed surface: TMS3)"},
+    {"map-eq-raw-k?", "map-eq-raw-k? -- like map-eq-raw? but compares keys with an explicit"},
+    {"map-eq-k?", "map-eq-k? -- structural equality over Map[K V] with an explicit key"},
     {"hamt-assoc-each__", "hamt-assoc-each__ -- internal helper for the hamt-of macro."},
     {"tur-map-homog__", "tur-map-homog__ -- internal: compile-time homogeneity check (see vec.tur)."},
     {"hamt-homog-chain__", "hamt-homog-chain__ -- internal: enforce homogeneous keys and values."},

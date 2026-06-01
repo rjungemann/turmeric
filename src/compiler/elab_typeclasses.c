@@ -264,6 +264,27 @@ static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) 
     return form_list(e->arena, span, lambda_items, 3);
 }
 
+/* GHE5/#4: build `(mk-cmp (:: 0 K))` -- the MapKey[K] carrier comparator for
+ * a concrete key type K.  mk-cmp ignores its argument value (it returns a
+ * constant carrier-ABI function pointer), so the ascribed 0 only carries the
+ * type K for dispatch.  Returns NULL if K cannot be round-tripped to a Form. */
+static Form *build_mapkey_cmp_form(Elab *e, const Type *key_type, Span span) {
+    Form *key_form = type_to_form(e, key_type, span);
+    if (!key_form) return NULL;
+    const Symbol *sym_mk_cmp = intern_cstr(e->st, "mk-cmp");
+
+    Form **asc_items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    asc_items[0] = form_sym(e->arena, span, e->sym_ascribe);
+    asc_items[1] = form_int(e->arena, span, 0);
+    asc_items[2] = key_form;
+    Form *asc = form_list(e->arena, span, asc_items, 3);
+
+    Form **mk_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    mk_items[0] = form_sym(e->arena, span, sym_mk_cmp);
+    mk_items[1] = asc;
+    return form_list(e->arena, span, mk_items, 2);
+}
+
 /* F3-5: synthesise the dispatcher rewrite for `(.eq? obj other)` when
  * `obj` has TY_APP receiver type AND the outer instance is a known
  * typed-collection whose element type(s) include at least one TY_APP
@@ -288,6 +309,84 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
     if (obj->type.kind != TY_APP || !obj->type.as.app.arg) return NULL;
     /* Look up the helper for this typed-collection. */
     const StructDef *sd = outer_inst->type_args[0].as.struct_.def;
+
+    /* GHE5/#4: content-keyed structural equality for Map[K V].  For a Map the
+     * outermost TY_APP arg is V and the inner is K (Map[K V] = app(app(Map,K),V)).
+     * The generic Eq[Map] instance compares keys by carrier identity, which is
+     * wrong for content keys (:cstr -- distinct pointers with equal text; a
+     * heap-boxed struct -- distinct boxes with equal fields).  Since this
+     * dispatch site is *concrete*, thread the per-K MapKey comparator -- exactly
+     * what map-assoc/map-get do at their concrete call sites -- into the
+     * content-aware map-eq-k? helper, alongside the recursive value comparator.
+     *
+     * Key witnesses to drive MapKey[K] dispatch (mk-cmp ignores its argument
+     * value -- it returns a constant carrier-ABI comparator -- so any value of
+     * type K serves):
+     *   - :cstr        -> (mk-cmp (:: 0 cstr))          (pointer carrier; the
+     *                                                    int->cstr ascription is
+     *                                                    a no-op)
+     *   - struct K     -> (mk-cmp (make-struct K 0 ...)) (a by-value zero struct,
+     *                     matching mk-cmp[K]'s by-value ABI; (:: 0 K) would
+     *                     instead deref a non-pointer aggregate).  Scoped to
+     *                     all-:int-field structs so the 0 literals type-check.
+     * Int/bool/float and opaque-over-int keys are inline values whose carrier
+     * identity already coincides with content equality, so they are left to the
+     * generic path. */
+    if (sd && strcmp(sd->name, "Map") == 0 &&
+        obj->type.as.app.fn && obj->type.as.app.fn->kind == TY_APP &&
+        obj->type.as.app.fn->as.app.arg) {
+        const Type *v_type = obj->type.as.app.arg;
+        const Type *k_type = obj->type.as.app.fn->as.app.arg;
+        Form *kf = NULL;
+        if (k_type->kind == TY_CSTR) {
+            kf = build_mapkey_cmp_form(e, k_type, span);
+        } else if (k_type->kind == TY_STRUCT && k_type->as.struct_.def &&
+                   !k_type->as.struct_.def->is_opaque &&
+                   k_type->as.struct_.def->n_fields > 0) {
+            /* Build (mk-cmp (make-struct K 0 0 ...)) when every field is :int. */
+            const StructDef *kd = k_type->as.struct_.def;
+            bool all_int = true;
+            for (uint8_t fi = 0; fi < kd->n_fields; fi++) {
+                if (kd->fields[fi].kind != TY_INT) { all_int = false; break; }
+            }
+            if (all_int) {
+                uint32_t n_ms = (uint32_t)kd->n_fields + 2; /* make-struct Name f... */
+                Form **ms_items = (Form **)arena_alloc(e->arena, n_ms * sizeof(Form *));
+                ms_items[0] = form_sym(e->arena, span,
+                                       intern_cstr(e->st, "make-struct"));
+                ms_items[1] = form_sym(e->arena, span,
+                                       intern_cstr(e->st, kd->name));
+                for (uint8_t fi = 0; fi < kd->n_fields; fi++) {
+                    ms_items[2 + fi] = form_int(e->arena, span, 0);
+                }
+                Form *ms = form_list(e->arena, span, ms_items, n_ms);
+                Form **mk_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+                mk_items[0] = form_sym(e->arena, span, intern_cstr(e->st, "mk-cmp"));
+                mk_items[1] = ms;
+                kf = form_list(e->arena, span, mk_items, 2);
+            }
+        }
+        if (kf) {
+            Form *vf = build_comparator_lambda(e, v_type, span);
+            if (!vf) return NULL;
+            Expr *kcmp = elab_form(e, kf);
+            Expr *vcmp = elab_form(e, vf);
+            if (!kcmp || !vcmp) return NULL;
+            Binding *mek_b = scope_lookup(&e->global, intern_cstr(e->st, "map-eq-k?"));
+            if (!mek_b) return NULL;
+            Expr **ca = (Expr **)arena_alloc(e->arena, 4 * sizeof(Expr *));
+            ca[0] = obj; ca[1] = other_arg; ca[2] = kcmp; ca[3] = vcmp;
+            Expr *out = expr_new(e->arena, EX_CALL, TYPE_BOOL, span);
+            out->as.call_.fn_binding = mek_b;
+            out->as.call_.fn_expr    = NULL;
+            out->as.call_.args       = ca;
+            out->as.call_.n_args     = 4;
+            out->as.call_.dict_arg   = NULL;
+            return out;
+        }
+        /* Not an intercepted key type -- fall through to the generic path. */
+    }
+
     uint8_t n_comparators = 0;
     const Symbol *helper_sym = helper_eq_symbol_for_struct(e, sd, &n_comparators);
     if (!helper_sym || (n_comparators != 1 && n_comparators != 2)) return NULL;

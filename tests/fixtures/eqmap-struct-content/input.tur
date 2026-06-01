@@ -1,0 +1,37 @@
+;; GHE5/#4: structural equality of struct-keyed maps is CONTENT-correct.
+;;
+;; A heap-boxed struct key (MapKey[Point], WKC3 carrier) stores each key in its
+;; own box, so two maps built with content-equal Point keys hold DISTINCT box
+;; pointers.  The Eq[Map] .eq? dispatch now threads the MapKey[Point] carrier
+;; comparator -- driven by (mk-cmp (make-struct Point 0 0)) at the concrete
+;; call site -- so the two maps compare equal by field content.
+
+(defstruct Point [x :int y :int])
+(definstance Hash [Point]
+  (hash [p] :int ```c return (int64_t)(p.x * 1000003 + p.y); ```))
+(definstance Eq [Point]
+  (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
+(defn point-carrier-eq? [a :int b :int] :bool
+  ```c Point *pa = (Point *)(intptr_t)a; Point *pb = (Point *)(intptr_t)b;
+  return (pa->x == pb->x) && (pa->y == pb->y); ```)
+(definstance MapKey [Point]
+  (mk-box [p] :int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
+  (mk-cmp [p] point-carrier-eq?)
+  (mk-owned? [p] 1))
+
+(defn main [] :int
+  (let [a  (map-assoc (map-assoc (:: (map-new) (Map Point int)) (make-struct Point 3 4) 100)
+                                              (make-struct Point 5 6) 200)
+        ;; same content, all keys distinct boxes
+        b  (map-assoc (map-assoc (:: (map-new) (Map Point int)) (make-struct Point 3 4) 100)
+                                              (make-struct Point 5 6) 200)
+        ;; one value differs
+        c  (map-assoc (map-assoc (:: (map-new) (Map Point int)) (make-struct Point 3 4) 100)
+                                              (make-struct Point 5 6) 999)
+        ;; one key differs
+        d  (map-assoc (map-assoc (:: (map-new) (Map Point int)) (make-struct Point 3 4) 100)
+                                              (make-struct Point 7 7) 200)]
+    (println (if (.eq? a b) 1 0))   ; 1 -- content-equal via distinct boxes
+    (println (if (.eq? a c) 1 0))   ; 0 -- value differs
+    (println (if (.eq? a d) 1 0)))  ; 0 -- key differs
+  0)
