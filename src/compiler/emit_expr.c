@@ -3278,6 +3278,34 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(fat_tmp);
             return ptr_tmp;
         }
+        case EX_POLY_TO_FAT: {
+            /* SC7: box a tur_poly_fn_t {env,fn} into a fat-closure handle
+             * { __tur_poly_to_fat1, fn, env }.  TUR_APPLY1 invokes the handle by
+             * calling slot 0 with the box itself as the env, so the preamble
+             * thunk reads the original fn (slot 1) and its captured env (slot 2)
+             * and forwards the argument. */
+            const Expr *inner = e->as.poly_to_fat_.inner;
+            char *pv = emit_value(ctx, body, inner);
+            char *pf = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_poly_fn_t %s = %s;\n", pf, pv);
+            char *box = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s[0] = (int64_t)(intptr_t)__tur_poly_to_fat1;\n", box);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s[1] = (int64_t)(intptr_t)%s.fn;\n", box, pf);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s[2] = (int64_t)(intptr_t)%s.env;\n", box, pf);
+            char *ptr_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = %s;\n", ptr_tmp, box);
+            free(pv);
+            free(pf);
+            free(box);
+            return ptr_tmp;
+        }
         /* Phase HRT1: type ascription — erase type, emit inner expression.
          * ACB (KB-004): when the inner expression is a carrier (int64_t) and
          * the ascribed type is a concrete aggregate, insert the bridge so the

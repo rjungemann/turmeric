@@ -282,8 +282,9 @@ The combinators above are plain functions over the int-carrier schema
 representation. The `Functor`/`Applicative`/`Alternative` **typeclass
 instances** -- so you could write `(<$> f s)` / `(<*> sf sa)` / `(<|> a b)` and
 build a struct field-by-field applicatively -- were deferred on three
-independent compiler obstacles. **Two are now cleared** (2026-06-01); the third
-still blocks the operator sugar.
+independent compiler obstacles. **All three are now cleared** (2026-06-01); a
+narrower type-level item (a chainable HKT method return) plus by-value
+aggregate *struct* building is what is left.
 
 1. **(CLEARED) HKT dispatch over a parametric wrapper.** A user-defined
    *parametric* struct (`(defstruct Schema [A] (raw :int))`) now reports kind
@@ -293,21 +294,27 @@ still blocks the operator sugar.
    fixture. (The phantom-type-parameter inference half was already done: a
    phantom struct param is inferred from an ascription, e.g.
    `(:: (make-struct Schema 0) (Schema cstr))`.)
-2. **(CLEARED for `fmap`/`transform`) Capturing closures in the decoder.**
-   `schema/transform` and `schema/fmap` carry a fat-closure handle (a `^fat`
-   parameter) and the inline-C decoder invokes it via `TUR_APPLY1`, so a
-   *capturing* closure -- not only a top-level function -- can map the decoded
-   value (`schema-transform-closure` fixture). The accumulating `schema/ap`
-   function-arm still takes a top-level fn (see obstacle 3).
-3. **(STILL DEFERRED) By-value aggregate carrier + the typeclass-method closure
-   ABI.** Two things still block the `definstance` sugar itself. First, a
-   typeclass method receives its closure argument as a `tur_poly_fn_t` `{env,fn}`
-   struct, while the `^fat`/decoder path expects the single-int64 fat handle, so
-   the instance body cannot hand its closure to a `^fat` combinator without a
-   `tur_poly_fn_t -> fat-handle` shim (a closure-ABI change). Second, applicative
-   *struct* building ends in a by-value aggregate the int64 decoder carrier
-   cannot hold without boxing, and `schema/ap`'s direct C call rules out
-   multi-argument currying.
+2. **(CLEARED) Capturing closures in the decoder.** `schema/transform` and
+   `schema/fmap` carry a fat-closure handle (a `^fat` parameter) and the inline-C
+   decoder invokes it via `TUR_APPLY1`, so a *capturing* closure -- not only a
+   top-level function -- can map the decoded value (`schema-transform-closure`
+   fixture). The accumulating `schema/ap` function-arm still takes a top-level fn
+   (see the remaining-work note).
+3. **(CLEARED) The typeclass-method closure ABI.** A typeclass method receives
+   its closure argument as a `tur_poly_fn_t` `{env,fn}` struct, while the
+   `^fat`/decoder path expects the single-int64 fat handle. The `EX_POLY_TO_FAT`
+   conversion boxes the `tur_poly_fn_t` into the fat-closure protocol
+   (`{ __tur_poly_to_fat1, fn, env }`), so a Functor/Applicative instance body can
+   hand its closure straight to a `^fat` schema combinator -- capturing closures
+   included. See the `hkt-instance-closure-to-fat` fixture.
+
+**Remaining work.** (a) A Functor method declared `:int` loses the `(Schema b)`
+wrapper on return, so results are not chainable without a re-ascription; a
+chainable HKT method return (`(f b)`) needs the type-level return-kind feature
+(the inverse of the SC5 carrier-return bridge applied to a parametric struct).
+(b) Applicative *struct* building still ends in a by-value aggregate the int64
+decoder carrier cannot hold without boxing, and `schema/ap`'s direct C call still
+rules out multi-argument currying.
 
 See [docs/schema-plan.md](../schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.

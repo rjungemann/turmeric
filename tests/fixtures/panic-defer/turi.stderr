@@ -1,2 +1,2 @@
-panic at /tmp/tur-build/tests_fixtures_panic-defer_input_tur.c:396: test panic
+panic at /tmp/tur-build/tests_fixtures_panic-defer_input_tur.c:458: test panic
 Aborted

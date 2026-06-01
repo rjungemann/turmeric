@@ -75,9 +75,10 @@ discriminants + decoder cases. The phantom-param-inference enabler also landed:
 
 The `Functor`/`Applicative`/`Alternative` *typeclass instances* (the `<$>`/`<*>`/
 `<|>` operator sugar and applicative *struct* building) were deferred on three
-independent compiler obstacles. **Two of the three are now cleared** (2026-06-01);
-the remaining one (plus a closure-ABI bridge surfaced underneath it) is what still
-blocks the operator sugar:
+independent compiler obstacles. **All three of the original obstacles are now
+cleared** (2026-06-01); what remains is a narrower type-level feature (a
+chainable HKT method return) plus the by-value aggregate carrier for *struct*
+building:
 
 1. **(CLEARED) HKT-kind registration for the wrapper.** A user-defined
    *parametric* struct (`(defstruct Schema [A] (raw :int))`) now reports its
@@ -87,23 +88,30 @@ blocks the operator sugar:
    `def->n_type_params`; the kind-inference pass still refuses to let a parametric
    struct *promote* a `*`-declared class (so `Measurable [Box]` stays concrete).
    Proof fixture: `hkt-user-parametric-struct`.
-2. **(CLEARED for fmap/transform) Closure application in the decoder.**
-   `schema/transform` and `schema/fmap` now carry a *fat closure* handle (the
-   standard `{ thunk, env }` layout, via a `^fat` parameter) and the inline-C
-   decoder invokes it through `TUR_APPLY1`, so a *capturing* closure -- not just a
-   top-level function -- can map a decoded value. Proof fixture:
-   `schema-transform-closure`. (The accumulating `schema/ap` function-arm still
-   takes a top-level fn; see below.)
-3. **(STILL DEFERRED) By-value aggregate carrier + the typeclass-method closure
-   ABI.** Wiring the cleared pieces into the actual `definstance Functor [Schema]`
-   hits a second closure-ABI seam: a typeclass method receives its function
-   argument as a 16-byte `tur_poly_fn_t` `{env, fn}`, whereas the `^fat`/decoder
-   path expects the single-int64 fat handle. Passing the method's closure to a
-   `^fat` combinator therefore needs a `tur_poly_fn_t -> fat-handle` shim (a
-   closure-ABI change flagged highest-regression in the RT risk register). On top
-   of that, applicative *struct* building still ends in a by-value aggregate the
-   int64 decoder carrier cannot hold without boxing, and `schema/ap`'s direct C
-   call still rules out multi-argument currying.
+2. **(CLEARED) Closure application in the decoder.** `schema/transform` and
+   `schema/fmap` now carry a *fat closure* handle (the standard `{ thunk, env }`
+   layout, via a `^fat` parameter) and the inline-C decoder invokes it through
+   `TUR_APPLY1`, so a *capturing* closure -- not just a top-level function -- can
+   map a decoded value. Proof fixture: `schema-transform-closure`. (The
+   accumulating `schema/ap` function-arm still takes a top-level fn; see the
+   remaining-work note below.)
+3. **(CLEARED) The typeclass-method closure ABI.** A typeclass method receives
+   its function argument as a 16-byte `tur_poly_fn_t` `{env, fn}`, whereas the
+   `^fat`/decoder path expects the single-int64 fat handle. The new `EX_POLY_TO_FAT`
+   conversion (`elab_call.c` at the `^fat` site, emitted in `emit_expr.c`, backed
+   by the `__tur_poly_to_fat1` preamble thunk in `emit_module.c`) boxes the
+   `tur_poly_fn_t` into `{ __tur_poly_to_fat1, fn, env }` so a Functor/Applicative
+   instance can hand its closure argument straight to a `^fat` schema combinator,
+   capturing closures included. Proof fixture: `hkt-instance-closure-to-fat`.
+
+**Remaining work (narrower than the original obstacles).** Two things still stand
+between the cleared primitives and the full operator sugar: (a) a Functor method
+declared `:int` loses the `(Schema b)` wrapper on return, so results are not
+chainable without re-ascription -- a *chainable HKT method return* (`(f b)`) needs
+the type-level return-kind feature (the inverse of the SC5 carrier-return bridge
+applied to a parametric struct); and (b) applicative *struct* building still ends
+in a by-value aggregate the int64 decoder carrier cannot hold without boxing, and
+`schema/ap`'s direct C call still rules out multi-argument currying.
 
 What *does* work today, and what each phase needs:
 

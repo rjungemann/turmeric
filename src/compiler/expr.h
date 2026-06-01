@@ -254,6 +254,7 @@ typedef enum ExprKind {
     /* Phase HRT1: Rank-2 higher-ranked types */
     EX_POLY_WRAP,      /* wraps a fn/closure as tur_poly_fn_t for rank-2 param passing */
     EX_FN_TO_FAT,      /* A#1: auto-shim a bare fn into a fat closure for a ^fat param */
+    EX_POLY_TO_FAT,    /* SC7: convert a tur_poly_fn_t (typeclass-method closure) into a fat-closure handle for a ^fat param */
     EX_ASCRIBE,        /* (:: expr type) — inline type ascription; erased at codegen */
     /* Phase HRT2: Existential types */
     EX_EXISTS_PACK,    /* (pack expr (exists [a] T)) — boxes value as existential */
@@ -706,6 +707,11 @@ struct Expr {
          * the emitter generates an env-ignoring wrapper thunk and a heap fat
          * struct { thunk, orig_fn_ptr } so a ^fat consumer can fat-call it. */
         struct { struct Expr *inner; } fn_to_fat_;
+        /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
+         * param) into a single-int64 fat-closure handle so a ^fat consumer can
+         * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes
+         * { __tur_poly_to_fat1, fn, env } and yields the box pointer. */
+        struct { struct Expr *inner; } poly_to_fat_;
         /* Phase HRT2: Existential types.
          * Phase EX1c: optional resolved constraint witnesses (one per constraint
          * in the target existential type).  NULL when the target has no
