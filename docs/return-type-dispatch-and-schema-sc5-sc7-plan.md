@@ -107,11 +107,15 @@ building:
 **Remaining work (narrower than the original obstacles).** Two things still stand
 between the cleared primitives and the full operator sugar: (a) a Functor method
 declared `:int` loses the `(Schema b)` wrapper on return, so results are not
-chainable without re-ascription -- a *chainable HKT method return* (`(f b)`) needs
-the type-level return-kind feature (the inverse of the SC5 carrier-return bridge
-applied to a parametric struct); and (b) applicative *struct* building still ends
-in a by-value aggregate the int64 decoder carrier cannot hold without boxing, and
-`schema/ap`'s direct C call still rules out multi-argument currying.
+chainable without re-ascription -- a *chainable HKT method return* (`(f b)`); and
+(b) applicative *struct* building still ends in a by-value aggregate the int64
+decoder carrier cannot hold without boxing, and `schema/ap`'s direct C call still
+rules out multi-argument currying. An end-to-end experiment (2026-06-01) showed
+(a) is **not** independent of (b): chaining requires `(Schema a)` to have one
+consistent C representation, but a parametric wrapper instantiated at a concrete
+element has *both* a by-value layout and the int64 carrier, and codegen mixes
+them. The concrete multi-site diagnosis and a proposed one-representation fix are
+in [docs/sc7-carrier-duality-plan.md](sc7-carrier-duality-plan.md).
 
 What *does* work today, and what each phase needs:
 
