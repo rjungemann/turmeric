@@ -4,10 +4,28 @@
 > CGI dispatch fix landed on this plan's branches; **GHE4 and GHE5 were delivered
 > by the typed `Map[K V]` surface work (TMS, PR #167)** that landed on `main` and
 > subsumes them -- see the *Landed since (GHE4/GHE5 -- delivered by TMS)* note
-> below for what shipped, the resolved open decisions, and the one remaining
-> known limitation (`Eq [Map]` is still identity-keyed for `:cstr` keys, blocked
-> by compiler limitations that are out of scope for this stdlib plan). The
-> historical status below is kept for the GHE2/GHE3/CGI root-causing record.
+> below for what shipped and the resolved open decisions.
+>
+> **GHE5 `Eq [Map]` content equality (follow-up, landed):** direct `(.eq? a b)`
+> on a concrete `Map[K V]` is now content-correct for **`:cstr`** and **heap-boxed
+> struct** keys (threaded at the dispatch site; fixtures `eqmap-cstr-content`,
+> `eqmap-struct-content`), and the `(:: <int> :Opaque)` ascription segfault was
+> fixed en route (`opaque-ascribe-int`).  See the *Eq [Map] content equality*
+> note below.
+>
+> **Remaining work (not landed):**
+>   1. The **generic-dict** `Eq [Map]` path -- `(eq? a b)` reached through a
+>      polymorphic `^Eq A` constraint rather than a concrete `.eq?` -- is still
+>      identity-keyed (in fact compares map pointers as ints).  This is the large
+>      three-part "constrained-generic instance specialization" feature (CGI gap
+>      #2); the three coupled compiler changes are enumerated in the *Remaining
+>      (large -- the generic-dict path)* note below.  **Decision: deferred** (stop
+>      and consolidate) -- it is a monomorphizer-core change with broad
+>      snapshot/regression risk, out of proportion to a stdlib follow-up.
+>   2. Struct keys with **non-`:int` fields** (the zero-struct witness only
+>      type-checks for all-`:int`-field structs).
+>
+> The historical status below is kept for the GHE2/GHE3/CGI root-causing record.
 >
 > ---
 >
