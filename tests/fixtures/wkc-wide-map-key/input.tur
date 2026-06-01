@@ -1,0 +1,34 @@
+;; WKC (float32-map-key-carrier-plan): inline float keys round-trip through the
+;; -g content-keyed map builders by VALUE, not by a truncating int64 carrier.
+;;
+;; Proves, for both :float32 and :float (float64):
+;;   1. a fractional key (1.5) is stored and looked up by value -- it does NOT
+;;      truncate to 1 (the pre-WKC carrier bug);
+;;   2. two distinct fractional keys (1.5 and 1.7) stay distinct (count == 2),
+;;      i.e. they neither collide on a truncated hash nor compare equal through
+;;      a mis-ABI'd comparator;
+;;   3. update-in-place (re-assoc same key) replaces rather than inserts;
+;;   4. map-has-g? / map-dissoc-g share the same MapKey[K] carrier dispatch.
+;;
+;; The key is boxed by MapKey[K].mk-box as a *bit* reinterpret and compared by a
+;; carrier-ABI bool(int64,int64) comparator from MapKey[K].mk-cmp, so the
+;; runtime's one-word HAMT carrier never sees a numerically-converted float.
+
+(defn main [] :int
+  ;; --- :float32 ---
+  (let [mf  (map-assoc-g (map-assoc-g (map-new) 1.5f32 7) 1.7f32 8)
+        mf2 (map-assoc-g mf 1.5f32 70)]          ; update, not insert
+    (println (:: (map-get-g mf2 1.5f32) :int))   ; 70
+    (println (:: (map-get-g mf2 1.7f32) :int))   ; 8
+    (println (map-count mf2))                     ; 2
+    (println (if (map-has-g? mf2 1.5f32) 1 0))    ; 1
+    (println (if (map-has-g? (map-dissoc-g mf2 1.5f32) 1.5f32) 1 0)))  ; 0
+  ;; --- :float (float64) ---
+  (let [md  (map-assoc-g (map-assoc-g (map-new) 1.5 42) 1.7 99)
+        md2 (map-assoc-g md 1.7 990)]            ; update, not insert
+    (println (:: (map-get-g md2 1.5) :int))      ; 42
+    (println (:: (map-get-g md2 1.7) :int))      ; 990
+    (println (map-count md2))                     ; 2
+    (println (if (map-has-g? md2 1.5) 1 0))       ; 1
+    (println (if (map-has-g? (map-dissoc-g md2 1.5) 1.5) 1 0)))  ; 0
+  0)

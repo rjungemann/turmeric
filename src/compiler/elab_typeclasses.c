@@ -1608,6 +1608,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 case TY_UINT16:  type_component = "uint16";  break;
                 case TY_UINT32:  type_component = "uint32";  break;
                 case TY_UINT64:  type_component = "uint64";  break;
+                case TY_FLOAT:   type_component = "float";   break;
                 case TY_FLOAT32: type_component = "float32"; break;
                 case TY_FLOAT64: type_component = "float64"; break;
                 case TY_STRUCT:

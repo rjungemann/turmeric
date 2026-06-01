@@ -570,6 +570,7 @@ static const char *emit_inst_suffix_component(TypeKind k) {
         case TY_UINT16:  return "uint16";
         case TY_UINT32:  return "uint32";
         case TY_UINT64:  return "uint64";
+        case TY_FLOAT:   return "float";
         case TY_FLOAT32: return "float32";
         case TY_FLOAT64: return "float64";
         default:         return NULL;
@@ -1305,6 +1306,7 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
             case TY_UINT16:   component = "uint16";   break;
             case TY_UINT32:   component = "uint32";   break;
             case TY_UINT64:   component = "uint64";   break;
+            case TY_FLOAT:    component = "float";    break;
             case TY_FLOAT32:  component = "float32";  break;
             case TY_FLOAT64:  component = "float64";  break;
             case TY_STRUCT:

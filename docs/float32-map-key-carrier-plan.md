@@ -1,6 +1,35 @@
 # Wide Map Key Carrier -- boxed keys that don't fit one word (WKC0--WKC5)
 
-> **Status:** Not started. Spun off from
+> **Status (update):** Implemented for **inline scalar** wide keys (`:float32`
+> and `:float`/float64). The carrier fix landed as a stdlib `MapKey[K]`
+> typeclass rather than a runtime heap box: `mk-box` bit-reinterprets the float
+> key into the existing one-word `int64_t` carrier (a `memcpy`-equivalent union
+> reinterpret, never a numeric conversion), and `mk-cmp` returns a carrier-ABI
+> `bool(int64_t,int64_t)` comparator that reinterprets each carrier word back to
+> the float before comparing. Because an inline scalar fits the word, **no
+> runtime-ownership change (WKC2) was needed** for floats -- there is no heap
+> allocation per key. A latent compiler bug was fixed along the way: the
+> typeclass instance-name manglers omitted `TY_FLOAT`, so every `[float]`
+> instance mis-named to the generic `T` and the dispatcher fell back to the
+> `int` carrier representative (this is why a `:float` key silently truncated).
+>
+> Deviations from the original W2 plan, by design:
+> - One-word keys are no longer emitted *byte-for-byte* identically (WKC1's
+>   strict zero-diff gate): they now route through `MapKey` dispatch (an
+>   inlinable identity box + a named comparator) instead of an inline
+>   `(fn [a :K b :K] (eq? a b))`. Behavior and cost are equivalent; the
+>   `ghe3-generic-map-key` snapshot was regenerated accordingly.
+> - **Multi-word struct/ADT keys remain unimplemented.** They are the only case
+>   that genuinely needs the heap-boxed carrier + refcount-aware key ownership
+>   (WKC2); that is the remaining follow-up. `mk-box` for an aggregate key would
+>   need to heap-copy the bytes and the map would need to own/free them.
+>
+> Fixtures: `wkc-wide-map-key` (focused float32/float64 round-trip, update,
+> dissoc) and a reinstated `:float32` section in `ghe3-generic-map-key`.
+>
+> ---
+>
+> **Status (original):** Not started. Spun off from
 > [generic-hash-eq-dispatch-plan.md](generic-hash-eq-dispatch-plan.md) (GHE3),
 > which unified content-key *dispatch* for `int` / `bool` / `cstr` keys but left
 > `:float32` keys failing. This plan covers the *runtime carrier*, not dispatch.

@@ -8,10 +8,12 @@
 ;;   3. :bool keys round-trip through the same generic builders;
 ;;   4. map-has-g? and map-dissoc-g share the same per-K Hash/Eq dispatch.
 ;;
-;; Key types are limited to those the runtime *-eq carrier supports losslessly
-;; (int, bool, cstr -- all fit the int64_t/void* key carrier).  A :float32 key
-;; would truncate through the int64_t carrier and is a separate runtime concern
-;; (the carrier is one word; widening it is out of scope for GHE).
+;; Key types include the one-word carriers (int, bool, cstr) and -- since the
+;; WKC wide-key carrier (float32-map-key-carrier-plan) -- the inline float keys
+;; (:float32 / :float).  Float keys are bit-reinterpreted into the int64_t
+;; carrier by MapKey[K] and compared by a carrier-ABI comparator, so 1.5 no
+;; longer truncates to 1.  See tests/fixtures/wkc-wide-map-key for the focused
+;; float round-trip; here we assert a :float32 key alongside the others.
 
 ;; dup-str -- a freshly-allocated, DISTINCT pointer with the same text.
 (defn dup-str [s :cstr] :cstr
@@ -40,4 +42,9 @@
   (let [mb (map-assoc-g (map-assoc-g (map-new) true 10) false 20)]
     (println (:: (map-get-g mb true) :int))                ; 10
     (println (:: (map-get-g mb false) :int)))              ; 20
+  ;; --- :float32 keys (WKC): reinstated; 1.5 no longer truncates to 1 ---
+  (let [mf (map-assoc-g (map-assoc-g (map-new) 1.5f32 7) 2.5f32 8)]
+    (println (:: (map-get-g mf 1.5f32) :int))              ; 7
+    (println (:: (map-get-g mf 2.5f32) :int))              ; 8
+    (println (map-count mf)))                              ; 2 (distinct keys)
   0)
