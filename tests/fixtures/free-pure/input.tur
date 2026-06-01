@@ -1,0 +1,16 @@
+(load "stdlib/free.tur")
+
+;; RF3: free-pure and free-bind with pure values.
+;; free-bind takes a ^fat continuation, so a bare non-capturing lambda is
+;; auto-shimmed into a fat closure -- no capture-forcing dummy needed.
+
+(defn double-pure [x :int] :int
+  (unsafe
+    (free-bind (free-pure x) (fn [v] (free-pure (* v 2))))))
+
+(defn main [] :int
+  (let [r (double-pure 21)]
+    (match r
+      (PureFree v) (println v)
+      (Suspend  _) (println "suspend"))
+    0))

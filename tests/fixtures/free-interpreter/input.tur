@@ -27,8 +27,10 @@
 
 (defn main [] :int
   ;; Build a program: add(3,4) => 7, mul(7,2) => 14
-  (let [step1 (calc-add 3 4)
-        step2 (calc-mul 2 (free-run (fn [op] (let [_ step1] (run-calc-op op))) step1))]
-    (let [result (free-run (fn [op] (let [_ step2] (run-calc-op op))) step2)]
-      (println result)
-      0)))
+  ;; The interpreter lambdas don't capture, so ^fat auto-shims them.
+  (unsafe
+    (let [step1 (calc-add 3 4)
+          step2 (calc-mul 2 (free-run (fn [op] (run-calc-op op)) step1))]
+      (let [result (free-run (fn [op] (run-calc-op op)) step2)]
+        (println result)
+        0))))

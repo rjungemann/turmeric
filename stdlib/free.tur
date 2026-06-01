@@ -55,7 +55,8 @@
 ;;;
 ;;; Parameters:
 ;;;   ma -- a Free value
-;;;   kont -- a typed fat-closure from a to (Free f b), stored as :fn
+;;;   kont -- a continuation from a to (Free f b); carried as an :int fat-closure
+;;;           handle via the ^fat marker (a bare non-capturing fn is auto-shimmed)
 ;;;
 ;;; Returns:
 ;;;   A new Free value representing the sequenced computation.
@@ -66,7 +67,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-bind [ma :int kont :fn]
+(defn free-bind [ma :int ^fat kont :int]
   #{Unsafe}
   :int
   ```c typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
@@ -82,7 +83,8 @@
 ;;;
 ;;; Parameters:
 ;;;   free -- a Free value
-;;;   f    -- a typed fat-closure from a to b, stored as :fn
+;;;   f    -- a function from a to b; carried as an :int fat-closure handle via
+;;;           the ^fat marker (a bare non-capturing fn is auto-shimmed)
 ;;;
 ;;; Returns:
 ;;;   A new Free value with f applied to all pure leaves.
@@ -90,7 +92,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-fmap [free :int f :fn]
+(defn free-fmap [free :int ^fat f :int]
   #{Unsafe}
   :int
   ```c typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free;
@@ -106,7 +108,8 @@
 ;;; free-run -- interpret a Free computation with a natural transformation.
 ;;;
 ;;; Parameters:
-;;;   interp -- a typed fat-closure from (f a) to a, stored as :fn
+;;;   interp -- a natural transformation from (f a) to a; carried as an :int
+;;;             fat-closure handle via the ^fat marker (bare fns auto-shimmed)
 ;;;   free   -- a Free computation to run
 ;;;
 ;;; Returns:
@@ -118,7 +121,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-run [interp :fn free :int]
+(defn free-run [^fat interp :int free :int]
   #{Unsafe}
   :int
   ```c typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;

@@ -252,11 +252,71 @@ near-zero count.
 | **A #6.** `TUR_APPLY*` macros | **Done** | `TUR_APPLY1..4` + `TUR_CLOSURE_FN` ship in the runtime preamble. Swept 25 inline-C fixtures (parsec/logic/backtrack/hkt families) plus `stdlib-arrow`'s `tur-call-closure1`, dropping the now-dead `thunk`/`fn_ptr` intermediates. All 75 `expected.c` snapshots regenerated for the new preamble. |
 | **C item 2.** `:void` inline-C returns | **Already satisfied** | A `:void` defn with an inline-C body needs no `return` today; verified. |
 | **C #1.** inline-C `:Option`/`:Result` ABI | **Done** | Shipped `tur_some` / `TUR_NONE` / `tur_is_some` / `tur_opt_value` and `tur_ok` / `tur_err` / `tur_is_ok` / `tur_ok_value` / `tur_err_value` in the runtime preamble (next to `TUR_APPLY*`), over the canonical Option `{ bool is_some; int64_t value; }` (none == 0) and Result `{ bool is_ok; int64_t ok_val; int64_t err_val; }` heap layouts. An inline-C block now builds/inspects real `:Option<int>` / `:Result<int,int>` values instead of a magic sentinel (`-1` / `INT64_MIN` / `0`-as-absent), and the bytes are layout-identical to `stdlib/option.tur` / `stdlib/result.tur`, so values flow transparently across the inline-C boundary **in both directions** (stdlib `some?`/`ok?` reads a C-built value; a C consumer reads a stdlib-built one). Dogfooded: the canonical `some`/`none`/`some?`/`unwrap-or` and `ok`/`err`/`ok?`/`err?` bodies now call the helpers, retiring their hand-rolled `struct { ... }` cast boilerplate. New fixture `option-result-c-abi` exercises all helpers + bidirectional interop. All 79 `expected.c` snapshots regenerated for the new preamble. |
-| **A #1.** Fat-closure auto-shim | **Done** | Shipped as the **sound** realization: a type-driven blanket shim is unsafe (the reactor *fat*-calls an `:int` callback while `hamt` *raw*-calls a `:ptr` callback -- the parameter type cannot tell a fat consumer from a raw-C callback), so the fat-call contract is made explicit via a new **`^fat` parameter marker** (on both `defn` and `extern-c`, threaded as `arg_fat[]` next to `arg_linear`/`arg_affine`). A bare non-capturing `fn` passed to a `^fat` parameter is wrapped in `EX_FN_TO_FAT`, which allocates `{ __tur_fatshim<arity>, orig_fn }`; the per-arity shim thunks live in the runtime preamble (int64_t carrier ABI, matching `TUR_APPLY` and the reactor casts) and forward args after reading the bare fn pointer from slot 1. A capturing closure passes through; nil/`0` is a null callback; **diagnostic half**: a non-fn argument to a `^fat` parameter is a typed error instead of a segfault (arity > 5 also rejected). `EX_FN_TO_FAT` carries `TY_PTR_VOID` like `EX_CLOSURE`, reusing the existing arg-emission casts, and is transparent in the turi interpreter. Swept the dummies: reactor (8 fixtures + `^fat` cb), `backtrack-fresh`, `backtrack-bind` (`mbind`), the seq combinators (`stdlib/seq/*` `^fat` params) + 8 `seq-*` fixtures, and 28 redundant `(let [_ x] ...)` wrappers in logic/parsec (those closures already captured a used value). Also fixed a latent codegen bug the cleanup exposed: a nil-typed user call in a non-nil function's tail position (`(defn main [] :int (some-void-call))`) was lowered with `emit_value` and discarded; it now lowers with `emit_stmt`. Fixtures `fat-shim` + `errors/fat-param-non-fn` added. **Return position** (follow-up, done): the `^fat` marker now also applies to a function's return type (`(defn f [] ^fat :ptr<void> ...)`), auto-shimming a returned non-capturing fn into a fat closure (`EX_FN_TO_FAT`) at every tail/return leaf -- symmetric with the parameter marker. The 2 genuine return-position dummies in `logic-fresh`/`logic-reify` were swept. See [fat-closure-return-position-plan.md](fat-closure-return-position-plan.md). |
+| **A #1.** Fat-closure auto-shim | **Done** | Shipped as the **sound** realization: a type-driven blanket shim is unsafe (the reactor *fat*-calls an `:int` callback while `hamt` *raw*-calls a `:ptr` callback -- the parameter type cannot tell a fat consumer from a raw-C callback), so the fat-call contract is made explicit via a new **`^fat` parameter marker** (on both `defn` and `extern-c`, threaded as `arg_fat[]` next to `arg_linear`/`arg_affine`). A bare non-capturing `fn` passed to a `^fat` parameter is wrapped in `EX_FN_TO_FAT`, which allocates `{ __tur_fatshim<arity>, orig_fn }`; the per-arity shim thunks live in the runtime preamble (int64_t carrier ABI, matching `TUR_APPLY` and the reactor casts) and forward args after reading the bare fn pointer from slot 1. A capturing closure passes through; nil/`0` is a null callback; **diagnostic half**: a non-fn argument to a `^fat` parameter is a typed error instead of a segfault (arity > 5 also rejected). `EX_FN_TO_FAT` carries `TY_PTR_VOID` like `EX_CLOSURE`, reusing the existing arg-emission casts, and is transparent in the turi interpreter. Swept the dummies: reactor (8 fixtures + `^fat` cb), `backtrack-fresh`, `backtrack-bind` (`mbind`), the seq combinators (`stdlib/seq/*` `^fat` params) + 8 `seq-*` fixtures, and 28 redundant `(let [_ x] ...)` wrappers in logic/parsec (those closures already captured a used value). Also fixed a latent codegen bug the cleanup exposed: a nil-typed user call in a non-nil function's tail position (`(defn main [] :int (some-void-call))`) was lowered with `emit_value` and discarded; it now lowers with `emit_stmt`. Fixtures `fat-shim` + `errors/fat-param-non-fn` added. **Return position** (follow-up, done): the `^fat` marker now also applies to a function's return type (`(defn f [] ^fat :ptr<void> ...)`), auto-shimming a returned non-capturing fn into a fat closure (`EX_FN_TO_FAT`) at every tail/return leaf -- symmetric with the parameter marker. The 2 genuine return-position dummies in `logic-fresh`/`logic-reify` were swept. See [fat-closure-return-position-plan.md](fat-closure-return-position-plan.md). **`stdlib/free.tur` sweep** (follow-up, done): marked the three Free combinators `free-bind`/`free-fmap`/`free-run` `^fat` (carrier param switched `:fn`->`:int`, matching the `seq/*` combinators) and retired the capture-forcing dummies from the `free-pure`/`free-lift-bind`/`free-interpreter` fixtures -- the last live cluster of the #1 tell-pattern. These three fixtures were previously dead (nested `tests/fixtures/free/<name>/`, invisible to `run.sh`'s one-level glob and absent from the turi allowlist) **and** broken (they predated `free-bind`/`free-run` becoming `#{Unsafe}`, so they no longer compiled); they were repaired (wrapped the unsafe combinator calls), re-homed to one-level `free-*` dirs so `run.sh` runs them compiled (leak-checked, matching the sibling `hkt-free-*` fixtures), and now pass on both the compiled and turi paths. A separate pre-existing codegen bug surfaced during the sweep -- a capturing closure constructed inside an `(unsafe ...)` block drops its capture -- documented as **KB-IDIOM-1** below and left unfixed (out of scope); `free-lift-bind` sidesteps it by building the capturing interpreter closure outside the `unsafe` block. |
 | **C #3.** tag-accessor sweep | **Not started** | The remaining sentinel/`tag == 0` users are the bespoke hand-written inline-C engines (logic `Term` = `{ tag; data1; data2; }`, the Free monad = `{ tag; val; }`). Their layouts are fixture-specific and intertwined with multi-tag dispatch (`tag == 1/2/3`), so a canonical `TUR_TAG`/`TUR_PAYLOAD` macro does not cleanly retire them; several are also intentional inline-C interop tests (see Out of scope). Deferred. |
 | **E item 2.** typed-empty-container sugar (#4) | **Done** | Shipped a reader-level desugar: a fused `:T` element-type suffix on a vec or set literal (`[]:int`, `#set{}:cstr`, `[]:(Vec int)`) lowers to `(:: <literal> (Vec T))` / `(:: <literal> (Set T))`, recovering an empty container's element type without the verbose `(:: (vec-new) (Vec int))` ascription. Implemented in `reader.c` (`maybe_container_type_suffix`), gated on `-Xdata-literals` for vecs (the `[...]` value literal is itself flag-gated) and adjacent to the closer (no whitespace), so binding vectors are unaffected and `::` is not mistaken for the suffix; codegen is byte-identical to the explicit ascription. A missing type after `:` is a typed read error. Swept all 8 `(:: (vec-new) (Vec T))` fixtures (`vec-eq-ascribed`, `vec-eq-ascribed-multi`, `set-of-tvec-eq`, `result-of-typed-eq`, `typed-slots/let-vec-new`, `map-of-tvec-eq`, `vec-of-tvec-eq`, `option-of-tvec-eq`) to `[]:T`; the `(:: (set-add ...) ...)` / `(:: (map-assoc ...) ...)` ascriptions on non-literal call results legitimately remain. Added fixtures `data-literal-typed-empty` and `errors/container-suffix-no-type`; guide updated. (Map typed-empty suffix is future work -- two type params; not in the #4 evidence.) |
 | **D, E item 1 (bidirectional inference).** | **Not started** | `defrecord`/field-accessor syntax (D) and full backward inference at container literals (E item 1, F3-tracked) each remain a substantial reader/codegen/ABI change with broad snapshot churn; deferred to dedicated efforts. |
 | **F.** F3 dictionary passing (#7) | Tracking only | Owned by the typeclass roadmap; no new work here. |
+
+## Known bugs surfaced during the sweeps
+
+These are real codegen bugs uncovered while removing the workarounds above.
+They are **not** idiom cleanup -- they are tracked here because the sweep is
+what exposed them and because a fixture currently has to dodge them.
+
+### KB-IDIOM-1. Capture dropped for a closure constructed inside `(unsafe ...)`
+
+**Symptom.** A closure that captures an outer binding **and is constructed
+inside an `(unsafe ...)` block** silently drops the capture. The generated C
+references the captured variable in the wrong scope, so `cc` fails with
+`'<name>_NNN' undeclared (first use in this function)` inside a
+`__handle_body_N` function. (If a future change made the surrounding code
+compile, the value would simply be wrong rather than a hard error.)
+
+**Root cause.** `unsafe` lowers through the effect-handler machinery: its body
+becomes a separate `__handle_body_N` C function. The closure-capture lowering
+emits the env-init (`__t->field = <name>_NNN;`) in the handler-body function but
+resolves `<name>_NNN` against the *enclosing* function's locals, which are not
+in scope inside `__handle_body_N`. The capture binding is never threaded across
+the handler-body boundary.
+
+**Minimal repro** (`tur build` fails at the `cc` step):
+
+```turmeric
+(load "stdlib/free.tur")
+(defn main [] :int
+  (let [scale 3
+        r     (unsafe (free-run (fn [inner] (* inner scale)) (free-lift 10)))]
+    (println r))
+  0)
+```
+
+```
+__handle_body_3: error: 'scale_888' undeclared (first use in this function)
+    __t5->scale = scale_888;
+```
+
+It is **not** specific to `^fat`, to `free`, or to inline-C -- any capturing
+`fn` literal *built inside* an `unsafe` block reproduces it. Building the
+closure **outside** the `unsafe` block and only calling the unsafe function
+inside is the current workaround:
+
+```turmeric
+(let [scale  3
+      interp (fn [inner] (* inner scale))   ; closure built in normal scope
+      r      (unsafe (free-run interp (free-lift 10)))]  ; only the call is unsafe
+  ...)
+```
+
+`tests/fixtures/free-lift-bind` uses exactly this shape to stay green.
+
+**Fix direction (out of scope here).** When lifting an `unsafe` body into a
+`__handle_body_N` function, the captured free variables of any closure
+constructed inside it must be threaded into the handler-body frame (the same
+way they are threaded for closures built in a normal function body). A
+dedicated codegen fix + a positive fixture (capturing closure built inside
+`unsafe`, asserting the correct value) should retire the `free-lift-bind`
+workaround.
 
 ## Out of scope
 
