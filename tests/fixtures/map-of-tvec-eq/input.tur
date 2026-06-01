@@ -8,9 +8,9 @@
 ;; value comparaok?r needs ok? be threaded recursively.
 
 (defn main [] :int
-  (let [inner1 (:: (vec-new) (Vec int))
-        inner2 (:: (vec-new) (Vec int))
-        inner3 (:: (vec-new) (Vec int))]
+  (let [inner1 []:int
+        inner2 []:int
+        inner3 []:int]
     (vec-push! inner1 10)
     (vec-push! inner1 20)
     (vec-push! inner2 10)
