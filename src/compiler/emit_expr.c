@@ -118,6 +118,7 @@ static bool reinterpret_kind_is_scalar(TypeKind kind) {
         case TY_FLOAT:
         case TY_CSTR:
         case TY_PTR_VOID:
+        case TY_SYM:        /* SYM3: interned symbol is a pointer-sized scalar */
         case TY_INT8:
         case TY_INT16:
         case TY_INT32:
@@ -151,6 +152,7 @@ static int reinterpret_kind_size_bytes(TypeKind kind) {
         case TY_FLOAT:
         case TY_CSTR:
         case TY_PTR_VOID:
+        case TY_SYM:        /* SYM3: interned symbol pointer */
         case TY_INT64:
         case TY_UINT64:
         case TY_FLOAT64:
@@ -940,6 +942,16 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (e->type.kind == TY_FLOAT32) return atom_float32(e->as.f);
             return atom_float(e->as.f);
         case EX_CSTR_LIT: return atom_cstr(e->as.s);
+        case EX_SYM_LIT: {
+            /* SYM1: reference the TU-local static record for this keyword. */
+            const char *cid = sym_codegen_register(e->as.sym_lit_.sym);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "((const struct __tur_sym *)&%s)", cid);
+            buf_putc(&out, '\0');
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         case EX_VAR:      return atom_var(ctx, e->as.var.binding);
         case EX_CAST: {
             /* (as TargetType expr) — emit as C cast: (target_c_type)(inner) */

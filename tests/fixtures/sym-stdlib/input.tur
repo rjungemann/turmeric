@@ -1,0 +1,5 @@
+;; SYM4 (runtime-symbols-plan): sym->str returns the embedded name with no
+;; allocation; the pointer lives for the process lifetime.  sym.tur is
+;; auto-loaded under -Xsymbols, so sym->str is available with no import.
+(println (sym->str :hello))
+(println (sym->str :world))

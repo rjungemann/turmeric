@@ -1,0 +1,43 @@
+;;; tur/sym-dynamic -- opt-in runtime symbol interning (str->sym, SYM5).
+;;;
+;;; This module is NOT auto-loaded.  Load it explicitly when you need to build
+;;; symbols from strings at runtime (deserialization, REPL-style tools):
+;;;
+;;;   (load "stdlib/sym-dynamic.tur")
+;;;
+;;; It pulls in the process-global intern table (src/runtime/symbols.c).  The
+;;; default :Sym surface (literal `:foo`, sym->str, sym=?, Eq/Hash/MapKey[Sym])
+;;; needs no runtime table and stays in sym.tur; keep this opt-in so programs
+;;; that only use literal symbols never link the table.  Requires -Xsymbols.
+;;;
+;;; Since: Phase SYM5
+;; tur/sym-dynamic -- runtime str->sym interning (opt-in via load).
+
+;;; str->sym -- intern a string into a symbol at runtime.
+;;;
+;;; Returns a stable, process-lifetime :Sym for the given name.  For a name that
+;;; also appears as a literal `:foo` in the program, the same pointer as the
+;;; static literal is returned, so (eq? :foo (str->sym "foo")) holds.  Repeated
+;;; calls with the same name return the same pointer and allocate at most one
+;;; record.  Thread-safe (the table is mutex-guarded).
+;;;
+;;; This is non-deterministic w.r.t. allocation count and slower than a literal
+;;; keyword (it hashes + locks); prefer literal `:foo` on hot paths and reserve
+;;; str->sym for deserialization / REPL-style tools.
+;;;
+;;; Parameters:
+;;;   s -- the NUL-terminated name to intern (without a leading colon)
+;;;
+;;; Returns:
+;;;   The interned symbol for s.
+;;;
+;;; Example:
+;;;   (eq? :hello (str->sym "hello"))  ; => true
+;;;
+;;; Since: Phase SYM5
+(defn str->sym [s :cstr] :Sym
+  ```c
+  /* __tur_autolink__: src/runtime/symbols.c -Isrc/runtime */
+  extern const struct __tur_sym *tur_sym_intern(const char *, uint32_t);
+  return (const struct __tur_sym *)tur_sym_intern(s, (uint32_t)strlen(s));
+  ```)

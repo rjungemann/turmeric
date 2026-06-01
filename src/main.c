@@ -682,6 +682,11 @@ static int compile_to_c(const char *path, Buf *out_c,
          * when -Xschema-reader is on (skipped below otherwise) so default
          * builds and their codegen snapshots are unaffected. */
         "schema.tur",
+        /* SYM4 (runtime-symbols-plan): sym.tur provides sym->str / sym=? over the
+         * first-class :Sym runtime type.  Only auto-loaded under -Xsymbols
+         * (skipped below otherwise) so default builds and their codegen
+         * snapshots are unaffected. */
+        "sym.tur",
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's
          * generated C and invalidating codegen snapshots.  They are library files
@@ -718,6 +723,9 @@ static int compile_to_c(const char *path, Buf *out_c,
             continue;
         /* JR0: json.tur is only auto-loaded under -Xjson-reader (see array). */
         if (!g_json_reader_enabled && strcmp(stdlib_files[i], "json.tur") == 0)
+            continue;
+        /* SYM4: sym.tur is only auto-loaded under -Xsymbols (see array). */
+        if (!g_symbols_enabled && strcmp(stdlib_files[i], "sym.tur") == 0)
             continue;
         /* RD: schema.tur is only auto-loaded under -Xschema-reader (see array). */
         if (!g_schema_reader_enabled && strcmp(stdlib_files[i], "schema.tur") == 0)
@@ -4315,6 +4323,10 @@ static int cmd_eval_expr(const char *expr, bool use_color) {
 }
 
 static int cmd_repl(bool watch_mode) {
+    /* UCH0 (diagnose-unbound-call-heads-plan): the REPL is an interpreter
+     * entry point -- flag it so the INT-1 reader conditional picks :turi and
+     * so elab_call keeps the runtime-native dispatch fallback (UCH1). */
+    g_interpret_mode = true;
     return turi_repl_run(watch_mode);
 }
 
@@ -4354,6 +4366,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "-Xcontracts")         == 0) g_contracts_enabled        = true;
         else if (strcmp(tok, "-Xsessions")          == 0) { g_sessions_enabled = true; g_substructural_enabled = true; g_linear_enabled = true; }
         else if (strcmp(tok, "-Xdynamic-vars")      == 0) g_dynvar_enabled           = true;
+        else if (strcmp(tok, "-Xsymbols")           == 0) g_symbols_enabled          = true;
         else if (strcmp(tok, "-Xcallcc")            == 0) g_callcc_enabled           = true;
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
@@ -7325,6 +7338,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xdynamic-vars") == 0) {
             /* DV0: enable dynamic var syntax and checking */
             g_dynvar_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xsymbols") == 0) {
+            /* SYM0: enable first-class runtime symbol (:Sym) values */
+            g_symbols_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

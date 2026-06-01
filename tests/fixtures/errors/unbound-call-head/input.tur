@@ -1,0 +1,5 @@
+;; UCH2 (diagnose-unbound-call-heads-plan): an unbound symbol in call-head
+;; position must be reported at compile time (a typo or a missing import),
+;; not silently typed :int and deferred to a cryptic C-compiler error.
+(defn main [] :int
+  (+ (foo 1) 2))

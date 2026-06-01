@@ -1216,7 +1216,16 @@ Expr *elab_call(Elab *e, Form *call) {
                               ov->name, ov->min_arity, ov->max_arity, arg_name, res_name);
                 }
             }
-        } else if (e->separate_compilation) {
+        } else if (e->separate_compilation || !g_interpret_mode) {
+            /* UCH1 (diagnose-unbound-call-heads-plan): in any compiled path an
+             * unknown call head is a genuine unbound reference (a typo, or a
+             * missing import / extern-c).  Report it here instead of silently
+             * typing the call :int -- which previously let `tur check` pass and
+             * deferred the failure to a cryptic C-compiler "undeclared" error,
+             * or surfaced as a misleading downstream type mismatch.  The
+             * runtime-dispatch fallback below is reserved for interpret mode
+             * (eval / --interpret / repl / worker), where TuriEnv natives are
+             * resolved at runtime. */
             diag_emit(DIAG_ERROR, head->span,
                       "unknown function or operator '%s'", name->name);
         } else {

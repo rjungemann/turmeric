@@ -1169,6 +1169,9 @@ const char *type_name(Type t) {
         /* Phase X3: Set literal */
         case TY_SET:
             return "set";
+        /* SYM0: interned runtime symbol */
+        case TY_SYM:
+            return "Sym";
         /* Phase HRT0: Quantified types.
          * Phase EX1b: print constraint vector when present. */
         case TY_FORALL:
@@ -1585,6 +1588,11 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, "set");
             break;
         }
+        /* SYM0: interned runtime symbol -- prints as :Sym */
+        case TY_SYM: {
+            buf_puts(b, ":Sym");
+            break;
+        }
         /* Phase HRT0: Quantified types — always print quantifiers explicitly.
          * Phase EX1b: print optional constraint vector. */
         case TY_FORALL:
@@ -1895,6 +1903,9 @@ const char *type_c_name(Type t) {
         /* Phase X3: Set literal — sorted int64_t array */
         case TY_SET:
             return "tur_set_t *";
+        /* SYM0: interned runtime symbol — pointer into static .rodata */
+        case TY_SYM:
+            return "const struct __tur_sym *";
         /* Phase HRT0: Quantified types — no runtime representation in HRT0 */
         case TY_FORALL:
         case TY_EXISTS:
@@ -2109,6 +2120,8 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_TYPECLASS_INST:
         case TY_NEVER:
         case TY_SET:
+        /* SYM0: symbols are opaque pointers — guard recursion like other leaves */
+        case TY_SYM:
         /* Phase G0: ADT types guard recursion like structs */
         case TY_ADT:
         /* Phase G2: unresolved type variable — treated as opaque/guarded */
@@ -2447,6 +2460,7 @@ const char *typekind_to_string(TypeKind k) {
         case TY_ADT:      return "adt";
         case TY_NEVER:    return "!";
         case TY_SET:      return "set";
+        case TY_SYM:      return "Sym";
         /* Phase HRT0 */
         case TY_FORALL:   return "forall";
         case TY_EXISTS:   return "exists";

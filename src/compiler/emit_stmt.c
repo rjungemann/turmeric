@@ -95,7 +95,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Run e for side effects, discard value. */
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
-        case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR:
         case EX_CAST:         /* pure expression, no stmt-level side effects */
         case EX_REINTERPRET:  /* compiler-only pure reinterpret node */
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
@@ -387,6 +387,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     case TY_FLOAT:    component = "float";    break;
                     case TY_FLOAT32:  component = "float32";  break;
                     case TY_FLOAT64:  component = "float64";  break;
+                    case TY_SYM:      component = "Sym";      break;
                     case TY_STRUCT:
                         /* Phase HKT §1: Use the original type arg symbol name
                          * (e.g. "option", "vec") so that two instances of the

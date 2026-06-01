@@ -573,6 +573,7 @@ static const char *emit_inst_suffix_component(TypeKind k) {
         case TY_FLOAT:   return "float";
         case TY_FLOAT32: return "float32";
         case TY_FLOAT64: return "float64";
+        case TY_SYM:     return "Sym";
         default:         return NULL;
     }
 }
@@ -1780,4 +1781,177 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
     char *result = strdup(out.data);
     buf_free(&out);
     return result;
+}
+
+/* ============================================================================
+ * SYM1 (runtime-symbols-plan): per-TU interned-symbol codegen registry.
+ *
+ * Every distinct `:foo` referenced in a translation unit lowers to a single
+ * static `struct __tur_sym` record in .rodata.  Two references to the same
+ * keyword fold to the same record (and therefore the same pointer), so `:Sym`
+ * equality is pointer equality and hashing is a single field load.
+ *
+ * The registry is keyed by the interned compile-time Symbol* identity (the
+ * reader/symtab already shares one Symbol* across all `:foo` occurrences in a
+ * unit), with a name-string fallback so independently-interned symbols with the
+ * same text still fold.  Mangling percent-encodes non-identifier bytes so the
+ * emitted C identifier is unique and ASCII-only even for punctuated keywords.
+ * ============================================================================
+ */
+#include "hamt.h"   /* tur_hamt_hash_str -- precomputed xxHash64 per keyword */
+
+typedef struct SymRecord {
+    char         *name;    /* malloc'd owned copy of the name (see note) */
+    uint32_t      len;     /* byte length, excluding NUL */
+    uint64_t      hash;    /* precomputed xxHash64 of name */
+    char         *cid;     /* malloc'd mangled C identifier, e.g. "__tur_sym_foo" */
+} SymRecord;
+
+static SymRecord *g_sym_records   = NULL;
+static uint32_t   g_n_sym_records = 0;
+static uint32_t   g_cap_sym_records = 0;
+/* SYM5: set when this TU defines str->sym (i.e. sym-dynamic.tur was loaded),
+ * which is the only thing that links the runtime intern table.  The seeding
+ * constructor (which references tur_sym_register) is emitted only then, so a
+ * program that uses literal :Sym values without str->sym never links the
+ * table and never runs a startup constructor. */
+static bool       g_sym_intern_used = false;
+
+void sym_codegen_note_intern_used(void) { g_sym_intern_used = true; }
+
+/* The name is strdup'd rather than borrowed from the source Symbol: in the
+ * multi-file build path each TU is elaborated in its own arena which is freed
+ * before the next TU, so a borrowed Symbol->name would dangle across the
+ * registry's lifetime.  sym_codegen_reset() must still be called per TU to
+ * keep dedup TU-local, but owning the string makes a missed reset a leak
+ * rather than a use-after-free. */
+void sym_codegen_reset(void) {
+    for (uint32_t i = 0; i < g_n_sym_records; i++) {
+        free(g_sym_records[i].cid);
+        free(g_sym_records[i].name);
+    }
+    free(g_sym_records);
+    g_sym_records     = NULL;
+    g_n_sym_records   = 0;
+    g_cap_sym_records = 0;
+    g_sym_intern_used = false;
+}
+
+uint32_t sym_codegen_count(void) { return g_n_sym_records; }
+
+/* Append the mangled form of `name` to `out`: each byte that is not [A-Za-z0-9_]
+ * is emitted as `_HH` (uppercase hex of the byte), so the result is a valid,
+ * collision-free C identifier suffix. */
+static void sym_mangle_append(Buf *out, const char *name, uint32_t len) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (uint32_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '_') {
+            buf_putc(out, (char)c);
+        } else {
+            buf_putc(out, '_');
+            buf_putc(out, hex[(c >> 4) & 0xF]);
+            buf_putc(out, hex[c & 0xF]);
+        }
+    }
+}
+
+const char *sym_codegen_register(const Symbol *sym) {
+    if (!sym) return NULL;
+    /* Dedup by name text (the source Symbol* identity is not stable across the
+     * per-TU arenas of a multi-file build). */
+    for (uint32_t i = 0; i < g_n_sym_records; i++) {
+        if (g_sym_records[i].len == sym->len &&
+            strcmp(g_sym_records[i].name, sym->name) == 0)
+            return g_sym_records[i].cid;
+    }
+    if (g_n_sym_records == g_cap_sym_records) {
+        uint32_t nc = g_cap_sym_records ? g_cap_sym_records * 2 : 8;
+        SymRecord *nr = (SymRecord *)realloc(g_sym_records, nc * sizeof(SymRecord));
+        if (!nr) { fprintf(stderr, "tur: oom\n"); abort(); }
+        g_sym_records = nr;
+        g_cap_sym_records = nc;
+    }
+    Buf cid; buf_init(&cid);
+    buf_puts(&cid, "__tur_sym_");
+    sym_mangle_append(&cid, sym->name, sym->len);
+    buf_putc(&cid, '\0');
+    SymRecord *rec = &g_sym_records[g_n_sym_records++];
+    rec->name = strdup(sym->name);
+    rec->len  = sym->len;
+    rec->hash = tur_hamt_hash_str(sym->name);
+    rec->cid  = strdup(cid.data);
+    buf_free(&cid);
+    return rec->cid;
+}
+
+/* Emit the runtime symbol struct + one record per distinct keyword.
+ * `struct __tur_sym` is emitted unconditionally when -Xsymbols is on (so that
+ * inline-C in stdlib sym helpers always sees the layout), and also whenever any
+ * record was registered.
+ *
+ * SYM2 (cross-TU interning): when `external_weak` is true (the multi-file /
+ * separate-compilation build path), each record is emitted with external weak
+ * linkage under its stable mangled name.  Two TUs that both reference `:foo`
+ * emit identical `__tur_sym_foo` definitions; the linker folds the weak
+ * duplicates to a single object, so `:foo` is one pointer across the whole
+ * program.  In single-file / emit-c mode (`external_weak` false) the records
+ * stay `static`, keeping the output self-contained. */
+void sym_codegen_emit(Buf *out, bool external_weak) {
+    extern bool g_symbols_enabled;
+    if (g_n_sym_records == 0 && !g_symbols_enabled) return;
+    buf_puts(out,
+        "/* SYM1 (runtime-symbols-plan): interned runtime symbol records. */\n"
+        "#ifndef TUR_SYM_DEFINED\n"
+        "#define TUR_SYM_DEFINED 1\n"
+        "struct __tur_sym {\n"
+        "    uint64_t hash;   /* precomputed xxHash64 of name */\n"
+        "    uint32_t len;    /* byte length, excluding NUL */\n"
+        "    uint32_t _pad;\n"
+        "    char     name[]; /* NUL-terminated UTF-8 */\n"
+        "};\n"
+        "#endif\n");
+    const char *storage = external_weak
+        ? "__attribute__((weak)) const"   /* SYM2: linker folds same-named dups */
+        : "static const";
+    for (uint32_t i = 0; i < g_n_sym_records; i++) {
+        SymRecord *r = &g_sym_records[i];
+        /* The record has a flexible array member, so use a sized anonymous
+         * struct for the definition and cast to const struct __tur_sym * at use. */
+        buf_printf(out,
+            "%s struct { uint64_t hash; uint32_t len; uint32_t _pad; char name[%u]; } %s = { ",
+            storage, r->len + 1, r->cid);
+        buf_printf(out, "%lluULL, %uu, 0u, ",
+                   (unsigned long long)r->hash, r->len);
+        /* Emit the name as a C string literal (escape conservatively). */
+        buf_putc(out, '"');
+        for (uint32_t j = 0; j < r->len; j++) {
+            unsigned char c = (unsigned char)r->name[j];
+            if (c == '"' || c == '\\') { buf_putc(out, '\\'); buf_putc(out, (char)c); }
+            else if (c == '\n') buf_puts(out, "\\n");
+            else if (c == '\t') buf_puts(out, "\\t");
+            else if (c < 0x20)  buf_printf(out, "\\%03o", c);
+            else                buf_putc(out, (char)c);
+        }
+        buf_puts(out, "\" };\n");
+    }
+    /* SYM5: seed the runtime intern table with this TU's static records so that
+     * str->sym("foo") returns the same pointer as the literal :foo.  The
+     * registrar lives in src/runtime/symbols.c, auto-linked into -Xsymbols
+     * programs via the marker in stdlib/sym.tur's str->sym.  First registration
+     * of a name wins, so weak-folded cross-TU records register idempotently.
+     * Gated on str->sym being defined in this TU (g_sym_intern_used): only then
+     * is the table (and tur_sym_register) linked, and only then can anything
+     * query the table -- so a literal-only program emits no constructor. */
+    if (g_n_sym_records > 0 && g_sym_intern_used) {
+        buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
+        buf_puts(out, "__attribute__((constructor)) static void __tur_sym_seed(void) {\n");
+        for (uint32_t i = 0; i < g_n_sym_records; i++) {
+            buf_printf(out, "    tur_sym_register((const struct __tur_sym *)&%s);\n",
+                       g_sym_records[i].cid);
+        }
+        buf_puts(out, "}\n");
+    }
+    if (g_n_sym_records > 0) buf_putc(out, '\n');
 }

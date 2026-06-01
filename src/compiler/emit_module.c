@@ -1105,6 +1105,7 @@ int emit_program(Buf *out, const Expr *program) {
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
+    sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
 
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
@@ -4284,6 +4285,10 @@ int emit_program(Buf *out, const Expr *program) {
     type_codegen_emit_struct_apps(&concrete_struct_apps);
     Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
     type_codegen_emit_adt_apps(&concrete_adt_apps);
+    /* SYM1: interned runtime symbol records (struct __tur_sym + one per keyword).
+     * Body emission above populated the registry via sym_codegen_register(). */
+    Buf sym_records; buf_init(&sym_records);
+    sym_codegen_emit(&sym_records, false);  /* single-file: static records */
     /* Phase E: fn-ptr typedefs for concrete fn fields in parametric structs */
     Buf concrete_fn_ptr_typedefs; buf_init(&concrete_fn_ptr_typedefs);
     type_codegen_emit_fn_ptr_typedefs(&concrete_fn_ptr_typedefs);
@@ -4301,6 +4306,7 @@ int emit_program(Buf *out, const Expr *program) {
      * 10. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
+    if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_struct_apps.len) { buf_write(out, concrete_struct_apps.data, concrete_struct_apps.len); buf_putc(out, '\n'); }
@@ -4316,6 +4322,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&concrete_struct_apps);
     buf_free(&concrete_adt_apps);
     buf_free(&concrete_fn_ptr_typedefs);
+    buf_free(&sym_records);
 
     /* Phase 19: Effect handler functions (after fwd_decls so they can call
      * user-defined Turmeric functions, before file so fn defs can reference them). */
@@ -4506,6 +4513,15 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n\n");
+
+    /* SYM2 (runtime-symbols-plan): forward-declare the interned-symbol tag so
+     * that exported signatures using `const struct __tur_sym *` (a :Sym param
+     * or result) refer to a single file-scope tag.  Without this, a :Sym in
+     * parameter position would declare the tag in prototype scope, conflicting
+     * with the full definition emitted in the .c. */
+    if (g_symbols_enabled) {
+        buf_puts(out, "struct __tur_sym;  /* SYM2: interned runtime symbol */\n\n");
+    }
 
     /* Phase M3: When separate compilation, emit #includes for imported modules. */
     if (separate_compilation) {
@@ -4755,6 +4771,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
+    sym_codegen_reset();   /* SYM1/SYM2: clear interned-symbol records for this TU */
 
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);
@@ -5079,6 +5096,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * In separate_compilation (M3) mode, never emit an auto-generated main():
      * each module is compiled independently and the user is responsible for
      * providing exactly one explicit main() across all modules. */
+    /* SYM2: interned-symbol records for this TU.  Function bodies (in `file`)
+     * were emitted above and registered their keywords; emit the struct def +
+     * records now, before the function definitions that reference them.  Weak
+     * external linkage lets the linker fold same-named records across TUs. */
+    Buf sym_records2; buf_init(&sym_records2);
+    sym_codegen_emit(&sym_records2, separate_compilation);
+    if (sym_records2.len) { buf_write(out, sym_records2.data, sym_records2.len); buf_putc(out, '\n'); }
+    buf_free(&sym_records2);
     if (thunk_typedefs2.len) { buf_write(out, thunk_typedefs2.data, thunk_typedefs2.len); buf_putc(out, '\n'); }
     /* J2: Clone forward decls precede function definitions. */
     if (impl_fwd_decls.len) { buf_write(out, impl_fwd_decls.data, impl_fwd_decls.len); buf_putc(out, '\n'); }

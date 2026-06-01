@@ -181,6 +181,64 @@ else
     fi
 fi
 
+# SYM2 (runtime-symbols-plan): a keyword `:foo` referenced from two different
+# module TUs must fold to a single interned record (one pointer) in the final
+# binary.  Build a two-module project under -Xsymbols, where each module returns
+# `:foo`, and assert pointer identity across the module boundary (exit 0) plus a
+# single weak symbol via nm.
+SYMP="$WORK/symx"
+mkdir -p "$SYMP/src/app"
+cat > "$SYMP/build.tur" <<'EOF'
+(defpackage tur-sym-cross-tu
+  :name    "tur-sym-cross-tu"
+  :version "0.1.0"
+  :exports #{
+    "app/main" ["main"]
+    "app/a"    ["a-foo"]
+    "app/b"    ["b-foo"]
+  })
+EOF
+cat > "$SYMP/src/app/a.tur" <<'EOF'
+(defmodule app/a (export a-foo) (defn a-foo [] :Sym :foo))
+EOF
+cat > "$SYMP/src/app/b.tur" <<'EOF'
+(defmodule app/b (export b-foo) (defn b-foo [] :Sym :foo))
+EOF
+cat > "$SYMP/src/app/main.tur" <<'EOF'
+(defmodule app/main
+  (import app/a :refer [a-foo])
+  (import app/b :refer [b-foo])
+  (defn same? [x :Sym y :Sym] :int
+    ```c
+    return (int64_t)((const void *)x == (const void *)y);
+    ```)
+  (defn main [] :int
+    ;; 0 = the two TUs' :foo are the same pointer (cross-TU interning works).
+    (if (= (same? (a-foo) (b-foo)) 1) 0 1)))
+EOF
+sym_out=$(cd "$WORK" && "$TUR" -Xsymbols build "$SYMP" -o "$WORK/symbin" 2>&1)
+sym_rc=$?
+if [ $sym_rc -ne 0 ] || [ ! -x "$WORK/symbin" ]; then
+    fail "build-project-sym-cross-tu" "rc=$sym_rc out=$sym_out"
+else
+    "$WORK/symbin"
+    sym_run_rc=$?
+    if [ "$sym_run_rc" -eq 0 ]; then
+        pass "build-project-sym-cross-tu"
+    else
+        fail "build-project-sym-cross-tu" "exit=$sym_run_rc (expected 0; :foo not folded across TUs)"
+    fi
+    # nm: exactly one __tur_sym_foo object in the linked binary (weak-folded).
+    if command -v nm >/dev/null 2>&1; then
+        sym_count=$(nm "$WORK/symbin" 2>/dev/null | grep -c "__tur_sym_foo")
+        if [ "$sym_count" -eq 1 ]; then
+            pass "build-project-sym-cross-tu-single-symbol"
+        else
+            fail "build-project-sym-cross-tu-single-symbol" "nm found $sym_count __tur_sym_foo symbols (expected 1)"
+        fi
+    fi
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

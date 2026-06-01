@@ -172,6 +172,12 @@ static Form *dl_build_call(Elab *e, Span span, const char *head,
  * reader (TUR-E0282) guarantees the key is one of these three forms. */
 static Form *dl_normalize_map_key(Elab *e, Form *key) {
     if (key->tag == F_INT) return key;
+    /* SYM3 (runtime-symbols-plan): under -Xsymbols a keyword key is a
+     * first-class :Sym value -- pass the F_KEYWORD through so the map is keyed
+     * by Sym (pointer-identity, via Hash[Sym] / MapKey[Sym]) instead of
+     * decaying to a content-hashed cstr.  Without the flag the legacy
+     * hamt/hash-str lowering below is unchanged. */
+    if (key->tag == F_KEYWORD && g_symbols_enabled) return key;
     Form *str;
     if (key->tag == F_KEYWORD) {
         str = form_str(e->arena, key->span, key->as.sym->name,
@@ -232,8 +238,19 @@ Expr *elab_form(Elab *e, Form *f) {
             return out;
         }
         case F_KEYWORD:
+            /* SYM0 (runtime-symbols-plan): under -Xsymbols, a keyword in
+             * expression position is a first-class :Sym literal whose runtime
+             * value is a pointer-identity-equal interned symbol.  Without the
+             * flag it remains a hard error (its only legal uses are syntactic:
+             * type annotations, :refer/:as, struct-field selectors, ADT tags --
+             * all consumed by earlier passes before reaching elab_form). */
+            if (g_symbols_enabled) {
+                Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
+                out->as.sym_lit_.sym = f->as.sym;
+                return out;
+            }
             diag_emit(DIAG_ERROR, f->span,
-                      "phase 1: keywords are only allowed as :else in cond or case");
+                      "keyword in expression position requires -Xsymbols");
             return NULL;
         case F_SYM: {
             /* M1: Use elab_lookup_sym for visibility + qualified name resolution */

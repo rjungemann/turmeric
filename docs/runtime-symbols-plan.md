@@ -1,6 +1,17 @@
 # Runtime Symbols (`:Sym`) -- Plan (SYM0--SYM6)
 
-> **Status:** Not started. Reader already produces `F_KEYWORD` forms and the
+> **Status:** Complete -- SYM0--SYM6 all implemented (type machinery, per-TU
+> codegen, cross-TU interning, map-literal + typeclass integration, stdlib
+> surface, dynamic `str->sym`, docs + fixtures: `sym-eq-basic`, `sym-stdlib`,
+> `sym-map-key`, `sym-dynamic`, plus a `build-project-sym-cross-tu` project
+> test). Two phases deviate from the original design below (see their "As built"
+> notes): **SYM2** uses external weak linkage rather than a per-build
+> `symbols.c` aggregator + `.tur-syms` manifests; **SYM5** ships `str->sym` as a
+> load-on-demand module (`stdlib/sym-dynamic.tur`) backed by a process-global
+> intern table (`src/runtime/symbols.c`), seeded from the static literal records
+> by a codegen-emitted startup constructor.
+>
+> Reader already produces `F_KEYWORD` forms and the
 > compiler already interns the name via the `Symbol` table; this plan adds a
 > runtime value type so `:foo` becomes a first-class expression whose value is
 > a pointer-identity-equal interned symbol.
@@ -302,7 +313,36 @@ self-contained; cross-TU folding comes in SYM2.
 Promotes the per-TU records into a single aggregated unit so multi-file
 builds share one record per keyword across TUs.
 
-### Changes
+### As built (deviation from the design below)
+
+The shipped implementation uses **external weak linkage** rather than the
+aggregator design originally sketched in this section:
+
+- `sym_codegen_emit(out, external_weak)` gains a linkage parameter.
+  `emit_implementation` (the separate-compilation / `tur build <dir>` path)
+  passes `external_weak = true`, so each record is emitted as
+  `__attribute__((weak)) const struct { ... } __tur_sym_<mangled> = { ... };`.
+  Two TUs that both reference `:foo` emit identical definitions; the linker
+  folds the weak duplicates to one object, so `:foo` is a single pointer
+  program-wide. `emit_program` (single-file / `emit-c`) passes
+  `external_weak = false`, keeping the `static` form so the output stays
+  self-contained.
+- The generated header forward-declares `struct __tur_sym;` (under
+  `-Xsymbols`) so an exported signature with a `:Sym` parameter/result refers
+  to a single file-scope tag instead of declaring it in prototype scope.
+- `sym_codegen_reset()` is called at the top of `emit_implementation` as well
+  as `emit_program`; the registry now owns a `strdup`'d copy of each name
+  (the per-TU elaboration arena is freed between TUs, so a borrowed
+  `Symbol->name` would dangle).
+- Verified by `tests/run-build-project.sh`
+  (`build-project-sym-cross-tu` + `...-single-symbol`): a two-module project
+  where both modules return `:foo` exits 0 (pointer-equal across TUs) and
+  `nm` finds exactly one `__tur_sym_foo`.
+
+No `.tur-syms` manifest, no `symbols.c` aggregator, and no link-list changes
+were needed. The original aggregator design is retained below for reference.
+
+### Changes (original design -- not taken)
 
 - `tur build <dir>` (project mode) gains a final emit step:
   - Each TU emits its `seen_symbols` set as a sidecar `.tur-syms` manifest
@@ -331,6 +371,40 @@ builds share one record per keyword across TUs.
 
 Replaces the `(hamt/hash-str "name")` decay in `dl_normalize_map_key` so
 keyword map keys are first-class `:Sym` values.
+
+### As built
+
+The shipped implementation matches the design with two additions the original
+plan did not anticipate:
+
+- **Typeclass dispatch had to learn `TY_SYM`.** `eq?`/`hash` (and the map's
+  `Hash[K]`/`MapKey[K]` resolution) classify the receiver's `TypeKind` as
+  `KIND_STAR` (nullary, exact-match) vs `KIND_ARROW` (constructor). `TY_SYM`
+  was missing from every "is primitive" set, so a `:Sym` receiver was treated
+  as `KIND_ARROW` and matched the *first* non-primitive instance (e.g.
+  `MutableMap`) -- a mis-dispatch that crashed. `TY_SYM` is now in the
+  primitive sets in `elab_typeclasses.c` (dispatch) and `typeclass.c`
+  (by-key lookup), and in every instance-name `type_suffix` switch
+  (`elab_typeclasses.c`, `emit_stmt.c`, `emit_core.c`) so the instance is named
+  `__inst_<Class>_<m>_Sym` rather than the fallback `__inst_..._T`.
+- **The Sym instances live in `sym.tur`, not the per-class files.** Instance
+  dict singletons are emitted unconditionally for every *registered* instance,
+  and their inline-C references `struct __tur_sym`. Putting `Eq[Sym]` /
+  `Hash[Sym]` / `MapKey[Sym]` in the always-loaded `typeclass-eq.tur` /
+  `typeclass-hash.tur` / `map.tur` would therefore force `struct __tur_sym`
+  (and dead instance code) into *every* program and churn all codegen
+  snapshots. Instead all three live in `sym.tur` (auto-loaded only under
+  `-Xsymbols`), and `builtin_kind_home_basename` credits `TY_SYM` to
+  `sym.tur` so they pass the orphan-instance check there. Non-`-Xsymbols`
+  builds are untouched (zero `__tur_sym` references).
+- `MapKey[Sym]` boxes the symbol pointer as the int carrier and uses the
+  plain integer (identity) comparator `tur_int_carrier_eq_` -- correct because
+  interned symbols compare by pointer. `EX_REINTERPRET` (the map carrier
+  box/unbox) now accepts `TY_SYM` as a pointer-sized scalar.
+
+Verified: `#map{:foo 10 :bar 20}` keyed by `:Sym`, `map-get` / `map-has?`,
+and bare `(eq? :foo :foo)` / `(hash :foo)` all dispatch correctly (fixture
+`tests/fixtures/sym-map-key`). The original design notes follow.
 
 ### Changes
 
@@ -387,7 +461,37 @@ The static interning model covers literal keywords. SYM5 adds an opt-in
 helper for constructing symbols from strings at runtime -- useful for
 deserialization or REPL-style tools.
 
-### Changes
+### As built
+
+- `src/runtime/symbols.{c,h}`: a process-global, mutex-guarded open-addressed
+  table. `tur_sym_intern(s, len)` returns an existing record or allocates a
+  fresh process-lifetime one; `tur_sym_register(rec)` registers a static
+  record (first name wins). The hash matches codegen via `tur_hamt_hash_str`.
+- **`str->sym` lives in `stdlib/sym-dynamic.tur`, not `sym.tur`, and is *not*
+  auto-loaded.** Load it with `(load "stdlib/sym-dynamic.tur")`. This keeps the
+  literal-only surface (`sym.tur`) free of any runtime-table dependency:
+  programs that only use `:foo` literals never link `symbols.c` and never run a
+  startup constructor (verified: a literal-only program emits zero
+  `tur_sym_*` references). `symbols.c` is auto-linked (like `hamt.c`) only when
+  `str->sym`'s body -- with its `__tur_autolink__` marker -- is emitted.
+- **Seeding:** `sym_codegen_emit` emits an `__attribute__((constructor))` that
+  calls `tur_sym_register` for each static record, so `str->sym("foo")` returns
+  the same pointer as the literal `:foo` (`(eq? :foo (str->sym "foo"))` holds).
+  The constructor is gated on `str->sym` being defined in the TU
+  (`g_sym_intern_used`, set in `emit_fn_def`), so literal-only programs emit
+  none. Weak-folded cross-TU records register idempotently (first wins).
+- **Known limitation:** in a multi-module build, `str->sym("foo")` matches a
+  literal `:foo` only if that literal appears in a TU that also defines/loads
+  `str->sym` (or is weak-folded with such a TU). A `:foo` that lives solely in
+  a module which never loads `sym-dynamic.tur` is not seeded, so `str->sym`
+  would allocate a distinct record for it. Single-file programs are unaffected.
+
+Verified: `(eq? :hello (str->sym "hello"))`, two interns of the same dynamic
+name are pointer-equal, distinct names are distinct, `sym->str` round-trips,
+a 1,000,000-iteration intern loop returns one stable pointer, and 8 threads
+interning the same name concurrently get one pointer with no TSan data race.
+
+### Changes (original design)
 
 - `src/runtime/symbols.c`: add a process-global hash table guarded by a
   mutex; `tur_sym_intern(const char *s, uint32_t len)` returns a stable
