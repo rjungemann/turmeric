@@ -147,6 +147,48 @@ etc.) dedupe by value:
 []       ; => empty Vec  (expression position)
 ```
 
+### Typed empty literals -- `[]:T` / `#set{}:T`
+
+An empty literal has no element to infer a type from, so a later typed
+operation (`.eq?`, `.push!`) can't recover its element type. Pin it with a
+fused `:T` element-type suffix immediately after the closer:
+
+```turmeric
+[]:int             ; empty Vec[int]
+#set{}:cstr        ; empty Set[cstr]
+[]:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+```
+
+The suffix desugars to an ascription on the literal, so `[]:int` is exactly
+`(:: (vec-of) (Vec int))` and `#set{}:T` is `(:: (set-of) (Set T))` -- the
+generated code is identical. It replaces the verbose
+`(:: (vec-new) (Vec int))` scaffolding that empty containers previously
+needed:
+
+```turmeric
+;; before
+(let [a (:: (vec-new) (Vec int))]
+  (vec-push! a 1) ...)
+
+;; after
+(let [a []:int]
+  (vec-push! a 1) ...)
+```
+
+Rules:
+
+- The `:` must be **immediately adjacent** to the closing `]` / `}` (no
+  intervening whitespace). A space-separated `[] :int` is two forms, not a
+  suffix -- this is what keeps binding vectors (`[x :int y :int]`, whose `]`
+  is followed by a space) unaffected.
+- A `::` after the closer is **not** a suffix (it is the ascription operator).
+- The suffix also works on non-empty literals (`[1 2 3]:int`), where it is
+  merely a redundant re-statement of the inferred type.
+- Missing type after the `:` is a read error: *"expected an element type
+  after the ':' container-literal suffix"*.
+- `#map{}` has two type parameters (key and value); a typed-empty suffix for
+  maps is not yet supported -- ascribe the full `(Map K V)` type instead.
+
 ## Errors
 
 | Code | Condition |

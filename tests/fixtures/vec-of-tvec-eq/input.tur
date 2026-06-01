@@ -13,15 +13,15 @@
 ;; auok?matically.
 
 (defn main [] :int
-  (let [inner-a (:: (vec-new) (Vec int))
-        inner-b (:: (vec-new) (Vec int))
-        inner-c (:: (vec-new) (Vec int))]
+  (let [inner-a []:int
+        inner-b []:int
+        inner-c []:int]
     (vec-push! inner-a 1)
     (vec-push! inner-b 1)
     (vec-push! inner-c 2)
-    (let [ouerr?-1 (:: (vec-new) (Vec (Vec int)))
-          ouerr?-2 (:: (vec-new) (Vec (Vec int)))
-          ouerr?-3 (:: (vec-new) (Vec (Vec int)))]
+    (let [ouerr?-1 []:(Vec int)
+          ouerr?-2 []:(Vec int)
+          ouerr?-3 []:(Vec int)]
       (vec-push! ouerr?-1 inner-a)
       (vec-push! ouerr?-2 inner-b)
       (vec-push! ouerr?-3 inner-c)
@@ -31,12 +31,12 @@
       (println (.eq? ouerr?-1 ouerr?-3)))   ; false ([[1]] vs [[2]])
 
     ;; Three-level deep: Vec[Vec[Vec[int]]]
-    (let [mid1 (:: (vec-new) (Vec (Vec int)))
-          mid2 (:: (vec-new) (Vec (Vec int)))]
+    (let [mid1 []:(Vec int)
+          mid2 []:(Vec int)]
       (vec-push! mid1 inner-a)
       (vec-push! mid2 inner-b)
-      (let [ok?p1 (:: (vec-new) (Vec (Vec (Vec int))))
-            ok?p2 (:: (vec-new) (Vec (Vec (Vec int))))]
+      (let [ok?p1 []:(Vec (Vec int))
+            ok?p2 []:(Vec (Vec int))]
         (vec-push! ok?p1 mid1)
         (vec-push! ok?p2 mid2)
         (println (.eq? ok?p1 ok?p2)))))    ; true ([[[1]]] vs [[[1]]])

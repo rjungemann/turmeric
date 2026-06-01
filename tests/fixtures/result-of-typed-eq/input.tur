@@ -7,8 +7,8 @@
 ;; primitive Eq instance from F3-7).
 
 (defn main [] :int
-  (let [v1 (:: (vec-new) (Vec int))
-        v2 (:: (vec-new) (Vec int))]
+  (let [v1 []:int
+        v2 []:int]
     (vec-push! v1 1)
     (vec-push! v2 1)
     (let [r1 (:: (ok v1) (Result (Vec int) cstr))

@@ -2,21 +2,24 @@
 ;; `Set[Vec[int]]` via the new `set-eq-cmp?` stdlib helper.
 ;;
 ;; The hash-only `set-eq?` is wrong for non-primitive elements
-;; (two structurally-equal Vec[int] poinerr?s hash differently).
+;; (two structurally-equal Vec[int] pointers hash differently).
 ;; F3-5 added `set-eq-cmp?` -- an O(n*m) variant that takes an
-;; element comparaok?r -- and routes Set's recursive dispatch
+;; element comparator -- and routes Set's recursive dispatch
 ;; through it so `Set[Vec[int]]` etc. compare structurally.
 
 (defn main [] :int
-  (let [v1 (:: (vec-new) (Vec int))
-        v2 (:: (vec-new) (Vec int))
-        v3 (:: (vec-new) (Vec int))]
+  (let [v1 []:int
+        v2 []:int
+        v3 []:int]
     (vec-push! v1 42)
     (vec-push! v2 42)
     (vec-push! v3 99)
     ;; set-add takes (s hash x); for non-primitive elements we
-    ;; supply the poinerr? as the hash.  The dispatcher's
-    ;; comparaok?r handles structural comparison element-by-element.
+    ;; supply the pointer as the hash.  The dispatcher's
+    ;; comparator handles structural comparison element-by-element.
+    ;; (set-add returns a fresh Set, so its result still needs the
+    ;; `(:: ... (Set (Vec int)))` ascription -- the typed-empty-literal
+    ;; sugar only applies to a bare `[]` / `#set{}` collection literal.)
     (let [s1 (:: (set-add (set-new) v1 v1) (Set (Vec int)))
           s2 (:: (set-add (set-new) v2 v2) (Set (Vec int)))
           s3 (:: (set-add (set-new) v3 v3) (Set (Vec int)))]

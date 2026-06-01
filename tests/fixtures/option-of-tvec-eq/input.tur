@@ -2,9 +2,9 @@
 ;; `option-eq?` per-call-site synthesis.
 
 (defn main [] :int
-  (let [v1 (:: (vec-new) (Vec int))
-        v2 (:: (vec-new) (Vec int))
-        v3 (:: (vec-new) (Vec int))]
+  (let [v1 []:int
+        v2 []:int
+        v3 []:int]
     (vec-push! v1 42)
     (vec-push! v2 42)
     (vec-push! v3 99)

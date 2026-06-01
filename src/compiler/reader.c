@@ -971,6 +971,54 @@ static Form *read_set_literal(Reader *r) {
                     "unterminated set literal (missing '}') (TUR-E0281)");
 }
 
+/* TCE (typed-container-elements / test-suite-idioms Phase E): a `:`-prefixed
+ * element type fused to the closer of a vec or set literal pins the
+ * collection's element type.  `[]:int` lowers to `(:: [] (Vec int))` and
+ * `#set{}:int` to `(:: #set{} (Set int))`, so an empty literal recovers its
+ * element type without the verbose `(:: (vec-new) (Vec int))` ascription.
+ * The element type form may itself be compound -- `#set{}:(Vec int)` pins
+ * `Set[Vec[int]]`.  `ctor` is the type-constructor name ("Vec" or "Set").
+ *
+ * The suffix is recognized only when a single ':' is immediately adjacent to
+ * the closer (no intervening whitespace) and is not the '::' ascription
+ * operator; otherwise `lit` is returned unchanged so binding vectors
+ * (`[x :int]`, where ']' is followed by space) and bare literals are
+ * unaffected. */
+static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor) {
+    if (!lit || r->error) return lit;
+    if (peek(r) != ':' || peek2(r) == ':') return lit;
+
+    uint32_t s_line = r->line, s_col = r->col;
+    size_t s_off = r->pos;
+    advance(r); /* consume ':' */
+    if (peek(r) == -1) {
+        Span s = span_from_to(r, s_line, s_col, s_off, r->pos);
+        diag_emit(DIAG_ERROR, s,
+                  "expected an element type after the ':' container-literal "
+                  "suffix (e.g. []:int)");
+        r->error = true;
+        return NULL;
+    }
+    Form *elem = read_form(r);
+    if (!elem || r->error) return NULL;
+
+    Span sp = lit->span;
+    /* (Ctor elem) -- the full container type. */
+    const Symbol *ctor_sym =
+        symtab_intern(r->st, strslice(ctor, (uint32_t)strlen(ctor)));
+    Form **ctor_items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    ctor_items[0] = form_sym(r->arena, sp, ctor_sym);
+    ctor_items[1] = elem;
+    Form *ctype = form_list(r->arena, sp, ctor_items, 2);
+    /* (:: lit (Ctor elem)) -- erased at codegen; pins the static type. */
+    const Symbol *asc_sym = symtab_intern(r->st, strslice("::", 2));
+    Form **asc_items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    asc_items[0] = form_sym(r->arena, sp, asc_sym);
+    asc_items[1] = lit;
+    asc_items[2] = ctype;
+    return form_list(r->arena, sp, asc_items, 3);
+}
+
 /* DL0: Try to read a #<tag>{...} data literal.  Returns NULL (without
  * consuming) when the input is not a data literal so the caller can fall
  * through to other '#'-dispatches.  Only invoked when -Xdata-literals is on.
@@ -985,7 +1033,7 @@ static Form *try_read_data_literal(Reader *r) {
     }
     if (peek_at(r, 1) == 's' && peek_at(r, 2) == 'e' &&
         peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
-        return read_set_literal(r);
+        return maybe_container_type_suffix(r, read_set_literal(r), "Set");
     }
     /* Detect a #<ident>{ shape with an unrecognized tag -> TUR-E0283.
      * Scan a run of identifier characters after '#'; if it is followed by
@@ -2725,7 +2773,16 @@ static Form *read_form(Reader *r) {
     }
     
     if (c == '(') return read_seq(r, '(', ')', F_LIST, "unterminated list (missing ')')");
-    if (c == '[') return read_seq(r, '[', ']', F_VEC,  "unterminated vector (missing ']')");
+    if (c == '[') {
+        Form *v = read_seq(r, '[', ']', F_VEC, "unterminated vector (missing ']')");
+        /* TCE: a fused `:T` element-type suffix (`[]:int`) pins the vec's
+         * element type.  Gated on -Xdata-literals since a `[...]` value
+         * literal is itself flag-gated; binding vectors are unaffected
+         * because their ']' is never immediately followed by ':'. */
+        if (g_data_literals_enabled)
+            return maybe_container_type_suffix(r, v, "Vec");
+        return v;
+    }
     if (c == ')' || c == ']' || c == '}') {
         Span s = span_point(r);
         diag_emit(DIAG_ERROR, s, "unexpected '%c'", (char)c);
