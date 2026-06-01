@@ -20,11 +20,24 @@
 /* Forward declaration */
 typedef struct HamtNode HamtNode;
 
+/* WKC2: boxed-key ownership ops.  A "boxed" key is a heap allocation (see
+ * tur_hamt_box_key) carrying a refcount so a single key can be shared across
+ * structurally-shared map versions and freed exactly once.  `retain` is called
+ * each time an entry referencing the key is duplicated (collision-node copy),
+ * `release` each time such an entry is freed (node free / delete).  Both NULL
+ * (the default) means keys are one-word/inline and the HAMT never touches their
+ * lifetime -- byte-identical to the pre-WKC behavior. */
+typedef struct {
+    void (*retain)(void *key);
+    void (*release)(void *key);
+} tur_hamt_key_ops;
+
 /* HAMT root structure. Owned via reference counting. */
 typedef struct Hamt {
     HamtNode *root;      /* Root node (NULL for empty map) */
     uint32_t count;      /* Number of key/value pairs */
     uint32_t ref_count;   /* Reference count for the root struct */
+    tur_hamt_key_ops key_ops;  /* WKC2: boxed-key ownership (NULL fns = none) */
 } Hamt;
 
 /* Node types for the tagged union */
@@ -127,6 +140,46 @@ Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_key
 Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
+
+/* Boxed-key ownership (WKC2 -- wide map-key carrier).
+ *
+ * A boxed key is a heap allocation holding a refcount header followed by `n`
+ * bytes copied from the source key.  The map owns the box: it is retained when
+ * an entry is duplicated across structural sharing and released when an entry
+ * is freed, so it is freed exactly once even when several persistent versions
+ * retain the entry.  Use these for keys that do not fit (or are not) a single
+ * inline word -- e.g. multi-word struct/ADT keys -- where the comparator reads
+ * the key bytes through the payload pointer. */
+
+/* Allocate a boxed key holding a copy of `n` bytes from `src`.  Returns a
+ * pointer to the PAYLOAD (the key bytes); the box starts with refcount 1.
+ * Pass the returned pointer as the `key` to the _eq_owned operations below. */
+void *tur_hamt_box_key(const void *src, size_t n);
+
+/* Retain / release a boxed key by its payload pointer.  release frees the box
+ * when the refcount reaches zero.  NULL-safe. */
+void  tur_hamt_box_retain(void *boxed_key);
+void  tur_hamt_box_release(void *boxed_key);
+
+/* Convenience: the standard ops vector for tur_hamt_box_key-allocated keys. */
+tur_hamt_key_ops tur_hamt_box_key_ops(void);
+
+/* Ownership-aware variants of the _eq family.  Identical to the _eq calls,
+ * except `ops` installs key retain/release for the duration of the operation
+ * (so structural copies retain the box and freed entries release it) and is
+ * stamped onto the resulting map so a later tur_hamt_free releases its keys.
+ *
+ * Each call consumes exactly ONE reference to the passed `key`:
+ *   - set: on insert the reference transfers into the stored entry; on update
+ *     (the key already exists by content) the passed key is not stored and its
+ *     reference is released before returning.
+ *   - get / has / del: the passed key is a transient probe and is released
+ *     before returning (del additionally releases the removed entry's key).
+ * Passing ops == {NULL,NULL} is identical to the plain _eq entry point. */
+Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+bool  tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
+void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
 
 /* Get the number of key/value pairs in the map. O(1). */
 uint32_t tur_hamt_count(Hamt *m);

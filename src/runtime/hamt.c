@@ -166,6 +166,8 @@ static Hamt *hamt_alloc_empty(void) {
     m->root = NULL;
     m->count = 0;
     m->ref_count = 1;
+    m->key_ops.retain = NULL;
+    m->key_ops.release = NULL;
     return m;
 }
 
@@ -253,6 +255,65 @@ static inline bool keys_equal(void *a, void *b) {
 }
 
 /* ============================================================================
+ * Boxed-key ownership (WKC2)
+ * ============================================================================
+ *
+ * A boxed key is `[refcount|size][payload bytes]`; the public payload pointer
+ * points past the 16-byte header (so payload alignment is malloc's, i.e. good
+ * for any standard key type).  Ownership retain/release run through a
+ * thread-local hook installed by the _eq_owned operations and by tur_hamt_free
+ * (which reads it back from the map's stored ops).  When the hook is NULL --
+ * the default for one-word/inline keys -- retain/release are no-ops and the
+ * HAMT never touches key lifetime, identical to pre-WKC behavior.
+ */
+
+typedef struct {
+    uint64_t refcount;
+    uint64_t size;
+} tur_hamt_box_hdr;
+
+void *tur_hamt_box_key(const void *src, size_t n) {
+    tur_hamt_box_hdr *h = (tur_hamt_box_hdr *)hamt_malloc(sizeof(tur_hamt_box_hdr) + n);
+    h->refcount = 1;
+    h->size = (uint64_t)n;
+    void *payload = (char *)h + sizeof(tur_hamt_box_hdr);
+    if (src && n) memcpy(payload, src, n);
+    return payload;
+}
+
+void tur_hamt_box_retain(void *boxed_key) {
+    if (!boxed_key) return;
+    tur_hamt_box_hdr *h =
+        (tur_hamt_box_hdr *)((char *)boxed_key - sizeof(tur_hamt_box_hdr));
+    h->refcount++;
+}
+
+void tur_hamt_box_release(void *boxed_key) {
+    if (!boxed_key) return;
+    tur_hamt_box_hdr *h =
+        (tur_hamt_box_hdr *)((char *)boxed_key - sizeof(tur_hamt_box_hdr));
+    if (--h->refcount == 0) free(h);
+}
+
+tur_hamt_key_ops tur_hamt_box_key_ops(void) {
+    tur_hamt_key_ops ops = { tur_hamt_box_retain, tur_hamt_box_release };
+    return ops;
+}
+
+/* Thread-local key-ownership hook, mirroring g_hamt_key_eq: saved/restored
+ * around each _eq_owned call and around tur_hamt_free so nested operations
+ * (and the deferred free of structurally-shared nodes) see the right ops. */
+static _Thread_local void (*g_hamt_key_retain)(void *) = NULL;
+static _Thread_local void (*g_hamt_key_release)(void *) = NULL;
+
+static inline void key_retain_hook(void *k) {
+    if (g_hamt_key_retain && k) g_hamt_key_retain(k);
+}
+static inline void key_release_hook(void *k) {
+    if (g_hamt_key_release && k) g_hamt_key_release(k);
+}
+
+/* ============================================================================
  * Entry lookup in collision nodes
  * ============================================================================
  */
@@ -308,6 +369,8 @@ static void node_free_recursive(HamtNode *n) {
             HamtEntry *e = n->as.collision.entries;
             while (e) {
                 HamtEntry *next = e->next;
+                /* WKC2: this entry's reference to its (boxed) key goes away. */
+                key_release_hook(e->key);
                 free(e);
                 e = next;
             }
@@ -373,6 +436,9 @@ static HamtNode *collision_node_copy(HamtNode *src) {
         (*tail)->key = e->key;
         (*tail)->val = e->val;
         (*tail)->next = NULL;
+        /* WKC2: the duplicated entry is a new reference to the (shared) key;
+         * retain so the box outlives whichever copy is freed last. */
+        key_retain_hook((*tail)->key);
         tail = &(*tail)->next;
     }
 
@@ -642,6 +708,9 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
                             } else {
                                 new_node->as.collision.entries = new_e->next;
                             }
+                            /* WKC2: collision_node_copy retained this key; the
+                             * removed entry's reference goes away here. */
+                            key_release_hook(new_e->key);
                             free(new_e);
                             break;
                         }
@@ -761,7 +830,13 @@ void tur_hamt_free(Hamt *m) {
     }
 
     if (m->root) {
+        /* WKC2: install this map's key-release hook so any entries that
+         * actually free during the node cascade release their boxed keys.
+         * Saved/restored to compose with an enclosing operation. */
+        void (*save_release)(void *) = g_hamt_key_release;
+        g_hamt_key_release = m->key_ops.release;
         tur_hamt_node_release(m->root);
+        g_hamt_key_release = save_release;
     }
     free(m);
 }
@@ -793,6 +868,7 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
     Hamt *new_map = hamt_alloc_empty();
     /* new_root has ref_count=1 from node_insert; new_map is the sole owner. */
     new_map->root = new_root;
+    new_map->key_ops = m->key_ops;  /* WKC2: inherit boxed-key ownership */
 
     if (key_exists) {
         new_map->count = m->count;
@@ -819,8 +895,11 @@ Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
     }
 
     Hamt *new_map = hamt_alloc_empty();
+    /* new_root has ref_count=1 from node_delete (a fresh copy, never a shared
+     * node); new_map is the sole owner -- do NOT retain again, or the root
+     * never reaches refcount 0 on free (leaking the node and its boxed keys). */
     new_map->root = new_root;
-    tur_hamt_node_retain(new_root);
+    new_map->key_ops = m->key_ops;  /* WKC2: inherit boxed-key ownership */
     new_map->count = m->count - 1;
 
     return new_map;
@@ -874,6 +953,80 @@ void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
     g_hamt_key_eq = eq;
     void *r = tur_hamt_get(m, hash, key);
     g_hamt_key_eq = save;
+    return r;
+}
+
+/* ----------------------------------------------------------------------------
+ * Ownership-aware variants (WKC2)
+ *
+ * Like the _eq calls but additionally install key retain/release for the
+ * duration (so structural copies retain the boxed key and freed entries
+ * release it) and stamp `ops` onto the resulting map so a later tur_hamt_free
+ * releases its keys.  Each call consumes one reference to `key` (see header).
+ * --------------------------------------------------------------------------*/
+
+/* RAII-ish save/restore of all three thread-local key hooks. */
+typedef struct {
+    tur_hamt_keyeq_fn  eq;
+    void (*retain)(void *);
+    void (*release)(void *);
+} hamt_key_hook_save;
+
+static hamt_key_hook_save hamt_install_key_hooks(tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
+    hamt_key_hook_save s = { g_hamt_key_eq, g_hamt_key_retain, g_hamt_key_release };
+    g_hamt_key_eq      = eq;
+    g_hamt_key_retain  = ops.retain;
+    g_hamt_key_release = ops.release;
+    return s;
+}
+
+static void hamt_restore_key_hooks(hamt_key_hook_save s) {
+    g_hamt_key_eq      = s.eq;
+    g_hamt_key_retain  = s.retain;
+    g_hamt_key_release = s.release;
+}
+
+Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val,
+                            tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
+    hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
+    /* On update the passed key is not stored (the existing entry's key is
+     * kept), so its incoming reference must be dropped.  Determine that up
+     * front while the eq hook is installed. */
+    bool existed = m ? tur_hamt_has(m, hash, key) : false;
+    Hamt *r = tur_hamt_set(m, hash, key, val);
+    if (existed && ops.release) ops.release(key);
+    if (r) r->key_ops = ops;
+    hamt_restore_key_hooks(s);
+    return r;
+}
+
+Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, void *key,
+                            tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
+    hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
+    Hamt *r = tur_hamt_del(m, hash, key);
+    if (r) r->key_ops = ops;
+    /* The probe key is never stored; release the caller's reference.  (The
+     * removed entry's own key reference was released inside node_delete.) */
+    if (ops.release) ops.release(key);
+    hamt_restore_key_hooks(s);
+    return r;
+}
+
+bool tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, void *key,
+                           tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
+    hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
+    bool r = tur_hamt_has(m, hash, key);
+    if (ops.release) ops.release(key);  /* transient probe */
+    hamt_restore_key_hooks(s);
+    return r;
+}
+
+void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
+                            tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
+    hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
+    void *r = tur_hamt_get(m, hash, key);
+    if (ops.release) ops.release(key);  /* transient probe */
+    hamt_restore_key_hooks(s);
     return r;
 }
 

@@ -13,19 +13,37 @@
 > instance mis-named to the generic `T` and the dispatcher fell back to the
 > `int` carrier representative (this is why a `:float` key silently truncated).
 >
+> **WKC2 (runtime boxed-key ownership) is now implemented** as the foundation
+> for multi-word keys: the HAMT carries an optional refcount-aware boxed-key
+> carrier (`tur_hamt_box_key` + `tur_hamt_box_retain/release`) and
+> ownership-aware `tur_hamt_*_eq_owned` entry points that install retain/release
+> for an operation and stamp the ops onto the resulting map so a later
+> `tur_hamt_free` releases its keys. A box shared across structurally-shared
+> versions is freed exactly once; one-word keys (NULL ops) are untouched.
+> Validated by `tests/test_hamt_owned_keys.c` under ASan/UBSan/LSan (ctest
+> `tur_hamt_owned_keys`, gate `tests/run-hamt-owned-keys.sh`) -- leak-clean and
+> double-free/use-after-free clean across collisions, updates, deletes, and
+> structural sharing. Fixing this surfaced and corrected a latent
+> `tur_hamt_del` bug (it double-retained the fresh delete-root, leaking the node
+> and its keys on `map-free`; harmless before only because compiled programs
+> never free maps). The float path does not use this (inline carriers need no
+> box); it exists for the still-pending aggregate-key lowering (WKC3).
+>
 > Deviations from the original W2 plan, by design:
 > - One-word keys are no longer emitted *byte-for-byte* identically (WKC1's
 >   strict zero-diff gate): they now route through `MapKey` dispatch (an
 >   inlinable identity box + a named comparator) instead of an inline
 >   `(fn [a :K b :K] (eq? a b))`. Behavior and cost are equivalent; the
 >   `ghe3-generic-map-key` snapshot was regenerated accordingly.
-> - **Multi-word struct/ADT keys remain unimplemented.** They are the only case
->   that genuinely needs the heap-boxed carrier + refcount-aware key ownership
->   (WKC2); that is the remaining follow-up. `mk-box` for an aggregate key would
->   need to heap-copy the bytes and the map would need to own/free them.
+> - **Multi-word struct/ADT keys remain unimplemented at the lowering (WKC3).**
+>   The runtime carrier + ownership (WKC2) that they need now exists; what is
+>   left is the `-g`/`MapKey` lowering that boxes an aggregate key via
+>   `tur_hamt_box_key` and routes through the `_eq_owned` entry points, plus
+>   the per-`K` box-aware comparator.
 >
 > Fixtures: `wkc-wide-map-key` (focused float32/float64 round-trip, update,
-> dissoc) and a reinstated `:float32` section in `ghe3-generic-map-key`.
+> dissoc) and a reinstated `:float32` section in `ghe3-generic-map-key`;
+> `tests/test_hamt_owned_keys.c` for the WKC2 runtime ownership.
 >
 > ---
 >
@@ -193,9 +211,14 @@ neither keys nor values (`src/runtime/hamt.h:82-84`). Add an opt-in key
 destructor / ownership hook so a boxed key is freed exactly once across
 structural sharing (refcount-aware, mirroring node `ref_count`).
 
-- **Acceptance:** an ASan/LSan run of a wide-keyed map build+drop is leak-clean
-  and double-free-clean (the compiler/codegen path is already leak-checked; this
-  extends it to runtime-built boxed keys).
+- **Acceptance (MET):** an ASan/LSan run of a wide-keyed map build+drop is
+  leak-clean and double-free-clean (the compiler/codegen path is already
+  leak-checked; this extends it to runtime-built boxed keys). Implemented as
+  `tur_hamt_box_key`/`box_retain`/`box_release` + `tur_hamt_*_eq_owned` with a
+  per-map `key_ops` stamp; the retain fires in `collision_node_copy`, the
+  release in the collision free/delete paths and in `tur_hamt_free` (which
+  installs the map's release hook for the node cascade). Validated by
+  `tests/test_hamt_owned_keys.c` (ctest `tur_hamt_owned_keys`).
 
 ### WKC3 -- per-`K` box/unbox in the `-g` lowering + comparator
 
