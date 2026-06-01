@@ -94,6 +94,16 @@ h1 em { font-style: italic; color: var(--gold-bright); }
   white-space: nowrap;
 }
 
+.codespaces-badge {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.codespaces-badge img {
+  display: block;
+}
+
 /* ── HERO CODE BLOCK ───────────────────── */
 .hero-code {
   margin-top: 64px;

@@ -20,6 +20,8 @@ Turmeric exists to explore the intersection of Lisp expressiveness and systems-l
 curl -sSf https://turmeric-lang.com/install | sh
 ```
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rjungemann/turmeric)
+
 This installs the `tur` compiler via the Homebrew formula in this repo.
 
 **Build from source:**
@@ -475,4 +477,3 @@ for C/CMake dependency details.
 | Higher-kinded types (Functor, Applicative, Monad, Foldable, Traversable; `^f`/`^^f` syntax) | ✅ |
 | Interactive REPL with `:type`, `:doc`, history | ✅ |
 | WebAssembly playground | ✅ |
-
