@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3000:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3000:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3001:8) *' [-Wincompatible-pointer-types]
+ 3000 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3001 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3002:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3002:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3003:8) *' [-Wincompatible-pointer-types]
+ 3002 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3003 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3021:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3021:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3022:8) *' [-Wincompatible-pointer-types]
+ 3021 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3022 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3057:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3057:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3058:8) *' [-Wincompatible-pointer-types]
+ 3057 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3058 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3073:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3070:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3061:3) *' [-Wincompatible-pointer-types]
+ 3073 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3076:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3070:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3064:3) *' [-Wincompatible-pointer-types]
+ 3076 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3848:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3848:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-nested-scopes_input_tur.c:3848:35) *' [-Wincompatible-pointer-types]
+ 3848 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

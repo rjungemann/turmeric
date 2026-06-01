@@ -6,3 +6,33 @@ tests/fixtures/match-redundant-arm/input.tur:7:5: warning: match: arm for constr
   |     ^^^^^
 8 |     (Green) 3
 9 |     (Blue) 4)]
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3010:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3010:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3011:8) *' [-Wincompatible-pointer-types]
+ 3010 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3011 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3012:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3012:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3013:8) *' [-Wincompatible-pointer-types]
+ 3012 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3013 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3031:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3031:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3032:8) *' [-Wincompatible-pointer-types]
+ 3031 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3032 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3067:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3067:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3068:8) *' [-Wincompatible-pointer-types]
+ 3067 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3068 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3083:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3080:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3071:3) *' [-Wincompatible-pointer-types]
+ 3083 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3086:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3080:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3074:3) *' [-Wincompatible-pointer-types]
+ 3086 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3858:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3858:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_match-redundant-arm_input_tur.c:3858:35) *' [-Wincompatible-pointer-types]
+ 3858 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

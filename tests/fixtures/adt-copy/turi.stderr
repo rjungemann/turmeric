@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3011:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3011:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3012:8) *' [-Wincompatible-pointer-types]
+ 3011 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3012 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3013:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3013:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3014:8) *' [-Wincompatible-pointer-types]
+ 3013 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3014 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3032:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3032:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3033:8) *' [-Wincompatible-pointer-types]
+ 3032 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3033 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3068:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3068:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3069:8) *' [-Wincompatible-pointer-types]
+ 3068 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3069 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3084:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3081:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3072:3) *' [-Wincompatible-pointer-types]
+ 3084 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3087:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3081:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3075:3) *' [-Wincompatible-pointer-types]
+ 3087 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3859:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3859:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-copy_input_tur.c:3859:35) *' [-Wincompatible-pointer-types]
+ 3859 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

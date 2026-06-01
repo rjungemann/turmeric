@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3006:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3006:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3007:8) *' [-Wincompatible-pointer-types]
+ 3006 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3007 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3008:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3008:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3009:8) *' [-Wincompatible-pointer-types]
+ 3008 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3009 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3027:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3027:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3028:8) *' [-Wincompatible-pointer-types]
+ 3027 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3028 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3063:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3063:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3064:8) *' [-Wincompatible-pointer-types]
+ 3063 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3064 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3079:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3076:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3067:3) *' [-Wincompatible-pointer-types]
+ 3079 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3082:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3076:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3070:3) *' [-Wincompatible-pointer-types]
+ 3082 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3854:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3854:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_adt-recursive_input_tur.c:3854:35) *' [-Wincompatible-pointer-types]
+ 3854 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

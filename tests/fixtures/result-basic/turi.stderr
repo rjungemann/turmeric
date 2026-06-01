@@ -1,0 +1,85 @@
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2992:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2992:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2993:8) *' [-Wincompatible-pointer-types]
+ 2992 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 2993 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2994:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2994:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2995:8) *' [-Wincompatible-pointer-types]
+ 2994 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 2995 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3013:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3013:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3014:8) *' [-Wincompatible-pointer-types]
+ 3013 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3014 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3049:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3049:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3050:8) *' [-Wincompatible-pointer-types]
+ 3049 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3050 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3065:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3062:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3053:3) *' [-Wincompatible-pointer-types]
+ 3065 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3068:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3062:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3056:3) *' [-Wincompatible-pointer-types]
+ 3068 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3840:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3840:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_result-basic_input_tur.c:3840:35) *' [-Wincompatible-pointer-types]
+ 3840 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4019:15: error: redefinition of 'ok'
+ 4019 | static void * ok(int64_t x) {
+      |               ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2839:15: note: previous definition is here
+ 2839 | static void * ok(int64_t x) {
+      |               ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4025:15: error: redefinition of 'err'
+ 4025 | static void * err(int64_t e) {
+      |               ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2848:15: note: previous definition is here
+ 2848 | static void * err(int64_t e) {
+      |               ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4031:13: error: redefinition of 'ok_'
+ 4031 | static bool ok_(void * r) {
+      |             ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2857:13: note: previous definition is here
+ 2857 | static bool ok_(void * r) {
+      |             ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4037:13: error: redefinition of 'err_'
+ 4037 | static bool err_(void * r) {
+      |             ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2863:13: note: previous definition is here
+ 2863 | static bool err_(void * r) {
+      |             ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4043:16: error: redefinition of 'ok_val'
+ 4043 | static int64_t ok_val(void * r) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2869:16: note: previous definition is here
+ 2869 | static int64_t ok_val(void * r) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4049:16: error: redefinition of 'err_val'
+ 4049 | static int64_t err_val(void * r) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2875:16: note: previous definition is here
+ 2875 | static int64_t err_val(void * r) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4055:16: error: redefinition of 'result_unwrap'
+ 4055 | static int64_t result_unwrap(void * r) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2881:16: note: previous definition is here
+ 2881 | static int64_t result_unwrap(void * r) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4062:16: error: redefinition of 'result_unwrap_or'
+ 4062 | static int64_t result_unwrap_or(void * r, int64_t default_val) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2891:16: note: previous definition is here
+ 2891 | static int64_t result_unwrap_or(void * r, int64_t default_val) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:4069:16: error: redefinition of 'result_expect'
+ 4069 | static int64_t result_expect(void * r, const char * msg) {
+      |                ^
+/tmp/tur-build/tests_fixtures_result-basic_input_tur.c:2898:16: note: previous definition is here
+ 2898 | static int64_t result_expect(void * r, const char * msg) {
+      |                ^
+7 warnings and 9 errors generated.
+tur: cc invocation failed (status 256)

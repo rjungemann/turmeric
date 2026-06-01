@@ -1,0 +1,51 @@
+<<<<<<< Updated upstream
+||||||| Stash base
+
+=================================================================
+==13073==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 64 byte(s) in 1 object(s) allocated from:
+    #0 0x7ff70d2fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x55ff43fe1b36 in collect_free_vars /home/user/turmeric/src/compiler/elab_core.c:442
+
+Direct leak of 24 byte(s) in 1 object(s) allocated from:
+    #0 0x7ff70d2fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55ff44160fbb in fresh_tmp /home/user/turmeric/src/compiler/emit_core.c:194
+
+Direct leak of 24 byte(s) in 1 object(s) allocated from:
+    #0 0x7ff70d2fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55ff4416142f in fresh_defer_env /home/user/turmeric/src/compiler/emit_core.c:218
+
+SUMMARY: AddressSanitizer: 112 byte(s) leaked in 3 allocation(s).
+=======
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:2998:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:2998:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:2999:8) *' [-Wincompatible-pointer-types]
+ 2998 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 2999 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3000:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3000:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3001:8) *' [-Wincompatible-pointer-types]
+ 3000 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3001 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3019:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3019:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3020:8) *' [-Wincompatible-pointer-types]
+ 3019 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3020 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3055:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3055:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3056:8) *' [-Wincompatible-pointer-types]
+ 3055 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3056 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3071:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3068:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3059:3) *' [-Wincompatible-pointer-types]
+ 3071 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3074:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3068:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3062:3) *' [-Wincompatible-pointer-types]
+ 3074 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3846:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3846:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_closure-multi-capture-ref_input_tur.c:3846:35) *' [-Wincompatible-pointer-types]
+ 3846 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.
+>>>>>>> Stashed changes

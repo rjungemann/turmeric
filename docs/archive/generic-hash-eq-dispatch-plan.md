@@ -19,9 +19,11 @@
 >      identity-keyed (in fact compares map pointers as ints).  This is the large
 >      three-part "constrained-generic instance specialization" feature (CGI gap
 >      #2); the three coupled compiler changes are enumerated in the *Remaining
->      (large -- the generic-dict path)* note below.  **Decision: deferred** (stop
->      and consolidate) -- it is a monomorphizer-core change with broad
->      snapshot/regression risk, out of proportion to a stdlib follow-up.
+>      (large -- the generic-dict path)* note below.  **No longer deferred:** this
+>      work has been extracted into its own active plan,
+>      [generic-dict-eq-map-dispatch-plan.md](../generic-dict-eq-map-dispatch-plan.md)
+>      (GDE0--GDE5), which sequences the three coupled monomorphizer/emit changes
+>      and a red reproduction fixture.
 >   2. ~~Struct keys with **non-`:int` fields** (the zero-struct witness only
 >      type-checks for all-`:int`-field structs).~~ **DONE** — `zero_form_for_field`
 >      in `elab_typeclasses.c` handles `float32`, `float64`, `bool`, `cstr`, and
@@ -130,7 +132,7 @@
 >
 > **Landed since (GHE4/GHE5 -- delivered by TMS, PR #167):** GHE4 and GHE5 were
 > realized by the **typed `Map[K V]` surface** work
-> ([typed-map-surface-plan.md](archive/typed-map-surface-plan.md), TMS2--TMS5),
+> ([typed-map-surface-plan.md](typed-map-surface-plan.md), TMS2--TMS5),
 > which landed on `main` and subsumes them:
 > - **GHE4** -- `#map{...}` / `hamt-of` now route **every** key type through one
 >   content-keyed builder (`(Hash K)` + `(MapKey K)`); the `smap-of` / `smap-*`
@@ -186,12 +188,17 @@
 > `K` is concrete -- which is also exactly how the stdlib already gives
 > `Vec`/`Option`/`Result`/`Pair`/`Set` recursive *value* equality.
 >
-> **Remaining (smaller):** struct keys with **non-`:int` fields** -- the zero
+> ~~**Remaining (smaller):** struct keys with **non-`:int` fields** -- the zero
 > witness `(make-struct K 0 ...)` only type-checks when every field is `:int`; a
-> field-type-aware zero (or a deref-safe inline-C witness) would lift this.
+> field-type-aware zero (or a deref-safe inline-C witness) would lift this.~~
+> **DONE** -- `zero_form_for_field` in `elab_typeclasses.c` handles `float32`,
+> `float64`, `bool`, `cstr`, and all integer variants; fixture
+> `eqmap-struct-float-fields` added.
 >
-> **Remaining (large -- the generic-dict path).** When `Eq [Map]` is used through
-> a *polymorphic* `Eq` constraint rather than a concrete `.eq?` -- e.g.
+> **Remaining (large -- the generic-dict path).** **No longer deferred --
+> extracted to
+> [generic-dict-eq-map-dispatch-plan.md](../generic-dict-eq-map-dispatch-plan.md)
+> (GDE0--GDE5).** When `Eq [Map]` is used through a *polymorphic* `Eq` constraint rather than a concrete `.eq?` -- e.g.
 > `(defn eq2 [^Eq A] [a :A b :A] :bool (eq? a b))` then `(eq2 mapX mapY)` -- the
 > result is still identity-keyed (in fact worse: see below).  The dispatch-site
 > synthesis cannot help here because the body's `(eq? a b)` is elaborated once
@@ -220,7 +227,7 @@
 > Content-keyed *lookup* (`map-get`/`map-has?`) is unaffected and correct.
 >
 > This is the deferred **Approach A** from
-> [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
+> [generic-map-key-dispatch-plan.md](generic-map-key-dispatch-plan.md) (see its
 > *Decision note (GMK1)*). GMK shipped content-keyed string maps via
 > **Approach B** (a `:cstr`-specific lowering onto the hand-written `smap-*`
 > layer). Approach A replaces that special-case with *uniform* dispatch: a
@@ -316,7 +323,7 @@ across *every* typeclass; that breadth is why GMK deferred it.
 
 ## Phasing
 
-### GHE0 -- make `Hash` (+ `Eq` content) available by default
+### GHE0 -- make `Hash` (+ `Eq` content) available by default (DONE)
 
 Resolve Gap 1 without the redefinition collision. Preferred shape: split a
 `typeclass-hash.tur` **stub** that declares `(defclass Hash [a] (hash [x] :int))`
@@ -332,7 +339,7 @@ or guard them so the on-demand full module stays idempotent against the stub
   reference `hash` (stub bodies must be dead-strippable / not force-live like
   the Eq stub).
 
-### GHE1 -- dispatch bare-name typeclass method calls
+### GHE1 -- dispatch bare-name typeclass method calls (DONE)
 
 Resolve Gap 2. In `elab_call.c`, before the eval-mode fallback, detect that the
 head symbol is a registered typeclass **method** (scan `e->typeclass_env`
@@ -363,7 +370,7 @@ Design constraints / open questions:
   `(show 5)` compile and run with the correct instance; a fixture asserts
   `(= (hash "a") (hash "a"))` and `(eq? 1 1)`. `bash tests/run.sh` green.
 
-### GHE2 -- thread `Eq[K]` to the runtime as a `bool(int64_t,int64_t)` pointer
+### GHE2 -- thread `Eq[K]` to the runtime as a `bool(int64_t,int64_t)` pointer (DONE)
 
 The runtime `*-eq` ops need the comparator as a plain non-capturing function
 pointer. Resolve the GMK1 `<eq-closure-for-K>` question. Two sub-options
@@ -465,14 +472,14 @@ build a content-keyed map. Then update docs and regenerate snapshots:
 
 ## File touchpoints
 
-| Phase | File | Change |
-|---|---|---|
-| GHE0 | `stdlib/typeclass-hash.tur` (new), `stdlib/typeclass.tur`, `src/main.c` | Split + auto-load a `Hash` stub; de-dupe instances |
-| GHE1 | `src/compiler/elab_call.c` (+ `elab_typeclasses.c`) | Route bare-name method calls to argument-type dispatch |
-| GHE2 | `src/compiler/` (method-as-value **or** wrapper synthesis) | Eq comparator as a `bool(i64,i64)` pointer |
-| GHE3 | `stdlib/map.tur` | `map-assoc-g` + `-g` reads; int fast path |
-| GHE4 | `src/compiler/elab_toplevel.c`, `elab_call.c`, `stdlib/map.tur` | Uniform `-g` lowering; retire Approach-B special-case |
-| GHE5 | `stdlib/map.tur`, `docs/`, snapshots | Read surface, docs, regen |
+| Phase | Status | File | Change |
+|---|---|---|---|
+| GHE0 | ✅ Done | `stdlib/typeclass-hash.tur` (new), `stdlib/typeclass.tur`, `src/main.c` | Split + auto-load a `Hash` stub; de-dupe instances |
+| GHE1 | ✅ Done | `src/compiler/elab_call.c` (+ `elab_typeclasses.c`) | Route bare-name method calls to argument-type dispatch |
+| GHE2 | ✅ Done | `src/compiler/emit_module.c`, `emit_core.c` | Eq comparator as a `bool(i64,i64)` pointer (A2 generalized fn-value specialization) |
+| GHE3 | ✅ Done | `stdlib/map.tur` | `map-assoc-g` + `-g` reads; int fast path |
+| GHE4 | ✅ Done (via TMS PR #167) | `src/compiler/elab_toplevel.c`, `elab_call.c`, `stdlib/map.tur` | Uniform `-g` lowering; retire Approach-B special-case |
+| GHE5 | ✅ Done (via TMS PR #167) | `stdlib/map.tur`, `docs/`, snapshots | Read surface, docs, regen; `Eq [Map]` content-correct for `:cstr`+struct keys |
 
 ## Risks
 
@@ -520,6 +527,9 @@ build a content-keyed map. Then update docs and regenerate snapshots:
    (`try_synth_recursive_eq` + `map-eq-k?`): `(mk-cmp (:: 0 cstr))` for `:cstr`,
    `(mk-cmp (make-struct K 0 ...))` for all-`:int`-field structs. The
    `defopaque`-ascription deref segfault was also fixed (`opaque-ascribe-int`).
-   **Remaining:** non-`:int`-field struct keys, and the generic-dict `Eq [Map]`
-   path (still identity; needs the true general HKT-instance element-dispatch
-   fix). Content *lookup* (`map-get`/`map-has?`) was always correct.
+   ~~**Remaining:** non-`:int`-field struct keys~~ **DONE** (see above), and the
+   generic-dict `Eq [Map]` path (still identity; needs the true general
+   HKT-instance element-dispatch fix; **no longer deferred -- extracted to
+   [generic-dict-eq-map-dispatch-plan.md](../generic-dict-eq-map-dispatch-plan.md),
+   GDE0--GDE5**). Content *lookup*
+   (`map-get`/`map-has?`) was always correct.

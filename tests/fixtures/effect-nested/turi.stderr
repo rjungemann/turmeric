@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3084:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3084:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3085:8) *' [-Wincompatible-pointer-types]
+ 3084 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3085 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3086:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3086:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3087:8) *' [-Wincompatible-pointer-types]
+ 3086 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3087 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3105:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3105:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3106:8) *' [-Wincompatible-pointer-types]
+ 3105 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3106 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3141:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3141:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3142:8) *' [-Wincompatible-pointer-types]
+ 3141 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3142 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3157:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3154:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3145:3) *' [-Wincompatible-pointer-types]
+ 3157 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3160:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3154:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3148:3) *' [-Wincompatible-pointer-types]
+ 3160 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3932:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3932:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-nested_input_tur.c:3932:35) *' [-Wincompatible-pointer-types]
+ 3932 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

@@ -1,0 +1,48 @@
+<<<<<<< Updated upstream
+||||||| Stash base
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2048:16: error: redefinition of 'Option'
+ 2048 | typedef struct Option {
+      |                ^
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2008:16: note: previous definition is here
+ 2008 | typedef struct Option {
+      |                ^
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2050:3: error: typedef redefinition with different types ('struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2048:16)' vs 'struct Option')
+ 2050 | } Option;
+      |   ^
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:2010:3: note: previous definition is here
+ 2010 | } Option;
+      |   ^
+2 errors generated.
+tur: cc invocation failed (status 256)
+=======
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3017:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3017:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3018:8) *' [-Wincompatible-pointer-types]
+ 3017 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3018 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3019:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3019:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3020:8) *' [-Wincompatible-pointer-types]
+ 3019 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3020 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3038:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3038:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3039:8) *' [-Wincompatible-pointer-types]
+ 3038 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3039 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3074:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3074:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3075:8) *' [-Wincompatible-pointer-types]
+ 3074 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3075 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3090:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3087:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3078:3) *' [-Wincompatible-pointer-types]
+ 3090 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3093:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3087:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3081:3) *' [-Wincompatible-pointer-types]
+ 3093 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3865:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3865:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_clone-option_input_tur.c:3865:35) *' [-Wincompatible-pointer-types]
+ 3865 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.
+>>>>>>> Stashed changes
