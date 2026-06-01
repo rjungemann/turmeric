@@ -23,7 +23,7 @@
 > - [`call-cc-completion-plan.md`](call-cc-completion-plan.md) -- the primary
 >   consumer; reframed to be built *on top of* this plan (undelimited `call/cc`
 >   + implicit program-wide prompt).
-> - [`multishot-continuations-plan.md`](../archive/multishot-continuations-plan.md)
+> - [`multishot-continuations-plan.md`](multishot-continuations-plan.md)
 >   -- `CK_MULTISHOT` ownership; orthogonal to the capture mechanism but rides
 >   on the same reified-continuation substrate.
 > - [`control-flow-completeness-plan.md`](../archive/history/control-flow-completeness-plan.md)
@@ -81,7 +81,7 @@ semantics directly.
   direct (see CPS1 coloring). "Whole-program" here means the *analysis* is
   whole-program; the *rewrite* is selective.
 - `CK_MULTISHOT` ownership accounting -- that is
-  [`multishot-continuations-plan.md`](../archive/multishot-continuations-plan.md);
+  [`multishot-continuations-plan.md`](multishot-continuations-plan.md);
   it consumes this substrate but is scheduled separately.
 
 ---

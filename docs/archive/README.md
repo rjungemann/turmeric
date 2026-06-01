@@ -61,7 +61,7 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[set-literal-plan.md](set-literal-plan.md)** -- `#s(...)` set literal syntax
 - **[scscm-tidal-spices-plan.md](scscm-tidal-spices-plan.md)** -- SuperCollider/Tidal live coding spice pair (Phase 20+ target)
 - **[effect-types-row-polymorphism-plan.md](effect-types-row-polymorphism-plan.md)** -- Full first-class effect polymorphism (ET0-ET4); not started; v3 target
-- **[multishot-continuations-plan.md](multishot-continuations-plan.md)** -- Multi-shot continuations (MS0-MS4); deferred until linear-continuations stable
+- **[multishot-continuations-plan.md](../upcoming/multishot-continuations-plan.md)** -- Multi-shot continuations (MS0-MS4); deferred until linear-continuations stable
 - **[linear-continuations-plan.md](linear-continuations-plan.md)** -- Linear continuations; deferred to v5+
 - **[self-hosted-interpreter-plan.md](self-hosted-interpreter-plan.md)** -- `libturi` importable eval API + self-hosted REPL (speculative; future project)
 - **[stubs-and-workarounds.md](stubs-and-workarounds.md)** -- Catalog of known placeholders and test workarounds

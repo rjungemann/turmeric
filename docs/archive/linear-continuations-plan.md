@@ -133,7 +133,7 @@ Multi-shot continuations (calling `k` more than once, e.g. for non-determinism
 or backtracking) are explicitly not supported under this plan. They would
 require a snapshotting runtime and a `CK_MULTISHOT` kind with capture analysis
 to enforce that only `CK_COPY` values are closed over. Multi-shot support is
-fully specified in [multishot-continuations-plan.md](multishot-continuations-plan.md)
+fully specified in [multishot-continuations-plan.md](../upcoming/multishot-continuations-plan.md)
 and scheduled for v5 or later, after LC0--LC3 are stable.
 
 This is a **known temporary breakage.** Turmeric's existing backtracking,

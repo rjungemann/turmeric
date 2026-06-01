@@ -44,7 +44,7 @@
 >   unbounded capture and the implicit root prompt (CPS5.3).
 > - [`control-flow-completeness-plan.md`](archive/history/control-flow-completeness-plan.md) -- CF4 (the gate this plan retires)
 > - [`control-flow-completeness-audit.md`](archive/history/control-flow-completeness-audit.md) -- audit item 1
-> - [`multishot-continuations-plan.md`](archive/multishot-continuations-plan.md) -- `CK_MULTISHOT` ownership (for `call/cc*`); rides the same substrate
+> - [`multishot-continuations-plan.md`](multishot-continuations-plan.md) -- `CK_MULTISHOT` ownership (for `call/cc*`); rides the same substrate
 > - [`linear-continuations-plan.md`](archive/linear-continuations-plan.md) -- `^linear` / one-shot accounting
 > - [`stubs-and-workarounds.md`](archive/stubs-and-workarounds.md) §1.4 -- the original stub entry
 

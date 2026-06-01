@@ -1,22 +1,26 @@
 # Multi-Shot Continuations -- Implementation Plan (MS0--MS4)
 
-> **Status:** Deferred -- not scoped until linear-continuations-plan.md (LC0--LC3) is stable
+> **Status:** Substantially shipped. MS0--MS3 are complete and MS4's
+> deprecation warning (`TUR-W0400`) is live. The **only** outstanding task is
+> the terminal MS4 step: removing `^unsafe-multishot` parsing, which is
+> deliberately deferred to a future major version. Reconciled against the tree
+> on 2026-06-01 (see [Verification](#verification-2026-06-01)).
 >
-> **Target:** v5 or later
->
-> **Prerequisites:**
-> - Linear Continuations (LC0--LC3) complete and stable
-> - Substructural Types (ST0--ST3) complete (`CK_UNIQUE`, `CK_LINEAR`, `UsageState`)
-> - Stdlib backtracking / non-determinism / logic-programming modules annotated
->   with `^unsafe-multishot` (LC3)
+> **Prerequisites (all met):**
+> - Linear Continuations (LC0--LC3) -- the single-shot foundation and
+>   `^unsafe-multishot` escape hatch landed.
+> - Substructural Types (ST0--ST3) -- `CK_UNIQUE`, `CK_LINEAR`, `UsageState`
+>   present in `src/compiler/types.h`.
+> - The codegen, diagnostics, and fixtures below all ship in-tree.
 >
 > **Related:**
-> - [linear-continuations-plan.md](linear-continuations-plan.md) -- single-shot foundation; `^unsafe-multishot` escape hatch
-> - [linear-types-plan.md](linear-types-plan.md) -- `CK_LINEAR`, `lref<T>`
-> - [substructural-types-plan.md](substructural-types-plan.md) -- `CK_UNIQUE`, `SubstructKind`
-> - [effect-types-row-polymorphism-plan.md](effect-types-row-polymorphism-plan.md) -- `TY_HANDLER`, shift/reset substrate
+> - [linear-continuations-plan.md](../archive/linear-continuations-plan.md) -- single-shot foundation; `^unsafe-multishot` escape hatch
+> - [linear-types-plan.md](../archive/history/linear-types-plan.md) -- `CK_LINEAR`, `lref<T>`
+> - [substructural-types-plan.md](../archive/substructural-types-plan.md) -- `CK_UNIQUE`, `SubstructKind`
+> - [effect-types-row-polymorphism-plan.md](../archive/effect-types-row-polymorphism-plan.md) -- `TY_HANDLER`, shift/reset substrate
+> - [cps-transform-plan.md](cps-transform-plan.md) -- the reified-continuation substrate `CK_MULTISHOT` resume rides on
 >
-> **Last updated:** 2026-05-15
+> **Last updated:** 2026-06-01
 
 ---
 
@@ -195,48 +199,94 @@ When `resume` is called on a `CK_MULTISHOT` binding:
 
 ## Implementation Phases
 
-### Phase MS0 -- Runtime snapshot infrastructure
+### Phase MS0 -- Runtime snapshot infrastructure -- **DONE**
 
-- [ ] Implement `tur_continuation_snapshot` in `src/runtime/effects.c`
-- [ ] Ensure all `CK_COPY` closure capture types support bitwise copy
-- [ ] Handle `rc<T>` captures: increment refcount in snapshot
-- [ ] Fixture: `multishot-snapshot.tur` -- two independent resumes produce
-      independent results
+The snapshot is implemented as `tur_cloneable_cont_clone`
+(`src/runtime/runtime.c:217`) rather than a function literally named
+`tur_continuation_snapshot`: a `^multishot` `k` lowers to a
+`tur_cloneable_cont*` and each resume clones first (`emit_effects.c:960`).
 
-### Phase MS1 -- `CK_MULTISHOT` kind and `^multishot` annotation
+- [x] Implement the continuation snapshot in the runtime --
+      `tur_cloneable_cont_clone` (`src/runtime/runtime.c:217`)
+- [x] `CK_COPY` closure capture types support duplication (clone copies env
+      and captured frames)
+- [x] Handle `rc<T>` / non-trivial captures: deep-clone via the `clone_env`
+      hook (CPS-CL6); v1 falls back to a shallow shared env where no
+      `clone_env` is present (documented limitation, see Open Questions)
+- [x] Fixture: `tests/fixtures/multishot-snapshot/` -- two independent resumes
+      produce independent results (PASS)
 
-- [ ] Add `CK_MULTISHOT` to `CopyKind` in `src/types.h`
-- [ ] Parse `^multishot k` in `src/reader.c`; set `CK_MULTISHOT` on the `k`
-      binding in the symbol table
-- [ ] `resume` on `CK_MULTISHOT` binding: emit `tur_continuation_snapshot`
-      call in codegen; do not mark `k` consumed
-- [ ] `UsageState` for `CK_MULTISHOT`: `USED_MANY` is not an error
+### Phase MS1 -- `CK_MULTISHOT` kind and `^multishot` annotation -- **DONE**
 
-### Phase MS2 -- Closure capture analysis
+- [x] `CK_MULTISHOT` added to `CopyKind` (`src/compiler/types.h:24`)
+- [x] `^multishot k` parsed: symbol interned (`elab_core.c:1014`) and handled
+      in `elab_effects.c`, `elab_fns.c`, `elab_forms.c`; sets `CK_MULTISHOT` on
+      the `k` binding
+- [x] `resume` on a `CK_MULTISHOT` binding clones before resume in codegen and
+      does not consume `k` (`emit_effects.c:960`)
+- [x] `UsageState` for `CK_MULTISHOT`: `USED_MANY` is not an error
+      (`multishot-handler` fixture resumes `k` multiple times -- PASS)
 
-- [ ] Walk handler clause body; collect free variable captures
-- [ ] Check each capture's `CopyKind`; emit `TUR_E0500` on `CK_UNIQUE` /
-      `CK_LINEAR` captures
-- [ ] Fixtures:
-  - `multishot-copy-capture.tur` -- `CK_COPY` capture accepted
-  - `errors/multishot-unique-capture.tur` -- `CK_UNIQUE` capture rejected
-  - `errors/multishot-linear-capture.tur` -- `CK_LINEAR` capture rejected
+### Phase MS2 -- Closure capture analysis -- **DONE**
 
-### Phase MS3 -- Stdlib migration
+- [x] Walk handler clause body; collect free variable captures
+- [x] Check each capture's `CopyKind`; emit `TUR_E0500` on `CK_UNIQUE` /
+      `CK_LINEAR` captures (`diag.c:1126`; `TUR_E0501` for the annotation
+      outside a handler)
+- [x] Fixtures (all PASS):
+  - `tests/fixtures/multishot-copy-capture/` -- `CK_COPY` capture accepted
+  - `tests/fixtures/errors/multishot-unique-capture/` -- `CK_UNIQUE` rejected
+  - `tests/fixtures/errors/multishot-linear-capture/` -- `CK_LINEAR` rejected
 
-- [ ] Remove `^unsafe-multishot` from stdlib:
-  - `stdlib/logic.tur` -- backtracking, `Choose`/`Fail` handlers
-  - `stdlib/async.tur` -- any multi-shot async combinators
-  - Any other modules annotated during LC3
-- [ ] Replace `^unsafe-multishot` with `^multishot` at each site; confirm
-      capture analysis passes
+### Phase MS3 -- Stdlib migration -- **DONE**
 
-### Phase MS4 -- `^unsafe-multishot` deprecation and removal
+- [x] No `^unsafe-multishot` annotations remain in `stdlib/`
+      (`grep -rc unsafe-multishot stdlib/` is empty)
+- [x] Sites that need multi-shot use `^multishot` and pass capture analysis
 
-- [ ] Emit `TUR_W0400` ("use `^multishot` instead of `^unsafe-multishot`") on
-      any remaining `^unsafe-multishot` annotation
-- [ ] Remove `^unsafe-multishot` parsing in the following major version
-- [ ] `tur explain TUR_E0500`, `TUR_E0501`, `TUR_W0400` entries
+### Phase MS4 -- `^unsafe-multishot` deprecation and removal -- **partial**
+
+- [x] Emit `TUR_W0400` ("use `^multishot` instead of `^unsafe-multishot`") on
+      any remaining `^unsafe-multishot` annotation (`diag.c:187`)
+- [x] `tur explain TUR_E0500`, `TUR_E0501`, `TUR_W0400` entries present
+      (`diag.c`)
+- [ ] **OUTSTANDING:** Remove `^unsafe-multishot` parsing in a future major
+      version. The symbol is still interned and accepted
+      (`sym_caret_unsafe_multishot`, `elab_internal.h:205`); the deprecation
+      warning is the holdover until that removal.
+
+---
+
+## Verification (2026-06-01)
+
+Reconciled this plan against the tree because the checkboxes had drifted out of
+date (the doc said "Deferred / not started" while the feature had largely
+landed). Built the Debug compiler from a clean tree and ran the suite with leak
+detection on:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j --config Debug
+bash tests/run.sh
+```
+
+All multi-shot fixtures pass:
+
+```
+PASS multishot-snapshot          PASS multishot-copy-capture
+PASS multishot-handler           PASS fh-multishot-value
+PASS effect-cont-unsafe-multishot
+PASS errors/multishot-unique-capture
+PASS errors/multishot-linear-capture
+PASS errors/fh-multishot-capture
+```
+
+(Three unrelated fixtures -- `option-result-c-abi`, `wkc-wide-map-key`,
+`wkc3-struct-map-key` -- fail with pre-existing codegen-snapshot mismatches
+untouched by this work.)
+
+Conclusion: MS0--MS3 are shipped; MS4's deprecation diagnostic is live; the
+sole remaining task is removing `^unsafe-multishot` parsing in a future major.
 
 ---
 
