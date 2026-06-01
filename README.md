@@ -447,7 +447,7 @@ for C/CMake dependency details.
 | Effect polymorphism (`forall [e]`, implicit row generalisation) | ✅ |
 | Effect hierarchy (`^extends`, stdlib `Write ≤ IO` lattice) | ✅ |
 | Handler typing (`(handler Effect A B)` first-class handler types) | ✅ |
-| Linear continuations (`^linear k` one-shot, `^unsafe-multishot` escape hatch) | ✅ |
+| Linear continuations (`^linear k` one-shot, affine by default) | ✅ |
 | Multi-shot continuations (`^multishot k`, snapshot semantics) | ✅ |
 | Session types (binary `Session[P]`, `make-session`, `send`/`recv`/`close`/`offer`/`choose-*`; `-Xsessions`) | ✅ |
 | Multi-party session types (`defprotocol`, `Role`, `make-protocol`, `send-to`/`recv-from`; `-Xsessions`) | ✅ |

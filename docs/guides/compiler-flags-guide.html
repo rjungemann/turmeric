@@ -417,8 +417,8 @@ algebraic effects (Phase 19). With this flag:</p>
 <li><code>TY_HANDLER</code> handler types are available for first-class handlers</li>
 <li>The effect hierarchy (<code>Write ≤ IO</code>, etc.) is checked; sub-effects are
   accepted where super-effects are expected</li>
-<li>Linear continuations (<code>^linear k</code>, <code>^unsafe-multishot</code>) and multi-shot
-  continuations (<code>^multishot</code>) are available</li>
+<li>Linear continuations (<code>^linear k</code>) and multi-shot continuations
+  (<code>^multishot</code>) are available</li>
 <li><code>--strict-effects</code> is implied (see below)</li>
 </ul>
 <pre><code class="language-clojure">; Explicit effect polymorphism

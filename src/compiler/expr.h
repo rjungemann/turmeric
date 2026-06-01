@@ -400,7 +400,6 @@ typedef struct HandleCase {
     /* LC0: ownership discipline for k.
      * CK_UNIQUE (default): at most one resume/discontinue (affine).
      * CK_LINEAR (^linear k): exactly one resume/discontinue required.
-     * CK_COPY (^unsafe-multishot k): no ownership tracking; multi-shot allowed.
      * CK_MULTISHOT (^multishot k): MS1: safe multi-shot via snapshot semantics. */
     CopyKind cont_kind;
     Expr *body;                 /* Handler body */

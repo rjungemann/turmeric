@@ -1,5 +1,5 @@
-;; LC0: ^unsafe-multishot annotation allows resuming k multiple times.
-;; A W0035 warning is emitted at the handler site.
+;; MS4: ^unsafe-multishot has been removed. The annotation is no longer parsed,
+;; so a handler clause using it is now a hard error -- use ^multishot instead.
 
 (defeffect Choose [] :int)
 

@@ -1,10 +1,10 @@
 # Multi-Shot Continuations -- Implementation Plan (MS0--MS4)
 
-> **Status:** Substantially shipped. MS0--MS3 are complete and MS4's
-> deprecation warning (`TUR-W0400`) is live. The **only** outstanding task is
-> the terminal MS4 step: removing `^unsafe-multishot` parsing, which is
-> deliberately deferred to a future major version. Reconciled against the tree
-> on 2026-06-01 (see [Verification](#verification-2026-06-01)).
+> **Status:** Complete. MS0--MS4 are all shipped. The terminal MS4 step --
+> removing `^unsafe-multishot` parsing -- landed on 2026-06-01: the annotation
+> is no longer interned or accepted, and the `TUR-W0035` / `TUR-W0400`
+> diagnostics that backed it have been retired. `^multishot` is now the sole
+> multi-shot annotation. See [Verification](#verification-2026-06-01).
 >
 > **Prerequisites (all met):**
 > - Linear Continuations (LC0--LC3) -- the single-shot foundation and
@@ -244,16 +244,22 @@ The snapshot is implemented as `tur_cloneable_cont_clone`
       (`grep -rc unsafe-multishot stdlib/` is empty)
 - [x] Sites that need multi-shot use `^multishot` and pass capture analysis
 
-### Phase MS4 -- `^unsafe-multishot` deprecation and removal -- **partial**
+### Phase MS4 -- `^unsafe-multishot` deprecation and removal -- **DONE**
 
-- [x] Emit `TUR_W0400` ("use `^multishot` instead of `^unsafe-multishot`") on
-      any remaining `^unsafe-multishot` annotation (`diag.c:187`)
-- [x] `tur explain TUR_E0500`, `TUR_E0501`, `TUR_W0400` entries present
-      (`diag.c`)
-- [ ] **OUTSTANDING:** Remove `^unsafe-multishot` parsing in a future major
-      version. The symbol is still interned and accepted
-      (`sym_caret_unsafe_multishot`, `elab_internal.h:205`); the deprecation
-      warning is the holdover until that removal.
+- [x] Emitted `TUR_W0400` ("use `^multishot` instead of `^unsafe-multishot`")
+      on any remaining `^unsafe-multishot` annotation throughout the deprecation
+      window.
+- [x] `tur explain TUR_E0500`, `TUR_E0501`, `TUR_E0502` entries present
+      (`diag.c`).
+- [x] **Removed `^unsafe-multishot` parsing (2026-06-01).** The symbol is no
+      longer interned (`elab_core.c`) and the `sym_caret_unsafe_multishot`
+      field is gone (`elab_internal.h`). A handler clause using the annotation
+      now hard-errors with "expected `^linear` or `^multishot`"
+      (`elab_effects.c`). The dead `CK_COPY` continuation switch arms, the
+      `TUR-W0035` ("ownership not tracked") warning, and the `TUR-W0400`
+      deprecation warning were all retired (`diag.c`, `diag.h`). The former
+      happy fixture `effect-cont-unsafe-multishot` is now the negative fixture
+      `errors/effect-cont-unsafe-multishot` asserting the rejection.
 
 ---
 
@@ -285,8 +291,10 @@ PASS errors/fh-multishot-capture
 `wkc3-struct-map-key` -- fail with pre-existing codegen-snapshot mismatches
 untouched by this work.)
 
-Conclusion: MS0--MS3 are shipped; MS4's deprecation diagnostic is live; the
-sole remaining task is removing `^unsafe-multishot` parsing in a future major.
+Conclusion (2026-06-01, updated): MS0--MS4 are all shipped. The deprecation
+window closed with the removal of `^unsafe-multishot` parsing; `^multishot` is
+the sole multi-shot annotation and the negative fixture
+`errors/effect-cont-unsafe-multishot` locks in the rejection.
 
 ---
 
