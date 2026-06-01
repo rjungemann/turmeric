@@ -1,0 +1,23 @@
+;; SC7/obstacle-2: a user-defined *parametric* struct is a genuine type
+;; constructor of kind * -> *, so it can back an HKT typeclass instance
+;; (Functor/Foldable/...) exactly like the built-in rc<T>.  Before the
+;; kind-registration fix, `(definstance Wrap [Sbox])` failed with TUR-E0012
+;; ("provides a kind-'*' type ... which expects kind '* -> *'") because a
+;; struct with a StructDef was always reported as kind *.
+;;
+;; Dispatch keys on the receiver's `(Sbox a)` type: (.unwrap b) walks the
+;; TY_APP spine to the Sbox struct and selects this instance.
+
+(defclass Wrap [^f]
+  (unwrap [c] :int))
+
+(defstruct Sbox [A]
+  (raw :int))
+
+(definstance Wrap [Sbox]
+  (unwrap [c] (.raw c)))
+
+(defn main [] :int
+  (let [b (:: (make-struct Sbox 99) (Sbox int))]
+    (println (.unwrap b)))
+  0)

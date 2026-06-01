@@ -1,0 +1,24 @@
+;; SC7/obstacle-3: schema/transform (and schema/fmap) now carry a *fat closure*
+;; (the standard { thunk, env } handle) instead of a bare function pointer, so a
+;; *capturing* closure -- not just a top-level function -- can map the decoded
+;; value.  The transform's function slot is invoked through TUR_APPLY1 in the
+;; inline-C decoder, the same protocol the runtime uses for any fat closure.
+;;
+;; delta is captured by the lambda; before the fix the env was dropped and only
+;; non-capturing functions worked.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defn main [] :int
+  (let [delta 100
+        ;; capturing closure through transform: 21 -> 121
+        a (schema-decode! (schema/transform (schema/int) (fn [x :int] :int (+ x delta)))
+                          (json/int 21))
+        ;; capturing closure through fmap (Functor map alias): 5 -> 55
+        scale 11
+        b (schema-decode! (schema/fmap (schema/int) (fn [x :int] :int (* x scale)))
+                          (json/int 5))]
+    (println a)
+    (println b))
+  0)
