@@ -1,0 +1,43 @@
+;; GDE4: generic-dict dispatch for a non-Eq typeclass (Size) over Map.
+;;
+;; Proves that GDE1+GDE2 machinery is not Eq/Map-specific: it fires for ANY
+;; typeclass whose instance body dispatches on a TY_APP-bound tyvar.
+;;
+;; The Size [int] instance returns -1 (the representative / wrong answer for
+;; maps).  The Size [Map] instance returns map-count.  Without GDE1+GDE2
+;; the generic count-it [^Size A] would bake Size [int] (the int-carrier
+;; representative) and return -1 for map arguments.  With GDE1+GDE2 it
+;; correctly specialises to Size [Map] and returns the count.
+;;
+;; Also serves as the negative test: count-it called with a plain :int argument
+;; should dispatch to Size [int] (-1), proving ABI-stable scalar bindings are
+;; not over-specialised into the map instance.
+
+(defclass Size [a] (size [x] :int))
+
+;; Representative (int-carrier) instance.
+(definstance Size [int] (size [x] -1))
+
+;; Map instance: reads the HAMT count via the internal layout.
+(definstance Size [Map] [(MapKey K) (Eq V)]
+  (size [x] :int
+    ```c
+    typedef struct { void *hamt; } tur_Map;
+    tur_Map *m = (tur_Map *)(intptr_t)x;
+    return tur_hamt_count(m->hamt);
+    ```))
+
+;; count-it -- the generic-dict driver: dispatches size through ^Size A.
+(defn count-it [^Size A] [x :A] :int (size x))
+
+(defn main [] :int
+  (let [m0 (:: (map-new) (Map cstr int))
+        m1 (map-assoc m0 "a" 1)
+        m2 (map-assoc m1 "b" 2)]
+    ;; Map arguments -- must use Size [Map], not Size [int].
+    (println (count-it m0))       ; 0
+    (println (count-it m1))       ; 1
+    (println (count-it m2)))      ; 2
+  ;; Negative: plain int argument -- must use Size [int] (-1).
+  (println (count-it 42))         ; -1
+  0)
