@@ -585,6 +585,12 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Special case: if this is main and it returns int64_t, cast to int */
         if (is_main && result_kind == TY_INT) {
             buf_printf(file, "return (int)%s;\n", ret_val);
+        } else if (result_kind == TY_INT && fd->body->type.kind == TY_FN) {
+            /* A bare non-capturing function reference (TY_FN) returned as the
+             * int64_t function-pointer carrier needs an explicit cast.  Without
+             * it, newer Apple clang rejects the implicit function-pointer-to-
+             * integer conversion with -Wincompatible-function-pointer-types. */
+            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

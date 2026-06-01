@@ -22,8 +22,10 @@
 >      (large -- the generic-dict path)* note below.  **Decision: deferred** (stop
 >      and consolidate) -- it is a monomorphizer-core change with broad
 >      snapshot/regression risk, out of proportion to a stdlib follow-up.
->   2. Struct keys with **non-`:int` fields** (the zero-struct witness only
->      type-checks for all-`:int`-field structs).
+>   2. ~~Struct keys with **non-`:int` fields** (the zero-struct witness only
+>      type-checks for all-`:int`-field structs).~~ **DONE** — `zero_form_for_field`
+>      in `elab_typeclasses.c` handles `float32`, `float64`, `bool`, `cstr`, and
+>      all integer variants; fixture `eqmap-struct-float-fields` added.
 >
 > The historical status below is kept for the GHE2/GHE3/CGI root-causing record.
 >

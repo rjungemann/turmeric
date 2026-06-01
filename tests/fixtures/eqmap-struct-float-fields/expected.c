@@ -3123,7 +3123,7 @@ static int64_t __inst_MapKey_mk_box_FPoint(FPoint p) {
 }
 
 static int64_t __inst_MapKey_mk_cmp_FPoint(FPoint p) {
-        return fpoint_carrier_eq_;
+        return (int64_t)(intptr_t)fpoint_carrier_eq_;
 }
 
 static int64_t __inst_MapKey_mk_owned__FPoint(FPoint p) {
@@ -3132,7 +3132,7 @@ static int64_t __inst_MapKey_mk_owned__FPoint(FPoint p) {
 
 typedef struct dict_MapKey_FPoint {
     int64_t (*mk_box)(FPoint);
-    bool (*mk_cmp)(FPoint);
+    int64_t (*mk_cmp)(FPoint);
     int64_t (*mk_owned_)(FPoint);
 } dict_MapKey_FPoint;
 

@@ -454,15 +454,27 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Build function pointer type */
                 buf_puts(ctx->file, "    ");
                 
-                /* Return type — prefer the declared return type from the binding
-                 * (inline-C bodies have TY_NIL body type which would wrongly emit
-                 * "void"; use the fn result_kind from the binding instead). */
-                Type ret_type = method_impl->body->type;
-                if ((ret_type.kind == TY_NIL || ret_type.kind == TY_UNKNOWN)
-                    && method_impl->binding
-                    && method_impl->binding->type.kind == TY_FN) {
-                    ret_type = emit_type_from_kind(
-                        method_impl->binding->type.as.fn.result_kind);
+                /* Return type: mirror the priority used by emit_fns.c.
+                 *
+                 * 1. emit_carrier_return_override: body returns a struct by
+                 *    value (e.g. HasSchema decode → User) → use the struct type.
+                 * 2. binding result_full_type: poly result with a known full type.
+                 * 3. binding result_kind: handles inline-C (TY_NIL body), bare
+                 *    fn-reference bodies (TY_FN), and bool-typed methods where
+                 *    body literal 1 has kind TY_INT.
+                 * 4. body->type fallback when no binding is available. */
+                Type ret_type;
+                Type carrier_override = emit_carrier_return_override(method_impl);
+                if (carrier_override.kind == TY_STRUCT) {
+                    ret_type = carrier_override;
+                } else if (method_impl->binding
+                           && method_impl->binding->type.kind == TY_FN) {
+                    Type *rft = method_impl->binding->type.as.fn.result_full_type;
+                    ret_type = rft ? *rft
+                                   : emit_type_from_kind(
+                                         method_impl->binding->type.as.fn.result_kind);
+                } else {
+                    ret_type = method_impl->body->type;
                 }
                 const char *ret_c_name = type_c_name(ret_type);
                 buf_printf(ctx->file, "%s", ret_c_name);
