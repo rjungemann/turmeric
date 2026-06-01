@@ -1,6 +1,29 @@
 # Generic `Hash` / `Eq` Dispatch -- Approach A for typed map keys (GHE0--GHE5)
 
-> **Status:** Not started. This is the deferred **Approach A** from
+> **Status:** GHE0 + GHE1 landed (branch `claude/focused-mendel-Sp7cQ`). GHE2--GHE5
+> are **blocked** on a deeper compiler gap discovered during GHE1 verification:
+> *constrained-generic method dispatch resolves the wrong instance.* A body that
+> calls `(.hash x)` (or bare `(hash x)`) where `x : K` is a type parameter
+> constrained by `^Hash K` does **not** dispatch through the constraint -- both
+> the `int` and `cstr` monomorphizations emit `__inst_Hash_hash_float32(x)`
+> (some arbitrary instance), rather than the per-specialization concrete
+> instance or a dictionary load. The codebase has **no** working example of a
+> `^Class`-constrained generic whose body actually calls a method on the
+> constrained parameter (`tests/fixtures/typeclass-constraint` only checks that
+> the *syntax* parses; its body is `true`). The GHE3 builder `map-assoc-g`
+> depends entirely on this working, so it cannot be implemented as specified
+> until constrained-generic method dispatch is fixed first -- a compiler feature
+> this plan assumed already existed (see "Relationship to existing building
+> blocks", which over-claimed the dictionary path works for poly tyvars).
+>
+> **Done:**
+> - **GHE0** -- `stdlib/typeclass-hash.tur` stub auto-loaded; `(.hash 5)` etc.
+>   dispatch by default; Hash removed from `typeclass.tur` to keep it idempotent.
+> - **GHE1** -- bare-name typeclass method calls (`(hash x)`, `(eq? a b)`,
+>   `(show v)`) now route to argument-type dispatch in `elab_call.c`, gated on
+>   no existing binding + class membership. Fixture `ghe1-bare-method-dispatch`.
+>
+> This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
 > *Decision note (GMK1)*). GMK shipped content-keyed string maps via
 > **Approach B** (a `:cstr`-specific lowering onto the hand-written `smap-*`
