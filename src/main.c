@@ -4323,6 +4323,10 @@ static int cmd_eval_expr(const char *expr, bool use_color) {
 }
 
 static int cmd_repl(bool watch_mode) {
+    /* UCH0 (diagnose-unbound-call-heads-plan): the REPL is an interpreter
+     * entry point -- flag it so the INT-1 reader conditional picks :turi and
+     * so elab_call keeps the runtime-native dispatch fallback (UCH1). */
+    g_interpret_mode = true;
     return turi_repl_run(watch_mode);
 }
 
