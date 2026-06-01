@@ -93,7 +93,7 @@ tag.
 continuation.
 
 **Plan:** Requires CPS transform or `setjmp`/stack-copying. Tracked separately in
-`docs/archive/multishot-continuations-plan.md`. Mark with a prominent `STUB` comment
+`docs/upcoming/multishot-continuations-plan.md`. Mark with a prominent `STUB` comment
 and add a `requires.compiled` guard to any test that exercises `call/cc`.
 
 **Prerequisites:**
