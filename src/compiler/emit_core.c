@@ -1611,6 +1611,12 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                 PUSH_EXPR(cur->as.cont_pred_.expr);
                 break;
             }
+            case EX_FN_TO_FAT: {
+                /* A#1 auto-shim wrapper: descend to the inner fn so its closure
+                 * captures are collected (KB-IDIOM-1). */
+                PUSH_EXPR(cur->as.fn_to_fat_.inner);
+                break;
+            }
             case EX_REF: { PUSH_EXPR(cur->as.ref_.expr); break; }
             case EX_DEREF: { PUSH_EXPR(cur->as.deref_.expr); break; }
             case EX_GET_FIELD: {
@@ -1652,6 +1658,40 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
                             caps = (Binding **)realloc(caps, ccaps * sizeof(Binding *));
                         }
                         caps[ncaps++] = db;
+                    }
+                }
+                break;
+            }
+            case EX_CLOSURE: {
+                /* KB-IDIOM-1: a closure constructed inside the handle body
+                 * captures free variables from the enclosing scope. Its env-init
+                 * (__t->field = <name>) references those names directly, so they
+                 * must be threaded into the handle body's env (body_env) just like
+                 * any other free variable. Do NOT walk the fn body (it has its own
+                 * param/local scope); instead add the closure's pre-computed
+                 * captures, which are already transitive (an outer closure captures
+                 * everything its inner closures need from further out). */
+                struct Closure *cl = cur->as.closure_.closure;
+                if (cl) {
+                    for (uint8_t j = 0; j < cl->n_captures; j++) {
+                        Binding *cb = cl->captures[j];
+                        if (!cb || cb->is_global || cb->type.kind == TY_FN) continue;
+                        bool in_defs = false;
+                        for (uint32_t k = 0; k < ndefs; k++) {
+                            if (defs[k] == cb) { in_defs = true; break; }
+                        }
+                        if (in_defs) continue;
+                        bool already = false;
+                        for (uint32_t k = 0; k < ncaps; k++) {
+                            if (caps[k] == cb) { already = true; break; }
+                        }
+                        if (!already) {
+                            if (ncaps >= ccaps) {
+                                ccaps = (ccaps == 0) ? 8 : ccaps * 2;
+                                caps = (Binding **)realloc(caps, ccaps * sizeof(Binding *));
+                            }
+                            caps[ncaps++] = cb;
+                        }
                     }
                 }
                 break;

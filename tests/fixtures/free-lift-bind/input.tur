@@ -6,9 +6,10 @@
   ;; free-lift wraps a value in Suspend(fx)
   (let [lifted (free-lift 10)]
     ;; free-run on a Suspend passes the inner value to interp.
-    ;; A capturing closure (captures scale) passes through ^fat unchanged.
+    ;; The interp closure captures `scale` and is built inside the unsafe block
+    ;; (KB-IDIOM-1, now fixed: its capture is threaded into the handler-body
+    ;; frame). A capturing closure passes through ^fat unchanged.
     (let [scale  3
-          interp (fn [inner] (* inner scale))
-          result (unsafe (free-run interp lifted))]
+          result (unsafe (free-run (fn [inner] (* inner scale)) lifted))]
       (println result)
       0)))
