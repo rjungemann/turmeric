@@ -2,7 +2,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.16.0` -- adds `tur/reactor`, a single-threaded epoll/kqueue event loop for multiplexing file descriptors, timers, signals, and channels without the fiber scheduler; extends Phase F poly-dispatch to unsigned narrow ints.
+**Latest release:** `v0.17.0` -- adds `tur/httpd` HTTP/1.1 server, `tur/schema` runtime validation, first-class `:Sym` symbols, typed `Map[K V]` surface with `MapKey` carrier, data literals, and `#json(...)` reader macro.
 
 ## What
 

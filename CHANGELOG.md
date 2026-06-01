@@ -2,6 +2,59 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.17.0] -- 2026-06-01
+
+### Added
+
+- **`tur/httpd` HTTP/1.1 server (H1-H7)** -- `stdlib/httpd.tur` adds a full
+  HTTP/1.1 server built on `tur/reactor`: blocking thread-per-connection (H1),
+  reactor-backed listener (H2), bounded worker pool with shared fd queue (H3),
+  persistent connections (H4), routing DSL with method guards and path parameters
+  (H6), and middleware composition via `httpd-call` (H7).
+- **`reactor-run-fibers` local fiber driver (F1-F8)** -- `tur/reactor` gains a
+  single-reactor fiber group for cooperative concurrency without a separate
+  scheduler thread.
+- **Data literals `#map{...}` / `#set{...}` (DL0)** -- compile-time reader
+  dispatch lowers `#map{:k v ...}` and `#set{a b ...}` to typed map/set
+  constructors; composes with neoteric and curly-infix in sweet-exp files.
+- **`tur/schema` runtime validation (SC0-SC7)** -- `stdlib/schema.tur` adds
+  `HasSchema` typeclass, typed decode, `Validation` applicative, and
+  `Functor`/`Applicative`/`Alternative` instances via transparent newtype (SC7).
+  Includes `docs/guides/schema-guide.md`.
+- **First-class runtime symbols `:Sym` (SYM0/SYM1/SYM4)** -- `-Xsymbols` enables
+  interned `:Sym` values, `sym->str`, `sym=?`, and dynamic interning via
+  `stdlib/sym-dynamic.tur`. Includes `docs/guides/symbols-guide.md`.
+- **Typed `Map[K V]` surface (TMS2-TMS5)** -- unified macro accessors for
+  content-keyed maps; `float32`/`float64` map keys via `MapKey` carrier typeclass
+  (WKC); string maps via `smap-of` lowering (GMK2).
+- **`#json(...)` compile-time reader macro (JR0)** -- parses a JSON literal at
+  compile time and lowers it to typed map/vec constructors.
+- **`let*` sequential-binding form** -- each binding sees previous bindings in
+  scope; complements `let` and `letrec`.
+- **`^fat` closure markers (A#1)** -- `^fat` parameter annotation triggers
+  fat-closure auto-shim generation; `^fat` return-position marker propagates
+  the annotation into nested lambdas.
+
+### Changed
+
+- **`^unsafe-multishot` annotation removed (MS4)** -- the annotation is no longer
+  needed; remove any remaining `^unsafe-multishot` from spice code.
+- **`#map`/`hamt-of` lowering unified (GHE4+GHE5)** -- all content-keyed map
+  builders now use per-`K` fn-value specialization; `smap-*` APIs are removed.
+  Migrate `smap-of` call sites to `#map{...}` or `hamt-of`.
+
+### Fixed
+
+- **Nested-closure captures in `#{Unsafe}`/`handle` bodies (KB-IDIOM-1)** --
+  captures from outer scopes are correctly threaded into `unsafe`/`handle`
+  body environments.
+- **Cross-module private-defn C symbol collision (CC0-CC2)** -- private `defn`
+  symbols in different modules no longer collide in emitted C.
+- **Unnecessary parentheses in codegen** -- `BIN_INFIX`, `PREFIX_UNARY`, and
+  `VARIADIC_FOLD` expressions no longer emit spurious wrapping parentheses.
+- **Generic dict eq dispatch** -- `dict-eq?` correctly dispatches through
+  `Hash`/`Eq` typeclasses for all registered key types.
+
 ## [0.16.0] -- 2026-05-30
 
 ### Added
