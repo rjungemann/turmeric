@@ -23,6 +23,34 @@
 >   `(show v)`) now route to argument-type dispatch in `elab_call.c`, gated on
 >   no existing binding + class membership. Fixture `ghe1-bare-method-dispatch`.
 >
+> **Why the dispatch fix is large (root-caused 2026-06-01):** the compiler has
+> *no* dictionary threading for constrained generics and *no* typeclass-instance
+> monomorphization. Constrained generics are realised purely by **emit-time ABI
+> specialization** (`emit_module.c` `emit_abi_*`, `emit_call_name`/
+> `emit_resolve_type` in `emit_core.c`). Three coupled gaps:
+>   1. **Wrong instance baked at elab.** For a `TY_TYVAR` receiver,
+>      `elab_method_call` (`elab_typeclasses.c:2698`) takes the `KIND_ARROW`
+>      branch and "matches" the first instance whose `type_args[0]` is not in the
+>      *incomplete* primitive list at line ~2724 (which omits `TY_FLOAT32`,
+>      `TY_INT8..UINT64`, `TY_FLOAT64`) -- so a tyvar spuriously binds to
+>      `Hash[float32]` and is recorded as an exact match (no `TUR_E0020`).
+>   2. **ABI-only specialization.** A spec is created only when
+>      `abi_changes` is true (`emit_module.c:374`). An `int` key == the int64_t
+>      carrier, so *no* spec is made and the call uses the polymorphic **base
+>      clone** -- which has no `current_abi_specialization`, so `emit_resolve_type`
+>      cannot map `K`. Correct dispatch needs *instance-driven* specialization
+>      (specialize when the body's tyvar method-dispatch differs per concrete
+>      type, even when ABIs match), plus making the base clone dead for such fns.
+>   3. **Emit-time re-resolution.** Even with a spec, `emit_call_name` must
+>      re-derive `__inst_<Class>_<method>_<T>` from the resolved receiver type,
+>      and the arg/result coercion in the direct-call path
+>      (`emit_expr.c:1890+`) keys off the (wrong) baked binding's `arg_kinds`.
+>
+> All three must land together; the change spans elab + the monomorphizer + emit,
+> with broad codegen-snapshot impact. This is a dedicated compiler feature, not a
+> within-GHE patch -- it should be scoped as its own plan
+> (`constrained-generic-instance-dispatch`) that GHE2--GHE5 then build on.
+>
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
 > *Decision note (GMK1)*). GMK shipped content-keyed string maps via
