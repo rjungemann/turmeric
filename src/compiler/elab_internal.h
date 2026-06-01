@@ -201,8 +201,7 @@ typedef struct Elab {
     const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
     const Symbol *sym_caret_fat;        /* ^fat -- fat-closure-consuming parameter (A#1) */
     const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
-    /* LC0: multi-shot continuation annotations */
-    const Symbol *sym_caret_unsafe_multishot; /* ^unsafe-multishot -- multi-shot k (ownership not tracked) */
+    /* MS1: multi-shot continuation annotation */
     const Symbol *sym_caret_multishot;        /* ^multishot -- MS1: safe multi-shot via snapshot semantics */
     /* F4 (cross-plan-followups): ^deprecated definition annotation */
     const Symbol *sym_caret_deprecated;

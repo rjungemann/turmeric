@@ -805,8 +805,8 @@ Expr *elab_handle(Elab *e, const Form *call) {
         
         /* Case header format: (EffectName [params...] k)
          * LC0: Optional annotation before k:
-         *   (EffectName [params...] ^linear k)           -- CK_LINEAR: exactly-once
-         *   (EffectName [params...] ^unsafe-multishot k) -- CK_COPY: multi-shot allowed */
+         *   (EffectName [params...] ^linear k)    -- CK_LINEAR: exactly-once
+         *   (EffectName [params...] ^multishot k) -- CK_MULTISHOT: safe multi-shot */
         uint32_t hdr_len = case_f->as.list.len;
         if (hdr_len != 3 && hdr_len != 4) {
             diag_emit(DIAG_ERROR, case_f->span,
@@ -857,14 +857,11 @@ Expr *elab_handle(Elab *e, const Form *call) {
             if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_linear) {
                 cases[i].cont_kind = CK_LINEAR;
             } else if (ann_f->tag == F_SYM &&
-                       ann_f->as.sym == e->sym_caret_unsafe_multishot) {
-                cases[i].cont_kind = CK_COPY;
-            } else if (ann_f->tag == F_SYM &&
                        ann_f->as.sym == e->sym_caret_multishot) {
                 cases[i].cont_kind = CK_MULTISHOT;
             } else {
                 diag_emit(DIAG_ERROR, ann_f->span,
-                          "handle case: expected ^linear, ^unsafe-multishot, or ^multishot "
+                          "handle case: expected ^linear or ^multishot "
                           "before continuation name, got '%s'",
                           ann_f->tag == F_SYM ? ann_f->as.sym->name : "<non-symbol>");
                 return NULL;
@@ -927,20 +924,6 @@ Expr *elab_handle(Elab *e, const Form *call) {
             kb->type.copy_kind = CK_LINEAR;
             kb->is_affine    = true;  /* no duplication */
             kb->is_relevant  = true;  /* must be consumed */
-            break;
-        case CK_COPY:
-            /* ^unsafe-multishot k: ownership not tracked; any number of resumes allowed.
-             * MS4: deprecated -- emit both the ownership warning (W0035) and the
-             * migration hint (W0400).  ^unsafe-multishot will be removed in the next
-             * major version; users should migrate to ^multishot. */
-            kb->type.copy_kind = CK_COPY;
-            diag_emit_with_code(DIAG_WARNING, k_f->span,
-                TUR_W0035_UNSAFE_MULTISHOT_CONT,
-                "unsafe-multishot continuation '%s' -- ownership not tracked",
-                kb->name->name);
-            diag_emit_with_code(DIAG_WARNING, k_f->span,
-                TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
-                "'^unsafe-multishot' is deprecated; use '^multishot' instead");
             break;
         case CK_MULTISHOT:
             /* ^multishot k: MS1: safe multi-shot via snapshot semantics; no ownership warning. */
@@ -1134,13 +1117,11 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
         k_f = case_f->as.list.items[3];
         if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_linear) {
             cases[0].cont_kind = CK_LINEAR;
-        } else if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_unsafe_multishot) {
-            cases[0].cont_kind = CK_COPY;
         } else if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_multishot) {
             cases[0].cont_kind = CK_MULTISHOT;
         } else {
             diag_emit(DIAG_ERROR, ann_f->span,
-                      "handler literal: expected ^linear, ^unsafe-multishot, or ^multishot "
+                      "handler literal: expected ^linear or ^multishot "
                       "before continuation name");
             return NULL;
         }
@@ -1184,13 +1165,6 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     case CK_LINEAR:
         kb->is_linear = true; kb->type.copy_kind = CK_LINEAR;
         kb->is_affine = true; kb->is_relevant = true;
-        break;
-    case CK_COPY:
-        kb->type.copy_kind = CK_COPY;
-        diag_emit_with_code(DIAG_WARNING, k_f->span, TUR_W0035_UNSAFE_MULTISHOT_CONT,
-            "unsafe-multishot continuation '%s' -- ownership not tracked", kb->name->name);
-        diag_emit_with_code(DIAG_WARNING, k_f->span, TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
-            "'^unsafe-multishot' is deprecated; use '^multishot' instead");
         break;
     case CK_MULTISHOT:
         kb->type.copy_kind = CK_MULTISHOT;

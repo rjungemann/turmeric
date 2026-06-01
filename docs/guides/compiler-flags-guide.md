@@ -267,8 +267,8 @@ algebraic effects (Phase 19). With this flag:
 - `TY_HANDLER` handler types are available for first-class handlers
 - The effect hierarchy (`Write ≤ IO`, etc.) is checked; sub-effects are
   accepted where super-effects are expected
-- Linear continuations (`^linear k`, `^unsafe-multishot`) and multi-shot
-  continuations (`^multishot`) are available
+- Linear continuations (`^linear k`) and multi-shot continuations
+  (`^multishot`) are available
 - `--strict-effects` is implied (see below)
 
 ```clojure

@@ -152,8 +152,6 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
         case TUR_W0033_UNREACHABLE_HANDLER:        return "TUR-W0033";
         case TUR_W0034_ROW_VAR_GENERALISED:        return "TUR-W0034";
-        /* LC0: Linear continuation warnings */
-        case TUR_W0035_UNSAFE_MULTISHOT_CONT:      return "TUR-W0035";
         /* U6: inline-C outside Unsafe annotation */
         case TUR_W0036_INLINE_C_MISSING_UNSAFE:    return "TUR-W0036";
         /* Phase C: narrow-width param in inline-C body */
@@ -183,8 +181,6 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
         case TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC:    return "TUR-E0502";
-        /* MS4: ^unsafe-multishot deprecation */
-        case TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED:   return "TUR-W0400";
         /* SS0b: Session type errors */
         case TUR_E0210_SESSION_NOT_DUAL:         return "TUR-E0210";
         case TUR_E0211_SESSION_DROPPED:          return "TUR-E0211";
@@ -252,8 +248,6 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
     if (strcmp(s, "TUR-W0033") == 0) return TUR_W0033_UNREACHABLE_HANDLER;
     if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
-    /* LC0: Linear continuation warnings */
-    if (strcmp(s, "TUR-W0035") == 0) return TUR_W0035_UNSAFE_MULTISHOT_CONT;
     /* U6: inline-C outside Unsafe annotation */
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
     /* LT1: Linear type errors */
@@ -281,8 +275,6 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
     if (strcmp(s, "TUR-E0502") == 0) return TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC;
-    /* MS4: ^unsafe-multishot deprecation */
-    if (strcmp(s, "TUR-W0400") == 0) return TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED;
     /* SS0b: Session type errors */
     if (strcmp(s, "TUR-E0210") == 0) return TUR_E0210_SESSION_NOT_DUAL;
     if (strcmp(s, "TUR-E0211") == 0) return TUR_E0211_SESSION_DROPPED;
@@ -710,19 +702,6 @@ static const DiagExplanation diag_explanations_[] = {
       "  ; After (explicit forall, no warning):\n"
       "  (defn run [f :(forall [e] fn [] #{e} :int)] #{e} :int (f))\n",
     },
-    /* LC0: Linear continuation warnings */
-    { TUR_W0035_UNSAFE_MULTISHOT_CONT,
-      "TUR-W0035: Unsafe multi-shot continuation\n"
-      "\n"
-      "A handler clause was annotated ^unsafe-multishot on its continuation k.\n"
-      "This disables ownership tracking, allowing k to be resumed any number of\n"
-      "times, but the compiler cannot verify that captured resources are safe to\n"
-      "duplicate. Use this only when you understand the memory implications.\n"
-      "\n"
-      "Fix: if you intend exactly-once semantics, use ^linear k instead.\n"
-      "If you need multi-shot, ensure all captured bindings are copyable (CK_COPY)\n"
-      "or reference-counted.\n",
-    },
     /* U6: inline-C outside Unsafe annotation */
     { TUR_W0036_INLINE_C_MISSING_UNSAFE,
       "TUR-W0036: Inline-C block in function not annotated #{Unsafe}\n"
@@ -810,8 +789,8 @@ static const DiagExplanation diag_explanations_[] = {
       "    (+ (resume k 1) (resume k 2)))  ; ERROR: ^linear k used twice\n"
       "\n"
       "Fix: ensure at most one resume or discontinue is reachable per handler\n"
-      "invocation. For multi-shot continuations, use ^unsafe-multishot k\n"
-      "(see TUR-W0035).\n",
+      "invocation. For multi-shot continuations, use ^multishot k\n"
+      "(see TUR-E0500).\n",
     },
     { TUR_E0102_LINEAR_COPY,
       "TUR-E0102: Cannot copy a linear value\n"
@@ -920,7 +899,7 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: call resume or discontinue at most once per handler invocation.\n"
       "For continuations that must be called exactly once, use ^linear k\n"
       "(emits TUR-E0100 if dropped). For multi-shot continuations, use\n"
-      "^unsafe-multishot k (see TUR-W0035).\n",
+      "^multishot k (see TUR-E0500).\n",
     },
     { TUR_E0202_UNIQUE_IN_RC,
       "TUR-E0202: Cannot wrap a unique value in rc<T>\n"
@@ -1146,11 +1125,7 @@ static const DiagExplanation diag_explanations_[] = {
       "       (handle (perform (Ask))\n"
       "         (Ask [] ^multishot k) (resume k x)))  ; OK: int is CK_COPY\n"
       "\n"
-      "  2. Use ^unsafe-multishot instead, which does not check captures\n"
-      "     (deprecated -- emits TUR-W0035 and TUR-W0400):\n"
-      "     (Ask [] ^unsafe-multishot k) (resume k ...)\n"
-      "\n"
-      "  3. If the struct is `:copy`, the capture is allowed:\n"
+      "  2. If the struct is `:copy`, the capture is allowed:\n"
       "     (defstruct CopyData :copy [x :int])\n",
     },
     { TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
@@ -1189,31 +1164,6 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: move the handle expression outside the atomically block, or use\n"
       "a plain STM operation instead of a ^multishot effect handler.\n",
-    },
-    /* MS4: ^unsafe-multishot deprecation */
-    { TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
-      "TUR-W0400: ^unsafe-multishot is deprecated\n"
-      "\n"
-      "The ^unsafe-multishot annotation allowed resuming a continuation k any\n"
-      "number of times without capture-safety checks.  It is deprecated now that\n"
-      "^multishot provides the same multi-shot semantics with safe capture analysis\n"
-      "(TUR-E0500 checks that only copyable values are captured).\n"
-      "\n"
-      "^unsafe-multishot will be removed in a future major version.\n"
-      "\n"
-      "Example triggering this warning:\n"
-      "  (handle body\n"
-      "    (Ask [] ^unsafe-multishot k)  ; TUR-W0035 + TUR-W0400\n"
-      "      (+ (resume k 1) (resume k 2)))\n"
-      "\n"
-      "Fix: replace ^unsafe-multishot with ^multishot:\n"
-      "  (handle body\n"
-      "    (Ask [] ^multishot k)          ; safe: captures are checked\n"
-      "      (+ (resume k 1) (resume k 2)))\n"
-      "\n"
-      "If the handler body captures a move-only or linear binding and you cannot\n"
-      "make it copyable, you will need to restructure the code to avoid multi-shot\n"
-      "semantics or wrap the captured value in a copyable container.\n",
     },
     /* SS4: Session type explanations */
     { TUR_E0210_SESSION_NOT_DUAL,
