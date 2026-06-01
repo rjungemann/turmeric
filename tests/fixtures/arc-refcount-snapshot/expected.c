@@ -142,6 +142,47 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_APPLY4(f, a, b, c, d) \
     (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
         ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))
+typedef struct { bool is_some; int64_t value; } tur_option_t;
+typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;
+#define TUR_NONE ((int64_t)0)
+static int64_t tur_some(int64_t __x) __attribute__((unused));
+static int64_t tur_some(int64_t __x) {
+    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));
+    __o->is_some = true; __o->value = __x;
+    return (int64_t)(intptr_t)__o;
+}
+static bool tur_is_some(int64_t __o) __attribute__((unused));
+static bool tur_is_some(int64_t __o) {
+    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;
+}
+static int64_t tur_opt_value(int64_t __o) __attribute__((unused));
+static int64_t tur_opt_value(int64_t __o) {
+    return ((tur_option_t *)(intptr_t)__o)->value;
+}
+static int64_t tur_ok(int64_t __v) __attribute__((unused));
+static int64_t tur_ok(int64_t __v) {
+    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));
+    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;
+    return (int64_t)(intptr_t)__r;
+}
+static int64_t tur_err(int64_t __e) __attribute__((unused));
+static int64_t tur_err(int64_t __e) {
+    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));
+    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;
+    return (int64_t)(intptr_t)__r;
+}
+static bool tur_is_ok(int64_t __r) __attribute__((unused));
+static bool tur_is_ok(int64_t __r) {
+    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;
+}
+static int64_t tur_ok_value(int64_t __r) __attribute__((unused));
+static int64_t tur_ok_value(int64_t __r) {
+    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;
+}
+static int64_t tur_err_value(int64_t __r) __attribute__((unused));
+static int64_t tur_err_value(int64_t __r) {
+    return ((tur_result_box_t *)(intptr_t)__r)->err_val;
+}
 static int64_t __tur_fatshim0(void *__e) {
     return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();
 }
@@ -3364,28 +3405,22 @@ static bool slice_eq_(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t some(int64_t x) {
-        struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
-  opt->is_some = true;
-  opt->value = x;
-  return (int64_t)(intptr_t)opt;
+        return tur_some(x);
   
 }
 
 static int64_t none() {
-        return 0;
+        return TUR_NONE;
   
 }
 
 static bool some_(int64_t o) {
-        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  return opt != NULL && opt->is_some;
+        return tur_is_some(o);
   
 }
 
 static int64_t unwrap_or(int64_t o, int64_t dflt) {
-        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) return dflt;
-  return (int64_t)opt->value;
+        return tur_is_some(o) ? tur_opt_value(o) : dflt;
   
 }
 
@@ -3416,32 +3451,22 @@ static bool option_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
 }
 
 static int64_t ok(int64_t x) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = true;
-  r->ok_val = x;
-  r->err_val = 0;
-  return (int64_t)(intptr_t)r;
+        return tur_ok(x);
   
 }
 
 static int64_t err(int64_t e) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = false;
-  r->ok_val = 0;
-  r->err_val = e;
-  return (int64_t)(intptr_t)r;
+        return tur_err(e);
   
 }
 
 static bool ok_(int64_t r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res && res->is_ok;
+        return tur_is_ok(r);
   
 }
 
 static bool err_(int64_t r) {
-        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return !res || !res->is_ok;
+        return !tur_is_ok(r);
   
 }
 

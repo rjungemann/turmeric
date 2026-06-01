@@ -27,10 +27,7 @@
 (defn some [x :int]
   #{}
   :int
-  ```c struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
-  opt->is_some = true;
-  opt->value = x;
-  return (int64_t)(intptr_t)opt;
+  ```c return tur_some(x);
   ```)
 ;;; none -- return the none Option[A] (NULL).
 ;;;
@@ -45,7 +42,7 @@
 (defn none []
   #{}
   :int
-  ```c return 0;
+  ```c return TUR_NONE;
   ```)
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
@@ -64,8 +61,7 @@
 (defn some? [o :int]
   #{}
   :bool
-  ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  return opt != NULL && opt->is_some;
+  ```c return tur_is_some(o);
   ```)
 ;;; unwrap -- extract the value from a typed Option[A].
 ;;;
@@ -100,9 +96,7 @@
 (defn unwrap-or [o :int dflt :int]
   #{}
   :int
-  ```c struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
-  if (!opt || !opt->is_some) return dflt;
-  return (int64_t)opt->value;
+  ```c return tur_is_some(o) ? tur_opt_value(o) : dflt;
   ```)
 ;;; option-free -- free a heap-allocated Option[A].
 ;;;
