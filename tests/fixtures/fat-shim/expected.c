@@ -2331,28 +2331,32 @@ static bool __inst_Eq_eq__uint64(uint64_t, uint64_t);
 static bool __inst_Eq_eq__float32(float, float);
 static int64_t __inst_Clone_clone_int(int64_t);
 static int64_t __inst_Clone_clone_T(void *);
-static bool __fn_477(int64_t, int64_t);
+static int64_t __inst_Hash_hash_int(int64_t);
+static int64_t __inst_Hash_hash_bool(bool);
+static int64_t __inst_Hash_hash_cstr(const char *);
+static int64_t __inst_Hash_hash_float32(float);
+static bool __fn_485(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_501(int64_t, int64_t);
+static bool __fn_509(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_528(int64_t, int64_t);
+static bool __fn_536(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_550(int64_t, int64_t);
-static bool __fn_554(int64_t, int64_t);
+static bool __fn_558(int64_t, int64_t);
+static bool __fn_562(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_570(int64_t, int64_t);
-static bool __fn_574(int64_t, int64_t);
+static bool __fn_578(int64_t, int64_t);
+static bool __fn_582(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_655(int64_t, int64_t);
-static bool __fn_659(int64_t, int64_t);
+static bool __fn_663(int64_t, int64_t);
+static bool __fn_667(int64_t, int64_t);
 static bool __inst_Eq_eq__Tuple2(int64_t, int64_t);
-static bool __fn_677(int64_t, int64_t);
+static bool __fn_685(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_756(int64_t, int64_t);
+static bool __fn_764(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
-static int64_t __fn_765(int64_t);
-static int64_t __fn_770(int64_t, int64_t);
+static int64_t __fn_773(int64_t);
+static int64_t __fn_778(int64_t, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2665,12 +2669,70 @@ static dict_Clone_T dict_Clone_T_singleton = {
     .clone = __inst_Clone_clone_T,
 };
 
-static bool __fn_477(int64_t a, int64_t b) {
+static int64_t __inst_Hash_hash_int(int64_t x) {
+        return x;
+}
+
+typedef struct dict_Hash_int {
+    int64_t (*hash)(int64_t);
+} dict_Hash_int;
+
+static dict_Hash_int dict_Hash_int_singleton = {
+    .hash = __inst_Hash_hash_int,
+};
+
+static int64_t __inst_Hash_hash_bool(bool x) {
+        int64_t __t0;
+        if (x) {
+            __t0 = INT64_C(1);
+        } else {
+            __t0 = INT64_C(0);
+        }
+        return __t0;
+}
+
+typedef struct dict_Hash_bool {
+    int64_t (*hash)(bool);
+} dict_Hash_bool;
+
+static dict_Hash_bool dict_Hash_bool_singleton = {
+    .hash = __inst_Hash_hash_bool,
+};
+
+static int64_t __inst_Hash_hash_cstr(const char * x) {
+        return (int64_t)tur_hamt_hash_str(x);
+    
+}
+
+typedef struct dict_Hash_cstr {
+    int64_t (*hash)(const char *);
+} dict_Hash_cstr;
+
+static dict_Hash_cstr dict_Hash_cstr_singleton = {
+    .hash = __inst_Hash_hash_cstr,
+};
+
+static int64_t __inst_Hash_hash_float32(float x) {
+        union { float f; int32_t i; } u;
+    u.f = (float)x;
+    return (int64_t)u.i;
+    
+}
+
+typedef struct dict_Hash_float32 {
+    int64_t (*hash)(float);
+} dict_Hash_float32;
+
+static dict_Hash_float32 dict_Hash_float32_singleton = {
+    .hash = __inst_Hash_hash_float32,
+};
+
+static bool __fn_485(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_477));
+        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_485));
 }
 
 typedef struct dict_Eq_Map {
@@ -2681,12 +2743,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_501(int64_t a, int64_t b) {
+static bool __fn_509(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_501));
+        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_509));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2697,12 +2759,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_528(int64_t a, int64_t b) {
+static bool __fn_536(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_528));
+        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_536));
 }
 
 typedef struct dict_Eq_Option {
@@ -2713,16 +2775,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_550(int64_t a, int64_t b) {
+static bool __fn_558(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_554(int64_t a, int64_t b) {
+static bool __fn_562(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_550), (int64_t)(intptr_t)(__fn_554));
+        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_558), (int64_t)(intptr_t)(__fn_562));
 }
 
 typedef struct dict_Eq_Result {
@@ -2733,16 +2795,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_570(int64_t a, int64_t b) {
+static bool __fn_578(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_574(int64_t a, int64_t b) {
+static bool __fn_582(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_570), (int64_t)(intptr_t)(__fn_574));
+        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_578), (int64_t)(intptr_t)(__fn_582));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2753,16 +2815,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_655(int64_t a, int64_t b) {
+static bool __fn_663(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_659(int64_t a, int64_t b) {
+static bool __fn_667(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_655), (int64_t)(intptr_t)(__fn_659));
+        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_663), (int64_t)(intptr_t)(__fn_667));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -2773,12 +2835,12 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_ = __inst_Eq_eq__Tuple2,
 };
 
-static bool __fn_677(int64_t a, int64_t b) {
+static bool __fn_685(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_677));
+        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_685));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2801,12 +2863,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_756(int64_t a, int64_t b) {
+static bool __fn_764(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_756));
+        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_764));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -2817,11 +2879,11 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
 
-static int64_t __fn_765(int64_t v) {
+static int64_t __fn_773(int64_t v) {
         return (v) * (INT64_C(10));
 }
 
-static int64_t __fn_770(int64_t a, int64_t b) {
+static int64_t __fn_778(int64_t a, int64_t b) {
         return (a) + (b);
 }
 
@@ -3529,13 +3591,13 @@ static int64_t list_tail(int64_t l) {
 }
 
 static int64_t list_concat(int64_t l1, int64_t l2) {
-        int64_t __t0;
+        int64_t __t1;
         if (tnil_(l1)) {
-            __t0 = l2;
+            __t1 = l2;
         } else {
-            __t0 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
+            __t1 = tcons(list_head(l1), list_concat(list_tail(l1), l2));
         }
-        return __t0;
+        return __t1;
 }
 
 static int64_t grid_new(int64_t width, int64_t height) {
@@ -4020,31 +4082,31 @@ static int64_t apply2(int64_t cb, int64_t x, int64_t y) {
   
 }
 
-static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_767 = __k;
+static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_775 = __k;
     return 0;
 }
 
-static void __handle_body_1(void);
-static void __handle_body_1(void) {
-    int64_t *__t3 = (int64_t *)malloc(2 * sizeof(int64_t));
-    __t3[0] = (int64_t)(intptr_t)__tur_fatshim1;
-    __t3[1] = (int64_t)(intptr_t)__fn_765;
-    void *__t4 = __t3;
-    printf("%lld\n", (long long)(apply1((int64_t)(intptr_t)(__t4), INT64_C(5))));
+static void __handle_body_2(void);
+static void __handle_body_2(void) {
+    int64_t *__t4 = (int64_t *)malloc(2 * sizeof(int64_t));
+    __t4[0] = (int64_t)(intptr_t)__tur_fatshim1;
+    __t4[1] = (int64_t)(intptr_t)__fn_773;
+    void *__t5 = __t4;
+    printf("%lld\n", (long long)(apply1((int64_t)(intptr_t)(__t5), INT64_C(5))));
     tur_current_fiber->result = 0;
 }
 
-static int64_t __dispatch_1(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
-static int64_t __dispatch_1(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+static int64_t __dispatch_2(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __dispatch_2(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
     TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
     FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
     int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
     if (__fiber->done) { return __fiber->result; }
     if (!__dcap->has_pending_effect) return __r;
     if (strcmp(__dcap->eff_name, "Unsafe") == 0) {
-        return __effect_handler_2(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+        return __effect_handler_3(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
     } else {
         /* Phase 19D: bubble up unhandled effect to outer fiber */
         FiberBlock *__outer_f = tur_current_fiber;
@@ -4057,7 +4119,7 @@ static int64_t __dispatch_1(void *__ctx_void, int64_t __k_int, int64_t __resume_
             __outer_cap->has_pending_effect = true;
             tur_fiber_block_yield(0);
             __outer_cap->has_pending_effect = false;
-            return __dispatch_1(__ctx_void, __k_int, __outer_f->arg);
+            return __dispatch_2(__ctx_void, __k_int, __outer_f->arg);
         }
         fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
         abort();
@@ -4065,31 +4127,31 @@ static int64_t __dispatch_1(void *__ctx_void, int64_t __k_int, int64_t __resume_
     return 0;
 }
 
-static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_772 = __k;
+static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_780 = __k;
     return 0;
 }
 
-static void __handle_body_6(void);
-static void __handle_body_6(void) {
-    int64_t *__t8 = (int64_t *)malloc(2 * sizeof(int64_t));
-    __t8[0] = (int64_t)(intptr_t)__tur_fatshim2;
-    __t8[1] = (int64_t)(intptr_t)__fn_770;
-    void *__t9 = __t8;
-    printf("%lld\n", (long long)(apply2((int64_t)(intptr_t)(__t9), INT64_C(20), INT64_C(22))));
+static void __handle_body_7(void);
+static void __handle_body_7(void) {
+    int64_t *__t9 = (int64_t *)malloc(2 * sizeof(int64_t));
+    __t9[0] = (int64_t)(intptr_t)__tur_fatshim2;
+    __t9[1] = (int64_t)(intptr_t)__fn_778;
+    void *__t10 = __t9;
+    printf("%lld\n", (long long)(apply2((int64_t)(intptr_t)(__t10), INT64_C(20), INT64_C(22))));
     tur_current_fiber->result = 0;
 }
 
-static int64_t __dispatch_6(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
-static int64_t __dispatch_6(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+static int64_t __dispatch_7(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __dispatch_7(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
     TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
     FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
     int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
     if (__fiber->done) { return __fiber->result; }
     if (!__dcap->has_pending_effect) return __r;
     if (strcmp(__dcap->eff_name, "Unsafe") == 0) {
-        return __effect_handler_7(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+        return __effect_handler_8(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
     } else {
         /* Phase 19D: bubble up unhandled effect to outer fiber */
         FiberBlock *__outer_f = tur_current_fiber;
@@ -4102,7 +4164,7 @@ static int64_t __dispatch_6(void *__ctx_void, int64_t __k_int, int64_t __resume_
             __outer_cap->has_pending_effect = true;
             tur_fiber_block_yield(0);
             __outer_cap->has_pending_effect = false;
-            return __dispatch_6(__ctx_void, __k_int, __outer_f->arg);
+            return __dispatch_7(__ctx_void, __k_int, __outer_f->arg);
         }
         fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
         abort();
@@ -4120,45 +4182,45 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        TurEffectCaptureCtx __cap_1;
-        __cap_1.has_pending_effect = false;
-        __cap_1.eff_name = NULL;
-        __cap_1.eff_n_args = 0;
-        __cap_1.dispatch = __dispatch_1;
-        __cap_1.body_env = NULL;
-        FiberBlock *__fiber_1 = tur_fiber_block_new(__handle_body_1, 0);
-        __fiber_1->eff_ctx = &__cap_1;
-        EffectHandlerFrame *__parent_chain_1 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
-        EffectHandlerFrame __eff_frame_1;
-        __eff_frame_1.parent = __parent_chain_1;
-        __eff_frame_1.n_cases = 1;
-        __eff_frame_1.cases[0].effect_name = "Unsafe";
-        __eff_frame_1.cases[0].handler_fn = NULL;
-        __eff_frame_1.cases[0].env = NULL;
-        __fiber_1->effect_handler_chain = &__eff_frame_1;
-        __dispatch_1(&__cap_1, (int64_t)(intptr_t)__fiber_1, 0);
-        if (__fiber_1->done) { free(__fiber_1->stack); free(__fiber_1); }
-        TurEffectCaptureCtx __cap_6;
-        __cap_6.has_pending_effect = false;
-        __cap_6.eff_name = NULL;
-        __cap_6.eff_n_args = 0;
-        __cap_6.dispatch = __dispatch_6;
-        __cap_6.body_env = NULL;
-        FiberBlock *__fiber_6 = tur_fiber_block_new(__handle_body_6, 0);
-        __fiber_6->eff_ctx = &__cap_6;
-        EffectHandlerFrame *__parent_chain_6 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
-        EffectHandlerFrame __eff_frame_6;
-        __eff_frame_6.parent = __parent_chain_6;
-        __eff_frame_6.n_cases = 1;
-        __eff_frame_6.cases[0].effect_name = "Unsafe";
-        __eff_frame_6.cases[0].handler_fn = NULL;
-        __eff_frame_6.cases[0].env = NULL;
-        __fiber_6->effect_handler_chain = &__eff_frame_6;
-        __dispatch_6(&__cap_6, (int64_t)(intptr_t)__fiber_6, 0);
-        if (__fiber_6->done) { free(__fiber_6->stack); free(__fiber_6); }
-        int64_t __t11;
-        __t11 = INT64_C(0);
-        return (int)__t11;
+        TurEffectCaptureCtx __cap_2;
+        __cap_2.has_pending_effect = false;
+        __cap_2.eff_name = NULL;
+        __cap_2.eff_n_args = 0;
+        __cap_2.dispatch = __dispatch_2;
+        __cap_2.body_env = NULL;
+        FiberBlock *__fiber_2 = tur_fiber_block_new(__handle_body_2, 0);
+        __fiber_2->eff_ctx = &__cap_2;
+        EffectHandlerFrame *__parent_chain_2 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
+        EffectHandlerFrame __eff_frame_2;
+        __eff_frame_2.parent = __parent_chain_2;
+        __eff_frame_2.n_cases = 1;
+        __eff_frame_2.cases[0].effect_name = "Unsafe";
+        __eff_frame_2.cases[0].handler_fn = NULL;
+        __eff_frame_2.cases[0].env = NULL;
+        __fiber_2->effect_handler_chain = &__eff_frame_2;
+        __dispatch_2(&__cap_2, (int64_t)(intptr_t)__fiber_2, 0);
+        if (__fiber_2->done) { free(__fiber_2->stack); free(__fiber_2); }
+        TurEffectCaptureCtx __cap_7;
+        __cap_7.has_pending_effect = false;
+        __cap_7.eff_name = NULL;
+        __cap_7.eff_n_args = 0;
+        __cap_7.dispatch = __dispatch_7;
+        __cap_7.body_env = NULL;
+        FiberBlock *__fiber_7 = tur_fiber_block_new(__handle_body_7, 0);
+        __fiber_7->eff_ctx = &__cap_7;
+        EffectHandlerFrame *__parent_chain_7 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
+        EffectHandlerFrame __eff_frame_7;
+        __eff_frame_7.parent = __parent_chain_7;
+        __eff_frame_7.n_cases = 1;
+        __eff_frame_7.cases[0].effect_name = "Unsafe";
+        __eff_frame_7.cases[0].handler_fn = NULL;
+        __eff_frame_7.cases[0].env = NULL;
+        __fiber_7->effect_handler_chain = &__eff_frame_7;
+        __dispatch_7(&__cap_7, (int64_t)(intptr_t)__fiber_7, 0);
+        if (__fiber_7->done) { free(__fiber_7->stack); free(__fiber_7); }
+        int64_t __t12;
+        __t12 = INT64_C(0);
+        return (int)__t12;
 }
 
 

@@ -590,6 +590,24 @@ static void sz8_dump_ctor_size(Elab *e, const CtorDef *ctor,
         fprintf(stderr, "size: %s : (%s ?)\n", ctor->name, ctor->adt->name);
 }
 
+/* Phase GHE1: does `name` name a method of some registered typeclass?
+ * Used to route a bare-name method call (hash x) / (eq? a b) to the same
+ * argument-type dispatch the dotted (.method ...) form performs, but only
+ * when no ordinary binding (user defn or local shadow) claims the name. */
+static bool elab_name_is_typeclass_method(Elab *e, const Symbol *name) {
+    if (!name) return false;
+    for (TypeClass *c = e->typeclass_env.typeclasses; c != NULL; c = c->next) {
+        for (uint8_t mi = 0; mi < c->n_methods; mi++) {
+            const Symbol *mn = c->methods[mi].name;
+            if (mn && mn->len == name->len &&
+                memcmp(mn->name, name->name, name->len) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -951,6 +969,37 @@ Expr *elab_call(Elab *e, Form *call) {
         bool rt_handled = false;
         Expr *rt = elab_try_return_dispatch(e, call, name, &rt_handled);
         if (rt_handled) return rt;
+    }
+
+    /* Phase GHE1: bare-name typeclass method dispatch.  A head symbol that
+     * names a registered typeclass method but resolves to no binding (no user
+     * defn and no local shadow) is routed to argument-type dispatch, exactly as
+     * the dotted (.method ...) form would be: the first argument is the
+     * receiver, and its static type selects the instance.  This lets bare
+     * (hash x), (eq? a b), (show v) pick the right instance instead of falling
+     * through to the eval-mode native fallback (which types them :int).
+     *
+     * Gated on `!fn_binding` so a user defn or local binding of the same name
+     * always wins, and on class membership so a program that never declared
+     * the class is never intercepted -- a genuinely-unbound symbol still flows
+     * to its original unbound-symbol / eval-native handling.  Return-only
+     * dispatch methods were already handled above; argument-dispatched methods
+     * always carry their dispatch type variable in the first parameter for the
+     * stdlib classes (Eq/Hash/Show/Num/Functor/...). */
+    if (!fn_binding && call->as.list.len >= 2 &&
+        elab_name_is_typeclass_method(e, name)) {
+        char dotbuf[160];
+        int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%s", name->name);
+        if (dotlen > 0 && (size_t)dotlen < sizeof(dotbuf)) {
+            const Symbol *dot_sym =
+                symtab_intern(e->st, strslice(dotbuf, (uint32_t)dotlen));
+            uint32_t n_items = call->as.list.len;
+            Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
+            items[0] = form_sym(e->arena, head->span, dot_sym);
+            for (uint32_t i = 1; i < n_items; i++) items[i] = call->as.list.items[i];
+            Form *dotcall = form_list(e->arena, call->span, items, n_items);
+            return elab_method_call(e, dotcall);
+        }
     }
 
     /* Phase G0: constructor call — (Ctor) or (Ctor :T1 ...) */

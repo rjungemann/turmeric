@@ -2685,6 +2685,50 @@ Expr *elab_method_call(Elab *e, const Form *call) {
     int fallback_count = 0;
     bool exact_match_found = false;
 
+    /* GHE (constrained-generic-instance-dispatch): when the receiver is a bare
+     * type variable `K` (a constrained generic type parameter, e.g. the `x : K`
+     * of `(defn f [^Hash K x :K] ...)`), the concrete instance is not known
+     * until the function is monomorphized.  This compiler realizes constrained
+     * generics via emit-time ABI specialization, so we must:
+     *   (a) pick a *carrier-compatible* representative instance here -- the one
+     *       whose type_args[0] is TY_INT, since the polymorphic base clone takes
+     *       the int64_t carrier and a tyvar key bottoms out at the carrier.
+     *       This makes the base clone valid C *and* correct for `int` keys.
+     *   (b) tag the call (via dict_arg, built below from best_inst's typeclass)
+     *       so emit_call_name can re-resolve to __inst_<Class>_<method>_<T> for
+     *       each non-carrier ABI specialization (cstr/bool/float32/...).
+     * Without this the old KIND_ARROW path spuriously matched the first instance
+     * whose type_args[0] failed the (incomplete) primitive test -- typically
+     * Hash[float32] -- baking a wrong, type-incompatible callee into the body. */
+    if (obj->type.kind == TY_TYVAR) {
+        TypeClassInstance *carrier_inst = NULL;
+        FnDef *carrier_method = NULL;
+        for (TypeClassInstance *inst = e->typeclass_env.instances;
+             inst != NULL && !carrier_inst; inst = inst->next) {
+            for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
+                const TypeClassMethod *method = &inst->typeclass->methods[i];
+                if (method->name->len != method_name_len ||
+                    memcmp(method->name->name, method_name, method_name_len) != 0) {
+                    continue;
+                }
+                if (inst->n_type_args > 0 && inst->type_args[0].kind == TY_INT) {
+                    carrier_inst = inst;
+                    carrier_method = inst->method_impls[i];
+                }
+                break; /* one method match per instance */
+            }
+        }
+        if (carrier_inst) {
+            best_method = carrier_method;
+            best_inst = carrier_inst;
+            exact_match_found = true;
+            goto found_method;
+        }
+        /* No int instance for this class: fall through to the generic search
+         * (keeps prior behavior for classes without a carrier-compatible
+         * instance; such a constrained generic would still need a fix). */
+    }
+
     /* Determine the effective constructor kind from the obj type. */
     Kind obj_ck = KIND_STAR;
     {

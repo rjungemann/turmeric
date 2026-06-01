@@ -1,6 +1,85 @@
 # Generic `Hash` / `Eq` Dispatch -- Approach A for typed map keys (GHE0--GHE5)
 
-> **Status:** Not started. This is the deferred **Approach A** from
+> **Status:** GHE0 + GHE1 landed (branch `claude/focused-mendel-Sp7cQ`). GHE2--GHE5
+> are **blocked** on a deeper compiler gap discovered during GHE1 verification:
+> *constrained-generic method dispatch resolves the wrong instance.* A body that
+> calls `(.hash x)` (or bare `(hash x)`) where `x : K` is a type parameter
+> constrained by `^Hash K` does **not** dispatch through the constraint -- both
+> the `int` and `cstr` monomorphizations emit `__inst_Hash_hash_float32(x)`
+> (some arbitrary instance), rather than the per-specialization concrete
+> instance or a dictionary load. The codebase has **no** working example of a
+> `^Class`-constrained generic whose body actually calls a method on the
+> constrained parameter (`tests/fixtures/typeclass-constraint` only checks that
+> the *syntax* parses; its body is `true`). The GHE3 builder `map-assoc-g`
+> depends entirely on this working, so it cannot be implemented as specified
+> until constrained-generic method dispatch is fixed first -- a compiler feature
+> this plan assumed already existed (see "Relationship to existing building
+> blocks", which over-claimed the dictionary path works for poly tyvars).
+>
+> **Done:**
+> - **GHE0** -- `stdlib/typeclass-hash.tur` stub auto-loaded; `(.hash 5)` etc.
+>   dispatch by default; Hash removed from `typeclass.tur` to keep it idempotent.
+> - **GHE1** -- bare-name typeclass method calls (`(hash x)`, `(eq? a b)`,
+>   `(show v)`) now route to argument-type dispatch in `elab_call.c`, gated on
+>   no existing binding + class membership. Fixture `ghe1-bare-method-dispatch`.
+>
+> **Why the dispatch fix is large (root-caused 2026-06-01):** the compiler has
+> *no* dictionary threading for constrained generics and *no* typeclass-instance
+> monomorphization. Constrained generics are realised purely by **emit-time ABI
+> specialization** (`emit_module.c` `emit_abi_*`, `emit_call_name`/
+> `emit_resolve_type` in `emit_core.c`). Three coupled gaps:
+>   1. **Wrong instance baked at elab.** For a `TY_TYVAR` receiver,
+>      `elab_method_call` (`elab_typeclasses.c:2698`) takes the `KIND_ARROW`
+>      branch and "matches" the first instance whose `type_args[0]` is not in the
+>      *incomplete* primitive list at line ~2724 (which omits `TY_FLOAT32`,
+>      `TY_INT8..UINT64`, `TY_FLOAT64`) -- so a tyvar spuriously binds to
+>      `Hash[float32]` and is recorded as an exact match (no `TUR_E0020`).
+>   2. **ABI-only specialization.** A spec is created only when
+>      `abi_changes` is true (`emit_module.c:374`). An `int` key == the int64_t
+>      carrier, so *no* spec is made and the call uses the polymorphic **base
+>      clone** -- which has no `current_abi_specialization`, so `emit_resolve_type`
+>      cannot map `K`. Correct dispatch needs *instance-driven* specialization
+>      (specialize when the body's tyvar method-dispatch differs per concrete
+>      type, even when ABIs match), plus making the base clone dead for such fns.
+>   3. **Emit-time re-resolution.** Even with a spec, `emit_call_name` must
+>      re-derive `__inst_<Class>_<method>_<T>` from the resolved receiver type,
+>      and the arg/result coercion in the direct-call path
+>      (`emit_expr.c:1890+`) keys off the (wrong) baked binding's `arg_kinds`.
+>
+> All three must land together; the change spans elab + the monomorphizer + emit,
+> with broad codegen-snapshot impact. This is a dedicated compiler feature, not a
+> within-GHE patch -- it should be scoped as its own plan
+> (`constrained-generic-instance-dispatch`) that GHE2--GHE5 then build on.
+>
+> **Landed since (CGI -- the hash half of Approach A):** the constrained-generic
+> *method dispatch* fix is done (commit `CGI:` on this branch). For a `TY_TYVAR`
+> receiver, `elab_method_call` now picks the carrier-compatible (`TY_INT`)
+> instance as the representative (valid base clone, correct for `int` keys) and
+> tags the call via `dict_arg`; `emit_call_name` re-resolves the call to
+> `__inst_<Class>_<method>_<T>` for each non-carrier ABI specialization
+> (cstr/bool/float32/...). Fixture `cgi-constrained-generic-dispatch` proves
+> `(hash x)` and `(eq? a b)` dispatch correctly through `^Hash K` / `^Eq K`.
+> A `map-assoc-g`/`map-get-g` prototype using this round-trips **int, bool, and
+> float32** keys correctly (their hashes are injective on the int64_t carrier,
+> so the carrier comparator is correct).
+>
+> **Remaining for GHE2/GHE3 (the comparator half):** the runtime `*-eq` ops need
+> a `bool(i64,i64)` *content* comparator, and the only scalar key needing it is
+> **cstr** (distinct pointers, equal text). Passing a generic `tur-key-eq?` by
+> name -- or an inline `(fn [a :K b :K] (eq? a b))` -- does **not** specialize
+> per `K`: both lower to a single lifted function that bakes the `Eq[int]`
+> (carrier) comparator, so a distinct-pointer cstr lookup misses. Fixing this is
+> **A2 generalized**: per-`K` specialization of a *function-value* reference --
+> the ABI-spec pre-pass (`emit_abi_scan_expr`) must recurse into a spec's body
+> under that spec's tyvar bindings to force-create + record the matching
+> specialization of the referenced comparator, and `atom_var`/`name_for_binding`
+> must emit the specialized clone for the fn-value reference (the analogue of the
+> `emit_call_name` re-resolution CGI added for method *calls*). Once it lands,
+> `map-assoc-g` (with the `int`-key fast path) + `map-get-g`/`-has-g?`/
+> `-dissoc-g` complete GHE3, and GHE4/GHE5 (literal lowering + reads + snapshot
+> regen) follow.
+>
+> This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
 > *Decision note (GMK1)*). GMK shipped content-keyed string maps via
 > **Approach B** (a `:cstr`-specific lowering onto the hand-written `smap-*`

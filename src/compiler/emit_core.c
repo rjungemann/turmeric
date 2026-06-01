@@ -549,8 +549,80 @@ char *raw_name_for_binding(const Binding *b) {
     return p;
 }
 
+/* GHE (constrained-generic-instance-dispatch): the single-component type suffix
+ * used in instance-method mangled names (__inst_<Class>_<method>_<component>).
+ * Mirrors the type_suffix switch in emit_stmt.c's EX_INSTANCE_DEF.  Returns NULL
+ * for types we do not re-resolve (the caller then keeps the baked representative
+ * callee, which is the carrier-correct TY_INT instance). */
+static const char *emit_inst_suffix_component(TypeKind k) {
+    switch (k) {
+        case TY_INT:     return "int";
+        case TY_BOOL:    return "bool";
+        case TY_CSTR:    return "cstr";
+        case TY_NIL:     return "nil";
+        case TY_INT8:    return "int8";
+        case TY_INT16:   return "int16";
+        case TY_INT32:   return "int32";
+        case TY_UINT8:   return "uint8";
+        case TY_UINT16:  return "uint16";
+        case TY_UINT32:  return "uint32";
+        case TY_UINT64:  return "uint64";
+        case TY_FLOAT32: return "float32";
+        case TY_FLOAT64: return "float64";
+        default:         return NULL;
+    }
+}
+
+/* GHE: re-resolve a typeclass-method call inside a monomorphized constrained
+ * generic.  When the call carries a dict_arg annotation (so it is a typeclass
+ * method call) and its receiver argument's type is a type variable that the
+ * current ABI specialization binds to a concrete scalar, return the correct
+ * __inst_<Class>_<sanitized-method>_<component> name.  Returns NULL when no
+ * re-resolution applies (the caller keeps the baked representative callee, which
+ * is the TY_INT carrier instance -- correct for the int / base-clone case). */
+static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
+    if (!ctx || !ctx->current_abi_specialization || !call ||
+        call->kind != EX_CALL) {
+        return NULL;
+    }
+    const Expr *dict = call->as.call_.dict_arg;
+    if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return NULL;
+    if (dict->as.dict_.method_name[0] == '\0') return NULL;
+    if (call->as.call_.n_args < 1 || !call->as.call_.args) return NULL;
+
+    /* Receiver is arg 0.  Strip ascriptions, then require a type variable so we
+     * only act on genuinely-polymorphic constrained-generic dispatch (a concrete
+     * receiver already baked the correct instance at elaboration). */
+    const Expr *recv = call->as.call_.args[0];
+    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+    if (!recv || recv->type.kind != TY_TYVAR) return NULL;
+
+    Type resolved = emit_resolve_type(ctx, recv->type);
+    if (resolved.kind == TY_TYVAR) return NULL; /* still unbound: keep base/repr */
+    const char *component = emit_inst_suffix_component(resolved.kind);
+    if (!component) return NULL;
+
+    const TypeClass *tc = dict->as.dict_.instance->typeclass;
+    if (!tc || !tc->name) return NULL;
+
+    Buf nm; buf_init(&nm);
+    buf_printf(&nm, "__inst_%s_%s_%s", tc->name->name,
+               dict->as.dict_.method_name, component);
+    buf_putc(&nm, '\0');
+    char *result = strdup(nm.data);
+    buf_free(&nm);
+    if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+    return result;
+}
+
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
     const Expr *cur = NULL;
+    /* GHE: typeclass-method dispatch inside a monomorphized constrained generic
+     * takes precedence over the generic-function specialization lookup below. */
+    {
+        char *reresolved = emit_reresolve_method_call(ctx, call);
+        if (reresolved) return reresolved;
+    }
     if (ctx && call) {
         for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
             if (ctx->specialized_call_exprs[i] == call) {
