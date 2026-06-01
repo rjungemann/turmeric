@@ -122,23 +122,69 @@ prompt.
 
 ## Phase CPS0 -- Ratify the model
 
+**Ratified 2026-06-01.**
+
 - **CPS0.1** Confirm **selective** CPS (color only may-capture functions) over
   whole-program CPS. *Done when:* this section is annotated "ratified" with a
   date and the coloring rule (CPS1) is agreed.
+
+  **Decision (2026-06-01):** Selective CPS confirmed. Coloring rule: a function
+  is colored iff it directly contains a control operator (`shift`, `shift0`,
+  `reset`, `call/cc`, `escape`, `cloneable-shift`, `cloneable-reset`,
+  `serial-shift`, effect `perform`) **or** transitively calls a colored
+  function. Pure arithmetic/data functions are never colored. Call-graph
+  propagation is a backward fixed-point over the whole-program call graph
+  (CPS1).
+
 - **CPS0.2** Adopt the multi-prompt delimited-control framework as the single
   substrate: `reset` -> fresh prompt, `shift`/`shift0` -> sub-continuation
   capture to nearest prompt, `call/cc` -> capture to the implicit root prompt.
   Record how `shift` (re-install prompt) vs `shift0` (do not) map onto
   `pushSubCont` vs not. *Done when:* the mapping table is in this doc and
   matches the existing `EX_SHIFT`/`EX_SHIFT0` semantics (CF2).
+
+  **Mapping table (2026-06-01):**
+
+  | Turmeric operator | Multi-prompt primitive | Prompt re-install on resume? | Notes |
+  |---|---|---|---|
+  | `(reset body)` | `pushPrompt P; run body` | — (prompt boundary) | Creates fresh prompt P on the CPS substrate |
+  | `(shift kfn body)` | `captureSubCont P → k; kfn(k)` | Yes (k re-installs P when resumed) | v1: `kfn(body)` — see note below |
+  | `(shift0 kfn body)` | `captureSubCont P → k; kfn(k)` | No | One-shot; P not re-installed |
+  | `(call/cc f)` | `captureSubCont rootPrompt → k; f(k)` | No | Captures to implicit root prompt |
+  | `(escape f)` | `captureSubCont rootPrompt → k; f(k); discard` | No | Abort-only; captured k not exposed |
+
+  **v1 backward-compat note:** In the existing v1 semantics (`src/compiler/elab_effects.c:16`),
+  `(shift kfn body)` evaluates to `kfn(body)` — `kfn` receives `body`'s value,
+  not a captured continuation. The CPS substrate implements the *infrastructure*
+  for real continuation capture; the CPS5 re-expression keeps v1 observable
+  behavior for existing `shift`/`reset` operators so existing tests pass
+  unchanged. Real capture (where `kfn` receives the actual continuation `k`) is
+  exposed via the implicit root prompt added in CPS5.3 (consumed by
+  `call-cc-completion-plan.md`).
+
 - **CPS0.3** Choose the native-stack-bounding strategy: a **trampoline** driver
   for CPS'd code (return-to-driver thunks) vs. relying on the C compiler's tail
   calls. Default: trampoline, because portable TCO across our targets is not
   guaranteed. *Done when:* the decision and its perf budget are recorded.
+
+  **Decision (2026-06-01):** Trampoline chosen. Rationale: (a) GCC/Clang do not
+  guarantee TCO for non-self-calls across TUs under our `-O0`/debug build; (b)
+  the trampoline adds a single indirect branch per CPS step — acceptable for
+  control-intensive paths; (c) uncolored direct-style code pays zero trampoline
+  cost (CPS7.1 gate). Perf budget: CPS-colored paths may incur up to 3× overhead
+  vs. direct calls; direct-style hot loops must show ≤ 2% regression.
+
 - **CPS0.4** Decide coexistence with the fiber runtime during transition: the
   fiber path (`fiber_ctx_*.S`, `tur_cont`) stays for delimited code until CPS5
   re-expresses it, then is removed or retained only as a fast path. *Done
   when:* a deprecation/coexistence note is recorded.
+
+  **Decision (2026-06-01):** Fiber path coexists through CPS4. The regular
+  `shift`/`reset` CPS path is gated behind `--cps-path` (a dev/internal flag)
+  through CPS4; the fiber path remains default. At CPS5 the CPS path becomes
+  the default for colored functions; `cloneable-shift`/`cloneable-reset` retains
+  the fiber/setjmp fast path until CPS7.2 numbers justify removal. The fiber
+  assembly files (`fiber_ctx_{x64,arm64}.S`) are not deleted until at least CPS7.
 
 ## Phase CPS1 -- "May-capture" coloring analysis
 
