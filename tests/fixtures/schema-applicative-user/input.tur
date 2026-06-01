@@ -1,0 +1,35 @@
+;; SC7 (headline): build a struct applicatively via the Functor + Applicative
+;; [Schema] instances.  A curried constructor is fmap'd over the first field
+;; schema (yielding a Schema decoding to a partially-applied closure), then ap'd
+;; against the second field schema.  Because (Schema a) is a transparent newtype
+;; the result keeps its (Schema _) type, so ap can dispatch on the fmap result.
+;; ap-fat invokes the curried closure through the fat-closure protocol, so
+;; multi-argument currying composes.
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defstruct User :copy [name :cstr age :int])
+
+;; name arrives as the int-carried cstr pointer the decoder yields for schema/str.
+(defn box-user [name :int age :int] :int
+  ```c User *u = malloc(sizeof(User));
+  u->name = (const char *)(intptr_t)name; u->age = age;
+  return (int64_t)(intptr_t)u; ```)
+(defn user-name [boxed :int] :cstr ```c return ((User *)(intptr_t)boxed)->name; ```)
+(defn user-age  [boxed :int] :int  ```c return ((User *)(intptr_t)boxed)->age; ```)
+
+;; curried constructor: name -> (age -> boxed User)
+(defn ->User [name :int] :ptr<void>
+  (let [_n name] (fn [age :int] :int (box-user _n age))))
+
+(defn user-schema [] :int
+  (let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
+        age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
+    (.raw (ap (fmap name-s ->User) age-s))))
+
+(defn main [] :int
+  (let [boxed (schema-decode! (user-schema)
+                              (json/decode "{\"name\": \"alice\", \"age\": 30}"))]
+    (println (user-name boxed))
+    (println (user-age boxed)))
+  0)

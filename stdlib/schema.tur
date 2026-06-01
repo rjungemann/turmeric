@@ -66,6 +66,8 @@
 (def SCHEMA_AP        14)
 ;;; SCHEMA_FIELD -- discriminant for an extract-one-field schema.
 (def SCHEMA_FIELD     15)
+;;; SCHEMA_AP_FAT -- discriminant for a closure-aware applicative apply.
+(def SCHEMA_AP_FAT    16)
 
 ;; ---------------------------------------------------------------------------
 ;; SC0 -- scalar + literal constructors
@@ -361,16 +363,12 @@
 ;; These build object decoders compositionally with the *accumulating*
 ;; Validation semantics: schema/ap decodes both arms against the same input and
 ;; concatenates their error lists rather than failing fast.  They are provided
-;; as plain combinators over the int-carrier schema representation.  The
-;; Functor/Applicative/Alternative *typeclass instances* (so you could write
-;; (<$> f s) / (<*> sf sa) / (<|> a b)) remain deferred, but two of the three
-;; original obstacles are now cleared: a user *parametric* struct now kind-checks
-;; as a (* -> *) HKT constructor (so a phantom (Schema a) wrapper can host the
-;; instances), and schema/transform / schema/fmap now carry a *fat closure* and
-;; invoke it via TUR_APPLY1, so capturing closures map decoded values.  What
-;; still blocks the definstance sugar: the typeclass-method closure ABI
-;; (tur_poly_fn_t vs the fat-handle the decoder expects) and the by-value
-;; aggregate carrier for applicative struct building.  See the schema guide.
+;; as plain combinators over the int-carrier schema representation, and (SC7
+;; complete) are also surfaced as Functor/Applicative/Alternative *typeclass
+;; instances* over the phantom `(Schema a)` wrapper below -- so an object decoder
+;; can be written applicatively with `fmap`/`ap`/`alt-or` and chains across
+;; operators.  The wrapper is a *transparent int newtype* (one int64
+;; representation everywhere), which is what lets HKT dispatch chain it.
 
 ;;; schema/always -- a pure schema that ignores its input, decoding to a fixed value.
 ;;;
@@ -504,6 +502,81 @@
 ;;; Since: Phase SC7
 (defn schema/alt [a :int b :int] :int
   (schema/union (vec-of a b)))
+
+;;; schema/ap-fat -- closure-aware Validation applicative (kind 16).
+;;;
+;;; Like schema/ap, but applies the decoded function arm to the decoded
+;;; argument through the fat-closure protocol (TUR_APPLY1) rather than a raw
+;;; C call, so the function arm may be a *capturing* closure -- e.g. the
+;;; partially-applied curried constructor produced by `fmap ctor field` when
+;;; assembling a struct field by field.  Same accumulating error semantics as
+;;; schema/ap.  This is the combinator the Applicative [Schema] instance's
+;;; `ap` method is built on.
+;;;
+;;; Parameters:
+;;;   sf -- a schema decoding to a unary fat-closure handle
+;;;   sa -- a schema decoding to that closure's argument
+;;;
+;;; Returns:
+;;;   An applicative schema decoding to (f a).
+;;;
+;;; Since: Phase SC7
+(defn schema/ap-fat [sf :int sa :int] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  s[0] = 16; s[1] = sf; s[2] = sa; s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; SC7 -- phantom (Schema a) wrapper + Functor/Applicative/Alternative
+;; ---------------------------------------------------------------------------
+;;
+;; `(Schema a)` is a phantom wrapper whose only field is the int-carrier schema
+;; pointer.  Because the lone field is a concrete `:int`, the type parameter `a`
+;; appears in no field and the value is a transparent newtype over int64 -- one
+;; C representation at every site -- which is what lets HKT dispatch chain a
+;; result across operators (`ap (fmap ctor f) g`).  The instances delegate to the
+;; plain combinators above and re-wrap, so dispatch keys on the `Schema` head.
+
+;; The Functor class is auto-loaded globally; pull in the Applicative and
+;; Alternative class stubs here (rather than globally) so only schema-using
+;; programs see them -- and so fixtures that declare their own Applicative /
+;; Alternative classes are unaffected.
+(load "stdlib/typeclass-applicative.tur")
+(load "stdlib/typeclass-alternative.tur")
+
+;;; Schema -- phantom wrapper over an int-carrier schema, for HKT dispatch.
+;;;
+;;; Parameters:
+;;;   A   -- phantom: the type a successful decode produces
+;;;   raw -- the underlying SC0 schema pointer (int-carrier)
+;;;
+;;; Since: Phase SC7
+(defstruct Schema [A] (raw :int))
+
+;;; Functor [Schema] -- map a function over a schema's decoded value.
+(definstance Functor [Schema]
+  (fmap [container fn]
+    (:: (make-struct Schema (schema/fmap (.raw container) fn)) (Schema int))))
+
+;;; Applicative [Schema] -- Validation applicative: pure + accumulating ap.
+;;;
+;;; `pure` lifts a value (schema/always); `ap` applies a decoded function arm to
+;;; a decoded argument arm via the closure-aware schema/ap-fat, accumulating both
+;;; arms' errors (Validation, not fail-fast).  Monad is deliberately omitted: the
+;;; lawful fail-fast >>= contradicts this accumulating <*> (see schema/ap).
+(definstance Applicative [Schema]
+  (pure [x]
+    (:: (make-struct Schema (schema/always x)) (Schema int)))
+  (ap [ff fa]
+    (:: (make-struct Schema (schema/ap-fat (.raw ff) (.raw fa))) (Schema int))))
+
+;;; Alternative [Schema] -- first-match choice (`alt-or`) + the empty schema.
+(definstance Alternative [Schema]
+  (empty [a]
+    (:: (make-struct Schema (schema/never "no alternative matched")) (Schema int)))
+  (alt-or [a b]
+    (:: (make-struct Schema (schema/alt (.raw a) (.raw b))) (Schema int))))
 
 ;; ---------------------------------------------------------------------------
 ;; SC3 -- SchemaError accessors + formatting
@@ -827,6 +900,15 @@
         if (errs->len != before) return 0;  /* either arm failed */
         int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)fv;
         return f(av);
+      }
+      case 16: { /* ap-fat: like ap, but apply the (possibly capturing) closure
+                  * arm through the fat-closure protocol so curried constructors
+                  * compose for applicative struct building. */
+        size_t before = errs->len;
+        int64_t fv = decode_rec((sch_t*)(intptr_t)s->a, n, path);
+        int64_t av = decode_rec((sch_t*)(intptr_t)s->b, n, path);
+        if (errs->len != before) return 0;  /* either arm failed */
+        return TUR_APPLY1(fv, av);
       }
       case 15: { /* field-of: extract one key from an object via inner schema */
         if (jtype(n) != 6) {

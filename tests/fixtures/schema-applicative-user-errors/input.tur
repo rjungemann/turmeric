@@ -1,0 +1,20 @@
+;; SC7: the Applicative [Schema] is Validation, not fail-fast -- ap decodes both
+;; field arms against the same input and accumulates every error with its path,
+;; even when assembling a struct via fmap/ap.  Bad name AND bad age => 2 errors.
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defn box-user [name :int age :int] :int
+  ```c return name + age; ```)
+(defn ->User [name :int] :ptr<void>
+  (let [_n name] (fn [age :int] :int (box-user _n age))))
+
+(defn main [] :int
+  (let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
+        age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))
+        s      (ap (fmap name-s ->User) age-s)
+        r      (schema-decode (.raw s) (json/decode "{\"name\": 42, \"age\": \"x\"}"))]
+    (println (schema-decode-ok? r))
+    (println (schema-error-count (schema-decode-errors r)))
+    (println (schema-error-message (schema-decode-errors r))))
+  0)

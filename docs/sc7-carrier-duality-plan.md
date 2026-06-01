@@ -1,12 +1,18 @@
 # SC7 final blocker: the parametric-wrapper carrier/concrete representation duality
 
-> **Status:** design note (2026-06-01). The three *original* SC7 obstacles are
-> cleared (see `docs/return-type-dispatch-and-schema-sc5-sc7-plan.md`). This note
-> documents the **one remaining blocker** for the full `<$>`/`<*>`/`<|>` operator
-> sugar -- a *chainable* HKT method return -- which an end-to-end experiment
-> showed is not independent of the long-deferred "by-value aggregate carrier"
-> obstacle. It records the concrete diagnosis and a proposed fix so the next
-> session starts grounded.
+> **Status: RESOLVED (2026-06-01).** The duality below was collapsed by the
+> *transparent int-newtype* approach (the "Alternative" at the end of this note),
+> not the four-site carrier pinning originally sketched. A parametric struct with
+> a single `:int` field (`(defstruct Schema [A] (raw :int))`) is now a transparent
+> newtype over int64 -- one C representation everywhere -- so the by-value
+> `Schema__int` layout is never emitted and HKT results chain. The chainable HKT
+> return is handled by a tiny, gated dispatch override (propagate the instance
+> body's transparent-newtype type as the call result). SC7's
+> `Functor`/`Applicative`/`Alternative` instances and applicative struct building
+> now ship. See the implementation notes at the end and
+> `docs/return-type-dispatch-and-schema-sc5-sc7-plan.md`.
+>
+> The original diagnosis is retained below for historical context.
 
 ## What "chainable HKT return" needs
 
@@ -114,3 +120,34 @@ chainable-return path from the dispatch section above, and regenerate the
 `expected.c` snapshots. Land the dispatch-level pieces (1) and (2) *together*
 with the codegen fix, guarded by a fixture that chains `(.fmapc (.fmapc s g) h)`
 and reads back through `.raw`.
+
+## How it was actually resolved (2026-06-01)
+
+The "Alternative" (transparent int-newtype) was the winning path, and it turned
+out to need **no** gating on "reached through HKT dispatch": a parametric struct
+with a *single concrete `:int` field* is structurally distinct from every
+value-carrying parametric struct (`Box [A] (x A)`, `Pair`, `Vec`, ...), whose
+field is the type parameter or a non-int type. So the gate is just the shape.
+
+- **`type_is_transparent_int_newtype(Type)`** (`src/compiler/types.c`): parametric
+  struct, one field, field declared `:int`. Uniquely matches the phantom
+  wrappers (`Schema`/`Sbox`/`SchemaW`); no other struct in the tree qualifies.
+- **One representation, int64, everywhere:** `type_c_name` returns `int64_t` for
+  it (TY_STRUCT and TY_APP), and `type_uses_carrier_abi` returns *false* (it is a
+  scalar, not a carrier aggregate -- so no spill/box/deref bridging). The
+  `Schema__int` by-value layout is never registered or emitted.
+- **`make-struct` and field access are identities** (`emit_expr.c`):
+  `(make-struct Schema x)` emits `(int64_t)(x)`; `(.raw s)` emits `s`.
+- **Chainable HKT return** (`elab_typeclasses.c`): after computing a dispatched
+  method's result type, if the resolved instance *body* has a transparent
+  int-newtype type, that type becomes the call result -- so `(fmap c f)` keeps its
+  `(Schema b)` head and `ap`/`alt-or` can dispatch on it. Inert for instances
+  whose bodies are bare `:int` carriers (every existing Functor instance).
+- **Applicative struct building** uses `schema/ap-fat` (decoder kind 16), which
+  applies the function arm via `TUR_APPLY1`, so a curried constructor closure
+  composes; the assembled value is boxed by the constructor and read back.
+
+Net result: zero `expected.c` churn (the three existing canary fixtures assert
+stdout only), and the full suite stays green. Proof fixtures:
+`schema-hkt-functor`, `schema-hkt-alternative`, `schema-applicative-user`,
+`schema-applicative-user-errors`.

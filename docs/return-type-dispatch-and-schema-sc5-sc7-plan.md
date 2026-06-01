@@ -2,12 +2,13 @@
 
 > **Status:** Phase RT landed (return-type-directed dispatch). The
 > carrier-return bridge then unblocked SC5 (typed decode to a real by-value
-> struct) and RD (the `#json-str<T>` reader family); both shipped. SC7 shipped
-> its Validation combinator layer + the phantom-param-inference enabler; its
-> `Functor`/`Applicative`/`Alternative` typeclass instances remain deferred. See
-> "Implementation status" below. This plan covers the compiler work that
-> `docs/schema-plan.md` deferred from SC5 and SC7, plus the two enabling
-> language features those phases depend on.
+> struct) and RD (the `#json-str<T>` reader family); both shipped. **SC7 is now
+> complete:** the Validation combinator layer + phantom-param-inference enabler,
+> *and* the `Functor`/`Applicative`/`Alternative` typeclass instances over the
+> phantom `(Schema a)` wrapper -- including applicative struct building. The final
+> carrier/concrete duality was collapsed by a transparent int-newtype
+> representation (see `docs/sc7-carrier-duality-plan.md`, now RESOLVED). See
+> "Implementation status" below.
 >
 > **Depends on:** `stdlib/schema.tur` SC0--SC4 (shipped),
 > `stdlib/typeclass.tur` (dictionary-passing typeclasses), `tur/json`,
@@ -62,16 +63,26 @@ site already use the concrete type. ADTs, type-apps and parametric structs keep
 the consistent `int64` carrier untouched. SC5's `HasSchema`/`decode!` and RD's
 `#json-str<T>` reader macro (under `-Xschema-reader`) build on this.
 
-**SC7 -- combinator layer DONE; typeclass instances deferred.** Its original
-rationale ("unblock SC5 representationally") is satisfied directly by the bridge.
-The Validation combinators shipped as plain functions over the int-carrier
-schema: `schema/always` (pure), `schema/never` (empty), `schema/ap` (accumulating
+**SC7 -- DONE (combinator layer + typeclass instances).** The Validation
+combinators shipped as plain functions over the int-carrier schema:
+`schema/always` (pure), `schema/never` (empty), `schema/ap` (accumulating
 applicative), `schema/field-of` (extract), `schema/fmap` (transform alias),
-`schema/alt` (two-arm union), with new `SCHEMA_ALWAYS/NEVER/AP/FIELD`
-discriminants + decoder cases. The phantom-param-inference enabler also landed:
-`make-struct` now fills a type parameter absent from all fields from the RT
-`expected_type` channel (`elab_structs.c`), so `(:: (make-struct Schema 0)
-(Schema cstr))` type-checks.
+`schema/alt` (two-arm union), plus `schema/ap-fat` (closure-aware apply), with
+`SCHEMA_ALWAYS/NEVER/AP/FIELD/AP_FAT` discriminants + decoder cases. The
+phantom-param-inference enabler landed: `make-struct` fills a type parameter
+absent from all fields from the RT `expected_type` channel (`elab_structs.c`), so
+`(:: (make-struct Schema 0) (Schema cstr))` type-checks.
+
+The `Functor`/`Applicative`/`Alternative` *typeclass instances* over the phantom
+`(defstruct Schema [A] (raw :int))` wrapper now ship, with chaining and
+applicative struct building. The final carrier/concrete duality was collapsed by
+a **transparent int-newtype** representation: a parametric struct with a single
+`:int` field has one C representation (int64) at every site, so HKT results flow
+with their `(Schema b)` type and chain across `fmap`/`ap`/`alt-or`. The chainable
+return is a small gated dispatch override (`elab_typeclasses.c`). See
+`docs/sc7-carrier-duality-plan.md` (RESOLVED) for the full mechanism. Proof
+fixtures: `schema-hkt-functor`, `schema-hkt-alternative`,
+`schema-applicative-user`, `schema-applicative-user-errors`.
 
 The `Functor`/`Applicative`/`Alternative` *typeclass instances* (the `<$>`/`<*>`/
 `<|>` operator sugar and applicative *struct* building) were deferred on three

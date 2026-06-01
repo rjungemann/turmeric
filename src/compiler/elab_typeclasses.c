@@ -2983,6 +2983,19 @@ found_method:;
             result_type = TYPE_INT;
         }
     }
+
+    /* SC7 (chainable HKT return): a class method may declare a concrete `:int`
+     * return (so the dictionary slot/ABI stay int64), yet its instance body
+     * yields a transparent int-newtype container -- e.g. a Functor `fmap` whose
+     * body is `(make-struct Schema (schema/fmap ...))` typed `(Schema b)`.
+     * Propagate that container type as the call's result so the next HKT
+     * operator (`ap`/`alt-or`) can dispatch on its `(Schema _)` head.  The C
+     * representation is unchanged (a transparent newtype is int64 everywhere),
+     * and instances whose bodies are bare `:int` carriers are unaffected. */
+    if (best_method->body &&
+        type_is_transparent_int_newtype(best_method->body->type)) {
+        result_type = best_method->body->type;
+    }
     
     /* Phase H §1 (dict load): Build an EX_DICT node that carries both the
      * singleton identity AND the method field name.  When fn_expr is this
