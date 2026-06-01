@@ -1,0 +1,17 @@
+;; GHE1: bare-name typeclass method calls dispatch on the first argument's
+;; static type, exactly like the dotted (.method ...) form.  Hash and Eq are
+;; in scope by default (auto-loaded stubs), so no (load ...) is needed.
+(defn pint [n :int] :void ```c printf("%lld\n", (long long)n); ```)
+
+(defn main [] :int
+  ;; bare (hash x) selects Hash[int] / Hash[bool]
+  (pint (hash 5))
+  (pint (hash true))
+  ;; bare (eq? a b) is :bool (selects Eq[int]), usable directly as an if-cond
+  (if (eq? 1 1) (println "eq-1-1-true") (println "BAD"))
+  (if (eq? 1 2) (println "BAD") (println "eq-1-2-false"))
+  ;; content equality: equal strings hash equally
+  (if (= (hash "abc") (hash "abc"))
+    (println "hash-abc-stable")
+    (println "BAD"))
+  0)
