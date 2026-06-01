@@ -29,20 +29,41 @@
 > never free maps). The float path does not use this (inline carriers need no
 > box); it exists for the still-pending aggregate-key lowering (WKC3).
 >
+> **WKC3 (aggregate/struct-key lowering) is now implemented.** A multi-word
+> struct/ADT key round-trips through the `-g` builders via the WKC2 boxed
+> carrier: a `MapKey[K]` instance for the struct heap-boxes the key bytes with
+> `tur_hamt_box_key` (`mk-box`), supplies a carrier-ABI comparator over the two
+> box payload pointers (`mk-cmp`), and returns `(mk-owned? _) = 1` so the
+> builders route through new ownership-aware `map-*-eq-o` /
+> `tur_hamt_*_eq_o(owned)` entry points (the map owns and frees the box). The
+> `MapKey` class gained `mk-owned?`; one-word/inline instances return 0 (the
+> plain `_eq` runtime path, no allocation). A second instance-dispatch gap was
+> fixed for this: `emit_reresolve_method_call` now resolves a `TY_STRUCT`
+> receiver to its (sanitized) type-name component, so an aggregate-keyed
+> constrained-generic call dispatches to `__inst_<Class>_<method>_<Struct>`
+> instead of falling back to the `int` carrier representative (the same failure
+> float keys hit before `TY_FLOAT` was added to the suffix manglers).
+> Round-trip (assoc/update/get/has/dissoc by content) is proven by
+> `wkc3-struct-map-key`; the box ownership it relies on is the WKC2-validated
+> path. Note: a struct `mk-box`/comparator still needs a little inline-C
+> (`&p`/`sizeof` and the field compare) since generic Turmeric cannot introspect
+> `K`'s size; a `derive-map-key` macro to generate that boilerplate is a
+> follow-up.
+>
 > Deviations from the original W2 plan, by design:
 > - One-word keys are no longer emitted *byte-for-byte* identically (WKC1's
 >   strict zero-diff gate): they now route through `MapKey` dispatch (an
 >   inlinable identity box + a named comparator) instead of an inline
 >   `(fn [a :K b :K] (eq? a b))`. Behavior and cost are equivalent; the
 >   `ghe3-generic-map-key` snapshot was regenerated accordingly.
-> - **Multi-word struct/ADT keys remain unimplemented at the lowering (WKC3).**
->   The runtime carrier + ownership (WKC2) that they need now exists; what is
->   left is the `-g`/`MapKey` lowering that boxes an aggregate key via
->   `tur_hamt_box_key` and routes through the `_eq_owned` entry points, plus
->   the per-`K` box-aware comparator.
+> - The carrier fix is a stdlib `MapKey[K]` typeclass dispatched per-`K`, rather
+>   than a compile-time boxing bridge baked into the `-g` lowering. Inline
+>   scalars reinterpret into the one-word carrier (no allocation); only
+>   aggregate keys allocate (and are owned via WKC2).
 >
-> Fixtures: `wkc-wide-map-key` (focused float32/float64 round-trip, update,
-> dissoc) and a reinstated `:float32` section in `ghe3-generic-map-key`;
+> Fixtures: `wkc-wide-map-key` (float32/float64 round-trip, update, dissoc),
+> a reinstated `:float32` section in `ghe3-generic-map-key`,
+> `wkc3-struct-map-key` (2-field struct key round-trip), and
 > `tests/test_hamt_owned_keys.c` for the WKC2 runtime ownership.
 >
 > ---
@@ -229,8 +250,14 @@ dereferences box pointers and delegates to the `Eq[K]`-resolved `eq?`; the box
 form is selected by the same `K` that selects the comparator, so the two always
 agree.
 
-- **Acceptance:** the `f32eq`-style repro returns `42`; a `float64` key and a
-  two-field struct key (given `Hash`/`Eq` instances) also round-trip.
+- **Acceptance (MET):** the `f32eq`-style repro returns `42` (`wkc-wide-map-key`);
+  a `float64` key (`wkc-wide-map-key`) and a two-field struct key given
+  `Hash`/`Eq` (and a `MapKey`) instance (`wkc3-struct-map-key`) also round-trip.
+  Realized as: `MapKey` gains `mk-owned?`; the `-g` builders call `map-*-eq-o`
+  with `(mk-owned? key)`, which select `tur_hamt_*_eq_o(owned)`; an aggregate
+  `mk-box` heap-boxes via `tur_hamt_box_key` and `mk-cmp` compares two box
+  payload pointers. The struct case also required teaching
+  `emit_reresolve_method_call` to dispatch a `TY_STRUCT` receiver by type name.
 
 ### WKC4 -- fixture + reinstate the GHE3 float case
 

@@ -1030,6 +1030,36 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
+/* Flag-driven convenience wrappers (WKC3): owned != 0 uses the standard boxed-
+ * key ops, owned == 0 is the plain _eq path. */
+Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val,
+                        tur_hamt_keyeq_fn eq, int64_t owned) {
+    if (owned)
+        return tur_hamt_set_eq_owned(m, hash, key, val, eq, tur_hamt_box_key_ops());
+    return tur_hamt_set_eq(m, hash, key, val, eq);
+}
+
+Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key,
+                        tur_hamt_keyeq_fn eq, int64_t owned) {
+    if (owned)
+        return tur_hamt_del_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
+    return tur_hamt_del_eq(m, hash, key, eq);
+}
+
+bool tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key,
+                       tur_hamt_keyeq_fn eq, int64_t owned) {
+    if (owned)
+        return tur_hamt_has_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
+    return tur_hamt_has_eq(m, hash, key, eq);
+}
+
+void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key,
+                        tur_hamt_keyeq_fn eq, int64_t owned) {
+    if (owned)
+        return tur_hamt_get_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
+    return tur_hamt_get_eq(m, hash, key, eq);
+}
+
 Hamt *tur_hamt_merge(Hamt *a, Hamt *b) {
     if (!a) return tur_hamt_retain(b);
     if (!b) return tur_hamt_retain(a);

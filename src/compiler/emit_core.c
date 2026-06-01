@@ -604,6 +604,25 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     Type resolved = emit_resolve_type(ctx, recv->type);
     if (resolved.kind == TY_TYVAR) return NULL; /* still unbound: keep base/repr */
     const char *component = emit_inst_suffix_component(resolved.kind);
+    /* WKC3: a named struct/ADT key resolves to TY_STRUCT; its instance is
+     * mangled by the (sanitized) type name, mirroring the EX_INSTANCE_DEF and
+     * dict-name switches.  Without this, an aggregate-keyed constrained-generic
+     * call falls back to the int carrier representative (the same failure float
+     * keys hit before TY_FLOAT was added to the suffix manglers). */
+    char struct_comp[64];
+    if (!component && resolved.kind == TY_STRUCT &&
+        resolved.as.struct_.def && resolved.as.struct_.def->name) {
+        const char *nm = resolved.as.struct_.def->name;
+        size_t i = 0;
+        for (; nm[i] && i < sizeof(struct_comp) - 1; i++) {
+            unsigned char c = (unsigned char)nm[i];
+            struct_comp[i] = (char)(((c >= '0' && c <= '9') ||
+                                     (c >= 'A' && c <= 'Z') ||
+                                     (c >= 'a' && c <= 'z')) ? (char)c : '_');
+        }
+        struct_comp[i] = '\0';
+        component = struct_comp;
+    }
     if (!component) return NULL;
 
     const TypeClass *tc = dict->as.dict_.instance->typeclass;

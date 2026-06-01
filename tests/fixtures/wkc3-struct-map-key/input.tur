@@ -1,0 +1,44 @@
+;; WKC3 (float32-map-key-carrier-plan): a multi-word struct key round-trips
+;; through the -g content-keyed map builders via the heap-boxed carrier.
+;;
+;; Point is a by-value 2-field struct -- it does NOT fit the one-word int64
+;; carrier.  MapKey[Point] boxes the key bytes with tur_hamt_box_key (the WKC2
+;; refcount-aware carrier the map owns) and supplies a carrier-ABI comparator
+;; over the two box payload pointers; (mk-owned? Point) = 1 routes the builders
+;; through the ownership-aware runtime path so the box is freed exactly once.
+;;
+;; Proves: content-keyed lookup, in-place update (re-assoc an equal key keeps
+;; count at 2), has?, negative has?, and dissoc -- all by value, by content.
+
+(defstruct Point [x :int y :int])
+
+(definstance Hash [Point]
+  (hash [p] :int ```c return (int64_t)(p.x * 1000003 + p.y); ```))
+(definstance Eq [Point]
+  (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
+
+;; Carrier comparator: a and b are box payload pointers to Point; compare by
+;; content (equivalent to Eq[Point]).
+(defn point-carrier-eq? [a :int b :int] :bool
+  ```c Point *pa = (Point *)(intptr_t)a; Point *pb = (Point *)(intptr_t)b;
+  return (pa->x == pb->x) && (pa->y == pb->y);
+  ```)
+
+;; MapKey[Point]: heap-box the struct key; owned by the map.
+(definstance MapKey [Point]
+  (mk-box [p] :int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
+  (mk-cmp [p] point-carrier-eq?)
+  (mk-owned? [p] 1))
+
+(defn main [] :int
+  (let [m  (map-assoc-g (map-assoc-g (map-new) (make-struct Point 3 4) 100)
+                                              (make-struct Point 5 6) 200)
+        m2 (map-assoc-g m (make-struct Point 3 4) 999)]   ; update by content
+    (println (:: (map-get-g m2 (make-struct Point 3 4)) :int))   ; 999
+    (println (:: (map-get-g m2 (make-struct Point 5 6)) :int))   ; 200
+    (println (map-count m2))                                     ; 2
+    (println (if (map-has-g? m2 (make-struct Point 5 6)) 1 0))   ; 1
+    (println (if (map-has-g? m2 (make-struct Point 9 9)) 1 0))   ; 0
+    (println (if (map-has-g? (map-dissoc-g m2 (make-struct Point 3 4))
+                             (make-struct Point 3 4)) 1 0)))      ; 0
+  0)

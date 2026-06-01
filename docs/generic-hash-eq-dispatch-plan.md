@@ -89,9 +89,13 @@
 > `bool(i64,i64)` comparator), but a `MapKey[K]` typeclass bit-reinterprets an
 > inline float key into the carrier (no numeric truncation) and supplies a
 > carrier-ABI `bool(i64,i64)` comparator that reinterprets back, so `1.5` no
-> longer collapses to `1`. Only **multi-word struct/ADT** keys remain out of
-> scope -- those need a heap-boxed carrier owned by the map; see
+> longer collapses to `1`. **Multi-word struct/ADT keys are now supported too**
+> (WKC3): a `MapKey[K]` instance heap-boxes the key via the refcount-aware
+> `tur_hamt_box_key` carrier (owned by the map) and the `-g` builders route
+> through ownership-aware `tur_hamt_*_eq_o` calls; see
 > [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md) (W2).
+> The remaining cost is a small per-struct `MapKey` instance (a `derive-map-key`
+> macro is a follow-up); the carrier itself no longer restricts key width.
 >
 > **Remaining for GHE4/GHE5:** route `hamt-of` / `#map{...}` through the `-g`
 > builders (collapsing GMK's Approach-B `:cstr` special-case), generalize the

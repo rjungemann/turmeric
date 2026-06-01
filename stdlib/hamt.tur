@@ -33,6 +33,21 @@
 
 (extern-c tur_hamt_get_eq [m :ptr hash :int key :ptr eq :ptr] :ptr)
 
+; WKC2/WKC3: boxed-key carrier + ownership-aware operations.  tur_hamt_box_key
+; heap-copies `n` key bytes behind a refcount header and returns the payload
+; pointer; the *_eq_o variants take an `owned` flag selecting the standard
+; boxed-key ownership (so the box is freed exactly once across structural
+; sharing) for multi-word struct/ADT keys.
+(extern-c tur_hamt_box_key [src :ptr n :int] :ptr)
+
+(extern-c tur_hamt_set_eq_o [m :ptr hash :int key :ptr val :ptr eq :ptr owned :int] :ptr)
+
+(extern-c tur_hamt_del_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
+
+(extern-c tur_hamt_has_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :bool)
+
+(extern-c tur_hamt_get_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
+
 (extern-c tur_hamt_merge [a :ptr b :ptr] :ptr)
 
 (extern-c tur_hamt_hash_str [str :cstr] :int)

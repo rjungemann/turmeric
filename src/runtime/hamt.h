@@ -181,6 +181,18 @@ Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn
 bool  tur_hamt_has_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
 void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops);
 
+/* Flag-driven convenience wrappers (WKC3 -- aggregate-key lowering).
+ *
+ * `owned != 0` selects tur_hamt_box_key_ops() (the standard boxed-key ownership
+ * for tur_hamt_box_key-allocated keys); `owned == 0` is the plain _eq path
+ * (keys not owned).  These have a flat scalar/pointer ABI so the generated
+ * program can declare them via (extern-c ...) without a by-value ops struct.
+ * `owned` is int64_t so the extern-c `:int` prototype matches exactly. */
+Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, int64_t owned);
+Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
+bool  tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
+void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
+
 /* Get the number of key/value pairs in the map. O(1). */
 uint32_t tur_hamt_count(Hamt *m);
 
