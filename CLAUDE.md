@@ -88,6 +88,23 @@ For the main turmeric repo's own build you still need CMake (via `just
 configure`). `tur run` is for spice development. See
 [docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
 
+### Fresh containers / web sessions -- use CMake directly
+
+In a freshly cloned container (e.g. Claude Code on the web) neither `just` nor a
+prebuilt `tur` is on `PATH`, and `build/` does not exist yet. Bootstrap the
+compiler with CMake directly -- this is the canonical fallback the Justfile
+recipes wrap:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5  # = just configure
+cmake --build build -j --config Debug                                            # = just build
+bash tests/run.sh                                                                # compiled-fixture suite
+```
+
+The built compiler lands at `./build/tur`. To get `just` itself, install it via
+`cargo install just` or your distro's package manager; the recipe names then
+match the commands above one-to-one.
+
 ## Spice Repository Layout
 
 Spice implementations live in the sibling repository `../turmeric-spices`, not

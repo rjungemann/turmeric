@@ -522,6 +522,11 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.fn_to_fat_.inner);
             buf_putc(b, ')');
             break;
+        case EX_POLY_TO_FAT:
+            buf_puts(b, "(poly->fat ");
+            expr_print(b, e->as.poly_to_fat_.inner);
+            buf_putc(b, ')');
+            break;
         case EX_ASCRIBE:
             buf_puts(b, "(:: ");
             expr_print(b, e->as.ascribe_.inner);

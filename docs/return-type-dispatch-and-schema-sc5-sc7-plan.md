@@ -74,15 +74,48 @@ discriminants + decoder cases. The phantom-param-inference enabler also landed:
 (Schema cstr))` type-checks.
 
 The `Functor`/`Applicative`/`Alternative` *typeclass instances* (the `<$>`/`<*>`/
-`<|>` operator sugar and applicative *struct* building) remain deferred on three
-independent compiler obstacles, documented in `docs/guides/schema-guide.md`
-("Deferred: the typeclass instances"): (1) a by-value aggregate result cannot
-ride the int64 decoder carrier without boxing; (2) argument-directed HKT dispatch
-needs values that flow with their `(Schema a)` type, which requires
-parametric-struct by-value return support (the carrier bridge's inverse) plus
-HKT-kind registration for the phantom wrapper; (3) `schema/ap` applies the
-decoded function with a direct C call, so multi-argument currying (closures) is
-out of reach for the inline-C decoder.
+`<|>` operator sugar and applicative *struct* building) were deferred on three
+independent compiler obstacles. **All three of the original obstacles are now
+cleared** (2026-06-01); what remains is a narrower type-level feature (a
+chainable HKT method return) plus the by-value aggregate carrier for *struct*
+building:
+
+1. **(CLEARED) HKT-kind registration for the wrapper.** A user-defined
+   *parametric* struct (`(defstruct Schema [A] (raw :int))`) now reports its
+   arity-based kind (`* -> *`) instead of `*`, so `(definstance Functor [Schema])`
+   kind-checks and dispatches by `StructDef` identity exactly like the built-in
+   `rc<T>`. Fix: `type_effective_kind` (`src/passes/kind_check.c`) keys on
+   `def->n_type_params`; the kind-inference pass still refuses to let a parametric
+   struct *promote* a `*`-declared class (so `Measurable [Box]` stays concrete).
+   Proof fixture: `hkt-user-parametric-struct`.
+2. **(CLEARED) Closure application in the decoder.** `schema/transform` and
+   `schema/fmap` now carry a *fat closure* handle (the standard `{ thunk, env }`
+   layout, via a `^fat` parameter) and the inline-C decoder invokes it through
+   `TUR_APPLY1`, so a *capturing* closure -- not just a top-level function -- can
+   map a decoded value. Proof fixture: `schema-transform-closure`. (The
+   accumulating `schema/ap` function-arm still takes a top-level fn; see the
+   remaining-work note below.)
+3. **(CLEARED) The typeclass-method closure ABI.** A typeclass method receives
+   its function argument as a 16-byte `tur_poly_fn_t` `{env, fn}`, whereas the
+   `^fat`/decoder path expects the single-int64 fat handle. The new `EX_POLY_TO_FAT`
+   conversion (`elab_call.c` at the `^fat` site, emitted in `emit_expr.c`, backed
+   by the `__tur_poly_to_fat1` preamble thunk in `emit_module.c`) boxes the
+   `tur_poly_fn_t` into `{ __tur_poly_to_fat1, fn, env }` so a Functor/Applicative
+   instance can hand its closure argument straight to a `^fat` schema combinator,
+   capturing closures included. Proof fixture: `hkt-instance-closure-to-fat`.
+
+**Remaining work (narrower than the original obstacles).** Two things still stand
+between the cleared primitives and the full operator sugar: (a) a Functor method
+declared `:int` loses the `(Schema b)` wrapper on return, so results are not
+chainable without re-ascription -- a *chainable HKT method return* (`(f b)`); and
+(b) applicative *struct* building still ends in a by-value aggregate the int64
+decoder carrier cannot hold without boxing, and `schema/ap`'s direct C call still
+rules out multi-argument currying. An end-to-end experiment (2026-06-01) showed
+(a) is **not** independent of (b): chaining requires `(Schema a)` to have one
+consistent C representation, but a parametric wrapper instantiated at a concrete
+element has *both* a by-value layout and the int64 carrier, and codegen mixes
+them. The concrete multi-site diagnosis and a proposed one-representation fix are
+in [docs/sc7-carrier-duality-plan.md](sc7-carrier-duality-plan.md).
 
 What *does* work today, and what each phase needs:
 

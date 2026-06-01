@@ -1747,10 +1747,20 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3);\n}\n");
     buf_puts(out, "static int64_t __tur_fatshim5(void *__e, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {\n");
     buf_puts(out, "    return ((int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1, a2, a3, a4);\n}\n");
+    /* SC7: EX_POLY_TO_FAT thunk.  Converts a tur_poly_fn_t {env,fn} (a
+     * typeclass-method closure param) into the fat-closure protocol: the fat box
+     * is { __tur_poly_to_fat1, fn, env }, and TUR_APPLY1 passes the box as the
+     * env, so this thunk reads the original fn (slot 1) + its env (slot 2) and
+     * forwards the argument.  tur_poly_fn_t is inherently unary, so one arity
+     * suffices. */
+    buf_puts(out, "static int64_t __tur_poly_to_fat1(void *__e, int64_t a0) {\n");
+    buf_puts(out, "    int64_t *__b = (int64_t *)__e;\n");
+    buf_puts(out, "    return ((int64_t (*)(void *, int64_t))(intptr_t)__b[1])((void *)(intptr_t)__b[2], a0);\n}\n");
     /* Suppress -Wunused-function for shim arities a program does not use. */
     buf_puts(out, "static void *__tur_fatshim_keep[] __attribute__((unused)) = {\n");
     buf_puts(out, "    (void *)__tur_fatshim0, (void *)__tur_fatshim1, (void *)__tur_fatshim2,\n");
-    buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5 };\n");
+    buf_puts(out, "    (void *)__tur_fatshim3, (void *)__tur_fatshim4, (void *)__tur_fatshim5,\n");
+    buf_puts(out, "    (void *)__tur_poly_to_fat1 };\n");
     /* IT4/TY2.4: (type-of x) helper — maps a TypeKind tag to a cstr type name.
      * The tag stored in tur_tagged_t is the value's TypeKind enum value, so the
      * struct/ADT cases are emitted from the actual enum constants rather than

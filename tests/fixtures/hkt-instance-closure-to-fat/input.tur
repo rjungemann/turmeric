@@ -1,0 +1,32 @@
+;; SC7/obstacle-3 (typeclass-instance half): a typeclass method receives its
+;; function argument as a tur_poly_fn_t {env,fn}.  Handing that closure to a
+;; ^fat consumer (schema/transform) now works via the tur_poly_fn_t -> fat-handle
+;; bridge (EX_POLY_TO_FAT), so a Functor instance over a phantom (SchemaW a)
+;; wrapper can map decoded values -- including with a *capturing* closure.
+;;
+;; This is the seam that previously blocked the SC7 definstance sugar: the two
+;; closure ABIs (16-byte tur_poly_fn_t vs the single-int64 fat handle the
+;; ^fat/decoder path expects) are now bridged at the call site.
+
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defstruct SchemaW [A]
+  (raw :int))
+
+(definstance Functor [SchemaW]
+  (fmap [container fn]
+    (schema/transform (.raw container) fn)))
+
+(defn double-it [x :int] :int (* x 2))
+
+(defn main [] :int
+  (let [delta 100
+        s (:: (make-struct SchemaW (schema/int)) (SchemaW int))]
+    ;; capturing closure through the instance method: 21 -> 121
+    (println (schema-decode! (.fmap s (fn [x :int] :int (+ x delta)))
+                             (json/int 21)))
+    ;; top-level function through the same instance method: 21 -> 42
+    (println (schema-decode! (.fmap s double-it)
+                             (json/int 21))))
+  0)

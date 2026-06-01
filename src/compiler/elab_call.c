@@ -2193,7 +2193,21 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             if (fn_arg_idx_fat < fn_type.as.fn.arity &&
                 fn_type.as.fn.arg_fat[fn_arg_idx_fat]) {
                 TypeKind ak = args[i]->type.kind;
-                if (ak == TY_FN) {
+                bool arg_is_poly_fn = (args[i]->kind == EX_VAR &&
+                                       args[i]->as.var.binding &&
+                                       args[i]->as.var.binding->is_poly_fn);
+                if (arg_is_poly_fn) {
+                    /* SC7: a tur_poly_fn_t value (a typeclass-method closure
+                     * param, marked is_poly_fn) is a 16-byte {env,fn} struct,
+                     * not a single-int64 fat handle.  Box it into a fat-closure
+                     * handle so the ^fat consumer's TUR_APPLY can fat-call it --
+                     * this is what lets a Functor/Applicative instance hand its
+                     * closure argument to a ^fat schema combinator. */
+                    Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID,
+                                          args[i]->span);
+                    conv->as.poly_to_fat_.inner = args[i];
+                    args[i] = conv;
+                } else if (ak == TY_FN) {
                     uint8_t inner_arity = args[i]->type.as.fn.arity;
                     if (inner_arity > 5) {
                         diag_emit(DIAG_ERROR, args[i]->span,

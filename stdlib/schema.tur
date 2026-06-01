@@ -288,17 +288,24 @@
 ;;;
 ;;; Parameters:
 ;;;   inner -- the schema to decode with
-;;;   f     -- a function applied to the decoded value (only on success)
+;;;   f     -- a function or *capturing closure* applied to the decoded value
+;;;            (only on success); carried as a fat closure (^fat)
 ;;;
 ;;; Returns:
 ;;;   A transform schema; decodes to (f decoded-inner).
 ;;;
 ;;; Example:
 ;;;   (schema/transform (schema/int) (fn [x] (* x 2)))
+;;;   (let [k 100] (schema/transform (schema/int) (fn [x] (+ x k))))  ; captures k
 ;;;
 ;;; Since: Phase SC2
-(defn schema/transform [inner :int f] :int
+(defn schema/transform [inner :int ^fat f] :int
   ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  /* SC7/obstacle-3: f is a fat closure (the standard { thunk, env } layout, a
+   * single int64 handle).  Storing the fat handle -- rather than a bare fn
+   * pointer -- lets the decoder invoke a *capturing* closure via TUR_APPLY1,
+   * not just a top-level function.  A non-capturing fn is auto-shimmed into a
+   * fat handle by the ^fat parameter before it ever reaches this body. */
   s[0] = 10; s[1] = inner;
   s[2] = (int64_t)(intptr_t)f;
   s[3] = 0;
@@ -356,10 +363,14 @@
 ;; concatenates their error lists rather than failing fast.  They are provided
 ;; as plain combinators over the int-carrier schema representation.  The
 ;; Functor/Applicative/Alternative *typeclass instances* (so you could write
-;; (<$> f s) / (<*> sf sa) / (<|> a b)) are deferred -- see the schema guide for
-;; the three compiler obstacles (by-value aggregate carrier on a struct result,
-;; HKT dispatch over a phantom Schema wrapper, and closure application inside
-;; the inline-C decoder).
+;; (<$> f s) / (<*> sf sa) / (<|> a b)) remain deferred, but two of the three
+;; original obstacles are now cleared: a user *parametric* struct now kind-checks
+;; as a (* -> *) HKT constructor (so a phantom (Schema a) wrapper can host the
+;; instances), and schema/transform / schema/fmap now carry a *fat closure* and
+;; invoke it via TUR_APPLY1, so capturing closures map decoded values.  What
+;; still blocks the definstance sugar: the typeclass-method closure ABI
+;; (tur_poly_fn_t vs the fat-handle the decoder expects) and the by-value
+;; aggregate carrier for applicative struct building.  See the schema guide.
 
 ;;; schema/always -- a pure schema that ignores its input, decoding to a fixed value.
 ;;;
@@ -457,7 +468,8 @@
 ;;;
 ;;; Parameters:
 ;;;   inner -- the schema to decode with
-;;;   f     -- a top-level function applied to the decoded value on success
+;;;   f     -- a function or capturing closure applied to the decoded value on
+;;;            success; carried as a fat closure (^fat)
 ;;;
 ;;; Returns:
 ;;;   A schema decoding to (f decoded-inner).
@@ -466,8 +478,16 @@
 ;;;   (schema/fmap (schema/int) double-it)
 ;;;
 ;;; Since: Phase SC7
-(defn schema/fmap [inner :int f] :int
-  (schema/transform inner f))
+(defn schema/fmap [inner :int ^fat f] :int
+  ```c int64_t *s = malloc(4 * sizeof(int64_t));
+  /* SC7: the Functor map -- identical node to schema/transform (kind 10).
+   * Built inline rather than delegating because an already-fat handle cannot
+   * be re-passed through a second ^fat parameter. */
+  s[0] = 10; s[1] = inner;
+  s[2] = (int64_t)(intptr_t)f;
+  s[3] = 0;
+  return (int64_t)(intptr_t)s;
+  ```)
 
 ;;; schema/alt -- the Alternative `<|>`: a two-arm first-match union (try `a`, then `b`).
 ;;;
@@ -780,12 +800,11 @@
         push_err(path, buf, n);
         return 0;
       }
-      case 10: { /* transform */
+      case 10: { /* transform: s->b is a fat-closure handle -- capturing-safe */
         size_t before = errs->len;
         int64_t dv = decode_rec((sch_t*)(intptr_t)s->a, n, path);
         if (errs->len != before) return 0;
-        int64_t (*f)(int64_t) = (int64_t(*)(int64_t))(intptr_t)s->b;
-        return f(dv);
+        return TUR_APPLY1(s->b, dv);
       }
       case 11: { /* recursive */
         if (s->c == 0) {

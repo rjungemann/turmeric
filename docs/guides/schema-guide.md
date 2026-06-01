@@ -281,24 +281,40 @@ monad. Note also the O(arms) cost: `ap`/`union` decode every arm.
 The combinators above are plain functions over the int-carrier schema
 representation. The `Functor`/`Applicative`/`Alternative` **typeclass
 instances** -- so you could write `(<$> f s)` / `(<*> sf sa)` / `(<|> a b)` and
-build a struct field-by-field applicatively -- are not yet available. Three
-compiler obstacles remain, each independent:
+build a struct field-by-field applicatively -- were deferred on three
+independent compiler obstacles. **All three are now cleared** (2026-06-01); a
+narrower type-level item (a chainable HKT method return) plus by-value
+aggregate *struct* building is what is left.
 
-1. **By-value aggregate carrier.** A multi-argument applicative build ends in a
-   by-value struct, which the int64 decoder carrier cannot hold without boxing
-   (the SC5 carrier-return bridge solves the *typeclass-method-return* case, not
-   the in-decoder case).
-2. **HKT dispatch over a phantom `Schema a`.** Argument-directed HKT dispatch
-   keys on the container's `(Schema a)` type, but schema constructors return the
-   int carrier, so values do not flow with that type. A phantom-typed `Schema a`
-   wrapper would need parametric-struct by-value return support (the carrier
-   bridge's inverse) and HKT-kind registration for the wrapper. The
-   *type-parameter inference* half of this is done: a phantom struct param is
-   now inferred from an ascription (`(:: (make-struct Schema 0) (Schema cstr))`).
-3. **Closure application in the decoder.** `schema/ap` applies the decoded
-   function with a direct C call, so it only supports top-level (non-capturing)
-   functions; multi-argument currying needs closures the inline-C decoder cannot
-   invoke.
+1. **(CLEARED) HKT dispatch over a parametric wrapper.** A user-defined
+   *parametric* struct (`(defstruct Schema [A] (raw :int))`) now reports kind
+   `* -> *`, so `(definstance Functor [Schema])` kind-checks and dispatches by
+   struct identity like the built-in `rc<T>`. Argument-directed `.fmap`/`.unwrap`
+   resolve on a `(Schema a)` receiver. See the `hkt-user-parametric-struct`
+   fixture. (The phantom-type-parameter inference half was already done: a
+   phantom struct param is inferred from an ascription, e.g.
+   `(:: (make-struct Schema 0) (Schema cstr))`.)
+2. **(CLEARED) Capturing closures in the decoder.** `schema/transform` and
+   `schema/fmap` carry a fat-closure handle (a `^fat` parameter) and the inline-C
+   decoder invokes it via `TUR_APPLY1`, so a *capturing* closure -- not only a
+   top-level function -- can map the decoded value (`schema-transform-closure`
+   fixture). The accumulating `schema/ap` function-arm still takes a top-level fn
+   (see the remaining-work note).
+3. **(CLEARED) The typeclass-method closure ABI.** A typeclass method receives
+   its closure argument as a `tur_poly_fn_t` `{env,fn}` struct, while the
+   `^fat`/decoder path expects the single-int64 fat handle. The `EX_POLY_TO_FAT`
+   conversion boxes the `tur_poly_fn_t` into the fat-closure protocol
+   (`{ __tur_poly_to_fat1, fn, env }`), so a Functor/Applicative instance body can
+   hand its closure straight to a `^fat` schema combinator -- capturing closures
+   included. See the `hkt-instance-closure-to-fat` fixture.
+
+**Remaining work.** (a) A Functor method declared `:int` loses the `(Schema b)`
+wrapper on return, so results are not chainable without a re-ascription; a
+chainable HKT method return (`(f b)`) needs the type-level return-kind feature
+(the inverse of the SC5 carrier-return bridge applied to a parametric struct).
+(b) Applicative *struct* building still ends in a by-value aggregate the int64
+decoder carrier cannot hold without boxing, and `schema/ap`'s direct C call still
+rules out multi-argument currying.
 
 See [docs/schema-plan.md](../schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.

@@ -125,11 +125,20 @@ Kind kind_unify(Kind k1, Kind k2, Span span) {
 static Kind type_effective_kind(Type t) {
     switch (t.kind) {
         case TY_STRUCT:
-            /* Concrete struct types (with a StructDef) have kind * — they are
-             * fully-applied types like Pair, Error, etc.  Opaque type constructor
-             * references (def == NULL) are used in HKT contexts (e.g. option in
+            /* Non-parametric struct types (a StructDef with no type params) have
+             * kind * — they are fully-applied types like Pair, Error, etc.  A
+             * *parametric* struct referenced bare (e.g. `Schema` in
+             * (definstance Functor [Schema]) where `(defstruct Schema [A] ...)`)
+             * is a genuine type constructor of kind * -> * (or higher), so it
+             * reports its arity-based kind.  Opaque type constructor references
+             * (def == NULL) are used in HKT contexts (e.g. option in
              * (definstance Functor [option])) and default to KIND_ARROW. */
-            return (t.as.struct_.def != NULL) ? KIND_STAR : KIND_ARROW;
+            if (t.as.struct_.def != NULL) {
+                return (t.as.struct_.def->n_type_params > 0)
+                           ? kind_for_arity(t.as.struct_.def->n_type_params)
+                           : KIND_STAR;
+            }
+            return KIND_ARROW;
         case TY_REC:    return KIND_ARROW;  /* Phase HKT-P2 */
         /* KB-027: rc<T> and weak<T> are built-in type constructors of kind
          * '* -> *', so a Functor/Foldable instance on the bare `rc` constructor
@@ -417,7 +426,20 @@ static void kind_infer_from_instances(Arena *a, Expr **items, uint32_t n) {
                 bool builtin_carrier_arg =
                     (inst->type_args[i].kind == TY_RC ||
                      inst->type_args[i].kind == TY_WEAK);
-                if (!opaque_struct_arg && !builtin_carrier_arg) {
+                /* SC7: a user parametric struct (def != NULL, n_type_params > 0)
+                 * now reports KIND_ARROW so it can satisfy an explicitly
+                 * higher-kinded class (Functor [Schema]).  But like an opaque
+                 * struct it is ambiguous -- the same name serves as a concrete
+                 * fully-applied type in a STAR-declared class (Measurable [Box]).
+                 * So it must NOT silently promote a STAR class; promotion stays
+                 * gated on an explicit '^f' annotation (cur_kind already ARROW,
+                 * handled by the trusted-annotation branch below). */
+                bool parametric_struct_arg =
+                    (inst->type_args[i].kind == TY_STRUCT &&
+                     inst->type_args[i].as.struct_.def != NULL &&
+                     inst->type_args[i].as.struct_.def->n_type_params > 0);
+                if (!opaque_struct_arg && !builtin_carrier_arg &&
+                        !parametric_struct_arg) {
                     tc->type_param_kinds[i] = arg_kind;
                 }
             }
