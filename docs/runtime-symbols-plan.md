@@ -1,9 +1,15 @@
 # Runtime Symbols (`:Sym`) -- Plan (SYM0--SYM6)
 
-> **Status:** SYM0, SYM1, and SYM4 implemented (type machinery, per-TU codegen,
-> stdlib surface), plus the SYM6 guide + `sym-eq-basic` / `sym-stdlib` fixtures.
-> Deferred: SYM2 (cross-TU aggregator -- records are per-TU `static`, correct
-> for single-binary builds), SYM3 (map-literal retyping + `Hash`/`Eq[Sym]`
+> **Status:** SYM0, SYM1, SYM2, and SYM4 implemented (type machinery, per-TU
+> codegen, cross-TU interning, stdlib surface), plus the SYM6 guide +
+> `sym-eq-basic` / `sym-stdlib` fixtures and a `build-project-sym-cross-tu`
+> project test. **SYM2 deviates from the design below:** rather than a per-build
+> `symbols.c` aggregator + `.tur-syms` manifests, records in the multi-file
+> build are emitted with **external weak linkage** under their stable mangled
+> name, and the linker folds same-named duplicates to one object. This needs no
+> build-orchestration changes and the manifest format never had to be defined;
+> `emit-c`/single-file output keeps `static` records. See "Phase SYM2" below for
+> the as-built notes. Deferred: SYM3 (map-literal retyping + `Hash`/`Eq[Sym]`
 > typeclass dispatch -- the dispatch path does not yet recognise `TY_SYM`, so
 > the instances were intentionally left out rather than shipped broken), and
 > SYM5 (dynamic `str->sym` intern table).
@@ -310,7 +316,36 @@ self-contained; cross-TU folding comes in SYM2.
 Promotes the per-TU records into a single aggregated unit so multi-file
 builds share one record per keyword across TUs.
 
-### Changes
+### As built (deviation from the design below)
+
+The shipped implementation uses **external weak linkage** rather than the
+aggregator design originally sketched in this section:
+
+- `sym_codegen_emit(out, external_weak)` gains a linkage parameter.
+  `emit_implementation` (the separate-compilation / `tur build <dir>` path)
+  passes `external_weak = true`, so each record is emitted as
+  `__attribute__((weak)) const struct { ... } __tur_sym_<mangled> = { ... };`.
+  Two TUs that both reference `:foo` emit identical definitions; the linker
+  folds the weak duplicates to one object, so `:foo` is a single pointer
+  program-wide. `emit_program` (single-file / `emit-c`) passes
+  `external_weak = false`, keeping the `static` form so the output stays
+  self-contained.
+- The generated header forward-declares `struct __tur_sym;` (under
+  `-Xsymbols`) so an exported signature with a `:Sym` parameter/result refers
+  to a single file-scope tag instead of declaring it in prototype scope.
+- `sym_codegen_reset()` is called at the top of `emit_implementation` as well
+  as `emit_program`; the registry now owns a `strdup`'d copy of each name
+  (the per-TU elaboration arena is freed between TUs, so a borrowed
+  `Symbol->name` would dangle).
+- Verified by `tests/run-build-project.sh`
+  (`build-project-sym-cross-tu` + `...-single-symbol`): a two-module project
+  where both modules return `:foo` exits 0 (pointer-equal across TUs) and
+  `nm` finds exactly one `__tur_sym_foo`.
+
+No `.tur-syms` manifest, no `symbols.c` aggregator, and no link-list changes
+were needed. The original aggregator design is retained below for reference.
+
+### Changes (original design -- not taken)
 
 - `tur build <dir>` (project mode) gains a final emit step:
   - Each TU emits its `seen_symbols` set as a sidecar `.tur-syms` manifest

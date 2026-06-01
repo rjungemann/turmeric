@@ -1760,8 +1760,7 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
 #include "hamt.h"   /* tur_hamt_hash_str -- precomputed xxHash64 per keyword */
 
 typedef struct SymRecord {
-    const Symbol *sym;     /* interned source symbol (identity key) */
-    const char   *name;    /* borrowed name string (== sym->name) */
+    char         *name;    /* malloc'd owned copy of the name (see note) */
     uint32_t      len;     /* byte length, excluding NUL */
     uint64_t      hash;    /* precomputed xxHash64 of name */
     char         *cid;     /* malloc'd mangled C identifier, e.g. "__tur_sym_foo" */
@@ -1771,8 +1770,17 @@ static SymRecord *g_sym_records   = NULL;
 static uint32_t   g_n_sym_records = 0;
 static uint32_t   g_cap_sym_records = 0;
 
+/* The name is strdup'd rather than borrowed from the source Symbol: in the
+ * multi-file build path each TU is elaborated in its own arena which is freed
+ * before the next TU, so a borrowed Symbol->name would dangle across the
+ * registry's lifetime.  sym_codegen_reset() must still be called per TU to
+ * keep dedup TU-local, but owning the string makes a missed reset a leak
+ * rather than a use-after-free. */
 void sym_codegen_reset(void) {
-    for (uint32_t i = 0; i < g_n_sym_records; i++) free(g_sym_records[i].cid);
+    for (uint32_t i = 0; i < g_n_sym_records; i++) {
+        free(g_sym_records[i].cid);
+        free(g_sym_records[i].name);
+    }
     free(g_sym_records);
     g_sym_records     = NULL;
     g_n_sym_records   = 0;
@@ -1801,9 +1809,9 @@ static void sym_mangle_append(Buf *out, const char *name, uint32_t len) {
 
 const char *sym_codegen_register(const Symbol *sym) {
     if (!sym) return NULL;
-    /* Dedup: same Symbol* identity, or same text (independently interned). */
+    /* Dedup by name text (the source Symbol* identity is not stable across the
+     * per-TU arenas of a multi-file build). */
     for (uint32_t i = 0; i < g_n_sym_records; i++) {
-        if (g_sym_records[i].sym == sym) return g_sym_records[i].cid;
         if (g_sym_records[i].len == sym->len &&
             strcmp(g_sym_records[i].name, sym->name) == 0)
             return g_sym_records[i].cid;
@@ -1820,8 +1828,7 @@ const char *sym_codegen_register(const Symbol *sym) {
     sym_mangle_append(&cid, sym->name, sym->len);
     buf_putc(&cid, '\0');
     SymRecord *rec = &g_sym_records[g_n_sym_records++];
-    rec->sym  = sym;
-    rec->name = sym->name;
+    rec->name = strdup(sym->name);
     rec->len  = sym->len;
     rec->hash = tur_hamt_hash_str(sym->name);
     rec->cid  = strdup(cid.data);
@@ -1829,11 +1836,19 @@ const char *sym_codegen_register(const Symbol *sym) {
     return rec->cid;
 }
 
-/* Emit the runtime symbol struct + one static record per distinct keyword.
+/* Emit the runtime symbol struct + one record per distinct keyword.
  * `struct __tur_sym` is emitted unconditionally when -Xsymbols is on (so that
- * inline-C in Hash/Eq instances and stdlib sym helpers always sees the layout),
- * and also whenever any record was registered. */
-void sym_codegen_emit(Buf *out) {
+ * inline-C in stdlib sym helpers always sees the layout), and also whenever any
+ * record was registered.
+ *
+ * SYM2 (cross-TU interning): when `external_weak` is true (the multi-file /
+ * separate-compilation build path), each record is emitted with external weak
+ * linkage under its stable mangled name.  Two TUs that both reference `:foo`
+ * emit identical `__tur_sym_foo` definitions; the linker folds the weak
+ * duplicates to a single object, so `:foo` is one pointer across the whole
+ * program.  In single-file / emit-c mode (`external_weak` false) the records
+ * stay `static`, keeping the output self-contained. */
+void sym_codegen_emit(Buf *out, bool external_weak) {
     extern bool g_symbols_enabled;
     if (g_n_sym_records == 0 && !g_symbols_enabled) return;
     buf_puts(out,
@@ -1847,13 +1862,16 @@ void sym_codegen_emit(Buf *out) {
         "    char     name[]; /* NUL-terminated UTF-8 */\n"
         "};\n"
         "#endif\n");
+    const char *storage = external_weak
+        ? "__attribute__((weak)) const"   /* SYM2: linker folds same-named dups */
+        : "static const";
     for (uint32_t i = 0; i < g_n_sym_records; i++) {
         SymRecord *r = &g_sym_records[i];
         /* The record has a flexible array member, so use a sized anonymous
          * struct for the definition and cast to const struct __tur_sym * at use. */
         buf_printf(out,
-            "static const struct { uint64_t hash; uint32_t len; uint32_t _pad; char name[%u]; } %s = { ",
-            r->len + 1, r->cid);
+            "%s struct { uint64_t hash; uint32_t len; uint32_t _pad; char name[%u]; } %s = { ",
+            storage, r->len + 1, r->cid);
         buf_printf(out, "%lluULL, %uu, 0u, ",
                    (unsigned long long)r->hash, r->len);
         /* Emit the name as a C string literal (escape conservatively). */

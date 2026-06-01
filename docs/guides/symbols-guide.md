@@ -1,8 +1,8 @@
 # Runtime Symbols: `:Sym`
 
 > **Status:** experimental, opt-in behind `-Xsymbols`. Phases SYM0, SYM1,
-> and SYM4 are implemented (type machinery, per-TU codegen, stdlib surface).
-> Cross-TU interning (SYM2), the map-literal retyping (SYM3), the dynamic
+> SYM2, and SYM4 are implemented (type machinery, per-TU codegen, cross-TU
+> interning, stdlib surface). The map-literal retyping (SYM3), the dynamic
 > `str->sym` intern table (SYM5), and `Hash`/`Eq` typeclass dispatch for
 > `:Sym` are not yet wired -- see "Not yet implemented" below.
 
@@ -29,8 +29,7 @@ struct __tur_sym {
 };
 ```
 
-Within a translation unit every distinct `:foo` lowers to **one** static
-record, so:
+Every distinct `:foo` lowers to **one** record, so:
 
 - **Equality is pointer equality** -- two `:foo` references are the same
   pointer (`==`); `:foo` and `:bar` are distinct.
@@ -42,6 +41,12 @@ record, so:
 The C identifier of each record is `__tur_sym_` followed by a percent-encoded
 mangling of the name, so punctuated keywords (`:a-b`, `:*x*`) still produce a
 unique, ASCII-only symbol.
+
+In a multi-module build (`tur build <dir>`) the records are emitted with
+external weak linkage, so the linker folds the per-module copies of `:foo`
+into a single object -- `:foo` is one pointer across the whole program, not
+just within a single file. Single-file `emit-c` output keeps the records
+`static` so it stays self-contained.
 
 ## Expression position vs. syntactic position
 
@@ -95,10 +100,6 @@ You can annotate parameters and returns with it:
 The following phases of `docs/runtime-symbols-plan.md` are not wired yet;
 attempting to rely on them will not work as the plan describes:
 
-- **SYM2 (cross-TU interning).** Records are emitted `static` per translation
-  unit. A single-binary build (`tur build <file>` / `emit-c`) is correct
-  because the whole program is one unit; a multi-`.c` link does not yet fold
-  `:foo` from different units into one pointer.
 - **SYM3 (map-literal integration + typeclass dispatch).** `#map{:foo 1}`
   still uses the legacy `hamt/hash-str` lowering, and `(eq? :foo :foo)` /
   `(hash :foo)` do **not** resolve to a `:Sym` instance yet. Use `sym=?` and
