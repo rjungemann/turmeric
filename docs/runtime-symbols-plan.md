@@ -1,17 +1,15 @@
 # Runtime Symbols (`:Sym`) -- Plan (SYM0--SYM6)
 
-> **Status:** SYM0, SYM1, SYM2, SYM3, and SYM4 implemented (type machinery,
-> per-TU codegen, cross-TU interning, map-literal + typeclass integration,
-> stdlib surface), plus the SYM6 guide + `sym-eq-basic` / `sym-stdlib` /
-> `sym-map-key` fixtures and a `build-project-sym-cross-tu` project test.
-> **SYM2 deviates from the design below:** rather than a per-build
-> `symbols.c` aggregator + `.tur-syms` manifests, records in the multi-file
-> build are emitted with **external weak linkage** under their stable mangled
-> name, and the linker folds same-named duplicates to one object. This needs no
-> build-orchestration changes and the manifest format never had to be defined;
-> `emit-c`/single-file output keeps `static` records. See "Phase SYM2" below for
-> the as-built notes; SYM3's as-built notes follow its section. Deferred: SYM5
-> (dynamic `str->sym` intern table).
+> **Status:** Complete -- SYM0--SYM6 all implemented (type machinery, per-TU
+> codegen, cross-TU interning, map-literal + typeclass integration, stdlib
+> surface, dynamic `str->sym`, docs + fixtures: `sym-eq-basic`, `sym-stdlib`,
+> `sym-map-key`, `sym-dynamic`, plus a `build-project-sym-cross-tu` project
+> test). Two phases deviate from the original design below (see their "As built"
+> notes): **SYM2** uses external weak linkage rather than a per-build
+> `symbols.c` aggregator + `.tur-syms` manifests; **SYM5** ships `str->sym` as a
+> load-on-demand module (`stdlib/sym-dynamic.tur`) backed by a process-global
+> intern table (`src/runtime/symbols.c`), seeded from the static literal records
+> by a codegen-emitted startup constructor.
 >
 > Reader already produces `F_KEYWORD` forms and the
 > compiler already interns the name via the `Symbol` table; this plan adds a
@@ -463,7 +461,37 @@ The static interning model covers literal keywords. SYM5 adds an opt-in
 helper for constructing symbols from strings at runtime -- useful for
 deserialization or REPL-style tools.
 
-### Changes
+### As built
+
+- `src/runtime/symbols.{c,h}`: a process-global, mutex-guarded open-addressed
+  table. `tur_sym_intern(s, len)` returns an existing record or allocates a
+  fresh process-lifetime one; `tur_sym_register(rec)` registers a static
+  record (first name wins). The hash matches codegen via `tur_hamt_hash_str`.
+- **`str->sym` lives in `stdlib/sym-dynamic.tur`, not `sym.tur`, and is *not*
+  auto-loaded.** Load it with `(load "stdlib/sym-dynamic.tur")`. This keeps the
+  literal-only surface (`sym.tur`) free of any runtime-table dependency:
+  programs that only use `:foo` literals never link `symbols.c` and never run a
+  startup constructor (verified: a literal-only program emits zero
+  `tur_sym_*` references). `symbols.c` is auto-linked (like `hamt.c`) only when
+  `str->sym`'s body -- with its `__tur_autolink__` marker -- is emitted.
+- **Seeding:** `sym_codegen_emit` emits an `__attribute__((constructor))` that
+  calls `tur_sym_register` for each static record, so `str->sym("foo")` returns
+  the same pointer as the literal `:foo` (`(eq? :foo (str->sym "foo"))` holds).
+  The constructor is gated on `str->sym` being defined in the TU
+  (`g_sym_intern_used`, set in `emit_fn_def`), so literal-only programs emit
+  none. Weak-folded cross-TU records register idempotently (first wins).
+- **Known limitation:** in a multi-module build, `str->sym("foo")` matches a
+  literal `:foo` only if that literal appears in a TU that also defines/loads
+  `str->sym` (or is weak-folded with such a TU). A `:foo` that lives solely in
+  a module which never loads `sym-dynamic.tur` is not seeded, so `str->sym`
+  would allocate a distinct record for it. Single-file programs are unaffected.
+
+Verified: `(eq? :hello (str->sym "hello"))`, two interns of the same dynamic
+name are pointer-equal, distinct names are distinct, `sym->str` round-trips,
+a 1,000,000-iteration intern loop returns one stable pointer, and 8 threads
+interning the same name concurrently get one pointer with no TSan data race.
+
+### Changes (original design)
 
 - `src/runtime/symbols.c`: add a process-global hash table guarded by a
   mutex; `tur_sym_intern(const char *s, uint32_t len)` returns a stable

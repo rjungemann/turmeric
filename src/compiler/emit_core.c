@@ -1770,6 +1770,14 @@ typedef struct SymRecord {
 static SymRecord *g_sym_records   = NULL;
 static uint32_t   g_n_sym_records = 0;
 static uint32_t   g_cap_sym_records = 0;
+/* SYM5: set when this TU defines str->sym (i.e. sym-dynamic.tur was loaded),
+ * which is the only thing that links the runtime intern table.  The seeding
+ * constructor (which references tur_sym_register) is emitted only then, so a
+ * program that uses literal :Sym values without str->sym never links the
+ * table and never runs a startup constructor. */
+static bool       g_sym_intern_used = false;
+
+void sym_codegen_note_intern_used(void) { g_sym_intern_used = true; }
 
 /* The name is strdup'd rather than borrowed from the source Symbol: in the
  * multi-file build path each TU is elaborated in its own arena which is freed
@@ -1786,6 +1794,7 @@ void sym_codegen_reset(void) {
     g_sym_records     = NULL;
     g_n_sym_records   = 0;
     g_cap_sym_records = 0;
+    g_sym_intern_used = false;
 }
 
 uint32_t sym_codegen_count(void) { return g_n_sym_records; }
@@ -1886,6 +1895,23 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
             else                buf_putc(out, (char)c);
         }
         buf_puts(out, "\" };\n");
+    }
+    /* SYM5: seed the runtime intern table with this TU's static records so that
+     * str->sym("foo") returns the same pointer as the literal :foo.  The
+     * registrar lives in src/runtime/symbols.c, auto-linked into -Xsymbols
+     * programs via the marker in stdlib/sym.tur's str->sym.  First registration
+     * of a name wins, so weak-folded cross-TU records register idempotently.
+     * Gated on str->sym being defined in this TU (g_sym_intern_used): only then
+     * is the table (and tur_sym_register) linked, and only then can anything
+     * query the table -- so a literal-only program emits no constructor. */
+    if (g_n_sym_records > 0 && g_sym_intern_used) {
+        buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
+        buf_puts(out, "__attribute__((constructor)) static void __tur_sym_seed(void) {\n");
+        for (uint32_t i = 0; i < g_n_sym_records; i++) {
+            buf_printf(out, "    tur_sym_register((const struct __tur_sym *)&%s);\n",
+                       g_sym_records[i].cid);
+        }
+        buf_puts(out, "}\n");
     }
     if (g_n_sym_records > 0) buf_putc(out, '\n');
 }

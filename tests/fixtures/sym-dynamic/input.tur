@@ -1,0 +1,12 @@
+;; SYM5 (runtime-symbols-plan): str->sym interns a string at runtime.  It is
+;; opt-in -- load stdlib/sym-dynamic.tur to pull in the runtime intern table.
+;; A name that also appears as a literal returns the same pointer as the
+;; literal, and repeated interns of a name return one stable pointer.
+(load "stdlib/sym-dynamic.tur")
+
+(defn main [] :int
+  (println (if (eq? :hello (str->sym "hello")) 1 0))     ; 1 (literal == dynamic)
+  (println (if (eq? (str->sym "x") (str->sym "x")) 1 0)) ; 1 (stable)
+  (println (if (eq? (str->sym "a") (str->sym "b")) 1 0)) ; 0 (distinct)
+  (println (sym->str (str->sym "round")))                ; round (round-trip)
+  0)

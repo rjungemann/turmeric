@@ -1,10 +1,9 @@
 # Runtime Symbols: `:Sym`
 
-> **Status:** experimental, opt-in behind `-Xsymbols`. Phases SYM0, SYM1,
-> SYM2, SYM3, and SYM4 are implemented (type machinery, per-TU codegen,
-> cross-TU interning, map-literal + typeclass integration, stdlib surface).
-> Only the dynamic `str->sym` intern table (SYM5) is not yet wired -- see
-> "Not yet implemented" below.
+> **Status:** experimental, opt-in behind `-Xsymbols`. All phases (SYM0--SYM6)
+> are implemented: the `:Sym` type, per-TU codegen, cross-TU interning,
+> map-literal + typeclass integration, the stdlib surface, and the opt-in
+> dynamic `str->sym` intern table.
 
 Turmeric's `:foo` keyword syntax has always parsed cleanly and interned its
 name at read time, but in *expression position* a keyword had no value and no
@@ -120,9 +119,34 @@ so lookups are pointer comparisons with the precomputed hash -- no string
 work. Without `-Xsymbols`, keyword map keys keep the legacy content-hashed
 lowering, and string keys (`#map{"foo" 1}`) are unchanged in either mode.
 
-## Not yet implemented
+## Dynamic interning: `str->sym` (opt-in)
 
-- **SYM5 (`str->sym`).** No runtime intern table; only literal keywords
-  produce symbols.
+Literal `:foo` symbols need no runtime table. To build a symbol from a string
+at runtime (deserialization, REPL tools), load the opt-in module:
+
+```turmeric
+(load "stdlib/sym-dynamic.tur")
+
+(eq? :hello (str->sym "hello"))   ; => true  (same pointer as the literal)
+(eq? (str->sym "x") (str->sym "x")) ; => true  (stable; one record allocated)
+(sym->str (str->sym "round"))     ; => "round"
+```
+
+`str->sym` returns a stable, process-lifetime symbol; repeated calls with the
+same name return the same pointer (allocating at most one record), and the
+table is mutex-guarded for concurrent use. For a name that also appears as a
+literal in the program, `str->sym` returns the **same pointer** as the literal
+(a startup constructor seeds the table with the static records).
+
+Keep it opt-in: loading `sym-dynamic.tur` links the process-global intern
+table (`src/runtime/symbols.c`). Programs that use only literal `:foo` symbols
+never link it. `str->sym` hashes and locks, so it is slower than a literal --
+prefer literals on hot paths.
+
+> **Multi-module note:** `str->sym("foo")` matches a literal `:foo` only when
+> that literal appears in a module that also loads `sym-dynamic.tur` (or is
+> linker-folded with one). A `:foo` confined to a module that never loads the
+> dynamic surface is interned as a separate record. Single-file programs are
+> unaffected.
 
 See `docs/runtime-symbols-plan.md` for the full phase breakdown.

@@ -52,6 +52,8 @@ void        sym_codegen_reset(void);
 const char *sym_codegen_register(const struct Symbol *sym);
 uint32_t    sym_codegen_count(void);
 void        sym_codegen_emit(Buf *out, bool external_weak);
+/* SYM5: note that str->sym is defined in this TU (gates the seeding ctor). */
+void        sym_codegen_note_intern_used(void);
 
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;

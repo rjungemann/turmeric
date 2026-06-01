@@ -254,6 +254,13 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
+    /* SYM5: detect the opt-in str->sym definition (from sym-dynamic.tur).  Its
+     * presence is what links the runtime intern table, so it gates the
+     * static-record seeding constructor emitted by sym_codegen_emit. */
+    if (fd->binding && fd->binding->name && fd->binding->name->name &&
+        strcmp(fd->binding->name->name, "str->sym") == 0) {
+        sym_codegen_note_intern_used();
+    }
     bool use_abi_spec = ctx->current_abi_specialization &&
         ctx->current_abi_specialization->fn == fd;
     /* Use raw name (without ID suffix) for function name */
