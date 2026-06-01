@@ -133,24 +133,35 @@
 > (#3) the `smap-*` surface is **removed**, not aliased; (#4) the int path is
 > uniform with every other key (no byte-for-byte gate; snapshots regenerated).
 >
-> **Known limitation (GHE5 `Eq [Map]`, not closed):** the plan called for
-> `Eq [Map]` / `map-eq?` to compare keys by `Hash`/`Eq` *content*. That remains
-> **identity-keyed** for `:cstr` keys, blocked by two compiler limitations that
-> are out of scope for this stdlib plan:
->   1. The `Eq [Map]` *instance* receives a bare-`Map` (unapplied HKT) handle and
->      cannot dispatch `MapKey[K]`'s comparator from its body -- the same reason
->      **every** parametric `Eq` instance in the stdlib (`Vec`, `Option`,
->      `Result`, `Pair`) compares elements with identity `(= a b)`.
->   2. A typed `map-eq?` *function* cannot resolve the per-`K` comparator either
->      (the CGI "no ABI change -> no specialization" gap bakes `mk-cmp_int`);
->      and the compiler's recursive `.eq?`-on-`Map[K (Vec V)]` synthesis depends
->      on `map-eq?` being a callable *function*, so it cannot simply be made a
->      macro. Closing this needs compiler work (constrained-generic instance
->      specialization, or element-method dispatch in HKT instance bodies), best
->      scoped on its own rather than within GHE. Content-keyed *lookup* (the
->      common case) is fully correct via `map-get` / `map-has?`; only structural
->      *equality* of two `:cstr`-keyed maps built from distinct key pointers is
->      affected.
+> **GHE5 `Eq [Map]` content equality -- :cstr keys now CONTENT-correct.**
+> `(.eq? a b)` on a concrete `Map[cstr V]` receiver now compares keys by content
+> (two distinct pointers with equal text are equal), closing the reported gap for
+> the common case. This was done **not** by fixing the bare-HKT instance body
+> (see #4 below) but by extending the existing dispatch-site synthesis
+> (`try_synth_recursive_eq` in `elab_typeclasses.c`): at the *concrete* `.eq?`
+> call site the compiler threads the per-`K` `MapKey` comparator -- built as
+> `(mk-cmp (:: 0 K))`, which resolves `MapKey[cstr]` because the site is concrete
+> (the same trick the `map-assoc`/`map-get` macros use) -- plus the recursive
+> value comparator, into a new content-aware `map-eq-k?` helper. Fixture
+> `eqmap-cstr-content`.
+>
+> Why this route and not the literal "#4": the `Eq [Map]` *instance* body
+> receives a bare-`Map` (unapplied HKT) handle and a typed `map-eq?` *function*
+> cannot resolve the per-`K` comparator (the CGI "no ABI change -> no
+> specialization" gap bakes `mk-cmp_int`; and the recursive `.eq?` synthesis
+> pins `map-eq?` to a *function* form, so it cannot just be a macro). The
+> dispatch-site synthesis sidesteps both by emitting a specialized call where
+> `K` is concrete -- which is also exactly how the stdlib already gives
+> `Vec`/`Option`/`Result`/`Pair`/`Set` recursive *value* equality.
+>
+> **Remaining (smaller):** (a) **opaque/struct** map keys via `.eq?` still fall
+> back to identity -- `(:: 0 K)` would hit the separate `defopaque`-ascription
+> deref bug, so a deref-safe witness is needed first; (b) the **generic-dict**
+> `Eq [Map]` path (using the instance through a polymorphic `Eq` constraint
+> rather than a direct `.eq?`) is still identity-keyed -- closing it needs the
+> true general fix (element-method dispatch in HKT instance bodies, or
+> constrained-generic instance specialization). Content-keyed *lookup* was always
+> correct via `map-get`/`map-has?`.
 >
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
@@ -447,10 +458,11 @@ build a content-keyed map. Then update docs and regenerate snapshots:
    other key; snapshots were regenerated.
 5. `:float32` (and other content keys wider/narrower than the one-word carrier):
    deferred to [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md).
-6. **Still open (GHE5 `Eq [Map]`).** Content-keyed *equality* of `:cstr`-keyed
-   maps is unfinished: `Eq [Map]` / `map-eq?` compare keys by identity, not
-   content. Blocked by (a) the bare-HKT parametric-instance limitation shared by
-   all stdlib `Eq` instances and (b) the CGI non-ABI-changing constrained-generic
-   gap, with the recursive `.eq?`-on-`Map[K (Vec V)]` synthesis pinning
-   `map-eq?` to a *function* form. Needs a dedicated compiler change; content
-   *lookup* (`map-get`/`map-has?`) is unaffected and correct.
+6. **GHE5 `Eq [Map]` -- `:cstr` keys now content-correct** (fixture
+   `eqmap-cstr-content`). `(.eq? a b)` on a concrete `Map[cstr V]` threads the
+   per-`K` `MapKey` comparator at the dispatch site (`try_synth_recursive_eq` +
+   the new `map-eq-k?`). **Remaining:** opaque/struct map keys via `.eq?` (need a
+   deref-safe witness, blocked by the `defopaque`-ascription deref bug) and the
+   generic-dict `Eq [Map]` path (still identity; needs the true general
+   HKT-instance element-dispatch fix). Content *lookup* (`map-get`/`map-has?`)
+   was always correct.

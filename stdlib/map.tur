@@ -574,6 +574,42 @@
 
 (defn map-eq? [K V] [m1 (Map K V) m2 (Map K V) val-cmp] :bool
   (map-eq-raw? m1 m2 val-cmp))
+;;; map-eq-raw-k? -- like map-eq-raw? but compares keys with an explicit
+;;; carrier comparator (tur_hamt_get_eq) instead of identity.  Threading the
+;;; MapKey[K] comparator here is what makes structural equality content-correct
+;;; for :cstr keys (distinct pointers with equal text match).
+
+(defn map-eq-raw-k? [m1 :int m2 :int keyeq val-cmp]
+  #{}
+  :bool
+  ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
+  struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
+  if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init((void*)iter_buf, map1->hamt);
+  uint64_t hash_out;
+  void *key_out = NULL, *val_out = NULL;
+  while (tur_hamt_iter_next((void*)iter_buf, &hash_out, &key_out, &val_out)) {
+      void *val_in_b = tur_hamt_get_eq(map2->hamt, (int64_t)hash_out, key_out,
+                                       (void *)(intptr_t)keyeq);
+      if (!val_in_b) { tur_hamt_iter_free((void*)iter_buf); return false; }
+      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
+          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      if (!vals_eq) { tur_hamt_iter_free((void*)iter_buf); return false; }
+  }
+  tur_hamt_iter_free((void*)iter_buf);
+  return true;
+  ```)
+;;; map-eq-k? -- structural equality over Map[K V] with an explicit key
+;;; comparator (and value comparator).  This is the target of the compiler's
+;;; content-keyed .eq? dispatch synthesis: at a concrete call site it threads
+;;; (mk-cmp (:: 0 K)) -- the MapKey[K] comparator resolved for the concrete key
+;;; type -- so two :cstr keys with equal text but distinct pointers compare
+;;; equal.
+
+(defn map-eq-k? [K V] [m1 (Map K V) m2 (Map K V) keyeq val-cmp] :bool
+  (map-eq-raw-k? m1 m2 keyeq val-cmp))
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
 ;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
 ;; Constraints: (Eq K) ensures keys are comparable; (Eq V) uses integer equality.
