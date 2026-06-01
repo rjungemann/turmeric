@@ -314,7 +314,8 @@ TypeClassInstance *typeclass_env_lookup_instance_by_key(const TypeClassEnv *env,
         if (inst->n_type_args > 0) {
             TypeKind tk = inst->type_args[0].kind;
             bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
-                                 tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID);
+                                 tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID ||
+                                 tk == TY_SYM);
             if (!is_primitive) return inst;
         } else {
             return inst;

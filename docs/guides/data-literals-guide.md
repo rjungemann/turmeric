@@ -65,7 +65,13 @@ instances. The literal has type `Map[K V]`: the typed `map-get`/`map-assoc`/
 mismatch is a `TUR-E0001`. Int and keyword keys are int-valued (a keyword
 normalizes to a content hash); string keys are compared by content (two
 distinct pointers with equal text are one key). See
-[`#map{...}` keys](#map-keys) below. Aggregate (multi-word struct/ADT) *key*
+[`#map{...}` keys](#map-keys) below.
+
+> **`-Xsymbols`:** with the runtime-symbols flag also enabled, a keyword key
+> is a first-class `:Sym` value rather than a content-hashed string -- the map
+> is keyed by `Sym` pointer identity via `Hash[Sym]` / `MapKey[Sym]`. See
+> [the symbols guide](symbols-guide.md). Without `-Xsymbols` the legacy
+> content-hash lowering above is unchanged. Aggregate (multi-word struct/ADT) *key*
 types must supply their own `MapKey` instance; *values* may be any type
 (scalars, floats, and heap handles like `Vec[A]` all ride the int64 carrier).
 

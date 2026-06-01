@@ -59,3 +59,24 @@
   ```c
   return (int64_t)(a == b);
   ```)
+
+;;; Eq [Sym] -- equality on interned symbols: pointer identity.
+;;;
+;;; Two symbols are equal iff they are the same interned pointer.
+
+(definstance Eq [Sym] (eq? [x y] :bool ```c return (int64_t)(x == y);
+    ```))
+
+;;; Hash [Sym] -- hash a symbol via its precomputed hash field (a single load).
+
+(definstance Hash [Sym] (hash [x] :int ```c return (int64_t)((const struct __tur_sym *)x)->hash;
+    ```))
+
+;;; MapKey [Sym] -- interned-symbol pointer carrier.  Symbols are deduplicated,
+;;; so pointer identity is content equality; the carrier is the pointer-as-int
+;;; and the comparator is plain integer (identity) equality.
+
+(definstance MapKey [Sym]
+  (mk-box [x] :int ```c return (int64_t)(intptr_t)x; ```)
+  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+  (mk-owned? [x] 0))

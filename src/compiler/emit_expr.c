@@ -118,6 +118,7 @@ static bool reinterpret_kind_is_scalar(TypeKind kind) {
         case TY_FLOAT:
         case TY_CSTR:
         case TY_PTR_VOID:
+        case TY_SYM:        /* SYM3: interned symbol is a pointer-sized scalar */
         case TY_INT8:
         case TY_INT16:
         case TY_INT32:
@@ -151,6 +152,7 @@ static int reinterpret_kind_size_bytes(TypeKind kind) {
         case TY_FLOAT:
         case TY_CSTR:
         case TY_PTR_VOID:
+        case TY_SYM:        /* SYM3: interned symbol pointer */
         case TY_INT64:
         case TY_UINT64:
         case TY_FLOAT64:

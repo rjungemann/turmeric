@@ -1,18 +1,17 @@
 # Runtime Symbols (`:Sym`) -- Plan (SYM0--SYM6)
 
-> **Status:** SYM0, SYM1, SYM2, and SYM4 implemented (type machinery, per-TU
-> codegen, cross-TU interning, stdlib surface), plus the SYM6 guide +
-> `sym-eq-basic` / `sym-stdlib` fixtures and a `build-project-sym-cross-tu`
-> project test. **SYM2 deviates from the design below:** rather than a per-build
+> **Status:** SYM0, SYM1, SYM2, SYM3, and SYM4 implemented (type machinery,
+> per-TU codegen, cross-TU interning, map-literal + typeclass integration,
+> stdlib surface), plus the SYM6 guide + `sym-eq-basic` / `sym-stdlib` /
+> `sym-map-key` fixtures and a `build-project-sym-cross-tu` project test.
+> **SYM2 deviates from the design below:** rather than a per-build
 > `symbols.c` aggregator + `.tur-syms` manifests, records in the multi-file
 > build are emitted with **external weak linkage** under their stable mangled
 > name, and the linker folds same-named duplicates to one object. This needs no
 > build-orchestration changes and the manifest format never had to be defined;
 > `emit-c`/single-file output keeps `static` records. See "Phase SYM2" below for
-> the as-built notes. Deferred: SYM3 (map-literal retyping + `Hash`/`Eq[Sym]`
-> typeclass dispatch -- the dispatch path does not yet recognise `TY_SYM`, so
-> the instances were intentionally left out rather than shipped broken), and
-> SYM5 (dynamic `str->sym` intern table).
+> the as-built notes; SYM3's as-built notes follow its section. Deferred: SYM5
+> (dynamic `str->sym` intern table).
 >
 > Reader already produces `F_KEYWORD` forms and the
 > compiler already interns the name via the `Symbol` table; this plan adds a
@@ -374,6 +373,40 @@ were needed. The original aggregator design is retained below for reference.
 
 Replaces the `(hamt/hash-str "name")` decay in `dl_normalize_map_key` so
 keyword map keys are first-class `:Sym` values.
+
+### As built
+
+The shipped implementation matches the design with two additions the original
+plan did not anticipate:
+
+- **Typeclass dispatch had to learn `TY_SYM`.** `eq?`/`hash` (and the map's
+  `Hash[K]`/`MapKey[K]` resolution) classify the receiver's `TypeKind` as
+  `KIND_STAR` (nullary, exact-match) vs `KIND_ARROW` (constructor). `TY_SYM`
+  was missing from every "is primitive" set, so a `:Sym` receiver was treated
+  as `KIND_ARROW` and matched the *first* non-primitive instance (e.g.
+  `MutableMap`) -- a mis-dispatch that crashed. `TY_SYM` is now in the
+  primitive sets in `elab_typeclasses.c` (dispatch) and `typeclass.c`
+  (by-key lookup), and in every instance-name `type_suffix` switch
+  (`elab_typeclasses.c`, `emit_stmt.c`, `emit_core.c`) so the instance is named
+  `__inst_<Class>_<m>_Sym` rather than the fallback `__inst_..._T`.
+- **The Sym instances live in `sym.tur`, not the per-class files.** Instance
+  dict singletons are emitted unconditionally for every *registered* instance,
+  and their inline-C references `struct __tur_sym`. Putting `Eq[Sym]` /
+  `Hash[Sym]` / `MapKey[Sym]` in the always-loaded `typeclass-eq.tur` /
+  `typeclass-hash.tur` / `map.tur` would therefore force `struct __tur_sym`
+  (and dead instance code) into *every* program and churn all codegen
+  snapshots. Instead all three live in `sym.tur` (auto-loaded only under
+  `-Xsymbols`), and `builtin_kind_home_basename` credits `TY_SYM` to
+  `sym.tur` so they pass the orphan-instance check there. Non-`-Xsymbols`
+  builds are untouched (zero `__tur_sym` references).
+- `MapKey[Sym]` boxes the symbol pointer as the int carrier and uses the
+  plain integer (identity) comparator `tur_int_carrier_eq_` -- correct because
+  interned symbols compare by pointer. `EX_REINTERPRET` (the map carrier
+  box/unbox) now accepts `TY_SYM` as a pointer-sized scalar.
+
+Verified: `#map{:foo 10 :bar 20}` keyed by `:Sym`, `map-get` / `map-has?`,
+and bare `(eq? :foo :foo)` / `(hash :foo)` all dispatch correctly (fixture
+`tests/fixtures/sym-map-key`). The original design notes follow.
 
 ### Changes
 

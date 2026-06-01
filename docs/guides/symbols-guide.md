@@ -1,10 +1,10 @@
 # Runtime Symbols: `:Sym`
 
 > **Status:** experimental, opt-in behind `-Xsymbols`. Phases SYM0, SYM1,
-> SYM2, and SYM4 are implemented (type machinery, per-TU codegen, cross-TU
-> interning, stdlib surface). The map-literal retyping (SYM3), the dynamic
-> `str->sym` intern table (SYM5), and `Hash`/`Eq` typeclass dispatch for
-> `:Sym` are not yet wired -- see "Not yet implemented" below.
+> SYM2, SYM3, and SYM4 are implemented (type machinery, per-TU codegen,
+> cross-TU interning, map-literal + typeclass integration, stdlib surface).
+> Only the dynamic `str->sym` intern table (SYM5) is not yet wired -- see
+> "Not yet implemented" below.
 
 Turmeric's `:foo` keyword syntax has always parsed cleanly and interned its
 name at read time, but in *expression position* a keyword had no value and no
@@ -95,15 +95,33 @@ You can annotate parameters and returns with it:
 (sym=? :a :b)       ; => false
 ```
 
+## Equality, hashing, and maps
+
+Under `-Xsymbols`, `:Sym` participates in the `Eq`, `Hash`, and `MapKey`
+typeclasses (instances live in `stdlib/sym.tur`, auto-loaded with the flag):
+
+```turmeric
+(eq? :foo :foo)   ; => true   (pointer identity)
+(eq? :foo :bar)   ; => false
+(hash :foo)       ; precomputed field load
+```
+
+With `-Xdata-literals` as well, a keyword key in a map literal is a
+first-class `:Sym` key rather than a content-hashed string:
+
+```turmeric
+(let [m #map{:foo 10 :bar 20}]
+  (map-get m :foo)      ; => 10
+  (map-has? m :missing) ; => false (0))
+```
+
+The map is keyed by `Sym` pointer identity (via `Hash[Sym]` + `MapKey[Sym]`),
+so lookups are pointer comparisons with the precomputed hash -- no string
+work. Without `-Xsymbols`, keyword map keys keep the legacy content-hashed
+lowering, and string keys (`#map{"foo" 1}`) are unchanged in either mode.
+
 ## Not yet implemented
 
-The following phases of `docs/runtime-symbols-plan.md` are not wired yet;
-attempting to rely on them will not work as the plan describes:
-
-- **SYM3 (map-literal integration + typeclass dispatch).** `#map{:foo 1}`
-  still uses the legacy `hamt/hash-str` lowering, and `(eq? :foo :foo)` /
-  `(hash :foo)` do **not** resolve to a `:Sym` instance yet. Use `sym=?` and
-  the precomputed `hash` field (via inline-C) instead.
 - **SYM5 (`str->sym`).** No runtime intern table; only literal keywords
   produce symbols.
 

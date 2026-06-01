@@ -78,6 +78,12 @@ static const char *builtin_kind_home_basename(TypeKind k) {
         case TY_FLOAT32:
         case TY_FLOAT64:
             return "typeclass.tur";
+        /* SYM3 (runtime-symbols-plan): the :Sym primitive has no data module of
+         * its own; its canonical instances (Eq/Hash/MapKey[Sym]) live in
+         * sym.tur, which is only auto-loaded under -Xsymbols.  Crediting Sym to
+         * sym.tur keeps those instances non-orphan there. */
+        case TY_SYM:
+            return "sym.tur";
         default:
             return NULL;
     }
@@ -113,6 +119,7 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
         case TY_UINT64:   kw = "uint64";   break;
         case TY_FLOAT32:  kw = "float32";  break;
         case TY_PTR_VOID: kw = "ptr<void>"; break;
+        case TY_SYM:      kw = "Sym";      break;
         default: break;
     }
     if (kw) {
@@ -1611,6 +1618,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 case TY_FLOAT:   type_component = "float";   break;
                 case TY_FLOAT32: type_component = "float32"; break;
                 case TY_FLOAT64: type_component = "float64"; break;
+                case TY_SYM:     type_component = "Sym";     break;
                 case TY_STRUCT:
                     /* Phase HKT H3: use the original symbol name when available,
                      * falling back to "T" for unnamed struct type args. */
@@ -2102,6 +2110,7 @@ static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
             case TY_CSTR:     component = "cstr";     break;
             case TY_NIL:      component = "nil";      break;
             case TY_PTR_VOID: component = "ptr_void"; break;
+            case TY_SYM:      component = "Sym";      break;
             case TY_STRUCT:
                 if (inst->type_arg_syms && inst->type_arg_syms[i])
                     component = inst->type_arg_syms[i]->name;
@@ -2736,7 +2745,7 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         TypeKind tk = obj->type.kind;
         bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
                              tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID ||
-                             tk == TY_UNKNOWN);
+                             tk == TY_SYM  || tk == TY_UNKNOWN);
         obj_ck = is_primitive ? KIND_STAR : KIND_ARROW;
     }
 
@@ -2768,7 +2777,8 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                     TypeKind itk = inst->type_args[0].kind;
                     bool inst_is_primitive =
                         (itk == TY_INT  || itk == TY_BOOL || itk == TY_CSTR ||
-                         itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID);
+                         itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID ||
+                         itk == TY_SYM);
                     type_ok = !inst_is_primitive;
                     if (type_ok && obj->type.kind == TY_APP && itk == TY_STRUCT) {
                         const Type *head = &obj->type;

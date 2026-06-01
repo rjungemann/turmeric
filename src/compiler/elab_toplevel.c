@@ -172,6 +172,12 @@ static Form *dl_build_call(Elab *e, Span span, const char *head,
  * reader (TUR-E0282) guarantees the key is one of these three forms. */
 static Form *dl_normalize_map_key(Elab *e, Form *key) {
     if (key->tag == F_INT) return key;
+    /* SYM3 (runtime-symbols-plan): under -Xsymbols a keyword key is a
+     * first-class :Sym value -- pass the F_KEYWORD through so the map is keyed
+     * by Sym (pointer-identity, via Hash[Sym] / MapKey[Sym]) instead of
+     * decaying to a content-hashed cstr.  Without the flag the legacy
+     * hamt/hash-str lowering below is unchanged. */
+    if (key->tag == F_KEYWORD && g_symbols_enabled) return key;
     Form *str;
     if (key->tag == F_KEYWORD) {
         str = form_str(e->arena, key->span, key->as.sym->name,

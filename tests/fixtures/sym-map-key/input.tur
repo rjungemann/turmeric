@@ -1,0 +1,13 @@
+;; SYM3 (runtime-symbols-plan): keyword map keys are first-class :Sym values
+;; under -Xsymbols, so #map{:foo 1} is keyed by Sym (pointer-identity) via
+;; Hash[Sym] / MapKey[Sym] rather than a content-hashed cstr.
+(defn main [] :int
+  (let [m #map{:foo 10 :bar 20 :baz 30}]
+    (println (:: (map-get m :foo) :int))          ; 10
+    (println (:: (map-get m :baz) :int))          ; 30
+    (println (if (map-has? m :bar) 1 0))          ; 1
+    (println (if (map-has? m :missing) 1 0))      ; 0
+    ;; eq? routes through the Eq[Sym] instance (pointer identity)
+    (println (if (eq? :foo :foo) 1 0))            ; 1
+    (println (if (eq? :foo :bar) 1 0))            ; 0
+    0))

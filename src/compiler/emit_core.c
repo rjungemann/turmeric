@@ -573,6 +573,7 @@ static const char *emit_inst_suffix_component(TypeKind k) {
         case TY_FLOAT:   return "float";
         case TY_FLOAT32: return "float32";
         case TY_FLOAT64: return "float64";
+        case TY_SYM:     return "Sym";
         default:         return NULL;
     }
 }
