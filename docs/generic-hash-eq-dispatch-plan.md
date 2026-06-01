@@ -63,21 +63,45 @@
 > float32** keys correctly (their hashes are injective on the int64_t carrier,
 > so the carrier comparator is correct).
 >
-> **Remaining for GHE2/GHE3 (the comparator half):** the runtime `*-eq` ops need
-> a `bool(i64,i64)` *content* comparator, and the only scalar key needing it is
-> **cstr** (distinct pointers, equal text). Passing a generic `tur-key-eq?` by
-> name -- or an inline `(fn [a :K b :K] (eq? a b))` -- does **not** specialize
-> per `K`: both lower to a single lifted function that bakes the `Eq[int]`
-> (carrier) comparator, so a distinct-pointer cstr lookup misses. Fixing this is
-> **A2 generalized**: per-`K` specialization of a *function-value* reference --
-> the ABI-spec pre-pass (`emit_abi_scan_expr`) must recurse into a spec's body
-> under that spec's tyvar bindings to force-create + record the matching
-> specialization of the referenced comparator, and `atom_var`/`name_for_binding`
-> must emit the specialized clone for the fn-value reference (the analogue of the
-> `emit_call_name` re-resolution CGI added for method *calls*). Once it lands,
-> `map-assoc-g` (with the `int`-key fast path) + `map-get-g`/`-has-g?`/
-> `-dissoc-g` complete GHE3, and GHE4/GHE5 (literal lowering + reads + snapshot
-> regen) follow.
+> **Landed since (GHE2 -- the comparator half / A2 generalized):** per-`K`
+> specialization of a *function-value* reference is done. The ABI scan
+> (`emit_abi_register_call`) now recurses into a freshly-created spec's body
+> under that spec's tyvar bindings; `emit_abi_scan_fn_values` (emit_module.c)
+> detects a generic fn referenced as a *value* argument (an inline
+> `(fn [a :K b :K] (eq? a b))` comparator, or a named generic fn) and interns a
+> child specialization for it, recursing so nested fn-values/method calls
+> specialize too. At emit time `emit_reresolve_fn_value` (emit_core.c, consulted
+> from `atom_var`) names the per-`K` child clone for the value reference -- the
+> analogue of the `emit_call_name` re-resolution CGI added for method *calls*.
+> The child clone's body re-resolves `(eq? a b)` to the concrete instance via the
+> existing CGI machinery, so a distinct-pointer cstr lookup matches by content.
+>
+> **Landed since (GHE3 -- the `-g` builders):** `map-assoc-g` / `map-get-g` /
+> `map-has-g?` / `map-dissoc-g` are in `stdlib/map.tur`, each a constrained
+> generic `[^Hash K ^Eq K ...]` routing through `(hash key)` + an inline
+> `(fn [a :K b :K] (eq? a b))` comparator threaded into the runtime `*-eq` HAMT.
+> Fixture `ghe3-generic-map-key` proves content-keyed `:cstr` (distinct-pointer
+> update collapses to one entry), identity `:int`, and `:bool` keys all round
+> trip through one path. **`:float32` (and any wider-than-one-word) keys are out
+> of scope** -- the runtime `*-eq` carrier is one word (`void*` key +
+> `bool(i64,i64)` comparator), so a float content key truncates through the
+> `int64_t` carrier. This is a *pre-existing* `*-eq` limitation (the hand-written
+> `tur-cstr-key-eq?` layer fails on float keys identically), not a dispatch gap;
+> the fix is a generalized **boxed-key carrier** scoped separately in
+> [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md) (W2 -- which
+> also unblocks multi-word struct/ADT keys).
+>
+> **Remaining for GHE4/GHE5:** route `hamt-of` / `#map{...}` through the `-g`
+> builders (collapsing GMK's Approach-B `:cstr` special-case), generalize the
+> read surface, and regenerate docs + snapshots. NB: with the A2 comparator
+> model the `:int` path routes through `map-assoc-eq` with the `Eq[int]`
+> comparator rather than the literal identity `map-assoc` + `eq == NULL`
+> runtime fast path. That is *behaviorally* correct (for int keys hash == carrier
+> == key, so a hash match implies a true key match and `(= a b)` agrees with
+> identity), but it is **not** byte-for-byte the current int-keyed codegen, so
+> GHE4's "zero `expected.c` diff for int-keyed fixtures" gate needs either an
+> elab-time int fast-path branch in the `-g` lowering or an explicit relaxation
+> of that gate. Decide when GHE4 lands.
 >
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
@@ -240,29 +264,55 @@ pointer. Resolve the GMK1 `<eq-closure-for-K>` question. Two sub-options
 A2 is the lower-risk default (it is exactly what `smap-*` does by hand,
 generalized). A1 is the cleaner long-term fix and is independently useful.
 
-- **Acceptance:** a generic helper passes `__eq_<K>` (or a method value) into
-  `map-assoc-eq` and round-trips `:cstr` keys with distinct-pointer equality,
-  reusing the TCE4 `tce4-map-cstr-key` assertions.
+**DONE (A2 generalized).** Rather than synthesize a named `__eq_<K>` wrapper,
+the compiler now specializes the lifted comparator *fn-value* itself per `K`, so
+a plain inline `(fn [a :K b :K] (eq? a b))` works directly. The implementation
+spans three sites:
+- `emit_abi_scan_fn_values` (emit_module.c) -- detects a generic fn referenced
+  as a value argument inside an active spec body and interns a child spec for it
+  under the spec's tyvar bindings, recursing into the child clone.
+- `emit_abi_register_call` -- after creating a spec, recurses into the spec body
+  with those bindings active so the scan above fires.
+- `emit_reresolve_fn_value` (emit_core.c, from `atom_var`) -- emits the per-`K`
+  child clone name at the value-reference site.
 
-### GHE3 -- the constrained-generic builder `map-assoc-g`
+The child clone's `(eq? a b)` re-resolves to the concrete instance via the
+already-landed CGI method-call machinery. Purely additive: no existing fixture
+references a generic fn-value inside a constrained-generic body, so the only
+snapshot churn is gensym-ID shift from the new stdlib `-g` builders.
 
-With GHE0--GHE2 in place, add to `stdlib/map.tur`:
+- **Acceptance (met):** `map-assoc-g`/`map-get-g` round-trip `:cstr` keys with
+  distinct-pointer equality (fixture `ghe3-generic-map-key`).
+
+### GHE3 -- the constrained-generic builder `map-assoc-g` (DONE)
+
+With GHE0--GHE2 in place, `stdlib/map.tur` now carries (inline constraint form
+`[^Hash K ^Eq K V]`, which is how the codebase spells constrained generics):
 
 ```turmeric
-(defn map-assoc-g [K V] #{(Hash K) (Eq K)} [m :int key :K val :V] :int
-  (map-assoc-eq m (hash key) key val <eq-for-K>))   ; <eq-for-K> per GHE2
+(defn map-assoc-g [^Hash K ^Eq K V] [m :int key :K val :V] :int
+  (map-assoc-eq m (hash key) key val (fn [a :K b :K] :bool (eq? a b))))
 ```
 
-plus `map-get-g` / `map-has-g?` / `map-dissoc-g`. The **`int` key path must
-stay zero-overhead**: `Hash[int]` is identity and `Eq[int]` is `=`, so the
-`int` instantiation must lower to exactly today's identity `map-assoc`
-(`eq == NULL` fast path in the runtime), with no closure call and no snapshot
-churn. Verify the emitted C for an int-keyed `map-assoc-g` matches the current
-`map-assoc` chain.
+plus `map-get-g` / `map-has-g?` / `map-dissoc-g`. The inline comparator
+specializes per `K` via GHE2.
 
-- **Acceptance:** `map-assoc-g`/`map-get-g` round-trip for `K` in
-  {`int`, `cstr`, `bool`, `float32`}; the `int` instantiation is byte-for-byte
-  the identity path; a `cstr` instantiation matches `smap-*` behavior.
+**Int-key codegen note (revised).** The plan originally required the `int`
+instantiation to be byte-for-byte the identity `map-assoc` (`eq == NULL`
+runtime fast path). With the uniform A2 comparator model the `int` path instead
+routes through `map-assoc-eq` carrying the `Eq[int]` comparator. This is
+*behaviorally* identical for int keys (hash == carrier == key, so a hash match
+implies a true key match and `(= a b)` agrees with identity) but **not**
+byte-for-byte the old int codegen. That only matters at GHE4, when existing
+int-keyed literals are re-targeted -- see the revised gate in the status header.
+
+- **Acceptance (met, scope revised):** `map-assoc-g`/`map-get-g`/`-has-g?`/
+  `-dissoc-g` round-trip for `K` in {`int`, `cstr`, `bool`}; the `cstr`
+  instantiation matches `smap-*` content-keyed behavior (distinct-pointer
+  update collapses to one entry). `:float32` is deferred to
+  [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md) -- the
+  one-word `*-eq` carrier cannot hold a float content key (a pre-existing
+  limitation, not a dispatch gap). Fixture: `ghe3-generic-map-key`.
 
 ### GHE4 -- route `hamt-of` / `#map{...}` through `map-assoc-g`
 
@@ -336,7 +386,15 @@ build a content-keyed map. Then update docs and regenerate snapshots:
 
 ## Open decisions to record as the work lands
 
-1. GHE2: **A1 (method-as-value)** vs **A2 (wrapper synthesis)** -- default A2.
+1. ~~GHE2: **A1 (method-as-value)** vs **A2 (wrapper synthesis)** -- default A2.~~
+   **Decided: A2, generalized to per-`K` fn-value specialization** (a plain
+   inline `(fn ...)` comparator specializes; no named-wrapper synthesis needed).
 2. GHE4: keep keyword keys as hash-collapsed, or content-key them too.
 3. Whether `smap-*` / `smap-of` remain as public aliases or are deprecated once
    `-g` is the single path.
+4. GHE4: with A2 the int path is no longer byte-for-byte the old identity
+   codegen (it routes through `map-assoc-eq` + `Eq[int]`). Either add an
+   elab-time int fast-path branch in the `-g` lowering or relax the "zero
+   int-keyed `expected.c` diff" gate. (Behaviorally correct either way.)
+5. `:float32` (and other content keys wider/narrower than the one-word carrier):
+   deferred to [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md).

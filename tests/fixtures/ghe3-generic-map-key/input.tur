@@ -1,0 +1,43 @@
+;; GHE3 (generic-hash-eq-dispatch-plan): the -g content-keyed map builders
+;; route ANY scalar key type through (Hash K) + (Eq K) by one code path.
+;;
+;; Proves:
+;;   1. :cstr keys are content-keyed -- a distinct-pointer copy of "beta"
+;;      updates the existing entry (count stays 2) and looks up by content;
+;;   2. :int keys use the identity/carrier path (hash is identity, eq is =);
+;;   3. :bool keys round-trip through the same generic builders;
+;;   4. map-has-g? and map-dissoc-g share the same per-K Hash/Eq dispatch.
+;;
+;; Key types are limited to those the runtime *-eq carrier supports losslessly
+;; (int, bool, cstr -- all fit the int64_t/void* key carrier).  A :float32 key
+;; would truncate through the int64_t carrier and is a separate runtime concern
+;; (the carrier is one word; widening it is out of scope for GHE).
+
+;; dup-str -- a freshly-allocated, DISTINCT pointer with the same text.
+(defn dup-str [s :cstr] :cstr
+  ```c const char *src = (const char *)(intptr_t)s;
+  size_t n = 0; while (src[n]) n++;
+  char *d = (char *)malloc(n + 1);
+  for (size_t i = 0; i <= n; i++) d[i] = src[i];
+  return (const char *)d;
+  ```)
+
+(defn main [] :int
+  ;; --- :cstr keys: content-keyed via distinct pointers ---
+  (let [m  (map-assoc-g (map-assoc-g (map-new) "alpha" 1) "beta" 2)
+        m2 (map-assoc-g m (dup-str "beta") 99)]
+    (println (:: (map-get-g m2 (dup-str "alpha")) :int))   ; 1
+    (println (:: (map-get-g m2 (dup-str "beta")) :int))    ; 99
+    (println (map-count m2))                               ; 2 (update, not insert)
+    (println (if (map-has-g? m2 "alpha") 1 0))             ; 1
+    (println (if (map-has-g? (map-dissoc-g m2 "alpha") "alpha") 1 0))) ; 0
+  ;; --- :int keys: identity/carrier path ---
+  (let [mi (map-assoc-g (map-assoc-g (map-new) 5 100) 7 200)]
+    (println (:: (map-get-g mi 5) :int))                   ; 100
+    (println (:: (map-get-g mi 7) :int))                   ; 200
+    (println (if (map-has-g? mi 5) 1 0)))                  ; 1
+  ;; --- :bool keys ---
+  (let [mb (map-assoc-g (map-assoc-g (map-new) true 10) false 20)]
+    (println (:: (map-get-g mb true) :int))                ; 10
+    (println (:: (map-get-g mb false) :int)))              ; 20
+  0)

@@ -399,6 +399,90 @@
 
 (defn smap-dissoc [m :int key :cstr] :int
   (map-dissoc-eq m (cstr-hash key) key tur-cstr-key-eq?))
+;;; ============================================================================
+;;; Generic content-keyed maps (GHE3 -- generic-hash-eq-dispatch-plan)
+;;;
+;;; The -g family routes ANY scalar key type through (Hash K) + (Eq K) by a
+;;; single constrained-generic code path: (hash key) selects the per-K hash
+;;; instance, and the per-K comparator (fn [a :K b :K] (eq? a b)) is threaded
+;;; into the runtime *-eq HAMT.  This unifies what smap-* did by hand for :cstr
+;;; with the carrier-correct identity path for :int / :bool / :float32 keys.
+;;;
+;;; Dispatch is resolved entirely at compile time: the constrained-generic
+;;; method-call re-resolution (CGI) picks (hash key) and (eq? a b) per
+;;; monomorphization, and the comparator fn-value is cloned per K (GHE2) so a
+;;; distinct-pointer :cstr key still matches by content.  For :int keys the
+;;; hash is identity and (eq? a b) is integer =, so a hash match already implies
+;;; a true key match -- the same outcome as the plain identity-keyed map-assoc.
+;;; ============================================================================
+
+;;; map-assoc-g -- generic content-keyed insert/update for any Hash/Eq key.
+;;;
+;;; Parameters:
+;;;   m   -- source Map[K V]
+;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;   val -- value of type V
+;;;
+;;; Returns:
+;;;   A new Map[K V] with the entry inserted or updated. Keys equal under
+;;;   Eq[K] (not just identical) collapse to one entry.
+;;;
+;;; Example:
+;;;   (map-assoc-g (map-new) "name" 1)  ; => Map {"name" -> 1}, content-keyed
+;;;   (map-assoc-g (map-new) 42 100)    ; => Map {42 -> 100}, identity-keyed
+;;;
+;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+
+(defn map-assoc-g [^Hash K ^Eq K V] [m :int key :K val :V] :int
+  (map-assoc-eq m (hash key) key val (fn [a :K b :K] :bool (eq? a b))))
+;;; map-get-g -- generic content-keyed lookup; returns V or 0 if absent.
+;;;
+;;; Parameters:
+;;;   m   -- Map[K V]
+;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;
+;;; Returns:
+;;;   The value of type V, or 0 (none) if absent.
+;;;
+;;; Example:
+;;;   (map-get-g m "name")  ; => value or 0
+;;;
+;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+
+(defn map-get-g [^Hash K ^Eq K V] [m :int key :K] :V
+  (map-get-eq m (hash key) key (fn [a :K b :K] :bool (eq? a b))))
+;;; map-has-g? -- generic content-keyed existence test.
+;;;
+;;; Parameters:
+;;;   m   -- Map[K V]
+;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;
+;;; Returns:
+;;;   true if the key is present under Eq[K], false otherwise.
+;;;
+;;; Example:
+;;;   (map-has-g? m "name")  ; => true or false
+;;;
+;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+
+(defn map-has-g? [^Hash K ^Eq K] [m :int key :K] :bool
+  (map-has-eq? m (hash key) key (fn [a :K b :K] :bool (eq? a b))))
+;;; map-dissoc-g -- generic content-keyed removal; returns a new map.
+;;;
+;;; Parameters:
+;;;   m   -- source Map[K V]
+;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;
+;;; Returns:
+;;;   A new Map[K V] with the key removed.
+;;;
+;;; Example:
+;;;   (map-dissoc-g m "name")  ; => map without "name"
+;;;
+;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+
+(defn map-dissoc-g [^Hash K ^Eq K] [m :int key :K] :int
+  (map-dissoc-eq m (hash key) key (fn [a :K b :K] :bool (eq? a b))))
 ;;; map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).
 ;;;
 ;;; Parameters:

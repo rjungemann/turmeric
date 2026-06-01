@@ -2342,32 +2342,36 @@ static int64_t __inst_Hash_hash_int(int64_t);
 static int64_t __inst_Hash_hash_bool(bool);
 static int64_t __inst_Hash_hash_cstr(const char *);
 static int64_t __inst_Hash_hash_float32(float);
-static bool __fn_488(int64_t, int64_t);
+static bool __fn_489(int64_t, int64_t);
+static bool __fn_495(int64_t, int64_t);
+static bool __fn_501(int64_t, int64_t);
+static bool __fn_507(int64_t, int64_t);
+static bool __fn_517(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_512(int64_t, int64_t);
+static bool __fn_541(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_539(int64_t, int64_t);
+static bool __fn_568(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_561(int64_t, int64_t);
-static bool __fn_565(int64_t, int64_t);
+static bool __fn_590(int64_t, int64_t);
+static bool __fn_594(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_581(int64_t, int64_t);
-static bool __fn_585(int64_t, int64_t);
+static bool __fn_610(int64_t, int64_t);
+static bool __fn_614(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_666(int64_t, int64_t);
-static bool __fn_670(int64_t, int64_t);
+static bool __fn_695(int64_t, int64_t);
+static bool __fn_699(int64_t, int64_t);
 static bool __inst_Eq_eq__Tuple2(int64_t, int64_t);
-static bool __fn_688(int64_t, int64_t);
+static bool __fn_717(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_767(int64_t, int64_t);
+static bool __fn_796(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
-static int64_t __fn_771(int64_t);
-static int64_t __fn_774(int64_t);
-static int64_t __fn_777(int64_t);
-static int64_t __fn_781(void *, int64_t);
-static int64_t __fn_787(int64_t);
-static int64_t __fn_793(void *, int64_t);
+static int64_t __fn_800(int64_t);
+static int64_t __fn_803(int64_t);
+static int64_t __fn_806(int64_t);
+static int64_t __fn_810(void *, int64_t);
+static int64_t __fn_816(int64_t);
+static int64_t __fn_822(void *, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2425,6 +2429,10 @@ static int64_t smap_assoc(int64_t, const char *, int64_t);
 static int64_t smap_get(int64_t, const char *);
 static bool smap_has_(int64_t, const char *);
 static int64_t smap_dissoc(int64_t, const char *);
+static int64_t map_assoc_g(int64_t, int64_t, int64_t);
+static int64_t map_get_g(int64_t, int64_t);
+static bool map_has_g_(int64_t, int64_t);
+static int64_t map_dissoc_g(int64_t, int64_t);
 static void map_free(int64_t);
 static bool map_eq_(int64_t, int64_t, int64_t);
 static void tur_map_homog__(int64_t, int64_t);
@@ -2742,12 +2750,28 @@ static dict_Hash_float32 dict_Hash_float32_singleton = {
     .hash = __inst_Hash_hash_float32,
 };
 
-static bool __fn_488(int64_t a, int64_t b) {
+static bool __fn_489(int64_t a, int64_t b) {
+        return __inst_Eq_eq__int(a, b);
+}
+
+static bool __fn_495(int64_t a, int64_t b) {
+        return __inst_Eq_eq__int(a, b);
+}
+
+static bool __fn_501(int64_t a, int64_t b) {
+        return __inst_Eq_eq__int(a, b);
+}
+
+static bool __fn_507(int64_t a, int64_t b) {
+        return __inst_Eq_eq__int(a, b);
+}
+
+static bool __fn_517(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_488));
+        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_517));
 }
 
 typedef struct dict_Eq_Map {
@@ -2758,12 +2782,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_512(int64_t a, int64_t b) {
+static bool __fn_541(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_512));
+        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_541));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2774,12 +2798,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_539(int64_t a, int64_t b) {
+static bool __fn_568(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_539));
+        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_568));
 }
 
 typedef struct dict_Eq_Option {
@@ -2790,16 +2814,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_561(int64_t a, int64_t b) {
+static bool __fn_590(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_565(int64_t a, int64_t b) {
+static bool __fn_594(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_561), (int64_t)(intptr_t)(__fn_565));
+        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_590), (int64_t)(intptr_t)(__fn_594));
 }
 
 typedef struct dict_Eq_Result {
@@ -2810,16 +2834,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_581(int64_t a, int64_t b) {
+static bool __fn_610(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_585(int64_t a, int64_t b) {
+static bool __fn_614(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_581), (int64_t)(intptr_t)(__fn_585));
+        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_610), (int64_t)(intptr_t)(__fn_614));
 }
 
 typedef struct dict_Eq_Pair {
@@ -2830,16 +2854,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_666(int64_t a, int64_t b) {
+static bool __fn_695(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_670(int64_t a, int64_t b) {
+static bool __fn_699(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_666), (int64_t)(intptr_t)(__fn_670));
+        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_695), (int64_t)(intptr_t)(__fn_699));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -2850,12 +2874,12 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_ = __inst_Eq_eq__Tuple2,
 };
 
-static bool __fn_688(int64_t a, int64_t b) {
+static bool __fn_717(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_688));
+        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_717));
 }
 
 typedef struct dict_Eq_Cons {
@@ -2878,12 +2902,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_767(int64_t a, int64_t b) {
+static bool __fn_796(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_767));
+        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_796));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -2894,32 +2918,32 @@ static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
 };
 
-static int64_t __fn_771(int64_t v) {
+static int64_t __fn_800(int64_t v) {
         return (v) * (INT64_C(2));
 }
 
-static int64_t __fn_774(int64_t v) {
+static int64_t __fn_803(int64_t v) {
         return (v) + (INT64_C(100));
 }
 
-static int64_t __fn_777(int64_t v) {
+static int64_t __fn_806(int64_t v) {
         return (v) * (INT64_C(2));
 }
 
-struct __env_783 { tur_thunk_int64_t_int64_t_t __fn; int64_t x; };
-static int64_t __fn_781(void * __env_p_784, int64_t v) {
-        struct __env_783 *__env___env_783 = (struct __env_783 *)__env_p_784;
-        return (__env___env_783->x) + (v);
+struct __env_812 { tur_thunk_int64_t_int64_t_t __fn; int64_t x; };
+static int64_t __fn_810(void * __env_p_813, int64_t v) {
+        struct __env_812 *__env___env_812 = (struct __env_812 *)__env_p_813;
+        return (__env___env_812->x) + (v);
 }
 
-static int64_t __fn_787(int64_t v) {
+static int64_t __fn_816(int64_t v) {
         return INT64_C(42);
 }
 
-struct __env_795 { tur_thunk_int64_t_int64_t_t __fn; int64_t a; int64_t b; int64_t c; };
-static int64_t __fn_793(void * __env_p_796, int64_t v) {
-        struct __env_795 *__env___env_795 = (struct __env_795 *)__env_p_796;
-        return (__env___env_795->a) + ((__env___env_795->b) + ((__env___env_795->c) + (v)));
+struct __env_824 { tur_thunk_int64_t_int64_t_t __fn; int64_t a; int64_t b; int64_t c; };
+static int64_t __fn_822(void * __env_p_825, int64_t v) {
+        struct __env_824 *__env___env_824 = (struct __env_824 *)__env_p_825;
+        return (__env___env_824->a) + ((__env___env_824->b) + ((__env___env_824->c) + (v)));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -3253,6 +3277,22 @@ static bool smap_has_(int64_t m, const char * key) {
 
 static int64_t smap_dissoc(int64_t m, const char * key) {
         return map_dissoc_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
+}
+
+static int64_t map_assoc_g(int64_t m, int64_t key, int64_t val) {
+        return map_assoc_eq(m, __inst_Hash_hash_int(key), key, val, (int64_t)(intptr_t)(__fn_489));
+}
+
+static int64_t map_get_g(int64_t m, int64_t key) {
+        return map_get_eq(m, __inst_Hash_hash_int(key), key, (int64_t)(intptr_t)(__fn_495));
+}
+
+static bool map_has_g_(int64_t m, int64_t key) {
+        return map_has_eq_(m, __inst_Hash_hash_int(key), key, (int64_t)(intptr_t)(__fn_501));
+}
+
+static int64_t map_dissoc_g(int64_t m, int64_t key) {
+        return map_dissoc_eq(m, __inst_Hash_hash_int(key), key, (int64_t)(intptr_t)(__fn_507));
 }
 
 static void map_free(int64_t m) {
@@ -4102,33 +4142,33 @@ static void mutmap_free(int64_t m) {
 }
 
 static int64_t test_nested_reset() {
-        int64_t __t2 = __fn_771(INT64_C(5));
+        int64_t __t2 = __fn_800(INT64_C(5));
         return (INT64_C(1)) + ((INT64_C(10)) + (__t2));
 }
 
 static int64_t test_shift_return_different() {
-        int64_t __t3 = __fn_774(INT64_C(7));
+        int64_t __t3 = __fn_803(INT64_C(7));
         return __t3;
 }
 
 static int64_t test_multiple_shifts() {
         int64_t __t4;
         {
-            int64_t __t5 = __fn_777(INT64_C(3));
-            int64_t x_779 = __t5;
-            (void)x_779;
-            struct __env_783 *__t7 = (struct __env_783 *)malloc(sizeof(struct __env_783));
-            __t7->__fn = (tur_thunk_int64_t_int64_t_t)__fn_781;
-            __t7->x = x_779;
+            int64_t __t5 = __fn_806(INT64_C(3));
+            int64_t x_808 = __t5;
+            (void)x_808;
+            struct __env_812 *__t7 = (struct __env_812 *)malloc(sizeof(struct __env_812));
+            __t7->__fn = (tur_thunk_int64_t_int64_t_t)__fn_810;
+            __t7->x = x_808;
             void *__t8 = __t7;
-            int64_t __t6 = __fn_781(__t8, INT64_C(4));
+            int64_t __t6 = __fn_810(__t8, INT64_C(4));
             __t4 = __t6;
         }
         return __t4;
 }
 
 static int64_t test_shift_ignores_k() {
-        int64_t __t9 = __fn_787(INT64_C(10));
+        int64_t __t9 = __fn_816(INT64_C(10));
         return __t9;
 }
 
@@ -4139,19 +4179,19 @@ static int64_t test_reset_no_shift() {
 static int64_t test_deeply_nested_shift() {
         int64_t __t10;
         {
-            int64_t a_789 = INT64_C(1);
-            (void)a_789;
-            int64_t b_790 = INT64_C(2);
-            (void)b_790;
-            int64_t c_791 = INT64_C(3);
-            (void)c_791;
-            struct __env_795 *__t12 = (struct __env_795 *)malloc(sizeof(struct __env_795));
-            __t12->__fn = (tur_thunk_int64_t_int64_t_t)__fn_793;
-            __t12->a = a_789;
-            __t12->b = b_790;
-            __t12->c = c_791;
+            int64_t a_818 = INT64_C(1);
+            (void)a_818;
+            int64_t b_819 = INT64_C(2);
+            (void)b_819;
+            int64_t c_820 = INT64_C(3);
+            (void)c_820;
+            struct __env_824 *__t12 = (struct __env_824 *)malloc(sizeof(struct __env_824));
+            __t12->__fn = (tur_thunk_int64_t_int64_t_t)__fn_822;
+            __t12->a = a_818;
+            __t12->b = b_819;
+            __t12->c = c_820;
             void *__t13 = __t12;
-            int64_t __t11 = __fn_793(__t13, INT64_C(10));
+            int64_t __t11 = __fn_822(__t13, INT64_C(10));
             __t10 = __t11;
         }
         return __t10;
