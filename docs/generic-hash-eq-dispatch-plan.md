@@ -1,6 +1,17 @@
 # Generic `Hash` / `Eq` Dispatch -- Approach A for typed map keys (GHE0--GHE5)
 
-> **Status:** GHE0 + GHE1 landed (branch `claude/focused-mendel-Sp7cQ`). GHE2--GHE5
+> **Status (2026):** GHE0--GHE5 are **effectively complete.** GHE0--GHE3 + the
+> CGI dispatch fix landed on this plan's branches; **GHE4 and GHE5 were delivered
+> by the typed `Map[K V]` surface work (TMS, PR #167)** that landed on `main` and
+> subsumes them -- see the *Landed since (GHE4/GHE5 -- delivered by TMS)* note
+> below for what shipped, the resolved open decisions, and the one remaining
+> known limitation (`Eq [Map]` is still identity-keyed for `:cstr` keys, blocked
+> by compiler limitations that are out of scope for this stdlib plan). The
+> historical status below is kept for the GHE2/GHE3/CGI root-causing record.
+>
+> ---
+>
+> > **Historical status:** GHE0 + GHE1 landed (branch `claude/focused-mendel-Sp7cQ`). GHE2--GHE5
 > are **blocked** on a deeper compiler gap discovered during GHE1 verification:
 > *constrained-generic method dispatch resolves the wrong instance.* A body that
 > calls `(.hash x)` (or bare `(hash x)`) where `x : K` is a type parameter
@@ -97,16 +108,49 @@
 > The remaining cost is a small per-struct `MapKey` instance (a `derive-map-key`
 > macro is a follow-up); the carrier itself no longer restricts key width.
 >
-> **Remaining for GHE4/GHE5:** route `hamt-of` / `#map{...}` through the `-g`
-> builders (collapsing GMK's Approach-B `:cstr` special-case), generalize the
-> read surface, and regenerate docs + snapshots. NB: with the A2 comparator
-> model the `:int` path routes through `map-assoc-eq` with the `Eq[int]`
-> comparator rather than the literal identity `map-assoc` + `eq == NULL`
-> runtime fast path. That is *behaviorally* correct (for int keys hash == carrier
-> == key, so a hash match implies a true key match and `(= a b)` agrees with
-> identity), but it is **not** byte-for-byte the current int-keyed codegen, so
-> GHE4 should simply regenerate snapshots after the change and verify
-> `bash tests/run.sh` passes with zero `FAIL` lines.
+> **Landed since (GHE4/GHE5 -- delivered by TMS, PR #167):** GHE4 and GHE5 were
+> realized by the **typed `Map[K V]` surface** work
+> ([typed-map-surface-plan.md](archive/typed-map-surface-plan.md), TMS2--TMS5),
+> which landed on `main` and subsumes them:
+> - **GHE4** -- `#map{...}` / `hamt-of` now route **every** key type through one
+>   content-keyed builder (`(Hash K)` + `(MapKey K)`); the `smap-of` / `smap-*`
+>   surface was removed and the `F_MAP_LITERAL` / `elab_call.c` string-key
+>   special-cases deleted. The `-g` builders were folded into unified
+>   `map-assoc` / `map-get` / `map-has?` / `map-dissoc` **macros** over a real
+>   `Map[K V]` type (the macro form is what makes per-`K` `MapKey` dispatch
+>   resolve at each concrete call site -- a constrained-generic *function* whose
+>   ABI does not change across `K` would bake the carrier instance instead).
+> - **GHE5** -- reads use those same unified accessors; the data-literals guide,
+>   `hamt-of` docstring, and snapshots were regenerated. A user `Hash` + `MapKey`
+>   instance on a `defopaque` key works for free **when constructed via a
+>   coercion fn** (`(defn mk-uid [t :int] :UserId t)`); note that the unrelated
+>   `(:: <int> :Opaque)` *ascription* form currently mis-emits a pointer
+>   dereference and segfaults -- a pre-existing opaque-codegen bug, out of scope
+>   here.
+>
+> **Decisions, as resolved by TMS:** (open-decision #2) keyword keys stay
+> hash-collapsed to an int key -- maps have no first-class keyword key type;
+> (#3) the `smap-*` surface is **removed**, not aliased; (#4) the int path is
+> uniform with every other key (no byte-for-byte gate; snapshots regenerated).
+>
+> **Known limitation (GHE5 `Eq [Map]`, not closed):** the plan called for
+> `Eq [Map]` / `map-eq?` to compare keys by `Hash`/`Eq` *content*. That remains
+> **identity-keyed** for `:cstr` keys, blocked by two compiler limitations that
+> are out of scope for this stdlib plan:
+>   1. The `Eq [Map]` *instance* receives a bare-`Map` (unapplied HKT) handle and
+>      cannot dispatch `MapKey[K]`'s comparator from its body -- the same reason
+>      **every** parametric `Eq` instance in the stdlib (`Vec`, `Option`,
+>      `Result`, `Pair`) compares elements with identity `(= a b)`.
+>   2. A typed `map-eq?` *function* cannot resolve the per-`K` comparator either
+>      (the CGI "no ABI change -> no specialization" gap bakes `mk-cmp_int`);
+>      and the compiler's recursive `.eq?`-on-`Map[K (Vec V)]` synthesis depends
+>      on `map-eq?` being a callable *function*, so it cannot simply be made a
+>      macro. Closing this needs compiler work (constrained-generic instance
+>      specialization, or element-method dispatch in HKT instance bodies), best
+>      scoped on its own rather than within GHE. Content-keyed *lookup* (the
+>      common case) is fully correct via `map-get` / `map-has?`; only structural
+>      *equality* of two `:cstr`-keyed maps built from distinct key pointers is
+>      affected.
 >
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
@@ -392,14 +436,21 @@ build a content-keyed map. Then update docs and regenerate snapshots:
 1. ~~GHE2: **A1 (method-as-value)** vs **A2 (wrapper synthesis)** -- default A2.~~
    **Decided: A2, generalized to per-`K` fn-value specialization** (a plain
    inline `(fn ...)` comparator specializes; no named-wrapper synthesis needed).
-2. GHE4: keep keyword keys as hash-collapsed, or content-key them too.
-3. Whether `smap-*` / `smap-of` remain as public aliases or are deprecated once
-   `-g` is the single path.
-4. ~~GHE4: with A2 the int path is no longer byte-for-byte the old identity
-   codegen (it routes through `map-assoc-eq` + `Eq[int]`). Either add an
-   elab-time int fast-path branch in the `-g` lowering or relax the "zero
-   int-keyed `expected.c` diff" gate. (Behaviorally correct either way.)~~
-   **Resolved:** snapshot churn for int-keyed fixtures is expected and fine;
-   regenerate and verify `bash tests/run.sh` passes.
+2. ~~GHE4: keep keyword keys as hash-collapsed, or content-key them too.~~
+   **Resolved by TMS: kept hash-collapsed** -- maps have no first-class keyword
+   key type; `:name` lowers to `(hamt/hash-str "name")`, an int key.
+3. ~~Whether `smap-*` / `smap-of` remain as public aliases or are deprecated.~~
+   **Resolved by TMS: removed entirely.** The unified `map-*` macros are the
+   single path; the literal lowering's string-key special-case was deleted.
+4. ~~GHE4: hold the int path byte-for-byte, or relax the zero-diff gate.~~
+   **Resolved by TMS: relaxed.** Int keys ride the same uniform carrier as every
+   other key; snapshots were regenerated.
 5. `:float32` (and other content keys wider/narrower than the one-word carrier):
    deferred to [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md).
+6. **Still open (GHE5 `Eq [Map]`).** Content-keyed *equality* of `:cstr`-keyed
+   maps is unfinished: `Eq [Map]` / `map-eq?` compare keys by identity, not
+   content. Blocked by (a) the bare-HKT parametric-instance limitation shared by
+   all stdlib `Eq` instances and (b) the CGI non-ABI-changing constrained-generic
+   gap, with the recursive `.eq?`-on-`Map[K (Vec V)]` synthesis pinning
+   `map-eq?` to a *function* form. Needs a dedicated compiler change; content
+   *lookup* (`map-get`/`map-has?`) is unaffected and correct.
