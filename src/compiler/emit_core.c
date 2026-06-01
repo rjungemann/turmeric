@@ -624,6 +624,28 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
         struct_comp[i] = '\0';
         component = struct_comp;
     }
+    /* GDE2: a TY_APP receiver (e.g. Map[cstr int]) needs the head constructor
+     * name as the instance suffix component, mirroring the HKT-instance naming
+     * on the definition side (__inst_Eq_eq__Map for definstance Eq [Map]).
+     * Walk the app-chain to the constructor, which must be a TY_STRUCT. */
+    char app_comp[64];
+    if (!component && resolved.kind == TY_APP) {
+        Type head = resolved;
+        while (head.kind == TY_APP && head.as.app.fn)
+            head = *head.as.app.fn;
+        if (head.kind == TY_STRUCT && head.as.struct_.def && head.as.struct_.def->name) {
+            const char *nm = head.as.struct_.def->name;
+            size_t i = 0;
+            for (; nm[i] && i < sizeof(app_comp) - 1; i++) {
+                unsigned char c = (unsigned char)nm[i];
+                app_comp[i] = (char)(((c >= '0' && c <= '9') ||
+                                      (c >= 'A' && c <= 'Z') ||
+                                      (c >= 'a' && c <= 'z')) ? (char)c : '_');
+            }
+            app_comp[i] = '\0';
+            component = app_comp;
+        }
+    }
     if (!component) return NULL;
 
     const TypeClass *tc = dict->as.dict_.instance->typeclass;
