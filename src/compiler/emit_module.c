@@ -1105,6 +1105,7 @@ int emit_program(Buf *out, const Expr *program) {
     type_codegen_reset_struct_apps();
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
+    sym_codegen_reset();   /* SYM1: clear interned-symbol records for this TU */
 
     /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
     uint32_t n_items;
@@ -4284,6 +4285,10 @@ int emit_program(Buf *out, const Expr *program) {
     type_codegen_emit_struct_apps(&concrete_struct_apps);
     Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
     type_codegen_emit_adt_apps(&concrete_adt_apps);
+    /* SYM1: interned runtime symbol records (struct __tur_sym + one per keyword).
+     * Body emission above populated the registry via sym_codegen_register(). */
+    Buf sym_records; buf_init(&sym_records);
+    sym_codegen_emit(&sym_records);
     /* Phase E: fn-ptr typedefs for concrete fn fields in parametric structs */
     Buf concrete_fn_ptr_typedefs; buf_init(&concrete_fn_ptr_typedefs);
     type_codegen_emit_fn_ptr_typedefs(&concrete_fn_ptr_typedefs);
@@ -4301,6 +4306,7 @@ int emit_program(Buf *out, const Expr *program) {
      * 10. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
+    if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_struct_apps.len) { buf_write(out, concrete_struct_apps.data, concrete_struct_apps.len); buf_putc(out, '\n'); }
@@ -4316,6 +4322,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&concrete_struct_apps);
     buf_free(&concrete_adt_apps);
     buf_free(&concrete_fn_ptr_typedefs);
+    buf_free(&sym_records);
 
     /* Phase 19: Effect handler functions (after fwd_decls so they can call
      * user-defined Turmeric functions, before file so fn defs can reference them). */

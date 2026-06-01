@@ -232,8 +232,19 @@ Expr *elab_form(Elab *e, Form *f) {
             return out;
         }
         case F_KEYWORD:
+            /* SYM0 (runtime-symbols-plan): under -Xsymbols, a keyword in
+             * expression position is a first-class :Sym literal whose runtime
+             * value is a pointer-identity-equal interned symbol.  Without the
+             * flag it remains a hard error (its only legal uses are syntactic:
+             * type annotations, :refer/:as, struct-field selectors, ADT tags --
+             * all consumed by earlier passes before reaching elab_form). */
+            if (g_symbols_enabled) {
+                Expr *out = expr_new(e->arena, EX_SYM_LIT, TYPE_SYM, f->span);
+                out->as.sym_lit_.sym = f->as.sym;
+                return out;
+            }
             diag_emit(DIAG_ERROR, f->span,
-                      "phase 1: keywords are only allowed as :else in cond or case");
+                      "keyword in expression position requires -Xsymbols");
             return NULL;
         case F_SYM: {
             /* M1: Use elab_lookup_sym for visibility + qualified name resolution */

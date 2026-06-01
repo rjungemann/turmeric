@@ -59,6 +59,8 @@ TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "f64") == 0) return TY_FLOAT64;
     /* IT4: Top type — available with -Xunion-types or -Xintersection-types */
     if (strcmp(name, "any") == 0) return TY_ANY;
+    /* SYM0: interned runtime symbol type (-Xsymbols) */
+    if (strcmp(name, "Sym") == 0) return TY_SYM;
     return TY_UNKNOWN;
 }
 
@@ -98,6 +100,7 @@ int type_size_bytes(TypeKind kind) {
         case TY_UINT64: return 8;
         case TY_FLOAT32: return 4;
         case TY_FLOAT64: return 8;
+        case TY_SYM:      return 8;   /* SYM0: pointer into static .rodata */
         default:          return 0;   /* unknown / composite */
     }
 }

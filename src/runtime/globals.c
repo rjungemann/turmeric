@@ -109,6 +109,9 @@ bool g_dynvar_enabled = false;
  * desugar.  Default off. */
 bool g_callcc_enabled = false;
 
+/* SYM0: -Xsymbols flag — enable first-class runtime symbol (:Sym) values. */
+bool g_symbols_enabled = false;
+
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
 

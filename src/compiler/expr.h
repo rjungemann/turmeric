@@ -282,6 +282,10 @@ typedef enum ExprKind {
     EX_GEN_DONE,         /* (gen-done? g) -- check if generator is exhausted; returns bool */
     /* AR8: Variadic rest-list construction at call sites */
     EX_CONS_LIST,        /* build a right-folded cons list from N items for & rest param */
+    /* SYM0 (runtime-symbols-plan): runtime symbol literal (-Xsymbols).
+     * `:foo` in expression position elaborates to this; codegen lowers it to a
+     * reference to a static `struct __tur_sym` record (SYM1). */
+    EX_SYM_LIT,          /* :foo -- interned symbol literal; type TY_SYM */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -806,6 +810,10 @@ struct Expr {
             uint32_t     n;        /* number of items */
             TypeKind     item_kind; /* element type (determines cast in emitter) */
         } cons_list_;
+        /* SYM0: runtime symbol literal -- carries the interned compile-time Symbol */
+        struct {
+            const Symbol *sym;     /* interned name (e.g. "foo" for :foo) */
+        } sym_lit_;
     } as;
 };
 

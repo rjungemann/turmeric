@@ -1,6 +1,14 @@
 # Runtime Symbols (`:Sym`) -- Plan (SYM0--SYM6)
 
-> **Status:** Not started. Reader already produces `F_KEYWORD` forms and the
+> **Status:** SYM0, SYM1, and SYM4 implemented (type machinery, per-TU codegen,
+> stdlib surface), plus the SYM6 guide + `sym-eq-basic` / `sym-stdlib` fixtures.
+> Deferred: SYM2 (cross-TU aggregator -- records are per-TU `static`, correct
+> for single-binary builds), SYM3 (map-literal retyping + `Hash`/`Eq[Sym]`
+> typeclass dispatch -- the dispatch path does not yet recognise `TY_SYM`, so
+> the instances were intentionally left out rather than shipped broken), and
+> SYM5 (dynamic `str->sym` intern table).
+>
+> Reader already produces `F_KEYWORD` forms and the
 > compiler already interns the name via the `Symbol` table; this plan adds a
 > runtime value type so `:foo` becomes a first-class expression whose value is
 > a pointer-identity-equal interned symbol.

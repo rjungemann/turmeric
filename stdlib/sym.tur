@@ -1,0 +1,61 @@
+;;; tur/sym -- first-class interned runtime symbols (:Sym).
+;;;
+;;; A :Sym value is a non-null pointer to a static, process-lifetime record in
+;;; .rodata.  Two keywords with the same name are the *same pointer*, so
+;;; equality and hashing are pointer/field operations -- no string compare, no
+;;; allocation.  Requires the -Xsymbols flag, which makes `:foo` a valid
+;;; expression of type :Sym.
+;;;
+;;; Example:
+;;;   (sym->str :hello)      ; => "hello"
+;;;   (sym=? :a :a)          ; => true
+;;;
+;;; Since: Phase SYM4
+;; tur/sym -- accessors over the interned :Sym runtime type.
+;; Auto-loaded (into the global namespace, like the other stdlib files) only
+;; under -Xsymbols, so default builds and their codegen snapshots are
+;; unaffected.
+
+;;; sym->str -- return the embedded name of a symbol (no allocation).
+;;;
+;;; The returned cstr points directly into the symbol's static record, so it
+;;; shares the symbol's process lifetime and never needs freeing.
+;;;
+;;; Parameters:
+;;;   s -- the symbol whose name to read
+;;;
+;;; Returns:
+;;;   The NUL-terminated UTF-8 name, without the leading colon.
+;;;
+;;; Example:
+;;;   (sym->str :hello)  ; => "hello"
+;;;
+;;; Since: Phase SYM4
+(defn sym->str [s :Sym] :cstr
+  ```c
+  return (const char *)((const struct __tur_sym *)s)->name;
+  ```)
+
+;;; sym=? -- pointer-identity equality of two symbols.
+;;;
+;;; Because symbols are interned, two :Sym values are equal exactly when they
+;;; are the same pointer; this is a single compare with no string work.  It is
+;;; a convenience over the Eq[Sym] typeclass instance for code that does not
+;;; want to dispatch through (eq? ...).
+;;;
+;;; Parameters:
+;;;   a -- the first symbol
+;;;   b -- the second symbol
+;;;
+;;; Returns:
+;;;   true iff a and b are the same interned symbol.
+;;;
+;;; Example:
+;;;   (sym=? :a :a)  ; => true
+;;;   (sym=? :a :b)  ; => false
+;;;
+;;; Since: Phase SYM4
+(defn sym=? [a :Sym b :Sym] :bool
+  ```c
+  return (int64_t)(a == b);
+  ```)

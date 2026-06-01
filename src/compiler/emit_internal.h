@@ -35,6 +35,20 @@ extern bool g_has_variadics;
 /* SS0a: Session types enabled (-Xsessions) */
 extern bool g_sessions_enabled;
 
+/* SYM1 (runtime-symbols-plan): per-TU interned-symbol codegen registry.
+ *   sym_codegen_reset()    -- clear the registry (call once per compilation unit)
+ *   sym_codegen_register() -- intern `sym` by name; returns the stable mangled
+ *                             C identifier of its static record (e.g.
+ *                             "__tur_sym_foo").  Idempotent per name.
+ *   sym_codegen_count()    -- number of distinct records registered so far.
+ *   sym_codegen_emit()     -- emit `struct __tur_sym` (once) + one `static const`
+ *                             record per distinct keyword into `out`. */
+struct Symbol;
+void        sym_codegen_reset(void);
+const char *sym_codegen_register(const struct Symbol *sym);
+uint32_t    sym_codegen_count(void);
+void        sym_codegen_emit(Buf *out);
+
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
 /* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */

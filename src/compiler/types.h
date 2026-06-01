@@ -152,6 +152,11 @@ typedef enum TypeKind {
                         Only held in DynVarEntry during elaboration; never appears as the type of a user expression. */
     /* GF1: Generator type */
     TY_GENERATOR,    /* generator<T> -- heap pointer to C state-machine struct; _next returns void* */
+    /* SYM0 (runtime-symbols-plan): first-class interned symbol type (-Xsymbols).
+     * A :Sym value is a non-null pointer to a static `struct __tur_sym` record.
+     * Two keywords with the same name are pointer-identical; eq is `==` and
+     * hashing reads a precomputed field. */
+    TY_SYM,          /* :Sym -- interned runtime symbol (const struct __tur_sym *) */
 } TypeKind;
 
 /* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
@@ -379,6 +384,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
             return CK_COPY;
         /* GF1: Generator is a heap pointer — copy by value (pointer copy) */
         case TY_GENERATOR:
+            return CK_COPY;
+        /* SYM0: a symbol is an interned pointer into .rodata — freely copyable */
+        case TY_SYM:
             return CK_COPY;
         case TY_UNKNOWN:
         default:
@@ -750,6 +758,8 @@ static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
 #define TYPE_CSTR     (type_simple(TY_CSTR, CK_COPY))
 #define TYPE_PTR_VOID (type_simple(TY_PTR_VOID, CK_COPY))
 #define TYPE_NEVER    (type_simple(TY_NEVER, CK_MOVE))
+/* SYM0: interned runtime symbol type (-Xsymbols) */
+#define TYPE_SYM      (type_simple(TY_SYM, CK_COPY))
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
