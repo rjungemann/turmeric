@@ -286,6 +286,9 @@ typedef enum ExprKind {
      * `:foo` in expression position elaborates to this; codegen lowers it to a
      * reference to a static `struct __tur_sym` record (SYM1). */
     EX_SYM_LIT,          /* :foo -- interned symbol literal; type TY_SYM */
+    /* CPS2: explicit continuation application in CPS-lowered code.
+     * Represents `k(v)` -- applying a continuation to a result value. */
+    EX_CPS_CONT_APP,     /* (cps-apply k v) -- continuation application; type is k's result type */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -305,6 +308,10 @@ struct FnDef {
     /* Phase 4: Future-proofing for v3 effects (effects-plan.md §6.10) - whether this
      * function may capture continuations. Always false in v0/v1. */
     bool           may_capture;
+    /* CPS2: true when this function has been selected for the CPS emission path
+     * (set by cps_propagate_coloring; mirrors may_capture but is a separate field
+     * so the CPS emitter path can be toggled independently). */
+    bool           is_cps;
     /* Phase 13: Lifetime annotations */
     LifetimeContext lifetime_ctx;  /* Lifetime parameters and constraints for this function */
     /* Phase 15: Typeclass constraints */
@@ -814,6 +821,14 @@ struct Expr {
         struct {
             const Symbol *sym;     /* interned name (e.g. "foo" for :foo) */
         } sym_lit_;
+        /* CPS2: explicit continuation application — used in CPS-lowered functions.
+         * Represents applying continuation `k` to a result value: `k(v)`.
+         * `cont` is the continuation expression (type TY_CONT); `value` is the
+         * argument passed to it. */
+        struct {
+            struct Expr *cont;     /* the continuation to apply */
+            struct Expr *value;    /* the value to pass to the continuation */
+        } cps_cont_app_;
     } as;
 };
 

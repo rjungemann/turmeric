@@ -956,6 +956,11 @@ static void cps_propagate_coloring(Expr *program) {
         }
     }
 
+    /* CPS2: mirror may_capture into is_cps for all top-level functions */
+    for (uint32_t i = 0; i < nfns; i++) {
+        fns[i]->is_cps = fns[i]->may_capture;
+    }
+
     free(fns);
     free(binds);
     free(colored);
