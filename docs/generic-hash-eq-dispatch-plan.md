@@ -166,13 +166,38 @@
 > `K` is concrete -- which is also exactly how the stdlib already gives
 > `Vec`/`Option`/`Result`/`Pair`/`Set` recursive *value* equality.
 >
-> **Remaining (smaller):** (a) struct keys with **non-`:int` fields** (the zero
-> witness only type-checks for all-`:int`-field structs); (b) the **generic-dict**
-> `Eq [Map]` path (using the instance through a polymorphic `Eq` constraint
-> rather than a direct `.eq?`) is still identity-keyed -- closing it needs the
-> true general fix (element-method dispatch in HKT instance bodies, or
-> constrained-generic instance specialization). Content-keyed *lookup* was always
-> correct via `map-get`/`map-has?`.
+> **Remaining (smaller):** struct keys with **non-`:int` fields** -- the zero
+> witness `(make-struct K 0 ...)` only type-checks when every field is `:int`; a
+> field-type-aware zero (or a deref-safe inline-C witness) would lift this.
+>
+> **Remaining (large -- the generic-dict path).** When `Eq [Map]` is used through
+> a *polymorphic* `Eq` constraint rather than a concrete `.eq?` -- e.g.
+> `(defn eq2 [^Eq A] [a :A b :A] :bool (eq? a b))` then `(eq2 mapX mapY)` -- the
+> result is still identity-keyed (in fact worse: see below).  The dispatch-site
+> synthesis cannot help here because the body's `(eq? a b)` is elaborated once
+> with `a : A` a *type variable*, so the concrete `Map[cstr int]` type the
+> synthesis needs is not visible until the instantiation site.  Closing it needs
+> three coupled compiler changes (the full "constrained-generic instance
+> specialization" feature, CGI gap #2), each in the monomorphizer/emit core:
+>   1. **Instance-driven specialization.** `eq2`'s body bakes
+>      `__inst_Eq_eq__int` (the `TY_INT` carrier representative) and is never
+>      specialized for `A = Map[cstr int]` because that type's ABI is `int64`,
+>      identical to `int`, so `emit_abi_register_call`'s `abi_changes` is false.
+>      So `(eq2 mapX mapY)` compares the two map *pointers* as ints.  Fix: force a
+>      spec when a tyvar parameter dispatches a typeclass method (carries a
+>      `dict_arg`) and binds to a type whose instance differs from the baked
+>      representative, even when the ABI is unchanged.
+>   2. **`TY_APP` re-resolution.** `emit_inst_suffix_component` returns NULL for
+>      `TY_APP`, so even inside a spec `emit_reresolve_method_call` could not name
+>      `__inst_Eq_eq__Map` from a `Map[cstr int]` receiver.  Fix: extract the
+>      struct constructor from a `TY_APP` chain and mangle by its name.
+>   3. **Content-correct `__inst_Eq_eq__Map`.** Even reaching the instance is not
+>      enough -- its body is identity.  The dispatch-site synthesis cannot fix it
+>      (the body is generic over `K`), so this needs either a key comparator
+>      *stamped into the map at runtime* (a `tur_hamt_*` change, so the instance
+>      body reads it with no compile-time dispatch) or true bare-HKT
+>      element-method dispatch in the instance body.
+> Content-keyed *lookup* (`map-get`/`map-has?`) is unaffected and correct.
 >
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
