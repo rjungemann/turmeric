@@ -25,6 +25,12 @@ extern bool g_lint_panic;
 extern int64_t g_backtrack_depth;
 extern bool g_dump_clone_plan;
 
+/* CPS1: --dump-cps-coloring flag — print colored/uncolored partition after CPS1 */
+extern bool g_dump_cps_coloring;
+
+/* CPS3: --cps-path flag — emit CPS wrappers for colored functions */
+extern bool g_cps_path;
+
 /* Phase U5: unsafe linting statistics */
 extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;

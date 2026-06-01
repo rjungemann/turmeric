@@ -1,0 +1,19 @@
+;; CPS1 fixture: verifies transitive call-graph coloring.
+;;
+;; pure-arith: no shift/reset; never calls a colored function → uncolored
+;; shift-fn: directly contains (shift ...) → colored (directly)
+;; colored-caller: calls shift-fn → colored (transitively)
+;; main: calls only pure-arith → uncolored
+
+(defn pure-arith [x :int] :int
+  (+ x 1))
+
+(defn shift-fn [v :int] :int
+  (reset (shift (fn [k] (+ v 10)) v)))
+
+(defn colored-caller [v :int] :int
+  (shift-fn v))
+
+(defn main [] :int
+  (println (pure-arith 5))
+  0)

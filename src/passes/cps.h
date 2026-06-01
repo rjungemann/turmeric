@@ -50,4 +50,9 @@ void cps_emit_capture_environment(Arena *a, Expr *program, TypeClassEnv *tc_env)
  * each captured binding (NULL = bitwise copy fallback). */
 void cps_dump_clone_plan(const Expr *program, FILE *out);
 
+/* CPS1: --dump-cps-coloring: walk the top-level FnDef list and print each
+ * function with its coloring ("colored" if may_capture, "uncolored" otherwise).
+ * Activated by the --dump-cps-coloring CLI flag after cps_transform. */
+void cps_dump_cps_coloring(const Expr *program, FILE *out);
+
 #endif

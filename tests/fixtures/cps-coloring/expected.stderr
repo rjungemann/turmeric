@@ -1,0 +1,4 @@
+pure-arith: uncolored
+shift-fn: colored
+colored-caller: colored
+main: uncolored

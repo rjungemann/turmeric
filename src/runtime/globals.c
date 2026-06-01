@@ -27,6 +27,12 @@ int64_t g_backtrack_depth = 0;
 /* Phase B5: --dump-clone-plan flag */
 bool g_dump_clone_plan = false;
 
+/* CPS1: --dump-cps-coloring flag */
+bool g_dump_cps_coloring = false;
+
+/* CPS3: --cps-path flag */
+bool g_cps_path = false;
+
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;
 uint32_t g_unsafe_total_lines = 0;
