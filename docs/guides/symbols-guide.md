@@ -149,4 +149,4 @@ prefer literals on hot paths.
 > dynamic surface is interned as a separate record. Single-file programs are
 > unaffected.
 
-See `docs/runtime-symbols-plan.md` for the full phase breakdown.
+See `docs/archive/history/runtime-symbols-plan.md` for the full phase breakdown.

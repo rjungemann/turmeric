@@ -153,7 +153,7 @@ Completed implementation plans and superseded design explorations are in
 
 - **[notebook-spice-plan.md](history/notebook-spice-plan.md)** -- `tur-notebook` spice; NB0-NB12 complete; see [notebook-guide.md](../guides/notebook-guide.md)
 - **[stats-spice-plan.md](history/stats-spice-plan.md)** -- `tur-stats` spice shipped; see [stats-guide.md](../guides/stats-guide.md)
-- **[plot-spice-plan.md](history/plot-spice-plan.md)** -- `tur-plot` spice shipped; follow-ups in `docs/upcoming/plot-spice-followups-plan.md`
+- **[plot-spice-plan.md](history/plot-spice-plan.md)** -- `tur-plot` spice shipped; follow-ups in [plot-spice-followups-plan.md](plot-spice-followups-plan.md)
 - **[adt-type-params-plan.md](history/adt-type-params-plan.md)** -- Typed type parameters for `defdata` / `defgadt`; complete
 - **[csv-optional-delimiter-plan.md](history/csv-optional-delimiter-plan.md)** -- Optional delimiter in `stdlib/csv.tur`; complete
 - **[test-recovery-plan.md](history/test-recovery-plan.md)** -- `turi_fixture_tests` / `tur_spice_resolver_tests` fully green
@@ -197,12 +197,26 @@ Post-v0.14.6 sweep:
 Post-v0.16.0 sweep:
 
 - **[tur-reactor-plan.md](history/tur-reactor-plan.md)** -- `tur/reactor` lightweight evented reactor; R1-R8 shipped; see [reactor-guide.md](../guides/reactor-guide.md)
-- **[reactor-run-fibers-plan.md](history/reactor-run-fibers-plan.md)** -- Local fiber driver on top of `tur/reactor`; F1-F8 shipped; F9 (global-scheduler rewrite) split out to `docs/upcoming/scheduler-on-local-fiber-group-plan.md`
+- **[reactor-run-fibers-plan.md](history/reactor-run-fibers-plan.md)** -- Local fiber driver on top of `tur/reactor`; F1-F8 shipped; F9 (global-scheduler rewrite) split out to [scheduler-on-local-fiber-group-plan.md](scheduler-on-local-fiber-group-plan.md)
 - **[tur-httpd-stdlib-plan.md](history/tur-httpd-stdlib-plan.md)** -- `stdlib/httpd` lightweight HTTP/1.1 server (was `tur-httpd-plan.md`); H1-H7 shipped; see [httpd-guide.md](../guides/httpd-guide.md)
 - **[tur-tls-plan.md](history/tur-tls-plan.md)** -- `tur-tls` spice + httpd H5 integration; T1-T6 complete; see [httpd-tls-guide.md](../guides/httpd-tls-guide.md)
 - **[data-literals-plan.md](history/data-literals-plan.md)** -- `#map{...}` / `#set{...}` / `[...]` data literals (`-Xdata-literals`); DL0-DL6 complete; see [data-literals-guide.md](../guides/data-literals-guide.md)
 - **[tur-fetch-system-first-plan.md](history/tur-fetch-system-first-plan.md)** -- `:prefer-system` resolution for `tur fetch :cmake-deps`; SF0-SF4 complete; documented in [developing-spices-guide.md](../guides/developing-spices-guide.md)
 - **[list-quasiquote-plan.md](history/list-quasiquote-plan.md)** -- Runtime list quasiquote (`` #` ``); rejected (Option D / "not now")
+- **[runtime-symbols-plan.md](history/runtime-symbols-plan.md)** -- First-class `:Sym` type (`-Xsymbols`); SYM0--SYM6 complete; see [symbols-guide.md](../guides/symbols-guide.md)
+- **[schema-plan.md](history/schema-plan.md)** -- `tur/schema` runtime validation; SC0--SC4/SC6 shipped here; SC5/SC7 completed in `return-type-dispatch-and-schema-sc5-sc7-plan.md`; see [schema-guide.md](../guides/schema-guide.md)
+- **[return-type-dispatch-and-schema-sc5-sc7-plan.md](history/return-type-dispatch-and-schema-sc5-sc7-plan.md)** -- Return-type-directed dispatch + `HasSchema` typeclass (SC5) + `Functor`/`Applicative`/`Alternative` (SC7); complete; see [schema-guide.md](../guides/schema-guide.md)
+- **[sc7-carrier-duality-plan.md](history/sc7-carrier-duality-plan.md)** -- SC7 final blocker: transparent int-newtype approach for `(Schema a)` wrapper; resolved
+- **[json-reader-macro-plan.md](history/json-reader-macro-plan.md)** -- `#json(...)` reader macro; JR0--JR5 complete; see [json-guide.md](../guides/json-guide.md)
+- **[typed-collection-elements-plan.md](history/typed-collection-elements-plan.md)** -- Polymorphic `Vec[A]`/`Map[K V]` element carrier (TCE0--TCE6); complete; see [data-literals-guide.md](../guides/data-literals-guide.md)
+- **[typed-map-surface-plan.md](history/typed-map-surface-plan.md)** -- Typed `Map[K V]` API surface (TMS0--TMS5); `smap-*` retired; see [data-literals-guide.md](../guides/data-literals-guide.md)
+- **[generic-map-key-dispatch-plan.md](history/generic-map-key-dispatch-plan.md)** -- Uniform `#map{...}`/`hamt-of` content-keyed dispatch for typed keys (GMK0--GMK4); complete via Approach B; see [data-literals-guide.md](../guides/data-literals-guide.md)
+- **[generic-hash-eq-dispatch-plan.md](history/generic-hash-eq-dispatch-plan.md)** -- `Hash`/`Eq` typeclass dispatch for typed map keys (GHE0--GHE5); effectively complete; generic-dict path extracted to GDE plan
+- **[generic-dict-eq-map-dispatch-plan.md](history/generic-dict-eq-map-dispatch-plan.md)** -- Content equality through polymorphic `^Eq A` constraint (GDE0--GDE5); complete
+- **[diagnose-unbound-call-heads-plan.md](history/diagnose-unbound-call-heads-plan.md)** -- `tur check` diagnoses unbound call heads (UCH0--UCH2); complete
+- **[codegen-parentheses-warnings-plan.md](history/codegen-parentheses-warnings-plan.md)** -- BIN_INFIX/VARIADIC_FOLD paren trimming to silence `-Wparentheses-equality` (PW0--PW3); complete
+- **[codegen-cross-module-private-defn-collision-plan.md](history/codegen-cross-module-private-defn-collision-plan.md)** -- Fix for private same-named defns across modules collapsing to one C symbol (CC0--CC2); complete
+- **[fat-closure-return-position-plan.md](history/fat-closure-return-position-plan.md)** -- `^fat` return-type marker auto-shimming non-capturing lambdas at return sites; complete; documented in test-suite-idioms-plan.md
 
 Earlier additions:
 

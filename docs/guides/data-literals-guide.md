@@ -128,7 +128,7 @@ How a key lowers depends on its form:
   there is one `hamt-of` builder for every key type (the old `smap-of` /
   `smap-*` split was retired in TMS3). (Runtime-built string keys must outlive
   the map -- the HAMT does not copy keys; see
-  [GMK / TCE4](../typed-collection-elements-plan.md).)
+  [GMK / TCE4](../archive/history/typed-collection-elements-plan.md).) 
 
 An odd number of slot forms is a `TUR-E0280` read error.
 
@@ -213,7 +213,7 @@ Rules:
 ## Relationship to the JSON reader macro
 
 The data literals supersede the [JSON reader-macro
-plan](../json-reader-macro-plan.md) for the common "literal shape, computed
+plan](../archive/history/json-reader-macro-plan.md) for the common "literal shape, computed
 values" case: `#map{...}` already accepts arbitrary value expressions, which a
 JSON-only reader cannot. A `#json(...)` reader would remain useful only for
 pasting a literal JSON blob verbatim; for everything else, write the map

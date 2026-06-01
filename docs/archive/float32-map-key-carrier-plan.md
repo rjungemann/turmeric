@@ -69,7 +69,7 @@
 > ---
 >
 > **Status (original):** Not started. Spun off from
-> [generic-hash-eq-dispatch-plan.md](generic-hash-eq-dispatch-plan.md) (GHE3),
+> [generic-hash-eq-dispatch-plan.md](history/generic-hash-eq-dispatch-plan.md) (GHE3),
 > which unified content-key *dispatch* for `int` / `bool` / `cstr` keys but left
 > `:float32` keys failing. This plan covers the *runtime carrier*, not dispatch.
 >
