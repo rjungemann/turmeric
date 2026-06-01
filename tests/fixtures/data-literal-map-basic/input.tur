@@ -4,11 +4,11 @@
 (defn get-a [] :int
   (let [m #map{:a 1 :b 2}
         k (hamt/hash-str "a")]
-    (map-get m k k)))
+    (map-get m k)))
 (defn get-b [] :int
   (let [m #map{:a 1 :b 2}
         k (hamt/hash-str "b")]
-    (map-get m k k)))
+    (map-get m k)))
 (println (count-))
 (println (get-a))
 (println (get-b))

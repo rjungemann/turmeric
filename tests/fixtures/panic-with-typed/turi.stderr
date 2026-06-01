@@ -1,10 +1,10 @@
 In function 'tur_panic_with',
-    inlined from 'main' at /tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:4010:9:
-/tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:646:9: warning: 'free' called on a pointer to an unallocated object '42' [-Wfree-nonheap-object]
-  646 |         free(payload);
+    inlined from 'main' at /tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:4137:9:
+/tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:687:9: warning: 'free' called on a pointer to an unallocated object '42' [-Wfree-nonheap-object]
+  687 |         free(payload);
       |         ^~~~~~~~~~~~~
-/tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:659:5: warning: 'free' called on a pointer to an unallocated object '42' [-Wfree-nonheap-object]
-  659 |     free(payload);
+/tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:700:5: warning: 'free' called on a pointer to an unallocated object '42' [-Wfree-nonheap-object]
+  700 |     free(payload);
       |     ^~~~~~~~~~~~~
-panic at /tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:4010
+panic at /tmp/tur-build/tests_fixtures_panic-with-typed_input_tur.c:4137
 Segmentation fault

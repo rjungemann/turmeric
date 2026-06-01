@@ -8,5 +8,5 @@
     (println (:: (vec-get fs 2) :float))
     (println (:: (vec-get ss 1) :cstr))
     (println (vec-len ss))
-    (println (:: (map-get m 2 2) :cstr))
+    (println (:: (map-get m 2) :cstr))
     0))

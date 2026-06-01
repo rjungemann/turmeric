@@ -1,17 +1,40 @@
 # Typed `Map[K V]` Surface -- key-type safety + one accessor (TMS0--TMS6)
 
-> **Status:** Not started. Ergonomics/safety follow-up to the map-key work.
-> Sits *on top of* [generic-hash-eq-dispatch-plan.md](generic-hash-eq-dispatch-plan.md)
-> (Approach A / GHE): that plan unifies *dispatch* (one `Hash`/`Eq`-driven
-> builder); this plan unifies the *type surface* (one accessor, compile-time
-> key/value-type safety) and retires the `smap-*` vs `map-*` split.
+> **Status:** TMS0--TMS5 landed (branch `claude/typed-map-surface-plan-JJPdC`).
+> `Map[K V]` is a real type at the API boundary: `(map-get m k)` works for any
+> `Hash`/`MapKey` key type, the checker rejects key/value mismatches, and there
+> is one `map-assoc`/`map-get`/`map-has?`/`map-dissoc` -- `smap-*` removed.
+> TMS6 (generalize to other containers) is deferred.
 >
-> **Type:** Compiler (parameterized-struct types in signatures + inference) +
-> stdlib (thread `Map[K V]` through the API) + a large migration.
+> **What actually shipped vs. the original design (verified during execution):**
+> - **TMS0 (parameterized-struct types in signatures):** already supported by
+>   the landed PTC4 machinery -- `(Map K V)` in param position and `: (Map K V)`
+>   in return position type-check and reject mismatches (`TUR-E0001`). The one
+>   needed change was making `Map` a **transparent int newtype** (a parametric
+>   struct with a single `:int` field, `(defstruct Map [K V] (carrier :int))`)
+>   so `(Map K V)` is emitted as `int64_t` in every C signature -- pure-Turmeric
+>   and inline-C alike -- keeping the runtime/ABI identical (Option 1).
+> - **TMS1 (inference):** explicit annotation is required for the nullary
+>   `(map-new)` (option a) -- `(:: (map-new) (Map K V))`, or a bare `(map-new)`
+>   tail whose K/V are pinned by the enclosing return type. Forward/first-use
+>   inference is *not* available (the checker resolves each generic call's
+>   tyvars first-arg-wins, with no cross-call unification). Literals seed from
+>   a value-pinned `map-empty-for`.
+> - **TMS3 accessors are MACROS, not functions.** A typed *function* accessor
+>   would ABI-specialize its value parameter to V's concrete C type and clash
+>   with the int64-carrier runtime bridge -- so `:float` values truncated and
+>   `Vec`/struct values were a hard C error. The accessors expand at the use
+>   site: the value flows straight into the inline-C carrier (any type rides the
+>   int64 word), while a borrow-checked `tur-map-kcheck` still enforces the key
+>   type K (`TUR-E0001` on a wrong-typed key). Cost: the accessors are macros
+>   (no first-class/higher-order use); the key is evaluated once via a let.
 >
-> **One-line goal:** make `Map[K V]` a *real* type at the API boundary, so
-> `(map-get m k)` works for any `Hash`/`Eq` key type, the type checker rejects
-> key/value mismatches, and there is exactly one `map-assoc`/`map-get`/
+> **Type:** stdlib (`stdlib/map.tur` rewrite) + small compiler lowering change
+> (`#map{...}` -> `hamt-of` for all key types) + migration of fixtures/docs.
+>
+> **One-line goal (met):** make `Map[K V]` a *real* type at the API boundary, so
+> `(map-get m k)` works for any `Hash`/`MapKey` key type, the type checker
+> rejects key/value mismatches, and there is exactly one `map-assoc`/`map-get`/
 > `map-has?`/`map-dissoc` -- no `smap-*` cousins to remember.
 
 ## The problem (verified 2026-05-31)
