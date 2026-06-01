@@ -1,0 +1,47 @@
+<<<<<<< Updated upstream
+||||||| Stash base
+
+=================================================================
+==13153==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 128 byte(s) in 2 object(s) allocated from:
+    #0 0x7fd5b98fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x55afc6068b36 in collect_free_vars /home/user/turmeric/src/compiler/elab_core.c:442
+
+Direct leak of 48 byte(s) in 2 object(s) allocated from:
+    #0 0x7fd5b98fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55afc61e7fbb in fresh_tmp /home/user/turmeric/src/compiler/emit_core.c:194
+
+SUMMARY: AddressSanitizer: 176 byte(s) leaked in 4 allocation(s).
+=======
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3023:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3023:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3024:8) *' [-Wincompatible-pointer-types]
+ 3023 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3024 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3025:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3025:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3026:8) *' [-Wincompatible-pointer-types]
+ 3025 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3026 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3044:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3044:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3045:8) *' [-Wincompatible-pointer-types]
+ 3044 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3045 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3080:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3080:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3081:8) *' [-Wincompatible-pointer-types]
+ 3080 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3081 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3096:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3093:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3084:3) *' [-Wincompatible-pointer-types]
+ 3096 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3099:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3093:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3087:3) *' [-Wincompatible-pointer-types]
+ 3099 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3871:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3871:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-advanced_input_tur.c:3871:35) *' [-Wincompatible-pointer-types]
+ 3871 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.
+>>>>>>> Stashed changes

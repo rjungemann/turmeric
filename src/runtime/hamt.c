@@ -168,6 +168,7 @@ static Hamt *hamt_alloc_empty(void) {
     m->ref_count = 1;
     m->key_ops.retain = NULL;
     m->key_ops.release = NULL;
+    m->key_ops.eq = NULL;  /* GDE3: no stamped comparator initially */
     return m;
 }
 
@@ -296,7 +297,7 @@ void tur_hamt_box_release(void *boxed_key) {
 }
 
 tur_hamt_key_ops tur_hamt_box_key_ops(void) {
-    tur_hamt_key_ops ops = { tur_hamt_box_retain, tur_hamt_box_release };
+    tur_hamt_key_ops ops = { tur_hamt_box_retain, tur_hamt_box_release, NULL };
     return ops;
 }
 
@@ -929,6 +930,8 @@ Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_key
     g_hamt_key_eq = eq;
     Hamt *r = tur_hamt_set(m, hash, key, val);
     g_hamt_key_eq = save;
+    /* GDE3: stamp the key comparator so tur_hamt_eq_dynamic can read it. */
+    if (r && r != m) r->key_ops.eq = eq;
     return r;
 }
 
@@ -937,6 +940,8 @@ Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
     g_hamt_key_eq = eq;
     Hamt *r = tur_hamt_del(m, hash, key);
     g_hamt_key_eq = save;
+    /* GDE3: propagate stamped comparator to the new map if one was created. */
+    if (r && r != m) r->key_ops.eq = eq;
     return r;
 }
 
@@ -995,7 +1000,7 @@ Hamt *tur_hamt_set_eq_owned(Hamt *m, uint64_t hash, void *key, void *val,
     bool existed = m ? tur_hamt_has(m, hash, key) : false;
     Hamt *r = tur_hamt_set(m, hash, key, val);
     if (existed && ops.release) ops.release(key);
-    if (r) r->key_ops = ops;
+    if (r) { r->key_ops = ops; r->key_ops.eq = eq; }  /* GDE3: stamp comparator */
     hamt_restore_key_hooks(s);
     return r;
 }
@@ -1004,7 +1009,7 @@ Hamt *tur_hamt_del_eq_owned(Hamt *m, uint64_t hash, void *key,
                             tur_hamt_keyeq_fn eq, tur_hamt_key_ops ops) {
     hamt_key_hook_save s = hamt_install_key_hooks(eq, ops);
     Hamt *r = tur_hamt_del(m, hash, key);
-    if (r) r->key_ops = ops;
+    if (r) { r->key_ops = ops; r->key_ops.eq = eq; }  /* GDE3: stamp comparator */
     /* The probe key is never stored; release the caller's reference.  (The
      * removed entry's own key reference was released inside node_delete.) */
     if (ops.release) ops.release(key);
@@ -1058,6 +1063,36 @@ void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key,
     if (owned)
         return tur_hamt_get_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
     return tur_hamt_get_eq(m, hash, key, eq);
+}
+
+/* GDE3: content-correct equality using each map's stamped key comparator.
+ * Reads the key comparator from a's Hamt->key_ops.eq; falls back to pointer
+ * identity when the map was built with no explicit comparator (int keys). */
+bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp) {
+    typedef struct { Hamt *hamt; } MapHandle;
+    MapHandle *ma = (MapHandle *)(intptr_t)a_handle;
+    MapHandle *mb = (MapHandle *)(intptr_t)b_handle;
+    if (!ma && !mb) return true;
+    if (!ma || !mb) return false;
+    Hamt *a = ma->hamt;
+    Hamt *b = mb->hamt;
+    if (tur_hamt_count(a) != tur_hamt_count(b)) return false;
+    tur_hamt_keyeq_fn keyeq = a ? a->key_ops.eq : NULL;
+    HamtIter iter_buf;
+    tur_hamt_iter_init(&iter_buf, a);
+    uint64_t hash_out;
+    void *key_out = NULL, *val_out = NULL;
+    while (tur_hamt_iter_next(&iter_buf, &hash_out, &key_out, &val_out)) {
+        void *val_in_b = keyeq
+            ? tur_hamt_get_eq(b, hash_out, key_out, keyeq)
+            : tur_hamt_get(b, hash_out, key_out);
+        if (!val_in_b) { tur_hamt_iter_free(&iter_buf); return false; }
+        bool vals_eq = ((bool (*)(int64_t, int64_t))(intptr_t)val_cmp)(
+            (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+        if (!vals_eq) { tur_hamt_iter_free(&iter_buf); return false; }
+    }
+    tur_hamt_iter_free(&iter_buf);
+    return true;
 }
 
 Hamt *tur_hamt_merge(Hamt *a, Hamt *b) {

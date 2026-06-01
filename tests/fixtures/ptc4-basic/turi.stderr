@@ -1,5 +1,39 @@
+<<<<<<< Updated upstream
 /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3662:109: error: passing 'int64_t' (aka 'long long') to parameter of incompatible type 'Box__int' (aka 'struct Box__int')
  3662 |     printf("%lld\n", (long long)(((int64_t (*)(Box__int))(intptr_t)(dict_Measurable_Box_singleton.measure))(box_new(INT64_C(42)))));
       |                                                                                                             ^~~~~~~~~~~~~~~~~~~~
 1 error generated.
 tur: cc invocation failed (status 256)
+||||||| Stash base
+=======
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3015:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3015:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3016:8) *' [-Wincompatible-pointer-types]
+ 3015 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3016 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3017:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3017:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3018:8) *' [-Wincompatible-pointer-types]
+ 3017 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3018 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3036:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3036:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3037:8) *' [-Wincompatible-pointer-types]
+ 3036 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3037 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3072:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3072:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3073:8) *' [-Wincompatible-pointer-types]
+ 3072 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3073 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3088:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3085:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3076:3) *' [-Wincompatible-pointer-types]
+ 3088 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3091:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3085:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3079:3) *' [-Wincompatible-pointer-types]
+ 3091 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3863:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3863:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_ptc4-basic_input_tur.c:3863:35) *' [-Wincompatible-pointer-types]
+ 3863 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.
+>>>>>>> Stashed changes

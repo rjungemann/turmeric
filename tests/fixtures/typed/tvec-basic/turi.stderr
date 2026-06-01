@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:2994:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:2994:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:2995:8) *' [-Wincompatible-pointer-types]
+ 2994 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 2995 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:2996:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:2996:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:2997:8) *' [-Wincompatible-pointer-types]
+ 2996 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 2997 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3015:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3015:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3016:8) *' [-Wincompatible-pointer-types]
+ 3015 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3016 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3051:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3051:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3052:8) *' [-Wincompatible-pointer-types]
+ 3051 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3052 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3067:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3064:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3055:3) *' [-Wincompatible-pointer-types]
+ 3067 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3070:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3064:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3058:3) *' [-Wincompatible-pointer-types]
+ 3070 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3842:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3842:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tvec-basic_input_tur.c:3842:35) *' [-Wincompatible-pointer-types]
+ 3842 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

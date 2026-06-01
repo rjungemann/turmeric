@@ -1,0 +1,47 @@
+<<<<<<< Updated upstream
+||||||| Stash base
+
+=================================================================
+==13943==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 64 byte(s) in 1 object(s) allocated from:
+    #0 0x7fdc596fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x55939ca06431 in dynvar_push_active /home/user/turmeric/src/compiler/elab_dynvars.c:168
+
+Direct leak of 64 byte(s) in 1 object(s) allocated from:
+    #0 0x7fdc596fc778 in realloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:85
+    #1 0x55939ca07703 in elab_defdynamic /home/user/turmeric/src/compiler/elab_dynvars.c:141
+
+SUMMARY: AddressSanitizer: 128 byte(s) leaked in 2 allocation(s).
+=======
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3079:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3079:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3080:8) *' [-Wincompatible-pointer-types]
+ 3079 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3080 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3081:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3081:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3082:8) *' [-Wincompatible-pointer-types]
+ 3081 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3082 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3100:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3100:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3101:8) *' [-Wincompatible-pointer-types]
+ 3100 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3101 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3136:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3136:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3137:8) *' [-Wincompatible-pointer-types]
+ 3136 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3137 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3152:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3149:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3140:3) *' [-Wincompatible-pointer-types]
+ 3152 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3155:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3149:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3143:3) *' [-Wincompatible-pointer-types]
+ 3155 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3927:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3927:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_dynvar-inject_input_tur.c:3927:35) *' [-Wincompatible-pointer-types]
+ 3927 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.
+>>>>>>> Stashed changes

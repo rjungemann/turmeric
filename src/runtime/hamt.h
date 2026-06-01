@@ -20,6 +20,10 @@
 /* Forward declaration */
 typedef struct HamtNode HamtNode;
 
+/* GDE3: key equality comparator type (forward declaration so tur_hamt_key_ops
+ * can reference it before the full typedef at line 139). */
+typedef bool (*tur_hamt_keyeq_fn)(int64_t, int64_t);
+
 /* WKC2: boxed-key ownership ops.  A "boxed" key is a heap allocation (see
  * tur_hamt_box_key) carrying a refcount so a single key can be shared across
  * structurally-shared map versions and freed exactly once.  `retain` is called
@@ -30,6 +34,7 @@ typedef struct HamtNode HamtNode;
 typedef struct {
     void (*retain)(void *key);
     void (*release)(void *key);
+    tur_hamt_keyeq_fn eq;  /* GDE3: stamped key comparator (NULL = identity) */
 } tur_hamt_key_ops;
 
 /* HAMT root structure. Owned via reference counting. */
@@ -135,7 +140,7 @@ void *tur_hamt_get(Hamt *m, uint64_t hash, void *key);
  * consulted only when two keys share the same 64-bit hash. Passing eq == NULL
  * is identical to the plain entry point. Use these for content-typed keys
  * (e.g. strings) where equal text may live at distinct addresses. */
-typedef bool (*tur_hamt_keyeq_fn)(int64_t, int64_t);
+/* tur_hamt_keyeq_fn is typedef'd early (before tur_hamt_key_ops) so no redecl needed. */
 Hamt *tur_hamt_set_eq(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq);
 Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
@@ -192,6 +197,14 @@ Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_k
 Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
 bool  tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
 void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
+
+/* GDE3: structural equality using each map's stamped key comparator.
+ * a_handle and b_handle are opaque int64_t Map handles (as used by Turmeric).
+ * val_cmp is a bool(*)(int64_t,int64_t) comparator for value equality.
+ * The key comparator is read from a_handle's Hamt->key_ops.eq (NULL = identity).
+ * Returns true iff both maps have the same count and every key/value pair in a
+ * has a matching entry in b. */
+bool tur_hamt_eq_dynamic(int64_t a_handle, int64_t b_handle, int64_t val_cmp);
 
 /* Get the number of key/value pairs in the map. O(1). */
 uint32_t tur_hamt_count(Hamt *m);

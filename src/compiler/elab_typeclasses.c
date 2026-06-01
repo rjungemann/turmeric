@@ -264,6 +264,38 @@ static Form *build_comparator_lambda(Elab *e, const Type *elem_type, Span span) 
     return form_list(e->arena, span, lambda_items, 3);
 }
 
+/* GHE5/#4 (non-int fields): produce a zero-valued Form for one struct field's
+ * storage kind, used as a dummy argument to `make-struct` so that the
+ * MapKey[K] typeclass dispatch sees a value of the right type.  mk-cmp
+ * ignores the argument value entirely -- it only needs the type.
+ *
+ * For non-parameterised structs make-struct does not type-check simple
+ * (non-full_type) field values, so the forms produced here satisfy dispatch
+ * even when their elaborated type is the default-width variant (e.g.
+ * form_float(0.0) elab → TY_FLOAT for a TY_FLOAT32 field).  We still emit
+ * the semantically-closest form to remain forward-compatible if make-struct's
+ * type checking is tightened in future.
+ *
+ * Returns NULL for field kinds we cannot synthesise a zero literal for
+ * (e.g. TY_FN, TY_RC, TY_REF -- such fields make the struct unsuitable as a
+ * map-key witness anyway). */
+static Form *zero_form_for_field(Elab *e, const StructField *f, Span span) {
+    switch (f->kind) {
+        case TY_BOOL:
+            return form_bool(e->arena, span, false);
+        case TY_CSTR:
+            return form_str(e->arena, span, "", 0);
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+            return form_float(e->arena, span, 0.0);
+        case TY_INT:
+        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return form_int(e->arena, span, 0);
+        default:
+            return NULL;
+    }
+}
+
 /* GHE5/#4: build `(mk-cmp (:: 0 K))` -- the MapKey[K] carrier comparator for
  * a concrete key type K.  mk-cmp ignores its argument value (it returns a
  * constant carrier-ABI function pointer), so the ascribed 0 only carries the
@@ -343,22 +375,25 @@ static Expr *try_synth_recursive_eq(Elab *e, TypeClassInstance *outer_inst,
         } else if (k_type->kind == TY_STRUCT && k_type->as.struct_.def &&
                    !k_type->as.struct_.def->is_opaque &&
                    k_type->as.struct_.def->n_fields > 0) {
-            /* Build (mk-cmp (make-struct K 0 0 ...)) when every field is :int. */
+            /* Build (mk-cmp (make-struct K z1 z2 ...)) for any struct whose
+             * fields all have synthesisable zero literals (int, bool, float,
+             * cstr, and their fixed-width variants).  Uses zero_form_for_field
+             * so non-:int field types (e.g. :float32, :cstr, :bool) are now
+             * handled too. */
             const StructDef *kd = k_type->as.struct_.def;
-            bool all_int = true;
+            uint32_t n_ms = (uint32_t)kd->n_fields + 2; /* make-struct Name f... */
+            Form **ms_items = (Form **)arena_alloc(e->arena, n_ms * sizeof(Form *));
+            ms_items[0] = form_sym(e->arena, span,
+                                   intern_cstr(e->st, "make-struct"));
+            ms_items[1] = form_sym(e->arena, span,
+                                   intern_cstr(e->st, kd->name));
+            bool ok = true;
             for (uint8_t fi = 0; fi < kd->n_fields; fi++) {
-                if (kd->fields[fi].kind != TY_INT) { all_int = false; break; }
+                Form *zf = zero_form_for_field(e, &kd->fields[fi], span);
+                if (!zf) { ok = false; break; }
+                ms_items[2 + fi] = zf;
             }
-            if (all_int) {
-                uint32_t n_ms = (uint32_t)kd->n_fields + 2; /* make-struct Name f... */
-                Form **ms_items = (Form **)arena_alloc(e->arena, n_ms * sizeof(Form *));
-                ms_items[0] = form_sym(e->arena, span,
-                                       intern_cstr(e->st, "make-struct"));
-                ms_items[1] = form_sym(e->arena, span,
-                                       intern_cstr(e->st, kd->name));
-                for (uint8_t fi = 0; fi < kd->n_fields; fi++) {
-                    ms_items[2 + fi] = form_int(e->arena, span, 0);
-                }
+            if (ok) {
                 Form *ms = form_list(e->arena, span, ms_items, n_ms);
                 Form **mk_items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
                 mk_items[0] = form_sym(e->arena, span, intern_cstr(e->st, "mk-cmp"));

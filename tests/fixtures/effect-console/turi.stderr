@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3089:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3089:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3090:8) *' [-Wincompatible-pointer-types]
+ 3089 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3090 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3091:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3091:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3092:8) *' [-Wincompatible-pointer-types]
+ 3091 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3092 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3110:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3110:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3111:8) *' [-Wincompatible-pointer-types]
+ 3110 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3111 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3146:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3146:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3147:8) *' [-Wincompatible-pointer-types]
+ 3146 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3147 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3162:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3159:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3150:3) *' [-Wincompatible-pointer-types]
+ 3162 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3165:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3159:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3153:3) *' [-Wincompatible-pointer-types]
+ 3165 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3937:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3937:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-console_input_tur.c:3937:35) *' [-Wincompatible-pointer-types]
+ 3937 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

@@ -340,6 +340,94 @@ static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, con
 static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                                const Expr **items, uint32_t n_items);
 
+/* GDE1: scan an expression subtree for a typeclass-method dispatch call where
+ * the receiver is a TY_TYVAR bound to a TY_APP type in `bindings`.  Returns
+ * true when any such call is found.  This detects the case where the C ABI is
+ * unchanged (both carrier and concrete type are int64_t) but the instance
+ * dispatched through the dict must still be re-resolved after monomorphization
+ * (e.g. an eq? call on a Map[cstr int] argument -- same ABI as int, but needs
+ * __inst_Eq_eq__Map not __inst_Eq_eq__int). */
+static bool body_has_dispatch_on_app_tyvar(
+        const Expr *e,
+        const AbiTypeBinding *bindings, uint8_t n_bindings) {
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->as.call_.dict_arg && e->as.call_.n_args >= 1) {
+        const Expr *recv = e->as.call_.args[0];
+        while (recv && recv->kind == EX_ASCRIBE)
+            recv = recv->as.ascribe_.inner;
+        if (recv && recv->type.kind == TY_TYVAR && recv->type.as.tyvar_.name) {
+            for (uint8_t i = 0; i < n_bindings; i++) {
+                if (bindings[i].name &&
+                    strcmp(bindings[i].name, recv->type.as.tyvar_.name) == 0 &&
+                    bindings[i].type.kind == TY_APP) {
+                    return true;
+                }
+            }
+        }
+    }
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (body_has_dispatch_on_app_tyvar(e->as.program.items[i], bindings, n_bindings))
+                    return true;
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                return body_has_dispatch_on_app_tyvar(e->as.fn_def_.fn->body, bindings, n_bindings);
+            break;
+        case EX_DEF:
+            return body_has_dispatch_on_app_tyvar(e->as.def_.init, bindings, n_bindings);
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (body_has_dispatch_on_app_tyvar(e->as.let_.bindings[i].init, bindings, n_bindings))
+                    return true;
+            return body_has_dispatch_on_app_tyvar(e->as.let_.body, bindings, n_bindings);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (body_has_dispatch_on_app_tyvar(e->as.do_.items[i], bindings, n_bindings))
+                    return true;
+            break;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (body_has_dispatch_on_app_tyvar(e->as.builtin.args[i], bindings, n_bindings))
+                    return true;
+            break;
+        case EX_IF:
+            return body_has_dispatch_on_app_tyvar(e->as.if_.cond, bindings, n_bindings) ||
+                   body_has_dispatch_on_app_tyvar(e->as.if_.then_, bindings, n_bindings) ||
+                   body_has_dispatch_on_app_tyvar(e->as.if_.else_or_null, bindings, n_bindings);
+        case EX_WHILE:
+            return body_has_dispatch_on_app_tyvar(e->as.while_.cond, bindings, n_bindings) ||
+                   body_has_dispatch_on_app_tyvar(e->as.while_.body, bindings, n_bindings);
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (body_has_dispatch_on_app_tyvar(e->as.call_.args[i], bindings, n_bindings))
+                    return true;
+            return body_has_dispatch_on_app_tyvar(e->as.call_.fn_expr, bindings, n_bindings);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (body_has_dispatch_on_app_tyvar(e->as.make_struct_.field_values[i], bindings, n_bindings))
+                    return true;
+            break;
+        case EX_GET_FIELD:
+            return body_has_dispatch_on_app_tyvar(e->as.get_field_.struct_expr, bindings, n_bindings);
+        case EX_SET_FIELD:
+            return body_has_dispatch_on_app_tyvar(e->as.set_field_.receiver, bindings, n_bindings) ||
+                   body_has_dispatch_on_app_tyvar(e->as.set_field_.value, bindings, n_bindings);
+        case EX_RETURN:
+            return body_has_dispatch_on_app_tyvar(e->as.return_.value, bindings, n_bindings);
+        case EX_ASCRIBE:
+            return body_has_dispatch_on_app_tyvar(e->as.ascribe_.inner, bindings, n_bindings);
+        case EX_CAST:
+            return body_has_dispatch_on_app_tyvar(e->as.cast_.expr, bindings, n_bindings);
+        case EX_REINTERPRET:
+            return body_has_dispatch_on_app_tyvar(e->as.reinterpret_.expr, bindings, n_bindings);
+        default:
+            break;
+    }
+    return false;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -430,7 +518,16 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
         abi_changes = true;
     }
-    if (!abi_changes) {
+    /* GDE1: even when the C ABI is unchanged, intern a specialization when the
+     * body contains a typeclass-method dispatch on a TY_TYVAR receiver that is
+     * bound to a TY_APP type (e.g. eq? on a Map[cstr int] argument).  Without
+     * this, the base clone bakes the representative (int-carrier) instance and
+     * the call never reaches the correct HKT instance (__inst_Eq_eq__Map). */
+    bool instance_changes = false;
+    if (!abi_changes && !borrow_path && fd && fd->body) {
+        instance_changes = body_has_dispatch_on_app_tyvar(fd->body, bindings, n_bindings);
+    }
+    if (!abi_changes && !instance_changes) {
         if (!borrow_path) emit_abi_note_carrier_call(ctx, fn_binding);
         return;
     }

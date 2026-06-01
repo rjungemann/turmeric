@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3038:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3038:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3039:8) *' [-Wincompatible-pointer-types]
+ 3038 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3039 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3040:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3040:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3041:8) *' [-Wincompatible-pointer-types]
+ 3040 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3041 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3059:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3059:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3060:8) *' [-Wincompatible-pointer-types]
+ 3059 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3060 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3095:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3095:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3096:8) *' [-Wincompatible-pointer-types]
+ 3095 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3096 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3111:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3108:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3099:3) *' [-Wincompatible-pointer-types]
+ 3111 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3114:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3108:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3102:3) *' [-Wincompatible-pointer-types]
+ 3114 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3886:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3886:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_effect-multiple_input_tur.c:3886:35) *' [-Wincompatible-pointer-types]
+ 3886 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

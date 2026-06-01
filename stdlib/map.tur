@@ -618,8 +618,18 @@
 ;; The instance receives bare-Map (HKT) handles, which carry as int64, so it
 ;; delegates to the raw :int helper rather than the typed map-eq?.
 
+;;; map-eq-dynamic -- internal: structural equality using each map's stamped
+;;; key comparator (GDE3).  val-cmp compares values as int64 carriers.
+;;;
+;;; The key comparator is read from the first map's runtime stamp (set by
+;;; map-assoc / map-dissoc via tur_hamt_set_eq).  For maps built without an
+;;; explicit comparator (identity keys) the stamp is NULL and pointer identity
+;;; is used -- which is correct for :int keys.
+
+(defn map-eq-dynamic [m1 :int m2 :int val-cmp] :bool
+  ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)
 (definstance Eq [Map] [(Eq K) (Eq V)]
-  (eq? [x y] (map-eq-raw? x y (fn [a b] (= a b)))))
+  (eq? [x y] (map-eq-dynamic x y (fn [a b] (= a b)))))
 ;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
 ;;;
 ;;; Threads (map-assoc m k v) over the kv-pairs in xs, returning the final

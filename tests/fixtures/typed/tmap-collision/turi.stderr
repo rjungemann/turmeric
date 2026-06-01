@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:2986:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:2986:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:2987:8) *' [-Wincompatible-pointer-types]
+ 2986 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 2987 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:2988:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:2988:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:2989:8) *' [-Wincompatible-pointer-types]
+ 2988 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 2989 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3007:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3007:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3008:8) *' [-Wincompatible-pointer-types]
+ 3007 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3008 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3043:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3043:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3044:8) *' [-Wincompatible-pointer-types]
+ 3043 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3044 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3059:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3056:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3047:3) *' [-Wincompatible-pointer-types]
+ 3059 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3062:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3056:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3050:3) *' [-Wincompatible-pointer-types]
+ 3062 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3834:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3834:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_typed_tmap-collision_input_tur.c:3834:35) *' [-Wincompatible-pointer-types]
+ 3834 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

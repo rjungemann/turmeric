@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3008:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3008:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3009:8) *' [-Wincompatible-pointer-types]
+ 3008 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 3009 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3010:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3010:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3011:8) *' [-Wincompatible-pointer-types]
+ 3010 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 3011 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3029:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3029:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3030:8) *' [-Wincompatible-pointer-types]
+ 3029 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3030 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3065:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3065:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3066:8) *' [-Wincompatible-pointer-types]
+ 3065 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3066 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3081:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3078:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3069:3) *' [-Wincompatible-pointer-types]
+ 3081 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3084:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3078:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3072:3) *' [-Wincompatible-pointer-types]
+ 3084 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3856:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3856:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_defer-early-return_input_tur.c:3856:35) *' [-Wincompatible-pointer-types]
+ 3856 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

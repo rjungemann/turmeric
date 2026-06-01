@@ -1,0 +1,30 @@
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:2995:66: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:2995:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:2996:8) *' [-Wincompatible-pointer-types]
+ 2995 |         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      |                                                                  ^
+ 2996 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:2997:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:2997:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:2998:8) *' [-Wincompatible-pointer-types]
+ 2997 |   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      |                                                            ^
+ 2998 |       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3016:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3016:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3017:8) *' [-Wincompatible-pointer-types]
+ 3016 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3017 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3052:60: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3052:9) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3053:8) *' [-Wincompatible-pointer-types]
+ 3052 |         struct { int64_t *data; size_t len; size_t cap; } *vec =
+      |                                                            ^
+ 3053 |       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+      |       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3068:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3065:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3056:3) *' [-Wincompatible-pointer-types]
+ 3068 |       dst = ok_vec;
+      |           ^ ~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3071:11: warning: incompatible pointer types assigning to 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3065:5) *' from 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3059:3) *' [-Wincompatible-pointer-types]
+ 3071 |       dst = err_vec;
+      |           ^ ~~~~~~~
+/tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3843:30: warning: incompatible pointer types initializing 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3843:3) *' with an expression of type 'struct (unnamed struct at /tmp/tur-build/tests_fixtures_continuation-escape-fn_input_tur.c:3843:35) *' [-Wincompatible-pointer-types]
+ 3843 |   struct { void *storage; } *m = (struct { void *storage; } *)malloc(sizeof(*m));
+      |                              ^   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.

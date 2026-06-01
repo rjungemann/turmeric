@@ -1,0 +1,33 @@
+;; GDE0: red fixture -- Eq [Map] through a polymorphic ^Eq constraint.
+;;
+;; When (eq? a b) is called inside a generic body (defn eq2 [^Eq A] ...),
+;; the compiler bakes __inst_Eq_eq__int (the TY_INT carrier representative)
+;; instead of __inst_Eq_eq__Map, so two Map[cstr int] values with equal content
+;; but distinct key pointers compare by pointer identity and return false.
+;;
+;; This fixture documents that failure mode.  The expected.stdout below reflects
+;; the CORRECT behaviour that GDE1-GDE3 will deliver; today run.sh shows one FAIL.
+
+;; dupe -- a freshly-allocated, DISTINCT pointer with the same text.
+(defn dupe [s :cstr] :cstr
+  ```c const char* p=(const char*)(intptr_t)s; size_t n=0; while(p[n])n++;
+  char* d=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)d[i]=p[i];
+  return (const char*)d; ```)
+
+;; eq2 -- the generic-dict driver: dispatches eq? through the ^Eq constraint.
+(defn eq2 [^Eq A] [a :A b :A] :bool (eq? a b))
+
+(defn main [] :int
+  (let [;; mapX: keys are direct string literals
+        mapX (map-assoc (map-assoc (:: (map-new) (Map cstr int)) "name" 1) "age" 2)
+        ;; mapY: same content, all key strings are distinct heap pointers
+        mapY (map-assoc (map-assoc (:: (map-new) (Map cstr int)) (dupe "name") 1) (dupe "age") 2)
+        ;; mapZ: same keys as mapX but one value differs
+        mapZ (map-assoc (map-assoc (:: (map-new) (Map cstr int)) "name" 1) "age" 99)
+        ;; mapW: different key set (only one key)
+        mapW (map-assoc (:: (map-new) (Map cstr int)) "name" 1)]
+    (println (if (eq2 mapX mapY) 1 0))   ; 1 -- content-equal via distinct pointers
+    (println (if (eq2 mapX mapZ) 1 0))   ; 0 -- value differs
+    (println (if (eq2 mapX mapW) 1 0))   ; 0 -- key set differs
+    (println (if (eq2 mapX mapX) 1 0)))  ; 1 -- reflexive
+  0)

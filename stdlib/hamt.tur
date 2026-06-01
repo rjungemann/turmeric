@@ -50,6 +50,8 @@
 
 (extern-c tur_hamt_merge [a :ptr b :ptr] :ptr)
 
+(extern-c tur_hamt_eq_dynamic [a :int b :int val_cmp :int] :bool)
+
 (extern-c tur_hamt_hash_str [str :cstr] :int)
 
 (extern-c tur_hamt_hash_ptr [ptr :ptr] :int)
