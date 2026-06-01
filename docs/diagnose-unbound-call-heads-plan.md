@@ -1,6 +1,11 @@
 # Diagnose Unbound Call Heads at Compile Time -- Plan (UCH0--UCH2)
 
-> **Status:** Not started.
+> **Status:** Done. All three phases (UCH0 REPL flag, UCH1 gated fallback,
+> UCH2 regression fixture) are implemented and verified: `tur check` on an
+> unbound call head reports `unknown function or operator '...'` and exits
+> non-zero, the interpreter paths keep the runtime-native fallback
+> (`tur eval '(task-cancelled?)'` -> `false`; unknown names give a runtime
+> `unbound variable` error), and the full fixture suite is green.
 >
 > **Last updated:** 2026-06-01
 
