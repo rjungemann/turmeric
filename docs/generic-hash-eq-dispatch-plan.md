@@ -133,17 +133,29 @@
 > (#3) the `smap-*` surface is **removed**, not aliased; (#4) the int path is
 > uniform with every other key (no byte-for-byte gate; snapshots regenerated).
 >
-> **GHE5 `Eq [Map]` content equality -- :cstr keys now CONTENT-correct.**
-> `(.eq? a b)` on a concrete `Map[cstr V]` receiver now compares keys by content
-> (two distinct pointers with equal text are equal), closing the reported gap for
-> the common case. This was done **not** by fixing the bare-HKT instance body
-> (see #4 below) but by extending the existing dispatch-site synthesis
+> **GHE5 `Eq [Map]` content equality -- `:cstr` AND struct keys now
+> CONTENT-correct.** `(.eq? a b)` on a concrete `Map[K V]` receiver compares keys
+> by content for `:cstr` keys (distinct pointers, equal text) and for heap-boxed
+> **struct** keys (distinct boxes, equal fields), closing the reported gap for
+> the common cases. Done **not** by fixing the bare-HKT instance body (see #4
+> below) but by extending the existing dispatch-site synthesis
 > (`try_synth_recursive_eq` in `elab_typeclasses.c`): at the *concrete* `.eq?`
-> call site the compiler threads the per-`K` `MapKey` comparator -- built as
-> `(mk-cmp (:: 0 K))`, which resolves `MapKey[cstr]` because the site is concrete
-> (the same trick the `map-assoc`/`map-get` macros use) -- plus the recursive
-> value comparator, into a new content-aware `map-eq-k?` helper. Fixture
-> `eqmap-cstr-content`.
+> call site the compiler threads the per-`K` `MapKey` comparator into a new
+> content-aware `map-eq-k?` helper, alongside the recursive value comparator. The
+> key witness that drives `MapKey[K]` dispatch is built per key kind (`mk-cmp`
+> ignores its argument value):
+>   - `:cstr` -> `(mk-cmp (:: 0 cstr))` (the int->cstr ascription is a no-op);
+>   - all-`:int`-field struct `K` -> `(mk-cmp (make-struct K 0 ...))` (a by-value
+>     zero struct matching `mk-cmp[K]`'s by-value ABI; `(:: 0 K)` would deref a
+>     non-pointer aggregate).
+> Fixtures `eqmap-cstr-content`, `eqmap-struct-content`.
+>
+> A related general bug was fixed en route: `(:: <int> :Opaque)` (a `defopaque`
+> newtype, which has no fields and emits as `int64_t`) was mis-emitting a
+> `*(int64_t *)(value)` carrier->concrete dereference and segfaulting; the
+> `EX_ASCRIBE` emit now skips the bridge for opaque types (fixture
+> `opaque-ascribe-int`). Opaque-over-int map keys are inline int values, so their
+> `.eq?` was already identity-correct -- they only needed this segfault fix.
 >
 > Why this route and not the literal "#4": the `Eq [Map]` *instance* body
 > receives a bare-`Map` (unapplied HKT) handle and a typed `map-eq?` *function*
@@ -154,9 +166,8 @@
 > `K` is concrete -- which is also exactly how the stdlib already gives
 > `Vec`/`Option`/`Result`/`Pair`/`Set` recursive *value* equality.
 >
-> **Remaining (smaller):** (a) **opaque/struct** map keys via `.eq?` still fall
-> back to identity -- `(:: 0 K)` would hit the separate `defopaque`-ascription
-> deref bug, so a deref-safe witness is needed first; (b) the **generic-dict**
+> **Remaining (smaller):** (a) struct keys with **non-`:int` fields** (the zero
+> witness only type-checks for all-`:int`-field structs); (b) the **generic-dict**
 > `Eq [Map]` path (using the instance through a polymorphic `Eq` constraint
 > rather than a direct `.eq?`) is still identity-keyed -- closing it needs the
 > true general fix (element-method dispatch in HKT instance bodies, or
@@ -458,11 +469,12 @@ build a content-keyed map. Then update docs and regenerate snapshots:
    other key; snapshots were regenerated.
 5. `:float32` (and other content keys wider/narrower than the one-word carrier):
    deferred to [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md).
-6. **GHE5 `Eq [Map]` -- `:cstr` keys now content-correct** (fixture
-   `eqmap-cstr-content`). `(.eq? a b)` on a concrete `Map[cstr V]` threads the
-   per-`K` `MapKey` comparator at the dispatch site (`try_synth_recursive_eq` +
-   the new `map-eq-k?`). **Remaining:** opaque/struct map keys via `.eq?` (need a
-   deref-safe witness, blocked by the `defopaque`-ascription deref bug) and the
-   generic-dict `Eq [Map]` path (still identity; needs the true general
-   HKT-instance element-dispatch fix). Content *lookup* (`map-get`/`map-has?`)
-   was always correct.
+6. **GHE5 `Eq [Map]` -- `:cstr` and struct keys now content-correct** (fixtures
+   `eqmap-cstr-content`, `eqmap-struct-content`). `(.eq? a b)` on a concrete
+   `Map[K V]` threads the per-`K` `MapKey` comparator at the dispatch site
+   (`try_synth_recursive_eq` + `map-eq-k?`): `(mk-cmp (:: 0 cstr))` for `:cstr`,
+   `(mk-cmp (make-struct K 0 ...))` for all-`:int`-field structs. The
+   `defopaque`-ascription deref segfault was also fixed (`opaque-ascribe-int`).
+   **Remaining:** non-`:int`-field struct keys, and the generic-dict `Eq [Map]`
+   path (still identity; needs the true general HKT-instance element-dispatch
+   fix). Content *lookup* (`map-get`/`map-has?`) was always correct.

@@ -604,9 +604,10 @@
 ;;; map-eq-k? -- structural equality over Map[K V] with an explicit key
 ;;; comparator (and value comparator).  This is the target of the compiler's
 ;;; content-keyed .eq? dispatch synthesis: at a concrete call site it threads
-;;; (mk-cmp (:: 0 K)) -- the MapKey[K] comparator resolved for the concrete key
-;;; type -- so two :cstr keys with equal text but distinct pointers compare
-;;; equal.
+;;; the MapKey[K] comparator resolved for the concrete key type -- for :cstr
+;;; keys via (mk-cmp (:: 0 K)), for all-:int-field struct keys via
+;;; (mk-cmp (make-struct K 0 ...)) -- so keys equal by content but stored under
+;;; distinct pointers/boxes compare equal.
 
 (defn map-eq-k? [K V] [m1 (Map K V) m2 (Map K V) keyeq val-cmp] :bool
   (map-eq-raw-k? m1 m2 keyeq val-cmp))
