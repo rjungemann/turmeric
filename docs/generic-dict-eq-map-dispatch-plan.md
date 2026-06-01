@@ -1,6 +1,6 @@
 # Generic-Dict `Eq [Map]` Dispatch -- content equality through a polymorphic `^Eq` constraint (GDE0--GDE5)
 
-> **Status:** Active (extracted from
+> **Status:** Done (GDE0-GDE5 completed). Extracted from
 > [generic-hash-eq-dispatch-plan.md](archive/generic-hash-eq-dispatch-plan.md),
 > "Remaining (large -- the generic-dict path)"). The concrete-receiver
 > `(.eq? a b)` path on a `Map[K V]` is already content-correct for `:cstr` and
