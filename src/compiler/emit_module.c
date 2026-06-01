@@ -245,6 +245,61 @@ static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type 
     return result;
 }
 
+/* GHE2: find an existing ABI specialization matching (fn_binding, arg_types,
+ * result_type), else append a fresh one.  Shared by the call path
+ * (emit_abi_register_call) and the fn-value path (emit_abi_scan_fn_values), so
+ * a generic function referenced *as a value* gets the same per-K clone a direct
+ * call would.  Does not record a specialized-call mapping -- the caller decides
+ * whether this spec stands in for a call site (call path) or a value reference
+ * (fn-value path, resolved later in atom_var). */
+static EmitAbiSpecialization *emit_abi_intern_spec(
+        EmitCtx *ctx, Binding *fn_binding, const Expr *fn_expr, FnDef *fd,
+        const AbiTypeBinding *bindings, uint8_t n_bindings,
+        const Type *arg_types, uint8_t n_spec_args, Type result_type,
+        const Expr *call_expr) {
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+        if (spec->binding != fn_binding || spec->n_args != n_spec_args ||
+            !type_eq(spec->result_type, result_type)) {
+            continue;
+        }
+        bool args_match = true;
+        for (uint8_t ai = 0; ai < n_spec_args; ai++) {
+            if (!type_eq(spec->arg_types[ai], arg_types[ai])) {
+                args_match = false;
+                break;
+            }
+        }
+        if (args_match) return spec;
+    }
+
+    if (ctx->n_abi_specializations >= ctx->cap_abi_specializations) {
+        uint32_t new_cap = ctx->cap_abi_specializations ? ctx->cap_abi_specializations * 2 : 8;
+        EmitAbiSpecialization *new_specs = (EmitAbiSpecialization *)realloc(
+            ctx->abi_specializations, new_cap * sizeof(EmitAbiSpecialization));
+        if (!new_specs) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->abi_specializations = new_specs;
+        ctx->cap_abi_specializations = new_cap;
+    }
+
+    EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];
+    memset(spec, 0, sizeof(*spec));
+    spec->call_expr = call_expr;
+    spec->fn_expr = fn_expr;  /* NULL for borrow specs */
+    spec->fn = fd;            /* NULL for borrow specs */
+    spec->binding = fn_binding;
+    spec->n_bindings = n_bindings;
+    for (uint8_t i = 0; i < n_bindings; i++) spec->bindings[i] = bindings[i];
+    spec->n_args = n_spec_args;
+    for (uint8_t i = 0; i < n_spec_args; i++) spec->arg_types[i] = arg_types[i];
+    spec->result_type = result_type;
+    spec->clone_name = emit_abi_clone_name(fn_binding, result_type, spec->arg_types, n_spec_args);
+    /* external_linkage is set later by the caller (emit_implementation) for
+     * separate-compilation builds; left false here so whole-program builds
+     * continue to emit static clones. */
+    return spec;
+}
+
 /* KB-022: record that `binding` is the target of a direct (carrier) call, so a
  * generic-unsafe definition for it is still emitted as a fallback. */
 static void emit_abi_note_carrier_call(EmitCtx *ctx, const Binding *binding) {
@@ -280,6 +335,10 @@ static void emit_abi_record_specialized_call(EmitCtx *ctx, const Expr *call, con
     ctx->specialized_call_names[ctx->n_specialized_calls] = clone_name;
     ctx->n_specialized_calls++;
 }
+
+/* GHE2: the call/spec scan recurses into freshly-created spec bodies. */
+static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
+                               const Expr **items, uint32_t n_items);
 
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
@@ -376,50 +435,116 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         return;
     }
 
-    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
-        EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
-        if (spec->binding != fn_binding || spec->n_args != n_spec_args ||
-            !type_eq(spec->result_type, result_type)) {
+    uint32_t before_specs = ctx->n_abi_specializations;
+    EmitAbiSpecialization *spec = emit_abi_intern_spec(
+        ctx, fn_binding, fn_expr, fd, bindings, n_bindings,
+        arg_types, n_spec_args, result_type, call);
+    emit_abi_record_specialized_call(ctx, call, spec->clone_name);
+
+    /* GHE2: a freshly-created spec whose body references generic fn-values must
+     * clone those values per the same bindings.  Recurse into the spec body with
+     * those bindings active so emit_abi_scan_expr's EX_CALL case can detect and
+     * intern the child fn-value specializations (and nested ones).  Borrow specs
+     * (fd==NULL) are emitted by the owning module and scanned there. */
+    if (fd && fd->body && ctx->n_abi_specializations != before_specs) {
+        uint32_t spec_idx = (uint32_t)(spec - ctx->abi_specializations);
+        /* current_abi_specialization may point into abi_specializations, which
+         * the recursion can realloc; save/restore by index, not pointer. */
+        const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+        bool saved_in_table = saved >= ctx->abi_specializations &&
+                              saved < ctx->abi_specializations + ctx->n_abi_specializations;
+        uint32_t saved_idx = saved_in_table
+            ? (uint32_t)(saved - ctx->abi_specializations) : 0;
+        ctx->current_abi_specialization = &ctx->abi_specializations[spec_idx];
+        emit_abi_scan_expr(ctx, fd->body, items, n_items);
+        ctx->current_abi_specialization = saved_in_table
+            ? &ctx->abi_specializations[saved_idx] : saved;
+    }
+}
+
+/* GHE2: specialize a generic function referenced *as a value* (not called).
+ *
+ * The CGI fix (emit_call_name's emit_reresolve_method_call) re-resolves a
+ * typeclass-method *call* inside a monomorphized constrained generic, but a
+ * lifted comparator like (fn [a :K b :K] (eq? a b)) is passed by *address*:
+ * its body bakes the carrier instance (Eq[int]) and is never re-emitted per K.
+ * So a cstr-keyed map-assoc-g passes the int comparator and a distinct-pointer
+ * lookup misses.
+ *
+ * This walks the argument expressions of `call` looking for a generic
+ * fn-binding referenced as a value (EX_VAR / EX_FN_TO_FAT wrapping one) whose
+ * type mentions a tyvar bound by `bindings`.  For each, it interns a child
+ * specialization under those same bindings, then recurses into the child
+ * clone's body so nested fn-values / method calls in turn specialize.  At emit
+ * time, atom_var resolves the value reference to the child clone (see
+ * emit_core.c).  The instance selection inside the child body is handled by the
+ * already-landed CGI method-call re-resolution. */
+static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
+                                    const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                    const Expr **items, uint32_t n_items) {
+    if (!call || call->kind != EX_CALL || !bindings || n_bindings == 0) return;
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++) {
+        const Expr *arg = call->as.call_.args[i];
+        while (arg && (arg->kind == EX_ASCRIBE || arg->kind == EX_FN_TO_FAT)) {
+            arg = (arg->kind == EX_ASCRIBE) ? arg->as.ascribe_.inner
+                                            : arg->as.fn_to_fat_.inner;
+        }
+        if (!arg || arg->kind != EX_VAR || arg->type.kind != TY_FN) continue;
+        Binding *vb = arg->as.var.binding;
+        if (!vb || vb->type.kind != TY_FN || !vb->is_global || vb->closure_fn_binding)
+            continue;
+
+        const Expr *vfn_expr = emit_abi_find_fn_expr(items, n_items, vb);
+        if (!vfn_expr || !vfn_expr->as.fn_def_.fn) continue;
+        FnDef *vfd = vfn_expr->as.fn_def_.fn;
+        if (vfd->closure || !vfd->body) continue;
+        if (vfd->body->kind == EX_INLINE_C &&
+            !inline_c_has_ty_template(vfd->body->as.inline_c_.inline_c)) {
             continue;
         }
-        bool args_match = true;
-        for (uint8_t ai = 0; ai < n_spec_args; ai++) {
-            if (!type_eq(spec->arg_types[ai], arg_types[ai])) {
-                args_match = false;
-                break;
-            }
+
+        /* Derive the value-fn's specialized arg/result types by instantiating
+         * its full types through the outer bindings.  Only proceed when this
+         * actually changes the ABI (i.e. the value-fn is generic in one of the
+         * outer tyvars); otherwise the carrier clone is already correct. */
+        bool abi_changes = false;
+        Type v_args[MAX_FN_ARITY];
+        uint8_t v_nargs = vfd->n_params;
+        for (uint8_t a = 0; a < v_nargs; a++) {
+            const Type *full = (vb->type.as.fn.arg_full_types &&
+                                vb->type.as.fn.arg_full_types[a])
+                ? vb->type.as.fn.arg_full_types[a]
+                : &vfd->params[a]->type;
+            Type generic_arg = full ? *full : vfd->param_types[a];
+            v_args[a] = full
+                ? emit_abi_instantiate_type(full, bindings, n_bindings, ctx->type_arena)
+                : vfd->param_types[a];
+            if (strcmp(type_c_name(generic_arg), type_c_name(v_args[a])) != 0)
+                abi_changes = true;
         }
-        if (args_match) {
-            emit_abi_record_specialized_call(ctx, call, spec->clone_name);
-            return;
+        Type v_generic_result = vb->type.as.fn.result_full_type
+            ? *vb->type.as.fn.result_full_type
+            : emit_type_from_kind(vb->type.as.fn.result_kind);
+        Type v_result = emit_abi_instantiate_type(&v_generic_result, bindings,
+                                                  n_bindings, ctx->type_arena);
+        if (strcmp(type_c_name(v_generic_result), type_c_name(v_result)) != 0)
+            abi_changes = true;
+        if (!abi_changes) continue;
+
+        uint32_t before = ctx->n_abi_specializations;
+        EmitAbiSpecialization *child = emit_abi_intern_spec(
+            ctx, vb, vfn_expr, vfd, bindings, n_bindings,
+            v_args, v_nargs, v_result, NULL);
+        /* Newly created: recurse into the clone body so nested fn-values
+         * specialize too.  (Already-interned specs were scanned when created.) */
+        if (ctx->n_abi_specializations != before) {
+            (void)child;
+            const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+            ctx->current_abi_specialization = &ctx->abi_specializations[before];
+            emit_abi_scan_expr(ctx, vfd->body, items, n_items);
+            ctx->current_abi_specialization = saved;
         }
     }
-
-    if (ctx->n_abi_specializations >= ctx->cap_abi_specializations) {
-        uint32_t new_cap = ctx->cap_abi_specializations ? ctx->cap_abi_specializations * 2 : 8;
-        EmitAbiSpecialization *new_specs = (EmitAbiSpecialization *)realloc(
-            ctx->abi_specializations, new_cap * sizeof(EmitAbiSpecialization));
-        if (!new_specs) { fprintf(stderr, "tur: oom\n"); abort(); }
-        ctx->abi_specializations = new_specs;
-        ctx->cap_abi_specializations = new_cap;
-    }
-
-    EmitAbiSpecialization *spec = &ctx->abi_specializations[ctx->n_abi_specializations++];
-    memset(spec, 0, sizeof(*spec));
-    spec->call_expr = call;
-    spec->fn_expr = fn_expr;  /* NULL for borrow specs */
-    spec->fn = fd;            /* NULL for borrow specs */
-    spec->binding = fn_binding;
-    spec->n_bindings = n_bindings;
-    for (uint8_t i = 0; i < n_bindings; i++) spec->bindings[i] = bindings[i];
-    spec->n_args = n_spec_args;
-    for (uint8_t i = 0; i < n_spec_args; i++) spec->arg_types[i] = arg_types[i];
-    spec->result_type = result_type;
-    spec->clone_name = emit_abi_clone_name(fn_binding, result_type, arg_types, n_spec_args);
-    /* external_linkage is set later by the caller (emit_implementation) for
-     * separate-compilation builds; left false here so whole-program builds
-     * continue to emit static clones. */
-    emit_abi_record_specialized_call(ctx, call, spec->clone_name);
 }
 
 static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
@@ -471,6 +596,15 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             if (!e->as.call_.fn_expr && e->as.call_.fn_binding &&
                 ctx->n_specialized_calls == before) {
                 emit_abi_note_carrier_call(ctx, e->as.call_.fn_binding);
+            }
+            /* GHE2: when scanning inside an active specialization, a call that
+             * passes a generic fn as a *value* argument (e.g. map-assoc-eq with a
+             * comparator) needs that value-fn cloned under the active bindings. */
+            if (ctx->current_abi_specialization) {
+                emit_abi_scan_fn_values(ctx, e,
+                    ctx->current_abi_specialization->bindings,
+                    ctx->current_abi_specialization->n_bindings,
+                    items, n_items);
             }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 emit_abi_scan_expr(ctx, e->as.call_.args[i], items, n_items);

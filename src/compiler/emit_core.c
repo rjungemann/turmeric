@@ -831,7 +831,40 @@ static char *atom_float_typed(TypeKind k, double f) {
     }
     return atom_float(f);
 }
+/* GHE2: when emitting inside a monomorphized constrained generic, a reference to
+ * a *generic function as a value* (e.g. a comparator fn passed to map-assoc-eq)
+ * must name the per-K child clone that the abi scan created under the active
+ * specialization's bindings -- not the carrier base clone whose body bakes the
+ * Eq[int] instance.  Mirrors emit_reresolve_method_call (which handles method
+ * *calls*) but for fn *values*.  Returns the clone name, or NULL when no child
+ * spec applies (caller falls back to name_for_binding). */
+static char *emit_reresolve_fn_value(EmitCtx *ctx, const Binding *b) {
+    const EmitAbiSpecialization *outer = ctx ? ctx->current_abi_specialization : NULL;
+    if (!outer || !b || b->type.kind != TY_FN) return NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+        if (spec->binding != b || !spec->clone_name) continue;
+        /* The child spec was interned under the same tyvar->type bindings the
+         * outer spec carries, so it matches iff those bindings agree. */
+        if (spec->n_bindings != outer->n_bindings) continue;
+        bool ok = true;
+        for (uint8_t bi = 0; bi < spec->n_bindings; bi++) {
+            const AbiTypeBinding *sb = &spec->bindings[bi];
+            const AbiTypeBinding *ob = &outer->bindings[bi];
+            if (!sb->name || !ob->name || strcmp(sb->name, ob->name) != 0 ||
+                !type_eq(sb->type, ob->type)) { ok = false; break; }
+        }
+        if (!ok) continue;
+        char *name = strdup(spec->clone_name);
+        if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+        return name;
+    }
+    return NULL;
+}
+
 char *atom_var(EmitCtx *ctx, const Binding *b) {
+    char *reresolved = emit_reresolve_fn_value(ctx, b);
+    if (reresolved) return reresolved;
     return name_for_binding(ctx, b);
 }
 char *atom_cstr(StrSlice s) {
