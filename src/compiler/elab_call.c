@@ -219,7 +219,15 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "map function '%s' requires at least 1 argument", name->name);
             return NULL;
         }
-        /* For map-new, we don't need to check the first arg since there isn't one */
+        /* Phase P3: if we are elaborating the RHS of a ^persistent let binding,
+         * lower map-new directly to hamt/new so the result type is void * and
+         * subsequent HAMT operations (count, assoc, …) receive the right type. */
+        if (e->in_persistent_let) {
+            e->needs_hamt = true;
+            extern bool g_needs_hamt;
+            g_needs_hamt = true;
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_new, 0, NULL);
+        }
     }
     
     Expr *first_arg = NULL;

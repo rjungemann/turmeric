@@ -505,7 +505,11 @@ Expr *elab_let(Elab *e, const Form *call) {
             }
         }
 
+        /* Phase P3: flag ^persistent RHS so map-new can lower to hamt/new */
+        bool prev_in_persistent_let = e->in_persistent_let;
+        if (is_persistent) e->in_persistent_let = true;
         Expr *init = elab_form(e, init_form);
+        e->in_persistent_let = prev_in_persistent_let;
 
         /* Task 2 (Prereq 1): Capture which preceding bindings were newly moved during this init elaboration. */
         if (moved_snapshot) {
