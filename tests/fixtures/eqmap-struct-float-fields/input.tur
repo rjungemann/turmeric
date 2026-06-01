@@ -1,0 +1,46 @@
+;; GHE5/#4 (non-int fields): structural equality of struct-keyed maps is
+;; CONTENT-correct for structs with :float32 fields.
+;;
+;; FPoint has :float32 fields.  The zero witness is now
+;; (make-struct FPoint 0.0 0.0) -- zero_form_for_field emits form_float(0.0)
+;; for TY_FLOAT32 fields, lifting the previous all-:int restriction.
+
+(defstruct FPoint [x :float32 y :float32])
+
+(definstance Hash [FPoint]
+  (hash [p] :int
+    ```c
+    uint32_t ix, iy;
+    memcpy(&ix, &p.x, sizeof ix);
+    memcpy(&iy, &p.y, sizeof iy);
+    return (int64_t)((uint64_t)ix * 1000003 ^ iy);
+    ```))
+
+(definstance Eq [FPoint]
+  (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
+
+(defn fpoint-carrier-eq? [a :int b :int] :bool
+  ```c FPoint *pa = (FPoint *)(intptr_t)a; FPoint *pb = (FPoint *)(intptr_t)b;
+  return (pa->x == pb->x) && (pa->y == pb->y); ```)
+
+(definstance MapKey [FPoint]
+  (mk-box [p] :int ```c return (int64_t)(intptr_t)tur_hamt_box_key(&p, sizeof(p)); ```)
+  (mk-cmp [p] fpoint-carrier-eq?)
+  (mk-owned? [p] 1))
+
+(defn main [] :int
+  (let [a  (map-assoc (map-assoc (:: (map-new) (Map FPoint int)) (make-struct FPoint 1.5f32 2.5f32) 100)
+                                              (make-struct FPoint 3.5f32 4.5f32) 200)
+        ;; same content, all keys distinct boxes
+        b  (map-assoc (map-assoc (:: (map-new) (Map FPoint int)) (make-struct FPoint 1.5f32 2.5f32) 100)
+                                              (make-struct FPoint 3.5f32 4.5f32) 200)
+        ;; one value differs
+        c  (map-assoc (map-assoc (:: (map-new) (Map FPoint int)) (make-struct FPoint 1.5f32 2.5f32) 100)
+                                              (make-struct FPoint 3.5f32 4.5f32) 999)
+        ;; one key differs
+        d  (map-assoc (map-assoc (:: (map-new) (Map FPoint int)) (make-struct FPoint 1.5f32 2.5f32) 100)
+                                              (make-struct FPoint 9.9f32 9.9f32) 200)]
+    (println (if (.eq? a b) 1 0))   ; 1 -- content-equal via distinct boxes
+    (println (if (.eq? a c) 1 0))   ; 0 -- value differs
+    (println (if (.eq? a d) 1 0)))  ; 0 -- key differs
+  0)

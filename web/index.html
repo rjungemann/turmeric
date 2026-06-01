@@ -83,8 +83,8 @@
 
 (println
   (handle (use-ask)
-    (Ask [] k) (resume k 41)))</div>
-          <div class="code-version sweet-exp-version" style="display: none;">defeffect Ask [] :int
+    (Ask [] k) (resume k 41)))</div><div class="code-version sweet-exp-version" style="display: none;">;; Algebraic effects in Turmeric
+defeffect Ask [] :int
 
 defn use-ask [] :int
   {1 + perform(Ask())}
@@ -105,13 +105,9 @@ println
   <div class="infl-sep"></div>
   <div class="infl-items">
     <span class="infl-item">Clojure</span>
-    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Racket</span>
-    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Haskell</span>
-    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Koka</span>
-    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Effekt</span>
   </div>
 </div>
@@ -211,8 +207,7 @@ println
   (match c
     (Red)   "red"
     (Green) "green"
-    (Blue)  "blue"))</div>
-      <div class="code-version sweet-exp-version" style="display:none;">defclass Show [a]
+    (Blue)  "blue"))</div><div class="code-version sweet-exp-version" style="display:none;">defclass Show [a]
   show [x] :cstr
 
 defclass Eq [a]
@@ -221,8 +216,7 @@ defclass Eq [a]
 defdata Color (Red) (Green) (Blue)
 
 definstance Eq [int]
-  eq? [x y]
-    {x = y}
+  eq? [x y] {x = y}
 
 ;; Typeclass constraint -- requires Show instance
 defn display [^Show a x] :void
@@ -277,8 +271,7 @@ defn color-name [c] :cstr
     (Ask [] k) (resume k 0)))
 
 (println (run-prod (compute 1)))  ;; =&gt; 42
-(println (run-test (compute 1)))  ;; =&gt; 1</div>
-      <div class="code-version sweet-exp-version" style="display:none;">defeffect Ask [] :int
+(println (run-test (compute 1)))  ;; =&gt; 1</div><div class="code-version sweet-exp-version" style="display:none;">defeffect Ask [] :int
 
 ;; Business logic -- no mention of *how* Ask works
 defn compute [x] :int
