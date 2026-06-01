@@ -54,16 +54,20 @@ recover the type with an ascription:
 [1.5 2.5 3.5]                 ; Vec[float]
 (:: (vec-get fs 0) :float)    ; => 1.5
 
-#map{1 "one" 2 "two"}         ; Map with :cstr values
-(:: (map-get m 1 1) :cstr)    ; => "one"
+#map{1 "one" 2 "two"}         ; Map[int cstr]
+(:: (map-get m 1) :cstr)      ; => "one"
 ```
 
-Map keys may be **int**, **keyword**, or **string**. Int and keyword keys are
-int-valued (a keyword normalizes to a content hash). A literal whose keys are
-all **string literals** lowers to a *content-keyed* map (`smap-of`): two
-distinct string pointers with equal text are the same key. See
-[`#map{...}` keys](#map-keys) below. Aggregate (multi-word struct/ADT) element
-types are not yet supported in these collections.
+Map keys may be any `Hash`/`MapKey` scalar -- **int**, **keyword**, **string**,
+**bool**, **float32**, **float**, or a user type with `Hash`/`Eq`/`MapKey`
+instances. The literal has type `Map[K V]`: the typed `map-get`/`map-assoc`/
+`map-has?`/`map-dissoc` surface reads and writes it, and a key/value-type
+mismatch is a `TUR-E0001`. Int and keyword keys are int-valued (a keyword
+normalizes to a content hash); string keys are compared by content (two
+distinct pointers with equal text are one key). See
+[`#map{...}` keys](#map-keys) below. Aggregate (multi-word struct/ADT) *key*
+types must supply their own `MapKey` instance; *values* may be any type
+(scalars, floats, and heap handles like `Vec[A]` all ride the int64 carrier).
 
 Slots are arbitrary expressions -- variable references, calls, nested
 literals -- and the normal typechecker handles them.
@@ -100,22 +104,24 @@ How a key lowers depends on its form:
   ```turmeric
   (let [m #map{:name 1 :age 2}
         k (hamt/hash-str "name")]
-    (map-get m k k))            ; => 1
+    (map-get m k))             ; => 1
   ```
 
-- A literal whose keys are all **string literals** lowers to `smap-of`, a
-  *content-keyed* map. The string itself is the key (compared by content, not
-  by pointer or hash), so two distinct pointers with equal text are one key.
-  Look string keys up with `smap-get` / `smap-has?` / `smap-dissoc`:
+- A literal whose keys are all **string literals** lowers to a *content-keyed*
+  map. The string itself is the key (compared by content, not by pointer or
+  hash), so two distinct pointers with equal text are one key. Read string
+  keys with the same unified `map-get` / `map-has?` / `map-dissoc` accessors
+  (they dispatch through `Hash[cstr]` / `MapKey[cstr]` by content):
 
   ```turmeric
   (let [m #map{"name" 1 "age" 2}]
-    (:: (smap-get m "name") :int))   ; => 1
+    (:: (map-get m "name") :int))   ; => 1
   ```
 
-  A direct `(hamt-of "k" v ...)` call with a leading string key is rewritten
-  to `smap-of` for the same content-keyed behavior. (Runtime-built string
-  keys must outlive the map -- the HAMT does not copy keys; see
+  A direct `(hamt-of "k" v ...)` call with string keys is content-keyed too --
+  there is one `hamt-of` builder for every key type (the old `smap-of` /
+  `smap-*` split was retired in TMS3). (Runtime-built string keys must outlive
+  the map -- the HAMT does not copy keys; see
   [GMK / TCE4](../typed-collection-elements-plan.md).)
 
 An odd number of slot forms is a `TUR-E0280` read error.

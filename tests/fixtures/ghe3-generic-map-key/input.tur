@@ -6,7 +6,7 @@
 ;;      updates the existing entry (count stays 2) and looks up by content;
 ;;   2. :int keys use the identity/carrier path (hash is identity, eq is =);
 ;;   3. :bool keys round-trip through the same generic builders;
-;;   4. map-has-g? and map-dissoc-g share the same per-K Hash/Eq dispatch.
+;;   4. map-has? and map-dissoc share the same per-K Hash/Eq dispatch.
 ;;
 ;; Key types include the one-word carriers (int, bool, cstr) and -- since the
 ;; WKC wide-key carrier (float32-map-key-carrier-plan) -- the inline float keys
@@ -26,25 +26,25 @@
 
 (defn main [] :int
   ;; --- :cstr keys: content-keyed via distinct pointers ---
-  (let [m  (map-assoc-g (map-assoc-g (map-new) "alpha" 1) "beta" 2)
-        m2 (map-assoc-g m (dup-str "beta") 99)]
-    (println (:: (map-get-g m2 (dup-str "alpha")) :int))   ; 1
-    (println (:: (map-get-g m2 (dup-str "beta")) :int))    ; 99
+  (let [m  (map-assoc (map-assoc (:: (map-new) (Map cstr int)) "alpha" 1) "beta" 2)
+        m2 (map-assoc m (dup-str "beta") 99)]
+    (println (:: (map-get m2 (dup-str "alpha")) :int))   ; 1
+    (println (:: (map-get m2 (dup-str "beta")) :int))    ; 99
     (println (map-count m2))                               ; 2 (update, not insert)
-    (println (if (map-has-g? m2 "alpha") 1 0))             ; 1
-    (println (if (map-has-g? (map-dissoc-g m2 "alpha") "alpha") 1 0))) ; 0
+    (println (if (map-has? m2 "alpha") 1 0))             ; 1
+    (println (if (map-has? (map-dissoc m2 "alpha") "alpha") 1 0))) ; 0
   ;; --- :int keys: identity/carrier path ---
-  (let [mi (map-assoc-g (map-assoc-g (map-new) 5 100) 7 200)]
-    (println (:: (map-get-g mi 5) :int))                   ; 100
-    (println (:: (map-get-g mi 7) :int))                   ; 200
-    (println (if (map-has-g? mi 5) 1 0)))                  ; 1
+  (let [mi (map-assoc (map-assoc (:: (map-new) (Map int int)) 5 100) 7 200)]
+    (println (:: (map-get mi 5) :int))                   ; 100
+    (println (:: (map-get mi 7) :int))                   ; 200
+    (println (if (map-has? mi 5) 1 0)))                  ; 1
   ;; --- :bool keys ---
-  (let [mb (map-assoc-g (map-assoc-g (map-new) true 10) false 20)]
-    (println (:: (map-get-g mb true) :int))                ; 10
-    (println (:: (map-get-g mb false) :int)))              ; 20
+  (let [mb (map-assoc (map-assoc (:: (map-new) (Map bool int)) true 10) false 20)]
+    (println (:: (map-get mb true) :int))                ; 10
+    (println (:: (map-get mb false) :int)))              ; 20
   ;; --- :float32 keys (WKC): reinstated; 1.5 no longer truncates to 1 ---
-  (let [mf (map-assoc-g (map-assoc-g (map-new) 1.5f32 7) 2.5f32 8)]
-    (println (:: (map-get-g mf 1.5f32) :int))              ; 7
-    (println (:: (map-get-g mf 2.5f32) :int))              ; 8
+  (let [mf (map-assoc (map-assoc (:: (map-new) (Map float32 int)) 1.5f32 7) 2.5f32 8)]
+    (println (:: (map-get mf 1.5f32) :int))              ; 7
+    (println (:: (map-get mf 2.5f32) :int))              ; 8
     (println (map-count mf)))                              ; 2 (distinct keys)
   0)

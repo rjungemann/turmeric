@@ -16,9 +16,9 @@
     (vec-push! inner2 10)
     (vec-push! inner2 20)
     (vec-push! inner3 999)
-    (let [m1 (:: (map-assoc (map-new) 1 inner1) (Map int (Vec int)))
-          m2 (:: (map-assoc (map-new) 1 inner2) (Map int (Vec int)))
-          m3 (:: (map-assoc (map-new) 1 inner3) (Map int (Vec int)))]
+    (let [m1 (map-assoc (:: (map-new) (Map int (Vec int))) 1 inner1)
+          m2 (map-assoc (:: (map-new) (Map int (Vec int))) 1 inner2)
+          m3 (map-assoc (:: (map-new) (Map int (Vec int))) 1 inner3)]
       ;; {1: [10 20]} vs {1: [10 20]} -- structurally equal
       (println (.eq? m1 m2))
       ;; {1: [10 20]} vs {1: [999]} -- different

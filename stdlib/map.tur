@@ -1,37 +1,63 @@
-;;; tur/map -- typed Map[K V]: persistent hash map requiring Hash[K] and Eq[K].
+;;; tur/map -- typed Map[K V]: persistent hash map requiring Hash[K] and MapKey[K].
 ;;;
 ;;; Backed by the persistent HAMT from tur/hamt.
 ;;;
-;;; Since: Phase TM0
-;; Phase TM0: Typed Map[K V]
-;; K must satisfy Hash[K] and Eq[K].
-;; Backed by the persistent HAMT (stdlib/hamt.tur).
-;; At runtime, a Map[K V] is a heap-allocated wrapper around a HAMT ptr<void>.
-;; Internal C layout: struct { void *hamt; }
+;;; Since: Phase TM0 (typed surface: Phase TMS2)
+;; Phase TMS2: Typed Map[K V] surface (typed-map-surface-plan).
+;; K must satisfy Hash[K] and MapKey[K]; both are auto-loaded for the primitive
+;; key types (int, bool, cstr, float32, float).
+;; At runtime, a Map[K V] is a heap-allocated wrapper around a HAMT ptr<void>,
+;; carried as a single int64 word.  Map is declared as a *transparent int
+;; newtype* (a parametric struct with one :int field), so (Map K V) is emitted
+;; as int64_t in every C signature -- pure-Turmeric and inline-C alike -- while
+;; the type checker still tracks K and V and rejects key/value mismatches.
+;; Internal C layout of the carried pointer: struct { void *hamt; }
 ;;; Map -- parameterized persistent map with key type K and value type V.
 ;;;
+;;; Map[K V] is a transparent int newtype over the heap pointer to its backing
+;;; HAMT.  The single :int field is the carrier word; it is never accessed
+;;; structurally (every operation is inline-C or delegates to one).
+;;;
 ;;; Since: Phase TM0
-(defstruct Map [K V] (hamt :ptr<void>))
+(defstruct Map [K V] (carrier :int))
 ;;; map-new -- create a new empty typed map.
+;;;
+;;; map-new is generic and nullary, so its K/V cannot be inferred from
+;;; arguments.  Annotate it at the binding site when the type is otherwise
+;;; unconstrained:
+;;;
+;;;   (let [m (:: (map-new) (Map cstr int))] ...)
+;;;
+;;; In a function whose declared return type fixes K/V, a bare (map-new) tail
+;;; is enough (the return annotation pins K/V) -- see map-empty-for.
 ;;;
 ;;; Returns:
 ;;;   An empty Map[K V].
 ;;;
 ;;; Example:
-;;;   (map-new)  ; => empty Map
+;;;   (:: (map-new) (Map int int))  ; => empty Map[int int]
 ;;;
 ;;; Since: Phase TM0
-
-(defn map-new []
+(defn map-new [K V] []
   #{}
-  :int
+  : (Map K V)
   ```c struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = tur_hamt_new();
   return (int64_t)(intptr_t)m;
   ```)
+;;; map-empty-for -- internal: an empty Map[K V] whose K/V are pinned by a
+;;; sample key/value pair.  Used by the hamt-of / #map{...} literal lowering,
+;;; where the key/value types are known from the first literal pair but cannot
+;;; be written as an annotation by the expanding macro.  The k/v arguments are
+;;; consumed only for type inference; the returned map is empty.
+;;;
+;;; Since: Phase TMS3
+
+(defn map-empty-for [^Hash K ^MapKey K V] [k :K v :V] : (Map K V)
+  (map-new))
 ;;; map-hamt -- internal accessor for the HAMT backing store.
 
-(defn map-hamt [m :int]
+(defn map-hamt [K V] [m (Map K V)]
   #{}
   :ptr<void>
   ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
@@ -39,206 +65,70 @@
   ```)
 ;;; map-wrap -- internal constructor from a HAMT pointer.
 
-(defn map-wrap [h :ptr<void>]
+(defn map-wrap [K V] [h :ptr<void>]
   #{}
-  :int
+  : (Map K V)
   ```c struct { void *hamt; } *m = malloc(sizeof(*m));
   m->hamt = (void*)(intptr_t)h;
   return (int64_t)(intptr_t)m;
   ```)
-;;; map-assoc -- insert or update a key/value pair; returns a new map.
-;;;
-;;; Parameters:
-;;;   m   -- source Map[K V]
-;;;   key -- key of type K (used as hash for scalar keys)
-;;;   val -- value of type V
-;;;
-;;; Returns:
-;;;   A new Map[K V] with the entry inserted or updated.
-;;;
-;;; Example:
-;;;   (map-assoc my-map 1 100)  ; => updated map
-;;;
-;;; Since: Phase TM0
-
-(defn map-assoc [V] [m :int key :int val :V]
-  #{}
-  :int
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
-  void *new_hamt = tur_hamt_set(map->hamt, (int64_t)key, (void*)(intptr_t)key, (void*)(intptr_t)val);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  ```)
-;;; map-assoc-h -- insert or update with an explicit hash; returns a new map.
-;;;
-;;; Parameters:
-;;;   m   -- source Map[K V]
-;;;   h   -- precomputed hash of key (from Hash[K] typeclass)
-;;;   key -- key of type K
-;;;   val -- value of type V
-;;;
-;;; Returns:
-;;;   A new Map[K V] with the entry inserted or updated.
-;;;
-;;; Example:
-;;;   (map-assoc-h my-map (hash k) k v)  ; => updated map
-;;;
-;;; Since: Phase TM0
-
-(defn map-assoc-h [V] [m :int h :int key :int val :V]
-  #{}
-  :int
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
-  void *new_hamt = tur_hamt_set(map->hamt, h, (void*)(intptr_t)key, (void*)(intptr_t)val);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  ```)
-;;; map-dissoc -- remove a key from the map; returns a new map.
-;;;
-;;; Parameters:
-;;;   m   -- source Map[K V]
-;;;   h   -- precomputed hash of key
-;;;   key -- key of type K
-;;;
-;;; Returns:
-;;;   A new Map[K V] with the key removed.
-;;;
-;;; Example:
-;;;   (map-dissoc my-map (hash k) k)  ; => map without k
-;;;
-;;; Since: Phase TM0
-
-(defn map-dissoc [m :int h :int key :int]
-  #{}
-  :int
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
-  void *new_hamt = tur_hamt_del(map->hamt, h, (void*)(intptr_t)key);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  ```)
-;;; map-get -- look up a key; returns the value or 0 if absent.
-;;;
-;;; Parameters:
-;;;   m   -- Map[K V]
-;;;   h   -- precomputed hash of key
-;;;   key -- key of type K
-;;;
-;;; Returns:
-;;;   The value for the key, or 0 (none) if absent.
-;;;
-;;; Example:
-;;;   (map-get my-map (hash k) k)  ; => value or 0
-;;;
-;;; Since: Phase TM0
-
-(defn map-get [V] [m :int h :int key :int]
-  #{}
-  :V
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get(map->hamt, h, (void*)(intptr_t)key);
-  ```)
-;;; map-has? -- check whether a key exists in the map.
-;;;
-;;; Parameters:
-;;;   m   -- Map[K V]
-;;;   h   -- precomputed hash of key
-;;;   key -- key of type K
-;;;
-;;; Returns:
-;;;   true if the key is present, false otherwise.
-;;;
-;;; Example:
-;;;   (map-has? my-map (hash k) k)  ; => true or false
-;;;
-;;; Since: Phase TM0
-
-(defn map-has? [m :int h :int key :int]
-  #{}
-  :bool
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return tur_hamt_has(map->hamt, h, (void*)(intptr_t)key);
-  ```)
-;;; map-count -- return the number of entries in the map.
-;;;
-;;; Parameters:
-;;;   m -- Map[K V]
-;;;
-;;; Returns:
-;;;   Integer count of key/value pairs.
-;;;
-;;; Example:
-;;;   (map-count my-map)  ; => 3
-;;;
-;;; Since: Phase TM0
-
-(defn map-count [m :int]
-  #{}
-  :int
-  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return tur_hamt_count(map->hamt);
-  ```)
-;;; map-merge -- merge two maps; values from b win on key collision.
-;;;
-;;; Parameters:
-;;;   a -- first Map[K V]
-;;;   b -- second Map[K V] (wins on collision)
-;;;
-;;; Returns:
-;;;   A new Map[K V] containing all entries from both maps.
-;;;
-;;; Example:
-;;;   (map-merge map-a map-b)  ; => merged map
-;;;
-;;; Since: Phase TM0
-
-(defn map-merge [a :int b :int]
-  #{}
-  :int
-  ```c struct { void *hamt; } *ma = (void*)(intptr_t)a;
-  struct { void *hamt; } *mb = (void*)(intptr_t)b;
-  void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  ```)
 ;;; ============================================================================
-;;; Content-keyed maps (TCE4)
+;;; Raw runtime bridges (#{Unsafe}-style, internal).
 ;;;
-;;; The plain map-assoc/map-get compare keys by identity (the key word is the
-;;; key). That is right for :int keys but wrong for content-typed keys such as
-;;; strings, where two distinct pointers may hold equal text. The *-eq family
-;;; below takes an explicit hash and a key-equality closure, threaded into the
-;;; runtime HAMT (tur_hamt_*_eq); the smap-* layer specializes them for :cstr
-;;; keys. See docs/typed-collection-elements-plan.md (TCE4).
+;;; These carry the key already boxed into the int64 carrier (a :int, not :K)
+;;; and an explicit comparator/ownership flag.  They are the thin C layer the
+;;; public Hash/MapKey-dispatched accessors below delegate to.  The handle is
+;;; typed (Map K V) so the public accessors thread K/V through them, but the
+;;; carrier key is always :int.
 ;;; ============================================================================
 
-;;; cstr-hash -- xxHash64 of a NUL-terminated string's contents.
-;;;
-;;; Parameters:
-;;;   s -- the string to hash
-;;;
-;;; Returns:
-;;;   The 64-bit content hash, so equal text hashes equally regardless of
-;;;   pointer identity.
-;;;
-;;; Example:
-;;;   (cstr-hash "key")  ; => <stable content hash>
-;;;
-;;; Since: TCE4
+;;; map-assoc-eq-o -- raw insert/update: explicit hash, boxed carrier key,
+;;; comparator and ownership flag.
 
-(defn cstr-hash [s :cstr] :int
-  ```c return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); ```)
-;;; tur-cstr-key-eq? -- internal: content equality of two string keys.
-
-(defn tur-cstr-key-eq? [a :cstr b :cstr] :bool
-  ```c const char *p = (const char *)(intptr_t)a;
-  const char *q = (const char *)(intptr_t)b;
-  while (*p && (*p == *q)) { p++; q++; }
-  return *(const unsigned char *)p == *(const unsigned char *)q;
+(defn map-assoc-eq-o [K V] [m (Map K V) h :int key :int val :V keyeq owned :int] : (Map K V)
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+                                     (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
+                                     (int64_t)owned);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
   ```)
+;;; map-get-eq-o -- raw lookup: explicit hash, boxed carrier key, comparator.
+
+(defn map-get-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] :V
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
+                                              (void *)(intptr_t)key,
+                                              (void *)(intptr_t)keyeq, (int64_t)owned);
+  ```)
+;;; map-has-eq-o? -- raw existence test: explicit hash, boxed carrier key.
+
+(defn map-has-eq-o? [K V] [m (Map K V) h :int key :int keyeq owned :int] :bool
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+                           (void *)(intptr_t)keyeq, (int64_t)owned);
+  ```)
+;;; map-dissoc-eq-o -- raw removal: explicit hash, boxed carrier key, comparator.
+
+(defn map-dissoc-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] : (Map K V)
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+                                     (void *)(intptr_t)keyeq, (int64_t)owned);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
+;;; ----------------------------------------------------------------------------
+;;; Explicit hash + key-equality content API (TCE4).
+;;;
+;;; Like the -eq-o family but with the key passed RAW (as :K, not a boxed
+;;; carrier) and no ownership flag (owned == 0).  These give direct control of
+;;; the hash word, which is what a forced-collision test needs (two distinct
+;;; keys sharing hash 0 stay distinct under the comparator).  The public
+;;; map-assoc/map-get accessors are preferred for ordinary use.
+;;; ----------------------------------------------------------------------------
+
 ;;; map-assoc-eq -- insert/update with an explicit hash and key-equality fn.
 ;;;
 ;;; Parameters:
@@ -257,7 +147,7 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-assoc-eq [K V] [m :int h :int key :K val :V keyeq] :int
+(defn map-assoc-eq [K V] [m (Map K V) h :int key :K val :V keyeq] : (Map K V)
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                    (void *)(intptr_t)val,
@@ -282,7 +172,7 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-get-eq [K V] [m :int h :int key :K keyeq] :V
+(defn map-get-eq [K V] [m (Map K V) h :int key :K keyeq] :V
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
                                             (void *)(intptr_t)key,
@@ -304,7 +194,7 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-has-eq? [K] [m :int h :int key :K keyeq] :bool
+(defn map-has-eq? [K V] [m (Map K V) h :int key :K keyeq] :bool
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                          (void *)(intptr_t)keyeq);
@@ -325,7 +215,7 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-dissoc-eq [K] [m :int h :int key :K keyeq] :int
+(defn map-dissoc-eq [K V] [m (Map K V) h :int key :K keyeq] : (Map K V)
   ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
                                    (void *)(intptr_t)keyeq);
@@ -333,123 +223,30 @@
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
-;;; ----------------------------------------------------------------------------
-;;; Ownership-aware *-eq-o variants (WKC3): like *-eq, but `owned` (0/1) selects
-;;; the boxed-key runtime ops so a heap-boxed multi-word key is freed exactly
-;;; once across structural sharing.  owned == 0 is byte-for-byte the plain _eq
-;;; path; the -g builders pass (mk-owned? key) so one-word keys cost nothing.
-;;; ----------------------------------------------------------------------------
-
-;;; map-assoc-eq-o -- map-assoc-eq with an ownership flag for boxed keys.
-;;;
-;;; Since: WKC3 (float32-map-key-carrier-plan)
-
-(defn map-assoc-eq-o [K V] [m :int h :int key :K val :V keyeq owned :int] :int
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                     (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
-                                     (int64_t)owned);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  ```)
-;;; map-get-eq-o -- map-get-eq with an ownership flag for boxed keys.
-;;;
-;;; Since: WKC3 (float32-map-key-carrier-plan)
-
-(defn map-get-eq-o [K V] [m :int h :int key :K keyeq owned :int] :V
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
-                                              (void *)(intptr_t)key,
-                                              (void *)(intptr_t)keyeq, (int64_t)owned);
-  ```)
-;;; map-has-eq-o? -- map-has-eq? with an ownership flag for boxed keys.
-;;;
-;;; Since: WKC3 (float32-map-key-carrier-plan)
-
-(defn map-has-eq-o? [K] [m :int h :int key :K keyeq owned :int] :bool
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                           (void *)(intptr_t)keyeq, (int64_t)owned);
-  ```)
-;;; map-dissoc-eq-o -- map-dissoc-eq with an ownership flag for boxed keys.
-;;;
-;;; Since: WKC3 (float32-map-key-carrier-plan)
-
-(defn map-dissoc-eq-o [K] [m :int h :int key :K keyeq owned :int] :int
-  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                     (void *)(intptr_t)keyeq, (int64_t)owned);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  ```)
-;;; smap-assoc -- string-keyed insert/update: Map[cstr V] by content.
+;;; cstr-hash -- xxHash64 of a NUL-terminated string's contents.
 ;;;
 ;;; Parameters:
-;;;   m   -- source Map[cstr V]
-;;;   key -- string key (compared and hashed by content)
-;;;   val -- value of type V
+;;;   s -- the string to hash
 ;;;
 ;;; Returns:
-;;;   A new Map[cstr V]; a key equal in text to an existing one updates it,
-;;;   even if the two strings are distinct pointers.
+;;;   The 64-bit content hash, so equal text hashes equally regardless of
+;;;   pointer identity.
 ;;;
 ;;; Example:
-;;;   (smap-assoc (map-new) "name" 1)  ; => Map {"name" -> 1}
+;;;   (cstr-hash "key")  ; => <stable content hash>
 ;;;
 ;;; Since: TCE4
 
-(defn smap-assoc [V] [m :int key :cstr val :V] :int
-  (map-assoc-eq m (cstr-hash key) key val tur-cstr-key-eq?))
-;;; smap-get -- string-keyed lookup by content; returns V or 0 if absent.
-;;;
-;;; Parameters:
-;;;   m   -- Map[cstr V]
-;;;   key -- string key (matched by content)
-;;;
-;;; Returns:
-;;;   The value of type V, or 0 (none) if absent.
-;;;
-;;; Example:
-;;;   (smap-get m "name")  ; => value or 0
-;;;
-;;; Since: TCE4
+(defn cstr-hash [s :cstr] :int
+  ```c return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); ```)
+;;; tur-cstr-key-eq? -- internal: content equality of two string keys.
 
-(defn smap-get [V] [m :int key :cstr] :V
-  (map-get-eq m (cstr-hash key) key tur-cstr-key-eq?))
-;;; smap-has? -- string-keyed existence test by content.
-;;;
-;;; Parameters:
-;;;   m   -- Map[cstr V]
-;;;   key -- string key (matched by content)
-;;;
-;;; Returns:
-;;;   true if present, false otherwise.
-;;;
-;;; Example:
-;;;   (smap-has? m "name")  ; => true or false
-;;;
-;;; Since: TCE4
-
-(defn smap-has? [m :int key :cstr] :bool
-  (map-has-eq? m (cstr-hash key) key tur-cstr-key-eq?))
-;;; smap-dissoc -- string-keyed removal by content; returns a new map.
-;;;
-;;; Parameters:
-;;;   m   -- source Map[cstr V]
-;;;   key -- string key (matched by content)
-;;;
-;;; Returns:
-;;;   A new Map[cstr V] with the key removed.
-;;;
-;;; Example:
-;;;   (smap-dissoc m "name")  ; => map without "name"
-;;;
-;;; Since: TCE4
-
-(defn smap-dissoc [m :int key :cstr] :int
-  (map-dissoc-eq m (cstr-hash key) key tur-cstr-key-eq?))
+(defn tur-cstr-key-eq? [a :cstr b :cstr] :bool
+  ```c const char *p = (const char *)(intptr_t)a;
+  const char *q = (const char *)(intptr_t)b;
+  while (*p && (*p == *q)) { p++; q++; }
+  return *(const unsigned char *)p == *(const unsigned char *)q;
+  ```)
 ;;; ============================================================================
 ;;; Wide map-key carrier (WKC -- float32-map-key-carrier-plan)
 ;;;
@@ -549,97 +346,169 @@
   (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f64_carrier_eq_; ```)
   (mk-owned? [x] 0))
 ;;; ============================================================================
-;;; Generic content-keyed maps (GHE3 -- generic-hash-eq-dispatch-plan; WKC carrier)
+;;; The typed Map[K V] accessor surface (TMS3).
 ;;;
-;;; The -g family routes ANY scalar key type through (Hash K) + (MapKey K) by a
-;;; single constrained-generic code path: (hash key) selects the per-K hash
-;;; instance, (mk-box key) boxes the key into the int64 carrier (a bit
-;;; reinterpret for float keys, identity for one-word keys), and (mk-cmp key)
-;;; supplies a carrier-ABI bool(int64,int64) comparator threaded into the
-;;; runtime *-eq HAMT.  This unifies what smap-* did by hand for :cstr with a
-;;; carrier-correct path for :int / :bool / :float32 / :float keys.
+;;; One family of accessors -- map-assoc / map-get / map-has? / map-dissoc --
+;;; works for ANY scalar key type via (Hash K) + (MapKey K): (hash key) selects
+;;; the per-K hash, (mk-box key) boxes the key into the int64 carrier (a bit
+;;; reinterpret for float keys, identity for one-word keys, the pointer for
+;;; cstr), and (mk-cmp key) supplies a carrier-ABI comparator threaded into the
+;;; runtime *-eq HAMT.  For :int keys mk-box is identity and the comparator is
+;;; integer =, matching an identity-keyed map; for :cstr keys distinct pointers
+;;; with equal text collapse to one entry; for :float32 / :float keys the key
+;;; round-trips by value.  Dispatch is resolved at compile time per
+;;; monomorphization.
 ;;;
-;;; Dispatch is resolved entirely at compile time per monomorphization, so a
-;;; distinct-pointer :cstr key still matches by content and a :float32 key
-;;; round-trips by value.  For :int keys mk-box is identity and the comparator
-;;; is integer =, so the result matches the plain identity-keyed map-assoc.
+;;; The handle is typed Map[K V], so the type checker enforces that the key has
+;;; type K and the value type V; a key/value-type mismatch is a TUR-E0001.
+;;;
+;;; The accessors are MACROS, not functions.  This is deliberate: a value of
+;;; ANY type V (a :float that must keep its bits, a heap handle like Vec[A] or
+;;; another Map, a user struct) must ride the map on the single int64 carrier
+;;; word.  A pure-Turmeric generic *function* would ABI-specialize its value
+;;; parameter to V's concrete C type (e.g. double, Vec__int) and then clash
+;;; with the int64-carrier runtime bridge.  By expanding at the use site, the
+;;; value flows straight into the inline-C bridge (which carries it as int64,
+;;; bit-reinterpreting floats and pointers correctly), while a typed
+;;; key-check (tur-map-kcheck) still enforces that the key has type K against
+;;; the map's Map[K V] -- so a wrong-typed key is a TUR-E0001.  Because they
+;;; are macros they cannot be passed as first-class function values.
 ;;; ============================================================================
 
-;;; map-assoc-g -- generic content-keyed insert/update for any Hash/Eq key.
+;;; tur-map-kcheck -- internal: enforce key type K against a Map[K V]; returns m.
+;;;
+;;; A typed identity on the map that unifies the key's type with the map's key
+;;; type K. The accessor macros wrap their map argument in this so a
+;;; wrong-typed key is rejected (TUR-E0001) even though the runtime dispatch
+;;; goes through the type-erased int64 carrier.
+
+(defn tur-map-kcheck [K V] [m (Map K V) k (& K)] : (Map K V) m)
+;;; map-assoc -- insert or update a key/value pair; returns a new map.
 ;;;
 ;;; Parameters:
 ;;;   m   -- source Map[K V]
 ;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
 ;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
-;;;          the carrier and compared by value; one-word keys are unchanged.
-;;;   val -- value of type V
+;;;          the carrier and compared by value; cstr keys are compared by
+;;;          content; one-word keys are unchanged.
+;;;   val -- value of type V (any type: scalar, float, or a heap handle)
 ;;;
 ;;; Returns:
 ;;;   A new Map[K V] with the entry inserted or updated. Keys equal under
 ;;;   Eq[K] (not just identical) collapse to one entry.
 ;;;
 ;;; Example:
-;;;   (map-assoc-g (map-new) "name" 1)  ; => Map {"name" -> 1}, content-keyed
-;;;   (map-assoc-g (map-new) 42 100)    ; => Map {42 -> 100}, identity-keyed
+;;;   (map-assoc (:: (map-new) (Map cstr int)) "name" 1)  ; => Map {"name" -> 1}
+;;;   (map-assoc (:: (map-new) (Map int int)) 42 100)     ; => Map {42 -> 100}
 ;;;
-;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+;;; Since: Phase TMS3 (macro accessor; was map-assoc-g; GHE3)
 
-(defn map-assoc-g [^Hash K ^MapKey K V] [m :int key :K val :V] :int
-  (map-assoc-eq-o m (hash key) (mk-box key) val (mk-cmp key) (mk-owned? key)))
-;;; map-get-g -- generic content-keyed lookup; returns V or 0 if absent.
+(defmacro map-assoc [m k v]
+  `(let [__tur_mk__ ~k]
+     (map-assoc-eq-o (tur-map-kcheck ~m (& __tur_mk__))
+                     (hash __tur_mk__) (mk-box __tur_mk__) ~v
+                     (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+;;; map-get -- look up a key; returns the value or 0 (none) if absent.
 ;;;
 ;;; Parameters:
 ;;;   m   -- Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
-;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
-;;;          the carrier and compared by value; one-word keys are unchanged.
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K])
 ;;;
 ;;; Returns:
-;;;   The value of type V, or 0 (none) if absent.
+;;;   The value of type V, or 0 (none) if absent. For a non-int value type read
+;;;   the result with an ascription, e.g. (:: (map-get m k) :float).
 ;;;
 ;;; Example:
-;;;   (map-get-g m "name")  ; => value or 0
+;;;   (map-get m "name")  ; => value or 0
 ;;;
-;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+;;; Since: Phase TMS3 (macro accessor; was map-get-g; GHE3)
 
-(defn map-get-g [^Hash K ^MapKey K V] [m :int key :K] :V
-  (map-get-eq-o m (hash key) (mk-box key) (mk-cmp key) (mk-owned? key)))
-;;; map-has-g? -- generic content-keyed existence test.
+(defmacro map-get [m k]
+  `(let [__tur_mk__ ~k]
+     (map-get-eq-o (tur-map-kcheck ~m (& __tur_mk__))
+                   (hash __tur_mk__) (mk-box __tur_mk__)
+                   (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+;;; map-has? -- check whether a key exists in the map.
 ;;;
 ;;; Parameters:
 ;;;   m   -- Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
-;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
-;;;          the carrier and compared by value; one-word keys are unchanged.
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K])
 ;;;
 ;;; Returns:
 ;;;   true if the key is present under Eq[K], false otherwise.
 ;;;
 ;;; Example:
-;;;   (map-has-g? m "name")  ; => true or false
+;;;   (map-has? m "name")  ; => true or false
 ;;;
-;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+;;; Since: Phase TMS3 (macro accessor; was map-has-g?; GHE3)
 
-(defn map-has-g? [^Hash K ^MapKey K] [m :int key :K] :bool
-  (map-has-eq-o? m (hash key) (mk-box key) (mk-cmp key) (mk-owned? key)))
-;;; map-dissoc-g -- generic content-keyed removal; returns a new map.
+(defmacro map-has? [m k]
+  `(let [__tur_mk__ ~k]
+     (map-has-eq-o? (tur-map-kcheck ~m (& __tur_mk__))
+                    (hash __tur_mk__) (mk-box __tur_mk__)
+                    (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+;;; map-dissoc -- remove a key from the map; returns a new map.
 ;;;
 ;;; Parameters:
 ;;;   m   -- source Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
-;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
-;;;          the carrier and compared by value; one-word keys are unchanged.
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K])
 ;;;
 ;;; Returns:
 ;;;   A new Map[K V] with the key removed.
 ;;;
 ;;; Example:
-;;;   (map-dissoc-g m "name")  ; => map without "name"
+;;;   (map-dissoc m "name")  ; => map without "name"
 ;;;
-;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
+;;; Since: Phase TMS3 (macro accessor; was map-dissoc-g; GHE3)
 
-(defn map-dissoc-g [^Hash K ^MapKey K] [m :int key :K] :int
-  (map-dissoc-eq-o m (hash key) (mk-box key) (mk-cmp key) (mk-owned? key)))
+(defmacro map-dissoc [m k]
+  `(let [__tur_mk__ ~k]
+     (map-dissoc-eq-o (tur-map-kcheck ~m (& __tur_mk__))
+                      (hash __tur_mk__) (mk-box __tur_mk__)
+                      (mk-cmp __tur_mk__) (mk-owned? __tur_mk__))))
+;;; map-count -- return the number of entries in the map.
+;;;
+;;; Parameters:
+;;;   m -- Map[K V]
+;;;
+;;; Returns:
+;;;   Integer count of key/value pairs.
+;;;
+;;; Example:
+;;;   (map-count my-map)  ; => 3
+;;;
+;;; Since: Phase TM0
+
+(defn map-count [K V] [m (Map K V)]
+  #{}
+  :int
+  ```c struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return tur_hamt_count(map->hamt);
+  ```)
+;;; map-merge -- merge two maps; values from b win on key collision.
+;;;
+;;; Parameters:
+;;;   a -- first Map[K V]
+;;;   b -- second Map[K V] (wins on collision)
+;;;
+;;; Returns:
+;;;   A new Map[K V] containing all entries from both maps.
+;;;
+;;; Example:
+;;;   (map-merge map-a map-b)  ; => merged map
+;;;
+;;; Since: Phase TM0
+
+(defn map-merge [K V] [a (Map K V) b (Map K V)]
+  #{}
+  : (Map K V)
+  ```c struct { void *hamt; } *ma = (void*)(intptr_t)a;
+  struct { void *hamt; } *mb = (void*)(intptr_t)b;
+  void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
 ;;; map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).
 ;;;
 ;;; Parameters:
@@ -650,7 +519,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-free [m :int]
+(defn map-free [K V] [m (Map K V)]
   #{}
   :void
   ```c free((void*)(intptr_t)m);
@@ -670,7 +539,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-eq? [m1 :int m2 :int val-cmp]
+(defn map-eq-raw? [m1 :int m2 :int val-cmp]
   #{}
   :bool
   ```c struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
@@ -691,13 +560,29 @@
   tur_hamt_iter_free((void*)iter_buf);
   return true;
   ```)
+;;; map-eq? -- typed structural equality over Map[K V] (delegates to map-eq-raw?).
+;;;
+;;; Parameters:
+;;;   m1      -- first Map[K V]
+;;;   m2      -- second Map[K V]
+;;;   val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair
+;;;
+;;; Returns:
+;;;   true if both maps have identical keys and all corresponding values satisfy val-cmp.
+;;;
+;;; Since: Phase TM0 (typed surface: TMS3)
+
+(defn map-eq? [K V] [m1 (Map K V) m2 (Map K V) val-cmp] :bool
+  (map-eq-raw? m1 m2 val-cmp))
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
 ;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
 ;; Constraints: (Eq K) ensures keys are comparable; (Eq V) uses integer equality.
 ;; Note: element comparison uses integer equality; correct for all primitive K/V.
+;; The instance receives bare-Map (HKT) handles, which carry as int64, so it
+;; delegates to the raw :int helper rather than the typed map-eq?.
 
 (definstance Eq [Map] [(Eq K) (Eq V)]
-  (eq? [x y] (map-eq? x y (fn [a b] (= a b)))))
+  (eq? [x y] (map-eq-raw? x y (fn [a b] (= a b)))))
 ;;; hamt-assoc-each__ -- internal helper for the hamt-of macro.
 ;;;
 ;;; Threads (map-assoc m k v) over the kv-pairs in xs, returning the final
@@ -737,91 +622,36 @@
 ;;;
 ;;; Parameters:
 ;;;   & kvs -- an even number of arguments, alternating key then value.
-;;;            Keys are int-valued (the carrier map-assoc hashes by value);
-;;;            the #map{...} data literal normalizes keyword keys to their
-;;;            content hash before reaching this macro. Values may be any
-;;;            scalar type V (:int, :cstr, :bool, :nil, :float) -- all values
-;;;            must unify to a single V, and all keys to a single (int) key
-;;;            type, else TUR-E0001 on the offending element.
+;;;            Keys may be any Hash/MapKey scalar type K (:int, :cstr, :bool,
+;;;            :float32, :float); all keys must unify to a single K and all
+;;;            values to a single V, else TUR-E0001 on the offending element.
+;;;            String keys are compared by content; int/bool by value; float
+;;;            keys round-trip by value.
 ;;;
 ;;; Returns:
-;;;   A fresh Map populated with the given entries; later duplicate keys win.
-;;;   map-get returns the value type V, so a non-int value is read with an
-;;;   ascription, e.g. (:: (map-get m k k) :cstr).
+;;;   A fresh Map[K V] populated with the given entries; later duplicate keys
+;;;   win.  map-get returns the value type V, so a non-int value is read with
+;;;   an ascription, e.g. (:: (map-get m k) :cstr).
 ;;;
 ;;; Note: this is the lowering target of the #map{...} data literal
 ;;;   (-Xdata-literals).  Writing #map{:a 1 :b 2} is preferred over calling
-;;;   hamt-of directly.
-;;;
-;;;   For *string* keys, prefer the content-keyed smap-of (the lowering target
-;;;   of #map{"k" v ...}).  GMK2: a direct (hamt-of "k" v ...) whose leading
-;;;   key is a string literal is rewritten to smap-of, so string keys are
-;;;   always compared by content rather than by the identity-hash carrier.
+;;;   hamt-of directly.  A non-empty literal is seeded from a value-pinned
+;;;   empty (map-empty-for) so the key/value types flow from the first pair;
+;;;   an empty (hamt-of) yields a bare (map-new) that must be annotated by the
+;;;   surrounding context.
 ;;;
 ;;; Example:
-;;;   (hamt-of)            ; => empty Map
-;;;   (hamt-of 1 10 2 20)  ; => Map {1 -> 10, 2 -> 20}
+;;;   (hamt-of)              ; => empty Map (annotate at the binding site)
+;;;   (hamt-of 1 10 2 20)    ; => Map {1 -> 10, 2 -> 20}
+;;;   (hamt-of "a" 1 "b" 2)  ; => Map {"a" -> 1, "b" -> 2}, content-keyed
 ;;;
-;;; Since: DL1 (data-literals-plan)
+;;; Since: DL1 (data-literals-plan); typed surface: TMS3
 
 (defmacro hamt-of [& kvs]
   (if (empty? kvs)
     (list map-new)
     (list do
       (list hamt-homog-chain__ ~@kvs)
-      (list hamt-assoc-each__ (list map-new) ~@kvs))))
-;;; smap-assoc-each__ -- internal helper for the smap-of macro.
-;;;
-;;; Like hamt-assoc-each__, but threads smap-assoc (content-keyed :cstr keys)
-;;; over the kv-pairs instead of the identity-keyed map-assoc.
-
-(defmacro smap-assoc-each__ [m & kvs]
-  (if (empty? kvs)
-    m
-    (list smap-assoc-each__
-      (list smap-assoc m (first kvs) (second kvs))
-      ~@(rest (rest kvs)))))
-;;; smap-homog-chain__ -- internal: enforce homogeneous values for smap-of.
-;;;
-;;; Keys are pinned to :cstr by smap-assoc's signature, so only the values
-;;; need a homogeneity chain: tur-map-homog__ over adjacent values forces
-;;; every value to unify to one type V (a mixed literal is TUR-E0001).
-
-(defmacro smap-homog-chain__ [& kvs]
-  (if (empty? kvs)
-    0
-    (if (empty? (rest (rest kvs)))
-      0
-      (list do
-        (list tur-map-homog__ (second kvs) (second (rest (rest kvs))))
-        (list smap-homog-chain__ ~@(rest (rest kvs)))))))
-;;; smap-of -- content-keyed string-map literal: alternating key/value args.
-;;;
-;;; Parameters:
-;;;   & kvs -- an even number of arguments, alternating string key then value.
-;;;            Keys are :cstr and compared by content (distinct pointers with
-;;;            equal text are the same key), via the smap-* / *-eq HAMT layer.
-;;;            Values may be any scalar type V; all values must unify to one V.
-;;;
-;;; Returns:
-;;;   A fresh content-keyed Map populated with the given entries; later
-;;;   duplicate keys win. Look entries up with smap-get / smap-has? /
-;;;   smap-dissoc (which hash and compare keys by content).
-;;;
-;;; Note: this is the lowering target of the #map{"k" v ...} data literal when
-;;;   every key is a string literal (-Xdata-literals). A direct
-;;;   (hamt-of "k" v ...) call with a leading string key is also rewritten to
-;;;   smap-of so string keys are always content-keyed.
-;;;
-;;; Example:
-;;;   (smap-of)                  ; => empty Map
-;;;   (smap-of "a" 1 "b" 2)      ; => Map {"a" -> 1, "b" -> 2}
-;;;
-;;; Since: GMK2 (generic-map-key-dispatch-plan)
-
-(defmacro smap-of [& kvs]
-  (if (empty? kvs)
-    (list map-new)
-    (list do
-      (list smap-homog-chain__ ~@kvs)
-      (list smap-assoc-each__ (list map-new) ~@kvs))))
+      (list hamt-assoc-each__
+        (list map-empty-for (first kvs) (second kvs))
+        ~@kvs))))

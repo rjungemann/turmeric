@@ -5,12 +5,12 @@
 (defn main [] :int
   (let [m (hamt-of 1 "alpha" 2 "beta" 3 "gamma")
         f (hamt-of 100 0.25 200 0.5)]
-    (println (:: (map-get m 1 1) :cstr))
-    (println (:: (map-get m 3 3) :cstr))
+    (println (:: (map-get m 1) :cstr))
+    (println (:: (map-get m 3) :cstr))
     (println (map-count m))
-    (println (:: (map-get f 200 200) :float))
+    (println (:: (map-get f 200) :float))
     ;; map-assoc adds a new entry, value type still cstr
     (let [m2 (map-assoc m 4 "delta")]
-      (println (:: (map-get m2 4 4) :cstr))
+      (println (:: (map-get m2 4) :cstr))
       (println (map-count m2)))
     0))

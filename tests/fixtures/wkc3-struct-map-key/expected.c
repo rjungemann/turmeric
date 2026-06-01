@@ -2217,7 +2217,7 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 typedef struct Map {
-    void * hamt;
+    int64_t carrier;
 } Map;
 
 typedef struct Vec {
@@ -2407,25 +2407,25 @@ static int64_t __inst_MapKey_mk_owned__float32(float);
 static int64_t __inst_MapKey_mk_box_float(double);
 static int64_t __inst_MapKey_mk_cmp_float(double);
 static int64_t __inst_MapKey_mk_owned__float(double);
-static bool __fn_592(int64_t, int64_t);
+static bool __fn_555(int64_t, int64_t);
 static bool __inst_Eq_eq__Map(int64_t, int64_t);
-static bool __fn_616(int64_t, int64_t);
+static bool __fn_579(int64_t, int64_t);
 static bool __inst_Eq_eq__Vec(int64_t, int64_t);
-static bool __fn_643(int64_t, int64_t);
+static bool __fn_606(int64_t, int64_t);
 static bool __inst_Eq_eq__Option(int64_t, int64_t);
-static bool __fn_665(int64_t, int64_t);
-static bool __fn_669(int64_t, int64_t);
+static bool __fn_628(int64_t, int64_t);
+static bool __fn_632(int64_t, int64_t);
 static bool __inst_Eq_eq__Result(int64_t, int64_t);
-static bool __fn_685(int64_t, int64_t);
-static bool __fn_689(int64_t, int64_t);
+static bool __fn_648(int64_t, int64_t);
+static bool __fn_652(int64_t, int64_t);
 static bool __inst_Eq_eq__Pair(int64_t, int64_t);
-static bool __fn_770(int64_t, int64_t);
-static bool __fn_774(int64_t, int64_t);
+static bool __fn_733(int64_t, int64_t);
+static bool __fn_737(int64_t, int64_t);
 static bool __inst_Eq_eq__Tuple2(int64_t, int64_t);
-static bool __fn_792(int64_t, int64_t);
+static bool __fn_755(int64_t, int64_t);
 static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
-static bool __fn_871(int64_t, int64_t);
+static bool __fn_834(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
 static int64_t __inst_Hash_hash_Point(Point);
 static bool __inst_Eq_eq__Point(Point, Point);
@@ -2470,38 +2470,18 @@ static void hamt_transient_del_(void *, int64_t, void *);
 static void * hamt_persistent_(void *);
 static int64_t hamt_autolink_hint();
 static int64_t map_new();
-static void * map_hamt(int64_t);
-static int64_t map_wrap(void *);
-static int64_t map_assoc(int64_t, int64_t, int64_t);
-static int64_t map_assoc_h(int64_t, int64_t, int64_t, int64_t);
-static int64_t map_dissoc(int64_t, int64_t, int64_t);
-static int64_t map_get(int64_t, int64_t, int64_t);
-static bool map_has_(int64_t, int64_t, int64_t);
-static int64_t map_count(int64_t);
-static int64_t map_merge(int64_t, int64_t);
-static int64_t cstr_hash(const char *);
-static bool tur_cstr_key_eq_(const char *, const char *);
-static int64_t map_assoc_eq(int64_t, int64_t, int64_t, int64_t, int64_t);
-static int64_t map_get_eq(int64_t, int64_t, int64_t, int64_t);
-static bool map_has_eq_(int64_t, int64_t, int64_t, int64_t);
-static int64_t map_dissoc_eq(int64_t, int64_t, int64_t, int64_t);
 static int64_t map_assoc_eq_o(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t map_get_eq_o(int64_t, int64_t, int64_t, int64_t, int64_t);
 static bool map_has_eq_o_(int64_t, int64_t, int64_t, int64_t, int64_t);
 static int64_t map_dissoc_eq_o(int64_t, int64_t, int64_t, int64_t, int64_t);
-static int64_t smap_assoc(int64_t, const char *, int64_t);
-static int64_t smap_get(int64_t, const char *);
-static bool smap_has_(int64_t, const char *);
-static int64_t smap_dissoc(int64_t, const char *);
+static int64_t cstr_hash(const char *);
+static bool tur_cstr_key_eq_(const char *, const char *);
 static bool tur_int_carrier_eq_(int64_t, int64_t);
 static bool tur_f32_carrier_eq_(int64_t, int64_t);
 static bool tur_f64_carrier_eq_(int64_t, int64_t);
-static int64_t map_assoc_g(int64_t, int64_t, int64_t);
-static int64_t map_get_g(int64_t, int64_t);
-static bool map_has_g_(int64_t, int64_t);
-static int64_t map_dissoc_g(int64_t, int64_t);
-static void map_free(int64_t);
-static bool map_eq_(int64_t, int64_t, int64_t);
+static int64_t tur_map_kcheck(int64_t, const void *);
+static int64_t map_count(int64_t);
+static bool map_eq_raw_(int64_t, int64_t, int64_t);
 static void tur_map_homog__(int64_t, int64_t);
 static int64_t vec_new();
 static int64_t vec_len(int64_t);
@@ -2576,10 +2556,6 @@ static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, int64_t);
 static void mutmap_free(int64_t);
 static bool point_carrier_eq_(int64_t, int64_t);
-static int64_t map_assoc_g__spec__int64_t_int64_t_Point_int64_t(int64_t, Point, int64_t);
-static int64_t map_get_g__spec__int64_t_int64_t_Point(int64_t, Point);
-static bool map_has_g___spec__bool_int64_t_Point(int64_t, Point);
-static int64_t map_dissoc_g__spec__int64_t_int64_t_Point(int64_t, Point);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -2957,12 +2933,12 @@ static dict_MapKey_float dict_MapKey_float_singleton = {
     .mk_owned_ = __inst_MapKey_mk_owned__float,
 };
 
-static bool __fn_592(int64_t a, int64_t b) {
+static bool __fn_555(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Map(int64_t x, int64_t y) {
-        return map_eq_(x, y, (int64_t)(intptr_t)(__fn_592));
+        return map_eq_raw_(x, y, (int64_t)(intptr_t)(__fn_555));
 }
 
 typedef struct dict_Eq_Map {
@@ -2973,12 +2949,12 @@ static dict_Eq_Map dict_Eq_Map_singleton = {
     .eq_ = __inst_Eq_eq__Map,
 };
 
-static bool __fn_616(int64_t a, int64_t b) {
+static bool __fn_579(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Vec(int64_t x, int64_t y) {
-        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_616));
+        return vec_eq_(x, y, (int64_t)(intptr_t)(__fn_579));
 }
 
 typedef struct dict_Eq_Vec {
@@ -2989,12 +2965,12 @@ static dict_Eq_Vec dict_Eq_Vec_singleton = {
     .eq_ = __inst_Eq_eq__Vec,
 };
 
-static bool __fn_643(int64_t a, int64_t b) {
+static bool __fn_606(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Option(int64_t x, int64_t y) {
-        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_643));
+        return option_eq_(x, y, (int64_t)(intptr_t)(__fn_606));
 }
 
 typedef struct dict_Eq_Option {
@@ -3005,16 +2981,16 @@ static dict_Eq_Option dict_Eq_Option_singleton = {
     .eq_ = __inst_Eq_eq__Option,
 };
 
-static bool __fn_665(int64_t a, int64_t b) {
+static bool __fn_628(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_669(int64_t a, int64_t b) {
+static bool __fn_632(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Result(int64_t x, int64_t y) {
-        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_665), (int64_t)(intptr_t)(__fn_669));
+        return result_eq_(x, y, (int64_t)(intptr_t)(__fn_628), (int64_t)(intptr_t)(__fn_632));
 }
 
 typedef struct dict_Eq_Result {
@@ -3025,16 +3001,16 @@ static dict_Eq_Result dict_Eq_Result_singleton = {
     .eq_ = __inst_Eq_eq__Result,
 };
 
-static bool __fn_685(int64_t a, int64_t b) {
+static bool __fn_648(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_689(int64_t a, int64_t b) {
+static bool __fn_652(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Pair(int64_t x, int64_t y) {
-        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_685), (int64_t)(intptr_t)(__fn_689));
+        return pair_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_648), (int64_t)(intptr_t)(__fn_652));
 }
 
 typedef struct dict_Eq_Pair {
@@ -3045,16 +3021,16 @@ static dict_Eq_Pair dict_Eq_Pair_singleton = {
     .eq_ = __inst_Eq_eq__Pair,
 };
 
-static bool __fn_770(int64_t a, int64_t b) {
+static bool __fn_733(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
-static bool __fn_774(int64_t a, int64_t b) {
+static bool __fn_737(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Tuple2(int64_t x, int64_t y) {
-        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_770), (int64_t)(intptr_t)(__fn_774));
+        return tuple2_eq_carrier_(x, y, (int64_t)(intptr_t)(__fn_733), (int64_t)(intptr_t)(__fn_737));
 }
 
 typedef struct dict_Eq_Tuple2 {
@@ -3065,12 +3041,12 @@ static dict_Eq_Tuple2 dict_Eq_Tuple2_singleton = {
     .eq_ = __inst_Eq_eq__Tuple2,
 };
 
-static bool __fn_792(int64_t a, int64_t b) {
+static bool __fn_755(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__Cons(int64_t x, int64_t y) {
-        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_792));
+        return list_eq_(x, y, (int64_t)(intptr_t)(__fn_755));
 }
 
 typedef struct dict_Eq_Cons {
@@ -3093,12 +3069,12 @@ static dict_Eq_Set dict_Eq_Set_singleton = {
     .eq_ = __inst_Eq_eq__Set,
 };
 
-static bool __fn_871(int64_t a, int64_t b) {
+static bool __fn_834(int64_t a, int64_t b) {
         return (a) == (b);
 }
 
 static bool __inst_Eq_eq__MutableMap(int64_t x, int64_t y) {
-        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_871));
+        return mutmap_eq_(x, y, (int64_t)(intptr_t)(__fn_834));
 }
 
 typedef struct dict_Eq_MutableMap {
@@ -3362,122 +3338,6 @@ static int64_t map_new() {
   
 }
 
-static void * map_hamt(int64_t m) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return map->hamt;
-  
-}
-
-static int64_t map_wrap(void * h) {
-        struct { void *hamt; } *m = malloc(sizeof(*m));
-  m->hamt = (void*)(intptr_t)h;
-  return (int64_t)(intptr_t)m;
-  
-}
-
-static int64_t map_assoc(int64_t m, int64_t key, int64_t val) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  void *new_hamt = tur_hamt_set(map->hamt, (int64_t)key, (void*)(intptr_t)key, (void*)(intptr_t)val);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t map_assoc_h(int64_t m, int64_t h, int64_t key, int64_t val) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  void *new_hamt = tur_hamt_set(map->hamt, h, (void*)(intptr_t)key, (void*)(intptr_t)val);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t map_dissoc(int64_t m, int64_t h, int64_t key) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  void *new_hamt = tur_hamt_del(map->hamt, h, (void*)(intptr_t)key);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t map_get(int64_t m, int64_t h, int64_t key) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get(map->hamt, h, (void*)(intptr_t)key);
-  
-}
-
-static bool map_has_(int64_t m, int64_t h, int64_t key) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return tur_hamt_has(map->hamt, h, (void*)(intptr_t)key);
-  
-}
-
-static int64_t map_count(int64_t m) {
-        struct { void *hamt; } *map = (void*)(intptr_t)m;
-  return tur_hamt_count(map->hamt);
-  
-}
-
-static int64_t map_merge(int64_t a, int64_t b) {
-        struct { void *hamt; } *ma = (void*)(intptr_t)a;
-  struct { void *hamt; } *mb = (void*)(intptr_t)b;
-  void *new_hamt = tur_hamt_merge(ma->hamt, mb->hamt);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t cstr_hash(const char * s) {
-        return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); 
-}
-
-static bool tur_cstr_key_eq_(const char * a, const char * b) {
-        const char *p = (const char *)(intptr_t)a;
-  const char *q = (const char *)(intptr_t)b;
-  while (*p && (*p == *q)) { p++; q++; }
-  return *(const unsigned char *)p == *(const unsigned char *)q;
-  
-}
-
-static int64_t map_assoc_eq(int64_t m, int64_t h, int64_t key, int64_t val, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                   (void *)(intptr_t)val,
-                                   (void *)(intptr_t)keyeq);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t map_get_eq(int64_t m, int64_t h, int64_t key, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
-                                            (void *)(intptr_t)key,
-                                            (void *)(intptr_t)keyeq);
-  
-}
-
-static bool map_has_eq_(int64_t m, int64_t h, int64_t key, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                         (void *)(intptr_t)keyeq);
-  
-}
-
-static int64_t map_dissoc_eq(int64_t m, int64_t h, int64_t key, int64_t keyeq) {
-        struct { void *hamt; } *map = (void *)(intptr_t)m;
-  void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
-                                   (void *)(intptr_t)keyeq);
-  struct { void *hamt; } *r = malloc(sizeof(*r));
-  r->hamt = new_hamt;
-  return (int64_t)(intptr_t)r;
-  
-}
-
 static int64_t map_assoc_eq_o(int64_t m, int64_t h, int64_t key, int64_t val, int64_t keyeq, int64_t owned) {
         struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -3514,20 +3374,16 @@ static int64_t map_dissoc_eq_o(int64_t m, int64_t h, int64_t key, int64_t keyeq,
   
 }
 
-static int64_t smap_assoc(int64_t m, const char * key, int64_t val) {
-        return map_assoc_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, val, (int64_t)(intptr_t)(tur_cstr_key_eq_));
+static int64_t cstr_hash(const char * s) {
+        return (int64_t)tur_hamt_hash_str((const char *)(intptr_t)s); 
 }
 
-static int64_t smap_get(int64_t m, const char * key) {
-        return map_get_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
-}
-
-static bool smap_has_(int64_t m, const char * key) {
-        return map_has_eq_(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
-}
-
-static int64_t smap_dissoc(int64_t m, const char * key) {
-        return map_dissoc_eq(m, cstr_hash(key), ((union { const char * s; int64_t d; }){.s = key}).d, (int64_t)(intptr_t)(tur_cstr_key_eq_));
+static bool tur_cstr_key_eq_(const char * a, const char * b) {
+        const char *p = (const char *)(intptr_t)a;
+  const char *q = (const char *)(intptr_t)b;
+  while (*p && (*p == *q)) { p++; q++; }
+  return *(const unsigned char *)p == *(const unsigned char *)q;
+  
 }
 
 static bool tur_int_carrier_eq_(int64_t a, int64_t b) {
@@ -3548,28 +3404,17 @@ static bool tur_f64_carrier_eq_(int64_t a, int64_t b) {
   
 }
 
-static int64_t map_assoc_g(int64_t m, int64_t key, int64_t val) {
-        return map_assoc_eq_o(m, __inst_Hash_hash_int(key), __inst_MapKey_mk_box_int(key), val, __inst_MapKey_mk_cmp_int(key), __inst_MapKey_mk_owned__int(key));
+static int64_t tur_map_kcheck(int64_t m, const void * k) {
+        return m;
 }
 
-static int64_t map_get_g(int64_t m, int64_t key) {
-        return map_get_eq_o(m, __inst_Hash_hash_int(key), __inst_MapKey_mk_box_int(key), __inst_MapKey_mk_cmp_int(key), __inst_MapKey_mk_owned__int(key));
-}
-
-static bool map_has_g_(int64_t m, int64_t key) {
-        return map_has_eq_o_(m, __inst_Hash_hash_int(key), __inst_MapKey_mk_box_int(key), __inst_MapKey_mk_cmp_int(key), __inst_MapKey_mk_owned__int(key));
-}
-
-static int64_t map_dissoc_g(int64_t m, int64_t key) {
-        return map_dissoc_eq_o(m, __inst_Hash_hash_int(key), __inst_MapKey_mk_box_int(key), __inst_MapKey_mk_cmp_int(key), __inst_MapKey_mk_owned__int(key));
-}
-
-static void map_free(int64_t m) {
-        free((void*)(intptr_t)m);
+static int64_t map_count(int64_t m) {
+        struct { void *hamt; } *map = (void*)(intptr_t)m;
+  return tur_hamt_count(map->hamt);
   
 }
 
-static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
+static bool map_eq_raw_(int64_t m1, int64_t m2, int64_t val_cmp) {
         struct { void *hamt; } *map1 = (void*)(intptr_t)m1;
   struct { void *hamt; } *map2 = (void*)(intptr_t)m2;
   if (tur_hamt_count(map1->hamt) != tur_hamt_count(map2->hamt)) return false;
@@ -4411,54 +4256,92 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            int64_t m_887 = map_assoc_g__spec__int64_t_int64_t_Point_int64_t(map_assoc_g__spec__int64_t_int64_t_Point_int64_t(map_new(), (Point){.x = INT64_C(3), .y = INT64_C(4)}, INT64_C(100)), (Point){.x = INT64_C(5), .y = INT64_C(6)}, INT64_C(200));
-            (void)m_887;
-            int64_t m2_888 = map_assoc_g__spec__int64_t_int64_t_Point_int64_t(m_887, (Point){.x = INT64_C(3), .y = INT64_C(4)}, INT64_C(999));
-            (void)m2_888;
-            printf("%lld\n", (long long)(map_get_g__spec__int64_t_int64_t_Point(m2_888, (Point){.x = INT64_C(3), .y = INT64_C(4)})));
-            printf("%lld\n", (long long)(map_get_g__spec__int64_t_int64_t_Point(m2_888, (Point){.x = INT64_C(5), .y = INT64_C(6)})));
-            printf("%lld\n", (long long)(map_count(m2_888)));
             int64_t __t4;
-            if (map_has_g___spec__bool_int64_t_Point(m2_888, (Point){.x = INT64_C(5), .y = INT64_C(6)})) {
-                __t4 = INT64_C(1);
-            } else {
-                __t4 = INT64_C(0);
+            {
+                Point __tur_mk___850 = (Point){.x = INT64_C(5), .y = INT64_C(6)};
+                (void)__tur_mk___850;
+                int64_t __t5;
+                {
+                    Point __tur_mk___851 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+                    (void)__tur_mk___851;
+                    __t5 = map_assoc_eq_o(tur_map_kcheck(map_new(), &__tur_mk___851), __inst_Hash_hash_Point(__tur_mk___851), __inst_MapKey_mk_box_Point(__tur_mk___851), INT64_C(100), __inst_MapKey_mk_cmp_Point(__tur_mk___851), __inst_MapKey_mk_owned__Point(__tur_mk___851));
+                }
+                __t4 = map_assoc_eq_o(tur_map_kcheck(__t5, &__tur_mk___850), __inst_Hash_hash_Point(__tur_mk___850), __inst_MapKey_mk_box_Point(__tur_mk___850), INT64_C(200), __inst_MapKey_mk_cmp_Point(__tur_mk___850), __inst_MapKey_mk_owned__Point(__tur_mk___850));
             }
-            printf("%lld\n", (long long)(__t4));
-            int64_t __t5;
-            if (map_has_g___spec__bool_int64_t_Point(m2_888, (Point){.x = INT64_C(9), .y = INT64_C(9)})) {
-                __t5 = INT64_C(1);
-            } else {
-                __t5 = INT64_C(0);
-            }
-            printf("%lld\n", (long long)(__t5));
+            int64_t m_852 = __t4;
+            (void)m_852;
             int64_t __t6;
-            if (map_has_g___spec__bool_int64_t_Point(map_dissoc_g__spec__int64_t_int64_t_Point(m2_888, (Point){.x = INT64_C(3), .y = INT64_C(4)}), (Point){.x = INT64_C(3), .y = INT64_C(4)})) {
-                __t6 = INT64_C(1);
-            } else {
-                __t6 = INT64_C(0);
+            {
+                Point __tur_mk___853 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+                (void)__tur_mk___853;
+                __t6 = map_assoc_eq_o(tur_map_kcheck(m_852, &__tur_mk___853), __inst_Hash_hash_Point(__tur_mk___853), __inst_MapKey_mk_box_Point(__tur_mk___853), INT64_C(999), __inst_MapKey_mk_cmp_Point(__tur_mk___853), __inst_MapKey_mk_owned__Point(__tur_mk___853));
             }
-            printf("%lld\n", (long long)(__t6));
+            int64_t m2_854 = __t6;
+            (void)m2_854;
+            int64_t __t7;
+            {
+                Point __tur_mk___855 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+                (void)__tur_mk___855;
+                __t7 = map_get_eq_o(tur_map_kcheck(m2_854, &__tur_mk___855), __inst_Hash_hash_Point(__tur_mk___855), __inst_MapKey_mk_box_Point(__tur_mk___855), __inst_MapKey_mk_cmp_Point(__tur_mk___855), __inst_MapKey_mk_owned__Point(__tur_mk___855));
+            }
+            printf("%lld\n", (long long)(__t7));
+            int64_t __t8;
+            {
+                Point __tur_mk___856 = (Point){.x = INT64_C(5), .y = INT64_C(6)};
+                (void)__tur_mk___856;
+                __t8 = map_get_eq_o(tur_map_kcheck(m2_854, &__tur_mk___856), __inst_Hash_hash_Point(__tur_mk___856), __inst_MapKey_mk_box_Point(__tur_mk___856), __inst_MapKey_mk_cmp_Point(__tur_mk___856), __inst_MapKey_mk_owned__Point(__tur_mk___856));
+            }
+            printf("%lld\n", (long long)(__t8));
+            printf("%lld\n", (long long)(map_count(m2_854)));
+            int64_t __t9;
+            bool __t10;
+            {
+                Point __tur_mk___857 = (Point){.x = INT64_C(5), .y = INT64_C(6)};
+                (void)__tur_mk___857;
+                __t10 = map_has_eq_o_(tur_map_kcheck(m2_854, &__tur_mk___857), __inst_Hash_hash_Point(__tur_mk___857), __inst_MapKey_mk_box_Point(__tur_mk___857), __inst_MapKey_mk_cmp_Point(__tur_mk___857), __inst_MapKey_mk_owned__Point(__tur_mk___857));
+            }
+            if (__t10) {
+                __t9 = INT64_C(1);
+            } else {
+                __t9 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t9));
+            int64_t __t11;
+            bool __t12;
+            {
+                Point __tur_mk___858 = (Point){.x = INT64_C(9), .y = INT64_C(9)};
+                (void)__tur_mk___858;
+                __t12 = map_has_eq_o_(tur_map_kcheck(m2_854, &__tur_mk___858), __inst_Hash_hash_Point(__tur_mk___858), __inst_MapKey_mk_box_Point(__tur_mk___858), __inst_MapKey_mk_cmp_Point(__tur_mk___858), __inst_MapKey_mk_owned__Point(__tur_mk___858));
+            }
+            if (__t12) {
+                __t11 = INT64_C(1);
+            } else {
+                __t11 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t11));
+            int64_t __t13;
+            bool __t14;
+            {
+                Point __tur_mk___859 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+                (void)__tur_mk___859;
+                int64_t __t15;
+                {
+                    Point __tur_mk___860 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+                    (void)__tur_mk___860;
+                    __t15 = map_dissoc_eq_o(tur_map_kcheck(m2_854, &__tur_mk___860), __inst_Hash_hash_Point(__tur_mk___860), __inst_MapKey_mk_box_Point(__tur_mk___860), __inst_MapKey_mk_cmp_Point(__tur_mk___860), __inst_MapKey_mk_owned__Point(__tur_mk___860));
+                }
+                __t14 = map_has_eq_o_(tur_map_kcheck(__t15, &__tur_mk___859), __inst_Hash_hash_Point(__tur_mk___859), __inst_MapKey_mk_box_Point(__tur_mk___859), __inst_MapKey_mk_cmp_Point(__tur_mk___859), __inst_MapKey_mk_owned__Point(__tur_mk___859));
+            }
+            if (__t14) {
+                __t13 = INT64_C(1);
+            } else {
+                __t13 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t13));
         }
-        int64_t __t7;
-        __t7 = INT64_C(0);
-        return (int)__t7;
-}
-
-static int64_t map_assoc_g__spec__int64_t_int64_t_Point_int64_t(int64_t m, Point key, int64_t val) {
-        return map_assoc_eq_o(m, __inst_Hash_hash_Point(key), __inst_MapKey_mk_box_Point(key), val, __inst_MapKey_mk_cmp_Point(key), __inst_MapKey_mk_owned__Point(key));
-}
-
-static int64_t map_get_g__spec__int64_t_int64_t_Point(int64_t m, Point key) {
-        return map_get_eq_o(m, __inst_Hash_hash_Point(key), __inst_MapKey_mk_box_Point(key), __inst_MapKey_mk_cmp_Point(key), __inst_MapKey_mk_owned__Point(key));
-}
-
-static bool map_has_g___spec__bool_int64_t_Point(int64_t m, Point key) {
-        return map_has_eq_o_(m, __inst_Hash_hash_Point(key), __inst_MapKey_mk_box_Point(key), __inst_MapKey_mk_cmp_Point(key), __inst_MapKey_mk_owned__Point(key));
-}
-
-static int64_t map_dissoc_g__spec__int64_t_int64_t_Point(int64_t m, Point key) {
-        return map_dissoc_eq_o(m, __inst_Hash_hash_Point(key), __inst_MapKey_mk_box_Point(key), __inst_MapKey_mk_cmp_Point(key), __inst_MapKey_mk_owned__Point(key));
+        int64_t __t16;
+        __t16 = INT64_C(0);
+        return (int)__t16;
 }
 
 
