@@ -389,87 +389,101 @@
 ;;;
 ;;; Since: Phase B2
 
+;; Private helpers for json/encode.
+;; State is a tur_json_buf { char *data; size_t len; size_t cap; } passed as :ptr.
+
+(defn json-enc-ensure- [b :ptr extra :int] :void
+  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  struct tur_json_buf *bp = (struct tur_json_buf *)b;
+  if (bp->len + (size_t)extra + 1 > bp->cap) {
+    bp->cap = (bp->len + (size_t)extra + 1) * 2 + 64;
+    bp->data = realloc(bp->data, bp->cap);
+  }
+  ```)
+
+(defn json-enc-append-s- [b :ptr s :cstr] :void
+  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  struct tur_json_buf *bp = (struct tur_json_buf *)b;
+  size_t slen = strlen(s);
+  json_enc_ensure_(b, (int64_t)slen);
+  memcpy(bp->data + bp->len, s, slen);
+  bp->len += slen;
+  bp->data[bp->len] = '\0';
+  ```)
+
+(defn json-enc-append-c- [b :ptr c :int] :void
+  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  struct tur_json_buf *bp = (struct tur_json_buf *)b;
+  json_enc_ensure_(b, 1);
+  bp->data[bp->len++] = (char)c;
+  bp->data[bp->len] = '\0';
+  ```)
+
+(defn json-enc-str- [b :ptr s :cstr] :void
+  ```c json_enc_append_c_(b, (int64_t)'"');
+  for (const char *sp = s; *sp; sp++) {
+    if (*sp == '"')       { json_enc_append_s_(b, "\\\""); }
+    else if (*sp == '\\') { json_enc_append_s_(b, "\\\\"); }
+    else if (*sp == '\n') { json_enc_append_s_(b, "\\n"); }
+    else if (*sp == '\r') { json_enc_append_s_(b, "\\r"); }
+    else if (*sp == '\t') { json_enc_append_s_(b, "\\t"); }
+    else                  { json_enc_append_c_(b, (int64_t)*sp); }
+  }
+  json_enc_append_c_(b, (int64_t)'"');
+  ```)
+
+(defn json-enc-node- [node :int b :ptr] :void
+  ```c if (!node) { json_enc_append_s_(b, "null"); return; }
+  int64_t *np = (int64_t*)(intptr_t)node;
+  int type = (int)np[0];
+  char tmp[64];
+  switch (type) {
+    case 0: json_enc_append_s_(b, "null"); break;
+    case 1: json_enc_append_s_(b, np[1] ? "true" : "false"); break;
+    case 2: snprintf(tmp, sizeof(tmp), "%lld", (long long)np[1]); json_enc_append_s_(b, tmp); break;
+    case 3: {
+      double v; memcpy(&v, &np[1], sizeof(double));
+      snprintf(tmp, sizeof(tmp), "%.17g", v); json_enc_append_s_(b, tmp); break;
+    }
+    case 4: json_enc_str_(b, (const char*)(intptr_t)np[1]); break;
+    case 5: {
+      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
+      json_enc_append_c_(b, (int64_t)'[');
+      for (size_t i = 0; i < v->len; i++) {
+        if (i > 0) json_enc_append_c_(b, (int64_t)',');
+        json_enc_node_(v->data[i], b);
+      }
+      json_enc_append_c_(b, (int64_t)']');
+      break;
+    }
+    case 6: {
+      json_enc_append_c_(b, (int64_t)'{');
+      int64_t cur = np[1];
+      int first = 1;
+      while (cur) {
+        int64_t *e = (int64_t*)(intptr_t)cur;
+        if (!first) json_enc_append_c_(b, (int64_t)',');
+        first = 0;
+        json_enc_str_(b, (const char*)(intptr_t)e[0]);
+        json_enc_append_c_(b, (int64_t)':');
+        json_enc_node_(e[1], b);
+        cur = e[2];
+      }
+      json_enc_append_c_(b, (int64_t)'}');
+      break;
+    }
+    default: json_enc_append_s_(b, "null"); break;
+  }
+  ```)
+
 (defn json/encode [node :int] :cstr
-  ```c struct buf_s { char *data; size_t len; size_t cap; };
-  void buf_ensure(struct buf_s *b, size_t extra) {
-    if (b->len + extra + 1 > b->cap) {
-      b->cap = (b->len + extra + 1) * 2 + 64;
-      b->data = realloc(b->data, b->cap);
-    }
-  }
-  void buf_append_s(struct buf_s *b, const char *s) {
-    size_t slen = strlen(s);
-    buf_ensure(b, slen);
-    memcpy(b->data + b->len, s, slen);
-    b->len += slen;
-    b->data[b->len] = '\0';
-  }
-  void buf_append_c(struct buf_s *b, char c) {
-    buf_ensure(b, 1);
-    b->data[b->len++] = c;
-    b->data[b->len] = '\0';
-  }
-  void encode_str(struct buf_s *b, const char *s) {
-    buf_append_c(b, '"');
-    for (; *s; s++) {
-      if (*s == '"')       { buf_append_s(b, "\\\""); }
-      else if (*s == '\\') { buf_append_s(b, "\\\\"); }
-      else if (*s == '\n') { buf_append_s(b, "\\n"); }
-      else if (*s == '\r') { buf_append_s(b, "\\r"); }
-      else if (*s == '\t') { buf_append_s(b, "\\t"); }
-      else                 { buf_append_c(b, *s); }
-    }
-    buf_append_c(b, '"');
-  }
-  void encode_node(int64_t n, struct buf_s *b) {
-    if (!n) { buf_append_s(b, "null"); return; }
-    int64_t *np = (int64_t*)(intptr_t)n;
-    int type = (int)np[0];
-    char tmp[64];
-    switch (type) {
-      case 0: buf_append_s(b, "null"); break;
-      case 1: buf_append_s(b, np[1] ? "true" : "false"); break;
-      case 2: snprintf(tmp, sizeof(tmp), "%lld", (long long)np[1]); buf_append_s(b, tmp); break;
-      case 3: {
-        double v; memcpy(&v, &np[1], sizeof(double));
-        snprintf(tmp, sizeof(tmp), "%.17g", v); buf_append_s(b, tmp); break;
-      }
-      case 4: encode_str(b, (const char*)(intptr_t)np[1]); break;
-      case 5: {
-        struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
-        buf_append_c(b, '[');
-        for (size_t i = 0; i < v->len; i++) {
-          if (i > 0) buf_append_c(b, ',');
-          encode_node(v->data[i], b);
-        }
-        buf_append_c(b, ']');
-        break;
-      }
-      case 6: {
-        buf_append_c(b, '{');
-        int64_t cur = np[1];
-        int first = 1;
-        while (cur) {
-          int64_t *e = (int64_t*)(intptr_t)cur;
-          if (!first) buf_append_c(b, ',');
-          first = 0;
-          encode_str(b, (const char*)(intptr_t)e[0]);
-          buf_append_c(b, ':');
-          encode_node(e[1], b);
-          cur = e[2];
-        }
-        buf_append_c(b, '}');
-        break;
-      }
-      default: buf_append_s(b, "null"); break;
-    }
-  }
-  struct buf_s b;
+  ```c struct tur_json_buf { char *data; size_t len; size_t cap; };
+  struct tur_json_buf b;
   b.data = malloc(256);
   b.data[0] = '\0';
   b.len = 0;
   b.cap = 256;
-  encode_node(node, &b);
+  json_enc_node_(node, (void *)&b);
   return b.data;
   ```)
 ;;; json/decode -- parse a JSON string into a node tree.
@@ -486,145 +500,158 @@
 ;;;
 ;;; Since: Phase B2
 
+;; Private helpers for json/decode.
+;; State is a tur_json_ctx { const char *s; size_t pos; int err; } passed as :ptr.
+
+(defn json-dec-skip-ws- [c :ptr] :void
+  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
+  while (cp->s[cp->pos] == ' ' || cp->s[cp->pos] == '\n' ||
+         cp->s[cp->pos] == '\r' || cp->s[cp->pos] == '\t') cp->pos++;
+  ```)
+
+;; Returns a heap-allocated mutable char* (caller owns) or NULL on error.
+(defn json-dec-parse-string- [c :ptr] :ptr
+  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
+  if (cp->s[cp->pos] != '"') { cp->err = 1; return NULL; }
+  cp->pos++;
+  size_t cap = 64, len = 0;
+  char *buf = malloc(cap);
+  while (cp->s[cp->pos] && cp->s[cp->pos] != '"') {
+    if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+    if (cp->s[cp->pos] == '\\') {
+      cp->pos++;
+      switch (cp->s[cp->pos]) {
+        case '"':  buf[len++] = '"';  break;
+        case '\\': buf[len++] = '\\'; break;
+        case '/':  buf[len++] = '/';  break;
+        case 'n':  buf[len++] = '\n'; break;
+        case 'r':  buf[len++] = '\r'; break;
+        case 't':  buf[len++] = '\t'; break;
+        case 'b':  buf[len++] = '\b'; break;
+        case 'f':  buf[len++] = '\f'; break;
+        default:   buf[len++] = cp->s[cp->pos]; break;
+      }
+    } else {
+      buf[len++] = cp->s[cp->pos];
+    }
+    cp->pos++;
+  }
+  if (cp->s[cp->pos] != '"') { cp->err = 1; free(buf); return NULL; }
+  cp->pos++;
+  buf[len] = '\0';
+  return buf;
+  ```)
+
+(defn json-dec-parse-value- [c :ptr] :int
+  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  struct tur_json_ctx *cp = (struct tur_json_ctx *)c;
+  json_dec_skip_ws_(c);
+  char ch = cp->s[cp->pos];
+  /* null */
+  if (ch == 'n' && strncmp(cp->s + cp->pos, "null", 4) == 0) {
+    cp->pos += 4;
+    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 0; n[1] = 0;
+    return (int64_t)(intptr_t)n;
+  }
+  /* true */
+  if (ch == 't' && strncmp(cp->s + cp->pos, "true", 4) == 0) {
+    cp->pos += 4;
+    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 1; n[1] = 1;
+    return (int64_t)(intptr_t)n;
+  }
+  /* false */
+  if (ch == 'f' && strncmp(cp->s + cp->pos, "false", 5) == 0) {
+    cp->pos += 5;
+    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 1; n[1] = 0;
+    return (int64_t)(intptr_t)n;
+  }
+  /* string */
+  if (ch == '"') {
+    char *sv = (char *)json_dec_parse_string_(c);
+    if (!sv) return 0;
+    int64_t *n = malloc(2 * sizeof(int64_t));
+    n[0] = 4; n[1] = (int64_t)(intptr_t)sv;
+    return (int64_t)(intptr_t)n;
+  }
+  /* number */
+  if (ch == '-' || (ch >= '0' && ch <= '9')) {
+    char *end;
+    int64_t ival = strtoll(cp->s + cp->pos, &end, 10);
+    if (*end == '.' || *end == 'e' || *end == 'E') {
+      double fval = strtod(cp->s + cp->pos, &end);
+      cp->pos = (size_t)(end - cp->s);
+      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 3;
+      memcpy(&n[1], &fval, sizeof(double));
+      return (int64_t)(intptr_t)n;
+    }
+    cp->pos = (size_t)(end - cp->s);
+    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 2; n[1] = ival;
+    return (int64_t)(intptr_t)n;
+  }
+  /* array */
+  if (ch == '[') {
+    cp->pos++;
+    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+    v->data = NULL; v->len = 0; v->cap = 0;
+    json_dec_skip_ws_(c);
+    if (cp->s[cp->pos] != ']') {
+      for (;;) {
+        int64_t elem = json_dec_parse_value_(c);
+        if (cp->err) { free(v->data); free(v); return 0; }
+        if (v->len >= v->cap) {
+          v->cap = v->cap > 0 ? v->cap * 2 : 4;
+          v->data = realloc(v->data, v->cap * sizeof(int64_t));
+        }
+        v->data[v->len++] = elem;
+        json_dec_skip_ws_(c);
+        if (cp->s[cp->pos] == ']') break;
+        if (cp->s[cp->pos] != ',') { cp->err = 1; free(v->data); free(v); return 0; }
+        cp->pos++;
+      }
+    }
+    cp->pos++;
+    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 5; n[1] = (int64_t)(intptr_t)v;
+    return (int64_t)(intptr_t)n;
+  }
+  /* object */
+  if (ch == '{') {
+    cp->pos++;
+    int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 6; n[1] = 0;
+    json_dec_skip_ws_(c);
+    if (cp->s[cp->pos] != '}') {
+      for (;;) {
+        json_dec_skip_ws_(c);
+        char *key = (char *)json_dec_parse_string_(c);
+        if (!key || cp->err) { free(n); return 0; }
+        json_dec_skip_ws_(c);
+        if (cp->s[cp->pos] != ':') { cp->err = 1; free(key); free(n); return 0; }
+        cp->pos++;
+        int64_t val = json_dec_parse_value_(c);
+        if (cp->err) { free(key); free(n); return 0; }
+        int64_t *entry = malloc(3 * sizeof(int64_t));
+        entry[0] = (int64_t)(intptr_t)key;
+        entry[1] = val;
+        entry[2] = n[1];
+        n[1] = (int64_t)(intptr_t)entry;
+        json_dec_skip_ws_(c);
+        if (cp->s[cp->pos] == '}') break;
+        if (cp->s[cp->pos] != ',') { cp->err = 1; free(n); return 0; }
+        cp->pos++;
+      }
+    }
+    cp->pos++;
+    return (int64_t)(intptr_t)n;
+  }
+  cp->err = 1;
+  return 0;
+  ```)
+
 (defn json/decode [s :cstr] :int
-  ```c struct ctx_s { const char *s; size_t pos; int err; };
-  void skip_ws(struct ctx_s *c) {
-    while (c->s[c->pos] == ' ' || c->s[c->pos] == '\n' ||
-           c->s[c->pos] == '\r' || c->s[c->pos] == '\t') c->pos++;
-  }
-  char *parse_string_val(struct ctx_s *c) {
-    if (c->s[c->pos] != '"') { c->err = 1; return NULL; }
-    c->pos++;
-    size_t cap = 64, len = 0;
-    char *buf = malloc(cap);
-    while (c->s[c->pos] && c->s[c->pos] != '"') {
-      if (len + 4 >= cap) { cap *= 2; buf = realloc(buf, cap); }
-      if (c->s[c->pos] == '\\') {
-        c->pos++;
-        switch (c->s[c->pos]) {
-          case '"':  buf[len++] = '"';  break;
-          case '\\': buf[len++] = '\\'; break;
-          case '/':  buf[len++] = '/';  break;
-          case 'n':  buf[len++] = '\n'; break;
-          case 'r':  buf[len++] = '\r'; break;
-          case 't':  buf[len++] = '\t'; break;
-          case 'b':  buf[len++] = '\b'; break;
-          case 'f':  buf[len++] = '\f'; break;
-          default:   buf[len++] = c->s[c->pos]; break;
-        }
-      } else {
-        buf[len++] = c->s[c->pos];
-      }
-      c->pos++;
-    }
-    if (c->s[c->pos] != '"') { c->err = 1; free(buf); return NULL; }
-    c->pos++;
-    buf[len] = '\0';
-    return buf;
-  }
-  int64_t parse_value(struct ctx_s *c) {
-    skip_ws(c);
-    char ch = c->s[c->pos];
-    /* null */
-    if (ch == 'n' && strncmp(c->s + c->pos, "null", 4) == 0) {
-      c->pos += 4;
-      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 0; n[1] = 0;
-      return (int64_t)(intptr_t)n;
-    }
-    /* true */
-    if (ch == 't' && strncmp(c->s + c->pos, "true", 4) == 0) {
-      c->pos += 4;
-      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 1; n[1] = 1;
-      return (int64_t)(intptr_t)n;
-    }
-    /* false */
-    if (ch == 'f' && strncmp(c->s + c->pos, "false", 5) == 0) {
-      c->pos += 5;
-      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 1; n[1] = 0;
-      return (int64_t)(intptr_t)n;
-    }
-    /* string */
-    if (ch == '"') {
-      char *sv = parse_string_val(c);
-      if (!sv) return 0;
-      int64_t *n = malloc(2 * sizeof(int64_t));
-      n[0] = 4; n[1] = (int64_t)(intptr_t)sv;
-      return (int64_t)(intptr_t)n;
-    }
-    /* number */
-    if (ch == '-' || (ch >= '0' && ch <= '9')) {
-      char *end;
-      int64_t ival = strtoll(c->s + c->pos, &end, 10);
-      if (*end == '.' || *end == 'e' || *end == 'E') {
-        double fval = strtod(c->s + c->pos, &end);
-        c->pos = (size_t)(end - c->s);
-        int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 3;
-        memcpy(&n[1], &fval, sizeof(double));
-        return (int64_t)(intptr_t)n;
-      }
-      c->pos = (size_t)(end - c->s);
-      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 2; n[1] = ival;
-      return (int64_t)(intptr_t)n;
-    }
-    /* array */
-    if (ch == '[') {
-      c->pos++;
-      struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-      v->data = NULL; v->len = 0; v->cap = 0;
-      skip_ws(c);
-      if (c->s[c->pos] != ']') {
-        for (;;) {
-          int64_t elem = parse_value(c);
-          if (c->err) { free(v->data); free(v); return 0; }
-          if (v->len >= v->cap) {
-            v->cap = v->cap > 0 ? v->cap * 2 : 4;
-            v->data = realloc(v->data, v->cap * sizeof(int64_t));
-          }
-          v->data[v->len++] = elem;
-          skip_ws(c);
-          if (c->s[c->pos] == ']') break;
-          if (c->s[c->pos] != ',') { c->err = 1; free(v->data); free(v); return 0; }
-          c->pos++;
-        }
-      }
-      c->pos++;
-      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 5; n[1] = (int64_t)(intptr_t)v;
-      return (int64_t)(intptr_t)n;
-    }
-    /* object */
-    if (ch == '{') {
-      c->pos++;
-      int64_t *n = malloc(2 * sizeof(int64_t)); n[0] = 6; n[1] = 0;
-      skip_ws(c);
-      if (c->s[c->pos] != '}') {
-        for (;;) {
-          skip_ws(c);
-          char *key = parse_string_val(c);
-          if (!key || c->err) { free(n); return 0; }
-          skip_ws(c);
-          if (c->s[c->pos] != ':') { c->err = 1; free(key); free(n); return 0; }
-          c->pos++;
-          int64_t val = parse_value(c);
-          if (c->err) { free(key); free(n); return 0; }
-          int64_t *entry = malloc(3 * sizeof(int64_t));
-          entry[0] = (int64_t)(intptr_t)key;
-          entry[1] = val;
-          entry[2] = n[1];
-          n[1] = (int64_t)(intptr_t)entry;
-          skip_ws(c);
-          if (c->s[c->pos] == '}') break;
-          if (c->s[c->pos] != ',') { c->err = 1; free(n); return 0; }
-          c->pos++;
-        }
-      }
-      c->pos++;
-      return (int64_t)(intptr_t)n;
-    }
-    c->err = 1;
-    return 0;
-  }
-  struct ctx_s ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
-  int64_t result = parse_value(&ctx);
+  ```c struct tur_json_ctx { const char *s; size_t pos; int err; };
+  struct tur_json_ctx ctx; ctx.s = s; ctx.pos = 0; ctx.err = 0;
+  int64_t result = json_dec_parse_value_((void *)&ctx);
   if (ctx.err) return 0;
   return result;
   ```)
@@ -638,30 +665,32 @@
 ;;;
 ;;; Since: Phase B2
 
-(defn json/free [node :int] :void
-  ```c void free_node(int64_t n) {
-    if (!n) return;
-    int64_t *np = (int64_t*)(intptr_t)n;
-    int type = (int)np[0];
-    if (type == 4) {
-      free((void*)(intptr_t)np[1]);
-    } else if (type == 5) {
-      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
-      for (size_t i = 0; i < v->len; i++) free_node(v->data[i]);
-      free(v->data);
-      free(v);
-    } else if (type == 6) {
-      int64_t cur = np[1];
-      while (cur) {
-        int64_t *e = (int64_t*)(intptr_t)cur;
-        free((void*)(intptr_t)e[0]);
-        free_node(e[1]);
-        int64_t next = e[2];
-        free(e);
-        cur = next;
-      }
+;; Private recursive helper for json/free.
+(defn json-free-node- [node :int] :void
+  ```c if (!node) return;
+  int64_t *np = (int64_t*)(intptr_t)node;
+  int type = (int)np[0];
+  if (type == 4) {
+    free((void*)(intptr_t)np[1]);
+  } else if (type == 5) {
+    struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)np[1];
+    for (size_t i = 0; i < v->len; i++) json_free_node_(v->data[i]);
+    free(v->data);
+    free(v);
+  } else if (type == 6) {
+    int64_t cur = np[1];
+    while (cur) {
+      int64_t *e = (int64_t*)(intptr_t)cur;
+      free((void*)(intptr_t)e[0]);
+      json_free_node_(e[1]);
+      int64_t next = e[2];
+      free(e);
+      cur = next;
     }
-    free(np);
   }
-  free_node(node);
+  free(np);
+  ```)
+
+(defn json/free [node :int] :void
+  ```c json_free_node_(node);
   ```)

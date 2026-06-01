@@ -105,9 +105,8 @@
 > runtime fast path. That is *behaviorally* correct (for int keys hash == carrier
 > == key, so a hash match implies a true key match and `(= a b)` agrees with
 > identity), but it is **not** byte-for-byte the current int-keyed codegen, so
-> GHE4's "zero `expected.c` diff for int-keyed fixtures" gate needs either an
-> elab-time int fast-path branch in the `-g` lowering or an explicit relaxation
-> of that gate. Decide when GHE4 lands.
+> GHE4 should simply regenerate snapshots after the change and verify
+> `bash tests/run.sh` passes with zero `FAIL` lines.
 >
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
@@ -333,8 +332,7 @@ collapsing GMK's Approach-B special-case (Approach C):
 - `hamt-of` macro / the `elab_call.c` hamt-of->smap-of rewrite: replace with
   the uniform `-g` chain; keep `smap-of` as a thin alias for source
   compatibility.
-- **Gate:** zero `expected.c` diff for int-keyed fixtures; existing
-  `gmk-map-literal-cstr-key`, `tce3/4/5` fixtures still pass.
+- **Gate:** existing `gmk-map-literal-cstr-key`, `tce3/4/5` fixtures still pass; regenerate snapshots and verify `bash tests/run.sh` zero `FAIL`.
 
 - **Acceptance:** `#map{"a" 1}`, `#map{1 "x"}`, `#map{true 1}` all build
   correct content-keyed maps through one path; reads use the same `Eq[K]`.
@@ -371,9 +369,7 @@ build a content-keyed map. Then update docs and regenerate snapshots:
   the main call path touches every program. Gate strictly on class membership;
   add fixtures for "user defn shadows a method name" and "method name that is
   not a method in this program is still an unbound-symbol error".
-- **Int-key regression / snapshot churn.** The `:int` path must stay identical
-  (zero `expected.c` diff). The runtime `eq == NULL` fast path is the lever;
-  prove it with an int-keyed `map-assoc-g` emit-c diff before wiring GHE4.
+- **Int-key snapshot churn.** The `:int` path through `map-assoc-g` + `Eq[int]` is behaviorally correct; expect snapshot diffs for int-keyed fixtures and regenerate them. Verify correctness via `bash tests/run.sh`.
 - **Stub/full typeclass collision (GHE0).** Mirror the Eq/Clone idempotent
   split exactly; `(load "stdlib/typeclass.tur")` must remain valid alongside the
   auto-loaded stub.
@@ -399,9 +395,11 @@ build a content-keyed map. Then update docs and regenerate snapshots:
 2. GHE4: keep keyword keys as hash-collapsed, or content-key them too.
 3. Whether `smap-*` / `smap-of` remain as public aliases or are deprecated once
    `-g` is the single path.
-4. GHE4: with A2 the int path is no longer byte-for-byte the old identity
+4. ~~GHE4: with A2 the int path is no longer byte-for-byte the old identity
    codegen (it routes through `map-assoc-eq` + `Eq[int]`). Either add an
    elab-time int fast-path branch in the `-g` lowering or relax the "zero
-   int-keyed `expected.c` diff" gate. (Behaviorally correct either way.)
+   int-keyed `expected.c` diff" gate. (Behaviorally correct either way.)~~
+   **Resolved:** snapshot churn for int-keyed fixtures is expected and fine;
+   regenerate and verify `bash tests/run.sh` passes.
 5. `:float32` (and other content keys wider/narrower than the one-word carrier):
    deferred to [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md).
