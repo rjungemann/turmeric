@@ -1,0 +1,47 @@
+;; C#1 (test-suite-idioms-plan): inline-C Option/Result ABI.
+;;
+;; Handwritten inline-C helpers return a real :Option<int> / :Result<int,int>
+;; through the tur_some / TUR_NONE / tur_ok / tur_err preamble helpers instead
+;; of encoding absence/failure as a magic sentinel integer.  Because the
+;; helpers share the canonical Option/Result heap layout with stdlib, the
+;; values flow transparently in both directions:
+;;   - stdlib accessors (some?, ok?, err?) inspect a C-built value;
+;;   - inline-C consumers (tur_is_some/tur_opt_value, tur_is_ok/tur_ok_value/
+;;     tur_err_value) inspect a value the same way.
+
+;; lookup : k -> Option<int>   (700 when k == 7, else none)
+(defn lookup [k :int] :int
+  ```c
+  if (k == 7) return tur_some(700);
+  return TUR_NONE;
+  ```)
+
+;; opt-or : consume an Option<int> from inline-C
+(defn opt-or [o :int dflt :int] :int
+  ```c return tur_is_some(o) ? tur_opt_value(o) : dflt; ```)
+
+;; safe-div : a b -> Result<int,int>   (err -1 on divide-by-zero)
+(defn safe-div [a :int b :int] :int
+  ```c
+  if (b == 0) return tur_err(-1);
+  return tur_ok(a / b);
+  ```)
+
+;; res-payload : consume a Result<int,int> from inline-C
+(defn res-payload [r :int] :int
+  ```c return tur_is_ok(r) ? tur_ok_value(r) : tur_err_value(r); ```)
+
+(defn main [] :int
+  (do
+    ;; stdlib some? reads a C-built Option
+    (println (some? (lookup 7)))             ;; true
+    ;; inline-C consumer reads a C-built Option
+    (println (opt-or (lookup 7) 0))          ;; 700
+    (println (some? (lookup 3)))             ;; false
+    (println (opt-or (lookup 3) -9))         ;; -9
+    ;; stdlib ok?/err? read a C-built Result
+    (println (ok? (safe-div 10 2)))          ;; true
+    (println (res-payload (safe-div 10 2)))  ;; 5
+    (println (err? (safe-div 10 0)))         ;; true
+    (println (res-payload (safe-div 10 0)))  ;; -1
+    0))

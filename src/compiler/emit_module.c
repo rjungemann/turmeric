@@ -1862,6 +1862,50 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
     buf_puts(out, "    (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
     buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))\n");
+    /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
+     * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
+     * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
+     * { bool is_ok; int64_t ok_val; int64_t err_val; }.  These helpers let an
+     * inline-C block construct and inspect Option/Result values through the
+     * canonical layout instead of hand-rolling the struct cast + a magic
+     * sentinel integer (`-1`, `INT64_MIN`, `0`-as-absent).  The layout matches
+     * stdlib/option.tur and stdlib/result.tur byte-for-byte, so values built
+     * with tur_some/tur_ok flow transparently into the stdlib accessors and
+     * vice versa.  Marked unused so a program that touches neither type still
+     * compiles clean under -Wall. */
+    buf_puts(out, "typedef struct { bool is_some; int64_t value; } tur_option_t;\n");
+    buf_puts(out, "typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;\n");
+    buf_puts(out, "#define TUR_NONE ((int64_t)0)\n");
+    buf_puts(out, "static int64_t tur_some(int64_t __x) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_some(int64_t __x) {\n");
+    buf_puts(out, "    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));\n");
+    buf_puts(out, "    __o->is_some = true; __o->value = __x;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__o;\n}\n");
+    buf_puts(out, "static bool tur_is_some(int64_t __o) __attribute__((unused));\n");
+    buf_puts(out, "static bool tur_is_some(int64_t __o) {\n");
+    buf_puts(out, "    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;\n}\n");
+    buf_puts(out, "static int64_t tur_opt_value(int64_t __o) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_opt_value(int64_t __o) {\n");
+    buf_puts(out, "    return ((tur_option_t *)(intptr_t)__o)->value;\n}\n");
+    buf_puts(out, "static int64_t tur_ok(int64_t __v) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_ok(int64_t __v) {\n");
+    buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
+    buf_puts(out, "    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
+    buf_puts(out, "static int64_t tur_err(int64_t __e) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_err(int64_t __e) {\n");
+    buf_puts(out, "    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));\n");
+    buf_puts(out, "    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)__r;\n}\n");
+    buf_puts(out, "static bool tur_is_ok(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static bool tur_is_ok(int64_t __r) {\n");
+    buf_puts(out, "    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;\n}\n");
+    buf_puts(out, "static int64_t tur_ok_value(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_ok_value(int64_t __r) {\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;\n}\n");
+    buf_puts(out, "static int64_t tur_err_value(int64_t __r) __attribute__((unused));\n");
+    buf_puts(out, "static int64_t tur_err_value(int64_t __r) {\n");
+    buf_puts(out, "    return ((tur_result_box_t *)(intptr_t)__r)->err_val;\n}\n");
     /* A#1: fat-closure auto-shim thunks.  EX_FN_TO_FAT allocates a 2-slot fat
      * struct { __fn = __tur_fatshim<arity>, __orig = bare_fn_ptr } so a non-capturing
      * fn passed to a ^fat parameter is invoked through the standard fat-closure

@@ -27,11 +27,7 @@
 (defn ok [x :int]
   #{}
   :int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = true;
-  r->ok_val = x;
-  r->err_val = 0;
-  return (int64_t)(intptr_t)r;
+  ```c return tur_ok(x);
   ```)
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
@@ -49,11 +45,7 @@
 (defn err [e :int]
   #{}
   :int
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = false;
-  r->ok_val = 0;
-  r->err_val = e;
-  return (int64_t)(intptr_t)r;
+  ```c return tur_err(e);
   ```)
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
@@ -72,8 +64,7 @@
 (defn ok? [r :int]
   #{}
   :bool
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return res && res->is_ok;
+  ```c return tur_is_ok(r);
   ```)
 ;;; err? -- check whether a Result[A B] is err.
 ;;;
@@ -91,8 +82,7 @@
 (defn err? [r :int]
   #{}
   :bool
-  ```c struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
-  return !res || !res->is_ok;
+  ```c return !tur_is_ok(r);
   ```)
 ;;; ok-val -- extract the ok value from a typed Result[A B].
 ;;;
