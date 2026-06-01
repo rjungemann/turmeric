@@ -217,7 +217,7 @@ target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
 # ---------------------------------------------------------------------------
-add_executable(tur main.c $<TARGET_OBJECTS:tur_core>)
+add_executable(tur main.c lsp/mcp.c $<TARGET_OBJECTS:tur_core>)
 
 # tur also needs the subsystem subdirs on the include path for main.c.
 target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})

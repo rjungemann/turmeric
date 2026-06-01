@@ -1,0 +1,731 @@
+/* mcp.c -- MCP (Model Context Protocol) server for tur.
+ *
+ * Implements the MCP 2024-11-05 protocol over JSON-RPC 2.0 / stdio.
+ * Start with:  tur mcp
+ *
+ * Supported tools:
+ *   check_file   -- type-check a .tur file; return diagnostics JSON
+ *   symbols      -- list all symbols defined in a .tur file
+ *   hover        -- type + docstring for symbol at cursor position
+ *   definition   -- source location of a symbol definition
+ *   complete     -- completion candidates at cursor position
+ *   doc          -- ;;; docstring for a named symbol
+ *   format       -- format a .tur file via `tur format`
+ *   build        -- compile a project directory via `tur build`
+ */
+
+#include "mcp.h"
+#include "lsp_io.h"
+#include "lsp_json.h"
+#include "lsp_docs.h"
+#include "lsp_sym.h"
+#include "lsp_util.h"
+
+#include "buf.h"
+#include "diag.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+
+extern int tur_check_only(const char *path);
+extern int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
+                               int *count_out);
+
+#define MCP_SYM_CAP 2048
+
+/* -------------------------------------------------------------------------
+ * JSON write helpers
+ * --------------------------------------------------------------------- */
+
+static void json_str(Buf *b, const char *s) {
+    buf_putc(b, '"');
+    for (const char *p = s; p && *p; p++) {
+        switch (*p) {
+            case '"':  buf_puts(b, "\\\""); break;
+            case '\\': buf_puts(b, "\\\\"); break;
+            case '\n': buf_puts(b, "\\n");  break;
+            case '\r': buf_puts(b, "\\r");  break;
+            case '\t': buf_puts(b, "\\t");  break;
+            default:
+                if ((unsigned char)*p < 0x20)
+                    buf_printf(b, "\\u%04x", (unsigned char)*p);
+                else
+                    buf_putc(b, *p);
+        }
+    }
+    buf_putc(b, '"');
+}
+
+static void send_response(int fd_out, const char *id_raw, size_t id_len,
+                          const char *result_json) {
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (id_raw && id_len > 0)
+        buf_write(&b, id_raw, id_len);
+    else
+        buf_puts(&b, "null");
+    buf_puts(&b, ",\"result\":");
+    buf_puts(&b, result_json ? result_json : "null");
+    buf_puts(&b, "}");
+    lsp_write_message(fd_out, b.data, b.len);
+    buf_free(&b);
+}
+
+/* Wrap tool output text in the standard MCP content response. */
+static void send_tool_result(int fd_out, const char *id_raw, size_t id_len,
+                             const char *text, int is_error) {
+    Buf r;
+    buf_init(&r);
+    buf_puts(&r, "{\"content\":[{\"type\":\"text\",\"text\":");
+    json_str(&r, text ? text : "");
+    buf_puts(&r, "}],\"isError\":");
+    buf_puts(&r, is_error ? "true" : "false");
+    buf_puts(&r, "}");
+    buf_putc(&r, '\0');
+    send_response(fd_out, id_raw, id_len, r.data);
+    buf_free(&r);
+}
+
+static void send_error_response(int fd_out, const char *id_raw, size_t id_len,
+                                int code, const char *msg) {
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (id_raw && id_len > 0)
+        buf_write(&b, id_raw, id_len);
+    else
+        buf_puts(&b, "null");
+    buf_printf(&b, ",\"error\":{\"code\":%d,\"message\":", code);
+    json_str(&b, msg);
+    buf_puts(&b, "}}");
+    lsp_write_message(fd_out, b.data, b.len);
+    buf_free(&b);
+}
+
+/* -------------------------------------------------------------------------
+ * Subprocess helper (safe fork/exec -- no shell interpolation)
+ * --------------------------------------------------------------------- */
+
+static int run_subprocess(const char *cmd, char *const argv[], Buf *out) {
+    int pfd[2];
+    if (pipe(pfd) < 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pfd[0]);
+        close(pfd[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        dup2(pfd[1], STDERR_FILENO);
+        close(pfd[1]);
+        execvp(cmd, argv);
+        _exit(127);
+    }
+
+    close(pfd[1]);
+    char tmp[4096];
+    ssize_t n;
+    while ((n = read(pfd[0], tmp, sizeof(tmp))) > 0)
+        buf_write(out, tmp, (size_t)n);
+    close(pfd[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* -------------------------------------------------------------------------
+ * Per-request file analysis
+ * --------------------------------------------------------------------- */
+
+typedef struct {
+    LspSymbol  syms[MCP_SYM_CAP];
+    int        sym_count;
+    LspDocTable dtable;
+    char       *text;
+    size_t      text_len;
+} McpAnalysis;
+
+static void mcp_analysis_free(McpAnalysis *a) {
+    lsp_doc_table_free(&a->dtable);
+    free(a->text);
+    a->text = NULL;
+}
+
+static int mcp_load_and_analyze(const char *path, McpAnalysis *a) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz < 0) { fclose(f); return -1; }
+
+    a->text = malloc((size_t)sz + 1);
+    if (!a->text) { fclose(f); return -1; }
+    size_t rd = fread(a->text, 1, (size_t)sz, f);
+    a->text[rd] = '\0';
+    a->text_len = rd;
+    fclose(f);
+
+    lsp_doc_table_init(&a->dtable);
+    lsp_scan_docs(a->text, a->text_len, &a->dtable);
+
+    diag_reset();
+    diag_init(false);
+    diag_lsp_begin();
+    tur_collect_symbols(path, a->syms, MCP_SYM_CAP, &a->sym_count);
+    diag_lsp_end();
+
+    for (int i = 0; i < a->sym_count; i++) {
+        lsp_scan_docs_lookup(&a->dtable, a->syms[i].name,
+                             a->syms[i].doc, sizeof(a->syms[i].doc));
+    }
+    return 0;
+}
+
+static const LspSymbol *mcp_find_symbol(const McpAnalysis *a, const char *name) {
+    for (int i = 0; i < a->sym_count; i++)
+        if (strcmp(a->syms[i].name, name) == 0)
+            return &a->syms[i];
+    return NULL;
+}
+
+/* -------------------------------------------------------------------------
+ * Tool implementations
+ * --------------------------------------------------------------------- */
+
+static void mcp_tool_check_file(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+
+    diag_reset();
+    diag_init(false);
+    diag_lsp_begin();
+    tur_check_only(path);
+    diag_lsp_flush_array(out);
+    diag_lsp_end();
+}
+
+static void mcp_tool_symbols(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+
+    McpAnalysis *a = calloc(1, sizeof(McpAnalysis));
+    if (!a) { buf_puts(out, "Out of memory"); *is_error = 1; return; }
+    if (mcp_load_and_analyze(path, a) < 0) {
+        buf_printf(out, "Could not read or analyze: %s", path);
+        *is_error = 1;
+        free(a);
+        return;
+    }
+
+    buf_putc(out, '[');
+    int count = 0;
+    for (int i = 0; i < a->sym_count; i++) {
+        const LspSymbol *sym = &a->syms[i];
+        if (!sym->name[0]) continue;
+        if (count > 0) buf_putc(out, ',');
+        buf_puts(out, "{\"name\":");
+        json_str(out, sym->name);
+        buf_puts(out, ",\"type\":");
+        json_str(out, sym->type_str);
+        buf_puts(out, ",\"doc\":");
+        json_str(out, sym->doc);
+        buf_puts(out, ",\"file\":");
+        json_str(out, sym->file_path);
+        buf_printf(out, ",\"line\":%d,\"col\":%d}",
+                   sym->line, sym->col_start);
+        count++;
+    }
+    buf_putc(out, ']');
+
+    mcp_analysis_free(a);
+    free(a);
+}
+
+static void mcp_tool_hover(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+    int64_t line_0 = lsp_json_int(args, "line");
+    int64_t char_0 = lsp_json_int(args, "col");
+    if (line_0 < 0 || char_0 < 0) {
+        buf_puts(out, "Missing required arguments: line, col (0-based)");
+        *is_error = 1;
+        return;
+    }
+
+    McpAnalysis *a = calloc(1, sizeof(McpAnalysis));
+    if (!a) { buf_puts(out, "Out of memory"); *is_error = 1; return; }
+    if (mcp_load_and_analyze(path, a) < 0) {
+        buf_printf(out, "Could not read or analyze: %s", path);
+        *is_error = 1;
+        free(a);
+        return;
+    }
+
+    char name[128];
+    if (!lsp_word_at_pos(a->text, a->text_len,
+                         (int)line_0 + 1, (int)char_0 + 1,
+                         name, sizeof(name))) {
+        buf_puts(out, "No symbol at position");
+        mcp_analysis_free(a);
+        free(a);
+        return;
+    }
+
+    const LspSymbol *sym = mcp_find_symbol(a, name);
+    if (!sym) {
+        buf_printf(out, "No type information for '%s'", name);
+    } else {
+        buf_puts(out, sym->name);
+        if (sym->type_str[0]) {
+            buf_puts(out, " : ");
+            buf_puts(out, sym->type_str);
+        }
+        if (sym->doc[0]) {
+            buf_puts(out, "\n\n");
+            buf_puts(out, sym->doc);
+        }
+    }
+
+    mcp_analysis_free(a);
+    free(a);
+}
+
+static void mcp_tool_definition(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+    int64_t line_0 = lsp_json_int(args, "line");
+    int64_t char_0 = lsp_json_int(args, "col");
+    if (line_0 < 0 || char_0 < 0) {
+        buf_puts(out, "Missing required arguments: line, col (0-based)");
+        *is_error = 1;
+        return;
+    }
+
+    McpAnalysis *a = calloc(1, sizeof(McpAnalysis));
+    if (!a) { buf_puts(out, "Out of memory"); *is_error = 1; return; }
+    if (mcp_load_and_analyze(path, a) < 0) {
+        buf_printf(out, "Could not read or analyze: %s", path);
+        *is_error = 1;
+        free(a);
+        return;
+    }
+
+    char name[128];
+    if (!lsp_word_at_pos(a->text, a->text_len,
+                         (int)line_0 + 1, (int)char_0 + 1,
+                         name, sizeof(name))) {
+        buf_puts(out, "No symbol at position");
+        mcp_analysis_free(a);
+        free(a);
+        return;
+    }
+
+    const LspSymbol *sym = mcp_find_symbol(a, name);
+    if (!sym || !sym->file_path[0]) {
+        buf_printf(out, "No definition found for '%s'", name);
+        mcp_analysis_free(a);
+        free(a);
+        return;
+    }
+
+    /* Return as JSON: { file, line, col } (1-based, matching LspSymbol) */
+    buf_puts(out, "{\"file\":");
+    json_str(out, sym->file_path);
+    buf_printf(out, ",\"line\":%d,\"col\":%d}", sym->line, sym->col_start);
+
+    mcp_analysis_free(a);
+    free(a);
+}
+
+static void mcp_tool_complete(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+    int64_t line_0 = lsp_json_int(args, "line");
+    int64_t char_0 = lsp_json_int(args, "col");
+    if (line_0 < 0 || char_0 < 0) {
+        buf_puts(out, "Missing required arguments: line, col (0-based)");
+        *is_error = 1;
+        return;
+    }
+
+    McpAnalysis *a = calloc(1, sizeof(McpAnalysis));
+    if (!a) { buf_puts(out, "Out of memory"); *is_error = 1; return; }
+    if (mcp_load_and_analyze(path, a) < 0) {
+        buf_printf(out, "Could not read or analyze: %s", path);
+        *is_error = 1;
+        free(a);
+        return;
+    }
+
+    char prefix[128] = {0};
+    lsp_word_at_pos(a->text, a->text_len,
+                    (int)line_0 + 1, (int)char_0 + 1,
+                    prefix, sizeof(prefix));
+    size_t prefix_len = strlen(prefix);
+
+    /* Detect (import context */
+    int in_import = 0;
+    if (a->text && a->text_len > 0) {
+        const char *p = a->text;
+        int cur_line = 1;
+        while (p < a->text + a->text_len && cur_line < (int)line_0 + 1) {
+            if (*p == '\n') cur_line++;
+            p++;
+        }
+        int cur_col = 1;
+        while (p < a->text + a->text_len && *p != '\n' &&
+               cur_col < (int)char_0 + 1) {
+            p++;
+            cur_col++;
+        }
+        const char *scan = p > a->text + 64 ? p - 64 : a->text;
+        for (; scan < p - 7; scan++) {
+            if (strncmp(scan, "(import", 7) == 0) {
+                in_import = 1;
+                break;
+            }
+        }
+    }
+
+    static const char *stdlib_modules[] = {
+        "stdlib/args", "stdlib/contract", "stdlib/fix",
+        "stdlib/free", "stdlib/hamt",     "stdlib/list",
+        "stdlib/macros", "stdlib/map",    "stdlib/option",
+        "stdlib/pair", "stdlib/result",   "stdlib/safe",
+        "stdlib/str",  "stdlib/vec",      NULL
+    };
+
+    buf_putc(out, '[');
+    int emitted = 0;
+
+    if (in_import) {
+        for (int i = 0; stdlib_modules[i]; i++) {
+            const char *mod = stdlib_modules[i];
+            if (prefix_len > 0) {
+                int match = 1;
+                for (size_t j = 0; j < prefix_len; j++) {
+                    char a2 = prefix[j], b = mod[j];
+                    if (a2 >= 'A' && a2 <= 'Z') a2 += 32;
+                    if (b  >= 'A' && b  <= 'Z') b  += 32;
+                    if (a2 != b) { match = 0; break; }
+                }
+                if (!match) continue;
+            }
+            if (emitted > 0) buf_putc(out, ',');
+            buf_puts(out, "{\"label\":");
+            json_str(out, mod);
+            buf_puts(out, ",\"kind\":9}");
+            emitted++;
+        }
+    }
+
+    if (!in_import) {
+        for (int i = 0; i < a->sym_count && emitted < 200; i++) {
+            const LspSymbol *sym = &a->syms[i];
+            if (!sym->name[0]) continue;
+            if (prefix_len > 0) {
+                int match = 1;
+                for (size_t j = 0; j < prefix_len; j++) {
+                    char a2 = prefix[j], b = sym->name[j];
+                    if (a2 >= 'A' && a2 <= 'Z') a2 += 32;
+                    if (b  >= 'A' && b  <= 'Z') b  += 32;
+                    if (a2 != b) { match = 0; break; }
+                }
+                if (!match) continue;
+            }
+            int kind = (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+            if (emitted > 0) buf_putc(out, ',');
+            buf_puts(out, "{\"label\":");
+            json_str(out, sym->name);
+            buf_printf(out, ",\"kind\":%d", kind);
+            if (sym->type_str[0]) {
+                buf_puts(out, ",\"detail\":");
+                json_str(out, sym->type_str);
+            }
+            if (sym->doc[0]) {
+                buf_puts(out, ",\"doc\":");
+                json_str(out, sym->doc);
+            }
+            buf_putc(out, '}');
+            emitted++;
+        }
+    }
+
+    buf_putc(out, ']');
+    mcp_analysis_free(a);
+    free(a);
+}
+
+static void mcp_tool_doc(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    char name[128];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+    if (lsp_json_str_copy(args, "name", name, sizeof(name)) < 0) {
+        buf_puts(out, "Missing required argument: name");
+        *is_error = 1;
+        return;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        buf_printf(out, "Cannot open: %s", path);
+        *is_error = 1;
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    char *text = NULL;
+    if (sz > 0) {
+        text = malloc((size_t)sz + 1);
+        size_t rd = fread(text, 1, (size_t)sz, f);
+        text[rd] = '\0';
+        sz = (long)rd;
+    }
+    fclose(f);
+
+    LspDocTable dtable;
+    lsp_doc_table_init(&dtable);
+    if (text) lsp_scan_docs(text, (size_t)sz, &dtable);
+    free(text);
+
+    char doc[512];
+    if (lsp_scan_docs_lookup(&dtable, name, doc, sizeof(doc))) {
+        buf_puts(out, doc);
+    } else {
+        buf_printf(out, "No docstring found for '%s' in %s", name, path);
+    }
+
+    lsp_doc_table_free(&dtable);
+}
+
+static void mcp_tool_format(const char *args, Buf *out, int *is_error) {
+    char path[1024];
+    if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
+        buf_puts(out, "Missing required argument: path");
+        *is_error = 1;
+        return;
+    }
+
+    char *argv[] = { "tur", "format", path, NULL };
+    Buf sub;
+    buf_init(&sub);
+    int rc = run_subprocess("tur", argv, &sub);
+    buf_putc(&sub, '\0');
+    if (rc != 0) {
+        buf_printf(out, "tur format exited with status %d: %s", rc, sub.data);
+        *is_error = 1;
+    } else {
+        buf_puts(out, sub.data);
+    }
+    buf_free(&sub);
+}
+
+static void mcp_tool_build(const char *args, Buf *out, int *is_error) {
+    char dir[1024];
+    if (lsp_json_str_copy(args, "dir", dir, sizeof(dir)) < 0) {
+        buf_puts(out, "Missing required argument: dir");
+        *is_error = 1;
+        return;
+    }
+
+    char *argv[] = { "tur", "build", dir, NULL };
+    Buf sub;
+    buf_init(&sub);
+    int rc = run_subprocess("tur", argv, &sub);
+    buf_putc(&sub, '\0');
+    buf_printf(out, "exit_status: %d\n", rc);
+    buf_puts(out, sub.data);
+    buf_free(&sub);
+    if (rc != 0) *is_error = 1;
+}
+
+/* -------------------------------------------------------------------------
+ * tools/list response (static -- tools don't change at runtime)
+ * --------------------------------------------------------------------- */
+
+static const char TOOLS_LIST_JSON[] =
+    "{\"tools\":["
+      "{\"name\":\"check_file\","
+       "\"description\":\"Type-check a Turmeric source file and return diagnostics as a JSON array.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"}},"
+         "\"required\":[\"path\"]}},"
+      "{\"name\":\"symbols\","
+       "\"description\":\"List all symbols defined in a Turmeric source file.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"}},"
+         "\"required\":[\"path\"]}},"
+      "{\"name\":\"hover\","
+       "\"description\":\"Return type and docstring for the symbol at a cursor position.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{"
+           "\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"},"
+           "\"line\":{\"type\":\"integer\",\"description\":\"0-based line number.\"},"
+           "\"col\":{\"type\":\"integer\",\"description\":\"0-based column number.\"}},"
+         "\"required\":[\"path\",\"line\",\"col\"]}},"
+      "{\"name\":\"definition\","
+       "\"description\":\"Return the source location where a symbol is defined.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{"
+           "\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"},"
+           "\"line\":{\"type\":\"integer\",\"description\":\"0-based line number.\"},"
+           "\"col\":{\"type\":\"integer\",\"description\":\"0-based column number.\"}},"
+         "\"required\":[\"path\",\"line\",\"col\"]}},"
+      "{\"name\":\"complete\","
+       "\"description\":\"Return completion candidates at a cursor position.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{"
+           "\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"},"
+           "\"line\":{\"type\":\"integer\",\"description\":\"0-based line number.\"},"
+           "\"col\":{\"type\":\"integer\",\"description\":\"0-based column number.\"}},"
+         "\"required\":[\"path\",\"line\",\"col\"]}},"
+      "{\"name\":\"doc\","
+       "\"description\":\"Return the ;;; docstring for a named symbol in a source file.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{"
+           "\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"},"
+           "\"name\":{\"type\":\"string\",\"description\":\"Symbol name to look up.\"}},"
+         "\"required\":[\"path\",\"name\"]}},"
+      "{\"name\":\"format\","
+       "\"description\":\"Format a Turmeric source file using tur format.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the .tur source file.\"}},"
+         "\"required\":[\"path\"]}},"
+      "{\"name\":\"build\","
+       "\"description\":\"Compile a Turmeric project directory using tur build. Returns diagnostics and exit status.\","
+       "\"inputSchema\":{\"type\":\"object\","
+         "\"properties\":{\"dir\":{\"type\":\"string\",\"description\":\"Absolute filesystem path to the project directory.\"}},"
+         "\"required\":[\"dir\"]}}"
+    "]}";
+
+/* -------------------------------------------------------------------------
+ * Main server loop
+ * --------------------------------------------------------------------- */
+
+void mcp_server_run(int fd_in, int fd_out) {
+    if (getenv("TUR_NO_MCP")) {
+        fprintf(stderr, "tur mcp: disabled by TUR_NO_MCP environment variable\n");
+        return;
+    }
+    char *msg;
+    while ((msg = lsp_read_message(fd_in)) != NULL) {
+        size_t method_len;
+        const char *method_raw = lsp_json_str(msg, "method", &method_len);
+        if (!method_raw) { free(msg); continue; }
+
+        char method[128];
+        size_t copy = method_len < sizeof(method) - 1 ? method_len : sizeof(method) - 1;
+        memcpy(method, method_raw, copy);
+        method[copy] = '\0';
+
+        size_t id_len = 0;
+        const char *id_raw = lsp_json_raw(msg, "id", &id_len);
+
+        size_t params_len = 0;
+        const char *params_raw = lsp_json_raw(msg, "params", &params_len);
+
+        if (strcmp(method, "initialize") == 0) {
+            Buf r;
+            buf_init(&r);
+            buf_puts(&r, "{\"protocolVersion\":\"2024-11-05\","
+                         "\"capabilities\":{\"tools\":{}},"
+                         "\"serverInfo\":{\"name\":\"turmeric\",\"version\":");
+            json_str(&r, TUR_VERSION);
+            buf_puts(&r, "}}");
+            buf_putc(&r, '\0');
+            send_response(fd_out, id_raw, id_len, r.data);
+            buf_free(&r);
+
+        } else if (strcmp(method, "notifications/initialized") == 0 ||
+                   strcmp(method, "initialized") == 0) {
+            /* no-op notification */
+
+        } else if (strcmp(method, "ping") == 0) {
+            send_response(fd_out, id_raw, id_len, "{}");
+
+        } else if (strcmp(method, "tools/list") == 0) {
+            send_response(fd_out, id_raw, id_len, TOOLS_LIST_JSON);
+
+        } else if (strcmp(method, "tools/call") == 0 && params_raw) {
+            char tool_name[64] = {0};
+            lsp_json_str_copy(params_raw, "name", tool_name, sizeof(tool_name));
+
+            size_t args_len = 0;
+            const char *args = lsp_json_raw(params_raw, "arguments", &args_len);
+            if (!args) args = "{}";
+
+            Buf out;
+            buf_init(&out);
+            int is_error = 0;
+
+            if (strcmp(tool_name, "check_file") == 0) {
+                mcp_tool_check_file(args, &out, &is_error);
+            } else if (strcmp(tool_name, "symbols") == 0) {
+                mcp_tool_symbols(args, &out, &is_error);
+            } else if (strcmp(tool_name, "hover") == 0) {
+                mcp_tool_hover(args, &out, &is_error);
+            } else if (strcmp(tool_name, "definition") == 0) {
+                mcp_tool_definition(args, &out, &is_error);
+            } else if (strcmp(tool_name, "complete") == 0) {
+                mcp_tool_complete(args, &out, &is_error);
+            } else if (strcmp(tool_name, "doc") == 0) {
+                mcp_tool_doc(args, &out, &is_error);
+            } else if (strcmp(tool_name, "format") == 0) {
+                mcp_tool_format(args, &out, &is_error);
+            } else if (strcmp(tool_name, "build") == 0) {
+                mcp_tool_build(args, &out, &is_error);
+            } else {
+                buf_printf(&out, "Unknown tool: %s", tool_name);
+                is_error = 1;
+            }
+
+            buf_putc(&out, '\0');
+            send_tool_result(fd_out, id_raw, id_len, out.data, is_error);
+            buf_free(&out);
+
+        } else if (id_raw) {
+            send_error_response(fd_out, id_raw, id_len, -32601, "Method not found");
+        }
+
+        free(msg);
+    }
+}

@@ -60,6 +60,9 @@ void    lsp_doc_change(const char *uri, size_t uri_len,
 void    lsp_doc_close(const char *uri, size_t uri_len);
 LspDoc *lsp_doc_get(const char *uri, size_t uri_len);
 
+/* Iterate every open document (read-only callback). */
+void    lsp_docs_iterate(void (*cb)(const LspDoc *doc, void *ctx), void *ctx);
+
 /* Free and zero the symbol array on doc. */
 void    lsp_doc_free_symbols(LspDoc *doc);
 

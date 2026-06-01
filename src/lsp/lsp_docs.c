@@ -320,3 +320,10 @@ LspDoc *lsp_doc_get(const char *uri, size_t uri_len) {
     size_t idx = find_slot(uri, uri_len);
     return idx != (size_t)-1 ? slots_[idx].doc : NULL;
 }
+
+void lsp_docs_iterate(void (*cb)(const LspDoc *doc, void *ctx), void *ctx) {
+    for (size_t i = 0; i < capacity_; i++) {
+        if (slots_[i].doc)
+            cb(slots_[i].doc, ctx);
+    }
+}

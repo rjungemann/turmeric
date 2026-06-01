@@ -188,6 +188,8 @@ static void on_initialize(const char *id_raw, size_t id_len, int fd_out) {
           "\"textDocumentSync\":1,"
           "\"hoverProvider\":true,"
           "\"definitionProvider\":true,"
+          "\"documentSymbolProvider\":true,"
+          "\"workspaceSymbolProvider\":true,"
           "\"completionProvider\":{"
             "\"triggerCharacters\":[\"(\",\" \"]"
           "}"
@@ -404,6 +406,161 @@ static void on_definition(const char *id_raw, size_t id_len,
     buf_free(&result);
 }
 
+/* Infer LSP SymbolKind from type_str.  Functions get kind 12, everything
+ * else gets kind 13 (Variable).  A ;;; `defstruct` / `defmacro` distinction
+ * is not preserved in LspSymbol today, so this is a best-effort mapping. */
+static int lsp_symbol_kind(const LspSymbol *sym) {
+    return (strncmp(sym->type_str, "(fn", 3) == 0) ? 12 : 13;
+}
+
+/* -------------------------------------------------------------------------
+ * LD4a: textDocument/documentSymbol
+ * --------------------------------------------------------------------- */
+
+static void on_document_symbol(const char *id_raw, size_t id_len,
+                                const char *params, int fd_out) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(fd_out, id_raw, id_len, "[]");
+        return;
+    }
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc || !doc->symbols) {
+        send_response(fd_out, id_raw, id_len, "[]");
+        return;
+    }
+
+    Buf result;
+    buf_init(&result);
+    buf_putc(&result, '[');
+    int emitted = 0;
+
+    for (int i = 0; i < doc->symbol_count; i++) {
+        const LspSymbol *sym = &doc->symbols[i];
+        if (!sym->name[0]) continue;
+        /* Only emit symbols defined in this file */
+        if (sym->file_path[0] && strcmp(sym->file_path, doc->path) != 0)
+            continue;
+
+        int kind  = lsp_symbol_kind(sym);
+        int line  = sym->line > 0 ? sym->line - 1 : 0;
+        int col_s = sym->col_start > 0 ? sym->col_start - 1 : 0;
+        int col_e = sym->col_end   > 0 ? sym->col_end   - 1 : col_s;
+
+        if (emitted > 0) buf_putc(&result, ',');
+        buf_puts(&result, "{\"name\":");
+        json_str(&result, sym->name);
+        buf_printf(&result, ",\"kind\":%d", kind);
+        buf_printf(&result,
+            ",\"range\":{"
+              "\"start\":{\"line\":%d,\"character\":%d},"
+              "\"end\":{\"line\":%d,\"character\":%d}"
+            "},\"selectionRange\":{"
+              "\"start\":{\"line\":%d,\"character\":%d},"
+              "\"end\":{\"line\":%d,\"character\":%d}"
+            "}}",
+            line, col_s, line, col_e,
+            line, col_s, line, col_e);
+        emitted++;
+    }
+
+    buf_putc(&result, ']');
+    buf_putc(&result, '\0');
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
+}
+
+/* -------------------------------------------------------------------------
+ * LD4b: workspace/symbol
+ * --------------------------------------------------------------------- */
+
+typedef struct {
+    const char *query;
+    size_t       query_len;
+    Buf         *result;
+    int          count;
+} WsCtx;
+
+/* Case-insensitive substring search.  Returns 1 if haystack contains needle. */
+static int ci_contains(const char *haystack, const char *needle, size_t nlen) {
+    if (nlen == 0) return 1;
+    for (const char *p = haystack; *p; p++) {
+        int match = 1;
+        for (size_t j = 0; j < nlen; j++) {
+            char a = p[j], b = needle[j];
+            if (!a) { match = 0; break; }
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) { match = 0; break; }
+        }
+        if (match) return 1;
+    }
+    return 0;
+}
+
+static void ws_collect_cb(const LspDoc *doc, void *ctx_) {
+    WsCtx *ctx = ctx_;
+    for (int i = 0; i < doc->symbol_count; i++) {
+        const LspSymbol *sym = &doc->symbols[i];
+        if (!sym->name[0]) continue;
+        /* Only symbols defined in this document */
+        if (sym->file_path[0] && strcmp(sym->file_path, doc->path) != 0)
+            continue;
+        /* Query filter */
+        if (ctx->query_len > 0 &&
+            !ci_contains(sym->name, ctx->query, ctx->query_len))
+            continue;
+
+        char uri[1024];
+        lsp_path_to_uri(sym->file_path[0] ? sym->file_path : doc->path,
+                        uri, sizeof(uri));
+        int kind  = lsp_symbol_kind(sym);
+        int line  = sym->line > 0 ? sym->line - 1 : 0;
+        int col_s = sym->col_start > 0 ? sym->col_start - 1 : 0;
+        int col_e = sym->col_end   > 0 ? sym->col_end   - 1 : col_s;
+
+        if (ctx->count > 0) buf_putc(ctx->result, ',');
+        buf_puts(ctx->result, "{\"name\":");
+        json_str(ctx->result, sym->name);
+        buf_printf(ctx->result, ",\"kind\":%d,\"location\":{\"uri\":", kind);
+        json_str(ctx->result, uri);
+        buf_printf(ctx->result,
+            ",\"range\":{"
+              "\"start\":{\"line\":%d,\"character\":%d},"
+              "\"end\":{\"line\":%d,\"character\":%d}"
+            "}}}",
+            line, col_s, line, col_e);
+        ctx->count++;
+    }
+}
+
+static void on_workspace_symbol(const char *id_raw, size_t id_len,
+                                 const char *params, int fd_out) {
+    size_t  query_len = 0;
+    const char *query_raw = lsp_json_str(params, "query", &query_len);
+
+    Buf result;
+    buf_init(&result);
+    buf_putc(&result, '[');
+
+    WsCtx ctx;
+    ctx.query     = query_raw;
+    ctx.query_len = query_raw ? query_len : 0;
+    ctx.result    = &result;
+    ctx.count     = 0;
+    lsp_docs_iterate(ws_collect_cb, &ctx);
+
+    buf_putc(&result, ']');
+    buf_putc(&result, '\0');
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
+}
+
 /* -------------------------------------------------------------------------
  * LD4: textDocument/completion
  * --------------------------------------------------------------------- */
@@ -602,6 +759,10 @@ void lsp_server_run(int fd_in, int fd_out) {
             on_hover(id_raw, id_len, params_raw, fd_out);
         } else if (strcmp(method, "textDocument/definition") == 0 && params_raw) {
             on_definition(id_raw, id_len, params_raw, fd_out);
+        } else if (strcmp(method, "textDocument/documentSymbol") == 0 && params_raw) {
+            on_document_symbol(id_raw, id_len, params_raw, fd_out);
+        } else if (strcmp(method, "workspace/symbol") == 0 && params_raw) {
+            on_workspace_symbol(id_raw, id_len, params_raw, fd_out);
         } else if (strcmp(method, "textDocument/completion") == 0 && params_raw) {
             on_completion(id_raw, id_len, params_raw, fd_out);
         } else if (id_raw) {

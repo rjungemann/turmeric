@@ -21,6 +21,8 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 | Capability | Status |
 |---|---|
 | Diagnostics (`textDocument/publishDiagnostics`) | Supported |
+| Document symbols (`textDocument/documentSymbol`) | Supported |
+| Workspace symbols (`workspace/symbol`) | Supported (open documents only) |
 | Hover documentation | Not yet supported |
 | Go-to-definition | Not yet supported |
 | Completion | Not yet supported |
