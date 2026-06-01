@@ -42,3 +42,13 @@
     u.f = (float)x;
     return (int64_t)u.i;
     ```))
+;;; Hash [float] -- Hash instance for float (float64): hash the IEEE-754 bits.
+;;;
+;;; Without this instance a :float (64-bit) map key falls back to the int
+;;; hash, which numerically truncates 1.5 -> 1 and collapses distinct keys.
+;;; Bit-casting the double to its int64 pattern hashes by value instead.
+
+(definstance Hash [float] (hash [x] :int ```c union { double f; int64_t i; } u;
+    u.f = (double)x;
+    return u.i;
+    ```))

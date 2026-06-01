@@ -82,14 +82,20 @@
 > `(fn [a :K b :K] (eq? a b))` comparator threaded into the runtime `*-eq` HAMT.
 > Fixture `ghe3-generic-map-key` proves content-keyed `:cstr` (distinct-pointer
 > update collapses to one entry), identity `:int`, and `:bool` keys all round
-> trip through one path. **`:float32` (and any wider-than-one-word) keys are out
-> of scope** -- the runtime `*-eq` carrier is one word (`void*` key +
-> `bool(i64,i64)` comparator), so a float content key truncates through the
-> `int64_t` carrier. This is a *pre-existing* `*-eq` limitation (the hand-written
-> `tur-cstr-key-eq?` layer fails on float keys identically), not a dispatch gap;
-> the fix is a generalized **boxed-key carrier** scoped separately in
-> [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md) (W2 -- which
-> also unblocks multi-word struct/ADT keys).
+> trip through one path. **`:float32` / `:float` keys are now also covered**
+> (since the WKC carrier work below); `ghe3-generic-map-key` asserts a `:float32`
+> key alongside the others and `wkc-wide-map-key` is the focused float
+> round-trip. The runtime `*-eq` carrier is still one word (`void*` key +
+> `bool(i64,i64)` comparator), but a `MapKey[K]` typeclass bit-reinterprets an
+> inline float key into the carrier (no numeric truncation) and supplies a
+> carrier-ABI `bool(i64,i64)` comparator that reinterprets back, so `1.5` no
+> longer collapses to `1`. **Multi-word struct/ADT keys are now supported too**
+> (WKC3): a `MapKey[K]` instance heap-boxes the key via the refcount-aware
+> `tur_hamt_box_key` carrier (owned by the map) and the `-g` builders route
+> through ownership-aware `tur_hamt_*_eq_o` calls; see
+> [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md) (W2).
+> The remaining cost is a small per-struct `MapKey` instance (a `derive-map-key`
+> macro is a follow-up); the carrier itself no longer restricts key width.
 >
 > **Remaining for GHE4/GHE5:** route `hamt-of` / `#map{...}` through the `-g`
 > builders (collapsing GMK's Approach-B `:cstr` special-case), generalize the
@@ -306,13 +312,14 @@ implies a true key match and `(= a b)` agrees with identity) but **not**
 byte-for-byte the old int codegen. That only matters at GHE4, when existing
 int-keyed literals are re-targeted -- see the revised gate in the status header.
 
-- **Acceptance (met, scope revised):** `map-assoc-g`/`map-get-g`/`-has-g?`/
-  `-dissoc-g` round-trip for `K` in {`int`, `cstr`, `bool`}; the `cstr`
+- **Acceptance (met):** `map-assoc-g`/`map-get-g`/`-has-g?`/`-dissoc-g`
+  round-trip for `K` in {`int`, `cstr`, `bool`, `float32`, `float`}; the `cstr`
   instantiation matches `smap-*` content-keyed behavior (distinct-pointer
-  update collapses to one entry). `:float32` is deferred to
-  [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md) -- the
-  one-word `*-eq` carrier cannot hold a float content key (a pre-existing
-  limitation, not a dispatch gap). Fixture: `ghe3-generic-map-key`.
+  update collapses to one entry). `:float32` / `:float` were reinstated by the
+  WKC carrier work (a `MapKey[K]` typeclass that bit-reinterprets the inline
+  float key into the one-word carrier and supplies a carrier-ABI comparator);
+  see [float32-map-key-carrier-plan.md](float32-map-key-carrier-plan.md).
+  Fixtures: `ghe3-generic-map-key`, `wkc-wide-map-key`.
 
 ### GHE4 -- route `hamt-of` / `#map{...}` through `map-assoc-g`
 

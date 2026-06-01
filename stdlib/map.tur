@@ -333,6 +333,57 @@
   r->hamt = new_hamt;
   return (int64_t)(intptr_t)r;
   ```)
+;;; ----------------------------------------------------------------------------
+;;; Ownership-aware *-eq-o variants (WKC3): like *-eq, but `owned` (0/1) selects
+;;; the boxed-key runtime ops so a heap-boxed multi-word key is freed exactly
+;;; once across structural sharing.  owned == 0 is byte-for-byte the plain _eq
+;;; path; the -g builders pass (mk-owned? key) so one-word keys cost nothing.
+;;; ----------------------------------------------------------------------------
+
+;;; map-assoc-eq-o -- map-assoc-eq with an ownership flag for boxed keys.
+;;;
+;;; Since: WKC3 (float32-map-key-carrier-plan)
+
+(defn map-assoc-eq-o [K V] [m :int h :int key :K val :V keyeq owned :int] :int
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+                                     (void *)(intptr_t)val, (void *)(intptr_t)keyeq,
+                                     (int64_t)owned);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
+;;; map-get-eq-o -- map-get-eq with an ownership flag for boxed keys.
+;;;
+;;; Since: WKC3 (float32-map-key-carrier-plan)
+
+(defn map-get-eq-o [K V] [m :int h :int key :K keyeq owned :int] :V
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
+                                              (void *)(intptr_t)key,
+                                              (void *)(intptr_t)keyeq, (int64_t)owned);
+  ```)
+;;; map-has-eq-o? -- map-has-eq? with an ownership flag for boxed keys.
+;;;
+;;; Since: WKC3 (float32-map-key-carrier-plan)
+
+(defn map-has-eq-o? [K] [m :int h :int key :K keyeq owned :int] :bool
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+                           (void *)(intptr_t)keyeq, (int64_t)owned);
+  ```)
+;;; map-dissoc-eq-o -- map-dissoc-eq with an ownership flag for boxed keys.
+;;;
+;;; Since: WKC3 (float32-map-key-carrier-plan)
+
+(defn map-dissoc-eq-o [K] [m :int h :int key :K keyeq owned :int] :int
+  ```c struct { void *hamt; } *map = (void *)(intptr_t)m;
+  void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
+                                     (void *)(intptr_t)keyeq, (int64_t)owned);
+  struct { void *hamt; } *r = malloc(sizeof(*r));
+  r->hamt = new_hamt;
+  return (int64_t)(intptr_t)r;
+  ```)
 ;;; smap-assoc -- string-keyed insert/update: Map[cstr V] by content.
 ;;;
 ;;; Parameters:
@@ -400,27 +451,127 @@
 (defn smap-dissoc [m :int key :cstr] :int
   (map-dissoc-eq m (cstr-hash key) key tur-cstr-key-eq?))
 ;;; ============================================================================
-;;; Generic content-keyed maps (GHE3 -- generic-hash-eq-dispatch-plan)
+;;; Wide map-key carrier (WKC -- float32-map-key-carrier-plan)
 ;;;
-;;; The -g family routes ANY scalar key type through (Hash K) + (Eq K) by a
+;;; The runtime *-eq HAMT carries a key as a single int64_t word and calls the
+;;; comparator through bool(*)(int64_t,int64_t).  For a one-word key (:int,
+;;; :bool, :cstr) the value rides that word losslessly.  A :float32 / :float
+;;; key does NOT: binding it to the int64_t carrier numerically converts it
+;;; (1.5 -> 1), and a bool(float,float) comparator invoked through the int64_t
+;;; ABI reads the wrong registers.  Both bugs predate generic dispatch -- they
+;;; are properties of the one-word carrier itself.
+;;;
+;;; MapKey fixes the carrier per key type, at the only place that knows K
+;;; concretely -- a typeclass dispatched on a K-typed argument:
+;;;
+;;;   mk-box : K -> int64 carrier.  One-word keys: identity.  Float keys:
+;;;            a *bit* reinterpret (memcpy of raw bytes via a union), never a
+;;;            numeric conversion, so 1.5 survives intact.
+;;;   mk-cmp : K -> a carrier-ABI comparator bool(int64,int64) (returned as a
+;;;            raw function pointer).  Float comparators reinterpret each
+;;;            carrier word back to the float and compare by value, so the
+;;;            runtime's int64_t ABI is honored.
+;;;
+;;; (hash key) still runs on the unboxed K via Hash[K], so the hash word is
+;;; unaffected.  The boxed form (mk-box) and the unbox in the comparator
+;;; (mk-cmp) are chosen by the same K, so they always agree.  Dispatch is
+;;; resolved at compile time and the float reinterprets are inlinable, so a
+;;; one-word map keeps today's representation and cost.
+;;;
+;;; Scope: this covers inline scalar keys (one-word + float32 + float64).
+;;; Multi-word struct/ADT keys would need a heap-boxed carrier owned by the
+;;; map (a runtime-ownership change); that remains a separate follow-up.
+;;; ============================================================================
+
+;;; tur-int-carrier-eq? -- carrier comparator for one-word integral keys.
+;;;
+;;; Used for :int and :bool keys, whose carrier word IS the value, so plain
+;;; integer equality on the two carrier words is the key equality.
+
+(defn tur-int-carrier-eq? [a :int b :int] :bool (= a b))
+;;; tur-f32-carrier-eq? -- carrier comparator for :float32 keys.
+;;;
+;;; Reinterprets each int64 carrier word's low 32 bits back to a float and
+;;; compares by value (NaN never matches, as with =).
+
+(defn tur-f32-carrier-eq? [a :int b :int] :bool
+  ```c union { float f; int64_t i; } ua, ub;
+  ua.i = a; ub.i = b;
+  return ua.f == ub.f;
+  ```)
+;;; tur-f64-carrier-eq? -- carrier comparator for :float (float64) keys.
+;;;
+;;; Reinterprets each int64 carrier word back to a double and compares by value.
+
+(defn tur-f64-carrier-eq? [a :int b :int] :bool
+  ```c union { double f; int64_t i; } ua, ub;
+  ua.i = a; ub.i = b;
+  return ua.f == ub.f;
+  ```)
+;;; MapKey -- per-key-type carrier boxing + a carrier-ABI comparator.
+;;;
+;;; Parameters:
+;;;   a -- the key type
+;;;
+;;; Since: WKC (float32-map-key-carrier-plan)
+(defclass MapKey [a]
+  (mk-box [x] :int)
+  (mk-cmp [x] :int)
+  (mk-owned? [x] :int))
+;;; MapKey [int] -- one-word identity carrier; integer-equality comparator.
+
+(definstance MapKey [int]
+  (mk-box [x] x)
+  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+  (mk-owned? [x] 0))
+;;; MapKey [bool] -- one-word 0/1 carrier; integer-equality comparator.
+
+(definstance MapKey [bool]
+  (mk-box [x] (if x 1 0))
+  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_int_carrier_eq_; ```)
+  (mk-owned? [x] 0))
+;;; MapKey [cstr] -- pointer carrier; content-equality comparator.
+
+(definstance MapKey [cstr]
+  (mk-box [x] :int ```c return (int64_t)(intptr_t)x; ```)
+  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_cstr_key_eq_; ```)
+  (mk-owned? [x] 0))
+;;; MapKey [float32] -- bit-reinterpret carrier; float-value comparator.
+
+(definstance MapKey [float32]
+  (mk-box [x] :int ```c union { float f; int64_t i; } u; u.i = 0; u.f = x; return u.i; ```)
+  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f32_carrier_eq_; ```)
+  (mk-owned? [x] 0))
+;;; MapKey [float] -- bit-reinterpret carrier (float64); double-value comparator.
+
+(definstance MapKey [float]
+  (mk-box [x] :int ```c union { double f; int64_t i; } u; u.f = x; return u.i; ```)
+  (mk-cmp [x] :int ```c return (int64_t)(intptr_t)tur_f64_carrier_eq_; ```)
+  (mk-owned? [x] 0))
+;;; ============================================================================
+;;; Generic content-keyed maps (GHE3 -- generic-hash-eq-dispatch-plan; WKC carrier)
+;;;
+;;; The -g family routes ANY scalar key type through (Hash K) + (MapKey K) by a
 ;;; single constrained-generic code path: (hash key) selects the per-K hash
-;;; instance, and the per-K comparator (fn [a :K b :K] (eq? a b)) is threaded
-;;; into the runtime *-eq HAMT.  This unifies what smap-* did by hand for :cstr
-;;; with the carrier-correct identity path for :int / :bool / :float32 keys.
+;;; instance, (mk-box key) boxes the key into the int64 carrier (a bit
+;;; reinterpret for float keys, identity for one-word keys), and (mk-cmp key)
+;;; supplies a carrier-ABI bool(int64,int64) comparator threaded into the
+;;; runtime *-eq HAMT.  This unifies what smap-* did by hand for :cstr with a
+;;; carrier-correct path for :int / :bool / :float32 / :float keys.
 ;;;
-;;; Dispatch is resolved entirely at compile time: the constrained-generic
-;;; method-call re-resolution (CGI) picks (hash key) and (eq? a b) per
-;;; monomorphization, and the comparator fn-value is cloned per K (GHE2) so a
-;;; distinct-pointer :cstr key still matches by content.  For :int keys the
-;;; hash is identity and (eq? a b) is integer =, so a hash match already implies
-;;; a true key match -- the same outcome as the plain identity-keyed map-assoc.
+;;; Dispatch is resolved entirely at compile time per monomorphization, so a
+;;; distinct-pointer :cstr key still matches by content and a :float32 key
+;;; round-trips by value.  For :int keys mk-box is identity and the comparator
+;;; is integer =, so the result matches the plain identity-keyed map-assoc.
 ;;; ============================================================================
 
 ;;; map-assoc-g -- generic content-keyed insert/update for any Hash/Eq key.
 ;;;
 ;;; Parameters:
 ;;;   m   -- source Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
+;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
+;;;          the carrier and compared by value; one-word keys are unchanged.
 ;;;   val -- value of type V
 ;;;
 ;;; Returns:
@@ -433,13 +584,15 @@
 ;;;
 ;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
 
-(defn map-assoc-g [^Hash K ^Eq K V] [m :int key :K val :V] :int
-  (map-assoc-eq m (hash key) key val (fn [a :K b :K] :bool (eq? a b))))
+(defn map-assoc-g [^Hash K ^MapKey K V] [m :int key :K val :V] :int
+  (map-assoc-eq-o m (hash key) (mk-box key) val (mk-cmp key) (mk-owned? key)))
 ;;; map-get-g -- generic content-keyed lookup; returns V or 0 if absent.
 ;;;
 ;;; Parameters:
 ;;;   m   -- Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
+;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
+;;;          the carrier and compared by value; one-word keys are unchanged.
 ;;;
 ;;; Returns:
 ;;;   The value of type V, or 0 (none) if absent.
@@ -449,13 +602,15 @@
 ;;;
 ;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
 
-(defn map-get-g [^Hash K ^Eq K V] [m :int key :K] :V
-  (map-get-eq m (hash key) key (fn [a :K b :K] :bool (eq? a b))))
+(defn map-get-g [^Hash K ^MapKey K V] [m :int key :K] :V
+  (map-get-eq-o m (hash key) (mk-box key) (mk-cmp key) (mk-owned? key)))
 ;;; map-has-g? -- generic content-keyed existence test.
 ;;;
 ;;; Parameters:
 ;;;   m   -- Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
+;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
+;;;          the carrier and compared by value; one-word keys are unchanged.
 ;;;
 ;;; Returns:
 ;;;   true if the key is present under Eq[K], false otherwise.
@@ -465,13 +620,15 @@
 ;;;
 ;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
 
-(defn map-has-g? [^Hash K ^Eq K] [m :int key :K] :bool
-  (map-has-eq? m (hash key) key (fn [a :K b :K] :bool (eq? a b))))
+(defn map-has-g? [^Hash K ^MapKey K] [m :int key :K] :bool
+  (map-has-eq-o? m (hash key) (mk-box key) (mk-cmp key) (mk-owned? key)))
 ;;; map-dissoc-g -- generic content-keyed removal; returns a new map.
 ;;;
 ;;; Parameters:
 ;;;   m   -- source Map[K V]
-;;;   key -- key of type K (must satisfy Hash[K] and Eq[K])
+;;;   key -- key of type K (must satisfy Hash[K] and MapKey[K]).
+;;;          Inline float keys (:float32 / :float) are bit-reinterpreted into
+;;;          the carrier and compared by value; one-word keys are unchanged.
 ;;;
 ;;; Returns:
 ;;;   A new Map[K V] with the key removed.
@@ -481,8 +638,8 @@
 ;;;
 ;;; Since: GHE3 (generic-hash-eq-dispatch-plan)
 
-(defn map-dissoc-g [^Hash K ^Eq K] [m :int key :K] :int
-  (map-dissoc-eq m (hash key) key (fn [a :K b :K] :bool (eq? a b))))
+(defn map-dissoc-g [^Hash K ^MapKey K] [m :int key :K] :int
+  (map-dissoc-eq-o m (hash key) (mk-box key) (mk-cmp key) (mk-owned? key)))
 ;;; map-free -- free the Map wrapper (does not free HAMT; use map-free-all for that).
 ;;;
 ;;; Parameters:

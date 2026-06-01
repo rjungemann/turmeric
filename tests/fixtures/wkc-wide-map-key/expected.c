@@ -142,47 +142,6 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_APPLY4(f, a, b, c, d) \
     (((int64_t (*)(void *, int64_t, int64_t, int64_t, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
         ((void *)(intptr_t)(f), (int64_t)(a), (int64_t)(b), (int64_t)(c), (int64_t)(d)))
-typedef struct { bool is_some; int64_t value; } tur_option_t;
-typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } tur_result_box_t;
-#define TUR_NONE ((int64_t)0)
-static int64_t tur_some(int64_t __x) __attribute__((unused));
-static int64_t tur_some(int64_t __x) {
-    tur_option_t *__o = (tur_option_t *)malloc(sizeof(*__o));
-    __o->is_some = true; __o->value = __x;
-    return (int64_t)(intptr_t)__o;
-}
-static bool tur_is_some(int64_t __o) __attribute__((unused));
-static bool tur_is_some(int64_t __o) {
-    return __o != 0 && ((tur_option_t *)(intptr_t)__o)->is_some;
-}
-static int64_t tur_opt_value(int64_t __o) __attribute__((unused));
-static int64_t tur_opt_value(int64_t __o) {
-    return ((tur_option_t *)(intptr_t)__o)->value;
-}
-static int64_t tur_ok(int64_t __v) __attribute__((unused));
-static int64_t tur_ok(int64_t __v) {
-    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));
-    __r->is_ok = true; __r->ok_val = __v; __r->err_val = 0;
-    return (int64_t)(intptr_t)__r;
-}
-static int64_t tur_err(int64_t __e) __attribute__((unused));
-static int64_t tur_err(int64_t __e) {
-    tur_result_box_t *__r = (tur_result_box_t *)malloc(sizeof(*__r));
-    __r->is_ok = false; __r->ok_val = 0; __r->err_val = __e;
-    return (int64_t)(intptr_t)__r;
-}
-static bool tur_is_ok(int64_t __r) __attribute__((unused));
-static bool tur_is_ok(int64_t __r) {
-    return __r != 0 && ((tur_result_box_t *)(intptr_t)__r)->is_ok;
-}
-static int64_t tur_ok_value(int64_t __r) __attribute__((unused));
-static int64_t tur_ok_value(int64_t __r) {
-    return ((tur_result_box_t *)(intptr_t)__r)->ok_val;
-}
-static int64_t tur_err_value(int64_t __r) __attribute__((unused));
-static int64_t tur_err_value(int64_t __r) {
-    return ((tur_result_box_t *)(intptr_t)__r)->err_val;
-}
 static int64_t __tur_fatshim0(void *__e) {
     return ((int64_t (*)(void))(intptr_t)((int64_t *)__e)[1])();
 }
@@ -2422,10 +2381,6 @@ static bool __inst_Eq_eq__Cons(int64_t, int64_t);
 static bool __inst_Eq_eq__Set(int64_t, int64_t);
 static bool __fn_869(int64_t, int64_t);
 static bool __inst_Eq_eq__MutableMap(int64_t, int64_t);
-static const char * __inst_MyShow_show_int(int64_t);
-static const char * __inst_MyShow_show_list_int(int64_t, int64_t);
-static const char * __inst_MyShow_show_bool(bool);
-static const char * __inst_MyShow_show_list_bool(bool, bool);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2569,6 +2524,14 @@ static bool mutmap_has_(int64_t, int64_t, int64_t);
 static bool mutmap_delete_(int64_t, int64_t, int64_t);
 static bool mutmap_eq_(int64_t, int64_t, int64_t);
 static void mutmap_free(int64_t);
+static int64_t map_assoc_g__spec__int64_t_int64_t_float_int64_t(int64_t, float, int64_t);
+static int64_t map_get_g__spec__int64_t_int64_t_float(int64_t, float);
+static bool map_has_g___spec__bool_int64_t_float(int64_t, float);
+static int64_t map_dissoc_g__spec__int64_t_int64_t_float(int64_t, float);
+static int64_t map_assoc_g__spec__int64_t_int64_t_double_int64_t(int64_t, double, int64_t);
+static int64_t map_get_g__spec__int64_t_int64_t_double(int64_t, double);
+static bool map_has_g___spec__bool_int64_t_double(int64_t, double);
+static int64_t map_dissoc_g__spec__int64_t_int64_t_double(int64_t, double);
 
 static bool __inst_Eq_eq__int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -3096,42 +3059,6 @@ typedef struct dict_Eq_MutableMap {
 
 static dict_Eq_MutableMap dict_Eq_MutableMap_singleton = {
     .eq_ = __inst_Eq_eq__MutableMap,
-};
-
-static const char * __inst_MyShow_show_int(int64_t x) {
-        return "int";
-}
-
-static const char * __inst_MyShow_show_list_int(int64_t x, int64_t y) {
-        return "int list";
-}
-
-typedef struct dict_MyShow_int {
-    const char * (*show)(int64_t);
-    const char * (*show_list)(int64_t, int64_t);
-} dict_MyShow_int;
-
-static dict_MyShow_int dict_MyShow_int_singleton = {
-    .show = __inst_MyShow_show_int,
-    .show_list = __inst_MyShow_show_list_int,
-};
-
-static const char * __inst_MyShow_show_bool(bool x) {
-        return "bool";
-}
-
-static const char * __inst_MyShow_show_list_bool(bool x, bool y) {
-        return "bool list";
-}
-
-typedef struct dict_MyShow_bool {
-    const char * (*show)(bool);
-    const char * (*show_list)(bool, bool);
-} dict_MyShow_bool;
-
-static dict_MyShow_bool dict_MyShow_bool_singleton = {
-    .show = __inst_MyShow_show_bool,
-    .show_list = __inst_MyShow_show_list_bool,
 };
 
 static void * array_get(void * arr, int64_t idx) {
@@ -3684,22 +3611,28 @@ static bool slice_eq_(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t some(int64_t x) {
-        return tur_some(x);
+        struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true;
+  opt->value = x;
+  return (int64_t)(intptr_t)opt;
   
 }
 
 static int64_t none() {
-        return TUR_NONE;
+        return 0;
   
 }
 
 static bool some_(int64_t o) {
-        return tur_is_some(o);
+        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  return opt != NULL && opt->is_some;
   
 }
 
 static int64_t unwrap_or(int64_t o, int64_t dflt) {
-        return tur_is_some(o) ? tur_opt_value(o) : dflt;
+        struct { bool is_some; int64_t value; } *opt = (void*)(intptr_t)o;
+  if (!opt || !opt->is_some) return dflt;
+  return (int64_t)opt->value;
   
 }
 
@@ -3730,22 +3663,32 @@ static bool option_eq_(int64_t o1, int64_t o2, int64_t cmp_fn) {
 }
 
 static int64_t ok(int64_t x) {
-        return tur_ok(x);
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true;
+  r->ok_val = x;
+  r->err_val = 0;
+  return (int64_t)(intptr_t)r;
   
 }
 
 static int64_t err(int64_t e) {
-        return tur_err(e);
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false;
+  r->ok_val = 0;
+  r->err_val = e;
+  return (int64_t)(intptr_t)r;
   
 }
 
 static bool ok_(int64_t r) {
-        return tur_is_ok(r);
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return res && res->is_ok;
   
 }
 
 static bool err_(int64_t r) {
-        return !tur_is_ok(r);
+        struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)(intptr_t)r;
+  return !res || !res->is_ok;
   
 }
 
@@ -4377,7 +4320,87 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        return (int)INT64_C(0);
+        {
+            int64_t mf_872 = map_assoc_g__spec__int64_t_int64_t_float_int64_t(map_assoc_g__spec__int64_t_int64_t_float_int64_t(map_new(), ((float)1.5), INT64_C(7)), ((float)1.7), INT64_C(8));
+            (void)mf_872;
+            int64_t mf2_873 = map_assoc_g__spec__int64_t_int64_t_float_int64_t(mf_872, ((float)1.5), INT64_C(70));
+            (void)mf2_873;
+            printf("%lld\n", (long long)(map_get_g__spec__int64_t_int64_t_float(mf2_873, ((float)1.5))));
+            printf("%lld\n", (long long)(map_get_g__spec__int64_t_int64_t_float(mf2_873, ((float)1.7))));
+            printf("%lld\n", (long long)(map_count(mf2_873)));
+            int64_t __t3;
+            if (map_has_g___spec__bool_int64_t_float(mf2_873, ((float)1.5))) {
+                __t3 = INT64_C(1);
+            } else {
+                __t3 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t3));
+            int64_t __t4;
+            if (map_has_g___spec__bool_int64_t_float(map_dissoc_g__spec__int64_t_int64_t_float(mf2_873, ((float)1.5)), ((float)1.5))) {
+                __t4 = INT64_C(1);
+            } else {
+                __t4 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t4));
+        }
+        {
+            int64_t md_874 = map_assoc_g__spec__int64_t_int64_t_double_int64_t(map_assoc_g__spec__int64_t_int64_t_double_int64_t(map_new(), 1.5, INT64_C(42)), 1.7, INT64_C(99));
+            (void)md_874;
+            int64_t md2_875 = map_assoc_g__spec__int64_t_int64_t_double_int64_t(md_874, 1.7, INT64_C(990));
+            (void)md2_875;
+            printf("%lld\n", (long long)(map_get_g__spec__int64_t_int64_t_double(md2_875, 1.5)));
+            printf("%lld\n", (long long)(map_get_g__spec__int64_t_int64_t_double(md2_875, 1.7)));
+            printf("%lld\n", (long long)(map_count(md2_875)));
+            int64_t __t5;
+            if (map_has_g___spec__bool_int64_t_double(md2_875, 1.5)) {
+                __t5 = INT64_C(1);
+            } else {
+                __t5 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t5));
+            int64_t __t6;
+            if (map_has_g___spec__bool_int64_t_double(map_dissoc_g__spec__int64_t_int64_t_double(md2_875, 1.5), 1.5)) {
+                __t6 = INT64_C(1);
+            } else {
+                __t6 = INT64_C(0);
+            }
+            printf("%lld\n", (long long)(__t6));
+        }
+        int64_t __t7;
+        __t7 = INT64_C(0);
+        return (int)__t7;
+}
+
+static int64_t map_assoc_g__spec__int64_t_int64_t_float_int64_t(int64_t m, float key, int64_t val) {
+        return map_assoc_eq_o(m, __inst_Hash_hash_float32(key), __inst_MapKey_mk_box_float32(key), val, __inst_MapKey_mk_cmp_float32(key), __inst_MapKey_mk_owned__float32(key));
+}
+
+static int64_t map_get_g__spec__int64_t_int64_t_float(int64_t m, float key) {
+        return map_get_eq_o(m, __inst_Hash_hash_float32(key), __inst_MapKey_mk_box_float32(key), __inst_MapKey_mk_cmp_float32(key), __inst_MapKey_mk_owned__float32(key));
+}
+
+static bool map_has_g___spec__bool_int64_t_float(int64_t m, float key) {
+        return map_has_eq_o_(m, __inst_Hash_hash_float32(key), __inst_MapKey_mk_box_float32(key), __inst_MapKey_mk_cmp_float32(key), __inst_MapKey_mk_owned__float32(key));
+}
+
+static int64_t map_dissoc_g__spec__int64_t_int64_t_float(int64_t m, float key) {
+        return map_dissoc_eq_o(m, __inst_Hash_hash_float32(key), __inst_MapKey_mk_box_float32(key), __inst_MapKey_mk_cmp_float32(key), __inst_MapKey_mk_owned__float32(key));
+}
+
+static int64_t map_assoc_g__spec__int64_t_int64_t_double_int64_t(int64_t m, double key, int64_t val) {
+        return map_assoc_eq_o(m, __inst_Hash_hash_float(key), __inst_MapKey_mk_box_float(key), val, __inst_MapKey_mk_cmp_float(key), __inst_MapKey_mk_owned__float(key));
+}
+
+static int64_t map_get_g__spec__int64_t_int64_t_double(int64_t m, double key) {
+        return map_get_eq_o(m, __inst_Hash_hash_float(key), __inst_MapKey_mk_box_float(key), __inst_MapKey_mk_cmp_float(key), __inst_MapKey_mk_owned__float(key));
+}
+
+static bool map_has_g___spec__bool_int64_t_double(int64_t m, double key) {
+        return map_has_eq_o_(m, __inst_Hash_hash_float(key), __inst_MapKey_mk_box_float(key), __inst_MapKey_mk_cmp_float(key), __inst_MapKey_mk_owned__float(key));
+}
+
+static int64_t map_dissoc_g__spec__int64_t_int64_t_double(int64_t m, double key) {
+        return map_dissoc_eq_o(m, __inst_Hash_hash_float(key), __inst_MapKey_mk_box_float(key), __inst_MapKey_mk_cmp_float(key), __inst_MapKey_mk_owned__float(key));
 }
 
 

@@ -69,6 +69,16 @@ add_test(
   COMMAND bash tests/run-leak-gate.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# WKC2: boxed-key ownership gate. Compiles the HAMT runtime + a C unit test
+# with ASan/UBSan (+LSan on Linux) and asserts that a wide-keyed map
+# build+drop is leak-clean and double-free/use-after-free clean: a boxed key
+# shared across structurally-shared persistent versions is freed exactly once.
+# See docs/float32-map-key-carrier-plan.md (WKC2).
+add_test(
+  NAME tur_hamt_owned_keys
+  COMMAND bash tests/run-hamt-owned-keys.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
 # The script builds tests/fixtures/build-shared-smoke as a .so and runs a
 # hand-written C harness that dlsyms the exported defn and calls it.

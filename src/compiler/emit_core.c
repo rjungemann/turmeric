@@ -570,6 +570,7 @@ static const char *emit_inst_suffix_component(TypeKind k) {
         case TY_UINT16:  return "uint16";
         case TY_UINT32:  return "uint32";
         case TY_UINT64:  return "uint64";
+        case TY_FLOAT:   return "float";
         case TY_FLOAT32: return "float32";
         case TY_FLOAT64: return "float64";
         default:         return NULL;
@@ -603,6 +604,25 @@ static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     Type resolved = emit_resolve_type(ctx, recv->type);
     if (resolved.kind == TY_TYVAR) return NULL; /* still unbound: keep base/repr */
     const char *component = emit_inst_suffix_component(resolved.kind);
+    /* WKC3: a named struct/ADT key resolves to TY_STRUCT; its instance is
+     * mangled by the (sanitized) type name, mirroring the EX_INSTANCE_DEF and
+     * dict-name switches.  Without this, an aggregate-keyed constrained-generic
+     * call falls back to the int carrier representative (the same failure float
+     * keys hit before TY_FLOAT was added to the suffix manglers). */
+    char struct_comp[64];
+    if (!component && resolved.kind == TY_STRUCT &&
+        resolved.as.struct_.def && resolved.as.struct_.def->name) {
+        const char *nm = resolved.as.struct_.def->name;
+        size_t i = 0;
+        for (; nm[i] && i < sizeof(struct_comp) - 1; i++) {
+            unsigned char c = (unsigned char)nm[i];
+            struct_comp[i] = (char)(((c >= '0' && c <= '9') ||
+                                     (c >= 'A' && c <= 'Z') ||
+                                     (c >= 'a' && c <= 'z')) ? (char)c : '_');
+        }
+        struct_comp[i] = '\0';
+        component = struct_comp;
+    }
     if (!component) return NULL;
 
     const TypeClass *tc = dict->as.dict_.instance->typeclass;
@@ -1305,6 +1325,7 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
             case TY_UINT16:   component = "uint16";   break;
             case TY_UINT32:   component = "uint32";   break;
             case TY_UINT64:   component = "uint64";   break;
+            case TY_FLOAT:    component = "float";    break;
             case TY_FLOAT32:  component = "float32";  break;
             case TY_FLOAT64:  component = "float64";  break;
             case TY_STRUCT:

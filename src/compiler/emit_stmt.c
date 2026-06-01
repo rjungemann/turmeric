@@ -384,6 +384,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     case TY_UINT16:   component = "uint16";   break;
                     case TY_UINT32:   component = "uint32";   break;
                     case TY_UINT64:   component = "uint64";   break;
+                    case TY_FLOAT:    component = "float";    break;
                     case TY_FLOAT32:  component = "float32";  break;
                     case TY_FLOAT64:  component = "float64";  break;
                     case TY_STRUCT:

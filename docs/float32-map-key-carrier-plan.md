@@ -1,6 +1,74 @@
 # Wide Map Key Carrier -- boxed keys that don't fit one word (WKC0--WKC5)
 
-> **Status:** Not started. Spun off from
+> **Status (update):** Implemented for **inline scalar** wide keys (`:float32`
+> and `:float`/float64). The carrier fix landed as a stdlib `MapKey[K]`
+> typeclass rather than a runtime heap box: `mk-box` bit-reinterprets the float
+> key into the existing one-word `int64_t` carrier (a `memcpy`-equivalent union
+> reinterpret, never a numeric conversion), and `mk-cmp` returns a carrier-ABI
+> `bool(int64_t,int64_t)` comparator that reinterprets each carrier word back to
+> the float before comparing. Because an inline scalar fits the word, **no
+> runtime-ownership change (WKC2) was needed** for floats -- there is no heap
+> allocation per key. A latent compiler bug was fixed along the way: the
+> typeclass instance-name manglers omitted `TY_FLOAT`, so every `[float]`
+> instance mis-named to the generic `T` and the dispatcher fell back to the
+> `int` carrier representative (this is why a `:float` key silently truncated).
+>
+> **WKC2 (runtime boxed-key ownership) is now implemented** as the foundation
+> for multi-word keys: the HAMT carries an optional refcount-aware boxed-key
+> carrier (`tur_hamt_box_key` + `tur_hamt_box_retain/release`) and
+> ownership-aware `tur_hamt_*_eq_owned` entry points that install retain/release
+> for an operation and stamp the ops onto the resulting map so a later
+> `tur_hamt_free` releases its keys. A box shared across structurally-shared
+> versions is freed exactly once; one-word keys (NULL ops) are untouched.
+> Validated by `tests/test_hamt_owned_keys.c` under ASan/UBSan/LSan (ctest
+> `tur_hamt_owned_keys`, gate `tests/run-hamt-owned-keys.sh`) -- leak-clean and
+> double-free/use-after-free clean across collisions, updates, deletes, and
+> structural sharing. Fixing this surfaced and corrected a latent
+> `tur_hamt_del` bug (it double-retained the fresh delete-root, leaking the node
+> and its keys on `map-free`; harmless before only because compiled programs
+> never free maps). The float path does not use this (inline carriers need no
+> box); it exists for the still-pending aggregate-key lowering (WKC3).
+>
+> **WKC3 (aggregate/struct-key lowering) is now implemented.** A multi-word
+> struct/ADT key round-trips through the `-g` builders via the WKC2 boxed
+> carrier: a `MapKey[K]` instance for the struct heap-boxes the key bytes with
+> `tur_hamt_box_key` (`mk-box`), supplies a carrier-ABI comparator over the two
+> box payload pointers (`mk-cmp`), and returns `(mk-owned? _) = 1` so the
+> builders route through new ownership-aware `map-*-eq-o` /
+> `tur_hamt_*_eq_o(owned)` entry points (the map owns and frees the box). The
+> `MapKey` class gained `mk-owned?`; one-word/inline instances return 0 (the
+> plain `_eq` runtime path, no allocation). A second instance-dispatch gap was
+> fixed for this: `emit_reresolve_method_call` now resolves a `TY_STRUCT`
+> receiver to its (sanitized) type-name component, so an aggregate-keyed
+> constrained-generic call dispatches to `__inst_<Class>_<method>_<Struct>`
+> instead of falling back to the `int` carrier representative (the same failure
+> float keys hit before `TY_FLOAT` was added to the suffix manglers).
+> Round-trip (assoc/update/get/has/dissoc by content) is proven by
+> `wkc3-struct-map-key`; the box ownership it relies on is the WKC2-validated
+> path. Note: a struct `mk-box`/comparator still needs a little inline-C
+> (`&p`/`sizeof` and the field compare) since generic Turmeric cannot introspect
+> `K`'s size; a `derive-map-key` macro to generate that boilerplate is a
+> follow-up.
+>
+> Deviations from the original W2 plan, by design:
+> - One-word keys are no longer emitted *byte-for-byte* identically (WKC1's
+>   strict zero-diff gate): they now route through `MapKey` dispatch (an
+>   inlinable identity box + a named comparator) instead of an inline
+>   `(fn [a :K b :K] (eq? a b))`. Behavior and cost are equivalent; the
+>   `ghe3-generic-map-key` snapshot was regenerated accordingly.
+> - The carrier fix is a stdlib `MapKey[K]` typeclass dispatched per-`K`, rather
+>   than a compile-time boxing bridge baked into the `-g` lowering. Inline
+>   scalars reinterpret into the one-word carrier (no allocation); only
+>   aggregate keys allocate (and are owned via WKC2).
+>
+> Fixtures: `wkc-wide-map-key` (float32/float64 round-trip, update, dissoc),
+> a reinstated `:float32` section in `ghe3-generic-map-key`,
+> `wkc3-struct-map-key` (2-field struct key round-trip), and
+> `tests/test_hamt_owned_keys.c` for the WKC2 runtime ownership.
+>
+> ---
+>
+> **Status (original):** Not started. Spun off from
 > [generic-hash-eq-dispatch-plan.md](generic-hash-eq-dispatch-plan.md) (GHE3),
 > which unified content-key *dispatch* for `int` / `bool` / `cstr` keys but left
 > `:float32` keys failing. This plan covers the *runtime carrier*, not dispatch.
@@ -164,9 +232,14 @@ neither keys nor values (`src/runtime/hamt.h:82-84`). Add an opt-in key
 destructor / ownership hook so a boxed key is freed exactly once across
 structural sharing (refcount-aware, mirroring node `ref_count`).
 
-- **Acceptance:** an ASan/LSan run of a wide-keyed map build+drop is leak-clean
-  and double-free-clean (the compiler/codegen path is already leak-checked; this
-  extends it to runtime-built boxed keys).
+- **Acceptance (MET):** an ASan/LSan run of a wide-keyed map build+drop is
+  leak-clean and double-free-clean (the compiler/codegen path is already
+  leak-checked; this extends it to runtime-built boxed keys). Implemented as
+  `tur_hamt_box_key`/`box_retain`/`box_release` + `tur_hamt_*_eq_owned` with a
+  per-map `key_ops` stamp; the retain fires in `collision_node_copy`, the
+  release in the collision free/delete paths and in `tur_hamt_free` (which
+  installs the map's release hook for the node cascade). Validated by
+  `tests/test_hamt_owned_keys.c` (ctest `tur_hamt_owned_keys`).
 
 ### WKC3 -- per-`K` box/unbox in the `-g` lowering + comparator
 
@@ -177,8 +250,14 @@ dereferences box pointers and delegates to the `Eq[K]`-resolved `eq?`; the box
 form is selected by the same `K` that selects the comparator, so the two always
 agree.
 
-- **Acceptance:** the `f32eq`-style repro returns `42`; a `float64` key and a
-  two-field struct key (given `Hash`/`Eq` instances) also round-trip.
+- **Acceptance (MET):** the `f32eq`-style repro returns `42` (`wkc-wide-map-key`);
+  a `float64` key (`wkc-wide-map-key`) and a two-field struct key given
+  `Hash`/`Eq` (and a `MapKey`) instance (`wkc3-struct-map-key`) also round-trip.
+  Realized as: `MapKey` gains `mk-owned?`; the `-g` builders call `map-*-eq-o`
+  with `(mk-owned? key)`, which select `tur_hamt_*_eq_o(owned)`; an aggregate
+  `mk-box` heap-boxes via `tur_hamt_box_key` and `mk-cmp` compares two box
+  payload pointers. The struct case also required teaching
+  `emit_reresolve_method_call` to dispatch a `TY_STRUCT` receiver by type name.
 
 ### WKC4 -- fixture + reinstate the GHE3 float case
 
