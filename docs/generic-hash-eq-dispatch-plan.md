@@ -51,6 +51,34 @@
 > within-GHE patch -- it should be scoped as its own plan
 > (`constrained-generic-instance-dispatch`) that GHE2--GHE5 then build on.
 >
+> **Landed since (CGI -- the hash half of Approach A):** the constrained-generic
+> *method dispatch* fix is done (commit `CGI:` on this branch). For a `TY_TYVAR`
+> receiver, `elab_method_call` now picks the carrier-compatible (`TY_INT`)
+> instance as the representative (valid base clone, correct for `int` keys) and
+> tags the call via `dict_arg`; `emit_call_name` re-resolves the call to
+> `__inst_<Class>_<method>_<T>` for each non-carrier ABI specialization
+> (cstr/bool/float32/...). Fixture `cgi-constrained-generic-dispatch` proves
+> `(hash x)` and `(eq? a b)` dispatch correctly through `^Hash K` / `^Eq K`.
+> A `map-assoc-g`/`map-get-g` prototype using this round-trips **int, bool, and
+> float32** keys correctly (their hashes are injective on the int64_t carrier,
+> so the carrier comparator is correct).
+>
+> **Remaining for GHE2/GHE3 (the comparator half):** the runtime `*-eq` ops need
+> a `bool(i64,i64)` *content* comparator, and the only scalar key needing it is
+> **cstr** (distinct pointers, equal text). Passing a generic `tur-key-eq?` by
+> name -- or an inline `(fn [a :K b :K] (eq? a b))` -- does **not** specialize
+> per `K`: both lower to a single lifted function that bakes the `Eq[int]`
+> (carrier) comparator, so a distinct-pointer cstr lookup misses. Fixing this is
+> **A2 generalized**: per-`K` specialization of a *function-value* reference --
+> the ABI-spec pre-pass (`emit_abi_scan_expr`) must recurse into a spec's body
+> under that spec's tyvar bindings to force-create + record the matching
+> specialization of the referenced comparator, and `atom_var`/`name_for_binding`
+> must emit the specialized clone for the fn-value reference (the analogue of the
+> `emit_call_name` re-resolution CGI added for method *calls*). Once it lands,
+> `map-assoc-g` (with the `int`-key fast path) + `map-get-g`/`-has-g?`/
+> `-dissoc-g` complete GHE3, and GHE4/GHE5 (literal lowering + reads + snapshot
+> regen) follow.
+>
 > This is the deferred **Approach A** from
 > [generic-map-key-dispatch-plan.md](archive/generic-map-key-dispatch-plan.md) (see its
 > *Decision note (GMK1)*). GMK shipped content-keyed string maps via
