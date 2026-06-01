@@ -3073,6 +3073,18 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_MAKE_STRUCT: {
             /* (make-struct StructName v1 v2 ...) - emit C99 compound literal */
             StructDef *def = e->as.make_struct_.def;
+            /* SC7: a transparent int newtype IS its single int64 field -- emit
+             * the field value directly (cast to int64), no compound literal. */
+            if (type_is_transparent_int_newtype(e->type)) {
+                char *fv = emit_value(ctx, body, e->as.make_struct_.field_values[0]);
+                Buf id; buf_init(&id);
+                buf_printf(&id, "(int64_t)(%s)", fv);
+                buf_putc(&id, '\0');
+                free(fv);
+                char *result = strdup(id.data);
+                buf_free(&id);
+                return result;
+            }
             Buf lit; buf_init(&lit);
             const char *struct_c_name = emit_type_c_name(ctx, e->type);
             buf_printf(&lit, "(%s){", struct_c_name);
@@ -3153,6 +3165,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase D: for pass-by-ptr params (const T*), use -> instead of . */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             StructDef *def = e->as.get_field_.def;
+            /* SC7: a transparent int newtype IS its single field -- the access
+             * is the identity (the value already holds the int64 payload). */
+            if (type_is_transparent_int_newtype(e->as.get_field_.struct_expr->type)) {
+                return sv;
+            }
             const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
             char *fname = mangle_field_name(fname_raw);
             bool through_rc = e->as.get_field_.struct_expr->type.kind == TY_RC;

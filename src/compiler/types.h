@@ -1190,6 +1190,11 @@ void         type_codegen_emit_fn_ptr_typedefs(Buf *out);
 /* Phase D: true if t is a struct type whose sizeof exceeds 16 bytes,
  * meaning it should be passed as const T* rather than by value. */
 bool         type_struct_pass_by_ptr(Type t);
+/* SC7 (carrier-duality): true for a parametric struct with a single `:int`
+ * field (e.g. `(defstruct Schema [A] (raw :int))`).  Such a phantom wrapper is
+ * a transparent newtype over int64 -- one C representation everywhere, so HKT
+ * dispatch can chain it (.fmap (.fmap s g) h) without rep-mixing. */
+bool         type_is_transparent_int_newtype(Type t);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 

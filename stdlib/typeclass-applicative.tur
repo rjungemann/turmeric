@@ -1,0 +1,12 @@
+;;; tur/typeclass-applicative -- minimal Applicative typeclass stub.
+;;;
+;;; Loaded by schema.tur (and loadable directly) so a module can declare
+;;; (definstance Applicative [...] ...) without importing the full
+;;; typeclass.tur.  The full typeclass.tur (with every typeclass) is still
+;;; available on demand via (load "stdlib/typeclass.tur").
+;;;
+;;; Since: Phase SC7
+;; Applicative -- container with a pure constructor and an ap combinator.
+;;   pure :: a -> f a
+;;   ap   :: f (a -> b) -> f a -> f b
+(defclass Applicative [^f] (pure [x] :int) (ap [ff fa] :int))

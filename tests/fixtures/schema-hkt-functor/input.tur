@@ -1,0 +1,16 @@
+;; SC7: the Functor [Schema] instance maps a function over a schema's decoded
+;; value, and -- because (Schema a) is a transparent newtype -- the result keeps
+;; its (Schema b) type, so fmap chains: (fmap (fmap s f) g).
+(load "stdlib/json.tur")
+(load "stdlib/schema.tur")
+
+(defn double-it [x :int] :int (* x 2))
+(defn inc-it    [x :int] :int (+ x 1))
+
+(defn main [] :int
+  (let [s (:: (make-struct Schema (schema/int)) (Schema int))]
+    ;; single map: 5 -> 10
+    (println (schema-decode! (.raw (fmap s double-it)) (json/int 5)))
+    ;; chained map across the Functor result: 5 -> 10 -> 11
+    (println (schema-decode! (.raw (fmap (fmap s double-it) inc-it)) (json/int 5))))
+  0)

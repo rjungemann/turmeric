@@ -350,6 +350,38 @@ static bool type_has_concrete_codegen_layout(const Type *t) {
     }
 }
 
+/* SC7 (carrier-duality): a "transparent int newtype" is a parametric struct
+ * with a single field declared as a plain int64-width scalar (`:int`) -- e.g.
+ * `(defstruct Schema [A] (raw :int))`.  Because the lone field is a concrete
+ * `:int`, the type parameter is necessarily phantom (it appears in no field),
+ * and the struct value carries exactly one int64.  Such a wrapper would
+ * otherwise have *two* coexisting C representations -- a by-value `Schema__int`
+ * aggregate and the int64 carrier ABI every parametric struct rides -- which
+ * codegen mixes at different sites and breaks HKT chaining (.fmap (.fmap s g) h).
+ *
+ * We collapse the duality by making the wrapper a transparent newtype over
+ * int64: `make-struct` and field access are identities and the C type is
+ * int64_t everywhere.  The gate is deliberately narrow -- a single concrete
+ * `:int` field excludes value-carrying parametric structs like
+ * `(defstruct Box [A] (x A))` (whose field is the type parameter), so no
+ * existing by-value parametric struct changes representation. */
+bool type_is_transparent_int_newtype(Type t) {
+    StructDef *def = NULL;
+    if (t.kind == TY_STRUCT) {
+        def = t.as.struct_.def;
+    } else if (t.kind == TY_APP) {
+        Type args[16];
+        uint8_t n_args = 0;
+        if (!type_extract_struct_app(&t, &def, args, &n_args)) return false;
+    } else {
+        return false;
+    }
+    if (!def || def->is_opaque) return false;
+    if (def->n_type_params == 0) return false;   /* must be parametric */
+    if (def->n_fields != 1) return false;        /* single field */
+    return def->fields[0].kind == TY_INT;        /* declared :int (concrete) */
+}
+
 static void append_type_mangle(Buf *b, Type t) {
     switch (t.kind) {
         case TY_NIL:      buf_puts(b, "nil"); break;
@@ -1837,6 +1869,8 @@ const char *type_c_name(Type t) {
             /* SI4-C: defopaque types are also int64_t in C (named only for REPL tags). */
             if (!t.as.struct_.def) return "int64_t";
             if (t.as.struct_.def->is_opaque) return "int64_t";
+            /* SC7: a transparent int newtype is just its int64 payload. */
+            if (type_is_transparent_int_newtype(t)) return "int64_t";
             return t.as.struct_.def->name;
         /* Phase G0: ADT types are passed as int64_t (opaque heap pointer) */
         case TY_ADT:
@@ -1848,6 +1882,8 @@ const char *type_c_name(Type t) {
          * field-level type variables lower to the same concrete C struct as
          * their head constructor; other applications stay opaque int64_t. */
         case TY_APP: {
+            /* SC7: a transparent int newtype is just its int64 payload. */
+            if (type_is_transparent_int_newtype(t)) return "int64_t";
             if (type_has_concrete_codegen_layout(&t)) {
                 return register_struct_app(t);
             }

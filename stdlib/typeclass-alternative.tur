@@ -1,0 +1,12 @@
+;;; tur/typeclass-alternative -- minimal Alternative typeclass stub.
+;;;
+;;; Loaded by schema.tur (and loadable directly) so a module can declare
+;;; (definstance Alternative [...] ...) without importing the full
+;;; typeclass.tur.  The full typeclass.tur (with every typeclass) is still
+;;; available on demand via (load "stdlib/typeclass.tur").
+;;;
+;;; Since: Phase SC7
+;; Alternative -- container with an empty value and a choice combinator.
+;;   empty  :: f a                 (a is a type witness for dispatch)
+;;   alt-or :: f a -> f a -> f a   (first-match choice)
+(defclass Alternative [^f] (empty [a] :int) (alt-or [a b] :int))

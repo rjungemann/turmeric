@@ -134,6 +134,9 @@ const char *emit_type_c_name(EmitCtx *ctx, Type t) {
  * the per-expression representation check) so they agree about whether a value
  * is already a carrier or a by-value aggregate that must be bridged. */
 bool type_uses_carrier_abi(Type t) {
+    /* SC7: a transparent int newtype has a single int64 representation -- it is
+     * not a carrier-ABI aggregate, so no spill/box/deref bridging applies. */
+    if (type_is_transparent_int_newtype(t)) return false;
     if (t.kind == TY_APP || t.kind == TY_ADT) return true;
     if (t.kind == TY_STRUCT && t.as.struct_.def &&
         t.as.struct_.def->n_type_params > 0) return true;
