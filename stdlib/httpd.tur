@@ -1244,6 +1244,178 @@
   t->next = nh;
   ```)
 ;; =============================================================================
+;; M2: Cookie middleware (depends on M0)
+;; =============================================================================
+;;
+;; Cookies live as request headers (`Cookie: a=1; b=2`) and response headers
+;; (`Set-Cookie: ...`, possibly repeated).  M2 layers a small read + write
+;; surface on top of M0.
+;;
+;; Read:
+;;   (httpd-req-cookie conn name)    -- parsed value, "" if absent
+;;
+;; Write:
+;;   (httpd-set-cookie! conn opts)   -- emits Set-Cookie via header-add!
+;;   (cookie name value)             -- CookieOpts with sensible defaults
+;;   (cookie-full name value path
+;;                domain max-age
+;;                secure http-only
+;;                same-site)         -- CookieOpts with everything explicit
+;;
+;; Defaults from `cookie`:
+;;   Path=/, no Domain, no Max-Age (session cookie), HttpOnly, SameSite=Lax,
+;;   not Secure (caller must opt in -- typically required on TLS).
+;;; httpd-req-cookie -- read a single cookie value from the Cookie: header.
+;;;
+;;; Parses the request's `Cookie:` header (using httpd-req-header) into
+;;; name=value pairs separated by `;` and returns the value for `name`.
+;;; Case-sensitive on the cookie name (per RFC 6265).
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- cookie name to look up (case-sensitive)
+;;;
+;;; Returns:
+;;;   The cookie's value as a heap-allocated cstr, OR the empty string ""
+;;;   if the header is absent or the cookie is not present.
+;;;
+;;;   NOTE: when the cookie IS found, the returned cstr is a fresh malloc
+;;;   that the runtime treats as per-call ownership; do not free.  When
+;;;   absent the returned pointer is a literal "" and also need not be
+;;;   freed.
+;;;
+;;; Example:
+;;;   (let [sid (httpd-req-cookie c "session")]
+;;;     (if (= (cstr-len sid) 0) ...))
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn httpd-req-cookie [conn :ptr<void> name :cstr] :cstr
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name || !*name) return "";
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  const char *cookie_hdr = NULL;
+  while (h) {
+      if (h->name && strcasecmp(h->name, "Cookie") == 0) {
+          cookie_hdr = h->value ? h->value : "";
+          break;
+      }
+      h = h->next;
+  }
+  if (!cookie_hdr) return "";
+  size_t nlen = strlen(name);
+  const char *p = cookie_hdr;
+  while (*p) {
+      /* Skip leading whitespace / separators. */
+      while (*p == ' ' || *p == '\t' || *p == ';') p++;
+      if (!*p) break;
+      const char *kstart = p;
+      while (*p && *p != '=' && *p != ';') p++;
+      size_t klen = (size_t)(p - kstart);
+      const char *vstart = NULL;
+      size_t vlen = 0;
+      if (*p == '=') {
+          p++;
+          vstart = p;
+          while (*p && *p != ';') p++;
+          vlen = (size_t)(p - vstart);
+      }
+      if (klen == nlen && strncmp(kstart, name, nlen) == 0) {
+          char *out = (char *)malloc(vlen + 1);
+          if (!out) return "";
+          if (vlen > 0) memcpy(out, vstart, vlen);
+          out[vlen] = '\0';
+          return out;
+      }
+  }
+  return "";
+  ```)
+;;; httpd-set-cookie! -- emit a Set-Cookie response header.
+;;;
+;;; The plan's M2 originally specified a `CookieOpts` defstruct argument,
+;;; but the codegen miscompiles defstruct-by-value parameters (emits
+;;; `&temp` for the actual argument while declaring the formal by value).
+;;; Until that bug is fixed (see
+;;; docs/upcoming/variadic-rest-closure-cast-plan.md for a related
+;;; codegen bug filed during this phase), the surface is the positional
+;;; equivalent: 9 args, just inside the >5 smell threshold but well
+;;; within the 16 hard cap.  `httpd-set-cookie-simple!` wraps the common
+;;; case so callers rarely need the full form.
+;;;
+;;; Field conventions:
+;;;   path       -- "" omits the Path attribute
+;;;   domain     -- "" omits the Domain attribute
+;;;   max-age    -- -1 omits the Max-Age attribute; 0 expires immediately
+;;;   secure     -- 0 / 1: include the "Secure" flag
+;;;   http-only  -- 0 / 1: include the "HttpOnly" flag
+;;;   same-site  -- "" omits; "Lax" / "Strict" / "None" otherwise
+;;;
+;;; Parameters:
+;;;   conn      -- connection handle from the worker
+;;;   name      -- cookie name (required)
+;;;   value     -- cookie value
+;;;   path      -- Path attribute (or "")
+;;;   domain    -- Domain attribute (or "")
+;;;   max-age   -- Max-Age in seconds (or -1 to omit)
+;;;   secure    -- 1 to include the Secure flag
+;;;   http-only -- 1 to include the HttpOnly flag
+;;;   same-site -- SameSite attribute (or "")
+;;;
+;;; Example:
+;;;   ;; long-lived session cookie, host-only, secure, JS-inaccessible
+;;;   (httpd-set-cookie! c "sid" "abc123" "/" "" 86400 1 1 "Lax")
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn httpd-set-cookie! [conn :ptr<void>
+                         name :cstr value :cstr
+                         path :cstr domain :cstr
+                         max-age :int secure :int http-only :int
+                         same-site :cstr] :nil
+  ```c
+  if (!conn || !name || !*name) return;
+  const char *cval  = value     ? value     : "";
+  const char *cpath = path      ? path      : "";
+  const char *cdom  = domain    ? domain    : "";
+  const char *csame = same_site ? same_site : "";
+  char buf[2048];
+  int n = snprintf(buf, sizeof(buf), "%s=%s", name, cval);
+  if (*cpath)        n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Path=%s",   cpath);
+  if (*cdom)         n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Domain=%s", cdom);
+  if (max_age >= 0)  n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Max-Age=%lld", (long long)max_age);
+  if (secure)        n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Secure");
+  if (http_only)     n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
+  if (*csame)        n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
+  httpd_resp_header_add_((void *)conn, "Set-Cookie", buf);
+  ```)
+;;; httpd-set-cookie-simple! -- emit a Set-Cookie with sensible defaults.
+;;;
+;;; Equivalent to (httpd-set-cookie! conn name value "/" "" -1 0 1 "Lax").
+;;; Defaults: Path=/, no Domain, session cookie (no Max-Age), not Secure
+;;; (callers on TLS should use the full form to opt in), HttpOnly,
+;;; SameSite=Lax.
+;;;
+;;; Example:
+;;;   (httpd-set-cookie-simple! c "session" "abc123")
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn httpd-set-cookie-simple! [conn :ptr<void> name :cstr value :cstr] :nil
+  (httpd-set-cookie! conn name value "/" "" -1 0 1 "Lax"))
+;; =============================================================================
 ;; H6: Routing DSL
 ;; =============================================================================
 ;;
