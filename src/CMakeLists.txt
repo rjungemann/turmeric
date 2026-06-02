@@ -80,6 +80,7 @@ set(TUR_CORE_SOURCES
     compiler/elab_dynvars.c
     compiler/elab_toplevel.c
     compiler/emit_core.c
+    compiler/emit_cps.c
     compiler/emit_effects.c
     compiler/emit_expr.c
     compiler/emit_stmt.c

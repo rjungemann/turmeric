@@ -121,10 +121,14 @@ transform.
   > bridging (CPS2--CPS3), a heap-reified unbounded-capture continuation runtime
   > + trampoline (CPS4, validated at 500k frames), a multi-prompt
   > delimited-control machine with an implicit root prompt (CPS5), and retires
-  > the 16-frame ceiling on the CPS path (CPS6). The substrate is built and
-  > unit-tested standalone; re-pointing the existing `shift`/`reset`/`call/cc*`
-  > codegen lowerings at it (so the shipping `continuation-*` suite runs on the
-  > CPS path) is the remaining integration tracked there.
+  > the 16-frame ceiling on the CPS path (CPS6). **CPS8 (2026-06-02) wires the
+  > base `reset`/`shift`/`shift0` codegen lowerings onto that substrate**
+  > (`emit_cps.c`): a delimited reset now compiles to a run on the multi-prompt
+  > `DK` machine emitted into the program, validated end-to-end by the executing
+  > `continuation-substrate` fixture. `call/cc*` (cloneable/multi-shot),
+  > `serial-*`, and undelimited `call/cc` (root-prompt capture) remain on their
+  > existing lowerings -- the next increment tracked in the plan; the substrate
+  > pieces they need (`dk_invoke`, `dk_run_root`) already exist.
 
 - **Multi-threaded scheduler integration.** `scheduler.c:542,550` (SCH-003):
   `tur_scheduler_mt_from_threadpool` / `..._set_for_threadpool` print

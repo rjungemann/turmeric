@@ -1,5 +1,6 @@
 /* emit_module.c -- program/module assembly (emit_program, emit_header, emit_implementation). */
 #include "emit_internal.h"
+#include "emit_cps.h"   /* cps-transform-plan: DK substrate prelude + wiring */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 
 /* ------------ program-level emit ------------ */
@@ -2552,6 +2553,13 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static __thread tur_cloneable_reset_ctx *tur_current_reset_ctx = NULL;\n\n");
 
     } /* end if (cps_expr_contains_cloneable_shift(program)) */
+
+    /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
+     * machine) when the program uses base delimited control (reset/shift/
+     * shift0). emit_cps_reset lowers those onto dk_run/dk_shift below. */
+    if (emit_cps_program_uses_delimited(program)) {
+        emit_cps_runtime_prelude(out);
+    }
 
     /* Phase 19: Effect handler chain */
     buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
