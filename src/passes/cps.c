@@ -1294,6 +1294,32 @@ void cps_dump_cps_coloring(const Expr *program, FILE *out) {
     fprintf(out, "=== end cps coloring ===\n");
 }
 
+/* CPS3: Normalize may_capture and is_cps for FnDef nodes nested inside
+ * EX_DEFMODULE items (stdlib/imported modules).  These are never processed
+ * by cps_mark_expr (which returns EX_DEFMODULE unchanged) or by
+ * cps_propagate_coloring (which only iterates top-level EX_FN_DEF items), so
+ * their arena-allocated may_capture/is_cps bytes can be uninitialized garbage.
+ * We use cps_fn_needs_transform (body scan) rather than the raw-byte read used
+ * by fn_is_colored, because arena memory is not zeroed and a garbage non-zero
+ * byte would incorrectly color an innocent stdlib function. */
+static void cps_normalize_module_fndefs(Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEFMODULE) continue;
+        DefModule *mod = item->as.defmodule_.mod;
+        if (!mod) continue;
+        for (uint32_t j = 0; j < mod->n_body; j++) {
+            Expr *body_item = mod->body[j];
+            if (!body_item || body_item->kind != EX_FN_DEF) continue;
+            FnDef *fd = body_item->as.fn_def_.fn;
+            if (!fd) continue;
+            fd->may_capture = cps_fn_needs_transform(fd);
+            fd->is_cps = fd->may_capture;
+        }
+    }
+}
+
 /* Main entry point: mark functions that contain shift for CPS transformation */
 Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
     if (!program) {
@@ -1305,6 +1331,12 @@ Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
         fprintf(stderr, "cps: expected EX_PROGRAM, got %d\n", program->kind);
         return NULL;
     }
+
+    /* Always normalize module-nested FnDefs before any emitter reads is_cps.
+     * This must run even when the program has no shift (early-return path)
+     * because the emitter iterates over all items (including module items) when
+     * --cps-path is active, and uninitialized arena bytes trigger UBSAN. */
+    cps_normalize_module_fndefs(program);
 
     /* Check if the program contains any shift expressions */
     if (!cps_expr_contains_shift(program)) {
