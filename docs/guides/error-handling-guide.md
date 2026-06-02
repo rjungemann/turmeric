@@ -590,6 +590,32 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 
 ---
 
+## Panic inside async tasks
+
+> **Today (synchronous async).** `(async fn)` inlines the function call; the
+> body runs synchronously with no fiber scheduler and no task boundary. A panic
+> inside an async body simply propagates through the caller's stack exactly as a
+> normal panic would -- there is nothing async-specific about it, and
+> `catch-unwind` at the call site catches it like any other panic.
+
+> **v2 (fiber-based async).** When the fiber scheduler lands, panics gain a task
+> boundary:
+>
+> 1. A panic inside an async task is caught at the task boundary; the task's
+>    future resolves to a rejected state carrying the panic payload. Use
+>    `catch-unwind` at the join point to recover.
+> 2. If a task is cancelled while a panic is in progress, the panic takes
+>    precedence.
+> 3. An uncaught panic in async main terminates the process with a nonzero exit
+>    code after all defer thunks have fired.
+> 4. On the WASM target, panics lower to the WebAssembly `unreachable`
+>    instruction.
+
+> See [docs/upcoming/cps-transform-plan.md](../upcoming/cps-transform-plan.md)
+> for the fiber-based async runtime these v2 semantics depend on.
+
+---
+
 ## Deferred
 
 The following features are planned but not yet implemented:
@@ -610,18 +636,15 @@ When a panic occurs inside an effect handler or continuation:
 3. **Defer**: Defer thunks fire during panic unwinding. A defer thunk that itself
    panics triggers the double-panic guard and calls `abort()`.
 
-### Panic inside async tasks (Phase R6)
+---
 
-In v1, `(async fn)` calls the function synchronously with no fiber scheduler. A
-panic inside an async body propagates through the call stack and is not caught at
-any task boundary.
+## See Also
 
-The v2 target behavior (when true fiber-based async lands):
-
-1. A panic inside an async task is caught at the task boundary. The task's future
-   resolves to a rejected state carrying the panic payload; use `catch-unwind` at
-   the join point to recover.
-2. If a task is cancelled while a panic is in progress, the panic takes precedence.
-3. An uncaught panic in async main terminates the process with a nonzero exit code
-   after all defer thunks have fired.
-4. WASM target: panics lower to the WebAssembly `unreachable` instruction.
+- [error-handling-rationale.md](../design/error-handling-rationale.md) --
+  exceptions vs. panic design rationale
+- [effects-system-guide.md](effects-system-guide.md) -- effect handler
+  semantics referenced above
+- [compiler-flags-guide.md](compiler-flags-guide.md) -- `--no-contracts`,
+  `--warn-unused-result`, and `--lint-panic`
+- [cps-transform-plan.md](../upcoming/cps-transform-plan.md) -- the fiber-based
+  async runtime behind the v2 async-panic semantics
