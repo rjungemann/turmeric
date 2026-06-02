@@ -835,6 +835,32 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# CPS3 (cps-transform-plan): selective lowering + direct<->CPS boundary bridging
+# ---------------------------------------------------------------------------
+
+# dump-cps-bridge: the mixed fixture must show the boundary classification --
+# main is a direct->CPS entry root; shift-then-twice/run are internal; the call
+# into the uncolored `twice` is a cps->direct bridge; colored tail calls are
+# cps->cps; and the uncolored `twice` is NOT lowered (stays direct style).
+MIX_FIXTURE="tests/fixtures/cps-mixed-coloring/input.tur"
+out=$("$TUR" --dump-cps emit-c "$MIX_FIXTURE" 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-cps-bridge" "non-zero exit ($rc)"
+elif [[ "$out" != *"cps-fn main "*"entry"* ]]; then
+    fail "dump-cps-bridge" "expected main classified as a direct->CPS 'entry'"
+elif [[ "$out" != *"cps-fn shift-then-twice "*"internal"* ]]; then
+    fail "dump-cps-bridge" "expected shift-then-twice classified 'internal'"
+elif [[ "$out" != *"call twice("*"; cps->direct"* ]]; then
+    fail "dump-cps-bridge" "expected a 'cps->direct' bridge into uncolored twice"
+elif [[ "$out" != *"; cps->cps"* ]]; then
+    fail "dump-cps-bridge" "expected a 'cps->cps' threaded tail call"
+elif [[ "$out" == *"cps-fn twice "* ]]; then
+    fail "dump-cps-bridge" "uncolored twice must stay direct (not CPS-lowered)"
+else
+    pass "dump-cps-bridge"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

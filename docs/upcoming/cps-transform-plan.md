@@ -2,7 +2,8 @@
 
 > **Status:** In progress. **CPS0 ratified (2026-06-02)**; **CPS1 (may-capture
 > coloring) done (2026-06-02)**; **CPS2 (CPS/ANF IR) done (2026-06-02, dump-only)**;
-> CPS3 (selective lowering + boundary bridging) next. This is the substrate that
+> **CPS3 (selective lowering + boundary bridging) done (2026-06-02, dump-only)**;
+> CPS4 (heap-reified continuations + trampoline) next. This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -288,20 +289,43 @@ are never touched.
   assert the ANF naming, the `k:cont<int>` typing, the threaded
   `tailcall ...(... j)`, the `letcont` join, and the `reset`/`shift` forms.
 
-## Phase CPS3 -- Selective CPS lowering + boundary bridging
+## Phase CPS3 -- Selective CPS lowering + boundary bridging  -- **DONE 2026-06-02 (dump-only)**
 
-- **CPS3.1** Lower colored functions to CPS: add the `k` parameter, sequence
-  ANF bindings into nested continuations, translate tail calls to `k`
-  applications. *Done when:* a colored function with a control op compiles
-  through the new path.
-- **CPS3.2** Leave uncolored functions in direct style. At a call from CPS'd
-  code into a direct function, call normally and feed the result to `k`; at a
-  call from direct code into a colored function, enter via a driver that
-  supplies the initial `k` (the current direct continuation reified). *Done
-  when:* a direct `main` calling a colored helper that calls `shift` works.
-- **CPS3.3** Fixture: `tests/fixtures/cps-mixed-coloring/` -- direct hot loop
-  calling a colored callee; assert correct result and (via CPS7 harness) no
-  allocation on the uncolored path.
+**Implementation.** The CPS2 IR *is* the lowered form; CPS3 adds the
+direct<->CPS boundary classification on top of it (`src/passes/cps_ir.c`).
+Because coloring is transitive (CPS1), every mid-program caller of a colored
+function is itself colored, so the boundaries reduce to two kinds, both made
+explicit in the `--dump-cps` output:
+
+- **cps->direct** -- a colored function calling an *uncolored* one: lowered to
+  `CT_LETCALL` (call normally, feed the result to the current continuation),
+  tagged `; cps->direct` in the dump.
+- **cps->cps** -- a colored tail call: `CT_TAILCALL` threads the continuation
+  through, tagged `; cps->cps`.
+- **direct->CPS entry** -- a colored function with no colored caller is an
+  *entry root* (the C runtime / implicit root prompt supplies the initial
+  continuation); classified `entry` vs `internal` in each `cps-fn` header
+  (`is_cps_entry`).
+
+This is **dump-only**: the classification and IR are produced for inspection;
+the live codegen still routes colored functions through the existing fiber path,
+so the fixture below runs correctly today via that path.
+
+- **CPS3.1** Lower colored functions to CPS (add `k`, sequence ANF bindings,
+  tail calls -> `k` applications). *Done (in the IR):* delivered by CPS2's
+  `cps_ir_translate_fn`; CPS3 confirms each colored function lowers and tags its
+  boundaries. *Deferred:* emitting C from this IR is CPS4 (needs the heap-cont
+  runtime + trampoline) -- "compiles through the new path" is gated on CPS4.
+- **CPS3.2** Leave uncolored functions direct; bridge at the boundaries. *Done:*
+  uncolored functions are never lowered (e.g. `twice` does not appear in the
+  dump); cps->direct and direct->CPS-entry boundaries are classified as above. A
+  `main` that drives a colored helper which calls `shift` runs correctly.
+- **CPS3.3** Fixture: `tests/fixtures/cps-mixed-coloring/`. *Done:* a mixed
+  program (uncolored `twice`, colored `shift-then-twice`/`run`, entry `main`)
+  that runs (interpreter + compiled) to the correct result `41`, with
+  `dump-cps-bridge` in `tests/run-flags.sh` asserting the boundary
+  classification. *Deferred to CPS7:* the "no allocation on the uncolored path"
+  perf assertion (needs the CPS7 perf harness).
 
 ## Phase CPS4 -- Heap-reified continuations + trampoline
 

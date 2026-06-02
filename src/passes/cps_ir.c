@@ -430,7 +430,8 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
         case CT_LETCALL:
             fprintf(out, "let %s = call %s(", t->as.letcall.x.name,
                     t->as.letcall.fn && t->as.letcall.fn->name ? t->as.letcall.fn->name->name : "?");
-            print_atoms(t->as.letcall.args, t->as.letcall.n, out); fputs(")\n", out);
+            print_atoms(t->as.letcall.args, t->as.letcall.n, out);
+            fputs(")  ; cps->direct\n", out);
             cps_ir_print(t->as.letcall.body, out, indent);
             break;
         case CT_TAILCALL:
@@ -438,7 +439,7 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                     t->as.tailcall.fn && t->as.tailcall.fn->name ? t->as.tailcall.fn->name->name : "?");
             print_atoms(t->as.tailcall.args, t->as.tailcall.n, out);
             if (t->as.tailcall.n) fputc(' ', out);
-            print_kont(&t->as.tailcall.kont, out); fputs(")\n", out);
+            print_kont(&t->as.tailcall.kont, out); fputs(")  ; cps->cps\n", out);
             break;
         case CT_LETCONT:
             fprintf(out, "letcont j%u(%s) =\n", t->as.letcont.j.id, t->as.letcont.param.name);
@@ -469,6 +470,69 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
     }
 }
 
+/* ---- CPS3: direct<->CPS boundary classification ----------------------- */
+
+/* Does e's subtree resolved-call `target`? (no descent into nested fns). */
+static bool body_calls_binding(const Expr *e, const Binding *target) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALL:
+            if (e->as.call_.fn_binding == target) return true;
+            if (body_calls_binding(e->as.call_.fn_expr, target)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (body_calls_binding(e->as.call_.args[i], target)) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (body_calls_binding(e->as.let_.bindings[i].init, target)) return true;
+            return body_calls_binding(e->as.let_.body, target);
+        case EX_IF:
+            return body_calls_binding(e->as.if_.cond, target)
+                || body_calls_binding(e->as.if_.then_, target)
+                || body_calls_binding(e->as.if_.else_or_null, target);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (body_calls_binding(e->as.do_.items[i], target)) return true;
+            return false;
+        case EX_WHILE:
+            return body_calls_binding(e->as.while_.cond, target)
+                || body_calls_binding(e->as.while_.body, target);
+        case EX_SET:    return body_calls_binding(e->as.set_.value, target);
+        case EX_DEF:    return body_calls_binding(e->as.def_.init, target);
+        case EX_RETURN: return body_calls_binding(e->as.return_.value, target);
+        case EX_DEFER:  return body_calls_binding(e->as.defer_.body, target);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (body_calls_binding(e->as.builtin.args[i], target)) return true;
+            return false;
+        case EX_RESET:  return body_calls_binding(e->as.reset_.body, target);
+        case EX_SHIFT:
+            return body_calls_binding(e->as.shift_.k_fn, target)
+                || body_calls_binding(e->as.shift_.body, target);
+        case EX_SHIFT0:
+            return body_calls_binding(e->as.shift0_.k_fn, target)
+                || body_calls_binding(e->as.shift0_.body, target);
+        /* nested fn definitions are boundaries */
+        case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* A colored function is a direct->CPS *entry* (needs a driver to supply the
+ * initial continuation) if no colored function resolved-calls it. */
+static bool is_cps_entry(Expr *program, FnDef *fd) {
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+        FnDef *g = it->as.fn_def_.fn;
+        if (g == fd || !g->cps_colored) continue;
+        if (body_calls_binding(g->body, fd->binding)) return false;
+    }
+    return true;
+}
+
 /* ---- public: dump all colored functions ------------------------------ */
 
 void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
@@ -486,7 +550,8 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
             if (pi) fputc(' ', out);
             fprintf(out, "%s", fd->params[pi]->name ? fd->params[pi]->name->name : "_");
         }
-        fprintf(out, "] k:cont<%s>\n", kind_name(fd->return_type.kind));
+        fprintf(out, "] k:cont<%s> %s\n", kind_name(fd->return_type.kind),
+                is_cps_entry(program, fd) ? "entry" : "internal");
         CTerm *t = cps_ir_translate_fn(a, program, fd);
         cps_ir_print(t, out, 1);
         fputs("cps-end\n", out);
