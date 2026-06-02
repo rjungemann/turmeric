@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "turmeric": {
+      "type": "stdio",
+      "command": "tur",
+      "args": ["mcp"]
+    }
+  }
+}

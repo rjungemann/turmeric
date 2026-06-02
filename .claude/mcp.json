@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "turmeric": {
+      "command": "tur",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}
