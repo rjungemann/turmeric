@@ -24,9 +24,12 @@
 > OQ-CPS2 **resolved** (keep the fiber path as selective fallback + bounded fast
 > path); the captured-context subset **broadened** to integer division and to
 > arbitrary 2-arg call frames (serial frames name-keyed for marshaling); and
-> **CC4** `(k v)` application sugar + `:cont` parameter typing. Remaining: cstr/
-> struct serial env types (gated on a flavored cont type), the parametric
-> `(cont T)` annotation (needs an arrow-kind `cont`), and broadening contexts
+> **CC4** `(k v)` application sugar + `:cont` parameter typing, extended by a
+> **flavored `cont`** so `(k v)` dispatches to the escape/cloneable/serial resume
+> runtime. Remaining: the *value* half of `cont<T>` -- a non-int result `T`
+> threaded through the shift node + resume + (for serial) a `Serializable` env
+> codec, which still gates cstr/struct serial env types; the parametric
+> `(cont T)` annotation (needs an arrow-kind `cont`); and broadening contexts
 > past single-hole binops/2-arg calls (lets, if-branches). This is the substrate
 > that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
@@ -706,24 +709,30 @@ no shipped snapshot regenerated):
   name-keyed scheme `serial.c` uses -- with a self-describing record format
   (`[tag][env]` for arithmetic, `[SK_TAG_CALL][name][env]` for calls, memcpy'd,
   variable length). Env values are int for now (`env_kind_ok`); cstr/struct envs
-  await a flavored cont type (see below). Fixture: `context-call-frame`.
+  await the value-typed half of `cont<T>` (see below). Fixture: `context-call-frame`.
 - **CC4: `(k v)` application sugar + `:cont` parameter typing.** A continuation
   parameter typed `:cont` is invoked directly as `(k v)`, desugaring (in
-  `elab_call`) to a cloneable continuation resume; `TY_CONT` lowers to an
-  `int64_t` handle (`type_c_name`). Scope: cloneable continuations (`call/cc*` /
-  `cloneable-shift`); escape/serial keep their explicit resume builtins. Fixture:
-  `callcc-kv-sugar`.
+  `elab_call`) to a continuation resume; `TY_CONT` lowers to an `int64_t` handle
+  (`type_c_name`). Initially scoped to cloneable continuations; the flavored-cont
+  increment below extends it to escape and serial. Fixture: `callcc-kv-sugar`.
+- **Flavored `cont` -- `(k v)` for escape/cloneable/serial.** The cont type gains
+  a `flavor` (`ContFlavor`: cloneable / escape / serial), set by the parameter
+  annotation `:cont` / `:escape-cont` / `:serial-cont`. The `(k v)` desugar
+  selects the resume runtime by flavor (`tur_cloneable_cont_resume` /
+  `tur_escape_resume` / `tur_serial_cont_resume`), so escape and serial
+  continuations get the same `(k v)` ergonomics cloneable already had. This is
+  the keystone for unifying `(k v)` across flavors. Fixture: `cont-flavors`
+  (cloneable multi-shot 23, serial 15, escape one-shot upward abort 42).
 
-  *Remaining for CC4/richer env types (coupled):* the resume builtins and the
-  shift node are int-typed, so a non-int continuation value (cstr/struct) can't
-  be expressed at the surface yet -- which also blocks richer **serial** env
-  types. Both want a value-typed (flavored) `cont<T>`: a continuation type that
-  carries its result type *and* its flavor (escape/cloneable/serial), so `(k v)`
-  picks the right resume and the serial marshaler can encode non-int envs via the
-  `Serializable` typeclass. The parametric `(cont T)` annotation additionally
-  needs `cont` registered as an arrow-kind (`* -> *`) constructor. Broadening
-  contexts past single-hole binops / 2-arg calls (lets, if-branches) is a
-  separate grammar extension.
+  *Remaining (value-typed `cont<T>`):* the resume builtins and the shift node are
+  still int-typed, so a non-int continuation value (cstr/struct) can't be
+  expressed at the surface yet -- which is what still blocks richer **serial**
+  env types. The flavor half of "flavored `cont<T>`" is done; the *value* half
+  (a non-int result `T` threaded through the shift node, the resume result, and
+  -- for serial -- a `Serializable`-typeclass env codec) layers on top. The
+  parametric `(cont T)` annotation additionally needs `cont` registered as an
+  arrow-kind (`* -> *`) constructor. Broadening contexts past single-hole binops
+  / 2-arg calls (lets, if-branches) is a separate grammar extension.
 
 ---
 
