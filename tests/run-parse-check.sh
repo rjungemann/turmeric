@@ -51,6 +51,39 @@ RC=$?
 if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
 
 # ---------------------------------------------------------------------------
+# Test: curly-infix with symbol operands lowers to prefix (not $nfx$).
+# Regression: {x * x} must read as (* x x), matching the turmeric prefix form.
+# ---------------------------------------------------------------------------
+NAME="parse-check-curly-symbol-operands"
+printf '(defn sq [x :int] :int (* x x))\n' > "$TMPDIR_PC/cs.tur"
+printf 'defn sq [x :int] :int\n  {x * x}\n' > "$TMPDIR_PC/cs.sweet"
+"$TUR" parse-check "$TMPDIR_PC/cs.tur" "$TMPDIR_PC/cs.sweet" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
+
+# ---------------------------------------------------------------------------
+# Test: neoteric application chains -- f(x)(y) reads as ((f x) y).
+# Regression: chained brackets must apply, not wrap as ((f x) (y)).
+# ---------------------------------------------------------------------------
+NAME="parse-check-neoteric-chaining"
+printf '((<<< double add1) 3)\n' > "$TMPDIR_PC/ch.tur"
+printf '<<<(double add1)(3)\n' > "$TMPDIR_PC/ch.sweet"
+"$TUR" parse-check "$TMPDIR_PC/ch.tur" "$TMPDIR_PC/ch.sweet" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
+
+# ---------------------------------------------------------------------------
+# Test: a trailing line comment on a wrapped t-expr line does not swallow the
+# implicit closing paren. Regression: closes must land before the `; comment`.
+# ---------------------------------------------------------------------------
+NAME="parse-check-trailing-comment"
+printf '(let [x 10 y 20] (+ x y))\n' > "$TMPDIR_PC/tc.tur"
+printf 'let [x 10 y 20] {x + y}   ; => 30\n' > "$TMPDIR_PC/tc.sweet"
+"$TUR" parse-check "$TMPDIR_PC/tc.tur" "$TMPDIR_PC/tc.sweet" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
+
+# ---------------------------------------------------------------------------
 # Test: genuinely different ASTs exit 1
 # ---------------------------------------------------------------------------
 NAME="parse-check-mismatch"
