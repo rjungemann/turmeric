@@ -7,10 +7,11 @@
 > standalone runtime)**; **CPS5 (multi-prompt delimited substrate + implicit
 > root prompt) done (2026-06-02, standalone machine)**; **CPS6 (retire the
 > capture ceiling on the CPS path) done (2026-06-02)**; **CPS7 (benchmarks /
-> perf gates / docs) done (2026-06-02)**. **CPS0--CPS7 implemented**; the
-> remaining work is the codegen wiring that re-points the existing delimited
-> lowerings at this substrate (see the Status summary at the end). This is the
-> substrate that
+> perf gates / docs) done (2026-06-02)**; **CPS8 (codegen wiring for base
+> delimited control) done (2026-06-02)**. **CPS0--CPS8 implemented**; base
+> `reset`/`shift`/`shift0` now execute on this substrate in emitted code
+> (`emit_cps.c`), while `call/cc*`/`serial-*`/undelimited `call/cc` remain the
+> next increment (see CPS8 and the Status summary). This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -380,8 +381,9 @@ integration that remains (gated until the substrate is wired end-to-end).
   `dk_shift0` capture up to the nearest prompt; `shift` re-installs the prompt on
   the captured sub (`cps5-shift-reinstall`), `shift0` does not
   (`cps5-shift0-no-reinstall`); compose works (`cps5-shift-compose`:
-  `reset{1+shift(k.2+k(k(3)))}` = 7). *Deferred:* re-pointing the IR lowerings +
-  running the `continuation-*` suite on this path is the codegen wiring.
+  `reset{1+shift(k.2+k(k(3)))}` = 7). *Landed (CPS8):* the base
+  `reset`/`shift`/`shift0` lowerings are re-pointed at this machine in emitted
+  code (`emit_cps.c`); the `continuation-*` base-shift fixtures run on it.
 - **CPS5.2** `call/cc*` (multi-shot) and `serial-*`. *Done (multi-shot):* a
   captured sub is re-entrant -- `dk_invoke` runs a fresh copy each time
   (`cps5-multishot`: `k(10)+k(20)` over `[]*2` = 60), which is exactly cloneable
@@ -424,10 +426,11 @@ the constant is scoped + documented as fiber-only.
 > CPS substrate is the single implementation) depends on re-pointing the
 > `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`/`call/cc*`/`serial-*` codegen lowerings at
 > the CPS substrate (the CPS5.1/CPS5.2 "deferred" items) and running the
-> `continuation-*` suite on that path. Until then both coexist and the fiber
-> path stays authoritative for shipping delimited ops -- exactly the CPS0.4
-> coexistence contract. The keep-vs-remove decision is OQ-CPS2, to be settled on
-> CPS7.2 numbers.
+> `continuation-*` suite on that path. **CPS8 re-points base
+> `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`** onto the DK machine in emitted code;
+> `call/cc*`/`serial-*` remain on their existing lowerings, so both substrates
+> still coexist for those ops -- the CPS0.4 coexistence contract. The
+> keep-vs-remove decision (OQ-CPS2) stays open until those, too, move over.
 
 ## Phase CPS7 -- Benchmarks, perf gates, docs  -- **DONE 2026-06-02**
 
@@ -454,6 +457,70 @@ the constant is scoped + documented as fiber-only.
   transformation" deferred item carries a **CF4 update** pointing here and
   summarizing what CPS0--CPS6 deliver.
 
+## Phase CPS8 -- Codegen wiring (base delimited control)  -- **DONE 2026-06-02**
+
+The substrate is now driven by emitted code for base delimited control. The
+delimited lowerings no longer sit only on the bespoke inlined runtime; a
+`(reset BODY)` whose body can dynamically reach a base `shift` bound to it is
+compiled to a run on the multi-prompt `DK` machine (`dk_run` / `dk_prompt` /
+`dk_shift` / `dk_shift0`), emitted directly into the generated program.
+
+**Implementation.** `src/compiler/emit_cps.{h,c}`.
+
+- **CPS8.1 -- Substrate in emitted programs.** `emit_cps_runtime_prelude`
+  emits a faithful C port of the `DK` machine (`src/runtime/cps_prompt.c`) into
+  the generated preamble, gated by `emit_cps_program_uses_delimited` (true iff
+  the program uses `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`). Previously `cps_prompt.c`
+  was linked only into the unit-test targets; now the same machine ships inside
+  programs that use delimited control.
+- **CPS8.2 -- reset/shift/shift0 onto the machine.** `emit_effects_reset`
+  delegates to `emit_cps_reset`. Turmeric's `shift` is abortive -- `(shift f v)`
+  applies the receiver `f` to the body value and delivers the result to the
+  nearest `reset`, discarding the captured context (the sub-continuation is
+  never handed back to user code). The lowering expresses exactly this: the
+  reset is a `dk_prompt`, the shift is a `dk_shift`/`dk_shift0` node whose body
+  (`__dk_abort_body`) returns the precomputed `f(v)` and ignores the captured
+  sub. Because `f(v)` is precomputed in-scope, the shift node needs no
+  per-frame environment-capture codegen -- the value rides in the node's
+  `body_env`. Sub-expression evaluation reuses the direct-style emitter, so all
+  value types/closures/builtins keep working; preceding `let`/`do` effects are
+  emitted ahead of the shift node so evaluation order is preserved.
+- **CPS8.3 -- Selective + safe fallback.** A pure `can_lower` feasibility check
+  runs before any emission, so shapes outside the supported subset (e.g. a
+  `shift` in an `if` branch, a non-`intptr`-safe result type) fall back to the
+  legacy lowering with byte-identical output. Only the four base-shift snapshot
+  fixtures (`continuation-basic`, `continuation-advanced`,
+  `shift-result-typing`, `shift0-result-typing`) regenerate; the rest of the
+  suite is unchanged.
+- **CPS8.4 -- Executing test.** `tests/fixtures/continuation-substrate/` builds
+  and runs reset/shift/shift0 (tail shift, shift0, nested resets, first-shift
+  abort, captured `let` locals, no-shift passthrough) on the DK machine and
+  asserts the values -- the executing gate the substrate previously lacked (the
+  prior `continuation-basic`/`-advanced` fixtures have no `main`, so only their
+  snapshots were checked).
+- **CPS8.5 -- Undelimited `call/cc` / `escape` (landed).** `(call/cc f)` and
+  `(escape f)` now capture a real, undelimited, one-shot continuation against an
+  implicit program-wide prompt -- no enclosing `reset` required, and unbounded
+  depth (the 16-frame fiber ceiling does not apply). The lowering (`EX_CALLCC`,
+  `emit_cps_callcc`) establishes a setjmp landing at the call/cc site and hands
+  `f` the landing as the continuation handle; invoking it via
+  `tur_escape_resume` is an upward escape that returns the value at the call/cc
+  site, abandoning `f`'s pending work. This is exactly the spec's one-shot
+  upward semantics (call-cc-completion CC1/CC3, OQ2/OQ3): invoking the
+  continuation *after* its prompt has returned is a runtime error, so no
+  downward re-entry is required. Validated by `callcc-real-capture` (CC1.4: no
+  reset, `k` aborts, result 42) and `escape-deep-capture` (escape from 5000
+  frames deep -- the unbounded-capture proof). Still gated behind `-Xcallcc`
+  (CC5 ungating is a follow-up); the continuation is resumed via the
+  `tur_escape_resume` builtin (the proven `call/cc*` handle pattern) -- direct
+  `(k v)` application sugar and the `cont<T>` parameter typing (CC4) remain.
+- **Remaining (next increment).** `call/cc*` (cloneable/multi-shot via
+  `dk_invoke`) and `serial-*` (chain-walk marshaling, CPS5.4) still use their
+  existing lowerings. They are the natural follow-on: the multi-shot machinery
+  already exists in the substrate (`dk_invoke`); what remains is reifying a
+  resumable sub-continuation in emitted code (env capture per frame), which the
+  abortive shift and one-shot upward escape do not need.
+
 ---
 
 ## Status summary (2026-06-02)
@@ -472,25 +539,38 @@ pipeline and the full fixture suite green at every step:
 | CPS5 | Multi-prompt machine + implicit root prompt | standalone runtime (`cps_prompt`) | `tur_cps_prompt_unit` |
 | CPS6 | Retire ceiling on the CPS path | runtime docs/scoping | grep + CPS4.4 |
 | CPS7 | Perf gate (identical snapshots) + bench + docs | doc/bench | suite + 43 Mstep/s bench |
+| CPS8 | Codegen wiring: base reset/shift/shift0 on the DK machine | live codegen (`emit_cps`) | `continuation-substrate` fixture + regen'd base-shift snapshots |
 
-**The one remaining piece** (called out under CPS3.1, CPS5.1/5.2, and CPS6) is
-the *codegen wiring*: re-pointing the `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`/
-`call/cc*`/`serial-*` lowerings from the fiber path to this substrate so the
-shipping `continuation-*` suite runs on it. Per CPS0.4 the fiber path remains
-authoritative until that lands; both coexist with zero behavior change today.
-That integration is its own focused change (it mutates live codegen and so
-cannot be additive) and is the natural next PR on top of this substrate.
+**Codegen wiring -- CPS8, landed (base delimited control).** The remaining
+piece called out under CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited
+lowerings off the legacy runtime and onto this substrate -- is implemented for
+**base** `reset`/`shift`/`shift0` (the `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`
+nodes). See [CPS8](#phase-cps8----codegen-wiring-base-delimited-control----done-2026-06-02)
+below. `call/cc*` (cloneable, multi-shot), `serial-*`, and undelimited
+`call/cc` (root-prompt capture) remain on their existing lowerings -- the
+honest next increment, scoped in CPS8's "Remaining" note. Because base
+delimited control now executes on the DK machine, the relevant exit criteria
+are met for that operator set; the rest stay open.
 
 ---
 
 ## Exit criteria
 
-- The full existing `continuation-*`, `call-cc-star`, and serial-continuation
-  fixtures pass on the CPS substrate with no semantic change.
+- Base `reset`/`shift`/`shift0` execute on the CPS substrate with no semantic
+  change (CPS8: `continuation-basic`/`-advanced`/`shift-result-typing`/
+  `shift0-result-typing` snapshots regenerated and green; `continuation-substrate`
+  asserts the runtime values). **Done.** `call/cc*` and serial-continuation
+  fixtures still run on their existing lowerings -- the next increment.
 - A continuation captured across a call depth far greater than 16 captures and
   resumes correctly (the fiber path's `NULL`-on-overflow no longer applies).
+  *Substrate-ready (`dk_*` is unbounded by construction); reached by emitted
+  code once a resumable sub-continuation is reified (post-CPS8 increment).*
 - An implicit root prompt exists around `main`; an undelimited `call/cc` with no
-  explicit `reset` captures to it and resumes.
+  explicit `reset` captures to it and resumes. **Done (CPS8.5):** `(call/cc f)`/
+  `(escape f)` capture a real one-shot continuation against an implicit
+  program-wide prompt with no enclosing `reset`; `callcc-real-capture` resumes
+  it (result 42) and `escape-deep-capture` escapes from 5000 frames deep
+  (unbounded). Multi-shot/downward re-entry stays with `call/cc*`.
 - Uncolored direct-style benchmarks show no regression beyond the CPS7.1
   threshold.
 - `control-flow-completeness-audit.md` CF4 is marked resolved.

@@ -73,6 +73,10 @@ bool cps_expr_contains_shift(const Expr *e) {
             return cps_expr_contains_shift(e->as.defer_.body);
         case EX_RETURN:
             return e->as.return_.value && cps_expr_contains_shift(e->as.return_.value);
+        case EX_CALLCC:
+            /* call-cc-completion: descend into the receiver so a shift nested
+             * inside (call/cc f)/(escape f) is still found. */
+            return cps_expr_contains_shift(e->as.callcc_.fn);
         case EX_PANIC:
             return cps_expr_contains_shift(e->as.panic_.payload);
         case EX_PANIC_WITH:

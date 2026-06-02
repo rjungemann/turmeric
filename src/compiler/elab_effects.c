@@ -1534,13 +1534,35 @@ Expr *elab_cont_pred(Elab *e, const Form *call) {
     return out;
 }
 
-/* Phase 18: (call/cc f) - capture the current (delimited) continuation.
- * v1 sugar: (call/cc f) => (let [__cc_f f] (__cc_f (fn [__v] __v)))
- *
- * In v1, full continuation capture is not yet implemented (requires CPS).
- * `f` receives an identity function as the continuation `k`; calling `(k v)`
- * just returns `v`.  This supports escape/abort patterns where f immediately
- * returns `(k result)` without relying on the rest of the computation. */
+/* call-cc-completion: build the shared EX_CALLCC node for (call/cc f) and
+ * (escape f).  The result type is f's codomain (CF2 typing): calling f with the
+ * captured continuation yields a value of f's return type. */
+static Expr *callcc_node(Elab *e, const Form *call, bool is_escape) {
+    Expr *f_expr = elab_form(e, call->as.list.items[1]);
+    if (!f_expr) return NULL;
+
+    /* f's codomain becomes the call/cc result type; fall back to int. */
+    Type result_type = TYPE_INT;
+    if (f_expr->type.kind == TY_FN) {
+        result_type = f_expr->type.as.fn.result_full_type
+            ? *f_expr->type.as.fn.result_full_type
+            : type_from_kind(f_expr->type.as.fn.result_kind);
+    } else if (f_expr->kind == EX_VAR && f_expr->as.var.binding
+               && f_expr->as.var.binding->type.kind == TY_FN) {
+        result_type = type_from_kind(
+            f_expr->as.var.binding->type.as.fn.result_kind);
+    }
+
+    Expr *out = expr_new(e->arena, EX_CALLCC, result_type, call->span);
+    out->as.callcc_.fn = f_expr;
+    out->as.callcc_.is_escape = is_escape;
+    return out;
+}
+
+/* call-cc-completion (CC1): (call/cc f) - undelimited continuation capture
+ * against the implicit program-wide prompt.  f receives a real continuation
+ * handle; invoking it (tur_escape_resume) returns its argument at the call/cc
+ * site (one-shot, upward).  No enclosing reset required; unbounded depth. */
 Expr *elab_call_cc(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -1558,38 +1580,14 @@ Expr *elab_call_cc(Elab *e, const Form *call) {
             "post-1.0 CPS pass.");
         return NULL;
     }
-    /* v1 sugar: (call/cc f) => (let [__cc_f f] (__cc_f 0))
-     *
-     * In v1 all lambda parameters default to TY_INT, so the continuation
-     * is passed as the integer 0.  Full continuation capture (where k is
-     * actually callable) requires CPS and is deferred to a future phase. */
-    Arena *a = e->arena;
-    Span sp = call->span;
-
-    /* integer literal 0 — the dummy v1 continuation */
-    Form *zero     = form_int(a, sp, 0);
-
-    /* let binding: [__cc_f <user-fn>] */
-    Form *sym_ff    = form_sym(a, sp, intern_cstr(e->st, "__cc_f"));
-    Form *fn_form   = call->as.list.items[1];
-    Form **bv       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
-    bv[0] = sym_ff;
-    bv[1] = fn_form;
-    Form *bind_vec  = form_vec(a, sp, bv, 2);
-
-    /* inner call: (__cc_f 0) */
-    Form **ic       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
-    ic[0] = sym_ff;
-    ic[1] = zero;
-    Form *inner     = form_list(a, sp, ic, 2);
-
-    /* (let [__cc_f fn_form] (__cc_f 0)) */
-    Form *sym_let   = form_sym(a, sp, e->sym_let);
-    Form **li       = (Form **)arena_alloc(a, 3 * sizeof(Form *));
-    li[0] = sym_let;
-    li[1] = bind_vec;
-    li[2] = inner;
-    return elab_form(e, form_list(a, sp, li, 3));
+    /* call-cc-completion (CC1): real undelimited capture against the implicit
+     * program-wide prompt.  Build an EX_CALLCC node; codegen establishes a
+     * setjmp landing at the call/cc site and hands f the landing as the
+     * continuation handle.  f receives it (as int64_t); invoking it via
+     * (tur_escape_resume k v) returns v at this site (one-shot, upward escape),
+     * with no enclosing reset required and no 16-frame ceiling.  The result
+     * type is f's codomain (CF2). */
+    return callcc_node(e, call, /*is_escape=*/false);
 }
 
 /* Phase 18: (escape f) - one-shot escape continuation.
@@ -1612,27 +1610,10 @@ Expr *elab_escape(Elab *e, const Form *call) {
             "post-1.0 CPS pass.");
         return NULL;
     }
-    Arena *a = e->arena;
-    Span sp = call->span;
-
-    Form *zero     = form_int(a, sp, 0);
-
-    Form *sym_ff    = form_sym(a, sp, intern_cstr(e->st, "__esc_f"));
-    Form *fn_form   = call->as.list.items[1];
-    Form **bv       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
-    bv[0] = sym_ff;
-    bv[1] = fn_form;
-    Form *bind_vec  = form_vec(a, sp, bv, 2);
-
-    Form **ic       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
-    ic[0] = sym_ff;
-    ic[1] = zero;
-    Form *inner     = form_list(a, sp, ic, 2);
-
-    Form *sym_let   = form_sym(a, sp, e->sym_let);
-    Form **li       = (Form **)arena_alloc(a, 3 * sizeof(Form *));
-    li[0] = sym_let;
-    li[1] = bind_vec;
-    li[2] = inner;
-    return elab_form(e, form_list(a, sp, li, 3));
+    /* call-cc-completion (CC3): escape is the one-shot abort flavor.  Same
+     * undelimited capture as call/cc; invoking the continuation unwinds to this
+     * site without re-installing a prompt.  For the one-shot upward use both
+     * flavors behave identically (the captured context is abandoned either
+     * way); is_escape is recorded for the eventual shift-vs-shift0 distinction. */
+    return callcc_node(e, call, /*is_escape=*/true);
 }

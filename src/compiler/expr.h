@@ -200,6 +200,9 @@ typedef enum ExprKind {
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
     EX_SHIFT0,         /* (shift0 k body) - one-shot shift */
+    EX_CALLCC,         /* (call/cc f) / (escape f) - undelimited capture vs the
+                        * implicit root prompt; f receives a real cont<T> (CPS8/
+                        * call-cc-completion). is_escape selects the abort flavor. */
     /* Phase B2: Cloneable continuations */
     EX_CLONEABLE_RESET, /* (cloneable-reset body) - continuation boundary with cloneable captures */
     EX_CLONEABLE_SHIFT, /* (cloneable-shift k body) - capture cloneable continuation */
@@ -608,10 +611,15 @@ struct Expr {
             Expr *k_fn;             /* (shift k body) - k is a function (fn [v] ...) that receives the continuation */
             Expr *body;             /* body to run with captured continuation */
         } shift_;
-        struct { 
+        struct {
             Expr *k_fn;             /* (shift0 k body) - k is a function that cannot resume */
             Expr *body;             /* body to run */
         } shift0_;
+        struct {
+            Expr *fn;               /* (call/cc f) / (escape f) - f : cont<T> -> T */
+            bool  is_escape;        /* true for (escape f): abort flavor (no re-install) */
+        } callcc_;
+
         /* Phase B2: Cloneable continuations */
         struct { Expr *body; }         cloneable_reset_; /* (cloneable-reset body) */
         struct {
