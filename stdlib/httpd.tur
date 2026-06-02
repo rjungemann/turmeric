@@ -126,6 +126,16 @@
 (extern-c tur_reactor_stop [r :ptr] :void)
 
 (extern-c tur_reactor_wake [r :ptr] :void)
+
+(extern-c tur_local_fiber_group_new [r :ptr] :ptr)
+
+(extern-c tur_local_fiber_group_free [g :ptr] :void)
+
+(extern-c tur_local_spawn [g :ptr body :int user-data :ptr] :int)
+
+(extern-c tur_local_park_fd [g :ptr fd :int events :int timeout-ms :int] :int)
+
+(extern-c tur_reactor_run_fibers [g :ptr] :int)
 ;;; httpd-handle -- internal: serve one or more HTTP requests on fd, then
 ;;; close fd. Loops while the client keeps the connection alive.
 ;;;
@@ -164,6 +174,7 @@
       void *resp_headers;
       int64_t req_json_cache;     /* M3: lazily-parsed json/decode tree, freed in cleanup */
       void *req_multipart_parts;  /* M7: lazily-parsed multipart head (HttpdPart linked list) */
+      void *fiber_group;          /* A0: bound local-fiber-group for await-* primitives */
   } HttpdConn;
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
@@ -2266,6 +2277,673 @@
   if (!part) return 0;
   HttpdPart *p = (HttpdPart *)part;
   return (int64_t)p->data_len;
+  ```)
+;; =============================================================================
+;; A0 + A1: Asynchronous server (fiber-per-request on a reactor)
+;; =============================================================================
+;;
+;; The blocking server (`httpd-new`/`httpd-new-pool`) ties up a worker
+;; thread for the lifetime of each request. The async server runs one
+;; reactor thread bound to a single `local-fiber-group`; each accepted
+;; connection becomes a fiber that uses non-blocking I/O and parks on
+;; the reactor when it would block. A handler can ALSO park explicitly
+;; via the `httpd-await-*` primitives -- e.g., on a timer or another
+;; fd -- which frees the reactor thread to drive other in-flight
+;; fibers (the whole point of going async; see plan motivation).
+;;
+;; Surface:
+;;   (httpd-new-async port handler)    -- create reactor + group + listener
+;;   (httpd-run-async h)               -- drive fibers until stopped
+;;   (httpd-stop-async h)              -- request a graceful shutdown
+;;   (httpd-async-free h)              -- tear down state
+;;
+;; Inside a handler (running as a fiber):
+;;   (httpd-await-readable conn)       -- suspend until conn fd is readable
+;;   (httpd-await-writable conn)       -- suspend until conn fd is writable
+;;   (httpd-await-timer conn ms)       -- suspend for ms milliseconds
+;;
+;; The blocking thread-pool path is untouched; async is opt-in.
+;;
+;; Threading: the resolved OQ3 picks a single reactor + one fiber group.
+;; Sharding into a pool of reactor threads is a measured follow-up.
+;;; httpd-async-fiber-body -- internal: per-request fiber entry point.
+;;;
+;;; Runs the non-blocking version of httpd-handle on the accepted fd:
+;;; sets O_NONBLOCK, reads up to end-of-headers (parking on EWOULDBLOCK),
+;;; reads body, dispatches the handler, writes the response (parking on
+;;; EWOULDBLOCK), and loops on keep-alive.  Mirrors httpd-handle.
+
+(defn httpd-async-fiber-body [self :ptr<void> user-data :ptr<void>] :nil
+  ```c #include <fcntl.h>
+  #include <errno.h>
+  (void)self;
+  /* HttpdAsync layout (kept in sync with httpd-new-async below). */
+  typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  typedef struct {
+      int   fd;
+      int64_t handler;
+      void *fiber_group;
+  } HttpdAsyncReqCtx;
+  if (!user_data) return;
+  HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)user_data;
+  int fd = ctx->fd;
+  int64_t handler = ctx->handler;
+  void *group = ctx->fiber_group;
+  free(ctx);
+  /* Ensure the fd is non-blocking; the listener may have inherited
+   * blocking semantics on some platforms. */
+  {
+      int cflags = fcntl(fd, F_GETFL, 0);
+      fcntl(fd, F_SETFL, cflags | O_NONBLOCK);
+  }
+  int keep_going = 1;
+  while (keep_going) {
+      HttpdConn _conn;
+      HttpdConn *conn = &_conn;
+      memset(conn, 0, sizeof(HttpdConn));
+      conn->fd = fd;
+      conn->handler = handler;
+      conn->fiber_group = group;
+      /* --- Read until end-of-headers --- */
+      size_t buf_cap = 8192;
+      size_t buf_max = 262144;
+      char  *buf     = (char *)malloc(buf_cap);
+      if (!buf) break;
+      buf[0] = '\0';
+      int total = 0;
+      char *hdr_end = NULL;
+      while (!hdr_end) {
+          if ((size_t)total + 1 >= buf_cap) {
+              if (buf_cap >= buf_max) break;
+              size_t new_cap = buf_cap * 2;
+              if (new_cap > buf_max) new_cap = buf_max;
+              char *nb = (char *)realloc(buf, new_cap);
+              if (!nb) break;
+              buf = nb;
+              buf_cap = new_cap;
+          }
+          ssize_t n = recv(fd, buf + total, buf_cap - 1 - (size_t)total, 0);
+          if (n < 0) {
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                  /* Park until readable; -1 = wait forever. */
+                  int ev = (int)tur_local_park_fd(group, fd, 1, -1);
+                  if (ev < 0) break;   /* fiber-driver error */
+                  continue;
+              }
+              break;
+          }
+          if (n == 0) break;   /* peer closed */
+          total += (int)n;
+          buf[total] = '\0';
+          hdr_end = strstr(buf, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+      }
+      if (!hdr_end) { free(buf); break; }
+      int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
+      int hdrs_total  = (int)(hdr_end - buf) + hdr_sep_len;
+      /* Request line + headers parsing -- identical to the blocking
+       * httpd-handle. Inlined here to avoid threading large state
+       * through a separate call. */
+      char *line_end = strpbrk(buf, "\r\n");
+      if (!line_end || line_end > buf + total) line_end = buf + total;
+      char *p = buf;
+      if (p < line_end) {
+          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+          if (sp) {
+              int l = (int)(sp - p);
+              if (l > 0 && l < 15) { memcpy(conn->method, p, (size_t)l); conn->method[l] = '\0'; }
+              p = sp + 1;
+          }
+      }
+      if (p < line_end) {
+          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+          if (sp) {
+              int l = (int)(sp - p);
+              if (l > 0 && l < 1023) { memcpy(conn->path, p, (size_t)l); conn->path[l] = '\0'; }
+              p = sp + 1;
+              char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
+              if (!vlen_end) vlen_end = line_end;
+              int vl = (int)(vlen_end - p);
+              if (vl > 0 && vl < 15) { memcpy(conn->version, p, (size_t)vl); conn->version[vl] = '\0'; }
+          } else {
+              int l = (int)(line_end - p);
+              if (l > 0 && l < 1023) { memcpy(conn->path, p, (size_t)l); conn->path[l] = '\0'; }
+          }
+      }
+      int is_http_11   = (strstr(conn->version, "1.1") != NULL);
+      int conn_keep    = is_http_11;
+      int conn_close   = 0;
+      int content_len  = 0;
+      HttpdHeader *req_tail = NULL;
+      char *h = strpbrk(buf, "\r\n");
+      if (h) {
+          while (h[0] == '\r' || h[0] == '\n') h++;
+          while (h < hdr_end) {
+              char *eol = strpbrk(h, "\r\n");
+              if (!eol || eol > hdr_end) eol = hdr_end;
+              if (eol > h) {
+                  char *colon = (char *)memchr(h, ':', (size_t)(eol - h));
+                  if (colon) {
+                      int name_len = (int)(colon - h);
+                      char *val = colon + 1;
+                      while (val < eol && (*val == ' ' || *val == '\t')) val++;
+                      int val_len = (int)(eol - val);
+                      if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
+                          if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
+                          if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
+                      } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
+                          content_len = (int)strtol(val, NULL, 10);
+                          if (content_len < 0) content_len = 0;
+                      }
+                      if (name_len > 0) {
+                          HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+                          if (rh) {
+                              rh->name  = (char *)malloc((size_t)name_len + 1);
+                              rh->value = (char *)malloc((size_t)val_len  + 1);
+                              if (rh->name && rh->value) {
+                                  memcpy(rh->name, h, (size_t)name_len); rh->name[name_len] = '\0';
+                                  if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
+                                  rh->value[val_len] = '\0';
+                                  if (req_tail) { req_tail->next = rh; req_tail = rh; }
+                                  else { conn->req_headers = rh; req_tail = rh; }
+                              } else {
+                                  if (rh->name) free(rh->name);
+                                  if (rh->value) free(rh->value);
+                                  free(rh);
+                              }
+                          }
+                      }
+                  }
+              }
+              if (eol >= hdr_end) break;
+              h = eol;
+              while (h < hdr_end && (h[0] == '\r' || h[0] == '\n')) h++;
+          }
+      }
+      conn->client_keep_alive = (conn_keep && !conn_close);
+      /* Body (await on EWOULDBLOCK). */
+      if (content_len > 0) {
+          int body_in_buf = total - hdrs_total;
+          if (body_in_buf < 0) body_in_buf = 0;
+          if (body_in_buf > content_len) body_in_buf = content_len;
+          conn->body = (char *)malloc((size_t)content_len + 1);
+          if (conn->body) {
+              if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
+              int need = content_len - body_in_buf;
+              int got  = body_in_buf;
+              while (need > 0) {
+                  ssize_t r = recv(fd, conn->body + got, (size_t)need, 0);
+                  if (r < 0) {
+                      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                          int ev = (int)tur_local_park_fd(group, fd, 1, -1);
+                          if (ev < 0) break;
+                          continue;
+                      }
+                      break;
+                  }
+                  if (r == 0) break;
+                  got  += (int)r;
+                  need -= (int)r;
+              }
+              conn->body[got] = '\0';
+              conn->body_len = got;
+          }
+      }
+      free(buf);
+      /* Dispatch handler. */
+      int64_t *fat = (int64_t *)(intptr_t)conn->handler;
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+      /* Build response header block (same as httpd-handle's writer). */
+      int status = conn->resp_status ? conn->resp_status : 200;
+      const char *stxt = (status == 200) ? "OK" :
+                         (status == 201) ? "Created" :
+                         (status == 204) ? "No Content" :
+                         (status == 400) ? "Bad Request" :
+                         (status == 401) ? "Unauthorized" :
+                         (status == 404) ? "Not Found" :
+                         (status == 500) ? "Internal Server Error" : "OK";
+      const char *body  = conn->resp_body ? conn->resp_body : "";
+      int         blen  = conn->resp_body ? conn->resp_body_len : 0;
+      const char *ver   = is_http_11 ? "HTTP/1.1" : "HTTP/1.0";
+      const char *chdr  = conn->client_keep_alive ? "keep-alive" : "close";
+      int has_content_type = 0;
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) { has_content_type = 1; break; }
+              rh = rh->next;
+          }
+      }
+      size_t hbuf_cap = 1024;
+      char  *hbuf     = (char *)malloc(hbuf_cap);
+      if (!hbuf) goto __async_cleanup;
+      int hlen = snprintf(hbuf, hbuf_cap,
+          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
+          ver, status, stxt, blen, chdr);
+      if (!has_content_type) {
+          if ((size_t)(hlen + 64) > hbuf_cap) {
+              size_t nc = hbuf_cap * 2;
+              char *nh = (char *)realloc(hbuf, nc);
+              if (nh) { hbuf = nh; hbuf_cap = nc; }
+          }
+          hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+              "Content-Type: text/plain; charset=utf-8\r\n");
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (!rh->name || strcasecmp(rh->name, "Content-Length") == 0) {
+                  rh = rh->next; continue;
+              }
+              size_t nlen = strlen(rh->name);
+              size_t vlen = rh->value ? strlen(rh->value) : 0;
+              size_t need = (size_t)hlen + nlen + vlen + 8;
+              if (need > hbuf_cap) {
+                  size_t nc = hbuf_cap;
+                  while (nc < need) nc *= 2;
+                  char *nh = (char *)realloc(hbuf, nc);
+                  if (!nh) break;
+                  hbuf = nh; hbuf_cap = nc;
+              }
+              hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+                  "%s: %s\r\n", rh->name, rh->value ? rh->value : "");
+              rh = rh->next;
+          }
+      }
+      if ((size_t)hlen + 3 > hbuf_cap) {
+          char *nh = (char *)realloc(hbuf, (size_t)hlen + 3);
+          if (nh) { hbuf = nh; hbuf_cap = (size_t)hlen + 3; }
+      }
+      hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen, "\r\n");
+      /* Non-blocking write loop -- park on EWOULDBLOCK. */
+      {
+          int sent = 0;
+          while (sent < hlen) {
+              ssize_t w = send(fd, hbuf + sent, (size_t)(hlen - sent), 0);
+              if (w < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);  /* WRITE */
+                      if (ev < 0) break;
+                      continue;
+                  }
+                  break;
+              }
+              sent += (int)w;
+          }
+      }
+      if (blen > 0) {
+          int sent = 0;
+          while (sent < blen) {
+              ssize_t w = send(fd, body + sent, (size_t)(blen - sent), 0);
+              if (w < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);
+                      if (ev < 0) break;
+                      continue;
+                  }
+                  break;
+              }
+              sent += (int)w;
+          }
+      }
+      free(hbuf);
+      keep_going = conn->client_keep_alive;
+  __async_cleanup:
+      if (conn->body)      free(conn->body);
+      if (conn->resp_body) free(conn->resp_body);
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->req_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+      }
+      if (conn->req_json_cache) { json_free(conn->req_json_cache); conn->req_json_cache = 0; }
+  }
+  close(fd);
+  ```)
+;;; httpd-async-accept-cb -- internal: reactor READ callback on the listen fd.
+;;;
+;;; Drains accept() and spawns a fiber per accepted connection.  The
+;;; fiber body is the pre-built closure stored on HttpdAsync, called
+;;; via local_spawn.
+
+(defn httpd-async-accept-cb [env :ptr<void> id :int events :int user :ptr<void>] :nil
+  ```c (void)id; (void)events; (void)user;
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;       /* fat closure handle for httpd-async-fiber-body */
+      volatile int stop_flag;
+  } HttpdAsync;
+  typedef struct {
+      int   fd;
+      int64_t handler;
+      void *fiber_group;
+  } HttpdAsyncReqCtx;
+  int64_t *fat = (int64_t *)env;
+  HttpdAsync *ha = (HttpdAsync *)(intptr_t)fat[1];
+  if (!ha || ha->stop_flag) return;
+  for (;;) {
+      int cfd = accept(ha->listen_fd, NULL, NULL);
+      if (cfd < 0) break;
+      HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)malloc(sizeof(HttpdAsyncReqCtx));
+      if (!ctx) { close(cfd); continue; }
+      ctx->fd          = cfd;
+      ctx->handler     = ha->handler;
+      ctx->fiber_group = ha->fiber_group;
+      int rc = (int)tur_local_spawn(ha->fiber_group, ha->body_closure, (void *)ctx);
+      if (rc < 0) { free(ctx); close(cfd); }
+  }
+  ```)
+;;; httpd-new-async -- create an async (fiber-per-request) httpd handle.
+;;;
+;;; Binds the listener to a single-thread reactor + LocalFiberGroup.
+;;; Each accepted connection runs as a fiber that uses non-blocking I/O
+;;; and parks on the reactor when it would block; handlers may also
+;;; park explicitly via the httpd-await-* primitives.
+;;;
+;;; Parameters:
+;;;   port    -- TCP port to listen on (0 = kernel-assigned)
+;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;
+;;; Returns:
+;;;   ptr<void> -- HttpdAsync handle (or NULL on error)
+;;;
+;;; Lifecycle:
+;;;   (let [h (httpd-new-async 0 handler)]
+;;;     (httpd-run-async h)         ;; blocks until httpd-stop-async fires
+;;;     (httpd-async-free h))
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-new-async [port :int handler :int] :ptr<void>
+  ```c #include <fcntl.h>
+  typedef void (*tur_sig_fn)(int);
+  extern tur_sig_fn signal(int, tur_sig_fn);
+  signal(13, (tur_sig_fn)(intptr_t)1);  /* SIGPIPE -> SIG_IGN */
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+  } HttpdAsync;
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port        = htons((uint16_t)port);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
+  if (!ha) { close(fd); return NULL; }
+  ha->listen_fd = fd;
+  ha->handler   = handler;
+  ha->reactor   = tur_reactor_new();
+  if (!ha->reactor) { close(fd); free(ha); return NULL; }
+  ha->fiber_group = tur_local_fiber_group_new(ha->reactor);
+  if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  /* Synthetic fat closure for the accept callback: { __fn, ha }. */
+  int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
+  if (!clos) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  clos[0] = (int64_t)(intptr_t)httpd_async_accept_cb;
+  clos[1] = (int64_t)(intptr_t)ha;
+  ha->accept_clos = (void *)clos;
+  /* Synthetic fat closure for the fiber body. */
+  int64_t *body_clos = (int64_t *)malloc(2 * sizeof(int64_t));
+  if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  body_clos[0] = (int64_t)(intptr_t)httpd_async_fiber_body;
+  body_clos[1] = 0;
+  ha->body_closure = (int64_t)(intptr_t)body_clos;
+  ha->listen_src_id = (int)tur_reactor_add_fd(ha->reactor, fd, 1,
+      (int64_t)(intptr_t)clos, NULL);
+  if (ha->listen_src_id < 0) {
+      free(body_clos); free(clos);
+      tur_reactor_free(ha->reactor);
+      close(fd); free(ha); return NULL;
+  }
+  return (void *)ha;
+  ```)
+;;; httpd-run-async -- drive the async server until stopped.
+;;;
+;;; Blocks the calling thread, running the fiber-per-request loop.
+;;; Returns when httpd-stop-async fires (or the reactor exits for any
+;;; other reason).
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-run-async [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+  } HttpdAsync;
+  if (!h) return;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  (void)tur_reactor_run_fibers(ha->fiber_group);
+  ```)
+;;; httpd-stop-async -- request a graceful shutdown of the async server.
+;;;
+;;; Sets the stop flag, removes the listener source from the reactor,
+;;; and wakes the reactor so httpd-run-async returns.  In-flight fibers
+;;; finish naturally when their reads/writes complete.
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-stop-async [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+  } HttpdAsync;
+  if (!h) return;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  ha->stop_flag = 1;
+  if (ha->listen_src_id >= 0) {
+      tur_reactor_remove(ha->reactor, ha->listen_src_id);
+      ha->listen_src_id = -1;
+  }
+  tur_reactor_stop(ha->reactor);
+  tur_reactor_wake(ha->reactor);
+  ```)
+;;; httpd-async-free -- tear down an async server handle.
+;;;
+;;; Free the fiber group, reactor, and synthetic closures.  Call only
+;;; after httpd-run-async has returned.
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-async-free [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+  } HttpdAsync;
+  if (!h) return;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  if (ha->fiber_group) tur_local_fiber_group_free(ha->fiber_group);
+  if (ha->reactor) tur_reactor_free(ha->reactor);
+  if (ha->accept_clos) free(ha->accept_clos);
+  if (ha->body_closure) free((void *)(intptr_t)ha->body_closure);
+  if (ha->listen_fd >= 0) close(ha->listen_fd);
+  free(ha);
+  ```)
+;;; httpd-async-port -- read the bound TCP port on an async server.
+;;;
+;;; Useful when port=0 was passed to httpd-new-async (kernel-assigned).
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-async-port [h :ptr<void>] :int
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+  } HttpdAsync;
+  if (!h) return 0;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  struct sockaddr_in sa;
+  socklen_t sl = sizeof(sa);
+  if (getsockname(ha->listen_fd, (struct sockaddr *)&sa, &sl) < 0) return 0;
+  return (int64_t)ntohs(sa.sin_port);
+  ```)
+;;; httpd-await-readable -- suspend the current fiber until conn fd is readable.
+;;;
+;;; Wraps `local-park-fd` for the READ event with no timeout. Must be
+;;; called from inside a request fiber spawned by httpd-new-async; in
+;;; the blocking thread-pool path it is a no-op (the fiber group is
+;;; NULL).
+;;;
+;;; Since: Phase H8 (A0)
+
+(defn httpd-await-readable [conn :ptr<void>] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->fiber_group) return;
+  (void)tur_local_park_fd(c->fiber_group, c->fd, 1, -1);
+  ```)
+;;; httpd-await-writable -- suspend until conn fd is writable.
+
+(defn httpd-await-writable [conn :ptr<void>] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->fiber_group) return;
+  (void)tur_local_park_fd(c->fiber_group, c->fd, 2, -1);
+  ```)
+;;; httpd-await-timer -- suspend the current fiber for ms milliseconds.
+;;;
+;;; Built on local-park-fd with timeout-only: the reactor still polls
+;;; the conn fd (no events of interest); when the timeout elapses the
+;;; fiber resumes.  Suitable for per-request deadlines, exponential
+;;; back-off, etc.
+;;;
+;;; Since: Phase H8 (A0)
+
+(defn httpd-await-timer [conn :ptr<void> ms :int] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->fiber_group) return;
+  /* Park on the fd with NO event mask (0): the timer alone wakes us. */
+  (void)tur_local_park_fd(c->fiber_group, c->fd, 0, (int64_t)ms);
   ```)
 ;; =============================================================================
 ;; H6: Routing DSL
