@@ -1,4 +1,6 @@
 pure-arith: uncolored
 shift-fn: colored
 colored-caller: colored
+serial-shift-fn: colored
+serial-caller: colored
 main: uncolored

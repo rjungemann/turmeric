@@ -29,6 +29,8 @@ bool cps_expr_contains_shift(const Expr *e) {
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
+        case EX_SERIAL_RESET:
+        case EX_SERIAL_SHIFT:
         case EX_CLONEABLE_RESET:
         case EX_CLONEABLE_SHIFT:
             return true;
@@ -630,6 +632,22 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             out->as.shift0_.body = new_body;
             return out;
         }
+
+        case EX_SERIAL_RESET: {
+            Expr *new_body = cps_mark_expr(a, e->as.serial_reset_.body);
+            Expr *out = expr_new(a, EX_SERIAL_RESET, e->type, e->span);
+            out->as.serial_reset_.body = new_body;
+            return out;
+        }
+
+        case EX_SERIAL_SHIFT: {
+            Expr *new_k_fn = cps_mark_expr(a, e->as.serial_shift_.k_fn);
+            Expr *new_body = cps_mark_expr(a, e->as.serial_shift_.body);
+            Expr *out = expr_new(a, EX_SERIAL_SHIFT, e->type, e->span);
+            out->as.serial_shift_.k_fn = new_k_fn;
+            out->as.serial_shift_.body = new_body;
+            return out;
+        }
         
         /* Phase B2: Cloneable continuations - pass through but mark */
         case EX_CLONEABLE_RESET: {
@@ -898,6 +916,11 @@ static bool cps_body_calls_colored(const Expr *e,
         case EX_SHIFT0:
             return cps_body_calls_colored(e->as.shift0_.k_fn, colored, n) ||
                    cps_body_calls_colored(e->as.shift0_.body, colored, n);
+        case EX_SERIAL_RESET:
+            return cps_body_calls_colored(e->as.serial_reset_.body, colored, n);
+        case EX_SERIAL_SHIFT:
+            return cps_body_calls_colored(e->as.serial_shift_.k_fn, colored, n) ||
+                   cps_body_calls_colored(e->as.serial_shift_.body, colored, n);
         default:
             return false;
     }
