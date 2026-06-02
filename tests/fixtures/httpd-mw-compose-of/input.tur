@@ -1,0 +1,112 @@
+;; M8 (runtime form): httpd-mw-compose-of -- chain built from fat closures.
+;;
+;; Unlike the compose-middleware macro (statically-known chain of defns),
+;; compose-middleware-of takes runtime fat-closure values. Each mw-make-*
+;; helper here returns a fat closure that wraps mw-tag with a fixed tag.
+;;
+;; The runtime composition should produce the same onion order as the
+;; macro form when given the same middlewares in the same order:
+;;
+;;   outer-pre
+;;   middle-pre
+;;   inner-pre
+;;   base
+;;   inner-post
+;;   middle-post
+;;   outer-post
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [tag :cstr] :nil
+  ```c printf("%s\n", tag); ```)
+
+(defn print-pre [tag :cstr] :nil
+  ```c printf("%s-pre\n", tag); ```)
+
+(defn print-post [tag :cstr] :nil
+  ```c printf("%s-post\n", tag); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req = "GET / HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+;; Middleware constructor, returns a fat closure that captures `tag`.
+(defn mw-tag [tag :cstr next :int] :ptr<void>
+  (let [_t tag]
+    (fn [conn :ptr<void>] :nil
+      (print-pre _t)
+      (httpd-call next conn)
+      (print-post _t))))
+
+;; Make-* helpers return fat closures (capture _tag) so the runtime fold
+;; can dispatch them through the standard fat-closure ABI.
+(defn make-mw [tag :cstr] :ptr<void>
+  (let [_tag tag]
+    (fn [n :int] :ptr<void> (mw-tag _tag n))))
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [conn :ptr<void>] :nil
+                 (print-tag "base")
+                 (httpd-resp-status! conn 200)
+                 (httpd-resp-body! conn "ok")
+                 (chan-send donech 1))
+        outer  (make-mw "outer")
+        mid    (make-mw "middle")
+        inner  (make-mw "inner")
+        composed (compose-middleware-of base outer mid inner)
+        h      (httpd-new-pool 0 1 composed)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

@@ -1823,3 +1823,63 @@
     base
     (list (first mws)
       (list compose-middleware base ~@(rest mws)))))
+;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
+;;; middlewares over a base handler. Each rest cell must hold a fat
+;;; closure value of shape (fn [next :int] :ptr<void> ...).
+
+(defn httpd-mw-fold [base :int mws :int] :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t buf[64];
+  int n = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
+  while (p && n < 64) {
+      buf[n++] = p->head;
+      p = (__tur_cons_cell *)(intptr_t)p->tail;
+  }
+  int64_t cur = base;
+  typedef int64_t (*fn1_t)(void *, int64_t);
+  for (int i = n - 1; i >= 0; i--) {
+      int64_t mw = buf[i];
+      if (!mw) continue;
+      int64_t *fat = (int64_t *)(intptr_t)mw;
+      cur = ((fn1_t)(intptr_t)fat[0])((void *)fat, cur);
+  }
+  return cur;
+  ```)
+;;; compose-middleware-of -- runtime variadic form of compose-middleware.
+;;;
+;;; This is a defn, not a macro. Use when the chain is built at runtime
+;;; (e.g. dependent on config, feature flags, or a runtime-chosen subset).
+;;; Apply order matches `compose-middleware`: leftmost = outermost.
+;;;
+;;; Each rest argument must be a *fat closure value* of shape
+;;; `(fn [next :int] :ptr<void> ...)` -- i.e. a closure that captures at
+;;; least one variable. A bare top-level defn name is NOT a fat closure;
+;;; passing one will compile (thanks to the
+;;; docs/upcoming/variadic-rest-closure-cast-plan.md fix) but the fat-
+;;; closure dispatch dereferences code bytes as the fn pointer and
+;;; BUS-faults. Bridge a bare defn through a let-captured `fn` literal:
+;;;
+;;;   (let [_ 0
+;;;         mw-log-val (fn [n :int] :ptr<void> (mw-log n))
+;;;         _ 0]
+;;;     (compose-middleware-of base mw-log-val ...))
+;;;
+;;; For statically-known chains the macro form `compose-middleware`
+;;; remains the better choice -- it accepts bare defns and catches
+;;; non-callable mistakes at elaboration.
+;;;
+;;; Parameters:
+;;;   base -- base handler closure (:int)
+;;;   mws  -- variadic fat-closure middlewares; type variable A unifies
+;;;           to whatever closure type the call site uses.
+;;;
+;;; Returns:
+;;;   The fully-wrapped handler closure (:int).
+;;;
+;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
+;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
+
+(defn compose-middleware-of [A] [base :int & mws :A] :int
+  (httpd-mw-fold base mws))

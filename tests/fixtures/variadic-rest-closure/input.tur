@@ -1,0 +1,38 @@
+;; V0: variadic-rest-closure -- reproducer for the EX_CONS_LIST cast bug.
+;;
+;; Before the codegen fix at src/compiler/emit_expr.c:4124, passing a
+;; bare top-level defn as a variadic rest arg failed with a clang
+;; -Wint-conversion: the rest collector pasted the function pointer
+;; directly into `__tur_cons_of(head, tail)` without a (int64_t)(intptr_t)
+;; cast.
+;;
+;; After the fix, the cast is unconditional and a defn pointer flows
+;; through the cons-list cleanly.
+;;
+;; Expected output:
+;;   ok
+
+(defn callable-a [n :int] :int (+ n 1))
+(defn callable-b [n :int] :int (* n 2))
+
+;; Fixed-arity helper that holds the inline-C (CLAUDE.md forbids inline-C
+;; in variadic bodies). Walks the cons list and returns the head value as
+;; an int -- enough to prove the cons cell was built without truncation.
+(defn rest-head [xs :int] :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)xs;
+  return p ? (int64_t)p->head : 0LL;
+  ```)
+
+;; Polymorphic variadic: rest type :A. The compiler unifies A to the
+;; element type of the call's actual args; the cons-list collector then
+;; emits __tur_cons_of for each one. Before V1, that emission missed
+;; the cast for function-pointer args.
+(defn first-of [A] [& xs :A] :int
+  (rest-head xs))
+
+(defn main [] :int
+  (let [_ (first-of callable-a callable-b)]
+    (println "ok"))
+  0)

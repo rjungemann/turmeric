@@ -4111,8 +4111,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* AR8: Build a right-folded cons list for a variadic rest parameter.
          * (f a b c d) where f takes [x y & rest :int] emits:
-         *   __tur_cons_of(c, __tur_cons_of(d, 0LL))
-         * as the last argument. Empty rest list emits 0LL (nil). */
+         *   __tur_cons_of((int64_t)(intptr_t)(c), __tur_cons_of((int64_t)(intptr_t)(d), 0LL))
+         * as the last argument. Empty rest list emits 0LL (nil).
+         *
+         * The (int64_t)(intptr_t) wrap is the same coercion every fixed-arity
+         * call boundary applies; it is a no-op for `int64_t` rvalues (the
+         * common case: numeric literals, opaque handles, closure carriers)
+         * and a needed coercion for function-pointer rvalues -- e.g. when
+         * the rest type is a polymorphic `:A` that unifies to a bare defn
+         * (`void *(*)(int64_t)` or similar). Without the cast, clang
+         * rejects the function-pointer pass with -Wint-conversion. See
+         * docs/upcoming/variadic-rest-closure-cast-plan.md. */
         case EX_CONS_LIST: {
             uint32_t n = e->as.cons_list_.n;
             if (n == 0) return strdup("0LL");
@@ -4121,7 +4130,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             for (int32_t i = (int32_t)n - 1; i >= 0; i--) {
                 char *head = emit_value(ctx, body, e->as.cons_list_.items[i]);
                 Buf cell; buf_init(&cell);
-                buf_printf(&cell, "__tur_cons_of(%s, %s)", head, tail);
+                buf_printf(&cell, "__tur_cons_of((int64_t)(intptr_t)(%s), %s)", head, tail);
                 buf_putc(&cell, '\0');
                 free(head);
                 free(tail);
