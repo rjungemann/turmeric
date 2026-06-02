@@ -1,0 +1,130 @@
+;; M7: httpd-mw-multipart -- parse multipart/form-data body into parts.
+;;
+;; The client POSTs a multipart body with three parts:
+;;   - text field "title"      = "hello"
+;;   - text field "subtitle"   = "world"
+;;   - file field "upload"     filename="notes.txt", Content-Type=text/plain,
+;;                             content "abc\n123\n"
+;;
+;; The handler resolves each via httpd-req-file and prints the
+;; relevant attribute (name+value for text fields; filename + size for
+;; the file).
+;;
+;; Expected output:
+;;   title=hello
+;;   subtitle=world
+;;   upload-filename=notes.txt
+;;   upload-content-type=text/plain
+;;   upload-len=8
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-pair [k :cstr v :cstr] :nil
+  ```c printf("%s=%s\n", k, v); ```)
+
+(defn print-int [k :cstr v :int] :nil
+  ```c printf("%s=%d\n", k, (int)v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  /* Build a small but realistic multipart/form-data body. */
+  const char *boundary = "----TestBoundary123";
+  char body[1024];
+  int bl = snprintf(body, sizeof(body),
+      "--%s\r\n"
+      "Content-Disposition: form-data; name=\"title\"\r\n"
+      "\r\n"
+      "hello\r\n"
+      "--%s\r\n"
+      "Content-Disposition: form-data; name=\"subtitle\"\r\n"
+      "\r\n"
+      "world\r\n"
+      "--%s\r\n"
+      "Content-Disposition: form-data; name=\"upload\"; filename=\"notes.txt\"\r\n"
+      "Content-Type: text/plain\r\n"
+      "\r\n"
+      "abc\n123\n\r\n"
+      "--%s--\r\n",
+      boundary, boundary, boundary, boundary);
+  char req[2048];
+  int rl = snprintf(req, sizeof(req),
+      "POST /upload HTTP/1.0\r\n"
+      "Content-Type: multipart/form-data; boundary=%s\r\n"
+      "Content-Length: %d\r\n"
+      "\r\n", boundary, bl);
+  send(fd, req, (size_t)rl, 0);
+  send(fd, body, (size_t)bl, 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+;; Helper: format the raw `data` pointer + length as a printable cstr.
+;; The fixture's parts only contain ASCII so we can cast directly.
+(defn data-as-cstr [data :ptr<void>] :cstr
+  ```c return (const char *)data; ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [c :ptr<void>] :nil
+                 (let [title    (httpd-req-file c "title")
+                       subtitle (httpd-req-file c "subtitle")
+                       upload   (httpd-req-file c "upload")]
+                   (print-pair "title"               (data-as-cstr (httpd-part-data title)))
+                   (print-pair "subtitle"            (data-as-cstr (httpd-part-data subtitle)))
+                   (print-pair "upload-filename"     (httpd-part-filename upload))
+                   (print-pair "upload-content-type" (httpd-part-content-type upload))
+                   (print-int  "upload-len"          (httpd-part-data-len upload)))
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body! c "ok")
+                 (chan-send donech 1))
+        h      (httpd-new-pool 0 1 base)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

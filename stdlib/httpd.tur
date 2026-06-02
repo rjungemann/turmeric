@@ -162,7 +162,8 @@
       int64_t tls;
       void *req_headers;
       void *resp_headers;
-      int64_t req_json_cache;  /* M3: lazily-parsed json/decode tree, freed in cleanup */
+      int64_t req_json_cache;     /* M3: lazily-parsed json/decode tree, freed in cleanup */
+      void *req_multipart_parts;  /* M7: lazily-parsed multipart head (HttpdPart linked list) */
   } HttpdConn;
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
@@ -473,6 +474,27 @@
       if (conn->req_json_cache) {
           json_free(conn->req_json_cache);
           conn->req_json_cache = 0;
+      }
+      /* M7: free any cached multipart parts. */
+      if (conn->req_multipart_parts) {
+          /* Same shape as HttpdPart below; redeclared here so cleanup is
+           * self-contained. */
+          typedef struct __HttpdPart {
+              char *name; char *filename; char *content_type;
+              char *data; int data_len;
+              struct __HttpdPart *next;
+          } HttpdPart;
+          HttpdPart *pp = (HttpdPart *)conn->req_multipart_parts;
+          while (pp) {
+              HttpdPart *nx = pp->next;
+              if (pp->name)         free(pp->name);
+              if (pp->filename)     free(pp->filename);
+              if (pp->content_type) free(pp->content_type);
+              if (pp->data)         free(pp->data);
+              free(pp);
+              pp = nx;
+          }
+          conn->req_multipart_parts = NULL;
       }
   }
   if (tls && httpd_tls_ops.shutdown) {
@@ -1958,6 +1980,293 @@
       (if (= 1 (httpd-mw-basic-auth-check c _v))
         (httpd-call _n c)
         (httpd-mw-basic-auth-challenge c _r)))))
+;; =============================================================================
+;; M7: Multipart form-data parser
+;; =============================================================================
+;;
+;; Parses `multipart/form-data` request bodies into a per-iteration linked
+;; list of HttpdPart records kept on the conn (req_multipart_parts).
+;; Parsing is lazy: the first call to httpd-req-file (or
+;; httpd-req-multipart-count) triggers the walk.
+;;
+;; Surface:
+;;   (httpd-req-file conn field)        -- handle (:ptr<void>) of part
+;;                                         with form-field name = `field`,
+;;                                         or 0 when absent
+;;   (httpd-part-name part)             -- form field name
+;;   (httpd-part-filename part)         -- file name attribute, or ""
+;;   (httpd-part-content-type part)     -- "text/plain" / "application/octet-stream" / ...
+;;   (httpd-part-data part)             -- raw bytes buffer (:ptr<void>)
+;;   (httpd-part-data-len part)         -- byte count (:int)
+;;
+;; The Part struct is defined in C only; callers see opaque pointers and
+;; go through the accessors above.  This avoids the defstruct-by-value
+;; codegen issues that bit M2 / M4 and keeps the API binary-safe (Part
+;; data is raw bytes, not a cstr -- it may contain embedded NULs).
+;;
+;; Limits:
+;;   - Body size is already bounded by Content-Length at the worker
+;;     read.  The parser additionally caps the number of parts at 64
+;;     to defend against pathological inputs.
+;;; httpd-req-multipart-parse -- internal: parse the body on first access.
+;;; Returns 1 on success (parts list populated), 0 on absent / malformed
+;;; / non-multipart content.
+
+(defn httpd-req-multipart-parse [conn :ptr<void>] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+  } HttpdConn;
+  if (!conn) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->req_multipart_parts) return 1;
+  if (!c->body || c->body_len <= 0) return 0;
+  /* Extract boundary from Content-Type. */
+  const char *ct = httpd_req_header((void *)conn, "Content-Type");
+  if (!ct || !*ct) return 0;
+  const char *bk = strstr(ct, "boundary=");
+  if (!bk) return 0;
+  bk += 9;
+  /* Boundary may be quoted; strip if so. */
+  char boundary[128];
+  size_t bi = 0;
+  if (*bk == '"') {
+      bk++;
+      while (*bk && *bk != '"' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
+  } else {
+      while (*bk && *bk != ';' && *bk != ' ' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
+  }
+  boundary[bi] = '\0';
+  if (bi == 0) return 0;
+  /* Build the full delimiter "--<boundary>". */
+  char delim[140];
+  int dlen = snprintf(delim, sizeof(delim), "--%s", boundary);
+  if (dlen <= 0) return 0;
+  HttpdPart *head = NULL;
+  HttpdPart *tail = NULL;
+  int n_parts = 0;
+  /* Find the first "--<boundary>" in the body. */
+  const char *p   = c->body;
+  const char *end = c->body + c->body_len;
+  const char *pos = strstr(p, delim);
+  if (!pos) return 0;
+  pos += dlen;
+  while (pos < end && n_parts < 64) {
+      /* Skip optional CRLF; "--" suffix means terminating delimiter. */
+      if (pos + 1 < end && pos[0] == '-' && pos[1] == '-') break;
+      while (pos < end && (*pos == '\r' || *pos == '\n')) pos++;
+      /* Parse part headers until blank line. */
+      char *p_name = NULL, *p_filename = NULL, *p_ctype = NULL;
+      while (pos < end) {
+          const char *eol = strstr(pos, "\r\n");
+          if (!eol || eol == pos) {
+              /* Blank line terminates headers. */
+              if (eol == pos) pos += 2;
+              break;
+          }
+          size_t llen = (size_t)(eol - pos);
+          if (llen >= 19 && strncasecmp(pos, "Content-Disposition", 19) == 0) {
+              /* Look for name="..." and filename="..." within this line. */
+              const char *nk = strstr(pos, "name=\"");
+              if (nk && nk < eol) {
+                  nk += 6;
+                  const char *nend = (const char *)memchr(nk, '"', (size_t)(eol - nk));
+                  if (nend) {
+                      size_t nl = (size_t)(nend - nk);
+                      p_name = (char *)malloc(nl + 1);
+                      if (p_name) { memcpy(p_name, nk, nl); p_name[nl] = '\0'; }
+                  }
+              }
+              const char *fk = strstr(pos, "filename=\"");
+              if (fk && fk < eol) {
+                  fk += 10;
+                  const char *fend = (const char *)memchr(fk, '"', (size_t)(eol - fk));
+                  if (fend) {
+                      size_t fl = (size_t)(fend - fk);
+                      p_filename = (char *)malloc(fl + 1);
+                      if (p_filename) { memcpy(p_filename, fk, fl); p_filename[fl] = '\0'; }
+                  }
+              }
+          } else if (llen >= 12 && strncasecmp(pos, "Content-Type", 12) == 0) {
+              const char *colon = (const char *)memchr(pos, ':', llen);
+              if (colon) {
+                  const char *vs = colon + 1;
+                  while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
+                  size_t vl = (size_t)(eol - vs);
+                  p_ctype = (char *)malloc(vl + 1);
+                  if (p_ctype) { memcpy(p_ctype, vs, vl); p_ctype[vl] = '\0'; }
+              }
+          }
+          pos = eol + 2;
+      }
+      /* Now `pos` points at the part body. Find the next "--<boundary>"
+       * preceded by CRLF (multipart boundaries are always on their own
+       * line within the body). */
+      char crlf_delim[144];
+      snprintf(crlf_delim, sizeof(crlf_delim), "\r\n%s", delim);
+      const char *bend = strstr(pos, crlf_delim);
+      if (!bend) {
+          if (p_name) free(p_name);
+          if (p_filename) free(p_filename);
+          if (p_ctype) free(p_ctype);
+          break;
+      }
+      size_t blen = (size_t)(bend - pos);
+      HttpdPart *part = (HttpdPart *)calloc(1, sizeof(HttpdPart));
+      if (!part) {
+          if (p_name) free(p_name);
+          if (p_filename) free(p_filename);
+          if (p_ctype) free(p_ctype);
+          break;
+      }
+      part->name         = p_name     ? p_name     : NULL;
+      part->filename     = p_filename ? p_filename : NULL;
+      part->content_type = p_ctype    ? p_ctype    : NULL;
+      part->data         = (char *)malloc(blen + 1);
+      if (part->data) {
+          if (blen > 0) memcpy(part->data, pos, blen);
+          part->data[blen] = '\0';
+          part->data_len = (int)blen;
+      }
+      if (!head) head = part;
+      if (tail)  tail->next = part;
+      tail = part;
+      n_parts++;
+      pos = bend + 2 + (size_t)dlen;  /* skip "\r\n" + "--<boundary>" */
+  }
+  c->req_multipart_parts = head;
+  return head ? 1 : 0;
+  ```)
+;;; httpd-req-file -- look up a multipart part by form field name.
+;;;
+;;; Triggers a lazy parse of the request body on first call; subsequent
+;;; calls reuse the cached part list (freed in the iteration cleanup).
+;;;
+;;; Returns an opaque part handle (`:ptr<void>`) usable with the
+;;; httpd-part-* accessors, or `0` (NULL) when the field is absent / the
+;;; body is not multipart / parsing failed.
+;;;
+;;; Example:
+;;;   (let [p (httpd-req-file c "upload")]
+;;;     (when (not= 0 p)
+;;;       (println (httpd-part-filename p))
+;;;       (println (int->cstr (httpd-part-data-len p)))))
+;;;
+;;; Since: Phase H8 (M7)
+
+(defn httpd-req-file [conn :ptr<void> field :cstr] :ptr<void>
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+  } HttpdConn;
+  if (!conn || !field || !*field) return NULL;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->req_multipart_parts) {
+      /* Trigger lazy parse via the Turmeric entry point.  C-level call
+       * works fine: the function name is `httpd_req_multipart_parse`. */
+      (void)httpd_req_multipart_parse((void *)conn);
+  }
+  HttpdPart *p = (HttpdPart *)c->req_multipart_parts;
+  while (p) {
+      if (p->name && strcmp(p->name, field) == 0) return (void *)p;
+      p = p->next;
+  }
+  return NULL;
+  ```)
+;;; httpd-part-name -- form field name of a part (or "" if missing).
+
+(defn httpd-part-name [part :ptr<void>] :cstr
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return "";
+  HttpdPart *p = (HttpdPart *)part;
+  return p->name ? p->name : "";
+  ```)
+;;; httpd-part-filename -- file name attribute (or "" for non-file parts).
+
+(defn httpd-part-filename [part :ptr<void>] :cstr
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return "";
+  HttpdPart *p = (HttpdPart *)part;
+  return p->filename ? p->filename : "";
+  ```)
+;;; httpd-part-content-type -- per-part Content-Type (or "" if absent).
+
+(defn httpd-part-content-type [part :ptr<void>] :cstr
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return "";
+  HttpdPart *p = (HttpdPart *)part;
+  return p->content_type ? p->content_type : "";
+  ```)
+;;; httpd-part-data -- raw byte buffer (binary-safe, may contain NUL).
+
+(defn httpd-part-data [part :ptr<void>] :ptr<void>
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return NULL;
+  HttpdPart *p = (HttpdPart *)part;
+  return (void *)p->data;
+  ```)
+;;; httpd-part-data-len -- byte count of the part's content.
+
+(defn httpd-part-data-len [part :ptr<void>] :int
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return 0;
+  HttpdPart *p = (HttpdPart *)part;
+  return (int64_t)p->data_len;
+  ```)
 ;; =============================================================================
 ;; H6: Routing DSL
 ;; =============================================================================
