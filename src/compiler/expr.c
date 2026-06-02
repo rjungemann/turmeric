@@ -30,6 +30,11 @@ void expr_print(Buf *b, const Expr *e) {
             buf_putc(b, ')');
             break;
         case EX_VAR:      buf_write(b, e->as.var.binding->name->name, e->as.var.binding->name->len); break;
+        case EX_CALLCC:
+            buf_puts(b, e->as.callcc_.is_escape ? "(escape " : "(call/cc ");
+            expr_print(b, e->as.callcc_.fn);
+            buf_putc(b, ')');
+            break;
         case EX_LETREC:
         case EX_LET:
             buf_puts(b, "(let [");

@@ -123,15 +123,38 @@ void tur_frame_fire_lifo_for_replay(tur_frame *f);
  * This is used for unwinding through multiple scope levels (e.g., on return or panic). */
 void tur_frame_fire_chain(tur_frame *f);
 
-/* Phase 18: Delimited continuations */
+/* Phase 18: Delimited continuations.
+ *
+ * Two continuation representations coexist (see cps-transform-plan.md, CPS0.4 /
+ * CPS6):
+ *
+ *   1. tur_cont / tur_cloneable_cont (BELOW) -- the original *fiber-frame
+ *      snapshot* path. It copies up to TUR_CONT_MAX_CAPTURED_FRAMES native
+ *      frames into a fixed array, so capture is BOUNDED: tur_cont_alloc returns
+ *      NULL past the ceiling. This remains the shipping fast path for shallow
+ *      delimited capture (small `reset`s), retained per CPS0.4 / OQ-CPS2.
+ *
+ *   2. TurKont (src/runtime/cps_rt.h) + the DK prompt machine
+ *      (src/runtime/cps_prompt.h) -- the *heap-reified* CPS substrate. A
+ *      continuation is a heap closure chain; capture is an O(1) pointer take
+ *      and is UNBOUNDED in depth (validated at 500k frames). The
+ *      TUR_CONT_MAX_CAPTURED_FRAMES ceiling does NOT apply there. Undelimited
+ *      capture to the implicit root prompt uses this path.
+ *
+ * CPS6: the ceiling is retired *on the CPS path* (which never had it); the
+ * constant below is kept solely for the retained fiber fast path. */
 
-/* Maximum number of captured frames per continuation. */
+/* Maximum number of captured frames per continuation -- FIBER FAST PATH ONLY.
+ * Does not constrain the heap-reified CPS substrate (cps_rt.h / cps_prompt.h),
+ * whose capture is unbounded. */
 #define TUR_CONT_MAX_CAPTURED_FRAMES 16
 
 /* A continuation frame for delimited continuations (shift/reset).
- * 
- * A continuation captures the execution state at the point of shift,
+ *
+ * BOUNDED fiber-frame snapshot (see the two-model note above): captures the
+ * execution state at the point of shift into a fixed `captured[]` array,
  * allowing it to be resumed later. Continuations are one-shot (move-only).
+ * For unbounded capture use the heap-reified CPS substrate (cps_rt.h).
  * 
  * Fields:
  *   cont_fn:      Function pointer to the continuation trampoline.

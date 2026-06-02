@@ -183,6 +183,10 @@ static BuiltinSpec table_[] = {
     { "tur_cloneable_cont_drop",   NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_NIL}, BS_FUNC_CALL, "tur_cloneable_cont_drop" },
     /* MS0: Snapshot a cloneable continuation for independent resumption */
     { "tur_continuation_snapshot", NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_continuation_snapshot" },
+    /* call-cc-completion: resume an undelimited escape continuation captured by
+     * (call/cc f)/(escape f).  k is the int64_t landing handle f received;
+     * invoking it returns v at the call/cc site (one-shot, upward escape). */
+    { "tur_escape_resume", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_escape_resume" },
 };
 
 #define TABLE_LEN (sizeof(table_) / sizeof(table_[0]))

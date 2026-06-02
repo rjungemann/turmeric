@@ -625,6 +625,94 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
     }
 }
 
+/* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.
+ * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices
+ * the chain up to the nearest prompt. Faithful port of src/runtime/cps_prompt.c.
+ * Capture is O(depth-of-slice) and unbounded -- no 16-frame ceiling. */
+#define DK_ROOT_TAG 0
+typedef struct DK DK;
+typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);
+typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
+typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0 } DKKind;
+struct DK {
+    DKKind kind; DKFrame fn; intptr_t env; int tag;
+    DKBody body; intptr_t body_env; DK *next;
+};
+static DK *dk_new(DKKind kind, DK *next) {
+    DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
+}
+static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }
+static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env; return k;
+}
+static DK *dk_prompt(int tag, DK *next) {
+    DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
+}
+static DK *dk_shift_impl(DKKind kind, int tag, DKBody body, intptr_t env, DK *next) {
+    DK *k = dk_new(kind, next); k->tag = tag; k->body = body; k->body_env = env; return k;
+}
+static DK *dk_shift(int tag, DKBody body, intptr_t env, DK *next) {
+    return dk_shift_impl(DKK_SHIFT, tag, body, env, next);
+}
+static DK *dk_shift0(int tag, DKBody body, intptr_t env, DK *next) {
+    return dk_shift_impl(DKK_SHIFT0, tag, body, env, next);
+}
+static DK *dk_copy_node(const DK *n) {
+    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
+    c->body = n->body; c->body_env = n->body_env; return c;
+}
+static DK *dk_copy_range(const DK *from, const DK *stop) {
+    DK *head = NULL, *tail = NULL;
+    for (const DK *p = from; p && p != stop; p = p->next) {
+        DK *c = dk_copy_node(p);
+        if (!head) head = tail = c; else { tail->next = c; tail = c; }
+    }
+    return head;
+}
+static DK *dk_append(DK *a, DK *b) {
+    if (!a) return b;
+    DK *p = a;
+    while (p->next) p = p->next;
+    p->next = b;
+    return a;
+}
+static void dk_free(DK *k) { while (k) { DK *n = k->next; free(k); k = n; } }
+static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
+    while (k) {
+        switch (k->kind) {
+            case DKK_DONE: return v;
+            case DKK_PROMPT: k = k->next; break;
+            case DKK_FRAME: v = k->fn(k->env, v); k = k->next; break;
+            case DKK_SHIFT:
+            case DKK_SHIFT0: {
+                DK *P = k->next;
+                while (P && !(P->kind == DKK_PROMPT && P->tag == k->tag)
+                         && P->kind != DKK_DONE) P = P->next;
+                bool to_root = (!P || P->kind == DKK_DONE);
+                bool reinstall = (k->kind == DKK_SHIFT);
+                DK *sub = dk_copy_range(k->next, P);
+                DK *tail = reinstall
+                    ? dk_prompt(to_root ? DK_ROOT_TAG : k->tag, dk_done()) : dk_done();
+                sub = dk_append(sub, tail);
+                intptr_t bodyval = k->body(k->body_env, sub);
+                dk_free(sub);
+                if (to_root) return bodyval;
+                k = P->next; v = bodyval; break;
+            }
+        }
+    }
+    (void)root; return v;
+}
+static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false); }
+static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }
+static intptr_t dk_invoke(DK *sub, intptr_t w) {
+    DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);
+    dk_free(c); return r;
+}
+/* Abortive shift body: deliver the precomputed receiver result f(v),
+ * ignoring the captured sub-continuation (Turmeric shift never resumes it). */
+static intptr_t __dk_abort_body(intptr_t env, DK *subk) { (void)subk; return env; }
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
@@ -4197,32 +4285,25 @@ static void mutmap_free(int64_t m) {
 
 static int64_t test_nested_reset() {
         int64_t __t3 = __fn_859(INT64_C(5));
-        return (INT64_C(1)) + ((INT64_C(10)) + (__t3));
+        int64_t __t4 = (int64_t)dk_run(dk_shift(1, __dk_abort_body, (intptr_t)(__t3), dk_prompt(1, dk_done())), 0);
+        return (INT64_C(1)) + (__t4);
 }
 
 static int64_t test_shift_return_different() {
-        int64_t __t4 = __fn_862(INT64_C(7));
-        return __t4;
+        int64_t __t5 = __fn_862(INT64_C(7));
+        int64_t __t6 = (int64_t)dk_run(dk_shift(1, __dk_abort_body, (intptr_t)(__t5), dk_prompt(1, dk_done())), 0);
+        return __t6;
 }
 
 static int64_t test_multiple_shifts() {
-        int64_t __t5;
-        {
-            int64_t __t6 = __fn_865(INT64_C(3));
-            int64_t x_867 = __t6;
-            (void)x_867;
-            struct __env_871 *__t8 = (struct __env_871 *)malloc(sizeof(struct __env_871));
-            __t8->__fn = (tur_thunk_int64_t_int64_t_t)__fn_869;
-            __t8->x = x_867;
-            void *__t9 = __t8;
-            int64_t __t7 = __fn_869(__t9, INT64_C(4));
-            __t5 = __t7;
-        }
-        return __t5;
+        int64_t __t7 = __fn_865(INT64_C(3));
+        int64_t __t8 = (int64_t)dk_run(dk_shift(1, __dk_abort_body, (intptr_t)(__t7), dk_prompt(1, dk_done())), 0);
+        return __t8;
 }
 
 static int64_t test_shift_ignores_k() {
-        int64_t __t10 = __fn_875(INT64_C(10));
+        int64_t __t9 = __fn_875(INT64_C(10));
+        int64_t __t10 = (int64_t)dk_run(dk_shift(1, __dk_abort_body, (intptr_t)(__t9), dk_prompt(1, dk_done())), 0);
         return __t10;
 }
 
@@ -4231,24 +4312,21 @@ static int64_t test_reset_no_shift() {
 }
 
 static int64_t test_deeply_nested_shift() {
-        int64_t __t11;
-        {
-            int64_t a_877 = INT64_C(1);
-            (void)a_877;
-            int64_t b_878 = INT64_C(2);
-            (void)b_878;
-            int64_t c_879 = INT64_C(3);
-            (void)c_879;
-            struct __env_883 *__t13 = (struct __env_883 *)malloc(sizeof(struct __env_883));
-            __t13->__fn = (tur_thunk_int64_t_int64_t_t)__fn_881;
-            __t13->a = a_877;
-            __t13->b = b_878;
-            __t13->c = c_879;
-            void *__t14 = __t13;
-            int64_t __t12 = __fn_881(__t14, INT64_C(10));
-            __t11 = __t12;
-        }
-        return __t11;
+        int64_t a_877 = INT64_C(1);
+        (void)a_877;
+        int64_t b_878 = INT64_C(2);
+        (void)b_878;
+        int64_t c_879 = INT64_C(3);
+        (void)c_879;
+        struct __env_883 *__t12 = (struct __env_883 *)malloc(sizeof(struct __env_883));
+        __t12->__fn = (tur_thunk_int64_t_int64_t_t)__fn_881;
+        __t12->a = a_877;
+        __t12->b = b_878;
+        __t12->c = c_879;
+        void *__t13 = __t12;
+        int64_t __t11 = __fn_881(__t13, INT64_C(10));
+        int64_t __t14 = (int64_t)dk_run(dk_shift(1, __dk_abort_body, (intptr_t)(__t11), dk_prompt(1, dk_done())), 0);
+        return __t14;
 }
 
 
