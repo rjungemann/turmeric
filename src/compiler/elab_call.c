@@ -1606,11 +1606,19 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* The handle, viewed as its int64 carrier so the resume builtin types. */
         Expr *kvar = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
         kvar->as.var.binding = fn_binding;
+        /* CC4: dispatch to the resume runtime selected by the cont flavor. */
+        const char *resume_name;
+        switch ((ContFlavor)fn_type.as.cont.flavor) {
+            case CONT_ESCAPE: resume_name = "tur_escape_resume"; break;
+            case CONT_SERIAL: resume_name = "tur_serial_cont_resume"; break;
+            case CONT_CLONEABLE:
+            default:          resume_name = "tur_cloneable_cont_resume"; break;
+        }
         const BuiltinSpec *rspec =
-            builtin_first_with_name(intern_cstr(e->st, "tur_cloneable_cont_resume"));
+            builtin_first_with_name(intern_cstr(e->st, resume_name));
         if (!rspec) {
             diag_emit(DIAG_ERROR, call->span,
-                      "internal: cloneable continuation resume builtin missing");
+                      "internal: continuation resume builtin missing");
             return NULL;
         }
         Type res_type = (fn_type.as.cont.returns != TY_UNKNOWN)

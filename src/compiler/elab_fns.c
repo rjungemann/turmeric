@@ -994,6 +994,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 *param_poly_types[n_params - 1] = params[n_params - 1]->type;
                 continue;
             }
+            /* CC4 (cps-transform-plan): a flavored continuation parameter --
+             * :cont (cloneable), :escape-cont, or :serial-cont. The flavor
+             * selects which runtime (k v) application sugar resumes against. */
+            {
+                int _cflav = cont_flavor_from_name(kw->name);
+                if (_cflav >= 0) {
+                    param_kinds[n_params - 1] = TY_CONT;
+                    params[n_params - 1]->type =
+                        type_cont_flavored(TY_INT, (ContFlavor)_cflav);
+                    continue;
+                }
+            }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the
