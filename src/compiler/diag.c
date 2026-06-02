@@ -156,6 +156,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0036_INLINE_C_MISSING_UNSAFE:    return "TUR-W0036";
         /* Phase C: narrow-width param in inline-C body */
         case TUR_W0037_INLINE_C_NARROW_PARAM:      return "TUR-W0037";
+        case TUR_W0038_LINT_PANIC_SITE:            return "TUR-W0038";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";

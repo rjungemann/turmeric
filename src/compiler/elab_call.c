@@ -616,6 +616,80 @@ static bool elab_name_is_typeclass_method(Elab *e, const Symbol *name) {
     return false;
 }
 
+/* Phase R6b: true if [p, p+n) contains the substring `needle`. */
+static bool lint_line_has_marker(const char *p, size_t n, const char *needle) {
+    size_t m = strlen(needle);
+    if (m == 0 || n < m) return false;
+    for (size_t i = 0; i + m <= n; i++) {
+        if (memcmp(p + i, needle, m) == 0) return true;
+    }
+    return false;
+}
+
+/* Phase R6b: --lint-panic allow-list. A `;; #lint-panic-allow` comment in the
+ * file's leading comment block silences the whole file; the same comment on
+ * the line immediately preceding a call silences just that call. Returns true
+ * if the call at `span` is allow-listed. */
+static bool lint_panic_allowed(Span span) {
+    const SourceFile *f = diag_source_file(span.file_id);
+    if (!f || !f->src) return false;
+    const char *src = f->src;
+    size_t len = f->len;
+    static const char marker[] = "#lint-panic-allow";
+
+    /* File-level: scan the leading run of blank/comment lines. If the marker
+     * appears before the first code line, the whole file is allow-listed. */
+    {
+        size_t i = 0;
+        while (i < len) {
+            size_t ls = i;
+            while (i < len && src[i] != '\n') i++;
+            size_t le = i;
+            if (i < len) i++;
+            size_t s = ls;
+            while (s < le && (src[s] == ' ' || src[s] == '\t')) s++;
+            if (s == le) continue;            /* blank line */
+            if (src[s] == ';') {              /* comment line */
+                if (lint_line_has_marker(src + s, le - s, marker)) return true;
+                continue;
+            }
+            break;                            /* first code line -> stop */
+        }
+    }
+
+    /* Per-call: examine the immediately-preceding non-blank line. */
+    {
+        size_t pos = span.off_start;
+        if (pos > len) pos = len;
+        while (pos > 0 && src[pos - 1] != '\n') pos--;  /* start of call's line */
+        while (pos > 0) {
+            size_t end = pos - 1;             /* '\n' ending the previous line */
+            size_t ls = end;
+            while (ls > 0 && src[ls - 1] != '\n') ls--;
+            size_t s = ls;
+            while (s < end && (src[s] == ' ' || src[s] == '\t')) s++;
+            if (s == end) { pos = ls; continue; }   /* blank -> keep looking up */
+            if (src[s] == ';')
+                return lint_line_has_marker(src + s, end - s, marker);
+            return false;                     /* non-comment code line -> no allow */
+        }
+    }
+    return false;
+}
+
+/* Phase R6b: panic-site names flagged by --lint-panic. */
+static bool lint_is_panic_site(const char *nm, bool *is_unwrap_out) {
+    bool is_unwrap = (strcmp(nm, "result-unwrap") == 0 ||
+                      strcmp(nm, "option-unwrap") == 0);
+    *is_unwrap_out = is_unwrap;
+    return is_unwrap ||
+        strcmp(nm, "panic") == 0          || strcmp(nm, "tur_panic") == 0 ||
+        strcmp(nm, "assert!") == 0        || strcmp(nm, "assert-msg!") == 0 ||
+        strcmp(nm, "require!") == 0       || strcmp(nm, "require-msg!") == 0 ||
+        strcmp(nm, "ensure!") == 0        || strcmp(nm, "ensure-msg!") == 0 ||
+        strcmp(nm, "invariant!") == 0     || strcmp(nm, "invariant-msg!") == 0;
+}
+
 Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
@@ -646,6 +720,26 @@ Expr *elab_call(Elab *e, Form *call) {
             Expr *f = expr_new(e->arena, EX_BOOL_LIT, TYPE_BOOL, call->span);
             f->as.b = false;
             return f;
+        }
+    }
+
+    /* Phase R6b: --lint-panic warns at panic call sites (panic/tur_panic, the
+     * contract macros, and result-unwrap/option-unwrap) unless allow-listed by
+     * a `;; #lint-panic-allow` comment. The macro names are still visible here
+     * because macro expansion happens later in this function. result-unwrap /
+     * option-unwrap carry a soft-deprecation hint toward *-must (OQ#1). */
+    if (g_lint_panic) {
+        bool is_unwrap = false;
+        if (lint_is_panic_site(name->name, &is_unwrap) &&
+            !lint_panic_allowed(call->span)) {
+            if (is_unwrap) {
+                diag_emit_with_code(DIAG_WARNING, call->span, TUR_W0038_LINT_PANIC_SITE,
+                    "panic call site '%s' outside allow-list; "
+                    "prefer result-must / option-must", name->name);
+            } else {
+                diag_emit_with_code(DIAG_WARNING, call->span, TUR_W0038_LINT_PANIC_SITE,
+                    "panic call site '%s' outside allow-list", name->name);
+            }
         }
     }
 

@@ -351,6 +351,33 @@ chain), it prints `double panic: aborting` and calls `abort()` immediately.
 Defer thunks registered before the panic are fired in reverse order during
 unwinding. If a defer thunk itself panics, the double-panic guard triggers `abort()`.
 
+### Auditing panic call sites
+
+Pass `--lint-panic` to have the compiler emit `TUR-W0038` at every panic call
+site so a codebase can audit (or gate CI on) where panics can originate. The
+flagged sites are:
+
+- `panic` / `tur_panic`
+- the contract macros `assert!` / `require!` / `ensure!` / `invariant!`
+  (and their `-msg!` variants)
+- `result-unwrap` / `option-unwrap` -- these additionally carry a
+  soft-deprecation hint to prefer `result-must` / `option-must`, which have
+  consistent panic semantics (`*-unwrap` go straight to `abort()`/`exit(1)`).
+
+The lint is **off by default**. Silence intentional sites with a
+`;; #lint-panic-allow` comment:
+
+- as a **top-of-file** comment (in the leading comment block) it silences the
+  whole file;
+- on the line **immediately preceding** a call it silences just that call.
+
+```turmeric
+(defn supervisor [] :int
+  ;; #lint-panic-allow
+  (panic "unrecoverable")   ;; not flagged
+  0)
+```
+
 ---
 
 ## Unwrap helpers: `must!` and `must-msg!`
@@ -570,7 +597,6 @@ The following features are planned but not yet implemented:
 | Feature | Phase | Notes |
 |---|---|---|
 | `catch-unwind` | R2 | Catch a panic at a safe boundary |
-| `--lint-panic` compiler flag | R6 | Audit panic call sites |
 
 ### Panic inside effect handlers and continuations (Phase R6)
 

@@ -1,0 +1,7 @@
+;; Phase R6b: the contract macros are panic sites under --lint-panic.
+(defn checked [x :int] :int
+  (require! (> x 0))
+  x)
+(defn main [] :int
+  (println (checked 3))
+  0)

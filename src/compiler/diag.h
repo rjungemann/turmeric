@@ -94,6 +94,8 @@ typedef enum DiagCode {
     TUR_W0036_INLINE_C_MISSING_UNSAFE, /* inline-C block in function not annotated #{Unsafe} */
     /* Phase C: narrow-width param in inline-C body */
     TUR_W0037_INLINE_C_NARROW_PARAM,   /* defn param has narrow numeric type in inline-C body */
+    /* Phase R6b: --lint-panic panic call site outside the allow-list */
+    TUR_W0038_LINT_PANIC_SITE,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
