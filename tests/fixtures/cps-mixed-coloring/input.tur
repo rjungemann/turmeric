@@ -1,0 +1,8 @@
+(defn colored [x :int] :int
+  (reset
+    (shift
+      (fn [k] (* x 2))
+      x)))
+
+(defn main [] :int
+  (colored 21))
