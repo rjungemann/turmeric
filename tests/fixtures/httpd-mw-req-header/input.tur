@@ -1,0 +1,93 @@
+;; M0: httpd-mw-req-header -- arbitrary request header read access.
+;;
+;; The client sends X-Test and User-Agent. The handler echoes both via
+;; println and also tests presence on a missing header.
+;;
+;; Expected output:
+;;   ua=demo-client/1.0
+;;   x-test=hello-world
+;;   has-x-test=1
+;;   has-missing=0
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-pair [k :cstr v :cstr] :nil
+  ```c printf("%s=%s\n", k, v); ```)
+
+(defn print-flag [k :cstr v :int] :nil
+  ```c printf("%s=%d\n", k, (int)v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req =
+      "GET / HTTP/1.0\r\n"
+      "User-Agent: demo-client/1.0\r\n"
+      "X-Test: hello-world\r\n"
+      "\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [c :ptr<void>] :nil
+                 ;; Lookup is case-insensitive -- prove it on user-agent.
+                 (print-pair "ua"          (httpd-req-header c "user-agent"))
+                 (print-pair "x-test"      (httpd-req-header c "X-Test"))
+                 (print-flag "has-x-test"  (httpd-req-header? c "x-test"))
+                 (print-flag "has-missing" (httpd-req-header? c "X-Missing"))
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body! c "ok")
+                 (chan-send donech 1))
+        h      (httpd-new-pool 0 1 base)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

@@ -1,0 +1,31 @@
+;; DS-multi: cover plan open question 2 -- a defn with multiple large-struct
+;; params + inline-C body must have every such param use the by-value ABI
+;; on both sides. The fix uses a whole-function `body_is_inline_c` flag, so
+;; this should work; this fixture pins the behaviour.
+;;
+;; Expected output:
+;;   a 1 | x 9
+
+(defstruct Big
+  [a :cstr b :cstr c :cstr d :cstr
+   e :int  f :int  g :int  h :cstr])
+
+(defstruct Wide
+  [w :cstr x :cstr y :cstr z :cstr
+   p :int  q :int  r :int  s :cstr])
+
+(defn mk-big [] :Big
+  (make-struct Big "a" "b" "c" "d" 1 2 3 "h"))
+
+(defn mk-wide [] :Wide
+  (make-struct Wide "w" "x" "y" "z" 9 8 7 "s"))
+
+(defn use-two [b :Big w :Wide] :nil
+  ```c
+  fprintf(stdout, "%s %d | %s %d\n", b.a, (int)b.e, w.x, (int)w.p);
+  fflush(stdout);
+  ```)
+
+(defn main [] :int
+  (use-two (mk-big) (mk-wide))
+  0)

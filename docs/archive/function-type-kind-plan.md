@@ -117,7 +117,7 @@ Add fixtures covering each spelling:
 | `fn-type-spaced/` | `f : (-> int int)` | Direct KB-008 repro |
 | `fn-type-shorthand/` | `f :(-> int int)` | Already passes; lock in |
 | `fn-type-curried/` | `f : (-> int int int)` | Multi-arg |
-| `fn-type-neoteric/` | `f : ->(int int)` (in a `.tursweet` file) | Sweet-exp form |
+| `fn-type-neoteric/` | `f : ->(int int)` (in a `.tur.sweet` file) | Sweet-exp form |
 | `fn-type-constraint/` | `[A] [^Eq a] (-> a a a)` | With typeclass constraint |
 
 ---

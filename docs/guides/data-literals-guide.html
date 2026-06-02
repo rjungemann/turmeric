@@ -121,9 +121,9 @@ runtime in the surrounding scope. They are sugar over the <code>hamt-of</code>,
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def payload #map{:name name :age (+ age 1) :active 1})
 (def points  [(make-point 0 0) (make-point 1 1) origin])
 (def small   #set{1 2 3})
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def payload #map{:name name :age {age + 1} :active 1}
-def points  [make-point(0 0) make-point(1 1) origin]
-def small   #set{1 2 3}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def payload #map
+def points [(make-point 0 0) (make-point 1 1) origin]
+def small #set
 </code></pre></div></div></div>
 <h2 id="enabling-the-feature">Enabling the feature</h2>
 <p>The syntax is gated behind a flag so programs that don't use it are
@@ -164,9 +164,14 @@ in expression position keeps its pre-existing meaning (a binding spec only).</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">[1 2 3]                       ; =&gt; (vec-of 1 2 3)
 #map{:a 1 :b x}               ; =&gt; map {:a -&gt; 1, :b -&gt; x}
 #set{:literal x (compute)}    ; (compute) evaluated once
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1 2 3]                       ; =&gt; vec-of(1 2 3)
-#map{:a 1 :b x}               ; =&gt; map {:a -&gt; 1, :b -&gt; x}
-#set{:literal x compute()}    ; compute() evaluated once
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1 2 3]
+; =&gt; (vec-of 1 2 3)
+#map
+{:a 1 :b x}
+; =&gt; map {:a -&gt; 1, :b -&gt; x}
+#set
+{:literal x (compute)}
+; (compute) evaluated once
 </code></pre></div></div></div>
 <h3 id="element-types">Element types</h3>
 <p><code>[...]</code> and the value slots of <code>#map{...}</code> accept any scalar element type --
@@ -180,11 +185,15 @@ recover the type with an ascription:</p>
 
 #map{1 &quot;one&quot; 2 &quot;two&quot;}         ; Map[int cstr]
 (:: (map-get m 1) :cstr)      ; =&gt; &quot;one&quot;
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1.5 2.5 3.5]                 ; Vec[float]
-::(vec-get(fs 0) :float)      ; =&gt; 1.5
-
-#map{1 &quot;one&quot; 2 &quot;two&quot;}         ; Map[int cstr]
-::(map-get(m 1) :cstr)        ; =&gt; &quot;one&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1.5 2.5 3.5]
+; Vec[float]
+::(vec-get(fs 0) :float)
+; =&gt; 1.5
+#map
+{1 &quot;one&quot; 2 &quot;two&quot;}
+; Map[int cstr]
+::(map-get(m 1) :cstr)
+; =&gt; &quot;one&quot;
 </code></pre></div></div></div>
 <p>Map keys may be any <code>Hash</code>/<code>MapKey</code> scalar -- <strong>int</strong>, <strong>keyword</strong>, <strong>string</strong>,
 <strong>bool</strong>, <strong>float32</strong>, <strong>float</strong>, or a user type with <code>Hash</code>/<code>Eq</code>/<code>MapKey</code>
@@ -198,7 +207,7 @@ distinct pointers with equal text are one key). See
 <p><strong><code>-Xsymbols</code>:</strong> with the runtime-symbols flag also enabled, a keyword key
 is a first-class <code>:Sym</code> value rather than a content-hashed string -- the map
 is keyed by <code>Sym</code> pointer identity via <code>Hash[Sym]</code> / <code>MapKey[Sym]</code>. See
-<a href="symbols-guide.md">the symbols guide</a>. Without <code>-Xsymbols</code> the legacy
+<a href="symbols-guide.html">the symbols guide</a>. Without <code>-Xsymbols</code> the legacy
 content-hash lowering above is unchanged. Aggregate (multi-word struct/ADT) <em>key</em>
 types must supply their own <code>MapKey</code> instance; <em>values</em> may be any type
 (scalars, floats, and heap handles like <code>Vec[A]</code> all ride the int64 carrier).</p>
@@ -216,11 +225,13 @@ surrounding form decides whether it is read as a binding spec or a value.</p>
 (let [a 1 b 2] (+ a b))                   ; [a 1 b 2] is a binding vector
 (def v [1 2 3])                           ; [1 2 3] is a vec literal
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn add [x :int y :int] :int
-  +(x y)                                ; [x :int y :int] is a param list
-let [a 1
-     b 2]
-  +(a b)                                ; [a 1 b 2] is a binding vector
-def v [1 2 3]                           ; [1 2 3] is a vec literal
+  +(x y)
+; [x :int y :int] is a param list
+let [a 1 b 2]
+  +(a b)
+; [a 1 b 2] is a binding vector
+def v [1 2 3]
+; [1 2 3] is a vec literal
 </code></pre></div></div></div>
 <h2 id="map-keys"><code>#map{...}</code> keys</h2>
 <p>Keys must be a <strong>keyword</strong>, <strong>string literal</strong>, or <strong>int literal</strong> -- anything
@@ -237,11 +248,12 @@ glance.</p>
 <p><code>turmeric
   (let [m #map{:name 1 :age 2}
         k (hamt/hash-str "name")]
-    (map-get m k))             ; =&gt; 1</code>
-  <code>sweet-exp
-  let [m #map{:name 1 :age 2}
-       k hamt/hash-str("name")]
-    map-get(m k)             ; =&gt; 1</code></p>
+    (map-get m k))             ; =&gt; 1</code></p>
+<pre><code class="language-sweet-exp">let [m #map{:name 1 :age 2}
+        k (hamt/hash-str &quot;name&quot;)]
+  map-get(m k)
+; =&gt; 1
+</code></pre>
 <ul>
 <li>A literal whose keys are all <strong>string literals</strong> lowers to a <em>content-keyed</em>
   map. The string itself is the key (compared by content, not by pointer or
@@ -251,10 +263,11 @@ glance.</p>
 </ul>
 <p><code>turmeric
   (let [m #map{"name" 1 "age" 2}]
-    (:: (map-get m "name") :int))   ; =&gt; 1</code>
-  <code>sweet-exp
-  let [m #map{"name" 1 "age" 2}]
-    ::(map-get(m "name") :int)   ; =&gt; 1</code></p>
+    (:: (map-get m "name") :int))   ; =&gt; 1</code></p>
+<pre><code class="language-sweet-exp">let [m #map{&quot;name&quot; 1 &quot;age&quot; 2}]
+  ::(map-get(m &quot;name&quot;) :int)
+; =&gt; 1
+</code></pre>
 <p>A direct <code>(hamt-of "k" v ...)</code> call with string keys is content-keyed too --
   there is one <code>hamt-of</code> builder for every key type (the old <code>smap-of</code> /
   <code>smap-*</code> split was retired in TMS3). (Runtime-built string keys must outlive
@@ -268,8 +281,12 @@ element is used as <strong>its own hash</strong> -- the identity-hash convention
 etc.) dedupe by value:</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#set{1 1 2}        ; =&gt; set with two elements, {1, 2}
 #set{x (+ x x) y}  ; each element expression evaluated exactly once
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#set{1 1 2}        ; =&gt; set with two elements, {1, 2}
-#set{x {x + x} y}  ; each element expression evaluated exactly once
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#set
+{1 1 2}
+; =&gt; set with two elements, {1, 2}
+#set
+{x (+ x x) y}
+; each element expression evaluated exactly once
 </code></pre></div></div></div>
 <blockquote>
 <p><strong>Note on the <code>Hash[A]</code> typeclass.</strong> The original design sketched injecting
@@ -283,9 +300,14 @@ use scalar elements.</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#map{}   ; =&gt; empty Map
 #set{}   ; =&gt; empty Set
 []       ; =&gt; empty Vec  (expression position)
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#map{}   ; =&gt; empty Map
-#set{}   ; =&gt; empty Set
-[]       ; =&gt; empty Vec  (expression position)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#map
+{}
+; =&gt; empty Map
+#set
+{}
+; =&gt; empty Set
+[]
+; =&gt; empty Vec  (expression position)
 </code></pre></div></div></div>
 <h3 id="typed-empty-literals-t-sett">Typed empty literals -- <code>[]:T</code> / <code>#set{}:T</code></h3>
 <p>An empty literal has no element to infer a type from, so a later typed
@@ -294,9 +316,17 @@ fused <code>:T</code> element-type suffix immediately after the closer:</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">[]:int             ; empty Vec[int]
 #set{}:cstr        ; empty Set[cstr]
 []:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[]:int             ; empty Vec[int]
-#set{}:cstr        ; empty Set[cstr]
-[]:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[]
+:int
+; empty Vec[int]
+#set
+{}
+:cstr
+; empty Set[cstr]
+[]
+:
+Vec(int)
+; empty Vec[Vec[int]]  (parenthesize a compound element type)
 </code></pre></div></div></div>
 <p>The suffix desugars to an ascription on the literal, so <code>[]:int</code> is exactly
 <code>(:: (vec-of) (Vec int))</code> and <code>#set{}:T</code> is <code>(:: (set-of) (Set T))</code> -- the
@@ -311,12 +341,13 @@ needed:</p>
 (let [a []:int]
   (vec-push! a 1) ...)
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; before
-let [a ::(vec-new() (Vec int))]
-  vec-push!(a 1) ...
-
+let [a (:: (vec-new) (Vec int))]
+  vec-push!(a 1)
+  ...
 ;; after
 let [a []:int]
-  vec-push!(a 1) ...
+  vec-push!(a 1)
+  ...
 </code></pre></div></div></div>
 <p>Rules:</p>
 <ul>
@@ -375,11 +406,12 @@ and curly-infix arithmetic:</p>
 (defn build [] :int
   (let [m #map{:a 1 :b 2}]
     map-count(m)))
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#lang sweet-exp
-
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#lang
+sweet-exp
 defn build [] :int
   let [m #map{:a 1 :b 2}]
-    map-count(m)
+    map-count
+    m()
 </code></pre></div></div></div>
     </div>
   </div>

@@ -73,7 +73,7 @@ browser submits form
   -> proceeds naturally to the next step
 ```
 
-From the programmer's perspective, writing a multi-page flow reads like a single straight-line function. No state machine, no session table, no hidden fields to maintain.
+From the programmer's perspective, writing a multi-page flow reads like a single straight-line function. There is no state machine to maintain; the session table and hidden form fields are also absent.
 
 ### Racket as the Reference Point
 

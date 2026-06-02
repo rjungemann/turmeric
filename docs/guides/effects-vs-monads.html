@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#effects-vs-monads-in-turmeric" style="">Effects vs. Monads in Turmeric</a></li>
 <li style=""><a href="#why-not-haskell-style-monads" style="">Why not Haskell-style monads?</a></li>
@@ -91,6 +92,22 @@
 <li style="padding-left:0.75rem;"><a href="#do-monadic-notation" style="color:var(--text-sec);">do-monadic notation</a></li>
 <li style=""><a href="#tradeoffs-vs-haskell" style="">Tradeoffs vs. Haskell</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="effects-vs-monads-in-turmeric">Effects vs. Monads in Turmeric</h1>
@@ -183,7 +200,7 @@ defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
 handle lookup-port(&quot;http.port&quot;)
   (Fail [] _)  8080   ;; default if anything in the chain fails
 </code></pre></div></div></div>
-<p>No <code>&gt;&gt;=</code>, no nested <code>Just</code>, no chains of <code>match</code>. Direct-style code that fails
+<p>No <code>&gt;&gt;=</code>, nested <code>Just</code>, or chains of <code>match</code>. Direct-style code that fails
 through an effect.</p>
 <h3 id="result-either-with-rich-errors">Result / Either with rich errors</h3>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Cfg-Error [what :cstr where :cstr])
@@ -415,9 +432,9 @@ effect-using programs that don't look monadic at all. The cases that
 genuinely want monad-as-value get a per-type fallback.</p>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="effects-system-guide.md">effects-system-guide.md</a> -- Algebraic effects API</li>
-<li><a href="custom-effects-tutorial.md">custom-effects-tutorial.md</a> -- Writing custom effects</li>
-<li><a href="error-handling-guide.md">error-handling-guide.md</a> -- Error handling patterns</li>
+<li><a href="effects-system-guide.html">effects-system-guide.md</a> -- Algebraic effects API</li>
+<li><a href="custom-effects-tutorial.html">custom-effects-tutorial.md</a> -- Writing custom effects</li>
+<li><a href="error-handling-guide.html">error-handling-guide.md</a> -- Error handling patterns</li>
 </ul>
     </div>
   </div>

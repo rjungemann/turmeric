@@ -141,7 +141,7 @@ entirely and keeps the same encoder path.
 
 **Inline solver (fast path, optional):** A small Fourier-Motzkin implementation
 in C covers trivial linear arithmetic obligations (constant-foldable, single
-variable) with near-zero latency -- no C API call, no string serialization.
+variable) with near-zero latency -- without any C API call or string serialization.
 This is an optimization for the common case, not a dependency-avoidance
 strategy. Predicates beyond its scope fall through to libz3 or the JS bridge.
 Implemented in RT5c; the system is fully functional without it.

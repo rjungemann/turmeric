@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#language-server-protocol-lsp-guide" style="">Language Server Protocol (LSP) Guide</a></li>
 <li style=""><a href="#current-capabilities" style="">Current capabilities</a></li>
@@ -94,6 +95,22 @@
 <li style=""><a href="#how-it-works" style="">How it works</a></li>
 <li style=""><a href="#troubleshooting" style="">Troubleshooting</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="language-server-protocol-lsp-guide">Language Server Protocol (LSP) Guide</h1>
@@ -117,12 +134,20 @@ over stdio (JSON-RPC 2.0). The server is invoked as:</p>
 <td>Supported</td>
 </tr>
 <tr>
+<td>Document symbols (<code>textDocument/documentSymbol</code>)</td>
+<td>Supported</td>
+</tr>
+<tr>
+<td>Workspace symbols (<code>workspace/symbol</code>)</td>
+<td>Supported (open documents only)</td>
+</tr>
+<tr>
 <td>Hover documentation</td>
-<td>Not yet supported</td>
+<td>Supported</td>
 </tr>
 <tr>
 <td>Go-to-definition</td>
-<td>Not yet supported</td>
+<td>Supported</td>
 </tr>
 <tr>
 <td>Completion</td>
@@ -319,9 +344,9 @@ LSP sync setting; the server responds to both <code>textDocument/didOpen</code> 
 <li><code>src/lsp/lsp.c</code> -- JSON-RPC dispatcher and diagnostic publisher</li>
 <li><code>src/lsp/lsp_docs.c</code> -- In-memory document store</li>
 <li><code>src/lsp/lsp_io.c</code> -- Framed stdio read/write</li>
-<li><a href="vscode-guide.md">vscode-guide.md</a> -- VS Code syntax extension</li>
-<li><a href="vim-guide.md">vim-guide.md</a> -- Vim / Neovim syntax highlighting</li>
-<li><a href="formatter-guide.md">formatter-guide.md</a> -- <code>tur format</code> CLI</li>
+<li><a href="vscode-guide.html">vscode-guide.md</a> -- VS Code syntax extension</li>
+<li><a href="vim-guide.html">vim-guide.md</a> -- Vim / Neovim syntax highlighting</li>
+<li><a href="formatter-guide.html">formatter-guide.md</a> -- <code>tur format</code> CLI</li>
 </ul>
     </div>
   </div>

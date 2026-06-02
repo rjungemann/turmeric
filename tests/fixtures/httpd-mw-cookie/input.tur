@@ -1,0 +1,116 @@
+;; M2: httpd-mw-cookie -- read parsed cookies, emit Set-Cookie lines.
+;;
+;; The client sends `Cookie: session=abc123; pref=dark; csrf=xyz`. The
+;; handler reads two of those by name, sets a default cookie via
+;; (cookie name value), and a fully-explicit one via cookie-full. The
+;; client prints the raw response so we can verify the Set-Cookie lines.
+;;
+;; Expected output:
+;;   session=abc123
+;;   pref=dark
+;;   missing=
+;;   Set-Cookie: session=new; Path=/; HttpOnly; SameSite=Lax
+;;   Set-Cookie: tracking=t1; Path=/api; Domain=example.com; Max-Age=3600; Secure; SameSite=None
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-pair [k :cstr v :cstr] :nil
+  ```c printf("%s=%s\n", k, v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req =
+      "GET / HTTP/1.0\r\n"
+      "Cookie: session=abc123; pref=dark; csrf=xyz\r\n"
+      "\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[4096];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  /* Print just the Set-Cookie lines. */
+  char *p   = drain;
+  char *end = strstr(drain, "\r\n\r\n");
+  if (!end) end = drain + total;
+  while (p < end) {
+      char *eol = strstr(p, "\r\n");
+      if (!eol || eol > end) break;
+      if (eol == p) break;
+      if (strncmp(p, "Set-Cookie:", 11) == 0) {
+          *eol = '\0';
+          printf("%s\n", p);
+      }
+      p = eol + 2;
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [c :ptr<void>] :nil
+                 ;; Read three cookies (two present, one absent).
+                 (print-pair "session" (httpd-req-cookie c "session"))
+                 (print-pair "pref"    (httpd-req-cookie c "pref"))
+                 (print-pair "missing" (httpd-req-cookie c "nope"))
+                 ;; Set two cookies via the defstruct builders.
+                 (httpd-set-cookie! c (cookie "session" "new"))
+                 (httpd-set-cookie! c (cookie-full "tracking" "t1"
+                                                  "/api" "example.com"
+                                                  3600 1 0 "None"))
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body! c "ok")
+                 (chan-send donech 1))
+        h      (httpd-new-pool 0 1 base)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

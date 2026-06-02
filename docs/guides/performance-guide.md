@@ -351,7 +351,7 @@ defn count-matches [pattern text] :int
 ### Prefer `str/view` over copying
 
 `str/view` is a non-owning slice into an existing string. Use it when you only
-need to inspect a substring -- no allocation, no copy:
+need to inspect a substring -- without allocating or copying:
 
 ```turmeric
 (let [s "hello world"]

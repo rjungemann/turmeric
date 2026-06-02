@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#generators-and-lazy-sequences-guide" style="">Generators and Lazy Sequences Guide</a></li>
 <li style=""><a href="#generators" style="">Generators</a></li>
@@ -103,6 +104,22 @@
 <li style=""><a href="#stdlibgentur-api-reference" style="">stdlib/gen.tur API Reference</a></li>
 <li style=""><a href="#stdlibseq-module-reference" style="">stdlib/seq/ Module Reference</a></li>
 <li style=""><a href="#stdlibrangetur-api-reference" style="">stdlib/range.tur API Reference</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="generators-and-lazy-sequences-guide">Generators and Lazy Sequences Guide</h1>
@@ -118,8 +135,8 @@
 <h3 id="the-gen-form">The <code>gen</code> form</h3>
 <p>A generator function uses <code>gen</code> in place of a function body and <code>yield</code> to
 produce values one at a time. The compiler rewrites each generator into a C
-struct plus a <code>_next</code> dispatch function -- no continuations, no heap alloc per
-step.</p>
+struct plus a <code>_next</code> dispatch function -- without continuations or per-step
+heap allocation.</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn integers-from [start :int] : (Generator :int)
   (gen []
     (let [^mut i start]

@@ -424,5 +424,5 @@ defn main [] :int
 - [gadts-guide.md](gadts-guide.md) -- Full language reference for GADTs and union types
 - [tur/gadt-vec API](../api/tur-gadt-vec.html) -- Production-quality length-indexed vector stdlib
 - [tur/equal API](../api/tur-equal.html) -- `Equal` witness, `sym`, `trans`, `subst`
-- `tests/fixtures/gadt-*/` -- All GADT test fixtures
-- `tests/fixtures/union-types-*/` -- Union type and gradual typing fixtures
+- [`tests/fixtures/gadt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- All GADT test fixtures
+- [`tests/fixtures/union-types-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing fixtures

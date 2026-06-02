@@ -1,0 +1,33 @@
+#lang sweet-exp
+
+;; T-expression layer: indented `defn` bodies, nested `if` branches,
+;; `$` rest-of-line, and multi-line bracket-continued bindings all
+;; resolve through the preprocessor.  Neoteric calls keep working
+;; inline.
+
+defn add [x :int y :int] :int
+  +(x y)
+
+defn classify [x :int] :int
+  if >(x 0)
+    1
+    if <(x 0)
+      -(0 1)
+      0
+
+defn pair-sum [] :int
+  let [a 10
+       b 20]
+    +(a b)
+
+defn dollar [] :int
+  $ + 100 200
+
+defn main [] :int
+  println(add(40 2))
+  println(classify(7))
+  println(classify(-3))
+  println(classify(0))
+  println(pair-sum())
+  println(dollar())
+  0

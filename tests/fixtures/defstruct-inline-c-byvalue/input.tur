@@ -1,0 +1,38 @@
+;; DS0: defstruct-inline-c-byvalue -- reproducer for the call-site `&temp`
+;; mismatch when a defn with an inline-C body declares a >16-byte defstruct
+;; parameter.
+;;
+;; Before the fix at src/compiler/emit_expr.c:2067, the formal side
+;; (emit_fns.c:423) emits the parameter by value (so inline-C can use
+;; `opts.field`), but the call site still applies the pass-by-pointer
+;; transform and passes `&temp`. clang refuses the resulting `T *` vs `T`
+;; mismatch.
+;;
+;; After the fix, the call site consults `body_is_inline_c` and stays
+;; consistent with the formal side.
+;;
+;; Expected output:
+;;   a 1
+
+(defstruct Big
+  [a :cstr
+   b :cstr
+   c :cstr
+   d :cstr
+   e :int
+   f :int
+   g :int
+   h :cstr])
+
+(defn mk [] :Big
+  (make-struct Big "a" "b" "c" "d" 1 2 3 "h"))
+
+(defn use-it [x :Big] :nil
+  ```c
+  fprintf(stdout, "%s %d\n", x.a, (int)x.e);
+  fflush(stdout);
+  ```)
+
+(defn main [] :int
+  (use-it (mk))
+  0)

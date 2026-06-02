@@ -1,0 +1,122 @@
+;; A4: httpd-async-throughput -- 4 concurrent slow handlers, single thread.
+;;
+;; The async server serves a handler that yields ~100ms via
+;; httpd-await-timer. Four client connections fire in parallel. Under the
+;; blocking thread-pool (n_workers=1) this would take ~400ms. Under the
+;; async fiber substrate the four request fibers park on the reactor in
+;; turn and the elapsed wall time is roughly one timer interval (~100ms).
+;;
+;; The fixture asserts a count rather than timing (timing is flaky in CI):
+;; all 4 requests succeed and the server's slow path ran once per client.
+;;
+;; Expected output:
+;;   handlers=4
+;;   responses=4
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr v :int] :nil
+  ```c printf("%s=%d\n", s, (int)v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t *args = (int64_t *)arg;
+  int64_t port  = args[0];
+  int64_t *ok_counter = (int64_t *)(intptr_t)args[1];
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req = "GET /slow HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[256];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  if (strncmp(drain, "HTTP/1.0 200", 12) == 0) {
+      __sync_fetch_and_add(ok_counter, 1);
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server-async [h :ptr<void>] :ptr<void>
+  ```c httpd_run_async(h); return NULL; ```)
+
+(defn spawn-server-async [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn alloc-ok-counter [] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)calloc(1, sizeof(int64_t));
+  return (void *)p;
+  ```)
+
+(defn read-ok-counter [p :ptr<void>] :int
+  ```c return p ? *(int64_t *)p : 0; ```)
+
+(defn free-ok-counter [p :ptr<void>] :nil
+  ```c free(p); ```)
+
+(defn spawn-client [port :int counter :ptr<void>] :ptr<void>
+  ```c
+  int64_t *args = (int64_t *)malloc(2 * sizeof(int64_t));
+  args[0] = (int64_t)port;
+  args[1] = (int64_t)(intptr_t)counter;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)args);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech    (chan-new 4)
+        counter   (alloc-ok-counter)
+        handler   (fn [c :ptr<void>] :nil
+                    (httpd-await-timer c 100)
+                    (httpd-resp-status! c 200)
+                    (httpd-resp-body! c "slow ok")
+                    (chan-send donech 1))
+        h         (httpd-new-async 0 handler)
+        port      (httpd-async-port h)
+        server    (spawn-server-async h)
+        c1        (spawn-client port counter)
+        c2        (spawn-client port counter)
+        c3        (spawn-client port counter)
+        c4        (spawn-client port counter)]
+    ;; Wait for all 4 handlers to fire.
+    (let [_ (chan-recv donech)] (let [_ (chan-recv donech)]
+      (let [_ (chan-recv donech)] (let [_ (chan-recv donech)] 0))))
+    (print-tag "handlers"  4)
+    (httpd-stop-async h)
+    (join-thread server)
+    (join-thread c1)
+    (join-thread c2)
+    (join-thread c3)
+    (join-thread c4)
+    (print-tag "responses" (read-ok-counter counter))
+    (println "done")
+    (free-ok-counter counter)
+    (httpd-async-free h)
+    (chan-free donech)
+    0))

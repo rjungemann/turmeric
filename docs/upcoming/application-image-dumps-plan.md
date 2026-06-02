@@ -87,7 +87,7 @@ application-level scaffolding for the warm-start pattern.** This plan owns
 ## Architectural picture
 
 ```
-   ┌─────────────────────── application ───────────────────────┐
+   ┌─────────────────────── application ────────────────────────┐
    │                                                            │
    │  (defn main []                                             │
    │    (with-image-cache "/var/cache/app.img"                  │

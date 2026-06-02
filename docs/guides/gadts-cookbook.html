@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#gadts-cookbook" style="">GADTs Cookbook</a></li>
 <li style=""><a href="#1-typed-ast-interpreter" style="">1. Typed AST Interpreter</a></li>
@@ -87,6 +88,22 @@
 <li style="padding-left:0.75rem;"><a href="#using-equal-to-implement-a-typed-heterogeneous-container" style="color:var(--text-sec);">Using Equal to implement a typed heterogeneous container</a></li>
 <li style=""><a href="#5-gadt-union-types-together" style="">5. GADT + Union Types Together</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="gadts-cookbook">GADTs Cookbook</h1>
@@ -453,12 +470,11 @@ defn main [] :int
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><code>docs/gadts-guide.md</code> -- Full language reference for GADTs and union types</li>
-<li><code>docs/gadts-plan.md</code> -- Implementation plan and phase history</li>
-<li><code>stdlib/gadt-vec.tur</code> -- Production-quality length-indexed vector stdlib</li>
-<li><code>stdlib/equal.tur</code> -- <code>Equal</code> witness, <code>sym</code>, <code>trans</code>, <code>subst</code></li>
-<li><code>tests/fixtures/gadt-*/</code> -- All GADT test fixtures</li>
-<li><code>tests/fixtures/union-types-*/</code> -- Union type and gradual typing fixtures</li>
+<li><a href="gadts-guide.html">gadts-guide.md</a> -- Full language reference for GADTs and union types</li>
+<li><a href="../api/tur-gadt-vec.html">tur/gadt-vec API</a> -- Production-quality length-indexed vector stdlib</li>
+<li><a href="../api/tur-equal.html">tur/equal API</a> -- <code>Equal</code> witness, <code>sym</code>, <code>trans</code>, <code>subst</code></li>
+<li><a href="https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/"><code>tests/fixtures/gadt-*/</code></a> -- All GADT test fixtures</li>
+<li><a href="https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/"><code>tests/fixtures/union-types-*/</code></a> -- Union type and gradual typing fixtures</li>
 </ul>
     </div>
   </div>

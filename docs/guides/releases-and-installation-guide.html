@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#releases-and-installation" style="">Releases and Installation</a></li>
 <li style=""><a href="#installing-turmeric" style="">Installing Turmeric</a></li>
@@ -94,6 +95,22 @@
 <li style="padding-left:0.75rem;"><a href="#iterating-on-the-workflow-itself" style="color:var(--text-sec);">Iterating on the workflow itself</a></li>
 <li style="padding-left:0.75rem;"><a href="#troubleshooting" style="color:var(--text-sec);">Troubleshooting</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="releases-and-installation">Releases and Installation</h1>
@@ -162,7 +179,7 @@ just build       # debug build
 just release     # optimized build, drops `tur` in build/
 </code></pre>
 <p>You'll need CMake 3.20+, a C99 compiler, and <code>libedit</code> (for the REPL).
-See <a href="devcontainer-guide.md"><code>devcontainer-guide.md</code></a> for a fully-scripted
+See <a href="devcontainer-guide.html"><code>devcontainer-guide.md</code></a> for a fully-scripted
 Linux dev environment.</p>
 <hr />
 <h2 id="whats-in-the-tarball">What's in the tarball</h2>
@@ -288,9 +305,6 @@ failed attempt's history is preserved.</p>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="../release-binaries-plan.md"><code>docs/release-binaries-plan.md</code></a> --
-  the original plan; documents the trade-offs (why arm64-only on macOS,
-  why sibling-stdlib over embedded, what's still out of scope).</li>
 <li><code>Formula/turmeric.rb</code> -- the Homebrew formula.</li>
 <li><code>.github/workflows/release.yml</code> -- the release pipeline.</li>
 <li><code>src/main.c:188</code> (<code>resolve_stdlib_root</code>) -- the stdlib-discovery logic

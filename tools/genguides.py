@@ -322,14 +322,6 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
     if meta is None:
         meta = fm_meta
 
-    # Rewrite .md links to .html (only local, non-absolute links)
-    def rewrite_md_link(m: re.Match) -> str:
-        href = m.group(1)
-        if href.startswith('http') or href.startswith('/') or href.startswith('..'):
-            return m.group(0)
-        return f'href="{Path(href).stem}.html"'
-
-    text = re.sub(r'href="([^"]+\.md)"', rewrite_md_link, text)
     text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
                   flags=re.MULTILINE)
 
@@ -337,6 +329,17 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
                             extension_configs={'toc': {'permalink': False}})
     body_html = conv.convert(text)
     body_html = inject_syntax_toggles(body_html)
+
+    # Rewrite .md links to .html (only local, non-absolute links).
+    # Must run AFTER markdown conversion -- the source uses `[text](file.md)`
+    # syntax, which only becomes `href="file.md"` after the converter runs.
+    def rewrite_md_link(m: re.Match) -> str:
+        href = m.group(1)
+        if href.startswith(('http://', 'https://', '/', '..')):
+            return m.group(0)
+        return f'href="{Path(href).stem}.html"'
+
+    body_html = re.sub(r'href="([^"]+\.md)"', rewrite_md_link, body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     fm_title = meta.get('title', '').strip() if meta else ''

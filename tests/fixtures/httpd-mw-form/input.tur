@@ -1,0 +1,95 @@
+;; M3: httpd-mw-form -- read URL-encoded form fields from POST body.
+;;
+;; The client sends `username=alice&password=hunter%202&missing=` (with
+;; `%20` so we verify percent-decode and `+ -> space` mode is exercised
+;; by a third field). The handler reads three fields by name -- one
+;; alphanumeric, one percent-encoded, one `+`-encoded, and one absent --
+;; and prints each.
+;;
+;; Expected output:
+;;   username=alice
+;;   password=hunter 2
+;;   nickname=tea time
+;;   missing=
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-pair [k :cstr v :cstr] :nil
+  ```c printf("%s=%s\n", k, v); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *body = "username=alice&password=hunter%202&nickname=tea+time";
+  char req[512];
+  int rl = snprintf(req, sizeof(req),
+      "POST /login HTTP/1.0\r\n"
+      "Content-Type: application/x-www-form-urlencoded\r\n"
+      "Content-Length: %d\r\n"
+      "\r\n"
+      "%s", (int)strlen(body), body);
+  send(fd, req, (size_t)rl, 0);
+  char drain[256];
+  recv(fd, drain, sizeof(drain), 0);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [c :ptr<void>] :nil
+                 (print-pair "username" (httpd-req-form c "username"))
+                 (print-pair "password" (httpd-req-form c "password"))
+                 (print-pair "nickname" (httpd-req-form c "nickname"))
+                 (print-pair "missing"  (httpd-req-form c "missing"))
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-body! c "ok")
+                 (chan-send donech 1))
+        h      (httpd-new-pool 0 1 base)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

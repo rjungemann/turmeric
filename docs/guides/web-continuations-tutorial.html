@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#web-continuations-tutorial-multi-page-forms-without-session-state" style="">Web Continuations Tutorial -- Multi-Page Forms Without Session State</a></li>
 <li style=""><a href="#tutorial-overview" style="">Tutorial Overview</a></li>
@@ -118,13 +119,29 @@
 <li style="padding-left:0.75rem;"><a href="#94-single-threaded-note" style="color:var(--text-sec);">9.4 Single-Threaded Note</a></li>
 <li style=""><a href="#running-the-guestbook" style="">Running the Guestbook</a></li>
 <li style=""><a href="#what-to-read-next" style="">What to Read Next</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="web-continuations-tutorial-multi-page-forms-without-session-state">Web Continuations Tutorial -- Multi-Page Forms Without Session State</h1>
 <p>A <strong>step-by-step guide</strong> to building a multi-page web form application in Turmeric using serializable continuations. Each step introduces one new concept. By the end you will have a working guestbook server that captures, stores, and resumes continuations across HTTP round-trips.</p>
 <blockquote>
-<p><strong>Prerequisites</strong>: Read <a href="serializable-continuations-guide.md">serializable-continuations-guide.md</a> first. You should understand <code>serial-reset</code>, <code>serial-shift</code>, and <code>serial-resume</code> before starting.</p>
-<p><strong>Related guides</strong>: <a href="effects-system-guide.md">effects-system-guide.md</a>, <a href="c-integration-guide.md">c-integration-guide.md</a>, <a href="checkpointing-guide.md">checkpointing-guide.md</a></p>
+<p><strong>Prerequisites</strong>: Read <a href="serializable-continuations-guide.html">serializable-continuations-guide.md</a> first. You should understand <code>serial-reset</code>, <code>serial-shift</code>, and <code>serial-resume</code> before starting.</p>
+<p><strong>Related guides</strong>: <a href="effects-system-guide.html">effects-system-guide.md</a>, <a href="c-integration-guide.html">c-integration-guide.md</a>, <a href="checkpointing-guide.html">checkpointing-guide.md</a></p>
 </blockquote>
 <hr />
 <h2 id="tutorial-overview">Tutorial Overview</h2>
@@ -247,7 +264,7 @@ browser submits form
   -&gt; k is now inside handler-1 again, with form data in hand
   -&gt; proceeds naturally to the next step
 </code></pre></div></div></div>
-<p>From the programmer's perspective, writing a multi-page flow reads like a single straight-line function. No state machine, no session table, no hidden fields to maintain.</p>
+<p>From the programmer's perspective, writing a multi-page flow reads like a single straight-line function. There is no state machine to maintain; the session table and hidden form fields are also absent.</p>
 <h3 id="racket-as-the-reference-point">Racket as the Reference Point</h3>
 <p>Racket's <code>send/suspend</code> API looks like this (for comparison):</p>
 <pre><code class="language-racket">(define (enter-name)
@@ -1459,7 +1476,7 @@ defn html-escape [s : cstr] : cstr
 </code></pre></div></div></div>
 <p>Call <code>html-escape</code> on every user-supplied string before embedding it in a template. The preview page and thank-you page in Step 8 already do this.</p>
 <h3 id="94-single-threaded-note">9.4 Single-Threaded Note</h3>
-<p>This tutorial server handles one request at a time. If a reader opens two browser tabs simultaneously, the second <code>GET /</code> starts a new flow concurrently -- but because the socket listener is single-threaded, requests are serialized at the OS level. For a multi-threaded extension, see the <a href="threading-guide.md">threading-guide.md</a> and <a href="stm-guide.md">stm-guide.md</a>.</p>
+<p>This tutorial server handles one request at a time. If a reader opens two browser tabs simultaneously, the second <code>GET /</code> starts a new flow concurrently -- but because the socket listener is single-threaded, requests are serialized at the OS level. For a multi-threaded extension, see the <a href="threading-guide.html">threading-guide.md</a> and <a href="stm-guide.html">stm-guide.md</a>.</p>
 <hr />
 <h2 id="running-the-guestbook">Running the Guestbook</h2>
 <pre><code class="language-bash"># First-time setup (from repo root)
@@ -1477,11 +1494,11 @@ just run-guestbook
 <hr />
 <h2 id="what-to-read-next">What to Read Next</h2>
 <ul>
-<li><a href="web-continuations-guide.md">web-continuations-guide.md</a> -- Compact reference: <code>send-form-and-wait</code> pattern, continuation store contract, composing flows</li>
-<li><a href="serializable-continuations-guide.md">serializable-continuations-guide.md</a> -- In-depth coverage of <code>serial-reset</code>, <code>serial-shift</code>, <code>Serializable</code>, and error handling</li>
-<li><a href="effects-system-guide.md">effects-system-guide.md</a> -- <code>defeffect</code>, <code>perform</code>, <code>handle</code> -- the mechanics behind <code>HttpEffect</code></li>
-<li><a href="checkpointing-guide.md">checkpointing-guide.md</a> -- A sibling use case: long-running business workflows that survive crashes</li>
-<li><a href="c-integration-guide.md">c-integration-guide.md</a> -- Deeper coverage of <code>extern-c</code> and the C FFI</li>
+<li><a href="web-continuations-guide.html">web-continuations-guide.md</a> -- Compact reference: <code>send-form-and-wait</code> pattern, continuation store contract, composing flows</li>
+<li><a href="serializable-continuations-guide.html">serializable-continuations-guide.md</a> -- In-depth coverage of <code>serial-reset</code>, <code>serial-shift</code>, <code>Serializable</code>, and error handling</li>
+<li><a href="effects-system-guide.html">effects-system-guide.md</a> -- <code>defeffect</code>, <code>perform</code>, <code>handle</code> -- the mechanics behind <code>HttpEffect</code></li>
+<li><a href="checkpointing-guide.html">checkpointing-guide.md</a> -- A sibling use case: long-running business workflows that survive crashes</li>
+<li><a href="c-integration-guide.html">c-integration-guide.md</a> -- Deeper coverage of <code>extern-c</code> and the C FFI</li>
 </ul>
     </div>
   </div>

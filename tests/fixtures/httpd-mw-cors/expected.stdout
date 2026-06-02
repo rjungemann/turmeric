@@ -1,0 +1,7 @@
+preflight-status=204
+preflight-allow-origin=*
+preflight-allow-methods=GET, POST, PUT, DELETE, OPTIONS
+base
+get-status=200
+get-allow-origin=*
+done

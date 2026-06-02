@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#turmeric-style-guide" style="">Turmeric Style Guide</a></li>
 <li style=""><a href="#function-arity" style="">Function Arity</a></li>
@@ -93,6 +94,22 @@
 <li style=""><a href="#docstring-standard" style="">Docstring Standard (;;;)</a></li>
 <li style=""><a href="#indentation" style="">Indentation</a></li>
 <li style=""><a href="#inline-c-style" style="">Inline-C Style</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="turmeric-style-guide">Turmeric Style Guide</h1>
@@ -108,7 +125,7 @@ are a code smell; 16 is an emergency escape hatch, not a target.</p>
 <h3 id="more-than-5-params-reach-for-defstruct">More than 5 params -- reach for <code>defstruct</code></h3>
 <p>When a function needs many named, independent inputs, pack them into a
 struct and pass a single options value:</p>
-<pre><code class="language-turmeric">(defstruct CsvOpts
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct CsvOpts
   [delim       :int   ;; field separator (e.g. 44 = ',')
    quote       :int   ;; quote char (e.g. 34 = '&quot;')
    has-header  :int   ;; 1 = first row is header
@@ -118,31 +135,52 @@ struct and pass a single options value:</p>
 
 (defn read-csv [src :cstr opts :CsvOpts] :int
   ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct CsvOpts [delim       :int   ;; field separator (e.g. 44 = ',')
+   quote       :int   ;; quote char (e.g. 34 = '&quot;')
+   has-header  :int   ;; 1 = first row is header
+   infer-rows  :int   ;; rows to sample for type inference
+   null-str    :cstr  ;; string that represents NULL (e.g. &quot;&quot;)
+  ]
+defn read-csv [src :cstr opts :CsvOpts] :int
+  ...
+</code></pre></div></div></div>
 <h4 id="default-values-via-partial-application-haskell-style-idiom">Default values via partial application (Haskell-style idiom)</h4>
 <p>With currying, locking in a default options value is a one-liner:</p>
-<pre><code class="language-turmeric">(def default-csv-opts (CsvOpts 44 34 1 100 &quot;&quot;))
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def default-csv-opts (CsvOpts 44 34 1 100 &quot;&quot;))
 
 ;; read-csv-fast is a closure with opts baked in.
 ;; Call it with just the filename.
 (def read-csv-fast (read-csv default-csv-opts))
 
 (read-csv-fast &quot;data.csv&quot;)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def default-csv-opts CsvOpts(44 34 1 100 &quot;&quot;)
+;; read-csv-fast is a closure with opts baked in.
+;; Call it with just the filename.
+def read-csv-fast read-csv(default-csv-opts)
+read-csv-fast(&quot;data.csv&quot;)
+</code></pre></div></div></div>
 <p><code>(read-csv default-csv-opts)</code> returns a closure <code>(fn [src :cstr] :int ...)</code>.
 No macro magic, no keyword arguments -- just currying.</p>
 <h3 id="genuine-variadic-interfaces-use-rest-type">Genuine variadic interfaces -- use <code>&amp; rest :type</code></h3>
 <p>When a function takes an <em>unknown number of values of the same type</em>
 (<code>println</code>, <code>format</code>, aggregation column lists, etc.), use a variadic
 rest parameter:</p>
-<pre><code class="language-turmeric">(defn println-all [first :cstr &amp; rest :cstr] :void
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn println-all [first :cstr &amp; rest :cstr] :void
   (println first)
   ;; rest is a cons-list of :cstr; walk it with head/tail helpers
   ...)
 
 (println-all &quot;hello&quot;)              ;; rest = nil (0)
 (println-all &quot;a&quot; &quot;b&quot; &quot;c&quot;)         ;; rest = cons(&quot;b&quot;, cons(&quot;c&quot;, 0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn println-all [first :cstr &amp; rest :cstr] :void
+  println(first)
+  ;; rest is a cons-list of :cstr; walk it with head/tail helpers
+  ...
+println-all(&quot;hello&quot;)
+;; rest = nil (0)
+println-all(&quot;a&quot; &quot;b&quot; &quot;c&quot;)
+;; rest = cons(&quot;b&quot;, cons(&quot;c&quot;, 0))
+</code></pre></div></div></div>
 <h4 id="rules-for-rest">Rules for <code>&amp; rest</code></h4>
 <ul>
 <li><strong>One <code>&amp;</code> per parameter list</strong> -- the rest parameter must be last.</li>
@@ -160,8 +198,14 @@ rest parameter:</p>
 <p>The rest parameter is an <code>int64_t</code> holding a pointer to a linked list
 of <code>__tur_cons_cell { int64_t head; int64_t tail; }</code> cells, or <code>0</code>
 (nil). Inline-C helpers that walk it:</p>
-<pre><code class="language-turmeric">(defn cons-list-sum [lst :int] #{Unsafe} :int
-  ```c
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn cons-list-sum [lst :int] #{Unsafe} :int
+  ```
+```sweet-exp
+defn cons-list-sum [lst :int]
+  #
+  {Unsafe}
+  :int
+```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
@@ -171,7 +215,13 @@ of <code>__tur_cons_cell { int64_t head; int64_t tail; }</code> cells, or <code>
 </code></pre>
 <p>Or use a pure tail-recursive helper:</p>
 <pre><code class="language-turmeric">(defn cons-head [lst :int] #{Unsafe} :int
-  ```c
+  ```
+```sweet-exp
+defn cons-head [lst :int]
+  #
+  {Unsafe}
+  :int
+```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
   return p ? p-&gt;head : 0;
@@ -252,7 +302,21 @@ fixed-arity helper.</p>
 ;;; Since: Phase B1
 (defn fn-name [param :int] :int
   ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;;; fn-name -- brief one-line summary.
+;;;
+;;; Parameters:
+;;;   param -- description
+;;;
+;;; Returns:
+;;;   description of return value
+;;;
+;;; Example:
+;;;   (fn-name arg)  ; =&gt; expected result
+;;;
+;;; Since: Phase B1
+defn fn-name [param :int] :int
+  ...
+</code></pre></div></div></div>
 <hr />
 <h2 id="indentation">Indentation</h2>
 <p>Follow Clojure-style indentation -- see <a href="../CLAUDE.md#indentation-style">CLAUDE.md</a>
@@ -272,7 +336,11 @@ for the full rules.</p>
 </ul>
 <pre><code class="language-turmeric">;; Good:
 (defn file-size [f] :int
-  ```c
+  ```
+```sweet-exp
+;; Good:
+defn file-size [f] :int
+```c
   return (int)ftell((FILE*)f);
   ```)
 

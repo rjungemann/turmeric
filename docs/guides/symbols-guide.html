@@ -119,7 +119,8 @@ type. With <code>-Xsymbols</code>, <code>:foo</code> becomes a first-class expre
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; tur run -Xsymbols / tur build -Xsymbols
 (println (sym-&gt;str :hello))   ; =&gt; hello
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; tur run -Xsymbols / tur build -Xsymbols
-println(sym-&gt;str(:hello))   ; =&gt; hello
+println(sym-&gt;str(:hello))
+; =&gt; hello
 </code></pre></div></div></div>
 <h2 id="the-model">The model</h2>
 <p>A <code>:Sym</code> value is a non-null pointer to a static, process-lifetime record:</p>
@@ -134,7 +135,7 @@ println(sym-&gt;str(:hello))   ; =&gt; hello
 <ul>
 <li><strong>Equality is pointer equality</strong> -- two <code>:foo</code> references are the same
   pointer (<code>==</code>); <code>:foo</code> and <code>:bar</code> are distinct.</li>
-<li><strong>Hashing is a single field load</strong> -- no string work, no allocation. The
+<li><strong>Hashing is a single field load</strong> -- skipping any string work or allocation. The
   hash is precomputed by the compiler.</li>
 <li><strong><code>sym-&gt;str</code> is free</strong> -- it returns the address of the embedded name; no
   copy, no <code>strlen</code>.</li>
@@ -198,9 +199,12 @@ freely copyable (it is just an interned pointer).</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(sym-&gt;str :hello)   ; =&gt; &quot;hello&quot;
 (sym=? :a :a)       ; =&gt; true
 (sym=? :a :b)       ; =&gt; false
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">sym-&gt;str(:hello)   ; =&gt; &quot;hello&quot;
-sym=?(:a :a)       ; =&gt; true
-sym=?(:a :b)       ; =&gt; false
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">sym-&gt;str(:hello)
+; =&gt; &quot;hello&quot;
+sym=?(:a :a)
+; =&gt; true
+sym=?(:a :b)
+; =&gt; false
 </code></pre></div></div></div>
 <h2 id="equality-hashing-and-maps">Equality, hashing, and maps</h2>
 <p>Under <code>-Xsymbols</code>, <code>:Sym</code> participates in the <code>Eq</code>, <code>Hash</code>, and <code>MapKey</code>
@@ -208,9 +212,12 @@ typeclasses (instances live in <code>stdlib/sym.tur</code>, auto-loaded with the
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(eq? :foo :foo)   ; =&gt; true   (pointer identity)
 (eq? :foo :bar)   ; =&gt; false
 (hash :foo)       ; precomputed field load
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">eq?(:foo :foo)   ; =&gt; true   (pointer identity)
-eq?(:foo :bar)   ; =&gt; false
-hash(:foo)       ; precomputed field load
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">eq?(:foo :foo)
+; =&gt; true   (pointer identity)
+eq?(:foo :bar)
+; =&gt; false
+hash(:foo)
+; precomputed field load
 </code></pre></div></div></div>
 <p>With <code>-Xdata-literals</code> as well, a keyword key in a map literal is a
 first-class <code>:Sym</code> key rather than a content-hashed string:</p>
@@ -218,8 +225,10 @@ first-class <code>:Sym</code> key rather than a content-hashed string:</p>
   (map-get m :foo)      ; =&gt; 10
   (map-has? m :missing) ; =&gt; false (0))
 </code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [m #map{:foo 10 :bar 20}]
-  map-get(m :foo)      ; =&gt; 10
-  map-has?(m :missing) ; =&gt; false (0)
+  map-get(m :foo)
+  ; =&gt; 10
+  map-has?(m :missing)
+  ; =&gt; false (0))
 </code></pre></div></div></div>
 <p>The map is keyed by <code>Sym</code> pointer identity (via <code>Hash[Sym]</code> + <code>MapKey[Sym]</code>),
 so lookups are pointer comparisons with the precomputed hash -- no string
@@ -233,11 +242,13 @@ at runtime (deserialization, REPL tools), load the opt-in module:</p>
 (eq? :hello (str-&gt;sym &quot;hello&quot;))   ; =&gt; true  (same pointer as the literal)
 (eq? (str-&gt;sym &quot;x&quot;) (str-&gt;sym &quot;x&quot;)) ; =&gt; true  (stable; one record allocated)
 (sym-&gt;str (str-&gt;sym &quot;round&quot;))     ; =&gt; &quot;round&quot;
-</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load &quot;stdlib/sym-dynamic.tur&quot;
-
-eq?(:hello str-&gt;sym(&quot;hello&quot;))      ; =&gt; true  (same pointer as the literal)
-eq?(str-&gt;sym(&quot;x&quot;) str-&gt;sym(&quot;x&quot;)) ; =&gt; true  (stable; one record allocated)
-sym-&gt;str(str-&gt;sym(&quot;round&quot;))        ; =&gt; &quot;round&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/sym-dynamic.tur&quot;)
+eq?(:hello str-&gt;sym(&quot;hello&quot;))
+; =&gt; true  (same pointer as the literal)
+eq?(str-&gt;sym(&quot;x&quot;) str-&gt;sym(&quot;x&quot;))
+; =&gt; true  (stable; one record allocated)
+sym-&gt;str(str-&gt;sym(&quot;round&quot;))
+; =&gt; &quot;round&quot;
 </code></pre></div></div></div>
 <p><code>str-&gt;sym</code> returns a stable, process-lifetime symbol; repeated calls with the
 same name return the same pointer (allocating at most one record), and the

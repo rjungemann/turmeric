@@ -155,8 +155,8 @@ a source or include changes).
 
 **Option 2: source-level aggregation.**
 The final binary's C compile step receives every transitive `.c` file
-as an additional translation unit. Simpler -- no archive step, no link
-ordering -- but rebuilds get expensive once a vendored library is more
+as an additional translation unit. Simpler -- skipping both the archive
+step and link ordering -- but rebuilds get expensive once a vendored library is more
 than a handful of files (any change in the consuming spice recompiles
 the world).
 

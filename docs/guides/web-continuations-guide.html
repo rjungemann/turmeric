@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#web-continuations-guide" style="">Web Continuations Guide</a></li>
 <li style=""><a href="#1-the-send-form-and-wait-pattern" style="">1. The send-form-and-wait Pattern</a></li>
@@ -94,11 +95,27 @@
 <li style="padding-left:0.75rem;"><a href="#passing-continuations-across-handler-boundaries" style="color:var(--text-sec);">Passing Continuations Across Handler Boundaries</a></li>
 <li style=""><a href="#6-comparison-to-rackets-sendsuspend" style="">6. Comparison to Racket's send/suspend</a></li>
 <li style=""><a href="#7-limitations" style="">7. Limitations</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="web-continuations-guide">Web Continuations Guide</h1>
-<p>A compact reference for building multi-page web applications in Turmeric using serializable continuations. This guide assumes you understand <code>serial-reset</code> / <code>serial-shift</code> / <code>serial-resume</code> -- see <a href="serializable-continuations-guide.md">serializable-continuations-guide.md</a> for that background.</p>
-<p>For a full step-by-step walkthrough with a complete guestbook example, see <a href="web-continuations-tutorial.md">web-continuations-tutorial.md</a>.</p>
+<p>A compact reference for building multi-page web applications in Turmeric using serializable continuations. This guide assumes you understand <code>serial-reset</code> / <code>serial-shift</code> / <code>serial-resume</code> -- see <a href="serializable-continuations-guide.html">serializable-continuations-guide.md</a> for that background.</p>
+<p>For a full step-by-step walkthrough with a complete guestbook example, see <a href="web-continuations-tutorial.html">web-continuations-tutorial.md</a>.</p>
 <hr />
 <h2 id="1-the-send-form-and-wait-pattern">1. The <code>send-form-and-wait</code> Pattern</h2>
 <p>The canonical idiom for a page in a multi-step flow:</p>
@@ -139,7 +156,7 @@ store-continuation(k)  : cstr
 load-continuation(token) : (Option (serial-continuation cstr))
 </code></pre></div></div></div>
 <h3 id="token-format">Token Format</h3>
-<p>Tokens are 64 hex characters (256 bits of randomness). When HMAC signing is enabled (see <a href="web-continuations-tutorial.md">web-continuations-tutorial.md</a> Step 9), tokens have the form <code>&lt;64-hex-chars&gt;.&lt;64-hex-chars&gt;</code> (raw token + HMAC-SHA256 signature).</p>
+<p>Tokens are 64 hex characters (256 bits of randomness). When HMAC signing is enabled (see <a href="web-continuations-tutorial.html">web-continuations-tutorial.md</a> Step 9), tokens have the form <code>&lt;64-hex-chars&gt;.&lt;64-hex-chars&gt;</code> (raw token + HMAC-SHA256 signature).</p>
 <h3 id="storage-interface">Storage Interface</h3>
 <p>The tutorial uses file-per-token storage in <code>data/conts/</code>:</p>
 <table>
@@ -360,7 +377,7 @@ defn checkout-flow [req : HttpRequest] : unit
 <p><strong>Token size.</strong> A typical serialized continuation for the guestbook flow is a few kilobytes. Deeply nested flows with large intermediate values can grow larger. Monitor file sizes in <code>data/conts/</code> during development.</p>
 <p><strong>No sharing.</strong> If the same value is reachable via two different paths in a captured continuation (e.g., two bindings pointing to the same <code>ref</code>), serialization produces two independent copies. On resume, mutations to one copy do not affect the other.</p>
 <p><strong>Single-threaded listener.</strong> The tutorial HTTP listener handles one request at a time. Two simultaneous form submissions are serialized at the socket level. For concurrent flows, run multiple server processes or switch to a multi-threaded listener with per-request effect handlers.</p>
-<p><strong>Schema versioning.</strong> If you change the structure of a captured type after tokens have been written to disk, <code>bytes-&gt;serial-cont</code> will return <code>Err (SchemaMismatch ...)</code>. Either drain all pending continuations before deploying, or implement a migration layer. See <a href="serializable-continuations-guide.md">serializable-continuations-guide.md</a> -- Error Handling.</p>
+<p><strong>Schema versioning.</strong> If you change the structure of a captured type after tokens have been written to disk, <code>bytes-&gt;serial-cont</code> will return <code>Err (SchemaMismatch ...)</code>. Either drain all pending continuations before deploying, or implement a migration layer. See <a href="serializable-continuations-guide.html">serializable-continuations-guide.md</a> -- Error Handling.</p>
     </div>
   </div>
   <footer class="site-footer">

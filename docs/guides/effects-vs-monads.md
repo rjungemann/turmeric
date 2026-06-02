@@ -76,7 +76,7 @@ handle lookup-port("http.port")
   (Fail [] _)  8080   ;; default if anything in the chain fails
 ```
 
-No `>>=`, no nested `Just`, no chains of `match`. Direct-style code that fails
+No `>>=`, nested `Just`, or chains of `match`. Direct-style code that fails
 through an effect.
 
 ### Result / Either with rich errors
