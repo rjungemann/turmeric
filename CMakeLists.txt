@@ -42,6 +42,13 @@ add_test(
   COMMAND bash tests/run-fmt.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# parse-check subcommand: AST-equality of turmeric + sweet-exp file pairs,
+# the backing check for tools/check-guide-pairs.py.
+add_test(
+  NAME tur_parse_check_tests
+  COMMAND bash tests/run-parse-check.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_span_tests
   COMMAND bash tests/check-span-unknown.sh
