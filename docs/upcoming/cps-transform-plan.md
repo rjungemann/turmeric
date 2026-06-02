@@ -4,8 +4,9 @@
 > coloring) done (2026-06-02)**; **CPS2 (CPS/ANF IR) done (2026-06-02, dump-only)**;
 > **CPS3 (selective lowering + boundary bridging) done (2026-06-02, dump-only)**;
 > **CPS4 (heap-reified continuations + trampoline runtime) done (2026-06-02,
-> standalone runtime)**; CPS5 (multi-prompt substrate) next. This is the
-> substrate that
+> standalone runtime)**; **CPS5 (multi-prompt delimited substrate + implicit
+> root prompt) done (2026-06-02, standalone machine)**; CPS6 (retire the capture
+> ceiling) next. This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -357,27 +358,41 @@ detection ON (the runtime frees everything it allocates).
   is not yet wired into emitted code; the end-to-end `.tur` deep-capture fixture
   lands with the CPS5 codegen wiring.)
 
-## Phase CPS5 -- Multi-prompt delimited substrate + implicit root prompt
+## Phase CPS5 -- Multi-prompt delimited substrate + implicit root prompt  -- **DONE 2026-06-02 (standalone machine)**
 
-- **CPS5.1** Implement prompts on the CPS substrate: `reset` pushes a fresh
-  prompt; `shift`/`shift0` capture the sub-continuation up to the nearest
-  prompt (`shift` re-installs it on resume, `shift0` does not). Re-express the
-  existing `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0` lowerings to target prompts.
-  *Done when:* the entire existing `continuation-*` fixture suite passes
-  unchanged on the CPS path.
-- **CPS5.2** Re-express `call/cc*` (cloneable/multi-shot) and `serial-*`
-  on prompts. Cloneable resume = re-enter the captured sub-continuation
-  multiple times; one-shot = consume after first resume. *Done when:* the
-  `call-cc-star` and serial-continuation fixtures pass on the CPS path.
-- **CPS5.3** Install an **implicit root prompt** around the program entry
-  (`main`). This is the prompt an undelimited `call/cc` captures up to. *Done
-  when:* a `call/cc` with no enclosing `reset` captures a continuation that
-  reaches the top of the program and resumes correctly. (Consumed by
-  `call-cc-completion-plan.md`, which flips OQ1.)
-- **CPS5.4** Note (no code): a heap-reified sub-continuation is a closure chain,
-  which the `Serializable` machinery can already walk -- record any
-  simplification this enables for `serial-*` and cross-link the serializable
-  guide. *Done when:* the cross-link and a short note land in CPS7 docs.
+**Implementation.** A multi-prompt delimited-control machine in
+`src/runtime/cps_prompt.{h,c}`, the Dybvig--Peyton-Jones--Sabry model expressed
+over continuation chains (`DK`) with prompt markers. Because capture is a
+*chain slice* (`dk_copy_range` from the shift point up to the nearest prompt),
+it is unbounded and O(depth-of-slice). Validated by the `tur_cps_prompt_unit`
+ctest (`tests/cps_prompt_unit.c`) under ASan. **Standalone machine, not yet
+driven by emitted code** -- the existing `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`
+lowerings still run on the fiber path, so the `continuation-*` fixtures keep
+passing unchanged; re-pointing those lowerings at this machine is the codegen
+integration that remains (gated until the substrate is wired end-to-end).
+
+- **CPS5.1** Prompts on the CPS substrate; shift vs shift0 re-install. *Done (on
+  the substrate):* `reset` = `dk_prompt`; `shift`/`shift0` = `dk_shift`/
+  `dk_shift0` capture up to the nearest prompt; `shift` re-installs the prompt on
+  the captured sub (`cps5-shift-reinstall`), `shift0` does not
+  (`cps5-shift0-no-reinstall`); compose works (`cps5-shift-compose`:
+  `reset{1+shift(k.2+k(k(3)))}` = 7). *Deferred:* re-pointing the IR lowerings +
+  running the `continuation-*` suite on this path is the codegen wiring.
+- **CPS5.2** `call/cc*` (multi-shot) and `serial-*`. *Done (multi-shot):* a
+  captured sub is re-entrant -- `dk_invoke` runs a fresh copy each time
+  (`cps5-multishot`: `k(10)+k(20)` over `[]*2` = 60), which is exactly cloneable
+  resume; one-shot is "invoke once". *serial-* simplification:* see CPS5.4.
+- **CPS5.3** Implicit root prompt. *Done:* `dk_run_root` delimits an unmatched
+  shift at program entry; `cps5-root-prompt` captures `(1 + [])` up to entry with
+  no explicit `reset` and resumes (= 1101). This is the prompt an undelimited
+  `call/cc` captures up to (consumed by `call-cc-completion-plan.md`).
+- **CPS5.4** Note (no code): a heap-reified sub-continuation is a flat closure
+  chain (`DK`: a list of `(frame-fn, env)` / prompt nodes), which the
+  `Serializable` machinery can walk directly -- no fiber/stack snapshot to
+  marshal. This makes `serial-*` a straightforward chain walk (serialize each
+  frame's tag + env), strictly simpler than snapshotting a native stack. See
+  [`serializable-continuations-guide.md`](../guides/serializable-continuations-guide.md);
+  recorded in CPS7 docs.
 
 ## Phase CPS6 -- Retire the capture ceiling
 

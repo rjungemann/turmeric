@@ -245,6 +245,12 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_cps_rt_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# CPS5 (cps-transform-plan): multi-prompt delimited-control machine unit
+add_test(
+  NAME tur_cps_prompt_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_cps_prompt_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Phase S3: algebraic effects via eval core
 add_test(
   NAME tur_eval_effects
