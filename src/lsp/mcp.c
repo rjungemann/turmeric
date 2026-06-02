@@ -29,6 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <dirent.h>
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -367,6 +368,81 @@ static void mcp_tool_definition(const char *args, Buf *out, int *is_error) {
     free(a);
 }
 
+/* Cached list of stdlib module names ("stdlib/<basename>"), discovered on
+ * first use by scanning the resolved stdlib directory.  Re-scans nothing
+ * after the first call -- the stdlib set is process-static.  Returns a
+ * NULL-terminated array; on any I/O failure returns an empty array so the
+ * caller still emits a well-formed JSON response. */
+static const char **mcp_stdlib_modules(void) {
+    static const char **cached = NULL;
+    static int          attempted = 0;
+    if (attempted) return cached;
+    attempted = 1;
+
+    const char *dir = getenv("TUR_STDLIB_DIR");
+    if (!dir || !*dir) dir = "stdlib";
+
+    DIR *d = opendir(dir);
+    if (!d) {
+        static const char *empty[] = { NULL };
+        cached = empty;
+        return cached;
+    }
+
+    /* Two passes: first count, then collect, so we can size the array. */
+    int count = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        const char *n = e->d_name;
+        size_t len = strlen(n);
+        if (len <= 4) continue;
+        if (strcmp(n + len - 4, ".tur") != 0) continue;
+        if (n[0] == '.') continue;
+        count++;
+    }
+    rewinddir(d);
+
+    const char **arr = calloc((size_t)count + 1, sizeof(char *));
+    if (!arr) {
+        closedir(d);
+        static const char *empty[] = { NULL };
+        cached = empty;
+        return cached;
+    }
+
+    int i = 0;
+    while ((e = readdir(d)) != NULL && i < count) {
+        const char *n = e->d_name;
+        size_t len = strlen(n);
+        if (len <= 4) continue;
+        if (strcmp(n + len - 4, ".tur") != 0) continue;
+        if (n[0] == '.') continue;
+        size_t base_len = len - 4;
+        char *mod = malloc(7 + base_len + 1);  /* "stdlib/" + base + NUL */
+        if (!mod) continue;
+        memcpy(mod, "stdlib/", 7);
+        memcpy(mod + 7, n, base_len);
+        mod[7 + base_len] = '\0';
+        arr[i++] = mod;
+    }
+    arr[i] = NULL;
+    closedir(d);
+
+    /* Sort alphabetically for stable completion ordering. */
+    for (int a = 0; a < i - 1; a++) {
+        for (int b = a + 1; b < i; b++) {
+            if (strcmp(arr[a], arr[b]) > 0) {
+                const char *t = arr[a];
+                arr[a] = arr[b];
+                arr[b] = t;
+            }
+        }
+    }
+
+    cached = arr;
+    return cached;
+}
+
 static void mcp_tool_complete(const char *args, Buf *out, int *is_error) {
     char path[1024];
     if (lsp_json_str_copy(args, "path", path, sizeof(path)) < 0) {
@@ -421,13 +497,7 @@ static void mcp_tool_complete(const char *args, Buf *out, int *is_error) {
         }
     }
 
-    static const char *stdlib_modules[] = {
-        "stdlib/args", "stdlib/contract", "stdlib/fix",
-        "stdlib/free", "stdlib/hamt",     "stdlib/list",
-        "stdlib/macros", "stdlib/map",    "stdlib/option",
-        "stdlib/pair", "stdlib/result",   "stdlib/safe",
-        "stdlib/str",  "stdlib/vec",      NULL
-    };
+    const char **stdlib_modules = mcp_stdlib_modules();
 
     buf_putc(out, '[');
     int emitted = 0;

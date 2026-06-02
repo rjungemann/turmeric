@@ -26,7 +26,7 @@ The MCP server exposes eight tools:
 | `symbols` | `path` | Lists all top-level symbols (name, type, docstring, location) |
 | `hover` | `path`, `line`, `col` | Returns type and docstring for the symbol at a 0-based position |
 | `definition` | `path`, `line`, `col` | Returns the file, line, and column where a symbol is defined |
-| `complete` | `path`, `line`, `col` | Returns completion candidates (symbols or module names in `import` context). **Note:** the stdlib module list (e.g. `stdlib/args`, `stdlib/contract`, `stdlib/fix`, …) is hardcoded in the MCP server and will drift as stdlib evolves; see [Known limitations](#known-limitations-and-open-issues). |
+| `complete` | `path`, `line`, `col` | Returns completion candidates (symbols or module names in `import` context). In an `(import` context the stdlib module list is discovered at runtime by scanning `$TUR_STDLIB_DIR`, so it tracks the installed stdlib without code changes. |
 | `doc` | `path`, `name` | Returns the `;;;` docstring for a named symbol |
 | `format` | `path` | Runs `tur format` on a file; returns the formatted text |
 | `build` | `dir` | Runs `tur build` on a project directory; returns output and exit status |
@@ -319,23 +319,22 @@ These are tracked concerns carried into the current release. They are
 documented here so AI assistants and contributors are aware of them when
 working with this integration.
 
-### No automated tests for MCP tools or new LSP handlers
+### Automated test coverage
 
-The existing test file `tests/lsp/docscanner_test.c` predates this feature
-branch. There are currently no fixtures or unit tests that exercise the new MCP
-tools (`check_file`, `symbols`, `hover`, `definition`, `complete`, `doc`,
-`format`, `build`) or the new LSP `hover`/`definition`/`documentSymbol`
-handlers. All smoke-test coverage comes from the manual CLI examples in the
-[Raw CLI smoke tests](#raw-cli-smoke-tests) section above. Automated test
-coverage is planned for a future phase.
+End-to-end JSON-RPC coverage for the MCP server and the new LSP handlers
+lives in `tests/lsp/mcp_lsp_test.py` (driven by `tests/lsp/run-mcp-lsp.sh`,
+wired into ctest as `tur_mcp_lsp_tests`). It spawns `tur mcp` and `tur lsp`
+as subprocesses, sends framed JSON-RPC, and asserts on responses for every
+tool except `build` (which is exercised indirectly via the rest of the
+suite) -- including the `TUR_NO_MCP=1` kill switch. The
+`tests/lsp/docscanner_test.c` unit test is wired in as
+`tur_docscanner_unit`.
 
-### `complete` tool stdlib list is hardcoded
-
-The `complete` tool's list of known stdlib modules (e.g. `stdlib/args`,
-`stdlib/contract`, `stdlib/fix`, …) is hardcoded in the MCP server
-implementation. It will drift as the standard library grows. Until this is
-resolved by deriving the list from the installed stdlib at runtime, treat
-completions for `import stdlib/…` as best-effort rather than authoritative.
+`tur build` is not driven from `mcp_lsp_test.py` because it shells out to a
+full project compile; if the rest of the test suite passes, the MCP
+`build` tool's only added behavior (subprocess launch + exit-status
+plumbing) is exercised by every other tool that uses the same
+`run_subprocess` helper.
 
 ### Doc-purge commits should be reviewed separately
 
@@ -347,8 +346,7 @@ diff stays focused.
 
 ### Build and test status
 
-These docs were written ahead of a full local build and test pass. Before
-relying on the MCP or LSP integration in production, run:
+Before relying on the MCP or LSP integration in production, run:
 
 ```sh
 cmake --build build -j

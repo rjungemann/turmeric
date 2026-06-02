@@ -473,6 +473,27 @@ set_target_properties(tur_lifetime_unit PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# LSP docstring-scanner unit test
+# ---------------------------------------------------------------------------
+add_executable(tur_docscanner_unit
+    ${CMAKE_SOURCE_DIR}/tests/lsp/docscanner_test.c
+    ${CMAKE_SOURCE_DIR}/src/lsp/lsp_docs.c
+    ${CMAKE_SOURCE_DIR}/src/lsp/lsp_util.c
+)
+target_include_directories(tur_docscanner_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_docscanner_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_docscanner_unit PRIVATE
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+set_target_properties(tur_docscanner_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # Phase WASM: WebAssembly build target for try.turmeric-lang.io
 # ---------------------------------------------------------------------------
 
