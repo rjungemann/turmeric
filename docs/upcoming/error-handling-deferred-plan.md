@@ -1,7 +1,7 @@
 # Error Handling -- Deferred Features Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-01
+> **Status:** Draft Plan (open questions resolved 2026-06-02)
+> **Last Updated:** 2026-06-02
 > **Type:** Language / Compiler / stdlib / Docs
 
 ---
@@ -144,7 +144,22 @@ Move row 1 ("`?` operator") of the **Deferred** table into the new section.
 
 ### Stdlib
 
-Add `stdlib/panic.tur`:
+Add `stdlib/panic.tur`. Per resolved OQ#2, the payload is exposed through an
+opaque `Panic` wrapper rather than a raw `:ptr<void>`, so callers cannot
+accidentally dereference it; the accessors take `:Panic`:
+
+```turmeric
+;; Opaque wrapper around the runtime tur_panic_payload pointer (OQ#2).
+(defopaque Panic :ptr<void>)
+```
+
+Per the resolved bonus finding, this phase also reroutes the existing
+`*-must`/`*-expect` natives (`native_result_must` et al. at `src/main.c:4989`)
+through `tur_panic_with` instead of their current bare `_exit(1)`, so they are
+catchable by `catch-unwind` and the guide's "standard panic message format and
+double-panic guard" claim becomes true. Add a fixture
+`tests/fixtures/panic-catch-unwind-must/` asserting `(catch-unwind (fn []
+(result-must (err-val ...))))` returns `err`, not a process exit.
 
 ```turmeric
 ;;; catch-unwind -- run thunk; return ok(thunk-result) or err(panic-payload).
@@ -160,7 +175,7 @@ Add `stdlib/panic.tur`:
 ;;;     (if (err? r) (println "caught") (println "ok")))
 ;;;
 ;;; Since: Phase R2
-(defn catch-unwind [thunk :int] :ptr<void> ...)
+(defn catch-unwind [thunk :int] :Panic ...)  ;; err slot carries :Panic, not raw ptr
 
 ;;; catch-panic-of -- like catch-unwind, but only catches panics whose
 ;;; payload downcasts to the given type tag; re-raises other panic types.
@@ -170,18 +185,18 @@ Add `stdlib/panic.tur`:
 ;;;   thunk    -- (fn [] :int)
 ;;;
 ;;; Since: Phase R2
-(defn catch-panic-of [type-tag :int thunk :int] :ptr<void> ...)
+(defn catch-panic-of [type-tag :int thunk :int] :Panic ...)
 
 ;;; panic-payload-message -- read the message string out of a caught payload.
 ;;;
 ;;; Since: Phase R2
-(defn panic-payload-message [p :ptr<void>] :cstr ...)
+(defn panic-payload-message [p :Panic] :cstr ...)
 
 ;;; panic-payload-file -- source file of the panic call site.
-(defn panic-payload-file [p :ptr<void>] :cstr ...)
+(defn panic-payload-file [p :Panic] :cstr ...)
 
 ;;; panic-payload-line -- source line of the panic call site.
-(defn panic-payload-line [p :ptr<void>] :int ...)
+(defn panic-payload-line [p :Panic] :int ...)
 ```
 
 ### Tests
@@ -275,6 +290,11 @@ Update the "In v1, contracts are always enabled..." paragraph in
 - `tests/fixtures/lint-unused-result-bound/` -- a `let [_ ...]` binding
   does **not** warn (explicit-discard convention).
 - `tests/fixtures/lint-unused-result-off/` -- flag not passed; no warning.
+- `tests/fixtures/lint-unused-result-question/` -- a `?`-wrapped result call
+  in statement position does **not** warn (resolved OQ#3). The `?` lowering
+  binds its operand via `(let [__q_N expr] ...)` at `elab_forms.c:2307`, so the
+  call is never in statement position; this fixture pins that no warning fires.
+  No elaborator carve-out is needed -- the let-binding shields it.
 
 ### Guide updates
 
@@ -295,6 +315,13 @@ row 4 of the **Deferred** table.
 - Per-call escape: an immediately-preceding `;; #lint-panic-allow` comment
   silences a single call.
 - Off by default; `--lint-panic` opts in.
+- **`*-unwrap` soft-deprecation (resolved OQ#1):** `result-unwrap` and
+  `option-unwrap` are flagged *specifically* as panic sites here -- they are
+  already in the panic-site set above, but the diagnostic text calls out the
+  `*-must` alternative (`TUR-W0xxx: panic call site outside allow-list; prefer
+  result-must / option-must`). This is the soft-deprecation lever: no removal,
+  no breaking change, just a lint nudge consistent with the guide's existing
+  steer toward `*-must`.
 
 ### Tests
 
@@ -303,6 +330,8 @@ row 4 of the **Deferred** table.
 - `tests/fixtures/lint-panic-call-allow/` -- per-call allow.
 - `tests/fixtures/lint-panic-asserts/` -- contract macros warn.
 - `tests/fixtures/lint-panic-off/` -- no flag, no warning.
+- `tests/fixtures/lint-panic-unwrap/` -- `(result-unwrap ...)` / `(option-unwrap
+  ...)` warn with the `prefer *-must` text (resolved OQ#1 soft-deprecation).
 
 ### Guide updates
 
@@ -451,21 +480,39 @@ phases that depend on it.
 
 ---
 
-## Open Questions
+## Open Questions (resolved 2026-06-02)
 
-1. Should `result-unwrap` and `option-unwrap` be deprecated once
-   `result-must` / `option-must` exist with consistent panic semantics? The
-   current guide already steers callers toward `*-must`. A `--lint-panic`
-   warning on `*-unwrap` specifically could be the soft-deprecation lever.
-2. `catch-unwind` payload representation: today the runtime stores a
-   `tur_panic_payload` pointer in the `err` slot of a `result`. Should the
-   stdlib surface expose this directly, or wrap it in a `Panic` opaque type
-   to prevent accidental dereferencing? The plan above assumes opaque
-   wrapping via `panic-payload-*` accessors.
-3. `--warn-unused-result` semantics for the `?` lowering: the lowered
-   `(let [__q expr] ...)` consumes `expr`, so the warning should never fire
-   on a `?`-wrapped call. Confirm during R6a implementation; add a fixture
-   if not.
+1. **Should `result-unwrap` / `option-unwrap` be soft-deprecated in favor of
+   `*-must`?** **Resolved: lint-only soft-deprecation.** `--lint-panic` (Phase
+   R6b) flags `*-unwrap` call sites *specifically* -- on top of the general
+   panic-site warning -- so migration is nudged without any breaking change or
+   removal. The guide already steers callers toward `*-must`. See the R6b
+   addendum below.
+2. **`catch-unwind` payload representation -- raw pointer or opaque wrapper?**
+   **Resolved: opaque `Panic` wrapper.** The stdlib surface introduces
+   `(defopaque Panic :ptr<void>)`; `catch-unwind` returns `Result<int, Panic>`
+   and the `panic-payload-*` accessors take a `:Panic` (not a raw
+   `:ptr<void>`), preventing accidental dereferencing. This matches the Phase
+   R2 stdlib sketch -- the accessor signatures below are updated from
+   `:ptr<void>` to `:Panic` accordingly.
+3. **`--warn-unused-result` interaction with the `?` lowering.** **Resolved:
+   confirmed safe; pin with a fixture.** The lowering already binds the
+   operand via `(let [__q_N expr] ...)` (`elab_forms.c:2307`, comment: "avoid
+   multiple evaluation"), so a `?`-wrapped call is never in statement position
+   and the warning cannot fire. No elaborator change is needed; R6a adds
+   `tests/fixtures/lint-unused-result-question/` to lock this in.
+
+### Bonus finding (resolved 2026-06-02): `*-must` bypass `tur_panic`
+
+Audit turned up that `result-must` / `result-must-msg` / `option-must` /
+`option-expect` are natives in `src/main.c` (e.g. `native_result_must` at
+`src/main.c:4989`) that call `_exit(1)` **directly**, not via `tur_panic`.
+This contradicts the guide's claim (error-handling-guide.md:86-87, 219-220)
+that the `*-must` family yields "the standard panic message format and
+double-panic guard" -- and, more importantly, it makes them **uncatchable by
+`catch-unwind`**. **Resolved: fold the fix into Phase R2.** Reroute the four
+`*-must`/`*-expect` natives through `tur_panic_with` so they are catchable and
+the guide text becomes accurate. See the R2 addendum below.
 
 ---
 
