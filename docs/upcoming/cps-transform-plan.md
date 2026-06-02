@@ -8,10 +8,15 @@
 > root prompt) done (2026-06-02, standalone machine)**; **CPS6 (retire the
 > capture ceiling on the CPS path) done (2026-06-02)**; **CPS7 (benchmarks /
 > perf gates / docs) done (2026-06-02)**; **CPS8 (codegen wiring for base
-> delimited control) done (2026-06-02)**. **CPS0--CPS8 implemented**; base
-> `reset`/`shift`/`shift0` now execute on this substrate in emitted code
-> (`emit_cps.c`), while `call/cc*`/`serial-*`/undelimited `call/cc` remain the
-> next increment (see CPS8 and the Status summary). This is the substrate that
+> delimited control + undelimited `call/cc`/`escape`) done (2026-06-02)**;
+> **CPS9 (cloneable continuations with captured context on the DK machine) done
+> (2026-06-02)**. **CPS0--CPS9 implemented**; base `reset`/`shift`/`shift0`,
+> undelimited `call/cc`/`escape`, and now `cloneable-reset`/`cloneable-shift`
+> (capturing the delimited *context* and replaying it multi-shot via
+> `dk_invoke`) execute on this substrate in emitted code (`emit_cps.c`), while
+> `serial-*` and the `call/cc*` fresh-reset sugar (whose captured continuation
+> is trivial/empty-context) remain the next increment (see CPS8/CPS9 and the
+> Status summary). This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -514,12 +519,71 @@ compiled to a run on the multi-prompt `DK` machine (`dk_run` / `dk_prompt` /
   (CC5 ungating is a follow-up); the continuation is resumed via the
   `tur_escape_resume` builtin (the proven `call/cc*` handle pattern) -- direct
   `(k v)` application sugar and the `cont<T>` parameter typing (CC4) remain.
-- **Remaining (next increment).** `call/cc*` (cloneable/multi-shot via
-  `dk_invoke`) and `serial-*` (chain-walk marshaling, CPS5.4) still use their
-  existing lowerings. They are the natural follow-on: the multi-shot machinery
-  already exists in the substrate (`dk_invoke`); what remains is reifying a
-  resumable sub-continuation in emitted code (env capture per frame), which the
-  abortive shift and one-shot upward escape do not need.
+- **Remaining (next increment) -- partly addressed by CPS9.** Reifying a
+  *resumable* sub-continuation in emitted code (the piece the abortive shift and
+  one-shot upward escape do not need) is delivered by **CPS9** for
+  `cloneable-reset`/`cloneable-shift` with a captured delimited context. What
+  still uses the legacy lowering: `serial-*` (chain-walk marshaling, CPS5.4) and
+  the `call/cc*` *sugar* -- which desugars to `(cloneable-reset (cloneable-shift
+  f 0))`, a freshly-installed inner reset whose captured continuation is empty
+  (trivial), so it stays on the legacy path. Capturing up to an *enclosing*
+  cloneable-reset (the real call/cc* semantics) is the natural follow-on now
+  that the resumable-sub machinery exists (CPS9).
+
+## Phase CPS9 -- Cloneable continuations with captured context on the DK machine  -- **DONE 2026-06-02**
+
+The headline "next increment" from CPS8: re-point cloneable continuations onto
+the multi-prompt `DK` machine so a captured continuation actually reifies the
+*delimited context* -- the frames between the `cloneable-shift` and its
+`cloneable-reset` -- and replays it, **multi-shot**, via `dk_invoke`.
+
+**Why this was needed.** Before CPS9 the emitted cloneable continuation was
+trivial: the captured "rest of the computation" was a no-op `__cont_fn`
+(`return __value`). So `(cloneable-reset (+ 10 (cloneable-shift k ...)))` lost
+the `+ 10` on resume, and with the shift nested inside an operand the legacy
+path did not even compile (it referenced an undeclared `tur_current_reset_ctx`,
+because `cps_expr_contains_cloneable_shift` does not look inside builtins). The
+interpreter already captured context correctly; CPS9 brings the **compiled**
+path up to the same semantics on the unbounded DK substrate.
+
+**Implementation.** `src/compiler/emit_cps.c` (`emit_cps_cloneable_reset` and
+the `emit_cps_cloneable_bridge_prelude`), hooked from
+`emit_effects_cloneable_reset` and gated in `emit_module.c`. The key
+realization is that the *existing* emitted `tur_cloneable_cont` machinery is
+reused wholesale: the reified sub-continuation chain rides in the cont's `env`,
+with a DK-invoking `cont_fn` (`__dk_cont_fn` -> `dk_invoke`), a clone that
+copies the chain (`__dk_env_clone` -> `dk_copy_range`), and a drop that frees it
+(`__dk_env_drop` -> `dk_free`). `resume`/`clone`/`drop` are unchanged;
+**multi-shot falls out of `dk_invoke`'s internal copy** (resuming the same
+handle repeatedly is safe).
+
+- **CPS9.1 -- Context reification.** The delimited context is lambda-lifted into
+  `DK` frames: each enclosing single-hole integer binary op (`+`, `-`, `*`)
+  becomes a `DKFrame` (`static intptr_t __cc_ctx_N(intptr_t env, intptr_t v)`),
+  with the non-hole operand captured into the frame env. Operands are pure int
+  expressions evaluated **once** at capture time and reused on every resume --
+  the standard delimited-control semantics. *Done:* `cl_collect_context` walks
+  the reset body to the shift; frames are wrapped outermost-first so the
+  innermost runs first on resume (inside-out).
+- **CPS9.2 -- The captured sub as a cloneable cont.** At the reset the body runs
+  on a `dk_shift(1, __cc_body_N, fenv, <frames> -> dk_prompt(1, dk_done()))`
+  chain via `dk_run`. The shift body (`__cc_body_N`) copies the captured sub
+  (`dk_copy_range`), wraps it in a `tur_cloneable_cont` (DK env + the bridge fn
+  pointers), and hands it to the receiver `f`; `f`'s return value becomes the
+  reset's value. *Done.*
+- **CPS9.3 -- Selective + safe fallback.** A pure `cl_can_lower` feasibility
+  check gates the path: it fires only for a **non-empty** supported context
+  around exactly one `cloneable-shift` whose receiver has no live captures and
+  whose result is intptr-safe (int). Everything else (including every existing
+  empty-context fixture, e.g. `call-cc-star`, `cloneable-basic`,
+  `cloneable-multi-resume`, and the RC/clone/defer fixtures) returns NULL and
+  falls back to the legacy lowering, **byte-identical** -- no snapshot
+  regenerated, full suite green. *Done.*
+- **CPS9.4 -- Executing test.** `tests/fixtures/cloneable-context-multishot/`
+  builds and runs five captured-context cases (`+`, `*`, nested `* (+ ...)`, `-`
+  with the hole on the right, and a single handle resumed three times) and
+  asserts the values (`23 6 46 197 3111`) -- exactly the context-replaying
+  multi-shot semantics the compiled path previously lacked.
 
 ---
 
@@ -539,18 +603,20 @@ pipeline and the full fixture suite green at every step:
 | CPS5 | Multi-prompt machine + implicit root prompt | standalone runtime (`cps_prompt`) | `tur_cps_prompt_unit` |
 | CPS6 | Retire ceiling on the CPS path | runtime docs/scoping | grep + CPS4.4 |
 | CPS7 | Perf gate (identical snapshots) + bench + docs | doc/bench | suite + 43 Mstep/s bench |
-| CPS8 | Codegen wiring: base reset/shift/shift0 on the DK machine | live codegen (`emit_cps`) | `continuation-substrate` fixture + regen'd base-shift snapshots |
+| CPS8 | Codegen wiring: base reset/shift/shift0 (+ undelimited call/cc/escape) on the DK machine | live codegen (`emit_cps`) | `continuation-substrate` fixture + regen'd base-shift snapshots |
+| CPS9 | Cloneable continuations with captured context, multi-shot via `dk_invoke` | live codegen (`emit_cps`) | `cloneable-context-multishot` fixture (legacy fallback keeps existing snapshots) |
 
-**Codegen wiring -- CPS8, landed (base delimited control).** The remaining
-piece called out under CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited
-lowerings off the legacy runtime and onto this substrate -- is implemented for
-**base** `reset`/`shift`/`shift0` (the `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`
-nodes). See [CPS8](#phase-cps8----codegen-wiring-base-delimited-control----done-2026-06-02)
-below. `call/cc*` (cloneable, multi-shot), `serial-*`, and undelimited
-`call/cc` (root-prompt capture) remain on their existing lowerings -- the
-honest next increment, scoped in CPS8's "Remaining" note. Because base
-delimited control now executes on the DK machine, the relevant exit criteria
-are met for that operator set; the rest stay open.
+**Codegen wiring -- CPS8/CPS9, landed.** The remaining piece called out under
+CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited lowerings off the legacy
+runtime and onto this substrate -- is implemented for **base**
+`reset`/`shift`/`shift0` (CPS8), **undelimited `call/cc`/`escape`** (CPS8.5),
+and **cloneable continuations with a captured delimited context** (CPS9:
+`cloneable-reset`/`cloneable-shift`, multi-shot via `dk_invoke`). What remains
+on the legacy lowering: `serial-*` (chain-walk marshaling) and the `call/cc*`
+*sugar* (a fresh inner reset -> empty/trivial captured continuation). Because
+base delimited control, undelimited capture, and context-capturing multi-shot
+all execute on the DK machine, the relevant exit criteria are met for those
+operator sets; `serial-*` and `call/cc*`-up-to-an-enclosing-reset stay open.
 
 ---
 
@@ -559,12 +625,16 @@ are met for that operator set; the rest stay open.
 - Base `reset`/`shift`/`shift0` execute on the CPS substrate with no semantic
   change (CPS8: `continuation-basic`/`-advanced`/`shift-result-typing`/
   `shift0-result-typing` snapshots regenerated and green; `continuation-substrate`
-  asserts the runtime values). **Done.** `call/cc*` and serial-continuation
-  fixtures still run on their existing lowerings -- the next increment.
+  asserts the runtime values). **Done.** Cloneable continuations with a captured
+  context also run on the substrate (CPS9: `cloneable-context-multishot`).
+  `serial-*` and the `call/cc*` fresh-reset sugar still run on their existing
+  lowerings -- the next increment.
 - A continuation captured across a call depth far greater than 16 captures and
   resumes correctly (the fiber path's `NULL`-on-overflow no longer applies).
-  *Substrate-ready (`dk_*` is unbounded by construction); reached by emitted
-  code once a resumable sub-continuation is reified (post-CPS8 increment).*
+  **Done in emitted code (CPS8.5/CPS9):** `escape-deep-capture` captures and
+  resumes from 5000 frames deep, and CPS9 reifies a *resumable* delimited
+  sub-continuation in emitted code (a `DK` chain), replayed multi-shot via
+  `dk_invoke` -- both unbounded by construction (`dk_*` has no frame ceiling).
 - An implicit root prompt exists around `main`; an undelimited `call/cc` with no
   explicit `reset` captures to it and resumes. **Done (CPS8.5):** `(call/cc f)`/
   `(escape f)` capture a real one-shot continuation against an implicit

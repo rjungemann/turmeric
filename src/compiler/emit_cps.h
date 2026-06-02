@@ -58,4 +58,20 @@ char *emit_cps_callcc(EmitCtx *ctx, Buf *body, const Expr *e);
  * caller to fall back to the legacy lowering (plain emit_value of the body). */
 char *emit_cps_reset(EmitCtx *ctx, Buf *body, const Expr *e);
 
+/* CPS9: true iff `program` has a (cloneable-reset ...) whose body is a
+ * supported delimited context around a cloneable-shift -- the gate for
+ * emitting the DK machine + the cloneable<->DK bridge for cloneable conts. */
+bool emit_cps_program_uses_cloneable_dk(const Expr *program);
+
+/* CPS9: emit the cloneable-continuation <-> DK bridge (__dk_cont_fn /
+ * __dk_env_clone / __dk_env_drop). Call once, after both the cloneable
+ * runtime and the DK machine prelude, gated on the predicate above. */
+void emit_cps_cloneable_bridge_prelude(Buf *out);
+
+/* CPS9: lower (cloneable-reset CTX[cloneable-shift f v]) onto the DK machine,
+ * reifying the delimited context CTX as DK frames and the captured
+ * sub-continuation as a multi-shot cloneable cont. Returns the C expression
+ * holding the result, or NULL to fall back to the legacy lowering. */
+char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e);
+
 #endif

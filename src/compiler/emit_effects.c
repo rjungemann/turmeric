@@ -1057,6 +1057,15 @@ char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
      * Fallback: body contains no shift -- just evaluate and return body value.
      */
     const Expr *rb = e->as.cloneable_reset_.body;
+
+    /* cps-transform-plan (CPS9): when the reset body wraps a cloneable-shift in
+     * a supported delimited context, lower onto the DK multi-prompt machine so
+     * the captured continuation reifies and replays that context (multi-shot
+     * via dk_invoke). Outside that subset emit_cps_cloneable_reset returns NULL
+     * and we fall back to the legacy lowering below (byte-identical). */
+    char *cps = emit_cps_cloneable_reset(ctx, body, e);
+    if (cps) return cps;
+
     if (rb->kind == EX_CLONEABLE_SHIFT) {
         /* Full CPS: shift is the entire reset body (Case 1 -- trivial continuation). */
         const Expr *shift = rb;

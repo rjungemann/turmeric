@@ -22,8 +22,10 @@
 #include "emit_cps.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "emit_internal.h"
+#include "builtins.h"
 #include "types.h"
 
 /* ---- program scan: does it use base delimited control? ---------------- */
@@ -442,6 +444,319 @@ void emit_cps_callcc_prelude(Buf *out) {
 "    longjmp(cc->buf, 1);\n"
 "    return 0; /* unreachable */\n"
 "}\n"
+"\n");
+}
+
+/* =========================================================================
+ * CPS9 (cps-transform-plan): cloneable continuations on the DK machine.
+ *
+ * The headline "next increment" called out in CPS8: re-point cloneable
+ * continuations (cloneable-reset / cloneable-shift, the substrate behind
+ * call/cc*) onto the multi-prompt DK machine so a captured continuation
+ * actually reifies the *delimited context* (the frames between the shift and
+ * its reset) and replays it -- multi-shot -- via dk_invoke.
+ *
+ * Before this, the emitted cloneable continuation was trivial: the captured
+ * "rest of the computation" was a no-op `return __value`, so a context like
+ * (cloneable-reset (+ 10 (cloneable-shift k ...))) lost the `+ 10` on resume
+ * (and, with the shift nested inside an operand, did not even compile). Now
+ * the context is lambda-lifted into DK frames; the cloneable continuation
+ * stores the reified sub-continuation chain as its env, with a DK-invoking
+ * cont_fn -- reusing the existing tur_cloneable_cont machinery wholesale
+ * (resume/clone/drop are unchanged; multi-shot is dk_invoke's internal copy).
+ *
+ * Supported context subset (anything else falls back to the legacy lowering,
+ * keeping its emitted C byte-identical): a non-empty chain of single-hole
+ * integer binary ops (+, -, *) wrapping exactly one cloneable-shift whose
+ * receiver has no live captures, with an intptr-safe (int) result. The
+ * non-hole operands are pure int expressions, evaluated once at capture time
+ * and reused on every resume (the standard delimited-control semantics).
+ * ========================================================================= */
+
+#define CL_MAX_CTX_FRAMES 32
+
+typedef struct {
+    const char *c_op;     /* "+", "-", "*" */
+    bool        hole_left;/* true iff args[0] is the hole (reaches the shift) */
+    const Expr *other;    /* the non-hole operand (captured into the frame env) */
+} ClFrame;
+
+/* Boundary-aware: can `e` dynamically reach a cloneable-shift bound to the
+ * enclosing cloneable-reset? Stops at nested resets/shifts of any flavor and
+ * at fn boundaries (those self-delimit or are not our shift). */
+static bool cl_reaches_cloneable_shift(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CLONEABLE_SHIFT:
+            return true;
+        case EX_CLONEABLE_RESET:
+        case EX_RESET:
+        case EX_SERIAL_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+        case EX_SERIAL_SHIFT:
+        case EX_CALLCC:
+        case EX_FN:
+        case EX_FN_DEF:
+        case EX_CLOSURE:
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cl_reaches_cloneable_shift(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (cl_reaches_cloneable_shift(e->as.call_.args[i])) return true;
+            return false;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cl_reaches_cloneable_shift(e->as.let_.bindings[i].init)) return true;
+            return cl_reaches_cloneable_shift(e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cl_reaches_cloneable_shift(e->as.do_.items[i])) return true;
+            return false;
+        case EX_IF:
+            return cl_reaches_cloneable_shift(e->as.if_.cond) ||
+                   cl_reaches_cloneable_shift(e->as.if_.then_) ||
+                   cl_reaches_cloneable_shift(e->as.if_.else_or_null);
+        case EX_RETURN:
+            return cl_reaches_cloneable_shift(e->as.return_.value);
+        case EX_SET:
+            return cl_reaches_cloneable_shift(e->as.set_.value);
+        default:
+            return false;
+    }
+}
+
+static bool cl_op_supported(const char *op) {
+    return op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
+                  strcmp(op, "*") == 0);
+}
+
+/* Walk the reset body down to its single cloneable-shift, recording each
+ * enclosing single-hole int binop as a context frame (frames[0] = outermost).
+ * Returns the cloneable-shift expr and *n_out frames (>= 0), or NULL if the
+ * body is not a supported context chain. */
+static const Expr *cl_collect_context(const Expr *rb, ClFrame *frames,
+                                      uint32_t *n_out) {
+    uint32_t n = 0;
+    const Expr *cur = rb;
+    while (cur && cur->kind == EX_BUILTIN) {
+        const BuiltinSpec *spec = cur->as.builtin.spec;
+        if (!spec || cur->as.builtin.n != 2) return NULL;
+        if (!cl_op_supported(spec->c_op)) return NULL;
+        if (cur->type.kind != TY_INT) return NULL;
+        const Expr *a0 = cur->as.builtin.args[0];
+        const Expr *a1 = cur->as.builtin.args[1];
+        bool h0 = cl_reaches_cloneable_shift(a0);
+        bool h1 = cl_reaches_cloneable_shift(a1);
+        if (h0 == h1) return NULL;                 /* need exactly one hole */
+        const Expr *hole  = h0 ? a0 : a1;
+        const Expr *other = h0 ? a1 : a0;
+        if (other->type.kind != TY_INT) return NULL;
+        if (cl_reaches_cloneable_shift(other)) return NULL;
+        if (expr_contains_return_or_throw(other)) return NULL;
+        if (n >= CL_MAX_CTX_FRAMES) return NULL;
+        frames[n].c_op = spec->c_op;
+        frames[n].hole_left = h0;
+        frames[n].other = other;
+        n++;
+        cur = hole;
+    }
+    if (cur && cur->kind == EX_CLONEABLE_SHIFT) {
+        *n_out = n;
+        return cur;
+    }
+    return NULL;
+}
+
+/* Pure feasibility check (NO emission): is this cloneable-reset lowerable onto
+ * the DK machine? Requires a non-empty supported context (so existing
+ * empty-context fixtures stay on the legacy path, byte-identical). */
+static bool cl_can_lower(const Expr *e) {
+    if (!e || e->kind != EX_CLONEABLE_RESET) return false;
+    if (!ty_intptr_safe(e->type.kind)) return false;
+    ClFrame frames[CL_MAX_CTX_FRAMES];
+    uint32_t nf = 0;
+    const Expr *shift = cl_collect_context(e->as.cloneable_reset_.body, frames, &nf);
+    if (!shift || nf == 0) return false;
+    if (shift->as.cloneable_shift_.n_live_captures != 0) return false;
+    if (!shift->as.cloneable_shift_.k_fn) return false;
+    return true;
+}
+
+/* Emit a context frame fn for op/hole-side. The frame receives the captured
+ * non-hole operand as `env` and the resumed value as `value`. */
+static void cl_emit_frame_fn(Buf *hb, const char *name, const ClFrame *f) {
+    const char *expr;
+    if (strcmp(f->c_op, "+") == 0)      expr = "env + value";
+    else if (strcmp(f->c_op, "*") == 0) expr = "env * value";
+    else /* "-" */                      expr = f->hole_left ? "value - env"
+                                                            : "env - value";
+    buf_printf(hb,
+        "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+        name, expr);
+}
+
+char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
+    if (!cl_can_lower(e)) return NULL;
+    if (!ctx->pending_handler_fns) return NULL;   /* need file scope for helpers */
+
+    ClFrame frames[CL_MAX_CTX_FRAMES];
+    uint32_t nf = 0;
+    const Expr *shift = cl_collect_context(e->as.cloneable_reset_.body, frames, &nf);
+    const Expr *k_fn = shift->as.cloneable_shift_.k_fn;
+    Buf *hb = ctx->pending_handler_fns;
+    int id = ctx->tmp_n++;
+
+    /* 1. Context frame fns (file scope). */
+    char frame_names[CL_MAX_CTX_FRAMES][48];
+    for (uint32_t i = 0; i < nf; i++) {
+        snprintf(frame_names[i], sizeof frame_names[i], "__cc_ctx_%d_%u", id, i);
+        cl_emit_frame_fn(hb, frame_names[i], &frames[i]);
+    }
+
+    /* 2. The shift body (file scope): wrap the captured sub-continuation in a
+     *    cloneable_cont (env = an owned DK copy) and hand it to the receiver f.
+     *    f's return value becomes the reset's value. */
+    char body_name[48];
+    snprintf(body_name, sizeof body_name, "__cc_body_%d", id);
+    buf_printf(hb,
+        "static intptr_t %s(intptr_t env, DK *subk) {\n"
+        "    DK *__cap = dk_copy_range(subk, NULL);\n"
+        "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc("
+        "__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n",
+        body_name);
+    if (k_fn->kind == EX_CLOSURE) {
+        struct Closure *closure = k_fn->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        buf_printf(hb,
+            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)__k);\n}\n",
+            thunk_name);
+        free(thunk_name);
+    } else {
+        buf_printf(hb,
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)"
+            "((int64_t)(intptr_t)__k);\n}\n");
+    }
+
+    /* 3. At the reset site: evaluate the non-hole operands (once, in source
+     *    order) and the receiver's env, build the DK chain, and run it. */
+    char *op_vals[CL_MAX_CTX_FRAMES];
+    for (uint32_t i = 0; i < nf; i++)
+        op_vals[i] = emit_value(ctx, body, frames[i].other);
+    char *k_fn_val = emit_value(ctx, body, k_fn);
+
+    char *chain = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "DK *%s = dk_prompt(1, dk_done());\n", chain);
+    /* Wrap outermost-first so the innermost frame ends up adjacent to the
+     * shift and runs first on resume (inside-out evaluation). */
+    for (uint32_t i = 0; i < nf; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = dk_frame(%s, (intptr_t)(%s), %s);\n",
+                   chain, frame_names[i], op_vals[i], chain);
+        free(op_vals[i]);
+    }
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);\n",
+               chain, body_name, k_fn_val, chain);
+    free(k_fn_val);
+
+    const char *rty = emit_type_c_name(ctx, e->type);
+    char *result = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s = (%s)dk_run(%s, 0);\n", rty, result, rty, chain);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "dk_free(%s);\n", chain);
+    free(chain);
+    return result;
+}
+
+/* Program scan: does any cloneable-reset lower onto the DK machine? Gates the
+ * DK runtime prelude + the cloneable<->DK bridge. Mirrors cl_can_lower. */
+static bool uses_cloneable_dk(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_CLONEABLE_RESET && cl_can_lower(e)) return true;
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (uses_cloneable_dk(e->as.program.items[i])) return true;
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && uses_cloneable_dk(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && uses_cloneable_dk(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   uses_cloneable_dk(e->as.closure_.closure->fn->body);
+        case EX_CLONEABLE_RESET:
+            return uses_cloneable_dk(e->as.cloneable_reset_.body);
+        case EX_RESET:
+            return uses_cloneable_dk(e->as.reset_.body);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (uses_cloneable_dk(e->as.let_.bindings[i].init)) return true;
+            return uses_cloneable_dk(e->as.let_.body);
+        case EX_IF:
+            return uses_cloneable_dk(e->as.if_.cond) ||
+                   uses_cloneable_dk(e->as.if_.then_) ||
+                   uses_cloneable_dk(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (uses_cloneable_dk(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return uses_cloneable_dk(e->as.while_.cond) ||
+                   uses_cloneable_dk(e->as.while_.body);
+        case EX_SET:    return uses_cloneable_dk(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && uses_cloneable_dk(e->as.def_.init);
+        case EX_RETURN: return e->as.return_.value && uses_cloneable_dk(e->as.return_.value);
+        case EX_DEFER:  return uses_cloneable_dk(e->as.defer_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (uses_cloneable_dk(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (uses_cloneable_dk(e->as.call_.args[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+bool emit_cps_program_uses_cloneable_dk(const Expr *program) {
+    return uses_cloneable_dk(program);
+}
+
+/* Bridge: a cloneable continuation whose captured context is a DK chain.
+ * Reuses the emitted tur_cloneable_cont struct -- the DK chain rides in `env`,
+ * resume dispatches to dk_invoke (multi-shot), clone copies the chain, drop
+ * frees it. Emitted after both the cloneable runtime and the DK machine. */
+void emit_cps_cloneable_bridge_prelude(Buf *out) {
+    buf_puts(out,
+"/* cps-transform-plan (CPS9): cloneable continuation <-> DK bridge.\n"
+" * The reified delimited context (a DK chain) rides in the cloneable cont's\n"
+" * env; resume = dk_invoke (multi-shot, copies internally), clone = chain\n"
+" * copy, drop = dk_free. Reuses the existing tur_cloneable_cont machinery. */\n"
+"static int64_t __dk_cont_fn(void *env, int64_t value) {\n"
+"    return (int64_t)dk_invoke((DK *)env, (intptr_t)value);\n"
+"}\n"
+"static void *__dk_env_clone(const void *env) {\n"
+"    return (void *)dk_copy_range((const DK *)env, NULL);\n"
+"}\n"
+"static void __dk_env_drop(void *env) { dk_free((DK *)env); }\n"
 "\n");
 }
 
