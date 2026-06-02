@@ -48,6 +48,7 @@ see the task plan for progress.
 
 ## Getting Started
 
+- **[syntax-guide.md](syntax-guide.md)** -- How to read and write Turmeric: s-expression and sweet-expression syntax, indentation, and a form cheat sheet
 - **[quickstart.md](quickstart.md)** -- Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
 - **[repl-tutorial.md](repl-tutorial.md)** -- 22-step interactive tutorial to follow at `tur repl` or the web REPL
 
