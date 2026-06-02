@@ -21,6 +21,14 @@ need a "file changed, react" loop.
            :subdir "spices/watch"}
 }
 ```
+```sweet-exp
+:spices
+{
+  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
+           :ref    "watch-v0.2.0"
+           :subdir "spices/watch"}
+}
+```
 
 ---
 
@@ -59,6 +67,18 @@ need a "file changed, react" loop.
     (watch-close w)
     0))
 ```
+```sweet-exp
+import watch/event :refer [watch-event-kind watch-event-path watch-event-free
+                             watch-kind-write watch-kind-rename]
+import watch/opts :refer [default-watch-opts]
+import watch/watch :refer [watch-open-one watch-close watch-next]
+defn main [] :int
+  let [opts (default-watch-opts)
+        w    (watch-open-one "notes.md" opts)]
+    loop([] let([ev (watch-next w -1)] ;; block indefinitely if(=(ev 0) 0 do(println(str-concat("changed: " watch-event-path(ev))) watch-event-free(ev) recur()))))
+    watch-close(w)
+    0
+```
 
 ---
 
@@ -87,6 +107,19 @@ need a "file changed, react" loop.
     (watch-close w)
     0))
 ```
+```sweet-exp
+import watch/event :refer [watch-event-path watch-event-kind
+                             watch-kind->cstr watch-event-free]
+import watch/opts :refer [watch-opts-make watch-opts-free]
+import watch/watch :refer [watch-open-tree watch-close watch-next]
+defn main [] :int
+  let [opts (watch-opts-make 1 150 1 0 1)  ;; recursive, 150 ms debounce
+        w    (watch-open-tree "src/" opts)]
+    watch-opts-free(opts)
+    loop([] let([ev (watch-next w -1)] if(=(ev 0) 0 do(println(str-concat(watch-kind->cstr(watch-event-kind(ev)) " " watch-event-path(ev))) watch-event-free(ev) recur()))))
+    watch-close(w)
+    0
+```
 
 ---
 
@@ -104,6 +137,16 @@ need a "file changed, react" loop.
 ;; Release the watcher
 (watch-close w)
 ```
+```sweet-exp
+;; Watch a single file or directory
+watch-open-one(path opts)
+;; returns watcher handle, or 0 on failure
+;; Watch a directory tree recursively
+watch-open-tree(dir opts)
+;; returns watcher handle
+;; Release the watcher
+watch-close(w)
+```
 
 ### Options
 
@@ -116,6 +159,15 @@ need a "file changed, react" loop.
 (watch-opts-make 1 200 1 0 0)
 
 (watch-opts-free opts)   ;; release options handle
+```
+```sweet-exp
+;; Use the defaults (150 ms debounce, non-recursive)
+default-watch-opts
+;; Construct custom options
+;; watch-opts-make recursive debounce-ms coalesce? reserved periodic?
+watch-opts-make(1 200 1 0 0)
+watch-opts-free(opts)
+;; release options handle
 ```
 
 | Parameter | Type | Default | Meaning |
@@ -135,6 +187,14 @@ need a "file changed, react" loop.
 ;; Drain all pending events without blocking
 (watch-drain w)              ;; returns a cons list of event handles (may be 0)
 ```
+```sweet-exp
+;; Block until the next event (timeout-ms = -1 blocks forever)
+watch-next(w timeout-ms)
+;; returns event handle, or 0 on timeout
+;; Drain all pending events without blocking
+watch-drain(w)
+;; returns a cons list of event handles (may be 0)
+```
 
 ### Event accessors
 
@@ -142,6 +202,14 @@ need a "file changed, react" loop.
 (watch-event-kind  ev)        ;; event kind constant (see below)
 (watch-event-path  ev)        ;; file path that changed
 (watch-event-free  ev)        ;; release the event handle
+```
+```sweet-exp
+watch-event-kind(ev)
+;; event kind constant (see below)
+watch-event-path(ev)
+;; file path that changed
+watch-event-free(ev)
+;; release the event handle
 ```
 
 ### Event kinds
@@ -154,6 +222,20 @@ need a "file changed, react" loop.
 (watch-kind-none)     ;; no change (returned only on timeout/drain miss)
 
 (watch-kind->cstr kind)  ;; human-readable string for a kind constant
+```
+```sweet-exp
+watch-kind-write
+;; file content changed
+watch-kind-create
+;; file created
+watch-kind-delete
+;; file deleted
+watch-kind-rename
+;; file renamed / moved
+watch-kind-none
+;; no change (returned only on timeout/drain miss)
+watch-kind->cstr(kind)
+;; human-readable string for a kind constant
 ```
 
 ---
@@ -183,6 +265,15 @@ a burst of events into one batched notification:
             (recur))
           (recur)))))
   (debounce-batch-free batch))
+```
+```sweet-exp
+import watch/debounce :refer [debounce-batch-new debounce-batch-add
+                               debounce-batch-ready? debounce-batch-drain
+                               debounce-batch-free]
+let [batch (debounce-batch-new 300)]
+  ;; 300 ms window
+  loop([] let([ev (watch-next w 50)] ;; 50 ms poll step if(not=(ev 0) do(debounce-batch-add(batch ev) recur()) ;; No event -- check if debounce window elapsed if(debounce-batch-ready?(batch) let([paths (debounce-batch-drain batch)] ;; paths is a cons list of changed cstr paths rebuild!(paths) recur()) recur()))))
+  debounce-batch-free(batch)
 ```
 
 ---

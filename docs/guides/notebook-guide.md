@@ -29,6 +29,14 @@ Declare the spice in your project's `build.tur`:
               :subdir "spices/notebook"}
 }
 ```
+```sweet-exp
+:spices
+{
+  "notebook" {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "notebook-v0.1.0"
+              :subdir "spices/notebook"}
+}
+```
 
 Then run `tur add` or `tur build` to fetch and link it.
 
@@ -169,6 +177,11 @@ Cells can advertise image files to the TUI via the image hook convention:
 ;; After generating /tmp/plot.png:
 (image-hook-record-path "/tmp/plot.png")
 ```
+```sweet-exp
+import notebook/image :refer [image-hook-record-path]
+;; After generating /tmp/plot.png:
+image-hook-record-path("/tmp/plot.png")
+```
 
 The TUI reads the advertised paths and displays the images inline using:
 
@@ -265,6 +278,11 @@ image from your preferred TeX engine and embed it via the image pipeline:
 (import notebook/image :refer [image-hook-record-path])
 ;; generate /tmp/eq.png from LaTeX here ...
 (image-hook-record-path "/tmp/eq.png")
+```
+```sweet-exp
+import notebook/image :refer [image-hook-record-path]
+;; generate /tmp/eq.png from LaTeX here ...
+image-hook-record-path("/tmp/eq.png")
 ```
 
 The full list of supported KaTeX functions is at

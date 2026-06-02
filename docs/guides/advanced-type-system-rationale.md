@@ -93,6 +93,9 @@ by `-Xsessions`.
     (send int
       EchoProto)))
 ```
+```sweet-exp
+deftype(EchoProto [] recv(int send(int EchoProto)))
+```
 
 ### Why these features fit
 
@@ -135,6 +138,18 @@ first-class.
 (defn ask-and-add [x :int] :int @ {Ask | e}
   (+ x (perform (Ask))))
 ```
+```sweet-exp
+;; Typed: this function may perform Io and nothing else.
+defn read-file [path:cstr] :cstr
+  @
+  {Io}
+  ...
+;; Effect-polymorphic: works with any effect set e that includes Ask.
+defn ask-and-add [x:int] :int
+  @
+  {Ask|e}
+  +(x perform(Ask()))
+```
 
 ### Why these features fit
 
@@ -171,6 +186,14 @@ separate features but modes of the existing continuation representation.
 
 ;; Intersection: a value that is both Serializable and Printable.
 (defn log-and-save [^Serializable ^Printable x :a] :unit ...)
+```
+```sweet-exp
+;; Union: a value that may be int, cstr, or bool.
+defn print-any [x:(int|cstr|bool)] :unit
+  match(x i(:int) println(i) s(:cstr) println(s) b(:bool) println(if(b "true" "false")))
+;; Intersection: a value that is both Serializable and Printable.
+defn log-and-save [^Serializable^Printablex:a] :unit
+  ...
 ```
 
 ### Why these features fit
@@ -217,6 +240,16 @@ infrastructure) track container dimensions as type-level compile-time integers.
 ;; (mat-mul (Matrix 3 4) (Matrix 5 6))
 ;;   => expected n = 4, got n = 5
 ```
+```sweet-exp
+;; Matrix multiplication: dimensions must be compatible.
+defn mat-mul [a:(Matrixmnfloat)
+b:(Matrixnpfloat)] :
+  Matrix(m p float)
+  ...
+;; Compile-time error if you pass incompatible shapes:
+;; (mat-mul (Matrix 3 4) (Matrix 5 6))
+;;   => expected n = 4, got n = 5
+```
 
 ### Why these features fit
 
@@ -253,6 +286,13 @@ function boundaries.
   (vec/get-unsafe v i))
 
 (defn sqrt [x :{ y :double | (>= y 0) }] :double ...)
+```
+```sweet-exp
+defn vec-get [v:(veca)
+i:{j:int|(and(>=j0)(<j(vec/lenv)))}] :a
+  vec/get-unsafe(v i)
+defn sqrt [x:{y:double|(>=y0)}] :double
+  ...
 ```
 
 ### Why these features fit
@@ -299,6 +339,14 @@ caller is allowed to do with it.
 
 (defn print-it [e :(exists [a] [(Show a)] a)] :unit
   (open e [x] (println (show x))))
+```
+```sweet-exp
+;; A boxed value paired with evidence that its type implements Show.
+defn box-it [x:a] :
+  exists([a] [(Showa)] a)
+  pack(x exists([a] [(Showa)] a))
+defn print-it [e:(exists[a][(Showa)]a)] :unit
+  open(e [x] println(show(x)))
 ```
 
 ### Why these features fit

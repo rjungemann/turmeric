@@ -35,6 +35,16 @@ struct and pass a single options value:
 (defn read-csv [src :cstr opts :CsvOpts] :int
   ...)
 ```
+```sweet-exp
+defstruct CsvOpts [delim       :int   ;; field separator (e.g. 44 = ',')
+   quote       :int   ;; quote char (e.g. 34 = '"')
+   has-header  :int   ;; 1 = first row is header
+   infer-rows  :int   ;; rows to sample for type inference
+   null-str    :cstr  ;; string that represents NULL (e.g. "")
+  ]
+defn read-csv [src :cstr opts :CsvOpts] :int
+  ...
+```
 
 #### Default values via partial application (Haskell-style idiom)
 
@@ -48,6 +58,13 @@ With currying, locking in a default options value is a one-liner:
 (def read-csv-fast (read-csv default-csv-opts))
 
 (read-csv-fast "data.csv")
+```
+```sweet-exp
+def default-csv-opts CsvOpts(44 34 1 100 "")
+;; read-csv-fast is a closure with opts baked in.
+;; Call it with just the filename.
+def read-csv-fast read-csv(default-csv-opts)
+read-csv-fast("data.csv")
 ```
 
 `(read-csv default-csv-opts)` returns a closure `(fn [src :cstr] :int ...)`.
@@ -67,6 +84,16 @@ rest parameter:
 
 (println-all "hello")              ;; rest = nil (0)
 (println-all "a" "b" "c")         ;; rest = cons("b", cons("c", 0))
+```
+```sweet-exp
+defn println-all [first :cstr & rest :cstr] :void
+  println(first)
+  ;; rest is a cons-list of :cstr; walk it with head/tail helpers
+  ...
+println-all("hello")
+;; rest = nil (0)
+println-all("a" "b" "c")
+;; rest = cons("b", cons("c", 0))
 ```
 
 #### Rules for `& rest`
@@ -90,7 +117,13 @@ of `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0`
 
 ```turmeric
 (defn cons-list-sum [lst :int] #{Unsafe} :int
-  ```c
+  ```
+```sweet-exp
+defn cons-list-sum [lst :int]
+  #
+  {Unsafe}
+  :int
+```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
@@ -103,7 +136,13 @@ Or use a pure tail-recursive helper:
 
 ```turmeric
 (defn cons-head [lst :int] #{Unsafe} :int
-  ```c
+  ```
+```sweet-exp
+defn cons-head [lst :int]
+  #
+  {Unsafe}
+  :int
+```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
   return p ? p->head : 0;
@@ -173,6 +212,22 @@ Quick reference:
 (defn fn-name [param :int] :int
   ...)
 ```
+```sweet-exp
+;;; fn-name -- brief one-line summary.
+;;;
+;;; Parameters:
+;;;   param -- description
+;;;
+;;; Returns:
+;;;   description of return value
+;;;
+;;; Example:
+;;;   (fn-name arg)  ; => expected result
+;;;
+;;; Since: Phase B1
+defn fn-name [param :int] :int
+  ...
+```
 
 ---
 
@@ -198,7 +253,11 @@ Key points:
 ```turmeric
 ;; Good:
 (defn file-size [f] :int
-  ```c
+  ```
+```sweet-exp
+;; Good:
+defn file-size [f] :int
+```c
   return (int)ftell((FILE*)f);
   ```)
 

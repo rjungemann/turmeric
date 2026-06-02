@@ -57,6 +57,24 @@ The key primitives are:
       walked (reify-walk x result)]
   (println (term-int-val walked)))  ; => 7
 ```
+```sweet-exp
+import tur/logic :refer [term-int term-var term-nil term-pair
+                           lvar-next subs-empty
+                           lequal succeed fail conjoined disjoined fresh
+                           run-logic first-state reify-walk
+                           term-int-val term-tag logic-walk]
+;; Q: is 5 equal to 5?
+let [results (run-logic 1 (lequal (term-int 5) (term-int 5)))]
+  println(bt-length(results))
+; => 1
+;; Q: what value does x have if x == 7?
+let [x      (term-var (lvar-next))
+      goal   (lequal x (term-int 7))
+      result (run-logic 1 goal)
+      walked (reify-walk x result)]
+  println(term-int-val(walked))
+; => 7
+```
 
 ---
 
@@ -84,6 +102,12 @@ Pairs nest to form lists in the usual cons-cell style:
                      (term-pair (term-int 2) (term-nil)))]
   ...)
 ```
+```sweet-exp
+;; build the list [1, 2, nil]
+let [lst (term-pair (term-int 1)
+                     (term-pair (term-int 2) (term-nil)))]
+  ...
+```
 
 ### Logic variables
 
@@ -94,6 +118,11 @@ global counter `(lvar-next)`:
 (let [x (term-var (lvar-next))
       y (term-var (lvar-next))]
   ...)
+```
+```sweet-exp
+let [x (term-var (lvar-next))
+      y (term-var (lvar-next))]
+  ...
 ```
 
 Prefer `(fresh ...)` (below) over manual `lvar-next` calls — it keeps
@@ -129,11 +158,31 @@ The built-in goal constructors:
 ;; Variable introduction
 (fresh (fn [x] body-goal))        ; create one fresh variable x
 ```
+```sweet-exp
+;; Primitives
+succeed
+; always succeeds
+fail
+; always fails
+lequal(t1 t2)
+; unify t1 and t2
+;; Combination
+conjoined(g1 g2)
+; g1 AND g2 (sequential)
+disjoined(g1 g2)
+; g1 OR  g2 (parallel streams)
+;; Variable introduction
+fresh(fn([x] body-goal))
+; create one fresh variable x
+```
 
 ### Running a goal
 
 ```turmeric
 (run-logic n goal)
+```
+```sweet-exp
+run-logic(n goal)
 ```
 
 Returns a solution list of at most `n` substitutions.  Use helper functions
@@ -143,6 +192,14 @@ to extract results:
 (first-state results)             ; first substitution, or 0
 (reify-walk term results)         ; walk a term through the first substitution
 (bt-length results)               ; number of solutions (from tur/logic, re-exported)
+```
+```sweet-exp
+first-state(results)
+; first substitution, or 0
+reify-walk(term results)
+; walk a term through the first substitution
+bt-length(results)
+; number of solutions (from tur/logic, re-exported)
 ```
 
 ---
@@ -155,6 +212,11 @@ to extract results:
 (let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
   (println (bt-length results)))   ; => 0 (no solutions)
 ```
+```sweet-exp
+let [results (run-logic 1 (lequal (term-int 1) (term-int 2)))]
+  println(bt-length(results))
+; => 0 (no solutions)
+```
 
 ### Disjunction — multiple answers
 
@@ -165,6 +227,15 @@ to extract results:
                                 (lequal x (term-int 3))))
       res (run-logic 5 g)]
   (println (bt-length res)))       ; => 3
+```
+```sweet-exp
+let [x   (term-var (lvar-next))
+      g   (disjoined (lequal x (term-int 1))
+                     (disjoined (lequal x (term-int 2))
+                                (lequal x (term-int 3))))
+      res (run-logic 5 g)]
+  println(bt-length(res))
+; => 3
 ```
 
 ### Fresh variables
@@ -179,6 +250,15 @@ to extract results:
                 (succeed)))))]
   (println (term-int-val (reify-walk x res))))  ; => 42
 ```
+```sweet-exp
+let [res (run-logic 1
+            (fresh (fn [x]
+              (conjoined
+                (lequal x (term-int 42))
+                (succeed)))))]
+  println(term-int-val(reify-walk(x res)))
+; => 42
+```
 
 ### Pair unification
 
@@ -192,6 +272,18 @@ to extract results:
   (println (term-int-val (reify-walk x res)))  ; => 1
   (println (term-int-val (reify-walk y res)))) ; => 2
 ```
+```sweet-exp
+let [x   (term-var (lvar-next))
+      y   (term-var (lvar-next))
+      lhs (term-pair x (term-int 2))
+      rhs (term-pair (term-int 1) y)
+      res (run-logic 1 (lequal lhs rhs))]
+  ;; after unification: x=1, y=2
+  println(term-int-val(reify-walk(x res)))
+  ; => 1
+  println(term-int-val(reify-walk(y res)))
+; => 2
+```
 
 ### Conjunction chain
 
@@ -203,6 +295,13 @@ Build a chain of goals with `conjoined`:
   (if (= (tail gs) 0)
     (head gs)
     (conjoined (head gs) (conjoin-all (tail gs)))))
+```
+```sweet-exp
+;; helper: (conjoin-all gs) folds a list of goals with conjoined
+defn conjoin-all [gs] :ptr<void>
+  if =(tail(gs) 0)
+    head(gs)
+    conjoined(head(gs) conjoin-all(tail(gs)))
 ```
 
 ### Family-tree relations
@@ -229,6 +328,19 @@ Build a chain of goals with `conjoined`:
   ;; walks each solution
   ...)
 ```
+```sweet-exp
+;; Encode people as integers; 0=Alice, 1=Bob, 2=Carol, 3=Dave
+defn parento [parent child] :ptr<void>
+  disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(1))) disjoined(conjoined(lequal(parent term-int(0)) lequal(child term-int(2))) conjoined(lequal(parent term-int(1)) lequal(child term-int(3)))))
+;; grandparento via fresh intermediate variable
+defn grandparento [grand child] :ptr<void>
+  fresh(fn([mid] conjoined(parento(grand mid) parento(mid child))))
+;; Query: who are the grandchildren of Alice (id=0)?
+let [child (term-var (lvar-next))
+      res   (run-logic 10 (grandparento (term-int 0) child))]
+  ;; walks each solution
+  ...
+```
 
 ---
 
@@ -253,6 +365,21 @@ inspect terms:
             (mzero)))
         (mzero)))))                             ; not ground — fail
 ```
+```sweet-exp
+;; goal: t must walk to an integer in the range [lo, hi]
+defn range-goal [t lo hi] :ptr<void>
+  fn [state]
+    let [walked (logic-walk t state)
+          tag    (term-tag walked)]
+      if =(tag 0)
+        ; INT term
+        let [v (term-int-val walked)]
+          if and(>=(v lo) <=(v hi))
+            mreturn(state)
+            mzero()
+        mzero()
+; not ground — fail
+```
 
 ### Reification helpers
 
@@ -271,6 +398,33 @@ tree, walk recursively:
       (= tag 3) "nil"
       :else     "?")))
 ```
+```sweet-exp
+defn reify-term [t subs] :cstr
+  let [walked (logic-walk t subs)
+        tag    (term-tag walked)]
+    cond
+      =
+        tag
+        0
+      int->cstr
+        term-int-val(walked)
+      =
+        tag
+        1
+      "_"
+      =
+        tag
+        2
+      str-concat
+        "("
+        str-concat(reify-term(term-pair-fst(walked) subs) str-concat(" . " str-concat(reify-term(term-pair-snd(walked) subs) ")")))
+      =
+        tag
+        3
+      "nil"
+      :else
+      "?"
+```
 
 ### `conde` macro
 
@@ -285,6 +439,14 @@ The classic miniKanren `conde` is syntactic sugar over nested `disjoined` /
     `(conjoin-all ~(head clauses))
     `(disjoined (conjoin-all ~(head clauses))
                 (conde ~@(tail clauses)))))
+```
+```sweet-exp
+;; (conde [g1 g2 ...] [g3 g4 ...] ...)
+;; each clause is a conjunction; clauses are disjoined
+defmacro conde [& clauses]
+  if =(tail(clauses) 0)
+    conjoin-all(~ head(clauses))
+    disjoined(conjoin-all(~ head(clauses)) conde(~@ tail(clauses)))
 ```
 
 ### Interleaving search
@@ -301,6 +463,16 @@ search replace `mplus` with an interleaving version:
     (let [head-val (bt-head xs)
           rest     (bt-tail xs)]
       (bt-cons head-val (mplus-i ys rest)))))
+```
+```sweet-exp
+;;; mplus-i -- interleaved (BFS) concatenation of two solution streams.
+defn mplus-i [xs ys] :int
+  ;; swap xs and ys for every cons cell so solutions alternate
+  if =(xs 0)
+    ys
+    let [head-val (bt-head xs)
+          rest     (bt-tail xs)]
+      bt-cons(head-val mplus-i(ys rest))
 ```
 
 Then define `disjoined-i` analogously and use it in place of `disjoined`
@@ -324,6 +496,19 @@ table keyed on `(goal-id, substitution)`:
       (let [result (apply-goal (goal-fn args) subs)]
         (set! *memo-table* (hamt-insert *memo-table* key result))
         result))))
+```
+```sweet-exp
+;; memo-table: map from (goal-name × subs-hash) → result-list
+;; Use tur/hamt for the persistent map.
+import tur/hamt :refer [hamt-empty hamt-insert hamt-lookup]
+defn tabled [name goal-fn args subs] :int
+  let [key  (hash-key name args subs)
+        memo (hamt-lookup *memo-table* key)]
+    if option-some?(memo)
+      option-unwrap(memo)
+      let [result (apply-goal (goal-fn args) subs)]
+        set!(*memo-table* hamt-insert(*memo-table* key result))
+        result
 ```
 
 ---

@@ -64,6 +64,13 @@ Unification tries to make two terms identical under a substitution:
 ;;; Returns: (some subst) on success, (none) on failure.
 (defn unify [u v s] ...)
 ```
+```sweet-exp
+;;; unify -- attempt to unify two terms under substitution s.
+;;;
+;;; Returns: (some subst) on success, (none) on failure.
+defn unify [u v s]
+  ...
+```
 
 Cover:
 - Unifying two atoms
@@ -76,12 +83,24 @@ Show the `==` goal constructor that wraps `unify`:
 ```turmeric
 (defn == [u v] ...)
 ```
+```sweet-exp
+defn == [u v]
+  ...
+```
 
 Demonstrate:
 ```turmeric
 (run 1 (q) (== q 3))        ; => (3)
 (run 1 (q) (== 4 3))        ; => ()
 (run 1 (x) (fresh (y) (== x y) (== y 7)))  ; => (7)
+```
+```sweet-exp
+run(1 q() ==(q 3))
+; => (3)
+run(1 q() ==(4 3))
+; => ()
+run(1 x() fresh(y() ==(x y) ==(y 7)))
+; => (7)
 ```
 
 ### Section 4 -- Goals and the goal type
@@ -105,6 +124,9 @@ Show goal combinators:
   (== x 1)
   (== y 2))
 ```
+```sweet-exp
+fresh(x(y) ==(x 1) ==(y 2))
+```
 
 Implement as a macro that allocates fresh `LVar` ids and builds a `conj` chain.
 
@@ -121,6 +143,9 @@ same example from webmk where the inner `y` differs from the outer `y`.
   ((== q :dog))
   ((== q :fish)))
 ```
+```sweet-exp
+conde(==(q :cat)() ==(q :dog)() ==(q :fish)())
+```
 
 Implement as interleaved `disj` of `conj` chains. Emphasise:
 - Each clause is tried independently (the substitution is "refreshed" per clause)
@@ -136,6 +161,10 @@ Example with multiple answers:
     ((== q :c))))
 ; => (:a :b :c)
 ```
+```sweet-exp
+run(3 q() conde(==(q :a)() ==(q :b)() ==(q :c)()))
+; => (:a :b :c)
+```
 
 ### Section 7 -- `run` and `run*`
 
@@ -143,6 +172,9 @@ Example with multiple answers:
 
 ```turmeric
 (run N (q) goal ...)
+```
+```sweet-exp
+run(N q() goal ...)
 ```
 
 Steps:
@@ -167,6 +199,12 @@ Show the reified output for:
 (run 1 (q) succeed)           ; => (_.0)   -- q is unbound
 (run 1 (q) (== q (list 1 q))) ; => ()      -- fails: occurs check
 ```
+```sweet-exp
+run(1 q() succeed)
+; => (_.0)   -- q is unbound
+run(1 q() ==(q list(1 q)))
+; => ()      -- fails: occurs check
+```
 
 ### Section 9 -- Putting it together: family graph revisited
 
@@ -185,6 +223,12 @@ Re-encode the Part 1 family graph using the new engine:
     (parento grand mid)
     (parento mid child)))
 ```
+```sweet-exp
+defn parento [parent child]
+  conde(==(parent :abe)(==(child :homer)) ==(parent :homer)(==(child :bart)) ==(parent :homer)(==(child :lisa)) ...)
+defn grandparento [grand child]
+  fresh(mid() parento(grand mid) parento(mid child))
+```
 
 Show the same queries as Part 1, now written with `run`:
 ```turmeric
@@ -192,6 +236,16 @@ Show the same queries as Part 1, now written with `run`:
 (run* (c) (parento :homer c))        ; children of Homer
 (run* (g) (grandparento g :bart))    ; grandparents of Bart
 (run* (p c) (parento p c))           ; all pairs
+```
+```sweet-exp
+run*(p() parento(p :bart))
+; parents of Bart
+run*(c() parento(:homer c))
+; children of Homer
+run*(g() grandparento(g :bart))
+; grandparents of Bart
+run*(p(c) parento(p c))
+; all pairs
 ```
 
 Contrast with Part 1 to show the gain in expressiveness.
@@ -217,6 +271,12 @@ The lazy stream type can be implemented with Turmeric's existing coroutine / eff
 support or as a simple thunk-based lazy list:
 
 ```turmeric
+;; A Stream<A> is one of:
+;;   (Empty)
+;;   (Cons head tail)    -- eager head, lazy tail (thunk)
+;;   (Thunk f)           -- suspended computation
+```
+```sweet-exp
 ;; A Stream<A> is one of:
 ;;   (Empty)
 ;;   (Cons head tail)    -- eager head, lazy tail (thunk)

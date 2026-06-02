@@ -43,6 +43,10 @@ tagged JSON node representation, because those nodes carry the runtime type tag
 (load "stdlib/json.tur")
 (load "stdlib/schema.tur")
 ```
+```sweet-exp
+load("stdlib/json.tur")
+load("stdlib/schema.tur")
+```
 
 The input to `schema-decode` is a JSON node, from either `json/decode` (runtime
 text) or the `#json(...)` reader macro (compile-time literal).
@@ -59,6 +63,22 @@ text) or the `#json(...)` reader macro (compile-time literal).
 (schema/literal-str "active")  ; matches only the exact string "active"
 (schema/literal-int 42)        ; matches only the exact integer 42
 ```
+```sweet-exp
+schema/str
+; matches JSON strings, decodes to the :cstr
+schema/int
+; matches JSON integers
+schema/float
+; matches JSON floats
+schema/bool
+; matches JSON booleans
+schema/nil
+; matches JSON null
+schema/literal-str("active")
+; matches only the exact string "active"
+schema/literal-int(42)
+; matches only the exact integer 42
+```
 
 ## Decoding: errors are values
 
@@ -70,6 +90,13 @@ with the helper accessors:
   (if (schema-decode-ok? r)
     (schema-decode-value r)            ; => 42
     (schema-error-message (schema-decode-errors r))))
+```
+```sweet-exp
+let [r (schema-decode (schema/int) (json/decode "42"))]
+  if schema-decode-ok?(r)
+    schema-decode-value(r)
+    ; => 42
+    schema-error-message(schema-decode-errors(r))
 ```
 
 | Helper | Purpose |
@@ -106,6 +133,12 @@ A field list mixes `:cstr` keys with schema pointers, which a homogeneous
 (schema-decode (user-schema) (json/decode "{\"name\": \"alice\", \"age\": 30}"))
 ;; => ok
 ```
+```sweet-exp
+defn user-schema [] :int
+  schema/field(schema/field(schema/object-new() "name" schema/str()) "age" schema/int())
+schema-decode(user-schema() json/decode("{\"name\": \"alice\", \"age\": 30}"))
+;; => ok
+```
 
 A field whose schema is `(schema/optional ...)` may be **absent** entirely or
 present-but-`null`; any other missing field is a `"missing required field"`
@@ -118,6 +151,16 @@ error.
 (schema/optional (schema/str))                     ; null / absent ok
 (schema/union (vec-of (schema/int) (schema/str)))  ; first matching arm wins
 (schema/transform (schema/int) (fn [x] (* x 2)))   ; decode, then map
+```
+```sweet-exp
+schema/array(schema/int())
+; [1, 2, 3] -> Vec of ints
+schema/optional(schema/str())
+; null / absent ok
+schema/union(vec-of(schema/int() schema/str()))
+; first matching arm wins
+schema/transform(schema/int() fn([x] *(x 2)))
+; decode, then map
 ```
 
 Union arms are all schema pointers (`:int`), so a plain `(vec-of ...)` works.
@@ -147,6 +190,18 @@ a dot-separated path (`address.zip`) or an array index (`children[0].value`):
 ;; name: expected :cstr, got :int
 ;; address.zip: expected :cstr, got :int
 ```
+```sweet-exp
+defn address-schema [] :int
+  schema/field(schema/field(schema/object-new() "city" schema/str()) "zip" schema/str())
+defn user-schema [] :int
+  schema/field(schema/field(schema/object-new() "name" schema/str()) "address" address-schema())
+let [r (schema-decode (user-schema)
+          (json/decode
+            "{\"name\": 42, \"address\": {\"city\": \"NYC\", \"zip\": 10001}}"))]
+  println(schema-error-message(schema-decode-errors(r)))
+;; name: expected :cstr, got :int
+;; address.zip: expected :cstr, got :int
+```
 
 Walk the errors programmatically with `schema-error-count`, `schema-error-at`,
 `schema-error-path`, and `schema-error-text`. This is the same accumulation
@@ -170,6 +225,12 @@ memoized:
 (schema-decode (tree-schema)
   (json/decode
     "{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}]}"))
+;; => ok, validated to arbitrary depth
+```
+```sweet-exp
+defn tree-schema [] :int
+  schema/rec(fn([self] schema/field(schema/field(schema/object-new() "value" schema/int()) "children" schema/array(self))))
+schema-decode(tree-schema() json/decode("{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}]}"))
 ;; => ok, validated to arbitrary depth
 ```
 
@@ -212,6 +273,17 @@ binding), not from any argument.
 (let [u (:: (decode! (json/decode body)) User)]
   (.name u))
 ```
+```sweet-exp
+load("stdlib/json.tur")
+load("stdlib/schema.tur")
+defstruct User :copy [name :cstr age :int]
+defn user-schema [] :int
+  schema/field(schema/field(schema/object-new() "name" schema/str()) "age" schema/int())
+definstance HasSchema [User] decode!([node] let([v (schema-decode! (user-schema) node)] make-struct(User json/get-string(json/get!(v "name")) json/get-int(json/get!(v "age")))))
+;; The ascription drives instance selection; decode! returns a real User.
+let [u (:: (decode! (json/decode body)) User)]
+  .name(u)
+```
 
 `decode!` returns the typed value directly (a genuine by-value struct -- the
 compiler bridges the typeclass dictionary's `int64` carrier ABI back to the
@@ -232,6 +304,11 @@ Under `-Xschema-reader` (which implies `-Xjson-reader` and auto-loads
 ```turmeric
 (defn parse-user [body :cstr] :User
   #json-str<User>(body))
+```
+```sweet-exp
+defn parse-user [body :cstr] :User
+  #json-str<User>
+  body()
 ```
 
 Unlike `#json(...)`, the inner is an ordinary Turmeric expression (read with the
@@ -267,6 +344,12 @@ once.
                            (schema/field-of "n" (schema/int)))
                 (json/decode "{\"n\": 21}"))
 ```
+```sweet-exp
+defn double-it [x :int] :int
+  *(x 2)
+;; pure(double-it) <*> field-of("n", int)  -- on {"n":21} => 42
+schema-decode!(schema/ap(schema/always(double-it) schema/field-of("n" schema/int())) json/decode("{\"n\": 21}"))
+```
 
 Decoding `{"a": "x", "b": "y"}` against an `ap` of two `int` fields yields **two**
 path-tagged errors (`a: expected :int, got :cstr` and `b: ...`), one per arm.
@@ -292,6 +375,13 @@ with the standard HKT method names and **chain across operators**:
 (definstance Applicative [Schema] (pure [x] ...) (ap [ff fa] ...))
 (definstance Alternative [Schema] (empty [a] ...) (alt-or [a b] ...))
 ```
+```sweet-exp
+defstruct Schema [A] raw(:int)
+; provided by stdlib/schema.tur
+definstance Functor [Schema] fmap([c f] ...)
+definstance Applicative [Schema] pure([x] ...) ap([ff fa] ...)
+definstance Alternative [Schema] empty([a] ...) alt-or([a b] ...)
+```
 
 `(Schema a)` is a **transparent int newtype**: a parametric struct whose single
 field is a concrete `:int`, so the type parameter is phantom and the value has
@@ -309,6 +399,14 @@ the identity (the value *is* the schema pointer). Build a struct field by field:
   (let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
         age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
     (.raw (ap (fmap name-s ->User) age-s))))   ; Validation: both fields decoded, errors accumulated
+```
+```sweet-exp
+;; ->User is a curried constructor: name -> (age -> boxed User)
+defn user-schema [] :int
+  let [name-s (:: (make-struct Schema (schema/field-of "name" (schema/str))) (Schema int))
+        age-s  (:: (make-struct Schema (schema/field-of "age"  (schema/int))) (Schema int))]
+    .raw(ap(fmap(name-s ->User) age-s))
+; Validation: both fields decoded, errors accumulated
 ```
 
 `ap` is built on `schema/ap-fat`, which applies the (possibly capturing) function

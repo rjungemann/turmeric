@@ -23,6 +23,10 @@ Ignores everything from `;` to the end of the line.
 ```turmeric
 (println "hello")  ; this is ignored
 ```
+```sweet-exp
+println("hello")
+; this is ignored
+```
 
 ### Block comment -- `#| ... |#`
 
@@ -35,6 +39,24 @@ Ignores a delimited region of text. Block comments nest.
   #| nested block comments work too |#
 |#
 (println "ok")
+```
+```sweet-exp
+#|
+This
+whole
+region
+is
+ignored.
+println("never runs")
+#|
+nested
+block
+comments
+work
+too
+|#
+|#
+println("ok")
 ```
 
 ### Datum comment -- `#;` *(planned)*
@@ -49,12 +71,18 @@ form, no matter how many lines it spans.
 (println #;(this is discarded) "ok")  ; => ok
 (println (+ 1 #;999 2))          ; => 3
 ```
+```sweet-exp
+println(# ;99 "ok")              ; => ok println(# ;"ignored" "ok")       ; => ok println(# ;(this is discarded) "ok")  ; => ok println(+(1 # ;999 2))          ; => 3)))))
+```
 
 Datum comments compose: `#;#;1 2 3` discards `2` (the result that inner `#;1`
 would have produced) and leaves `3`.
 
 ```turmeric
 (println #;#;1 2 3)   ; => 3
+```
+```sweet-exp
+println(# ;#;1 2 3)   ; => 3)
 ```
 
 `#;` at end of file, or immediately before a closing delimiter, is an error.
@@ -69,6 +97,14 @@ Decimal, hexadecimal (`0x`/`0X`), and binary (`0b`/`0B`) are supported.
 An optional type suffix pins the width.
 
 ```turmeric
+42
+-7
+0xff
+0b1010
+255u8
+1000i32
+```
+```sweet-exp
 42
 -7
 0xff
@@ -99,6 +135,12 @@ pins the width; unsuffixed floats are `f64`.
 2.5f32
 1f64
 ```
+```sweet-exp
+3.14
+1.0e10
+2.5f32
+1f64
+```
 
 ### String -- `"..."`
 
@@ -106,6 +148,10 @@ Double-quoted UTF-8 text. Standard C escape sequences apply (`\n`, `\t`, `\\`,
 `\"`, etc.).
 
 ```turmeric
+"hello, world"
+"line one\nline two"
+```
+```sweet-exp
 "hello, world"
 "line one\nline two"
 ```
@@ -120,6 +166,11 @@ compile-time constant).
 :error
 :tur
 ```
+```sweet-exp
+:ok
+:error
+:tur
+```
 
 ### Symbol / identifier
 
@@ -127,6 +178,14 @@ Any name that starts with a letter or one of `+ - * / = < > ! ? _ $ & . ^ |`
 or a UTF-8 code-point in the symbol-start set (includes `λ`, `∀`, `∃`).
 
 ```turmeric
+foo
+my-var
++
+->
+|>
+λ
+```
+```sweet-exp
 foo
 my-var
 +
@@ -148,12 +207,22 @@ An ordered sequence of forms. The primary syntactic unit in Turmeric.
 (+ 1 2 3)
 (defn square [x :int] :int (* x x))
 ```
+```sweet-exp
+println("hello")
++(1 2 3)
+defn square [x :int] :int
+  *(x x)
+```
 
 ### Vector -- `[...]`
 
 A vector literal.
 
 ```turmeric
+[1 2 3]
+[:a :b :c]
+```
+```sweet-exp
 [1 2 3]
 [:a :b :c]
 ```
@@ -166,6 +235,10 @@ interleaved.
 ```turmeric
 #{:name "Alice" :age 30}
 ```
+```sweet-exp
+#
+{:name "Alice" :age 30}
+```
 
 ### Set literal -- `#s(...)`
 
@@ -175,6 +248,12 @@ A set literal.
 #s(1 2 3)
 #s(:red :green :blue)
 ```
+```sweet-exp
+#s
+1(2 3)
+#s
+:red(:green :blue)
+```
 
 ### Contract type -- `{ var : T | pred }`
 
@@ -182,6 +261,9 @@ A refinement type annotation. Introduces a binding `var` of type `T` with
 predicate `pred`.
 
 ```turmeric
+{ x : :int | (> x 0) }
+```
+```sweet-exp
 { x : :int | (> x 0) }
 ```
 
@@ -199,6 +281,13 @@ Expands to `(quote expr)`. Prevents evaluation.
 'foo          ; => (quote foo)
 '(1 2 3)      ; => (quote (1 2 3))
 ```
+```sweet-exp
+'foo
+; => (quote foo)
+'
+1(2 3)
+; => (quote (1 2 3))
+```
 
 ### Quasiquote -- `` `expr ``
 
@@ -209,6 +298,14 @@ Expands to `(quasiquote expr)`. Like quote, but `~` and `~@` splice in values.
 `(1 ~x 3)            ; unquotes x
 `(1 ~@xs 3)          ; splices list xs
 ```
+```sweet-exp
+1(2 3)
+; => (quasiquote (1 2 3))
+1(~x 3)
+; unquotes x
+1(~@xs 3)
+; splices list xs
+```
 
 ### Unquote -- `~expr`
 
@@ -216,6 +313,10 @@ Valid only inside a quasiquote. Expands to `(unquote expr)`.
 
 ```turmeric
 `(a ~b c)   ; b is evaluated and inserted
+```
+```sweet-exp
+a(~b c)
+; b is evaluated and inserted
 ```
 
 ### Unquote-splicing -- `~@expr`
@@ -227,6 +328,11 @@ value must be a list; its elements are spliced into the surrounding list.
 (let [xs '(2 3)]
   `(1 ~@xs 4))   ; => (1 2 3 4)
 ```
+```sweet-exp
+let [xs '(2 3)]
+  1(~@xs 4)
+; => (1 2 3 4)
+```
 
 ### Deref -- `@expr`
 
@@ -234,6 +340,10 @@ Expands to `(deref expr)`.
 
 ```turmeric
 @my-ref   ; => (deref my-ref)
+```
+```sweet-exp
+@my-ref
+; => (deref my-ref)
 ```
 
 ### Effect-row annotation -- `@{...}`
@@ -245,6 +355,12 @@ rather than a deref.
 @{IO}
 @{IO Exn}
 ```
+```sweet-exp
+@
+{IO}
+@
+{IO Exn}
+```
 
 ### Borrow -- `&expr`
 
@@ -255,6 +371,12 @@ is left as the symbol `&` (preserving the explicit `(& x)` call form).
 &x       ; => (& x)
 (& x)    ; identical -- explicit form still works
 ```
+```sweet-exp
+&x
+; => (& x)
+&(x)
+; identical -- explicit form still works
+```
 
 ### Mutable borrow -- `&mut expr`
 
@@ -262,6 +384,11 @@ Expands to `(&mut expr)`.
 
 ```turmeric
 &mut x   ; => (&mut x)
+```
+```sweet-exp
+&mut
+x
+; => (&mut x)
 ```
 
 ---
@@ -278,6 +405,12 @@ Attaches a compile-time attribute to the next definition.
 #[no-unwind]
 (defn risky [] :int ...)
 ```
+```sweet-exp
+#
+[no-unwind]
+defn risky [] :int
+  ...
+```
 
 ### Reader conditional -- `#?(...)`
 
@@ -286,6 +419,9 @@ output and `:turi` for the interpreter.
 
 ```turmeric
 (println #?(:tur "compiled" :turi "interpreted"))
+```
+```sweet-exp
+println(#? :tur("compiled" :turi "interpreted"))
 ```
 
 ---
@@ -297,7 +433,10 @@ A triple-backtick block embeds raw C code inside a `defn` body. The closing
 
 ```turmeric
 (defn file-size [f] :int
-  ```c
+  ```
+```sweet-exp
+defn file-size [f] :int
+```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
   ```)
@@ -318,6 +457,11 @@ function call.
 ```turmeric
 square(9)     ; => (square 9)
 ```
+```sweet-exp
+square
+9
+; => (square 9)
+```
 
 ### Curly-infix -- `{a op b}`
 
@@ -326,4 +470,10 @@ Braces in sweet-exp mode treat the middle element as an infix operator.
 ```turmeric
 {1 + 2}       ; => (+ 1 2)
 {x > 0}       ; => (> x 0)
+```
+```sweet-exp
+{1 + 2}
+; => (+ 1 2)
+{x > 0}
+; => (> x 0)
 ```

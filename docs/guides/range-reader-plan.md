@@ -46,6 +46,33 @@ elaborator phases, no new type-system machinery.
 #r{0 <= n < len}   ; => (closed-open-range 0 len)
 #r{lo <= n <= hi}  ; => (closed-range lo hi)
 ```
+```sweet-exp
+;; One-sided (unbounded on one end)
+#r{n > 0}        ; => greater-than-range(0)         -- (0, +inf)
+#r{n >= 0}       ; => at-least-range(0)             -- [0, +inf)
+#r{n < 0}        ; => less-than-range(0)            -- (-inf, 0)
+#r{n <= 0}       ; => at-most-range(0)              -- (-inf, 0]
+#r{n = 0}        ; => singleton-range(0)            -- [0, 0]
+
+;; Two-sided (left-to-right)
+#r{0 <= n < 10}  ; => closed-open-range(0 10)       -- [0, 10)
+#r{0 < n <= 10}  ; => open-closed-range(0 10)       -- (0, 10]
+#r{0 < n < 10}   ; => open-range(0 10)              -- (0, 10)
+#r{0 <= n <= 10} ; => closed-range(0 10)            -- [0, 10]
+
+;; Two-sided (right-to-left -- same semantics, mirrored operators)
+#r{10 > n >= 0}  ; => closed-open-range(0 10)       -- [0, 10)
+#r{10 >= n > 0}  ; => open-closed-range(0 10)       -- (0, 10]
+#r{10 > n > 0}   ; => open-range(0 10)              -- (0, 10)
+#r{10 >= n >= 0} ; => closed-range(0 10)            -- [0, 10]
+
+;; Float bounds (uses float-range constructors)
+#r{0.0 <= n < 1.0} ; => float-closed-open-range(0.0 1.0)
+
+;; Expression bounds (runtime values, no compile-time empty check)
+#r{0 <= n < len}   ; => closed-open-range(0 len)
+#r{lo <= n <= hi}  ; => closed-range(lo hi)
+```
 
 The variable name (`n`, `i`, `x`, ...) must be a single-letter identifier.
 It guides the human reader but is not bound or referenced in the expansion.
@@ -237,6 +264,11 @@ runtime.
 #r{lo <= n <= hi}       ; => (closed-range lo hi)
 #r{(- hi 1) > n >= 0}  ; => (closed-open-range 0 (- hi 1))
 ```
+```sweet-exp
+#r{0 <= n < len}         ; => closed-open-range(0 len)
+#r{lo <= n <= hi}        ; => closed-range(lo hi)
+#r{{hi - 1} > n >= 0}    ; => closed-open-range(0 {hi - 1})
+```
 
 Changes from RR1:
 - The compile-time empty-range check is **skipped** when either bound is not a
@@ -296,6 +328,20 @@ Mirror of `stdlib/range.tur` using `float64` bounds.  The internal
 (defn float-singleton-range [v :float] :int ...)
 (defn float-unbounded-range [] :int ...)
 (defn float-range-contains? [r :int v :float] :bool ...)
+```
+```sweet-exp
+;; float-range constructors (same shape as stdlib/range.tur)
+defn float-closed-range [lo :float hi :float] :int ...
+defn float-open-range [lo :float hi :float] :int ...
+defn float-closed-open-range [lo :float hi :float] :int ...
+defn float-open-closed-range [lo :float hi :float] :int ...
+defn float-at-least-range [lo :float] :int ...
+defn float-greater-than-range [lo :float] :int ...
+defn float-at-most-range [hi :float] :int ...
+defn float-less-than-range [hi :float] :int ...
+defn float-singleton-range [v :float] :int ...
+defn float-unbounded-range [] :int ...
+defn float-range-contains? [r :int v :float] :bool ...
 ```
 
 The reader selects float constructors when any bound token is a `F_FLOAT`
@@ -376,4 +422,34 @@ type.  In that case it defaults to the integer constructor family and emits a
 ;; Right-to-left syntax (same semantics)
 (when (range-contains? #r{100 > n >= 0} score)
   (println "in range"))
+```
+```sweet-exp
+;; Index bounds check with expression upper bound
+defn safe-get [v :int i :int] :int
+  require!(range-contains?(#r{0 <= i < vec-len(v)} i)
+           "index out of bounds")
+  vec-get(v i)
+
+;; Contract type
+defn classify-score [score : { s : :int | range-contains?(#r{1 <= s <= 5} s) }] :cstr
+  cond
+    =(score 5) "excellent"
+    =(score 4) "good"
+    "average"
+
+;; Seq iteration over an integer range
+for i seq/from-range(#r{0 <= i < 10})
+  println(i)
+
+;; Float range membership test
+defn unit-clamp [x :float] :float
+  if float-range-contains?(#r{0.0 <= x <= 1.0} x)
+    x
+    if <(x 0.0)
+      0.0
+      1.0
+
+;; Right-to-left syntax (same semantics)
+when range-contains?(#r{100 > n >= 0} score)
+  println("in range")
 ```

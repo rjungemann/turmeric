@@ -42,6 +42,14 @@ Append a suffix to an integer or float literal to fix its kind:
 2.5f32      ; float32
 3.14159f64  ; float64 (same as 3.14159)
 ```
+```sweet-exp
+42i8        ; int8   -- value 42
+200u8       ; uint8  -- value 200
+1000i16     ; int16
+0xFFu32     ; uint32 -- hex literal
+2.5f32      ; float32
+3.14159f64  ; float64 (same as 3.14159)
+```
 
 Unsuffixed integer literals have type `int` (int64). Unsuffixed float
 literals have type `float` (float64).
@@ -57,6 +65,11 @@ compile error (TUR-E0042):
 (+ 1i32 2)        ; error TUR-E0042: int32 and int (int64) cannot be mixed
 (< 1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
 ```
+```sweet-exp
++(1i8 2i16)      ; error TUR-E0042: int8 and int16 cannot be mixed
++(1i32 2)        ; error TUR-E0042: int32 and int (int64) cannot be mixed
+<(1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
+```
 
 To operate on values of different widths, cast one side with `(as type expr)`:
 
@@ -68,6 +81,15 @@ To operate on values of different widths, cast one side with `(as type expr)`:
 (+ (as int 1i32) 2)         ; widen int32 to int64
 
 (< 1.5f32 (as float32 2.0)) ; narrow float64 literal to float32
+```
+```sweet-exp
++(1i8 as(int8 2i16))       ; narrow 2i16 to int8
++(as(int16 1i8) 2i16)      ; widen 1i8 to int16
+
++(1i32 as(int32 2))        ; narrow canonical int to int32
++(as(int 1i32) 2)          ; widen int32 to int64
+
+<(1.5f32 as(float32 2.0))  ; narrow float64 literal to float32
 ```
 
 ### Rationale
@@ -91,6 +113,13 @@ numeric kind. Both operands must have the same kind:
 (= 42u8 42u8)       ; uint8 = uint8  -> bool
 (+ 1.5f32 2.5f32)   ; float32 + float32 -> float32
 ```
+```sweet-exp
++(10i8 20i8)       ; int8 + int8   -> int8
+mod(100u32 7u32)   ; uint32 mod uint32 -> uint32
+<(1i32 2i32)       ; int32 < int32  -> bool
+=(42u8 42u8)       ; uint8 = uint8  -> bool
++(1.5f32 2.5f32)   ; float32 + float32 -> float32
+```
 
 ## Casting with `(as ...)`
 
@@ -103,6 +132,12 @@ performed:
 (as uint8 -1)           ; wraps: 255
 (as float32 1i32)       ; integer -> float
 (as int32 3.7f32)       ; truncates: 3
+```
+```sweet-exp
+as(int8 300)       ; wraps: 300 mod 256 = 44
+as(uint8 -1)       ; wraps: 255
+as(float32 1i32)   ; integer -> float
+as(int32 3.7f32)   ; truncates: 3
 ```
 
 Casts between signed and unsigned types of the same width reinterpret the
@@ -124,6 +159,18 @@ Struct fields can use any numeric kind:
    y :float32
    z :float32])
 ```
+```sweet-exp
+defstruct Pixel
+  [r :uint8
+   g :uint8
+   b :uint8
+   a :uint8]
+
+defstruct Vec3f
+  [x :float32
+   y :float32
+   z :float32]
+```
 
 The generated C struct uses the corresponding `<stdint.h>` types
 (`uint8_t`, `float`, etc.) directly, with no `int64_t` boxing for fields
@@ -139,6 +186,11 @@ then cast back:
 (let [x 0xF0u8
       y 0x0Fu8]
   (as uint8 (bit-and (as int x) (as int y))))  ; => 0u8
+```
+```sweet-exp
+let [x 0xF0u8
+     y 0x0Fu8]
+  as(uint8 bit-and(as(int x) as(int y)))  ; => 0u8
 ```
 
 See Phase C of the unboxing plan for kind-preserving bitwise ops.
