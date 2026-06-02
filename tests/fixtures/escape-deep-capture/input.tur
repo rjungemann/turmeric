@@ -11,8 +11,10 @@
     (tur_escape_resume k 7)
     (+ 1 (descend k (- n 1)))))   ; (+ 1 ...) frames the escape would abort
 
+;; k is annotated :int so it threads through descend's :int handle parameter
+;; (the explicit tur_escape_resume builtin consumes the int64-carried landing).
 (defn find-deep [] :int
-  (escape (fn [k] (descend k 5000))))
+  (escape (fn [k :int] (descend k 5000))))
 
 ;; escape whose f never invokes k -- normal return flows out.
 (defn no-escape [] :int

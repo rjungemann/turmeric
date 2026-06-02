@@ -1,18 +1,17 @@
-;; Phase 18: escape nested value test
-;; v1 semantics: (escape f) = f(0) where 0 is a dummy continuation.
-;; Full early-exit semantics require CPS (deferred to future phase).
+;; call-cc-completion (CC5.3): real undelimited escape -- no -Xcallcc flag and
+;; no enclosing reset.  escape is the one-shot abort flavor: invoking (k v)
+;; unwinds to the escape site with v, abandoning the pending computation.
 
-;; Test: nested escape - inner escape returns value
-(defn test-escape-nested [] :int
-  (escape (fn [exit1]
-    (escape (fn [exit2] 100)))))
-
-;; Test: escape result used in let binding
-(defn test-escape-let [] :int
-  (let [v (escape (fn [exit] 5))]
+;; (k 5) aborts the pending (+ 1 ...); escape returns 5, the let binds v=5.
+(defn test-escape-abort [] :int
+  (let [v (escape (fn [k] (+ 1 (k 5))))]
     (+ v 10)))
 
+;; f ignores k: the body value (100) flows out normally.
+(defn test-escape-normal [] :int
+  (escape (fn [k] 100)))
+
 (defn main [] :int
-  (println (test-escape-nested))
-  (println (test-escape-let))
+  (println (test-escape-abort))
+  (println (test-escape-normal))
   0)

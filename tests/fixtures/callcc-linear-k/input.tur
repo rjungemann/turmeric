@@ -1,0 +1,11 @@
+;; call-cc-completion (CC4.4): ^linear continuation parameter (OQ3 opt-in).
+;; k defaults to the escape flavor (CC4.2) and is additionally marked ^linear,
+;; so it must be used exactly once.  (k 42) consumes it -> returns 42.
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn t [] :int
+  (call/cc (fn [^linear k] (k 42))))
+
+(defn main [] :int
+  (printf "r=%lld\n" (t))
+  0)

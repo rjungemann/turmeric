@@ -1,16 +1,16 @@
-;; Phase 18: escape basic test
-;; v1 semantics: (escape f) = f(identity) where identity(v) = v.
-;; Full early-exit semantics require CPS (deferred to future phase).
+;; call-cc-completion (CC5.3): real undelimited escape continuation as a value.
+;; No -Xcallcc flag, no enclosing reset.
 
-;; Test 1: escape body ignores exit, returns value normally
+;; escape body ignores k: returns 42 normally.
 (defn test-escape-no-exit [] :int
-  (escape (fn [exit] 42)))
+  (escape (fn [k] 42)))
 
-;; Test 2: escape body ignores exit, value flows out through arithmetic
-(defn test-escape-value [] :int
-  (+ 3 (escape (fn [exit] 7))))
+;; escape body invokes (k 9): the pending (+ 3 ...) is abandoned, escape
+;; returns 9, and the outer (+ 100 ...) makes 109.
+(defn test-escape-exit [] :int
+  (+ 100 (escape (fn [k] (+ 3 (k 9))))))
 
 (defn main [] :int
   (println (test-escape-no-exit))
-  (println (test-escape-value))
+  (println (test-escape-exit))
   0)

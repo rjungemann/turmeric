@@ -4381,7 +4381,7 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "-Xsessions")          == 0) { g_sessions_enabled = true; g_substructural_enabled = true; g_linear_enabled = true; }
         else if (strcmp(tok, "-Xdynamic-vars")      == 0) g_dynvar_enabled           = true;
         else if (strcmp(tok, "-Xsymbols")           == 0) g_symbols_enabled          = true;
-        else if (strcmp(tok, "-Xcallcc")            == 0) g_callcc_enabled           = true;
+        else if (strcmp(tok, "-Xcallcc")            == 0) { /* call-cc-completion CC5: deprecated no-op (call/cc/escape are now real + ungated) */ }
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
@@ -6583,7 +6583,7 @@ static int usage(void) {
         "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
         "  --keep-contracts                 retain contract checks in release builds (CT3)\n"
         "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n"
-        "  -Xcallcc                         enable experimental call/cc / escape -- no real capture yet (unsound); requires the post-1.0 CPS pass\n");
+        "  -Xcallcc                         DEPRECATED no-op; call/cc / escape are now real and enabled by default (CPS substrate)\n");
     list_external_subcommands();
     return 64;
 }
@@ -7404,8 +7404,11 @@ int main(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "-Xcallcc") == 0) {
-            /* CF4: unlock the experimental (unsound) call/cc / escape desugar */
-            g_callcc_enabled = true;
+            /* call-cc-completion (CC5): -Xcallcc is a deprecated no-op for one
+             * release.  call/cc / escape are now real, sound, and ungated on the
+             * CPS substrate (cps-transform-plan CPS5.3/CPS6). */
+            fprintf(stderr, "warning: -Xcallcc is deprecated and has no effect; "
+                            "call/cc and escape are now enabled by default\n");
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

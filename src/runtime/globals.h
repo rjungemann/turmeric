@@ -109,10 +109,10 @@ extern bool g_sessions_enabled;
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 extern bool g_dynvar_enabled;
 
-/* CF4 (control-flow-completeness-plan): -Xcallcc flag — unlock the experimental
- * (unsound, no real capture) call/cc / escape desugar.  Default off; ungated
- * call/cc / escape raise TUR-E0700 / TUR-E0701.  Real capture needs the
- * post-1.0 CPS pass. */
+/* CF4 / call-cc-completion CC5: vestigial.  -Xcallcc once gated the unsound
+ * call/cc / escape stub; call/cc / escape are now real, sound, and enabled by
+ * default on the CPS substrate, and the flag is a deprecated no-op.  No longer
+ * read by the elaborator; kept for one release to avoid churn. */
 extern bool g_callcc_enabled;
 
 /* SYM0 (runtime-symbols-plan): -Xsymbols flag — enable first-class runtime

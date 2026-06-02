@@ -28,7 +28,7 @@ between flags.
 | `-Xcontracts` | ✅ Complete | Contract types; `assert!`/`require!`/`ensure!`; refinement-style `{ x : T \| pred }`; checked in debug, stripped in release (`--keep-contracts` retains). On by default; the flag is a redundant re-enable. | -- |
 | `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
 | `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | -- |
-| `-Xcallcc` | ⚠️ Experimental (unsound) | Unlocks the v1 `call/cc` / `escape` desugar. **No real capture** -- `f` receives the integer `0` as a fake continuation. Ungated, `call/cc`/`escape` are a hard error (`TUR-E0700`/`TUR-E0701`). Real capture needs the post-1.0 CPS pass. `call/cc*` (cloneable) is unaffected. | -- |
+| `-Xcallcc` | 🚫 Deprecated no-op | `call/cc` / `escape` are now real, sound, and **enabled by default** (undelimited capture on the CPS substrate). The flag prints a deprecation warning and has no effect; `TUR-E0700`/`TUR-E0701` are retired. | -- |
 | `-Xsized-types` | ⚠️ Partial (SZ0–SZ4) | Sized types over the `Size` GADT (`SizedVec`, `sized-buf`, `sized-matrix`, `sized-bits`); flag exists and implies `-Xgadt`; size checking is **runtime** today, static checking in progress (see [sized-types-completion-plan.md](../sized-types-completion-plan.md)) | `-Xgadt` |
 
 **Always-on (no flag).** Higher-kinded types (`^f`/`^^f`, kind `* -> *`),
@@ -367,33 +367,30 @@ are forbidden in dynamic vars (`TUR-E0603`).
 
 ---
 
-### `-Xcallcc` -- Experimental `call/cc` / `escape` *(unsound)*
+### `-Xcallcc` -- *Deprecated no-op*
 
-Unlocks the v1 desugar for `call/cc` and `escape`. This desugar has **no real
-continuation capture**: `(call/cc f)` and `(escape f)` lower to
-`(let [g f] (g 0))`, handing `f` the integer `0` as a stand-in continuation. It
-only "works" for escape/abort patterns where `f` ignores the continuation, and
-it is unsound in general -- which is why it is gated.
+`call/cc` and `escape` are now **real, sound, and enabled by default**. They
+capture an undelimited continuation against the implicit program-wide prompt
+supplied by the CPS substrate (`cps-transform-plan.md` CPS5.3/CPS6) -- no flag
+and no enclosing `reset` required:
 
 ```clojure
-;; without -Xcallcc:  hard error
-(call/cc (fn [k] 99))   ; error [TUR-E0700]: 'call/cc' has no real ...
-(escape  (fn [x] 5))    ; error [TUR-E0701]: 'escape' has no real ...
-
-;; with -Xcallcc:  the v1 desugar is unlocked (still unsound; for experiments)
-;;   tur -Xcallcc run prog.tur
+;; no flag needed:
+(+ 1 (call/cc (fn [k] (+ 100 (k 41)))))   ; => 42
+(escape (fn [k] (k 7)))                    ; => 7
 ```
 
-Real first-class continuation capture requires the post-1.0 CPS pass; until then
-this flag exists only for experimentation. **`call/cc*`** (the cloneable,
-multi-shot continuation built on `cloneable-reset`/`cloneable-shift`) is a
-separate, real construct and is **not** gated.
+`-Xcallcc` is accepted for one release as a deprecated no-op (passing it prints
+a deprecation warning and otherwise has no effect). The old `TUR-E0700` /
+`TUR-E0701` "unsound stub" diagnostics are retired (codes reserved, no longer
+emitted). See the
+[Effects System Guide](effects-system-guide.md#continuations-callcc-escape) for
+the semantics and typing (`f : cont<T> -> T`, one-shot by default, `^linear`
+opt-in, `call/cc*` for multi-shot).
 
-**Does not imply** any other flag.
-
-**See also:** [control-flow-completeness-plan.md](../control-flow-completeness-plan.md)
-(Phase CF4), [control-flow-completeness-audit.md](../control-flow-completeness-audit.md)
-(audit item 1)
+**See also:** [cps-transform-plan.md](../upcoming/cps-transform-plan.md) (the
+substrate), [call-cc-completion-plan.md](../upcoming/call-cc-completion-plan.md)
+(this work)
 
 ---
 

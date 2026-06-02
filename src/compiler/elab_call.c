@@ -1603,6 +1603,20 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         Expr *karg = elab_form(e, call->as.list.items[1]);
         if (!karg) return NULL;
+        /* CC4.4: (k v) consumes the continuation.  This sugar builds the EX_VAR
+         * by hand (below), bypassing the shared var-use consumption path, so
+         * account for linearity here: invoking a ^linear k marks it consumed, and
+         * a second invocation is a use-after-consume (TUR-E0101). */
+        if (g_linear_enabled && fn_binding->is_linear) {
+            if (fn_binding->is_linear_consumed) {
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                                    TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                                    "linear value '%s' used after being consumed",
+                                    fn_binding->name->name);
+                return NULL;
+            }
+            fn_binding->is_linear_consumed = true;
+        }
         /* The handle, viewed as its int64 carrier so the resume builtin types. */
         Expr *kvar = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
         kvar->as.var.binding = fn_binding;

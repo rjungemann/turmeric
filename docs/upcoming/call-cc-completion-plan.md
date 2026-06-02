@@ -1,17 +1,28 @@
 # Finish `call/cc` -- Completion Plan (CC0--CC6)
 
-> **Status:** **CC1 + CC3 core landed (2026-06-02)** on the CPS substrate
-> (cps-transform-plan CPS8.5). `(call/cc f)` and `(escape f)` now perform real
-> undelimited, one-shot, upward capture against an implicit program-wide prompt
-> -- no enclosing `reset`, unbounded depth (the 16-frame fiber ceiling does not
-> apply). Implementation: an `EX_CALLCC` node lowered by `emit_cps_callcc` to a
-> setjmp landing at the call/cc site; the continuation is resumed via the
-> `tur_escape_resume` builtin (the proven `call/cc*` handle pattern). Fixtures
-> `callcc-real-capture` (CC1.4) and `escape-deep-capture` (deep escape) are
-> green. **Remaining:** CC4 (`cont<T>` parameter typing + direct `(k v)`
-> application sugar; today `f`'s `k` is an `int64_t` handle resumed explicitly),
-> CC5 (retire `-Xcallcc` / `TUR-E0700`/`TUR-E0701`), CC6 (guide docs). Closes
-> the *capability* gap of audit item 1; the gating/typing cleanup is CC4--CC6.
+> **Status:** **DONE (2026-06-02).** All phases landed on the CPS substrate
+> (cps-transform-plan CPS5.3 implicit root prompt + CPS6 unbounded capture).
+> `(call/cc f)` and `(escape f)` perform real undelimited capture against the
+> implicit program-wide prompt -- no enclosing `reset`, unbounded depth, sound,
+> and **enabled by default**. Phase status:
+> - **CC0** ratified (undelimited semantics + CPS prerequisite).
+> - **CC1** -- `EX_CALLCC` node lowered to a setjmp landing at the call/cc site
+>   (`emit_cps`), resumed via `tur_escape_resume`.
+> - **CC2** -- removed (OQ1 reversal; no missing-boundary diagnostic).
+> - **CC3** -- `escape` is the abort flavor (no prompt re-install).
+> - **CC4** -- `f : cont<T> -> T` typing; an unannotated `k` defaults to the
+>   escape continuation flavor, so the `(k v)` application sugar dispatches to
+>   `tur_escape_resume`; `^linear k` opt-in supported on lambda params.
+> - **CC5** -- `-Xcallcc` is a deprecated no-op; `TUR-E0700`/`TUR-E0701` are no
+>   longer emitted (codes reserved); the three legacy fixtures were rewritten to
+>   resume `(k v)` with no flag and no `reset`; the gated error fixtures removed.
+> - **CC6** -- effects-system + compiler-flags guides updated; audit item 1 and
+>   stubs-and-workarounds §1.4 marked resolved.
+>
+> Fixtures: `callcc-real-capture`, `escape-real`, `escape-deep-capture`,
+> `escape-nested-reset`, `callcc-linear-k`, `errors/callcc-linear-k-dropped`, and
+> the rewritten `continuation-callcc` / `continuation-escape` /
+> `continuation-escape-fn`.
 >
 > **Reframed 2026-06-01.** An earlier draft of this plan shipped a *delimited*
 > `call/cc`/`escape` today (lowering to `(reset (shift k (f k)))`) and required
@@ -118,6 +129,10 @@ continuations on the heap, removes that ceiling, and installs the root prompt
 ---
 
 ## Semantics (the contract)
+
+> **Ratified 2026-06-02 (CC0.1).** Undelimited `call/cc`/`escape` against the
+> implicit program-wide prompt; delimited capture stays with
+> `shift`/`reset`/`call/cc*`. Implemented and shipping by default.
 
 `(call/cc f)` evaluates as follows:
 
