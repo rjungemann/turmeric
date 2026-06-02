@@ -86,6 +86,7 @@ see the task plan for progress.
 
 ### Type System
 
+- **[polymorphism-guide.md](polymorphism-guide.md)** -- Tour of polymorphism approaches: parametric, typeclasses, HKT, HRT, GADTs, unions, existentials, effect rows, substructural, variadics, and the unsafe escape hatch
 - **[type-annotations-guide.md](type-annotations-guide.md)** -- Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
 - **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
