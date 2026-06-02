@@ -2563,13 +2563,18 @@ int emit_program(Buf *out, const Expr *program) {
      * shift0), or when a cloneable-reset lowers onto the DK machine (CPS9).
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (emit_cps_program_uses_delimited(program) ||
-        emit_cps_program_uses_cloneable_dk(program)) {
+        emit_cps_program_uses_cloneable_dk(program) ||
+        emit_cps_program_uses_serial_dk(program)) {
         emit_cps_runtime_prelude(out);
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope. */
     if (emit_cps_program_uses_cloneable_dk(program)) {
         emit_cps_cloneable_bridge_prelude(out);
+    }
+    /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. */
+    if (emit_cps_program_uses_serial_dk(program)) {
+        emit_cps_serial_runtime_prelude(out);
     }
 
     /* call-cc-completion: emit the undelimited escape-continuation runtime when

@@ -1497,7 +1497,14 @@ char *emit_effects_cloneable_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* serial-reset lowers to reset semantics: just evaluate body. */
+    /* cps-transform-plan (CPS10 / CPS5.4): when the body wraps a serial-shift in
+     * a supported delimited context, lower onto the DK multi-prompt machine so
+     * the captured continuation is reified as a marshalable DK chain (resume /
+     * serialize / deserialize). Outside that subset emit_cps_serial_reset
+     * returns NULL and we fall back to the legacy lowering: serial-reset with no
+     * shift just evaluates its body. */
+    char *cps = emit_cps_serial_reset(ctx, body, e);
+    if (cps) return cps;
     return emit_value(ctx, body, e->as.serial_reset_.body);
 }
 

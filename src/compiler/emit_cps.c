@@ -481,50 +481,51 @@ typedef struct {
     const Expr *other;    /* the non-hole operand (captured into the frame env) */
 } ClFrame;
 
-/* Boundary-aware: can `e` dynamically reach a cloneable-shift bound to the
- * enclosing cloneable-reset? Stops at nested resets/shifts of any flavor and
- * at fn boundaries (those self-delimit or are not our shift). */
-static bool cl_reaches_cloneable_shift(const Expr *e) {
+/* Boundary-aware: can `e` dynamically reach a shift of kind `target` bound to
+ * the enclosing reset? Stops at nested resets/shifts of any other flavor and at
+ * fn boundaries (those self-delimit or are not our shift). Shared by the
+ * cloneable (CPS9) and serial (CPS10) context walks. */
+static bool reaches_shift_kind(const Expr *e, ExprKind target) {
     if (!e) return false;
+    if (e->kind == target) return true;
     switch (e->kind) {
         case EX_CLONEABLE_SHIFT:
-            return true;
+        case EX_SERIAL_SHIFT:
         case EX_CLONEABLE_RESET:
         case EX_RESET:
         case EX_SERIAL_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
-        case EX_SERIAL_SHIFT:
         case EX_CALLCC:
         case EX_FN:
         case EX_FN_DEF:
         case EX_CLOSURE:
-            return false;
+            return false;   /* target already matched above; these self-delimit */
         case EX_BUILTIN:
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                if (cl_reaches_cloneable_shift(e->as.builtin.args[i])) return true;
+                if (reaches_shift_kind(e->as.builtin.args[i], target)) return true;
             return false;
         case EX_CALL:
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-                if (cl_reaches_cloneable_shift(e->as.call_.args[i])) return true;
+                if (reaches_shift_kind(e->as.call_.args[i], target)) return true;
             return false;
         case EX_LET:
         case EX_LETREC:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
-                if (cl_reaches_cloneable_shift(e->as.let_.bindings[i].init)) return true;
-            return cl_reaches_cloneable_shift(e->as.let_.body);
+                if (reaches_shift_kind(e->as.let_.bindings[i].init, target)) return true;
+            return reaches_shift_kind(e->as.let_.body, target);
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (cl_reaches_cloneable_shift(e->as.do_.items[i])) return true;
+                if (reaches_shift_kind(e->as.do_.items[i], target)) return true;
             return false;
         case EX_IF:
-            return cl_reaches_cloneable_shift(e->as.if_.cond) ||
-                   cl_reaches_cloneable_shift(e->as.if_.then_) ||
-                   cl_reaches_cloneable_shift(e->as.if_.else_or_null);
+            return reaches_shift_kind(e->as.if_.cond, target) ||
+                   reaches_shift_kind(e->as.if_.then_, target) ||
+                   reaches_shift_kind(e->as.if_.else_or_null, target);
         case EX_RETURN:
-            return cl_reaches_cloneable_shift(e->as.return_.value);
+            return reaches_shift_kind(e->as.return_.value, target);
         case EX_SET:
-            return cl_reaches_cloneable_shift(e->as.set_.value);
+            return reaches_shift_kind(e->as.set_.value, target);
         default:
             return false;
     }
@@ -535,12 +536,13 @@ static bool cl_op_supported(const char *op) {
                   strcmp(op, "*") == 0);
 }
 
-/* Walk the reset body down to its single cloneable-shift, recording each
+/* Walk the reset body down to its single shift of kind `target`, recording each
  * enclosing single-hole int binop as a context frame (frames[0] = outermost).
- * Returns the cloneable-shift expr and *n_out frames (>= 0), or NULL if the
- * body is not a supported context chain. */
-static const Expr *cl_collect_context(const Expr *rb, ClFrame *frames,
-                                      uint32_t *n_out) {
+ * Returns the shift expr and *n_out frames (>= 0), or NULL if the body is not a
+ * supported context chain. Shared by the cloneable (CPS9) and serial (CPS10)
+ * lowerings. */
+static const Expr *collect_ctx(const Expr *rb, ExprKind target,
+                               ClFrame *frames, uint32_t *n_out) {
     uint32_t n = 0;
     const Expr *cur = rb;
     while (cur && cur->kind == EX_BUILTIN) {
@@ -550,13 +552,13 @@ static const Expr *cl_collect_context(const Expr *rb, ClFrame *frames,
         if (cur->type.kind != TY_INT) return NULL;
         const Expr *a0 = cur->as.builtin.args[0];
         const Expr *a1 = cur->as.builtin.args[1];
-        bool h0 = cl_reaches_cloneable_shift(a0);
-        bool h1 = cl_reaches_cloneable_shift(a1);
+        bool h0 = reaches_shift_kind(a0, target);
+        bool h1 = reaches_shift_kind(a1, target);
         if (h0 == h1) return NULL;                 /* need exactly one hole */
         const Expr *hole  = h0 ? a0 : a1;
         const Expr *other = h0 ? a1 : a0;
         if (other->type.kind != TY_INT) return NULL;
-        if (cl_reaches_cloneable_shift(other)) return NULL;
+        if (reaches_shift_kind(other, target)) return NULL;
         if (expr_contains_return_or_throw(other)) return NULL;
         if (n >= CL_MAX_CTX_FRAMES) return NULL;
         frames[n].c_op = spec->c_op;
@@ -565,7 +567,7 @@ static const Expr *cl_collect_context(const Expr *rb, ClFrame *frames,
         n++;
         cur = hole;
     }
-    if (cur && cur->kind == EX_CLONEABLE_SHIFT) {
+    if (cur && cur->kind == target) {
         *n_out = n;
         return cur;
     }
@@ -580,7 +582,7 @@ static bool cl_can_lower(const Expr *e) {
     if (!ty_intptr_safe(e->type.kind)) return false;
     ClFrame frames[CL_MAX_CTX_FRAMES];
     uint32_t nf = 0;
-    const Expr *shift = cl_collect_context(e->as.cloneable_reset_.body, frames, &nf);
+    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf);
     if (!shift || nf == 0) return false;
     if (shift->as.cloneable_shift_.n_live_captures != 0) return false;
     if (!shift->as.cloneable_shift_.k_fn) return false;
@@ -606,7 +608,7 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     ClFrame frames[CL_MAX_CTX_FRAMES];
     uint32_t nf = 0;
-    const Expr *shift = cl_collect_context(e->as.cloneable_reset_.body, frames, &nf);
+    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf);
     const Expr *k_fn = shift->as.cloneable_shift_.k_fn;
     Buf *hb = ctx->pending_handler_fns;
     int id = ctx->tmp_n++;
@@ -757,6 +759,259 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 "    return (void *)dk_copy_range((const DK *)env, NULL);\n"
 "}\n"
 "static void __dk_env_drop(void *env) { dk_free((DK *)env); }\n"
+"\n");
+}
+
+/* =========================================================================
+ * CPS10 (cps-transform-plan, CPS5.4): serializable continuations on the DK
+ * machine.
+ *
+ * serial-shift captures the delimited context as a DK chain, exactly like the
+ * cloneable path (CPS9) -- but the captured continuation is *marshalable*. A
+ * heap-reified sub-continuation is a flat list of (frame, env) nodes, so it can
+ * be serialized by writing each frame's stable TAG plus its env, and rebuilt by
+ * mapping the tag back to a frame function -- no fiber/stack snapshot to walk
+ * (the CPS5.4 insight). This is strictly simpler than snapshotting a native
+ * stack and is portable: tags are stable integers, not code addresses.
+ *
+ * To make the tags stable the context frames are a FIXED set emitted once into
+ * the preamble (not per-site lambda-lifted as in CPS9): +, *, and - (with the
+ * hole on either side), keyed by SK_TAG_*. The env (the captured non-hole
+ * operand) is an int and is marshaled inline; richer env types via the
+ * Serializable typeclass are a follow-on. The supported context subset is the
+ * same single-hole integer (+, -, *) chain as CPS9; serial-shift may also be
+ * the whole reset body (empty context).
+ *
+ * Surface runtime (emitted builtins, registered in builtins.c):
+ *   tur_serial_cont_resume(k, v)      -- run the captured chain on v
+ *   tur_serial_cont_serialize(k)      -- marshal to a length-prefixed buffer
+ *   tur_serial_cont_deserialize(bytes)-- rebuild a runnable chain from a buffer
+ * ========================================================================= */
+
+/* Pure feasibility check (NO emission) for a serial-reset. Unlike the cloneable
+ * path, an empty context (serial-shift IS the whole body) is allowed -- serial
+ * continuations are an all-new feature with no legacy snapshots to preserve. */
+static bool sk_can_lower(const Expr *e) {
+    if (!e || e->kind != EX_SERIAL_RESET) return false;
+    if (!ty_intptr_safe(e->type.kind)) return false;
+    ClFrame frames[CL_MAX_CTX_FRAMES];
+    uint32_t nf = 0;
+    const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
+                                    frames, &nf);
+    if (!shift) return false;
+    if (!shift->as.serial_shift_.k_fn) return false;
+    return true;
+}
+
+/* The stable tag for a context frame (op + hole side), shared by the emitted
+ * frame table. Mirrors the SK_TAG_* enum emitted in the prelude. */
+static int sk_tag_for_frame(const ClFrame *f) {
+    if (strcmp(f->c_op, "+") == 0) return 1;       /* SK_TAG_ADD:  env + v */
+    if (strcmp(f->c_op, "*") == 0) return 2;       /* SK_TAG_MUL:  env * v */
+    /* "-" */ return f->hole_left ? 4              /* SK_TAG_SUBL: v - env */
+                                  : 3;             /* SK_TAG_SUBR: env - v */
+}
+
+char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
+    if (!sk_can_lower(e)) return NULL;
+    if (!ctx->pending_handler_fns) return NULL;
+
+    ClFrame frames[CL_MAX_CTX_FRAMES];
+    uint32_t nf = 0;
+    const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
+                                    frames, &nf);
+    const Expr *k_fn = shift->as.serial_shift_.k_fn;
+    Buf *hb = ctx->pending_handler_fns;
+    int id = ctx->tmp_n++;
+
+    /* The shift body (file scope): own a copy of the captured sub-continuation
+     * (a DK chain of tagged frames) and hand it to the receiver f as the serial
+     * continuation handle. f's return value becomes the reset's value. */
+    char body_name[48];
+    snprintf(body_name, sizeof body_name, "__sk_body_%d", id);
+    buf_printf(hb,
+        "static intptr_t %s(intptr_t env, DK *subk) {\n"
+        "    DK *__cap = dk_copy_range(subk, NULL);\n",
+        body_name);
+    if (k_fn->kind == EX_CLOSURE) {
+        struct Closure *closure = k_fn->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        buf_printf(hb,
+            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)__cap);\n}\n",
+            thunk_name);
+        free(thunk_name);
+    } else {
+        buf_printf(hb,
+            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)"
+            "((int64_t)(intptr_t)__cap);\n}\n");
+    }
+
+    /* At the reset site: evaluate the non-hole operands and the receiver env,
+     * build the DK chain from the fixed tagged frames, and run it. */
+    char *op_vals[CL_MAX_CTX_FRAMES];
+    int   op_tags[CL_MAX_CTX_FRAMES];
+    for (uint32_t i = 0; i < nf; i++) {
+        op_vals[i] = emit_value(ctx, body, frames[i].other);
+        op_tags[i] = sk_tag_for_frame(&frames[i]);
+    }
+    char *k_fn_val = emit_value(ctx, body, k_fn);
+
+    char *chain = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "DK *%s = dk_prompt(1, dk_done());\n", chain);
+    for (uint32_t i = 0; i < nf; i++) {       /* outermost-first -> innermost at front */
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);\n",
+                   chain, op_tags[i], op_vals[i], chain);
+        free(op_vals[i]);
+    }
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);\n",
+               chain, body_name, k_fn_val, chain);
+    free(k_fn_val);
+
+    const char *rty = emit_type_c_name(ctx, e->type);
+    char *result = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s = (%s)dk_run(%s, 0);\n", rty, result, rty, chain);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "dk_free(%s);\n", chain);
+    free(chain);
+    return result;
+}
+
+/* Program scan: does any serial-reset lower onto the DK machine? Gates the DK
+ * runtime prelude + the serial marshaling runtime. Mirrors sk_can_lower. */
+static bool uses_serial_dk(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_SERIAL_RESET && sk_can_lower(e)) return true;
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (uses_serial_dk(e->as.program.items[i])) return true;
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && uses_serial_dk(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && uses_serial_dk(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   uses_serial_dk(e->as.closure_.closure->fn->body);
+        case EX_SERIAL_RESET:
+            return uses_serial_dk(e->as.serial_reset_.body);
+        case EX_CLONEABLE_RESET:
+            return uses_serial_dk(e->as.cloneable_reset_.body);
+        case EX_RESET:
+            return uses_serial_dk(e->as.reset_.body);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (uses_serial_dk(e->as.let_.bindings[i].init)) return true;
+            return uses_serial_dk(e->as.let_.body);
+        case EX_IF:
+            return uses_serial_dk(e->as.if_.cond) ||
+                   uses_serial_dk(e->as.if_.then_) ||
+                   uses_serial_dk(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (uses_serial_dk(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return uses_serial_dk(e->as.while_.cond) ||
+                   uses_serial_dk(e->as.while_.body);
+        case EX_SET:    return uses_serial_dk(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && uses_serial_dk(e->as.def_.init);
+        case EX_RETURN: return e->as.return_.value && uses_serial_dk(e->as.return_.value);
+        case EX_DEFER:  return uses_serial_dk(e->as.defer_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (uses_serial_dk(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (uses_serial_dk(e->as.call_.args[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+bool emit_cps_program_uses_serial_dk(const Expr *program) {
+    return uses_serial_dk(program);
+}
+
+/* Serial marshaling runtime: the fixed tagged context frames + the resume /
+ * serialize / deserialize builtins. Emitted after the DK machine prelude,
+ * gated on emit_cps_program_uses_serial_dk. */
+void emit_cps_serial_runtime_prelude(Buf *out) {
+    buf_puts(out,
+"/* cps-transform-plan (CPS10 / CPS5.4): serializable continuations.\n"
+" * The captured continuation is a DK chain of tagged context frames; it is\n"
+" * marshaled by writing each frame's stable tag + env (no code addresses), and\n"
+" * rebuilt by mapping the tag back to a frame fn. Buffer layout matches stdlib\n"
+" * `bytes` (int64 length prefix, then payload). */\n"
+"enum { SK_TAG_ADD = 1, SK_TAG_MUL = 2, SK_TAG_SUBR = 3, SK_TAG_SUBL = 4 };\n"
+"static intptr_t __sk_add (intptr_t env, intptr_t v) { return env + v; }\n"
+"static intptr_t __sk_mul (intptr_t env, intptr_t v) { return env * v; }\n"
+"static intptr_t __sk_subr(intptr_t env, intptr_t v) { return env - v; } /* other - hole */\n"
+"static intptr_t __sk_subl(intptr_t env, intptr_t v) { return v - env; } /* hole - other */\n"
+"static DKFrame __sk_frame_for_tag(int tag) {\n"
+"    switch (tag) {\n"
+"        case SK_TAG_ADD:  return __sk_add;\n"
+"        case SK_TAG_MUL:  return __sk_mul;\n"
+"        case SK_TAG_SUBR: return __sk_subr;\n"
+"        case SK_TAG_SUBL: return __sk_subl;\n"
+"        default: return NULL;\n"
+"    }\n"
+"}\n"
+"static int __sk_tag_for_frame(DKFrame f) {\n"
+"    if (f == __sk_add)  return SK_TAG_ADD;\n"
+"    if (f == __sk_mul)  return SK_TAG_MUL;\n"
+"    if (f == __sk_subr) return SK_TAG_SUBR;\n"
+"    if (f == __sk_subl) return SK_TAG_SUBL;\n"
+"    return 0;\n"
+"}\n"
+"/* Resume a (possibly deserialized) serial continuation on a value. */\n"
+"static int64_t tur_serial_cont_resume(int64_t k, int64_t v) {\n"
+"    return (int64_t)dk_invoke((DK *)(intptr_t)k, (intptr_t)v);\n"
+"}\n"
+"/* Marshal: [int64 payload_len][int64 n][ (int64 tag, int64 env) * n ]. The\n"
+" * captured frames run front-to-back, so they are written in chain order. */\n"
+"static int64_t tur_serial_cont_serialize(int64_t k) {\n"
+"    DK *p = (DK *)(intptr_t)k;\n"
+"    int64_t n = 0;\n"
+"    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) n++;\n"
+"    int64_t payload = (int64_t)sizeof(int64_t) * (1 + 2 * n);\n"
+"    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + (size_t)payload);\n"
+"    if (!buf) abort();\n"
+"    buf[0] = payload; buf[1] = n;\n"
+"    int64_t i = 2;\n"
+"    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) {\n"
+"        buf[i++] = (int64_t)__sk_tag_for_frame(q->fn);\n"
+"        buf[i++] = (int64_t)q->env;\n"
+"    }\n"
+"    return (int64_t)(intptr_t)buf;\n"
+"}\n"
+"/* Rebuild a runnable chain [frames..., prompt, done] from a marshaled buffer.\n"
+" * Frames are prepended in reverse so the first-written frame stays at front. */\n"
+"static int64_t tur_serial_cont_deserialize(int64_t bytes) {\n"
+"    int64_t *buf = (int64_t *)(intptr_t)bytes;\n"
+"    int64_t n = buf[1];\n"
+"    DK *chain = dk_prompt(1, dk_done());\n"
+"    for (int64_t i = n - 1; i >= 0; i--) {\n"
+"        int64_t tag = buf[2 + 2 * i];\n"
+"        int64_t env = buf[2 + 2 * i + 1];\n"
+"        chain = dk_frame(__sk_frame_for_tag((int)tag), (intptr_t)env, chain);\n"
+"    }\n"
+"    return (int64_t)(intptr_t)chain;\n"
+"}\n"
 "\n");
 }
 
