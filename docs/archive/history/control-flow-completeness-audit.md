@@ -114,6 +114,18 @@ transform.
   precise liveness for cloneable continuations. Large, separable piece of
   work; correctly deferred.
 
+  > **CF4 update (2026-06-02): the "whole-program CPS pass" substrate is
+  > addressed by [`cps-transform-plan.md`](../../upcoming/cps-transform-plan.md),
+  > phases CPS0--CPS6.** That plan delivers the selective may-capture coloring
+  > (CPS1), the ANF/CPS IR + selective lowering with direct<->CPS boundary
+  > bridging (CPS2--CPS3), a heap-reified unbounded-capture continuation runtime
+  > + trampoline (CPS4, validated at 500k frames), a multi-prompt
+  > delimited-control machine with an implicit root prompt (CPS5), and retires
+  > the 16-frame ceiling on the CPS path (CPS6). The substrate is built and
+  > unit-tested standalone; re-pointing the existing `shift`/`reset`/`call/cc*`
+  > codegen lowerings at it (so the shipping `continuation-*` suite runs on the
+  > CPS path) is the remaining integration tracked there.
+
 - **Multi-threaded scheduler integration.** `scheduler.c:542,550` (SCH-003):
   `tur_scheduler_mt_from_threadpool` / `..._set_for_threadpool` print
   "not yet integrated" and are non-functional. Single-threaded and the

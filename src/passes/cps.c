@@ -194,6 +194,290 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
     return cps_expr_contains_cloneable_shift(fd->body);
 }
 
+/* =========================================================================
+ * CPS1 (cps-transform-plan): whole-program "may-capture" coloring analysis.
+ *
+ * See CPS0.1 for the ratified rule. We build a call graph over the top-level
+ * functions, seed the colored set with functions whose body directly contains a
+ * control-op node, conservatively color any function that makes an unresolved
+ * (indirect/extern/local-value) call, and propagate backward to a fixed point.
+ * Calls to nested lambdas are unresolved and hence covered by the conservative
+ * rule, so the node set can be restricted to top-level functions while staying
+ * sound for the top-level coloring this exposes.
+ * ========================================================================= */
+
+/* True iff e's subtree DIRECTLY contains a control-op node, WITHOUT descending
+ * into nested function definitions (each nested fn is colored on its own merits;
+ * reaching it is modeled as an unresolved call by the caller). This mirrors the
+ * trusted enumeration in cps_expr_contains_shift, plus the serial operators. */
+static bool cps_directly_uses_control(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        /* Seeds: any of these IR nodes is a control operator. */
+        case EX_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET:
+        case EX_SERIAL_SHIFT:
+        case EX_PERFORM:
+        case EX_HANDLE:
+        case EX_RESUME:
+        case EX_DISCONTINUE:
+            return true;
+        /* Structural recursion (no descent into nested fn bodies). */
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cps_directly_uses_control(e->as.let_.bindings[i].init)) return true;
+            return cps_directly_uses_control(e->as.let_.body);
+        case EX_IF:
+            return cps_directly_uses_control(e->as.if_.cond)
+                || cps_directly_uses_control(e->as.if_.then_)
+                || cps_directly_uses_control(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cps_directly_uses_control(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return cps_directly_uses_control(e->as.while_.cond)
+                || cps_directly_uses_control(e->as.while_.body);
+        case EX_SET:
+            return cps_directly_uses_control(e->as.set_.value);
+        case EX_DEF:
+            return cps_directly_uses_control(e->as.def_.init);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cps_directly_uses_control(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            if (cps_directly_uses_control(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (cps_directly_uses_control(e->as.call_.args[i])) return true;
+            return false;
+        case EX_DEFER:
+            return cps_directly_uses_control(e->as.defer_.body);
+        case EX_RETURN:
+            return cps_directly_uses_control(e->as.return_.value);
+        case EX_PANIC:
+            return cps_directly_uses_control(e->as.panic_.payload);
+        case EX_PANIC_WITH:
+            return cps_directly_uses_control(e->as.panic_with_.payload);
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            return cps_directly_uses_control(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_DOWNS:
+            return cps_directly_uses_control(e->as.panic_payload_downs_.payload);
+        case EX_CATCH_UNWIND:
+            return cps_directly_uses_control(e->as.catch_unwind_.thunk);
+        case EX_CATCH_PANIC_OF:
+            return cps_directly_uses_control(e->as.catch_panic_of_.thunk);
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++)
+                if (cps_directly_uses_control(e->as.dynvar_binding_.pairs[i].override_expr))
+                    return true;
+            return cps_directly_uses_control(e->as.dynvar_binding_.body);
+        /* Nested function definitions are call-graph boundaries. */
+        case EX_FN_DEF:
+        case EX_FN:
+        case EX_CLOSURE:
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* One call-graph node, one per top-level function. */
+typedef struct CpsNode {
+    FnDef    *fd;
+    bool      colored;
+    bool      has_indirect;   /* makes an unresolved call -> conservatively colored */
+    uint32_t *edges;          /* indices of resolved top-level callees */
+    uint32_t  n_edges, cap_edges;
+} CpsNode;
+
+static void cps_node_add_edge(CpsNode *self, uint32_t target) {
+    for (uint32_t i = 0; i < self->n_edges; i++)
+        if (self->edges[i] == target) return; /* dedup */
+    if (self->n_edges == self->cap_edges) {
+        self->cap_edges = self->cap_edges ? self->cap_edges * 2 : 4;
+        self->edges = realloc(self->edges, self->cap_edges * sizeof(uint32_t));
+    }
+    self->edges[self->n_edges++] = target;
+}
+
+/* Find the top-level node whose function binding == b, or -1. */
+static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
+    if (!b) return -1;
+    for (uint32_t i = 0; i < n; i++)
+        if (nodes[i].fd->binding == b) return (int)i;
+    return -1;
+}
+
+/* Walk a function body collecting call edges and the indirect flag, WITHOUT
+ * descending into nested function bodies (separate nodes). */
+static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
+                              CpsNode *self) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_CALL: {
+            int idx = cps_find_node(nodes, n_nodes, e->as.call_.fn_binding);
+            if (idx >= 0) {
+                cps_node_add_edge(self, (uint32_t)idx);
+            } else {
+                /* Unresolved: indirect call, call through a local value, or an
+                 * extern/builtin not in the top-level set. Conservatively treat
+                 * as possibly reaching a control op (CPS0.1 rule 3). */
+                self->has_indirect = true;
+            }
+            cps_collect_calls(e->as.call_.fn_expr, nodes, n_nodes, self);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                cps_collect_calls(e->as.call_.args[i], nodes, n_nodes, self);
+            return;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                cps_collect_calls(e->as.let_.bindings[i].init, nodes, n_nodes, self);
+            cps_collect_calls(e->as.let_.body, nodes, n_nodes, self);
+            return;
+        case EX_IF:
+            cps_collect_calls(e->as.if_.cond, nodes, n_nodes, self);
+            cps_collect_calls(e->as.if_.then_, nodes, n_nodes, self);
+            cps_collect_calls(e->as.if_.else_or_null, nodes, n_nodes, self);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                cps_collect_calls(e->as.do_.items[i], nodes, n_nodes, self);
+            return;
+        case EX_WHILE:
+            cps_collect_calls(e->as.while_.cond, nodes, n_nodes, self);
+            cps_collect_calls(e->as.while_.body, nodes, n_nodes, self);
+            return;
+        case EX_SET:
+            cps_collect_calls(e->as.set_.value, nodes, n_nodes, self);
+            return;
+        case EX_DEF:
+            cps_collect_calls(e->as.def_.init, nodes, n_nodes, self);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                cps_collect_calls(e->as.builtin.args[i], nodes, n_nodes, self);
+            return;
+        case EX_DEFER:
+            cps_collect_calls(e->as.defer_.body, nodes, n_nodes, self);
+            return;
+        case EX_RETURN:
+            cps_collect_calls(e->as.return_.value, nodes, n_nodes, self);
+            return;
+        case EX_RESET:
+            cps_collect_calls(e->as.reset_.body, nodes, n_nodes, self);
+            return;
+        case EX_SHIFT:
+            cps_collect_calls(e->as.shift_.k_fn, nodes, n_nodes, self);
+            cps_collect_calls(e->as.shift_.body, nodes, n_nodes, self);
+            return;
+        case EX_SHIFT0:
+            cps_collect_calls(e->as.shift0_.k_fn, nodes, n_nodes, self);
+            cps_collect_calls(e->as.shift0_.body, nodes, n_nodes, self);
+            return;
+        case EX_CLONEABLE_RESET:
+            cps_collect_calls(e->as.cloneable_reset_.body, nodes, n_nodes, self);
+            return;
+        case EX_CLONEABLE_SHIFT:
+            cps_collect_calls(e->as.cloneable_shift_.k_fn, nodes, n_nodes, self);
+            cps_collect_calls(e->as.cloneable_shift_.body, nodes, n_nodes, self);
+            return;
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++)
+                cps_collect_calls(e->as.dynvar_binding_.pairs[i].override_expr,
+                                  nodes, n_nodes, self);
+            cps_collect_calls(e->as.dynvar_binding_.body, nodes, n_nodes, self);
+            return;
+        case EX_CATCH_UNWIND:
+            cps_collect_calls(e->as.catch_unwind_.thunk, nodes, n_nodes, self);
+            return;
+        case EX_CATCH_PANIC_OF:
+            cps_collect_calls(e->as.catch_panic_of_.thunk, nodes, n_nodes, self);
+            return;
+        /* Nested function definitions are call-graph boundaries. */
+        case EX_FN_DEF:
+        case EX_FN:
+        case EX_CLOSURE:
+            return;
+        default:
+            return;
+    }
+}
+
+void cps_color_program(Arena *a, Expr *program) {
+    (void)a;
+    if (!program || program->kind != EX_PROGRAM) return;
+
+    /* Collect top-level function nodes. */
+    uint32_t cap = 16, n = 0;
+    CpsNode *nodes = calloc(cap, sizeof(CpsNode));
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        FnDef *fd = item->as.fn_def_.fn;
+        fd->cps_colored = false; /* reset (idempotent) */
+        if (n == cap) { cap *= 2; nodes = realloc(nodes, cap * sizeof(CpsNode)); }
+        memset(&nodes[n], 0, sizeof(CpsNode));
+        nodes[n].fd = fd;
+        n++;
+    }
+
+    /* Seed + build edges. */
+    for (uint32_t i = 0; i < n; i++) {
+        nodes[i].colored = cps_directly_uses_control(nodes[i].fd->body);
+        cps_collect_calls(nodes[i].fd->body, nodes, n, &nodes[i]);
+        if (nodes[i].has_indirect) nodes[i].colored = true;
+    }
+
+    /* Backward propagation to a least fixed point: a function is colored if any
+     * resolved callee is colored. */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (nodes[i].colored) continue;
+            for (uint32_t e = 0; e < nodes[i].n_edges; e++) {
+                if (nodes[nodes[i].edges[e]].colored) {
+                    nodes[i].colored = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Write results back as additive IR metadata, then free scratch. */
+    for (uint32_t i = 0; i < n; i++) {
+        nodes[i].fd->cps_colored = nodes[i].colored;
+        free(nodes[i].edges);
+    }
+    free(nodes);
+}
+
+void cps_dump_coloring(Arena *a, Expr *program, FILE *out) {
+    if (!program || program->kind != EX_PROGRAM || !out) return;
+    cps_color_program(a, program);
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        FnDef *fd = item->as.fn_def_.fn;
+        if (!fd->binding || !fd->binding->name) continue;
+        /* Only report user-level top-level defns (not stdlib module functions),
+         * so the partition is legible. */
+        if (fd->binding->defining_module_name) continue;
+        fprintf(out, "cps-coloring: %s %s\n",
+                fd->binding->name->name,
+                fd->cps_colored ? "COLORED" : "uncolored");
+    }
+}
+
 /* -------------------------------------------------------------------------
  * CPS-CL1: Liveness analysis for cloneable-shift sites
  * -------------------------------------------------------------------------

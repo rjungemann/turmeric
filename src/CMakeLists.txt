@@ -100,6 +100,7 @@ set(TUR_CORE_SOURCES
     # passes/ -- analysis and transformation passes
     passes/borrow_check.c
     passes/cps.c
+    passes/cps_ir.c
     passes/effect.c
     passes/effect_check.c
     passes/effect_lower.c
@@ -118,6 +119,8 @@ set(TUR_CORE_SOURCES
     # RP4: generated shape-switch that bridges the interpreter's
     # marshaling layer to the typed trampolines above.
     runtime/ffi_dispatch_thunk.c
+    runtime/cps_rt.c
+    runtime/cps_prompt.c
     runtime/gc.c
     runtime/globals.c
     runtime/hamt.c
@@ -469,6 +472,54 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_lifetime_unit PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 set_target_properties(tur_lifetime_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# CPS4 (cps-transform-plan): heap-reified continuation + trampoline runtime unit.
+# Compiles cps_rt.c directly (no tur_core link) so leak detection validates only
+# the CPS runtime -- it is self-contained and frees everything it allocates.
+add_executable(tur_cps_rt_unit
+    ${CMAKE_SOURCE_DIR}/tests/cps_rt_unit.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/cps_rt.c
+)
+target_include_directories(tur_cps_rt_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_cps_rt_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_cps_rt_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+target_link_libraries(tur_cps_rt_unit PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_cps_rt_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_cps_rt_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_cps_rt_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# CPS5 (cps-transform-plan): multi-prompt delimited-control machine unit.
+add_executable(tur_cps_prompt_unit
+    ${CMAKE_SOURCE_DIR}/tests/cps_prompt_unit.c
+    ${CMAKE_SOURCE_DIR}/src/runtime/cps_prompt.c
+)
+target_include_directories(tur_cps_prompt_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_cps_prompt_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_cps_prompt_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+target_link_libraries(tur_cps_prompt_unit PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_cps_prompt_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_cps_prompt_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_cps_prompt_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
