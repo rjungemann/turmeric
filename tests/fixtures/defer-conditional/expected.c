@@ -131,6 +131,9 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_UNTAG(x)   ((x).val)
 #define TUR_GETTAG(x)  ((x).tag)
 #define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]
+#define TUR_APPLY0(f) \
+    (((int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \
+        ((void *)(intptr_t)(f)))
 #define TUR_APPLY1(f, a) \
     (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \
         ((void *)(intptr_t)(f), (int64_t)(a)))
@@ -491,12 +494,22 @@ static void tur_panic_print_scope_chain(void) {
     }
 }
 
+typedef struct tur_panic_payload tur_panic_payload;
+static jmp_buf global_panic_jmpbuf;
+static int global_panic_jmpbuf_valid;
+static tur_panic_payload *global_panic_payload;
+static tur_panic_payload *panic_payload_new(int, void *, const char *, int);
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
         abort();
     }
     tur_panic_in_progress = 1;
+    if (global_panic_jmpbuf_valid) {
+        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, __FILE__, __LINE__);
+        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }
+        longjmp(global_panic_jmpbuf, 1);
+    }
     fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
     tur_panic_print_scope_chain();
     if (global_panic_frame) {
@@ -515,7 +528,6 @@ static void tur_panic_abort(const char *msg) {
 static void tur_panic_with(int type_tag, void *payload, const char *file, int line);
 
 /* Phase R2: tur_panic_with types */
-typedef struct tur_panic_payload tur_panic_payload;
 struct tur_panic_payload {
     int type_tag;
     void *value;
@@ -623,6 +635,50 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         }
         return false;
         }
+    }
+}
+
+/* Phase R2: catch-unwind special-form helpers (result-box ABI) */
+static int64_t tur_catch_unwind_box(int64_t thunk) {
+    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;
+    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
+    global_panic_jmpbuf_valid = 1;
+    if (setjmp(global_panic_jmpbuf) == 0) {
+        int64_t __v = TUR_APPLY0(thunk);
+        global_panic_jmpbuf_valid = __prev_valid;
+        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        return tur_ok(__v);
+    } else {
+        global_panic_jmpbuf_valid = __prev_valid;
+        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        tur_panic_in_progress = 0;
+        tur_panic_payload *__p = global_panic_payload;
+        global_panic_payload = NULL;
+        return tur_err((int64_t)(intptr_t)__p);
+    }
+}
+
+static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
+    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;
+    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
+    global_panic_jmpbuf_valid = 1;
+    if (setjmp(global_panic_jmpbuf) == 0) {
+        int64_t __v = TUR_APPLY0(thunk);
+        global_panic_jmpbuf_valid = __prev_valid;
+        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        return tur_ok(__v);
+    } else {
+        global_panic_jmpbuf_valid = __prev_valid;
+        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));
+        tur_panic_in_progress = 0;
+        tur_panic_payload *__p = global_panic_payload;
+        global_panic_payload = NULL;
+        if (__p && __p->type_tag == expected_type) {
+            return tur_err((int64_t)(intptr_t)__p);
+        }
+        /* type mismatch: re-raise to the next outer boundary (restored above) */
+        if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);
+        return tur_err(0);
     }
 }
 

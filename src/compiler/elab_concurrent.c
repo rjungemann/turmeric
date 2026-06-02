@@ -330,9 +330,34 @@ Expr *elab_panic_with(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase R2: catch-unwind/catch-panic-of yield a result box carried as :int
+ * (the same int64 carrier stdlib's ok/err return).  The box is { is_ok, ok_val,
+ * err_val }; the err slot holds the opaque Panic payload pointer.  Typing the
+ * value :int lets the stdlib ok?/err? predicates (declared [r :int]) and the
+ * inline-C result helpers consume it directly, matching how every other v1
+ * Result value flows. */
+static Type catch_unwind_result_type(Elab *e, Span span) {
+    (void)e; (void)span;
+    return TYPE_INT;
+}
+
+/* Phase R2: ensure the catch-unwind thunk is a fat closure so the runtime
+ * helper can invoke it through the standard closure protocol (TUR_APPLY0).
+ * A bare non-capturing (fn [] ...) has type TY_FN (a raw C function pointer);
+ * auto-shim it into a { fatshim0, orig } box via EX_FN_TO_FAT.  A capturing
+ * closure already carries TY_PTR_VOID (a fat handle) and passes through. */
+static Expr *catch_thunk_to_fat(Elab *e, Expr *thunk) {
+    if (thunk && thunk->type.kind == TY_FN) {
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID, thunk->span);
+        shim->as.fn_to_fat_.inner = thunk;
+        return shim;
+    }
+    return thunk;
+}
+
 /* Phase R2: (catch-unwind thunk) — catch any panic at a boundary.
  * thunk is a nullary function; returns result<T, panic-payload>.
- * In v1, result is ptr<void> and lowering uses tur_catch_unwind from runtime. */
+ * In v1, result is (Result :int :ptr<void>); lowering uses tur_catch_unwind_box. */
 Expr *elab_catch_unwind(Elab *e, const Form *call) {
     /* Phase R6b: catch-unwind is not a panic site under --lint-panic (it is
      * the recovery boundary); no lint here. */
@@ -343,8 +368,9 @@ Expr *elab_catch_unwind(Elab *e, const Form *call) {
     }
     Expr *thunk = elab_form(e, call->as.list.items[1]);
     if (!thunk) return NULL;
-    /* Result type is result<T, panic-payload> - ptr<void> in v1 */
-    Expr *out = expr_new(e->arena, EX_CATCH_UNWIND, TYPE_PTR_VOID, call->span);
+    thunk = catch_thunk_to_fat(e, thunk);
+    Expr *out = expr_new(e->arena, EX_CATCH_UNWIND,
+                         catch_unwind_result_type(e, call->span), call->span);
     out->as.catch_unwind_.thunk = thunk;
     return out;
 }
@@ -359,18 +385,21 @@ Expr *elab_catch_panic_of(Elab *e, const Form *call) {
                   "(catch-panic-of Type thunk) requires exactly two arguments");
         return NULL;
     }
-    /* First arg: type identifier */
+    /* First arg: type identifier -- accept both a bare symbol (cstr) and a
+     * keyword (:cstr); both spell a primitive TypeKind for payload filtering. */
     Form *type_form = call->as.list.items[1];
     TypeKind type_kind = TY_UNKNOWN;
     if (type_form->tag == F_SYM) {
-        const char *type_name = type_form->as.sym->name;
-        type_kind = typekind_from_name(type_name);
+        type_kind = typekind_from_name(type_form->as.sym->name);
+    } else if (type_form->tag == F_KEYWORD) {
+        type_kind = typekind_from_symbol(type_form->as.sym->name);
     }
     /* Second arg: thunk */
     Expr *thunk = elab_form(e, call->as.list.items[2]);
     if (!thunk) return NULL;
-    /* Result type is result<T, panic-payload> - ptr<void> in v1 */
-    Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF, TYPE_PTR_VOID, call->span);
+    thunk = catch_thunk_to_fat(e, thunk);
+    Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF,
+                         catch_unwind_result_type(e, call->span), call->span);
     out->as.catch_panic_of_.type_kind = type_kind;
     out->as.catch_panic_of_.thunk = thunk;
     return out;

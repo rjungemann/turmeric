@@ -1,0 +1,7 @@
+;;; Phase R2: catch-unwind returns ok(value) when the thunk completes normally.
+(defn main [] :int
+  (let [r (catch-unwind (fn [] :int 42))]
+    (if (ok? r)
+      (println "ok")
+      (println "err")))
+  0)

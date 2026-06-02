@@ -1,0 +1,10 @@
+;;; Phase R2: defer thunks fire during unwinding, before catch-unwind returns.
+(defn with-defer [] :int
+  (defer (println "defer fired"))
+  (panic "boom")
+  0)
+
+(defn main [] :int
+  (let [r (catch-unwind (fn [] :int (with-defer)))]
+    (println "after catch"))
+  0)
