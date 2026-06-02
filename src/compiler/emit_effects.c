@@ -12,6 +12,7 @@
  * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
  */
 #include "emit_internal.h"
+#include "emit_cps.h"
 
 /* =========================================================================
  * Region C -- algebraic effects
@@ -1033,12 +1034,16 @@ char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e) {
  * ========================================================================= */
 
 char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
-    /* (reset body) - establish a continuation boundary and run body
+    /* (reset body) - establish a continuation boundary and run body.
      *
-     * For v1 without full CPS: reset just evaluates and returns its body.
-     * This is correct for the case where body doesn't contain shift.
-     * When body contains shift, the CPS pass should have transformed it.
-     */
+     * cps-transform-plan: when the body can dynamically reach a base shift
+     * bound to this reset, lower the delimited computation onto the CPS
+     * substrate's multi-prompt machine (emit_cps_reset). Outside that subset
+     * emit_cps_reset returns NULL and we fall back to the legacy lowering:
+     * reset just evaluates and returns its body (correct when the body has no
+     * shift, or when an inner reset/operator self-delimits it). */
+    char *cps = emit_cps_reset(ctx, body, e);
+    if (cps) return cps;
     return emit_value(ctx, body, e->as.reset_.body);
 }
 

@@ -310,8 +310,43 @@ Effects interact with Turmeric's `defer` mechanism:
 - `defer` cleanup runs correctly even when `perform` is inside the same `do` block (see [Custom Effects Tutorial](custom-effects-tutorial.md) §8).
 - Capturing a continuation across a `defer` boundary is handled: the continuation's environment is cleaned up if it crosses a `defer` boundary.
 
+## The Prompt Model and Unbounded Capture (CPS substrate)
+
+Delimited control in Turmeric is moving onto a single **multi-prompt** substrate
+(the Dybvig--Peyton-Jones--Sabry model), built by
+[`cps-transform-plan.md`](../upcoming/cps-transform-plan.md). The operators you
+already use map onto prompts and sub-continuations:
+
+| Operator | Prompt action |
+|---|---|
+| `reset` | push a fresh prompt |
+| `shift` | capture the sub-continuation up to the nearest prompt; **re-install** that prompt on resume |
+| `shift0` | capture up to the nearest prompt; **do not** re-install it on resume |
+| `call/cc*` | capture a **multi-shot** sub-continuation (re-enter it any number of times) |
+| undelimited `call/cc` | capture up to the **implicit root prompt** at program entry |
+
+Two properties of the substrate matter in practice:
+
+- **Unbounded capture.** A continuation is a heap-reified closure chain, not a
+  fixed-size native-stack snapshot. Capturing it is O(1) and works at any call
+  depth -- the old 16-frame ceiling (`tur_cont_alloc` returning `NULL` past
+  `TUR_CONT_MAX_CAPTURED_FRAMES`) does not apply on this path. This is what lets
+  `call/cc` reach all the way back to the top of the program.
+
+- **Implicit root prompt.** There is a prompt around program entry, so a bare
+  `call/cc` with no enclosing `reset` still has something to capture up to and
+  resume.
+
+Performance is preserved by **selectivity**: only functions that can actually
+reach a control operator (`shift`/`perform`/`call/cc`/...) are CPS-converted
+(the "coloring" analysis, viewable with `--dump-cps-coloring`); direct-style hot
+code keeps its native calling convention and pays no trampoline or allocation
+cost. See the plan for the full model.
+
 ## See Also
 
+- [Whole-Program CPS Transform Plan](../upcoming/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
+- [Serializable Continuations Guide](serializable-continuations-guide.md) -- a heap-reified sub-continuation is a flat chain, directly serializable
 - [Async/Await Guide](async-await-guide.md) -- Effects-based async/await syntax
 - [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations
 - [STM Tutorial](stm-tutorial.md) -- Composable transactions with effects

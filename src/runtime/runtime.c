@@ -100,10 +100,14 @@ void tur_frame_fire_chain(tur_frame *f) {
 
 /* Allocate a new continuation with captured frame chain. */
 tur_cont *tur_cont_alloc(tur_frame **frame_chain, int n_frames) {
+    /* CPS6: bounded FIBER FAST PATH. The ceiling is intrinsic here (fixed
+     * captured[] array); it is NOT a limitation of the CPS substrate
+     * (cps_rt.h / cps_prompt.h), whose heap-reified capture is unbounded.
+     * Do not remove this guard while the fiber path is retained (CPS0.4). */
     if (n_frames > TUR_CONT_MAX_CAPTURED_FRAMES) {
-        return NULL;  /* Too many frames to capture */
+        return NULL;  /* Too many frames to capture (use the CPS path instead) */
     }
-    
+
     tur_cont *cont = (tur_cont *)malloc(sizeof(tur_cont));
     if (!cont) {
         return NULL;
@@ -177,8 +181,11 @@ bool tur_cont_consumed(tur_cont *cont) {
 
 /* Allocate a new cloneable continuation with captured frame chain. */
 tur_cloneable_cont *tur_cloneable_cont_alloc(tur_frame **frame_chain, int n_frames) {
+    /* CPS6: bounded FIBER FAST PATH (see tur_cont_alloc). Unbounded cloneable
+     * capture is provided by the heap-reified CPS substrate's multi-shot
+     * dk_invoke (cps_prompt.h), not by lifting this ceiling. */
     if (n_frames > TUR_CONT_MAX_CAPTURED_FRAMES) {
-        return NULL;  /* Too many frames to capture */
+        return NULL;  /* Too many frames to capture (use the CPS path instead) */
     }
 
     tur_cloneable_cont *cont =

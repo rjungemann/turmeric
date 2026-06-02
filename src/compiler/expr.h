@@ -200,6 +200,9 @@ typedef enum ExprKind {
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
     EX_SHIFT0,         /* (shift0 k body) - one-shot shift */
+    EX_CALLCC,         /* (call/cc f) / (escape f) - undelimited capture vs the
+                        * implicit root prompt; f receives a real cont<T> (CPS8/
+                        * call-cc-completion). is_escape selects the abort flavor. */
     /* Phase B2: Cloneable continuations */
     EX_CLONEABLE_RESET, /* (cloneable-reset body) - continuation boundary with cloneable captures */
     EX_CLONEABLE_SHIFT, /* (cloneable-shift k body) - capture cloneable continuation */
@@ -308,6 +311,13 @@ struct FnDef {
     /* Phase 4: Future-proofing for v3 effects (effects-plan.md §6.10) - whether this
      * function may capture continuations. Always false in v0/v1. */
     bool           may_capture;
+    /* CPS1 (cps-transform-plan): whole-program "may-capture" coloring result.
+     * True iff this function can dynamically reach a control operator (directly,
+     * transitively through a resolved call, or conservatively via an indirect
+     * call). Additive analysis metadata: written by cps_color_program, consumed
+     * by the future selective-CPS lowering (CPS3). Distinct from `may_capture`,
+     * which the existing Phase-18 delimited-CPS pass owns. */
+    bool           cps_colored;
     /* CPS2: true when this function has been selected for the CPS emission path
      * (set by cps_propagate_coloring; mirrors may_capture but is a separate field
      * so the CPS emitter path can be toggled independently). */
@@ -608,10 +618,15 @@ struct Expr {
             Expr *k_fn;             /* (shift k body) - k is a function (fn [v] ...) that receives the continuation */
             Expr *body;             /* body to run with captured continuation */
         } shift_;
-        struct { 
+        struct {
             Expr *k_fn;             /* (shift0 k body) - k is a function that cannot resume */
             Expr *body;             /* body to run */
         } shift0_;
+        struct {
+            Expr *fn;               /* (call/cc f) / (escape f) - f : cont<T> -> T */
+            bool  is_escape;        /* true for (escape f): abort flavor (no re-install) */
+        } callcc_;
+
         /* Phase B2: Cloneable continuations */
         struct { Expr *body; }         cloneable_reset_; /* (cloneable-reset body) */
         struct {
