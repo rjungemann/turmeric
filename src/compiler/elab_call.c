@@ -1588,6 +1588,43 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return NULL;
     }
 
+    /* CC4 (cps-transform-plan): (k v) application sugar for a cloneable
+     * continuation. A call through a cont-typed binding desugars to a resume of
+     * the cloneable continuation handle -- what the surface previously had to
+     * spell as (tur_cloneable_cont_resume k v). The handle is carried as an
+     * int64_t (see type_c_name TY_CONT), so the resume builtin consumes it
+     * directly. */
+    if (fn_type.kind == TY_CONT) {
+        if (n_args != 1) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "continuation '%s' takes exactly one argument (the resume value)",
+                      fn_binding->name->name);
+            return NULL;
+        }
+        Expr *karg = elab_form(e, call->as.list.items[1]);
+        if (!karg) return NULL;
+        /* The handle, viewed as its int64 carrier so the resume builtin types. */
+        Expr *kvar = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
+        kvar->as.var.binding = fn_binding;
+        const BuiltinSpec *rspec =
+            builtin_first_with_name(intern_cstr(e->st, "tur_cloneable_cont_resume"));
+        if (!rspec) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "internal: cloneable continuation resume builtin missing");
+            return NULL;
+        }
+        Type res_type = (fn_type.as.cont.returns != TY_UNKNOWN)
+                        ? type_from_kind(fn_type.as.cont.returns) : TYPE_INT;
+        Expr **bargs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        bargs[0] = kvar;
+        bargs[1] = karg;
+        Expr *out = expr_new(e->arena, EX_BUILTIN, res_type, call->span);
+        out->as.builtin.spec = rspec;
+        out->as.builtin.args = bargs;
+        out->as.builtin.n = 2;
+        return out;
+    }
+
     if (fn_type.kind == TY_FN &&
         e->unsafe_depth == 0 &&
         effect_row_contains_symbol(fn_type.as.fn.effect_row, e->sym_effect_unsafe)) {

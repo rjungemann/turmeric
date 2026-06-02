@@ -1864,9 +1864,12 @@ const char *type_c_name(Type t) {
         /* Phase 17: Exceptions removed. TY_EXCEPTION is orphaned; lower to void* */
         case TY_EXCEPTION:
             return "void *";
-        /* Phase 18: Continuation types lower to a struct in C */
+        /* Phase 18 / CC4 (cps-transform-plan): a continuation lowers to an
+         * int64_t handle. (k v) application sugar resumes it via the cloneable
+         * continuation runtime; the legacy fiber path refers to tur_cont*
+         * through its own typedefs, not via this carrier name. */
         case TY_CONT:
-            return "tur_cont *";
+            return "int64_t";
         case TY_CLONEABLE_CONT:
             return "tur_cloneable_cont *";
         /* Phase 11: Struct types lower to the struct name in C */
