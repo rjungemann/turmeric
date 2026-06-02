@@ -1,8 +1,116 @@
 # Error Handling -- Deferred Features Plan
 
-> **Status:** Draft Plan (open questions resolved 2026-06-02)
+> **Status:** In progress -- R1, C2, R6a, R6b, R6d shipped; R2 + R6c remain
 > **Last Updated:** 2026-06-02
 > **Type:** Language / Compiler / stdlib / Docs
+
+---
+
+## Implementation status (2026-06-02)
+
+Five of seven items have shipped on branch `claude/practical-volta-3dl2D`
+(suite green at 1257 fixtures). The plan's original "Current state" column was
+significantly stale -- several flags were already partly wired, and
+`catch-unwind` is *not* merely "partial" (see the R2 findings below).
+
+| # | Feature | Status | Notes |
+|---|---|---|---|
+| 1 | `?` query operator | **Shipped (R1)** | `?`-specific TUR-E0001 for literal non-Results; fixtures for typed err-carry, sweet-exp `?(...)`, bad-type, top-level; guide section added. |
+| 2 | `catch-unwind` | **Remaining (R2)** | Larger than "partial" -- two disconnected panic impls must be unified. See "R2 findings" below. |
+| 3 | `--no-contracts` | **Shipped (C2)** | Strips contract macros *and* refinement contracts at elaboration; folds `contract-enabled?`; `TUR_CONTRACTS_ENABLED` preamble define; `release-stripped` recipe. |
+| 4 | `--warn-unused-result` | **Shipped (R6a)** | Flag was already implemented; added 5 fixtures (incl. OQ#3 `?` carve-out) + guide. |
+| 5 | `--lint-panic` | **Shipped (R6b)** | Rewrote the ad-hoc lint into TUR-W0038 with `;; #lint-panic-allow` file/per-call allow-list and `*-unwrap` soft-deprecation (OQ#1); 6 fixtures + guide. |
+| 6 | Panic in effect handlers / continuations | **Remaining (R6c)** | Depends on R2. |
+| 7 | Panic in async tasks | **Shipped (R6d)** | Promoted to a body section with Today/v2 callouts + cps-transform cross-link. |
+
+**Deferred-table & HTML cleanup:** the guide's *Deferred* section now holds
+only the `catch-unwind` row (R2) and the effect-handler/continuation subsection
+(R6c). The `See Also` section was added. The HTML companion
+(`error-handling-guide.html`) regen was intentionally deferred to a single
+final sweep once R2/R6c land (the `.md` is the source of truth meanwhile).
+
+### R2 findings (why catch-unwind is more than "partial")
+
+Auditing the compiled path turned up that **panic has two disconnected
+implementations**:
+
+- `src/runtime/runtime.c` has `tur_catch_unwind` + a single global
+  `setjmp` boundary (`global_panic_jmpbuf`) and a `tur_panic_with` that
+  `longjmp`s to it. Nested boundaries are explicitly unsupported.
+- **Compiled programs do not use that path.** `emit_module.c:2400` emits a
+  *separate* `tur_panic` into each program's C preamble that fires the defer
+  chain (`tur_frame_fire_chain`) and then **always `abort()`s** -- it never
+  consults the runtime's boundary jmpbuf. The plain `(panic "msg")` form
+  lowers to this emitted `tur_panic`, so it is uncatchable in compiled code.
+
+That is why the `panic-catch-unwind` fixture is just `(defn main [] :int 0)`:
+the codegen for `EX_CATCH_UNWIND` (`emit_expr.c:1203`) is effectively dead --
+it declares a `tur_result`, calls the runtime `tur_catch_unwind` with a
+mismatched thunk ABI (`(fn [] :int)` fat closures are *not*
+`void(*)(void*, tur_result*)`), and "extracts" the value only via C comments.
+
+### Concrete R2 design for a dedicated session
+
+1. **Unify the panic path in the emitted preamble** (`emit_module.c`):
+   - Emit a boundary *stack*: `static jmp_buf tur_catch_stack[N]; static int
+     tur_catch_top; static tur_panic_payload *tur_caught_payload;` plus the
+     `tur_panic_payload` struct + accessors (or link them from `runtime.c`,
+     but keep one source of truth).
+   - Reroute the emitted `tur_panic` **and** `tur_panic_with`: when
+     `tur_catch_top > 0`, fire defers up to the boundary's frame, box the
+     message/payload, set `tur_caught_payload`, and `longjmp` to
+     `tur_catch_stack[tur_catch_top-1]`. When `tur_catch_top == 0`, behave
+     exactly as today (fire chain + abort) so every existing panic/defer test
+     is unaffected.
+   - Plain string panic boxes `{type_tag = TY_CSTR, value = strdup(msg)}` so
+     `catch-unwind` can recover the message.
+
+2. **Inline `setjmp` codegen** for `EX_CATCH_UNWIND` (`emit_expr.c`) -- the
+   `setjmp` MUST live in the generated frame, not a runtime helper:
+   ```c
+   int64_t __cu_ok; tur_panic_payload *__cu_p = NULL; int __cu_caught = 0;
+   jmp_buf *__jb = &tur_catch_stack[tur_catch_top++];
+   if (setjmp(*__jb) == 0) { __cu_ok = TUR_APPLY0(<thunk-closure>); tur_catch_top--; }
+   else { __cu_p = tur_caught_payload; tur_caught_payload = NULL; __cu_caught = 1; }
+   ```
+   Then build a **result-shaped `ptr<void>`** `{is_ok, ok_val, err_val}` (the
+   same layout `__tur-q-is-err?` reads) so the result composes with
+   `err?`/`ok-val`/`?`: ok => `{1, __cu_ok, 0}`; err =>
+   `{0, 0, (int64_t)__cu_p}` where the err slot is the opaque `Panic` handle
+   (OQ#2). Confirm `TUR_APPLY0` exists for nullary fat closures; add it if not.
+
+3. **`catch-panic-of`**: same boundary, but after catching, if
+   `tur_panic_payload_type(p) != expected`, re-raise via `tur_panic_with`
+   (now routing to the *next* outer boundary because this one was popped).
+
+4. **stdlib `stdlib/panic.tur`**: `(defopaque Panic :ptr<void>)` and the
+   `panic-payload-message/-file/-line` accessors (`:Panic -> ...`) wrapping the
+   runtime accessors. `catch-unwind`/`catch-panic-of` stay special forms.
+
+5. **`*-must` reroute (OQ#2 bonus)**: `native_result_must` /
+   `native_option_must` / `*-expect` in `src/main.c:4989+` currently
+   `_exit(1)`. Route them through `tur_panic_with` so they are catchable and
+   the guide's "standard panic message format + double-panic guard" claim
+   becomes true. (Interpreter-side; the compiled `*-must` surface is separate.)
+
+6. **Regenerate all codegen snapshots** (preamble change) per the CLAUDE.md
+   Fixture Snapshots rule, and add fixtures: `panic-catch-unwind-basic`,
+   `-caught`, `-nested`, `-defer`, `-double`, `panic-catch-panic-of`, plus the
+   interpreter equivalents under `tests/run-turi.sh` (the interpreter already
+   has `env->catch_jmp` in `src/turi/env.h:154`).
+
+7. **Risk:** the partial-defer-unwind-to-a-boundary semantics (plan rules 3-4
+   of R6c) are not in the current frame-chain model, which only supports
+   full-chain unwind to abort. Validate `panic-defer`, `panic-double-panic`,
+   `panic-trace`, `continuation-*`, `defer-*`, `effect-abort-panic`, and
+   `taskgroup-panic-propagate` after every step.
+
+### R6c note
+
+R6c (panic in effect handlers / continuations) is unblocked only once R2 lands.
+Its runtime change -- `tur_reset_enter`/`tur_reset_exit` save/restore of
+`tur_panic_in_progress` (rule 2) -- should be implemented against the unified
+boundary stack from R2 step 1, not the dead `runtime.c` path.
 
 ---
 
@@ -15,7 +123,9 @@ implemented. This plan finishes those features, sequences them by dependency,
 and folds the guide updates into the same phase that ships each piece -- so
 the guide never drifts ahead of, or behind, the runtime.
 
-The deferred surface is:
+The deferred surface is (original assessment -- see
+"Implementation status (2026-06-02)" below for the corrected, current state;
+several "Not started" / "Partial" entries here proved stale):
 
 | # | Feature | Guide phase tag | Current state |
 |---|---|---|---|
