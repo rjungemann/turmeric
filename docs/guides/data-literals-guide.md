@@ -12,6 +12,11 @@ runtime in the surrounding scope. They are sugar over the `hamt-of`,
 (def points  [(make-point 0 0) (make-point 1 1) origin])
 (def small   #set{1 2 3})
 ```
+```sweet-exp
+def payload #map
+def points [(make-point 0 0) (make-point 1 1) origin]
+def small #set
+```
 
 ## Enabling the feature
 
@@ -40,6 +45,16 @@ in expression position keeps its pre-existing meaning (a binding spec only).
 #map{:a 1 :b x}               ; => map {:a -> 1, :b -> x}
 #set{:literal x (compute)}    ; (compute) evaluated once
 ```
+```sweet-exp
+[1 2 3]
+; => (vec-of 1 2 3)
+#map
+{:a 1 :b x}
+; => map {:a -> 1, :b -> x}
+#set
+{:literal x (compute)}
+; (compute) evaluated once
+```
 
 ### Element types
 
@@ -56,6 +71,17 @@ recover the type with an ascription:
 
 #map{1 "one" 2 "two"}         ; Map[int cstr]
 (:: (map-get m 1) :cstr)      ; => "one"
+```
+```sweet-exp
+[1.5 2.5 3.5]
+; Vec[float]
+::(vec-get(fs 0) :float)
+; => 1.5
+#map
+{1 "one" 2 "two"}
+; Map[int cstr]
+::(map-get(m 1) :cstr)
+; => "one"
 ```
 
 Map keys may be any `Hash`/`MapKey` scalar -- **int**, **keyword**, **string**,
@@ -92,6 +118,16 @@ surrounding form decides whether it is read as a binding spec or a value.
 (let [a 1 b 2] (+ a b))                   ; [a 1 b 2] is a binding vector
 (def v [1 2 3])                           ; [1 2 3] is a vec literal
 ```
+```sweet-exp
+defn add [x :int y :int] :int
+  +(x y)
+; [x :int y :int] is a param list
+let [a 1 b 2]
+  +(a b)
+; [a 1 b 2] is a binding vector
+def v [1 2 3]
+; [1 2 3] is a vec literal
+```
 
 ## `#map{...}` keys
 
@@ -112,6 +148,12 @@ How a key lowers depends on its form:
         k (hamt/hash-str "name")]
     (map-get m k))             ; => 1
   ```
+```sweet-exp
+let [m #map{:name 1 :age 2}
+        k (hamt/hash-str "name")]
+  map-get(m k)
+; => 1
+```
 
 - A literal whose keys are all **string literals** lowers to a *content-keyed*
   map. The string itself is the key (compared by content, not by pointer or
@@ -123,6 +165,11 @@ How a key lowers depends on its form:
   (let [m #map{"name" 1 "age" 2}]
     (:: (map-get m "name") :int))   ; => 1
   ```
+```sweet-exp
+let [m #map{"name" 1 "age" 2}]
+  ::(map-get(m "name") :int)
+; => 1
+```
 
   A direct `(hamt-of "k" v ...)` call with string keys is content-keyed too --
   there is one `hamt-of` builder for every key type (the old `smap-of` /
@@ -143,6 +190,14 @@ etc.) dedupe by value:
 #set{1 1 2}        ; => set with two elements, {1, 2}
 #set{x (+ x x) y}  ; each element expression evaluated exactly once
 ```
+```sweet-exp
+#set
+{1 1 2}
+; => set with two elements, {1, 2}
+#set
+{x (+ x x) y}
+; each element expression evaluated exactly once
+```
 
 > **Note on the `Hash[A]` typeclass.** The original design sketched injecting
 > a `(hash x)` typeclass call per element. The `Hash[A]` method does not
@@ -158,6 +213,16 @@ etc.) dedupe by value:
 #set{}   ; => empty Set
 []       ; => empty Vec  (expression position)
 ```
+```sweet-exp
+#map
+{}
+; => empty Map
+#set
+{}
+; => empty Set
+[]
+; => empty Vec  (expression position)
+```
 
 ### Typed empty literals -- `[]:T` / `#set{}:T`
 
@@ -169,6 +234,19 @@ fused `:T` element-type suffix immediately after the closer:
 []:int             ; empty Vec[int]
 #set{}:cstr        ; empty Set[cstr]
 []:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+```
+```sweet-exp
+[]
+:int
+; empty Vec[int]
+#set
+{}
+:cstr
+; empty Set[cstr]
+[]
+:
+Vec(int)
+; empty Vec[Vec[int]]  (parenthesize a compound element type)
 ```
 
 The suffix desugars to an ascription on the literal, so `[]:int` is exactly
@@ -185,6 +263,16 @@ needed:
 ;; after
 (let [a []:int]
   (vec-push! a 1) ...)
+```
+```sweet-exp
+;; before
+let [a (:: (vec-new) (Vec int))]
+  vec-push!(a 1)
+  ...
+;; after
+let [a []:int]
+  vec-push!(a 1)
+  ...
 ```
 
 Rules:
@@ -231,4 +319,12 @@ and curly-infix arithmetic:
 (defn build [] :int
   (let [m #map{:a 1 :b 2}]
     map-count(m)))
+```
+```sweet-exp
+#lang
+sweet-exp
+defn build [] :int
+  let [m #map{:a 1 :b 2}]
+    map-count
+    m()
 ```

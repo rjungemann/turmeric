@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runtime Symbols: `:Sym` | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <hr class="sidebar-divider">
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#runtime-symbols-sym" style="">Runtime Symbols: :Sym</a></li>
+<li style=""><a href="#the-model" style="">The model</a></li>
+<li style=""><a href="#expression-position-vs-syntactic-position" style="">Expression position vs. syntactic position</a></li>
+<li style=""><a href="#the-sym-type" style="">The :Sym type</a></li>
+<li style=""><a href="#stdlib-surface-stdlibsymtur" style="">Stdlib surface (stdlib/sym.tur)</a></li>
+<li style=""><a href="#equality-hashing-and-maps" style="">Equality, hashing, and maps</a></li>
+<li style=""><a href="#dynamic-interning-str-sym-opt-in" style="">Dynamic interning: str-&gt;sym (opt-in)</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="runtime-symbols-sym">Runtime Symbols: <code>:Sym</code></h1>
+<blockquote>
+<p><strong>Status:</strong> experimental, opt-in behind <code>-Xsymbols</code>. All phases (SYM0--SYM6)
+are implemented: the <code>:Sym</code> type, per-TU codegen, cross-TU interning,
+map-literal + typeclass integration, the stdlib surface, and the opt-in
+dynamic <code>str-&gt;sym</code> intern table.</p>
+</blockquote>
+<p>Turmeric's <code>:foo</code> keyword syntax has always parsed cleanly and interned its
+name at read time, but in <em>expression position</em> a keyword had no value and no
+type. With <code>-Xsymbols</code>, <code>:foo</code> becomes a first-class expression of type
+<code>:Sym</code> whose runtime value is a unique, deduplicated pointer into <code>.rodata</code>.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; tur run -Xsymbols / tur build -Xsymbols
+(println (sym-&gt;str :hello))   ; =&gt; hello
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; tur run -Xsymbols / tur build -Xsymbols
+println(sym-&gt;str(:hello))   ; =&gt; hello
+</code></pre></div></div></div>
+<h2 id="the-model">The model</h2>
+<p>A <code>:Sym</code> value is a non-null pointer to a static, process-lifetime record:</p>
+<pre><code class="language-c">struct __tur_sym {
+    uint64_t hash;   /* precomputed xxHash64 of the name */
+    uint32_t len;    /* byte length, excluding NUL */
+    uint32_t _pad;
+    char     name[]; /* NUL-terminated UTF-8 */
+};
+</code></pre>
+<p>Every distinct <code>:foo</code> lowers to <strong>one</strong> record, so:</p>
+<ul>
+<li><strong>Equality is pointer equality</strong> -- two <code>:foo</code> references are the same
+  pointer (<code>==</code>); <code>:foo</code> and <code>:bar</code> are distinct.</li>
+<li><strong>Hashing is a single field load</strong> -- no string work, no allocation. The
+  hash is precomputed by the compiler.</li>
+<li><strong><code>sym-&gt;str</code> is free</strong> -- it returns the address of the embedded name; no
+  copy, no <code>strlen</code>.</li>
+</ul>
+<p>The C identifier of each record is <code>__tur_sym_</code> followed by a percent-encoded
+mangling of the name, so punctuated keywords (<code>:a-b</code>, <code>:*x*</code>) still produce a
+unique, ASCII-only symbol.</p>
+<p>In a multi-module build (<code>tur build &lt;dir&gt;</code>) the records are emitted with
+external weak linkage, so the linker folds the per-module copies of <code>:foo</code>
+into a single object -- <code>:foo</code> is one pointer across the whole program, not
+just within a single file. Single-file <code>emit-c</code> output keeps the records
+<code>static</code> so it stays self-contained.</p>
+<h2 id="expression-position-vs-syntactic-position">Expression position vs. syntactic position</h2>
+<p>Adding a runtime value for <code>:foo</code> does <strong>not</strong> change any of its existing
+syntactic uses. These are consumed by earlier elaborator passes and behave
+identically with or without <code>-Xsymbols</code>:</p>
+<ul>
+<li>Type annotations: <code>:int</code>, <code>:cstr</code>, <code>:Sym</code></li>
+<li>Import directives: <code>:refer [...]</code>, <code>:as foo</code></li>
+<li>Struct field selectors: <code>(:name p)</code></li>
+<li><code>:else</code> in <code>cond</code>/<code>case</code></li>
+</ul>
+<p>The only behavioral change is in <strong>expression position</strong>, where <code>:foo</code> was
+previously a hard error. Without the flag it still is:</p>
+<pre><code>error: keyword in expression position requires -Xsymbols
+</code></pre>
+<h2 id="the-sym-type">The <code>:Sym</code> type</h2>
+<p><code>:Sym</code> is a nullary type that prints as <code>:Sym</code>. It is <strong>not</strong> a subtype of
+<code>cstr</code>; conversion is explicit via <code>sym-&gt;str</code>. A value of type <code>:Sym</code> is
+freely copyable (it is just an interned pointer).</p>
+<p>You can annotate parameters and returns with it:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn label [tag :Sym] :cstr
+  (sym-&gt;str tag))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn label [tag :Sym] :cstr
+  sym-&gt;str(tag)
+</code></pre></div></div></div>
+<h2 id="stdlib-surface-stdlibsymtur">Stdlib surface (<code>stdlib/sym.tur</code>)</h2>
+<p><code>sym.tur</code> is auto-loaded into the global namespace <strong>only</strong> under <code>-Xsymbols</code>
+(so default builds and their codegen snapshots are unaffected). It provides:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Signature</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sym-&gt;str</code></td>
+<td><code>(sym-&gt;str s :Sym) :cstr</code></td>
+<td>embedded name, no allocation</td>
+</tr>
+<tr>
+<td><code>sym=?</code></td>
+<td><code>(sym=? a :Sym b :Sym) :bool</code></td>
+<td>pointer-identity equality</td>
+</tr>
+</tbody>
+</table>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(sym-&gt;str :hello)   ; =&gt; &quot;hello&quot;
+(sym=? :a :a)       ; =&gt; true
+(sym=? :a :b)       ; =&gt; false
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">sym-&gt;str(:hello)   ; =&gt; &quot;hello&quot;
+sym=?(:a :a)       ; =&gt; true
+sym=?(:a :b)       ; =&gt; false
+</code></pre></div></div></div>
+<h2 id="equality-hashing-and-maps">Equality, hashing, and maps</h2>
+<p>Under <code>-Xsymbols</code>, <code>:Sym</code> participates in the <code>Eq</code>, <code>Hash</code>, and <code>MapKey</code>
+typeclasses (instances live in <code>stdlib/sym.tur</code>, auto-loaded with the flag):</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(eq? :foo :foo)   ; =&gt; true   (pointer identity)
+(eq? :foo :bar)   ; =&gt; false
+(hash :foo)       ; precomputed field load
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">eq?(:foo :foo)   ; =&gt; true   (pointer identity)
+eq?(:foo :bar)   ; =&gt; false
+hash(:foo)       ; precomputed field load
+</code></pre></div></div></div>
+<p>With <code>-Xdata-literals</code> as well, a keyword key in a map literal is a
+first-class <code>:Sym</code> key rather than a content-hashed string:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [m #map{:foo 10 :bar 20}]
+  (map-get m :foo)      ; =&gt; 10
+  (map-has? m :missing) ; =&gt; false (0))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [m #map{:foo 10 :bar 20}]
+  map-get(m :foo)      ; =&gt; 10
+  map-has?(m :missing) ; =&gt; false (0)
+</code></pre></div></div></div>
+<p>The map is keyed by <code>Sym</code> pointer identity (via <code>Hash[Sym]</code> + <code>MapKey[Sym]</code>),
+so lookups are pointer comparisons with the precomputed hash -- no string
+work. Without <code>-Xsymbols</code>, keyword map keys keep the legacy content-hashed
+lowering, and string keys (<code>#map{"foo" 1}</code>) are unchanged in either mode.</p>
+<h2 id="dynamic-interning-str-sym-opt-in">Dynamic interning: <code>str-&gt;sym</code> (opt-in)</h2>
+<p>Literal <code>:foo</code> symbols need no runtime table. To build a symbol from a string
+at runtime (deserialization, REPL tools), load the opt-in module:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/sym-dynamic.tur&quot;)
+
+(eq? :hello (str-&gt;sym &quot;hello&quot;))   ; =&gt; true  (same pointer as the literal)
+(eq? (str-&gt;sym &quot;x&quot;) (str-&gt;sym &quot;x&quot;)) ; =&gt; true  (stable; one record allocated)
+(sym-&gt;str (str-&gt;sym &quot;round&quot;))     ; =&gt; &quot;round&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load &quot;stdlib/sym-dynamic.tur&quot;
+
+eq?(:hello str-&gt;sym(&quot;hello&quot;))      ; =&gt; true  (same pointer as the literal)
+eq?(str-&gt;sym(&quot;x&quot;) str-&gt;sym(&quot;x&quot;)) ; =&gt; true  (stable; one record allocated)
+sym-&gt;str(str-&gt;sym(&quot;round&quot;))        ; =&gt; &quot;round&quot;
+</code></pre></div></div></div>
+<p><code>str-&gt;sym</code> returns a stable, process-lifetime symbol; repeated calls with the
+same name return the same pointer (allocating at most one record), and the
+table is mutex-guarded for concurrent use. For a name that also appears as a
+literal in the program, <code>str-&gt;sym</code> returns the <strong>same pointer</strong> as the literal
+(a startup constructor seeds the table with the static records).</p>
+<p>Keep it opt-in: loading <code>sym-dynamic.tur</code> links the process-global intern
+table (<code>src/runtime/symbols.c</code>). Programs that use only literal <code>:foo</code> symbols
+never link it. <code>str-&gt;sym</code> hashes and locks, so it is slower than a literal --
+prefer literals on hot paths.</p>
+<blockquote>
+<p><strong>Multi-module note:</strong> <code>str-&gt;sym("foo")</code> matches a literal <code>:foo</code> only when
+that literal appears in a module that also loads <code>sym-dynamic.tur</code> (or is
+linker-folded with one). A <code>:foo</code> confined to a module that never loads the
+dynamic surface is interned as a separate record. Single-file programs are
+unaffected.</p>
+</blockquote>
+<p>See <code>docs/archive/history/runtime-symbols-plan.md</code> for the full phase breakdown.</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/symbols-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -34,6 +34,11 @@ without a doubled brace and a top-level array has no doubled bracket:
 #json([1, 2, 3])          ; array
 #json(42)                 ; scalar
 ```
+```sweet-exp
+#json({"a": 1, "b": 2})   ; object
+#json([1, 2, 3])          ; array
+#json(42)                 ; scalar
+```
 
 ### What the reader produces
 
@@ -62,6 +67,10 @@ extract the scalar with the typed accessor:
 (json/get-string (json/get! #json({"name": "alice", "age": 30}) "name"))  ; => "alice"
 (json/get-int    (json/get! #json({"name": "alice", "age": 30}) "age"))   ; => 30
 ```
+```sweet-exp
+json/get-string(json/get!(#json({"name": "alice", "age": 30}) "name"))  ; => "alice"
+json/get-int(json/get!(#json({"name": "alice", "age": 30}) "age"))      ; => 30
+```
 
 (`json/get` is the total variant -- it returns an `Option` node; `json/get!`
 panics on a missing key.)
@@ -73,6 +82,11 @@ Index into arrays with `json/array-get` / `json/array-len`:
 (json/get-int    (json/array-get #json([10, "x", true]) 0)) ; => 10
 (json/get-string (json/array-get #json([10, "x", true]) 1)) ; => "x"
 ```
+```sweet-exp
+json/array-len(#json([10, "x", true]))                      ; => 3
+json/get-int(json/array-get(#json([10, "x", true]) 0))     ; => 10
+json/get-string(json/array-get(#json([10, "x", true]) 1))  ; => "x"
+```
 
 `null` is genuinely distinct from `0`/`false` -- it is a node whose
 `(json/type node)` is `0`:
@@ -81,6 +95,11 @@ Index into arrays with `json/array-get` / `json/array-len`:
 (json/type #json(null))   ; => 0  (null)
 (json/type #json(false))  ; => 1  (bool)
 (json/type #json(0))      ; => 2  (int)
+```
+```sweet-exp
+json/type(#json(null))   ; => 0  (null)
+json/type(#json(false))  ; => 1  (bool)
+json/type(#json(0))      ; => 2  (int)
 ```
 
 ### Why a tagged node tree (and not a HAMT/vec)?
@@ -122,6 +141,11 @@ input), use the runtime library:
 (let [node (json/decode "{\"x\": 1, \"y\": 2}")]
   ...)                        ; node is a heap JSON value tree
 (json/encode node)            ; => "{\"x\":1,\"y\":2}"
+```
+```sweet-exp
+let [node json/decode("{\"x\": 1, \"y\": 2}")]
+  ...                        ; node is a heap JSON value tree
+json/encode(node)            ; => "{\"x\":1,\"y\":2}"
 ```
 
 `json/decode` returns a node tree (null / bool / int / float / string / array /

@@ -14,6 +14,11 @@ type. With `-Xsymbols`, `:foo` becomes a first-class expression of type
 ;; tur run -Xsymbols / tur build -Xsymbols
 (println (sym->str :hello))   ; => hello
 ```
+```sweet-exp
+;; tur run -Xsymbols / tur build -Xsymbols
+println(sym->str(:hello))
+; => hello
+```
 
 ## The model
 
@@ -77,6 +82,10 @@ You can annotate parameters and returns with it:
 (defn label [tag :Sym] :cstr
   (sym->str tag))
 ```
+```sweet-exp
+defn label [tag :Sym] :cstr
+  sym->str(tag)
+```
 
 ## Stdlib surface (`stdlib/sym.tur`)
 
@@ -93,6 +102,14 @@ You can annotate parameters and returns with it:
 (sym=? :a :a)       ; => true
 (sym=? :a :b)       ; => false
 ```
+```sweet-exp
+sym->str(:hello)
+; => "hello"
+sym=?(:a :a)
+; => true
+sym=?(:a :b)
+; => false
+```
 
 ## Equality, hashing, and maps
 
@@ -104,6 +121,14 @@ typeclasses (instances live in `stdlib/sym.tur`, auto-loaded with the flag):
 (eq? :foo :bar)   ; => false
 (hash :foo)       ; precomputed field load
 ```
+```sweet-exp
+eq?(:foo :foo)
+; => true   (pointer identity)
+eq?(:foo :bar)
+; => false
+hash(:foo)
+; precomputed field load
+```
 
 With `-Xdata-literals` as well, a keyword key in a map literal is a
 first-class `:Sym` key rather than a content-hashed string:
@@ -112,6 +137,13 @@ first-class `:Sym` key rather than a content-hashed string:
 (let [m #map{:foo 10 :bar 20}]
   (map-get m :foo)      ; => 10
   (map-has? m :missing) ; => false (0))
+```
+```sweet-exp
+let [m #map{:foo 10 :bar 20}]
+  map-get(m :foo)
+  ; => 10
+  map-has?(m :missing)
+  ; => false (0))
 ```
 
 The map is keyed by `Sym` pointer identity (via `Hash[Sym]` + `MapKey[Sym]`),
@@ -130,6 +162,15 @@ at runtime (deserialization, REPL tools), load the opt-in module:
 (eq? :hello (str->sym "hello"))   ; => true  (same pointer as the literal)
 (eq? (str->sym "x") (str->sym "x")) ; => true  (stable; one record allocated)
 (sym->str (str->sym "round"))     ; => "round"
+```
+```sweet-exp
+load("stdlib/sym-dynamic.tur")
+eq?(:hello str->sym("hello"))
+; => true  (same pointer as the literal)
+eq?(str->sym("x") str->sym("x"))
+; => true  (stable; one record allocated)
+sym->str(str->sym("round"))
+; => "round"
 ```
 
 `str->sym` returns a stable, process-lifetime symbol; repeated calls with the

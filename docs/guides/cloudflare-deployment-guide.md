@@ -89,6 +89,40 @@ requests to it.
     (scheduler-run-to-completion sched))
   0)
 ```
+```sweet-exp
+;; service.tur -- minimal HTTP service for Approach A (Cloudflare Containers)
+;;
+;; Listens on $PORT (default 8080), accepts connections concurrently using the
+;; cooperative fiber scheduler, and returns a fixed HTTP 200 response.
+import "stdlib/async_socket.tur"
+import "stdlib/scheduler.tur"
+import "stdlib/fiber.tur"
+import "stdlib/args.tur"
+import "stdlib/env.tur"
+defn http-ok [body:cstrlen:int] :cstr
+  str-concat("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: " str-concat(int->str(len) str-concat("\r\n\r\n" body)))
+defn handle-client [fd:int] :nil
+  async-socket-recv(fd 4096)
+  let [body"Hello from Turmeric!\n"
+resp(http-okbody21)]
+    async-socket-send(fd resp cstr-length(resp))
+  async-socket-close(fd)
+defn accept-loop [listen-fd:intsched:ptr<void>] :nil
+  let [client-fd(async-socket-acceptlisten-fd)
+f(fiber-new(fn[]:nil(handle-clientclient-fd))0)]
+    scheduler-spawn(sched f)
+  accept-loop(listen-fd sched)
+defn main [] :int
+  let [port-str(getenv"PORT")
+port(ifport-str(cstr->parse-intport-str)8080)
+sched(scheduler-new)
+fd(async-socket-listenport128)
+accepter(fiber-new(fn[]:nil(accept-loopfdsched))0)]
+    println(str-concat("Listening on :" int->str(port)))
+    scheduler-spawn(sched accepter)
+    scheduler-run-to-completion(sched)
+  0
+```
 
 Test locally before containerizing:
 
@@ -280,6 +314,15 @@ interpreter on each incoming request:
 (defn handle-request [body :cstr] :cstr
   (str-concat "Hello from Turmeric! You sent: " body))
 ```
+```sweet-exp
+;; handler.tur -- evaluated once per Worker request via turi_wasm_eval
+;;
+;; The Worker calls:
+;;   turi_wasm_eval("(handle-request request-body)")
+;; after loading the stdlib definitions below.
+defn handle-request [body:cstr] :cstr
+  str-concat("Hello from Turmeric! You sent: " body)
+```
 
 The Worker loads these definitions at startup (cold) and calls `handle-request` on
 each incoming request.
@@ -389,6 +432,20 @@ layer.
 
 (defn tur-handle [method :cstr path :cstr body :cstr] :cstr
   (greet (if (= (cstr-length body) 0) "world" body)))
+```
+```sweet-exp
+;; handler.tur -- compiled to WASM via emit-c + emcc
+;;
+;; Exports a single C function:
+;;   char *tur_handle(const char *method, const char *path, const char *body)
+;; which the Worker calls directly via WASM imports.
+;;
+;; All logic must be pure computation -- no sockets, threads, or filesystem.
+import "stdlib/str.tur"
+defn greet [name:cstr] :cstr
+  str-concat("Hello, " str-concat(name "!"))
+defn tur-handle [method:cstrpath:cstrbody:cstr] :cstr
+  greet(if(=(cstr-length(body) 0) "world" body))
 ```
 
 ### Step 2 -- compile to C

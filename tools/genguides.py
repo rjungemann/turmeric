@@ -75,6 +75,24 @@ def build_categories_from_meta(meta_by_stem: dict, all_stems: set) -> list:
 
 STYLE_REL = '../api/style.css'
 
+SIDEBAR_GLOBALS = '''\
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>'''
+
 PAGE_HEADER = '''\
   <header class="site-header">
     <button class="hamburger" aria-label="Toggle navigation">
@@ -334,8 +352,10 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | N
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
-      <ul>{sidebar_items}</ul>'''
+      <ul>{sidebar_items}</ul>
+{SIDEBAR_GLOBALS}'''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -471,8 +491,10 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
   <div class="page-layout">
     <div class="sidebar">
       <a class="sidebar-back" href="/">← Back to home</a>
+      <hr class="sidebar-divider">
       <h3>Categories</h3>
       <ul>{sidebar_cats}</ul>
+{SIDEBAR_GLOBALS}
     </div>
     <div class="content">
       <div class="module-heading">
@@ -528,7 +550,7 @@ def main() -> None:
             dated.append((d, src))
     dated.sort(key=lambda t: t[0], reverse=True)
     recent = []
-    for date, src in dated[:5]:
+    for date, src in dated[:10]:
         m = meta_by_stem.get(src.stem, {})
         label = m.get('title', src.stem.replace('-', ' ').title()).strip()
         recent.append({'stem': src.stem, 'label': label, 'date': date})

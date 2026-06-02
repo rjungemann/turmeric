@@ -66,6 +66,14 @@ fresh handler scope).
 ;; k = (fn [x] (+ 1 x)), re-delimited on each call
 ;; => (+ 1 (+ 1 10)) = 12, all surfacing inside the reset
 ```
+```sweet-exp
+reset
+  (+ 1
+     (shift k
+       k(k(10))))
+;; k = (fn [x] {1 + x}), re-delimited on each call
+;; => {1 + {1 + 10}} = 12, all surfacing inside the reset
+```
 
 ## `shift0` / `reset0` -- pops the prompt
 
@@ -90,6 +98,15 @@ differs.
 (defn is-zero [n :int] :bool
   (reset
     (shift0 (fn [v :int] (= v 0)) n)))
+```
+```sweet-exp
+;; The expression has f's codomain type (here :bool), exactly like shift.
+defn is-zero [n :int] :bool
+  reset
+    (shift0
+      (fn [v :int]
+        =(v 0))
+      n)
 ```
 
 ## `call/cc` -- delimited capture, value at the capture site
@@ -141,6 +158,16 @@ Reach for `escape` when you want to bail out of deep recursion with a value and
       (when (< x 0)
         (exit x)))   ; unwinds straight to the boundary with x
     0)))             ; no negative found
+```
+```sweet-exp
+;; Conceptual: exit produces the value at the boundary, abandoning the rest.
+defn first-negative [xs :list<int>] :int
+  escape
+    fn [exit]
+      for [x xs]
+        when <(x 0)
+          exit(x)   ; unwinds straight to the boundary with x
+      0            ; no negative found
 ```
 
 Where `shift`/`call/cc` is for splicing a captured slice back into a

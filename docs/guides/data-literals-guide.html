@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data Literals: `#map{...}`, `#set{...}`, and `[...]` | Turmeric Guides</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/400.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@fontsource/iosevka@5/500.css" rel="stylesheet">
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold-bright); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--text-primary); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold-bright); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"Iosevka","Fira Code",monospace; font-size:0.85em; background:var(--bg-panel); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-panel); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--text-sec); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold-bright); }
+    .guide-content strong { color:var(--text-primary); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }
+    .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
+    .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
+    .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
+    .seg-btn { padding:3px 10px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; transition:all 0.14s; }
+    .seg-btn:hover { color:var(--text-primary); }
+    .seg-btn.active { color:var(--gold-bright); background:var(--bg-hover); }
+    .code-card-body { }
+    .code-version { }
+    .guide-content .code-toggle pre { border:none; border-radius:0; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <button class="hamburger" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <a class="nav-logo" href="/">
+      <img src="/logo-icon.svg" width="28" height="28" alt="">
+      <img src="/logo.svg" width="101" height="28" alt="Turmeric">
+    </a>
+    <nav>
+      <a href="/docs/html/guides/" class="active">Guides</a>
+      <a href="/docs/html/api/">API Docs</a>
+      <a href="https://spices.turmeric-lang.com">Spices</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="sidebar-overlay"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      var btn = document.querySelector('.hamburger');
+      var sidebar = document.querySelector('.sidebar');
+      var overlay = document.querySelector('.sidebar-overlay');
+      if (!btn || !sidebar) return;
+      function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+      function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+      btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+      overlay && overlay.addEventListener('click', close);
+    });
+  </script>
+  <div class="page-layout">
+    <div class="sidebar">
+            <a class="sidebar-back" href="/">← Back to home</a>
+      <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
+      </div>
+      <hr class="sidebar-divider">
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#data-literals-map-set-and" style="">Data Literals: #map{...}, #set{...}, and [...]</a></li>
+<li style=""><a href="#enabling-the-feature" style="">Enabling the feature</a></li>
+<li style=""><a href="#the-three-forms" style="">The three forms</a></li>
+<li style="padding-left:0.75rem;"><a href="#element-types" style="color:var(--text-sec);">Element types</a></li>
+<li style=""><a href="#is-only-a-vec-in-expression-position" style="">[...] is only a vec in expression position</a></li>
+<li style=""><a href="#map-keys" style="">#map{...} keys</a></li>
+<li style=""><a href="#set-elements-and-hashing" style="">#set{...} elements and hashing</a></li>
+<li style=""><a href="#empty-literals" style="">Empty literals</a></li>
+<li style="padding-left:0.75rem;"><a href="#typed-empty-literals-t-sett" style="color:var(--text-sec);">Typed empty literals -- []:T / #set{}:T</a></li>
+<li style=""><a href="#errors" style="">Errors</a></li>
+<li style=""><a href="#relationship-to-the-json-reader-macro" style="">Relationship to the JSON reader macro</a></li>
+<li style=""><a href="#sweet-expression-interaction" style="">Sweet-expression interaction</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="data-literals-map-set-and">Data Literals: <code>#map{...}</code>, <code>#set{...}</code>, and <code>[...]</code></h1>
+<blockquote>
+<p><strong>Status:</strong> experimental, opt-in behind <code>-Xdata-literals</code>.</p>
+</blockquote>
+<p>Turmeric's data literals give map, vec, and set construction a compact
+literal syntax whose slot values are ordinary expressions, evaluated at
+runtime in the surrounding scope. They are sugar over the <code>hamt-of</code>,
+<code>vec-of</code>, and <code>set-of</code> stdlib macros.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(def payload #map{:name name :age (+ age 1) :active 1})
+(def points  [(make-point 0 0) (make-point 1 1) origin])
+(def small   #set{1 2 3})
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">def payload #map{:name name :age {age + 1} :active 1}
+def points  [make-point(0 0) make-point(1 1) origin]
+def small   #set{1 2 3}
+</code></pre></div></div></div>
+<h2 id="enabling-the-feature">Enabling the feature</h2>
+<p>The syntax is gated behind a flag so programs that don't use it are
+completely unaffected:</p>
+<pre><code class="language-sh">tur -Xdata-literals build   src/app.tur
+tur -Xdata-literals emit-c  src/app.tur
+tur -Xdata-literals run     src/app.tur
+</code></pre>
+<p>Without the flag, <code>#map{</code> / <code>#set{</code> are not recognized and a bare <code>[...]</code>
+in expression position keeps its pre-existing meaning (a binding spec only).</p>
+<h2 id="the-three-forms">The three forms</h2>
+<table>
+<thead>
+<tr>
+<th>Syntax</th>
+<th>Lowers to</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>[e1 e2 e3 ...]</code> <em>(expression position)</em></td>
+<td><code>(vec-of e1 e2 e3 ...)</code></td>
+<td>element type inferred from the first element</td>
+</tr>
+<tr>
+<td><code>#map{k1 v1 k2 v2 ...}</code></td>
+<td><code>(hamt-of k1' v1 k2' v2 ...)</code></td>
+<td>keys normalized (see below); last duplicate key wins</td>
+</tr>
+<tr>
+<td><code>#set{e1 e2 e3 ...}</code></td>
+<td><code>(set-of e1 e2 e3 ...)</code></td>
+<td>duplicate elements collapse</td>
+</tr>
+</tbody>
+</table>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">[1 2 3]                       ; =&gt; (vec-of 1 2 3)
+#map{:a 1 :b x}               ; =&gt; map {:a -&gt; 1, :b -&gt; x}
+#set{:literal x (compute)}    ; (compute) evaluated once
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1 2 3]                       ; =&gt; vec-of(1 2 3)
+#map{:a 1 :b x}               ; =&gt; map {:a -&gt; 1, :b -&gt; x}
+#set{:literal x compute()}    ; compute() evaluated once
+</code></pre></div></div></div>
+<h3 id="element-types">Element types</h3>
+<p><code>[...]</code> and the value slots of <code>#map{...}</code> accept any scalar element type --
+<code>:int</code>, <code>:cstr</code>, <code>:bool</code>, <code>:nil</code>, or <code>:float</code> -- not just <code>:int</code>. All
+elements of a vector must unify to one type, and all map values to one type
+(a mixed literal such as <code>[1 "x"]</code> is a <code>TUR-E0001</code> on the offending
+element). Elements are stored through an <code>:int</code> carrier slot, so reads
+recover the type with an ascription:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">[1.5 2.5 3.5]                 ; Vec[float]
+(:: (vec-get fs 0) :float)    ; =&gt; 1.5
+
+#map{1 &quot;one&quot; 2 &quot;two&quot;}         ; Map[int cstr]
+(:: (map-get m 1) :cstr)      ; =&gt; &quot;one&quot;
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1.5 2.5 3.5]                 ; Vec[float]
+::(vec-get(fs 0) :float)      ; =&gt; 1.5
+
+#map{1 &quot;one&quot; 2 &quot;two&quot;}         ; Map[int cstr]
+::(map-get(m 1) :cstr)        ; =&gt; &quot;one&quot;
+</code></pre></div></div></div>
+<p>Map keys may be any <code>Hash</code>/<code>MapKey</code> scalar -- <strong>int</strong>, <strong>keyword</strong>, <strong>string</strong>,
+<strong>bool</strong>, <strong>float32</strong>, <strong>float</strong>, or a user type with <code>Hash</code>/<code>Eq</code>/<code>MapKey</code>
+instances. The literal has type <code>Map[K V]</code>: the typed <code>map-get</code>/<code>map-assoc</code>/
+<code>map-has?</code>/<code>map-dissoc</code> surface reads and writes it, and a key/value-type
+mismatch is a <code>TUR-E0001</code>. Int and keyword keys are int-valued (a keyword
+normalizes to a content hash); string keys are compared by content (two
+distinct pointers with equal text are one key). See
+<a href="#map-keys"><code>#map{...}</code> keys</a> below.</p>
+<blockquote>
+<p><strong><code>-Xsymbols</code>:</strong> with the runtime-symbols flag also enabled, a keyword key
+is a first-class <code>:Sym</code> value rather than a content-hashed string -- the map
+is keyed by <code>Sym</code> pointer identity via <code>Hash[Sym]</code> / <code>MapKey[Sym]</code>. See
+<a href="symbols-guide.md">the symbols guide</a>. Without <code>-Xsymbols</code> the legacy
+content-hash lowering above is unchanged. Aggregate (multi-word struct/ADT) <em>key</em>
+types must supply their own <code>MapKey</code> instance; <em>values</em> may be any type
+(scalars, floats, and heap handles like <code>Vec[A]</code> all ride the int64 carrier).</p>
+</blockquote>
+<p>Slots are arbitrary expressions -- variable references, calls, nested
+literals -- and the normal typechecker handles them.</p>
+<h2 id="is-only-a-vec-in-expression-position"><code>[...]</code> is only a vec in <em>expression</em> position</h2>
+<p>The reader parses every <code>[...]</code> as the same vector form. Binding forms
+(<code>defn</code>/<code>fn</code>/<code>defmethod</code> parameter lists, and <code>let</code>/<code>loop</code>/<code>for</code>/... binding
+vectors) consume that form as a <em>binding spec</em> before it is ever treated as a
+value. Only a <code>[...]</code> that reaches expression position lowers to <code>(vec-of
+...)</code>. This is the same rule Clojure uses: <code>[x y]</code> is always a vector; the
+surrounding form decides whether it is read as a binding spec or a value.</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn add [x :int y :int] :int (+ x y))   ; [x :int y :int] is a param list
+(let [a 1 b 2] (+ a b))                   ; [a 1 b 2] is a binding vector
+(def v [1 2 3])                           ; [1 2 3] is a vec literal
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn add [x :int y :int] :int
+  +(x y)                                ; [x :int y :int] is a param list
+let [a 1
+     b 2]
+  +(a b)                                ; [a 1 b 2] is a binding vector
+def v [1 2 3]                           ; [1 2 3] is a vec literal
+</code></pre></div></div></div>
+<h2 id="map-keys"><code>#map{...}</code> keys</h2>
+<p>Keys must be a <strong>keyword</strong>, <strong>string literal</strong>, or <strong>int literal</strong> -- anything
+else (a variable, a call) is rejected at read time with <code>TUR-E0282</code>. Computed
+keys are intentionally disallowed so a reader can tell keys from values at a
+glance.</p>
+<p>How a key lowers depends on its form:</p>
+<ul>
+<li>An <strong>int</strong> key passes through unchanged (identity-keyed, zero overhead).</li>
+<li>A <strong>keyword</strong> key lowers to <code>(hamt/hash-str "name")</code> -- the keyword's content
+  hash <em>is</em> the int key, so two equal keywords collide deliberately. Look a
+  keyword key back up by hashing it the same way:</li>
+</ul>
+<p><code>turmeric
+  (let [m #map{:name 1 :age 2}
+        k (hamt/hash-str "name")]
+    (map-get m k))             ; =&gt; 1</code>
+  <code>sweet-exp
+  let [m #map{:name 1 :age 2}
+       k hamt/hash-str("name")]
+    map-get(m k)             ; =&gt; 1</code></p>
+<ul>
+<li>A literal whose keys are all <strong>string literals</strong> lowers to a <em>content-keyed</em>
+  map. The string itself is the key (compared by content, not by pointer or
+  hash), so two distinct pointers with equal text are one key. Read string
+  keys with the same unified <code>map-get</code> / <code>map-has?</code> / <code>map-dissoc</code> accessors
+  (they dispatch through <code>Hash[cstr]</code> / <code>MapKey[cstr]</code> by content):</li>
+</ul>
+<p><code>turmeric
+  (let [m #map{"name" 1 "age" 2}]
+    (:: (map-get m "name") :int))   ; =&gt; 1</code>
+  <code>sweet-exp
+  let [m #map{"name" 1 "age" 2}]
+    ::(map-get(m "name") :int)   ; =&gt; 1</code></p>
+<p>A direct <code>(hamt-of "k" v ...)</code> call with string keys is content-keyed too --
+  there is one <code>hamt-of</code> builder for every key type (the old <code>smap-of</code> /
+  <code>smap-*</code> split was retired in TMS3). (Runtime-built string keys must outlive
+  the map -- the HAMT does not copy keys; see
+  <a href="../archive/history/typed-collection-elements-plan.md">GMK / TCE4</a>.) </p>
+<p>An odd number of slot forms is a <code>TUR-E0280</code> read error.</p>
+<h2 id="set-elements-and-hashing"><code>#set{...}</code> elements and hashing</h2>
+<p>Set elements are arbitrary value expressions (no key-form restriction). Each
+element is used as <strong>its own hash</strong> -- the identity-hash convention the typed
+<code>Set[A]</code> uses everywhere (<code>(set-add s 42 42)</code>). Scalar element types (int,
+etc.) dedupe by value:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#set{1 1 2}        ; =&gt; set with two elements, {1, 2}
+#set{x (+ x x) y}  ; each element expression evaluated exactly once
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#set{1 1 2}        ; =&gt; set with two elements, {1, 2}
+#set{x {x + x} y}  ; each element expression evaluated exactly once
+</code></pre></div></div></div>
+<blockquote>
+<p><strong>Note on the <code>Hash[A]</code> typeclass.</strong> The original design sketched injecting
+a <code>(hash x)</code> typeclass call per element. The <code>Hash[A]</code> method does not
+monomorphize in the current compiled codegen, so <code>set-of</code> uses identity
+hashing instead (matching all existing <code>Set[A]</code> usage). Keyword <em>values</em>
+are not runtime values in Turmeric, so <code>#set{:a :b}</code> does not type-check;
+use scalar elements.</p>
+</blockquote>
+<h2 id="empty-literals">Empty literals</h2>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#map{}   ; =&gt; empty Map
+#set{}   ; =&gt; empty Set
+[]       ; =&gt; empty Vec  (expression position)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#map{}   ; =&gt; empty Map
+#set{}   ; =&gt; empty Set
+[]       ; =&gt; empty Vec  (expression position)
+</code></pre></div></div></div>
+<h3 id="typed-empty-literals-t-sett">Typed empty literals -- <code>[]:T</code> / <code>#set{}:T</code></h3>
+<p>An empty literal has no element to infer a type from, so a later typed
+operation (<code>.eq?</code>, <code>.push!</code>) can't recover its element type. Pin it with a
+fused <code>:T</code> element-type suffix immediately after the closer:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">[]:int             ; empty Vec[int]
+#set{}:cstr        ; empty Set[cstr]
+[]:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[]:int             ; empty Vec[int]
+#set{}:cstr        ; empty Set[cstr]
+[]:(Vec int)       ; empty Vec[Vec[int]]  (parenthesize a compound element type)
+</code></pre></div></div></div>
+<p>The suffix desugars to an ascription on the literal, so <code>[]:int</code> is exactly
+<code>(:: (vec-of) (Vec int))</code> and <code>#set{}:T</code> is <code>(:: (set-of) (Set T))</code> -- the
+generated code is identical. It replaces the verbose
+<code>(:: (vec-new) (Vec int))</code> scaffolding that empty containers previously
+needed:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; before
+(let [a (:: (vec-new) (Vec int))]
+  (vec-push! a 1) ...)
+
+;; after
+(let [a []:int]
+  (vec-push! a 1) ...)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; before
+let [a ::(vec-new() (Vec int))]
+  vec-push!(a 1) ...
+
+;; after
+let [a []:int]
+  vec-push!(a 1) ...
+</code></pre></div></div></div>
+<p>Rules:</p>
+<ul>
+<li>The <code>:</code> must be <strong>immediately adjacent</strong> to the closing <code>]</code> / <code>}</code> (no
+  intervening whitespace). A space-separated <code>[] :int</code> is two forms, not a
+  suffix -- this is what keeps binding vectors (<code>[x :int y :int]</code>, whose <code>]</code>
+  is followed by a space) unaffected.</li>
+<li>A <code>::</code> after the closer is <strong>not</strong> a suffix (it is the ascription operator).</li>
+<li>The suffix also works on non-empty literals (<code>[1 2 3]:int</code>), where it is
+  merely a redundant re-statement of the inferred type.</li>
+<li>Missing type after the <code>:</code> is a read error: <em>"expected an element type
+  after the ':' container-literal suffix"</em>.</li>
+<li><code>#map{}</code> has two type parameters (key and value); a typed-empty suffix for
+  maps is not yet supported -- ascribe the full <code>(Map K V)</code> type instead.</li>
+</ul>
+<h2 id="errors">Errors</h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TUR-E0280</code></td>
+<td>Odd number of slot forms in <code>#map{...}</code> (unmatched key)</td>
+</tr>
+<tr>
+<td><code>TUR-E0281</code></td>
+<td>Unexpected EOF inside <code>#map{...}</code> or <code>#set{...}</code></td>
+</tr>
+<tr>
+<td><code>TUR-E0282</code></td>
+<td>Invalid key form in <code>#map{...}</code> (must be keyword, string, or int literal)</td>
+</tr>
+<tr>
+<td><code>TUR-E0283</code></td>
+<td>Unknown <code>#&lt;tag&gt;{...}</code> dispatch tag (only <code>#map{</code>/<code>#set{</code> are defined)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="relationship-to-the-json-reader-macro">Relationship to the JSON reader macro</h2>
+<p>The data literals supersede the <a href="../archive/history/json-reader-macro-plan.md">JSON reader-macro
+plan</a> for the common "literal shape, computed
+values" case: <code>#map{...}</code> already accepts arbitrary value expressions, which a
+JSON-only reader cannot. A <code>#json(...)</code> reader would remain useful only for
+pasting a literal JSON blob verbatim; for everything else, write the map
+literal directly.</p>
+<h2 id="sweet-expression-interaction">Sweet-expression interaction</h2>
+<p>The reader dispatch sits below the sweet-expression layer, so the literals
+work transparently inside <code>#lang sweet-exp</code> files alongside neoteric calls
+and curly-infix arithmetic:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#lang sweet-exp
+
+(defn build [] :int
+  (let [m #map{:a 1 :b 2}]
+    map-count(m)))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#lang sweet-exp
+
+defn build [] :int
+  let [m #map{:a 1 :b 2}]
+    map-count(m)
+</code></pre></div></div></div>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/data-literals-guide.md</code>
+  </footer>
+  <script>
+  (function(){
+    var KW = new Set([
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
+      'if','cond','when','unless','do','begin','and','or','not',
+      'fn','lambda','async','await','match','case',
+      'quote','quasiquote','unquote','for','while','loop','do-m',
+      'set!','try','catch','finally','with','use',
+      'import','export','module','require','provide',
+      'cons','car','cdr','nil-value','some','none','ok','err',
+      'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
+    ]);
+    function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function hl(code){
+      var out='', i=0, n=code.length;
+      while(i<n){
+        var c=code[i];
+        // Line comment
+        if(c===';'){
+          var e=code.indexOf('\n',i); if(e===-1)e=n;
+          out+='<span class="hl-comment">'+esc(code.slice(i,e))+'</span>'; i=e; continue;
+        }
+        // String
+        if(c==='"'){
+          var j=i+1;
+          while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+='<span class="hl-string">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Type annotation :keyword
+        if(c===':'&&i+1<n&&/[a-zA-Z_]/.test(code[i+1])){
+          var j=i+1;
+          while(j<n&&/[a-zA-Z0-9_\-?!]/.test(code[j]))j++;
+          out+='<span class="hl-type">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Number (integer or float, possibly negative)
+        if(/[0-9]/.test(c)||(c==='-'&&i+1<n&&/[0-9]/.test(code[i+1]))){
+          var j=i; if(code[j]==='-')j++;
+          while(j<n&&/[0-9a-fA-FxX_\.]/.test(code[j]))j++;
+          out+='<span class="hl-number">'+esc(code.slice(i,j))+'</span>'; i=j; continue;
+        }
+        // Symbol / identifier
+        if(/[a-zA-Z_\-!?*+<>=\/&%^~#@]/.test(c)){
+          var j=i;
+          while(j<n&&/[a-zA-Z0-9_\-!?*+<>=\/&%^~#@\.]/.test(code[j]))j++;
+          var sym=code.slice(i,j);
+          if(sym==='true'||sym==='false'||sym==='nil'){
+            out+='<span class="hl-number">'+esc(sym)+'</span>';
+          } else if(KW.has(sym)){
+            out+='<span class="hl-keyword">'+esc(sym)+'</span>';
+          } else {
+            out+=esc(sym);
+          }
+          i=j; continue;
+        }
+        out+=esc(c); i++;
+      }
+      return out;
+    }
+    document.querySelectorAll('pre code.language-turmeric, pre code.language-sweet-exp').forEach(function(el){
+      el.innerHTML=hl(el.textContent);
+    });
+  })();
+  </script>
+  <script>
+  (function(){
+    function applyToggle(toggle, syntax) {
+      var card = toggle.closest('.code-card');
+      if (!card) return;
+      toggle.querySelectorAll('.seg-btn').forEach(function(btn){
+        var active = btn.dataset.syntax === syntax;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      card.querySelectorAll('.code-version').forEach(function(v){
+        v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+
+    // ST1.5: restore stored preference across all cards on load
+    var stored = localStorage.getItem('guide-syntax');
+    if (stored) {
+      document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, stored); });
+    }
+
+    document.querySelectorAll('.code-syntax-toggle').forEach(function(toggle){
+      // Click handler
+      toggle.addEventListener('click', function(e){
+        if (!e.target.classList.contains('seg-btn')) return;
+        var syntax = e.target.dataset.syntax;
+        document.querySelectorAll('.code-syntax-toggle').forEach(function(t){ applyToggle(t, syntax); });
+        localStorage.setItem('guide-syntax', syntax);
+      });
+      // ST5.2: arrow-key navigation within the tablist
+      toggle.addEventListener('keydown', function(e){
+        var btns = Array.from(toggle.querySelectorAll('.seg-btn'));
+        var idx = btns.indexOf(document.activeElement);
+        if (idx === -1) return;
+        if (e.key === 'ArrowRight'){ btns[(idx+1)%btns.length].focus(); e.preventDefault(); }
+        if (e.key === 'ArrowLeft') { btns[(idx-1+btns.length)%btns.length].focus(); e.preventDefault(); }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

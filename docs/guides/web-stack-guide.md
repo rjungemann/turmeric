@@ -30,11 +30,33 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
            :subdir "spices/httpd"}
 }
 ```
+```sweet-exp
+:spices
+{
+  "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
+           :ref    "httpd-v0.1.0"
+           :subdir "spices/httpd"}
+}
+```
 
 ### Full stack (httpd + template + tourist)
 
 ```turmeric
 :spices {
+  "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "httpd-v0.1.0"
+              :subdir "spices/httpd"}
+  "template" {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "template-v0.1.0"
+              :subdir "spices/template"}
+  "tourist"  {:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "tourist-v0.1.0"
+              :subdir "spices/tourist"}
+}
+```
+```sweet-exp
+:spices
+{
   "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
               :ref    "httpd-v0.1.0"
               :subdir "spices/httpd"}
@@ -80,6 +102,18 @@ request handle and returns a response handle.
     (server-stop s)
     0))
 ```
+```sweet-exp
+import httpd/server :refer [server-start server-stop]
+import httpd/request :refer [req-path]
+import httpd/response :refer [resp-ok]
+defn handler [req :int] :int
+  resp-ok("text/plain" str-concat("You requested: " req-path(req)))
+defn main [] :int
+  let [s (server-start 8080 handler)]
+    ;; run until killed
+    server-stop(s)
+    0
+```
 
 ### Starting the server
 
@@ -90,6 +124,13 @@ request handle and returns a response handle.
 
 ;; Thread-per-connection (legacy)
 (server-start-spawn port handler)
+```
+```sweet-exp
+;; Bounded thread pool (default -- recommended)
+server-start(port handler)
+server-start-pool(port handler pool-size)
+;; Thread-per-connection (legacy)
+server-start-spawn(port handler)
 ```
 
 `server-start` returns a server handle. Pass it to `server-stop` to close
@@ -104,6 +145,18 @@ the listening socket and join the pool threads.
 (req-body    req)       ;; request body as cstr (may be "")
 (req-header  req "x-api-key")  ;; value of a header, or 0 if absent
 ```
+```sweet-exp
+req-method(req)
+;; "GET", "POST", "PUT", "DELETE", ...
+req-path(req)
+;; "/users/42"
+req-query(req)
+;; "page=1&limit=10"  (raw query string)
+req-body(req)
+;; request body as cstr (may be "")
+req-header(req "x-api-key")
+;; value of a header, or 0 if absent
+```
 
 ### Response constructors
 
@@ -115,6 +168,14 @@ the listening socket and join the pool threads.
 
 ;; Custom status
 (with-header (resp-ok "text/plain" "Not found") "x-reason" "missing")
+```
+```sweet-exp
+;; Convenience: status 200 with a content-type and body
+resp-ok("text/html" "<h1>Hello</h1>")
+resp-ok("text/plain" "OK")
+resp-ok("application/json" "{\"ok\":true}")
+;; Custom status
+with-header(resp-ok("text/plain" "Not found") "x-reason" "missing")
 ```
 
 ---
@@ -144,6 +205,16 @@ the listening socket and join the pool threads.
       (env-free e)
       out)))
 ```
+```sweet-exp
+import template/render :refer [render]
+import template/env :refer [env-new env-set env-free]
+defn greet [name :cstr] :cstr
+  let [e (env-new)]
+    env-set(e "name" name)
+    let [out (render "Hello, <%= name %>!" e)]
+      env-free(e)
+      out
+```
 
 The returned string is heap-allocated; the caller must free it.
 
@@ -164,6 +235,16 @@ The returned string is heap-allocated; the caller must free it.
 (env-set-list env "items" lst)      ;; bind a cons list of cstr values
 (env-free env)                      ;; release the Env
 ```
+```sweet-exp
+env-new
+;; create an Env handle
+env-set(env "key" "value")
+;; bind a scalar string
+env-set-list(env "items" lst)
+;; bind a cons list of cstr values
+env-free(env)
+;; release the Env
+```
 
 ### Rendering from a file
 
@@ -178,6 +259,17 @@ The returned string is heap-allocated; the caller must free it.
       e    (env-new)]
   (env-set e "title" "Home")
   (render-ast ast e))
+```
+```sweet-exp
+import template/render :refer [render-ast]
+import template/token :refer [lex]
+import template/parse :refer [parse]
+let [src  (slurp "views/index.html")   ;; read file as cstr
+      toks (lex src)
+      ast  (parse toks)
+      e    (env-new)]
+  env-set(e "title" "Home")
+  render-ast(ast e)
 ```
 
 ---
@@ -221,6 +313,26 @@ serving on top of `tur-httpd`.
     (server-stop s)
     0))
 ```
+```sweet-exp
+import tourist/app :refer [tourist]
+import tourist/dsl :refer [get! post!]
+import tourist/helpers :refer [text html]
+import tourist/param :refer [capture param]
+defn main [] :int
+  let [s (tourist 3000
+            (get! "/hello/:name"
+              (fn [ctx]
+                (text (str-concat "Hello, " (ok-val (capture ctx "name")) "!"))))
+            (get! "/search"
+              (fn [ctx]
+                (let [q (ok-val (param ctx "q"))]
+                  (text (str-concat "Searching for: " q)))))
+            (post! "/echo"
+              (fn [ctx]
+                (text (req-body ctx)))))]
+    server-stop(s)
+    0
+```
 
 ### Route constructors
 
@@ -230,6 +342,18 @@ serving on top of `tur-httpd`.
 (put!    pattern handler)    ;; match PUT  requests
 (delete! pattern handler)    ;; match DELETE requests
 (any!    pattern handler)    ;; match any method
+```
+```sweet-exp
+get!(pattern handler)
+;; match GET  requests
+post!(pattern handler)
+;; match POST requests
+put!(pattern handler)
+;; match PUT  requests
+delete!(pattern handler)
+;; match DELETE requests
+any!(pattern handler)
+;; match any method
 ```
 
 Pattern syntax:
@@ -248,12 +372,28 @@ The context transparently forwards all `httpd/request` accessors:
 (req-body   ctx)         ;; request body
 (req-header ctx "name")  ;; header value
 ```
+```sweet-exp
+req-method(ctx)
+;; "GET"
+req-path(ctx)
+;; "/user/42"
+req-body(ctx)
+;; request body
+req-header(ctx "name")
+;; header value
+```
 
 Plus tourist-specific helpers:
 
 ```turmeric
 (capture ctx "id")       ;; URL segment capture -- result<:cstr>
 (param   ctx "page")     ;; query parameter    -- result<:cstr>
+```
+```sweet-exp
+capture(ctx "id")
+;; URL segment capture -- result<:cstr>
+param(ctx "page")
+;; query parameter    -- result<:cstr>
 ```
 
 Both return `result<:cstr>`. Unwrap with `ok-val` after checking for `err`:
@@ -264,6 +404,12 @@ Both return `result<:cstr>`. Unwrap with `ok-val` after checking for `err`:
     (text (ok-val res))
     (status 400 (text "missing id"))))
 ```
+```sweet-exp
+let [res (capture ctx "id")]
+  if ok?(res)
+    text(ok-val(res))
+    status(400 text("missing id"))
+```
 
 ### Response helpers
 
@@ -273,6 +419,18 @@ Both return `result<:cstr>`. Unwrap with `ok-val` after checking for `err`:
 (json-body body)         ;; 200 application/json
 (redirect path)          ;; 302 Location: path
 (status code resp)       ;; override the status code of any response
+```
+```sweet-exp
+text(body)
+;; 200 text/plain
+html(body)
+;; 200 text/html
+json-body(body)
+;; 200 application/json
+redirect(path)
+;; 302 Location: path
+status(code resp)
+;; override the status code of any response
 ```
 
 ### Middleware
@@ -295,6 +453,15 @@ function receives a request and returns `option<:int>`:
   (use! auth-mw)
   (get! "/private" (fn [ctx] (text "secret"))))
 ```
+```sweet-exp
+import tourist/middleware :refer [use!]
+import stdlib/option :refer [none-value some]
+defn auth-mw [ctx :int] :int
+  if =(req-header(ctx "x-api-key") 0)
+    some(status(401 text("Unauthorized")))
+    none-value()
+tourist(3000 use!(auth-mw) get!("/private" fn([ctx] text("secret"))))
+```
 
 ### Static file serving
 
@@ -304,6 +471,10 @@ function receives a request and returns `option<:int>`:
 (tourist 3000
   (serve-static! "/assets" "./public")
   (get! "/" (fn [ctx] (html "<h1>Hello</h1>"))))
+```
+```sweet-exp
+import tourist/static :refer [serve-static!]
+tourist(3000 serve-static!("/assets" "./public") get!("/" fn([ctx] html("<h1>Hello</h1>"))))
 ```
 
 `serve-static!` matches `GET /assets/**` paths and serves files from
@@ -337,6 +508,27 @@ Using `tur-template` with `tur-tourist`:
                   (html (render-view "Hello, <%= name %>!" e))))))]
     (server-stop s)
     0))
+```
+```sweet-exp
+import tourist/app :refer [tourist]
+import tourist/dsl :refer [get!]
+import tourist/helpers :refer [html]
+import template/render :refer [render]
+import template/env :refer [env-new env-set env-free]
+defn render-view [name :cstr env :int] :cstr
+  let [out (render name env)]
+    env-free(env)
+    out
+defn main [] :int
+  let [s (tourist 3000
+            (get! "/hello/:name"
+              (fn [ctx]
+                (let [e (env-new)
+                      n (ok-val (capture ctx "name"))]
+                  (env-set e "name" n)
+                  (html (render-view "Hello, <%= name %>!" e))))))]
+    server-stop(s)
+    0
 ```
 
 ---

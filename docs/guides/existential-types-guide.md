@@ -26,6 +26,10 @@ on the inner value without ever learning its concrete type:
 ; A boxed value paired with an evidence that its type implements Show.
 (exists [a] [(Show a)] a)
 ```
+```sweet-exp
+; A boxed value paired with an evidence that its type implements Show.
+exists [a] [(Show a)] a
+```
 
 ## `pack` -- introduce an existential
 
@@ -50,12 +54,31 @@ the boxed value and a vtable pointer for each constraint.
   (let [e (pack 42 (exists [a] [(Show a)] a))]
     0))
 ```
+```sweet-exp
+defclass Show [a]
+  show [x] :cstr
+
+definstance Show [int]
+  show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```
+
+defn main [] :int
+  let [e pack(42 exists [a] [(Show a)] a)]
+    0
+```
 
 If you omit the constraint, the existential has no usable methods -- it
 is a pure information-hiding boundary:
 
 ```turmeric
 (pack 42 (exists [a] a))   ; opaque -- nothing you can do with the inner value
+```
+```sweet-exp
+pack(42 exists [a] a)   ; opaque -- nothing you can do with the inner value
 ```
 
 ## `open` -- eliminate an existential
@@ -79,6 +102,15 @@ one branch of an `if`.
 ; rejected: body would leak the abstract type `a` out of its scope.
 (open e [a v]
   v)
+```
+```sweet-exp
+; ok: body returns a :cstr, not a value of type `a`.
+open e [a v]
+  .show(v)
+
+; rejected: body would leak the abstract type `a` out of its scope.
+open e [a v]
+  v
 ```
 
 The error message names the abstract variable that escapes:
@@ -118,6 +150,31 @@ list of mixed concrete payloads can still be printed:
     (println (open e2 [a v] (.show v))))
   0)
 ```
+```sweet-exp
+defclass Show [a]
+  show [x] :cstr
+
+definstance Show [int]
+  show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "%lld", (long long)x);
+    return (const char *)buf;
+    ```
+
+definstance Show [bool]
+  show [x] :cstr
+    if x
+      "true"
+      "false"
+
+defn main [] :int
+  let [e1 pack(42 exists [a] [(Show a)] a)
+       e2 pack(true exists [a] [(Show a)] a)]
+    println $ open(e1 [a v] .show(v))
+    println $ open(e2 [a v] .show(v))
+  0
+```
 
 The pack/open sites stay inline; passing a constrained existential
 through a function parameter erases the constraint info and prevents
@@ -136,6 +193,14 @@ the `Show`-constrained case. They are load-on-demand:
   (let [e (showable 42)]
     (println (show-it e)))
   0)
+```
+```sweet-exp
+load "stdlib/existential.tur"
+
+defn main [] :int
+  let [e showable(42)]
+    println(show-it(e))
+  0
 ```
 
 | Macro | Expands to |

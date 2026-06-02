@@ -645,6 +645,11 @@ a:hover { text-decoration: underline; }
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 .sidebar-back:hover { color: var(--gold-bright); background: var(--bg-hover); border-color: var(--gold-line); text-decoration: none; }
+.sidebar-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.25rem 0 0.5rem;
+}
 
 /* Content */
 .content {
@@ -999,6 +1004,26 @@ _SIDEBAR_TOGGLE_JS = """\
 </script>"""
 
 
+SIDEBAR_GLOBALS = """\
+  <hr class="sidebar-divider">
+  <h3>Language</h3>
+  <ul>
+    <li><a href="/tour">Tour</a></li>
+    <li><a href="/try">Try It</a></li>
+  </ul>
+  <h3>Ecosystem</h3>
+  <ul>
+    <li><a href="/docs/html/guides/">Guides</a></li>
+    <li><a href="/docs/html/api/">API Docs</a></li>
+    <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+  </ul>
+  <h3>Community</h3>
+  <ul>
+    <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+  </ul>
+"""
+
+
 def _html_header(title, css_path='style.css'):
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1170,6 +1195,7 @@ def render_module_page(module, out_dir, brand='stdlib'):
     # Build sidebar TOC (exported only)
     sidebar = '<div class="sidebar">\n'
     sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
+    sidebar += '  <hr class="sidebar-divider">\n'
     sidebar += '  <h3>Exported</h3>\n  <ul>\n'
     for defn in exported:
         anchor = re.sub(r'[^a-zA-Z0-9_\-]', '_', defn['name'])
@@ -1180,6 +1206,7 @@ def render_module_page(module, out_dir, brand='stdlib'):
         for defn in internal:
             sidebar += f'    <li><a href="#{html_module.escape(defn["name"])}" style="color:var(--faint)">{html_module.escape(defn["name"])}</a></li>\n'
         sidebar += '  </ul>\n'
+    sidebar += SIDEBAR_GLOBALS
     sidebar += '</div>\n'
 
     # Path display: prefer the relative path stored on the module (when generated
@@ -1313,6 +1340,7 @@ def render_index_page(modules, out_dir, brand='stdlib', brand_label=None):
 
     sidebar = '<div class="sidebar">\n'
     sidebar += '  <a class="sidebar-back" href="/">← Back to home</a>\n'
+    sidebar += SIDEBAR_GLOBALS
     sidebar += '</div>\n'
 
     page = _html_header(f'{brand_label} | API Docs', css_path='style.css')

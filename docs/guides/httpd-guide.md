@@ -33,6 +33,19 @@ see [reactor-guide.md](reactor-guide.md).
     (httpd-free h)
     0))
 ```
+```sweet-exp
+load "stdlib/httpd.tur"
+load "stdlib/chan.tur"
+
+defn main [] :int
+  let [h httpd-new(8080
+           fn [conn :ptr<void>] :nil
+             httpd-resp-status!(conn 200)
+             httpd-resp-body!(conn "Hello, world!"))]
+    httpd-run(h)
+    httpd-free(h)
+    0
+```
 
 `httpd-run` blocks the calling thread until `httpd-stop` is signalled
 from another thread. The handler runs on a worker thread, not the
@@ -50,6 +63,13 @@ as a handler -- wrap it:
               (fn [conn :ptr<void>] :nil
                 (handle-request conn _)))]
   ...)
+```
+```sweet-exp
+let [_ 0
+     h httpd-new(8080
+         fn [conn :ptr<void>] :nil
+           handle-request(conn _))]
+  ...
 ```
 
 Inside the handler:
@@ -86,6 +106,15 @@ A `port` of `0` lets the kernel choose; read it back with
     (join-thread server)
     (httpd-free h)))               ; releases reactor + worker pool
 ```
+```sweet-exp
+let [h httpd-new(0 handler)]
+  ;; run on a background thread so the main thread can signal shutdown
+  let [server spawn-server(h)]
+    ...                            ; do work, wait for a signal, etc.
+    httpd-stop(h)                  ; thread-safe; wakes the listener
+    join-thread(server)
+    httpd-free(h)                  ; releases reactor + worker pool
+```
 
 `httpd-stop` delegates to `reactor-stop` on the listener's reactor and
 is safe to call from a signal handler, another worker, or the main
@@ -111,6 +140,18 @@ pattern, with support for `:name` path parameters:
     (router-free r)
     (httpd-free h)))
 ```
+```sweet-exp
+let [r router-new()]
+  defroute r "GET"  "/"           home-handler
+  defroute r "GET"  "/users/:id"  user-handler
+  defroute r "POST" "/users"      create-user-handler
+  let [h httpd-new(8080
+           fn [conn :ptr<void>] :nil
+             router-dispatch(r conn))]
+    httpd-run(h)
+    router-free(r)
+    httpd-free(h)
+```
 
 Inside a route handler, `(httpd-param conn "id")` returns the captured
 segment as a `:cstr`. Unmatched requests receive a 404 automatically.
@@ -135,6 +176,17 @@ machinery:
 (let [h (httpd-new 8080
           (log-mw (router-mw r)))]
   ...)
+```
+```sweet-exp
+defn log-mw [next :int]
+  fn [conn :ptr<void>] :nil
+    println(httpd-req-path(conn))
+    httpd-call(next conn)
+    println-status(httpd-resp-status-get(conn))
+
+let [h httpd-new(8080
+         log-mw(router-mw(r)))]
+  ...
 ```
 
 `httpd-call` invokes a captured handler closure on a connection -- it is
@@ -193,6 +245,22 @@ fd -- see [httpd-tls-guide.md](httpd-tls-guide.md).
   (join-thread server)
   (join-thread client)
   (httpd-free h))
+```
+```sweet-exp
+let [donech chan-new(1)
+     h      httpd-new(0
+              fn [conn :ptr<void>] :nil
+                httpd-resp-status!(conn 200)
+                httpd-resp-body!(conn "ok")
+                chan-send(donech 1))
+     port   httpd-port(h)
+     server spawn-server(h)
+     client spawn-client(port)]
+  chan-recv(donech)
+  httpd-stop(h)
+  join-thread(server)
+  join-thread(client)
+  httpd-free(h)
 ```
 
 This is the shape used by every fixture under

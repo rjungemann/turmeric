@@ -1,0 +1,23 @@
+;; cps-transform-plan (grammar extension): the serial-reset context walk now
+;; descends through a pure `let` too.  The captured continuation -- built with a
+;; `let` in its context -- still marshals: serialize -> deserialize -> resume
+;; reproduces a direct resume, because the let-bound operand is evaluated once
+;; at capture time and rides in the frame env exactly like a literal operand.
+
+;; round-trip the captured continuation through bytes, then resume it.
+(defn rt5 [k] :int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+
+;; resume directly, without marshaling.
+(defn direct4 [k] :int (tur_serial_cont_resume k 4))
+
+(defn main [] :int
+  ;; let in context, round-tripped: a = 10; (10 + 5)                 = 15
+  (println (serial-reset (let [a 10] (+ a (serial-shift rt5 0)))))
+  ;; nested let context (* a (+ b [])) with a=2 b=1, direct resume:
+  ;;   2 * (1 + 4)                                                    = 10
+  (println (serial-reset
+             (let [a 2 b 1]
+               (* a (+ b (serial-shift direct4 0))))))
+  0)
