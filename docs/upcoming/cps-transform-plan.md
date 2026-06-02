@@ -34,8 +34,9 @@
 > serialize/deserialize round-trips). Remaining: parametric containers that
 > monomorphize to a by-value struct need carrier<->concrete ABI bridging to be
 > usable as a CPS env; and broadening contexts past single-hole binops/2-arg
-> calls (pure `let` preludes now supported; `if`-branches still pending). This is
-> the substrate that
+> calls (pure `let` preludes and one reset-body `if` branch point now supported;
+> only an `if` reached *through* outer frames remains). This is the substrate
+> that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -779,16 +780,40 @@ no shipped snapshot regenerated):
   whose init is a pure expression computed once -- multi-shot, = 23/46/197) and
   `serial-context-let` (a `let`-built context that still serialize/deserialize
   round-trips, = 15/10).
+- **Broaden the context subset: one `if` branch point.** The resumable
+  cloneable (CPS9) and serial (CPS10) lowerings now admit a single runtime
+  branch point: an `(if cond THEN ELSE)` at the reset body position whose
+  condition is *pure* (does not reach the shift) and whose arms split into
+  exactly one shift-bearing arm and one pure arm (`ctx_if_branch`). The
+  abort-value/frame-chain model cannot reify a shift reached only on one runtime
+  branch as a static chain, so the lowering instead emits a real C `if`: the
+  condition is evaluated once at the reset site, the shift path runs the DK
+  chain built from the shift-bearing arm (capturing/marshaling as usual), and
+  the other path yields the pure arm's value directly with no capture. A
+  shift-in-`else` arm emits `if (!(cond))`. The reset emitters were refactored to
+  a reusable `emit_cloneable_ctx` / `emit_serial_ctx` core (the per-context-body
+  lowering) wrapped by the conditional scaffold; `if` composes with the `let`
+  and frame grammar inside the chosen arm. Selective + safe: `ctx_if_branch`
+  returns NULL (legacy fallback, byte-identical) for an impure condition, both
+  or neither arm reaching the shift, a one-armed `if`, or an `if` that is not the
+  whole reset body, so no shipped snapshot regenerates. Fixtures:
+  `cloneable-context-if` (shift in `then`/`else`, both conditions, plus an
+  `if`+`let`+nested-frame arm -- multi-shot, = 23/99/6/77/46) and
+  `serial-context-if` (shift path still serialize/deserialize round-trips, =
+  15/42/95).
 
   *Remaining:* parametric containers that monomorphize to a **by-value** struct
   (concrete `Pair[int int]`) need carrier<->concrete ABI bridging at the env
   store + frame call to be usable as a CPS env (the carrier-fitting opaque path
   works today). The handle<->cont bridging for the *explicit* `tur_serial_cont_*`
   builtins still needs a `::` ascribe at the call site (the `(k v)` sugar is
-  seamless). Broadening contexts past single-hole binops / 2-arg calls now
-  covers pure `let` preludes; `if`-branches (genuine runtime branching, not
-  statically pin-pointable on the abort-value/frame-chain model) remain a
-  separate grammar extension.
+  seamless). The supported context grammar now spans single-hole binops, 2-arg
+  call frames, pure `let` preludes, and one `if` branch point at the reset body.
+  The remaining grammar shape is an `if` reached *through* outer context frames
+  (e.g. `(reset (+ 5 (if cond THEN[shift] ELSE)))`): it would need the outer
+  frames applied to the pure arm via a no-shift DK chain plus an
+  outer/inner-frame split; today it falls back to the legacy lowering (which has
+  a pre-existing limitation for a shift nested inside an operand).
 
 ---
 

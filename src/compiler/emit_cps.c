@@ -741,17 +741,59 @@ static const Expr *collect_ctx(const Expr *rb, ExprKind target,
     return NULL;
 }
 
+/* cps-transform-plan (grammar extension): the one runtime branch point the
+ * resumable lowering supports.  If `body` is an `(if cond THEN ELSE)` whose
+ * condition is pure (does not reach the shift) and whose arms split cleanly
+ * into exactly one shift-bearing arm and one pure arm, return the shift-bearing
+ * arm (the context body to walk) and set *cond_out / *else_out (the pure arm) /
+ * *when_out (true iff the shift arm is the `then` arm, so the emitted C test is
+ * `if (cond)` vs `if (!(cond))`).  Otherwise return NULL.  The condition is
+ * evaluated once at the reset site; the shift path runs the DK chain built from
+ * the shift-bearing arm, the other path yields the pure arm's value directly --
+ * the frame-chain model cannot express a shift reached only on one runtime
+ * branch any other way. */
+static const Expr *ctx_if_branch(const Expr *body, ExprKind shift_kind,
+                                 const Expr **cond_out, const Expr **else_out,
+                                 bool *when_out) {
+    if (!body || body->kind != EX_IF) return NULL;
+    const Expr *cond = body->as.if_.cond;
+    const Expr *thn  = body->as.if_.then_;
+    const Expr *els  = body->as.if_.else_or_null;
+    if (!cond || !thn || !els) return NULL;            /* need both arms */
+    if (reaches_shift_kind(cond, shift_kind)) return NULL;
+    if (expr_contains_return_or_throw(cond)) return NULL;
+    bool ht = reaches_shift_kind(thn, shift_kind);
+    bool he = reaches_shift_kind(els, shift_kind);
+    if (ht == he) return NULL;                         /* exactly one shift arm */
+    const Expr *shift_arm = ht ? thn : els;
+    const Expr *pure_arm  = ht ? els : thn;
+    if (reaches_shift_kind(pure_arm, shift_kind)) return NULL;   /* defensive */
+    if (expr_contains_return_or_throw(pure_arm)) return NULL;
+    *cond_out = cond;
+    *else_out = pure_arm;
+    *when_out = ht;
+    return shift_arm;
+}
+
 /* Pure feasibility check (NO emission): is this cloneable-reset lowerable onto
  * the DK machine? Requires a non-empty supported context (so existing
- * empty-context fixtures stay on the legacy path, byte-identical). */
+ * empty-context fixtures stay on the legacy path, byte-identical) -- except for
+ * the if-shaped body, which never matched the legacy path, so an empty context
+ * in the shift arm is admitted there. */
 static bool cl_can_lower(const Expr *e) {
     if (!e || e->kind != EX_CLONEABLE_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
+    const Expr *cond = NULL, *els = NULL; bool when = true;
+    const Expr *inner = e->as.cloneable_reset_.body;
+    const Expr *branch = ctx_if_branch(inner, EX_CLONEABLE_SHIFT, &cond, &els, &when);
+    bool has_if = (branch != NULL);
+    if (has_if) inner = branch;
     ClFrame frames[CL_MAX_CTX_FRAMES];
     CtxLet lets[CL_MAX_CTX_LETS];
     uint32_t nf = 0, nl = 0;
-    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
-    if (!shift || nf == 0) return false;
+    const Expr *shift = collect_ctx(inner, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
+    if (!shift) return false;
+    if (!has_if && nf == 0) return false;
     if (shift->as.cloneable_shift_.n_live_captures != 0) return false;
     if (!shift->as.cloneable_shift_.k_fn) return false;
     return true;
@@ -784,14 +826,16 @@ static void cl_emit_frame_fn(Buf *hb, const char *name, const ClFrame *f) {
     cl_emit_frame_body(hb, name, f);
 }
 
-char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
-    if (!cl_can_lower(e)) return NULL;
-    if (!ctx->pending_handler_fns) return NULL;   /* need file scope for helpers */
-
+/* Emit the cloneable DK lowering for a single context body `ctx_body` (the
+ * reset body, or -- under ctx_if_branch -- the shift-bearing arm), producing a
+ * fresh result var holding the reset's value. The caller guarantees feasibility
+ * (cl_can_lower) and file scope (pending_handler_fns). */
+static char *emit_cloneable_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
+                                const Expr *ctx_body) {
     ClFrame frames[CL_MAX_CTX_FRAMES];
     CtxLet lets[CL_MAX_CTX_LETS];
     uint32_t nf = 0, nl = 0;
-    const Expr *shift = collect_ctx(e->as.cloneable_reset_.body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
+    const Expr *shift = collect_ctx(ctx_body, EX_CLONEABLE_SHIFT, frames, &nf, NULL, false, lets, &nl);
     const Expr *k_fn = shift->as.cloneable_shift_.k_fn;
     Buf *hb = ctx->pending_handler_fns;
     int id = ctx->tmp_n++;
@@ -877,6 +921,46 @@ char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_printf(body, "dk_free(%s);\n", chain);
     free(chain);
+    return result;
+}
+
+char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
+    if (!cl_can_lower(e)) return NULL;
+    if (!ctx->pending_handler_fns) return NULL;   /* need file scope for helpers */
+
+    const Expr *cond = NULL, *els = NULL; bool when = true;
+    const Expr *branch = ctx_if_branch(e->as.cloneable_reset_.body,
+                                       EX_CLONEABLE_SHIFT, &cond, &els, &when);
+    if (!branch)
+        return emit_cloneable_ctx(ctx, body, e, e->as.cloneable_reset_.body);
+
+    /* if-shaped body: the condition is pure, so evaluate it once and branch in
+     * the emitted C -- the shift path runs the DK chain built from the
+     * shift-bearing arm, the other path yields the pure arm's value. */
+    const char *rty = emit_type_c_name(ctx, e->type);
+    char *result = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", rty, result);
+    char *cv = emit_value(ctx, body, cond);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s(%s)) {\n", when ? "" : "!", cv);
+    free(cv);
+    ctx->indent++;
+    char *sub = emit_cloneable_ctx(ctx, body, e, branch);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", result, sub);
+    free(sub);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "} else {\n");
+    ctx->indent++;
+    char *ev = emit_value(ctx, body, els);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", result, ev);
+    free(ev);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
     return result;
 }
 
@@ -990,10 +1074,14 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 static bool sk_can_lower(const Expr *e, const Expr *program) {
     if (!e || e->kind != EX_SERIAL_RESET) return false;
     if (!ty_intptr_safe(e->type.kind)) return false;
+    const Expr *cond = NULL, *els = NULL; bool when = true;
+    const Expr *inner = e->as.serial_reset_.body;
+    const Expr *branch = ctx_if_branch(inner, EX_SERIAL_SHIFT, &cond, &els, &when);
+    if (branch) inner = branch;
     ClFrame frames[CL_MAX_CTX_FRAMES];
     CtxLet lets[CL_MAX_CTX_LETS];
     uint32_t nf = 0, nl = 0;
-    const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
+    const Expr *shift = collect_ctx(inner, EX_SERIAL_SHIFT,
                                     frames, &nf, program, /*want_names=*/false,
                                     lets, &nl);
     if (!shift) return false;
@@ -1014,14 +1102,15 @@ static int sk_tag_for_frame(const ClFrame *f) {
                                   : 5;             /* SK_TAG_DIVR: env / v */
 }
 
-char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
-    if (!sk_can_lower(e, ctx->program_root)) return NULL;
-    if (!ctx->pending_handler_fns) return NULL;
-
+/* Emit the serial DK lowering for a single context body `ctx_body` (the reset
+ * body, or -- under ctx_if_branch -- the shift-bearing arm), producing a fresh
+ * result var holding the reset's value. Caller guarantees feasibility. */
+static char *emit_serial_ctx(EmitCtx *ctx, Buf *body, const Expr *e,
+                             const Expr *ctx_body) {
     ClFrame frames[CL_MAX_CTX_FRAMES];
     CtxLet lets[CL_MAX_CTX_LETS];
     uint32_t nf = 0, nl = 0;
-    const Expr *shift = collect_ctx(e->as.serial_reset_.body, EX_SERIAL_SHIFT,
+    const Expr *shift = collect_ctx(ctx_body, EX_SERIAL_SHIFT,
                                     frames, &nf, ctx->program_root, /*want_names=*/true,
                                     lets, &nl);
     const Expr *k_fn = shift->as.serial_shift_.k_fn;
@@ -1135,6 +1224,46 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_printf(body, "dk_free(%s);\n", chain);
     free(chain);
+    return result;
+}
+
+char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
+    if (!sk_can_lower(e, ctx->program_root)) return NULL;
+    if (!ctx->pending_handler_fns) return NULL;
+
+    const Expr *cond = NULL, *els = NULL; bool when = true;
+    const Expr *branch = ctx_if_branch(e->as.serial_reset_.body,
+                                       EX_SERIAL_SHIFT, &cond, &els, &when);
+    if (!branch)
+        return emit_serial_ctx(ctx, body, e, e->as.serial_reset_.body);
+
+    /* if-shaped body: branch in the emitted C on the pure condition; the shift
+     * path captures + marshals the chain built from the shift-bearing arm, the
+     * other path yields the pure arm's value. */
+    const char *rty = emit_type_c_name(ctx, e->type);
+    char *result = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", rty, result);
+    char *cv = emit_value(ctx, body, cond);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s(%s)) {\n", when ? "" : "!", cv);
+    free(cv);
+    ctx->indent++;
+    char *sub = emit_serial_ctx(ctx, body, e, branch);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", result, sub);
+    free(sub);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "} else {\n");
+    ctx->indent++;
+    char *ev = emit_value(ctx, body, els);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", result, ev);
+    free(ev);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
     return result;
 }
 

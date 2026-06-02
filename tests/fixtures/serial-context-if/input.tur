@@ -1,0 +1,21 @@
+;; cps-transform-plan (grammar extension): the serial lowering supports the same
+;; one runtime branch point as the cloneable path -- an `(if cond THEN ELSE)` at
+;; the reset body with a pure condition and exactly one shift-bearing arm.  On
+;; the shift path the captured continuation still marshals (serialize ->
+;; deserialize -> resume reproduces a direct resume); the pure path yields its
+;; arm's value with no capture.
+
+;; round-trip the captured continuation through bytes, then resume it.
+(defn rt5 [k] :int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+
+(defn main [] :int
+  ;; cond true, shift path round-tripped, context (+ 10 []): (10+5)   = 15
+  (println (serial-reset (if (< 0 1) (+ 10 (serial-shift rt5 0)) 42)))
+  ;; cond false, no capture -> pure ELSE                              = 42
+  (println (serial-reset (if (< 1 0) (+ 10 (serial-shift rt5 0)) 42)))
+  ;; shift in ELSE arm, cond false -> takes it, context (- 100 []):
+  ;;   (100-5)                                                        = 95
+  (println (serial-reset (if (< 1 0) 8 (- 100 (serial-shift rt5 0)))))
+  0)

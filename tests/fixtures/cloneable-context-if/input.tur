@@ -1,0 +1,34 @@
+;; cps-transform-plan (grammar extension): the resumable cloneable lowering now
+;; supports one runtime branch point -- an `(if cond THEN ELSE)` at the reset
+;; body position whose condition is pure (does not reach the shift) and whose
+;; arms split into exactly one shift-bearing arm and one pure arm.  The
+;; condition is evaluated once at the reset site; the shift path runs the DK
+;; chain built from the shift-bearing arm, the other path yields the pure arm's
+;; value.  Previously a shift behind an `if` fell back to the legacy lowering.
+
+;; sum-two: resume the captured continuation twice (clone for the first use).
+(defn sum-two [k] :int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
+     (tur_cloneable_cont_resume k 2)))
+
+(defn main [] :int
+  ;; cond true, shift in THEN, context (+ 10 []): (10+1) + (10+2)    = 23
+  (println (cloneable-reset
+             (if (< 0 1) (+ 10 (cloneable-shift sum-two 0)) 99)))
+  ;; cond false, shift in THEN not taken -> pure ELSE                = 99
+  (println (cloneable-reset
+             (if (< 1 0) (+ 10 (cloneable-shift sum-two 0)) 99)))
+  ;; shift in ELSE arm, cond false -> takes it, context (* 2 []):
+  ;;   (2*1) + (2*2)                                                 = 6
+  (println (cloneable-reset
+             (if (< 1 0) 77 (* 2 (cloneable-shift sum-two 0)))))
+  ;; shift in ELSE arm, cond true -> takes pure THEN                 = 77
+  (println (cloneable-reset
+             (if (< 0 1) 77 (* 2 (cloneable-shift sum-two 0)))))
+  ;; if + let-in-branch compose: cond true, b=10, (* 2 (+ b [])):
+  ;;   2*(10+1) + 2*(10+2)                                           = 46
+  (println (cloneable-reset
+             (if (< 0 1)
+               (let [b 10] (* 2 (+ b (cloneable-shift sum-two 0))))
+               5)))
+  0)
