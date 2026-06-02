@@ -28,10 +28,13 @@
 > **flavored `cont`** (`(k v)` dispatches to the escape/cloneable/serial resume
 > runtime) and **value-typed `cont<T>`** (a non-int result `T` via `(cont T)` /
 > `(serial-cont T)` etc., threaded through the resume with bit-casts; cstr serial
-> env types marshal by value). Remaining: struct/ADT continuation values + their
-> `Serializable` env codec (cstr is the first non-int kind); and broadening
-> contexts past single-hole binops/2-arg calls (lets, if-branches). This is the
-> substrate that
+> env types marshal by value); composite **`Serializable` instances** for
+> `Pair`/`Option` in stdlib; and **struct/nominal continuation envs marshaled via
+> their `Serializable` instance** (a serial env of an opaque/boxed type
+> serialize/deserialize round-trips). Remaining: parametric containers that
+> monomorphize to a by-value struct need carrier<->concrete ABI bridging to be
+> usable as a CPS env; and broadening contexts past single-hole binops/2-arg
+> calls (lets, if-branches). This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -738,14 +741,33 @@ no shipped snapshot regenerated):
   as a fresh heap string on deserialize. Fixture: `cont-value-typed` (cstr
   cloneable `hello world`, cstr serial resume `hi there`, cstr serial
   serialize/deserialize round-trip `hi world`).
+- **Composite `Serializable` instances (stdlib).** The first composite
+  `Serializable` instances in the codebase -- `Pair[A B]` and `Option[A]` in
+  `serial.tur` (the typeclass's module -> non-orphan) -- the enabling precedent
+  for serializing a struct/container env. Carrier-level (element slots packed as
+  int64 carriers), matching the `Eq`/`Clone` container-instance pattern; correct
+  for int-carrier elements. `deserialize` is invoked via the explicit instance
+  method because `(deserialize b)` is return-type polymorphic and cannot dispatch
+  on a type variable. Fixture: `serial-composite-instances`.
+- **Struct/nominal continuation env via `Serializable` (CPS step a).** A
+  serial-shift whose captured context has a nominal (struct/opaque) env now
+  marshals that env through the env type's `Serializable` instance. `EmitCtx`
+  gains `program_root`; `sk_find_serializable` scans the program's instance
+  definitions (codegen has no typeclass env) and pulls the exact serialize/
+  deserialize C names from the instance's `method_impls`. The serial format gains
+  `SK_ENV_SER`: `SkReg` carries the instance fn pointers; serialize embeds the
+  bytes the instance returns, deserialize rebuilds them and calls the instance
+  deserializer. Scope: carrier-fitting nominal envs (opaque/pointer-backed).
+  Fixture: `serial-struct-env` (a boxed two-int `Rec` env round-tripped through
+  serialize/deserialize before resume = 35; resumed directly = 108).
 
-  *Remaining:* struct/ADT continuation values + their `Serializable` env codec
-  (cstr is the first non-int kind; the format and casts generalize, but a struct
-  env needs a per-type `Serializable` (de)serialize rather than the inline
-  length-prefixed bytes used for cstr). The handle<->cont bridging for the
-  *explicit* `tur_serial_cont_*` builtins still needs a `::` ascribe at the call
-  site (the `(k v)` sugar is seamless). Broadening contexts past single-hole
-  binops / 2-arg calls (lets, if-branches) remains a separate grammar extension.
+  *Remaining:* parametric containers that monomorphize to a **by-value** struct
+  (concrete `Pair[int int]`) need carrier<->concrete ABI bridging at the env
+  store + frame call to be usable as a CPS env (the carrier-fitting opaque path
+  works today). The handle<->cont bridging for the *explicit* `tur_serial_cont_*`
+  builtins still needs a `::` ascribe at the call site (the `(k v)` sugar is
+  seamless). Broadening contexts past single-hole binops / 2-arg calls (lets,
+  if-branches) remains a separate grammar extension.
 
 ---
 
