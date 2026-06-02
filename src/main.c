@@ -39,6 +39,7 @@
 #include "buf.h"
 #include "borrow_check.h"  /* Phase 14 */
 #include "cps.h"          /* Phase 18: CPS transformation */
+#include "cps_ir.h"       /* CPS2: ANF/CPS IR (--dump-cps) */
 #include "diag.h"
 #include "effect_check.h" /* Phase P19-2: effect-row inference */
 #include "effect.h"       /* built-in effect registration */
@@ -399,11 +400,22 @@ static int run_core_passes(PassContext *ctx) {
 #endif
             break;
         case PASS_CPS:
+            /* CPS1 (cps-transform-plan): --dump-cps-coloring runs the
+             * whole-program may-capture coloring on the pre-transform tree and
+             * prints the colored/uncolored partition. */
+            if (g_dump_cps_coloring)
+                cps_dump_coloring(ctx->arena, ctx->prog, stdout);
+            /* CPS2 (cps-transform-plan): --dump-cps prints the ANF/CPS IR for
+             * every colored function (dump-only; not wired into codegen). */
+            if (g_dump_cps)
+                cps_ir_dump_program(ctx->arena, ctx->prog, stdout);
             /* Phase 18: CPS transformation for shift/reset. */
             ctx->prog = cps_transform(ctx->arena, ctx->prog, &ctx->tc_env);
             if (!ctx->prog || diag_had_error()) return 1;
             /* Phase B5: --dump-clone-plan: print cloneable capture plan after CPS */
             if (g_dump_clone_plan) cps_dump_clone_plan(ctx->prog, stderr);
+            /* CPS1: --dump-cps-coloring: print colored/uncolored partition */
+            if (g_dump_cps_coloring) cps_dump_cps_coloring(ctx->prog, stderr);
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info preserved after CPS */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_CPS");
@@ -4373,6 +4385,8 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
+        else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
+        else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
@@ -6542,9 +6556,13 @@ static int usage(void) {
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
         "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
+        "  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)\n"
+        "  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)\n"
         "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
+        "  --dump-cps-coloring              dump CPS coloring (colored/uncolored) per top-level defn (CPS1)\n"
+        "  --cps-path                       emit CPS wrappers for colored functions (CPS3)\n"
         "  --emit-abi-trace                 print the resolved ABI path per call site during emit-c (Phase I)\n"
         "  --no-abi-cache                   disable the persistent cross-module ABI cache (.tur-abi-cache/) (Phase J6)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
@@ -7203,6 +7221,22 @@ int main(int argc, char **argv) {
             }
             argc--;
             i--;
+        } else if (strcmp(argv[i], "--dump-cps-coloring") == 0) {
+            /* CPS1: print the whole-program may-capture coloring per defn */
+            g_dump_cps_coloring = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-cps") == 0) {
+            /* CPS2: print the ANF/CPS IR for each colored defn */
+            g_dump_cps = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
         } else if (strcmp(argv[i], "--dump-sizes") == 0) {
             /* SZ8: print inferred size index per sized-GADT constructor */
             g_dump_sizes = true;
@@ -7237,6 +7271,22 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-clone-plan") == 0) {
             /* Phase B5: dump cloneable capture plan after CPS */
             g_dump_clone_plan = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-cps-coloring") == 0) {
+            /* CPS1: dump CPS coloring (colored/uncolored) after cps_transform */
+            g_dump_cps_coloring = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--cps-path") == 0) {
+            /* CPS3: emit CPS wrappers for colored functions */
+            g_cps_path = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

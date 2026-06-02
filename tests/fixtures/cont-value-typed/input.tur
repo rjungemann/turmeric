@@ -1,0 +1,34 @@
+;; cps-transform-plan (value-typed cont<T>): a continuation can carry a non-int
+;; result type T, written (cont T) / (serial-cont T) / (escape-cont T).  This
+;; lets a cstr-valued continuation type-check, and -- for serial -- lets a cstr
+;; context operand (the frame env) marshal by value (length-prefixed bytes)
+;; rather than as a dangling pointer.
+
+(extern-c malloc [^int n] :ptr<void>)
+(extern-c strcpy [^cstr d ^cstr s] :cstr)
+(extern-c strcat [^cstr d ^cstr s] :cstr)
+(extern-c strlen [^cstr s] :int)
+(defn cat [a :cstr b :cstr] :cstr
+  ```c
+  char *r=(char*)malloc(strlen(a)+strlen(b)+1); strcpy(r,a); strcat(r,b); return r;
+  ```)
+
+;; cstr-valued cloneable continuation: (k v) returns cstr.
+(defn cl [k (cont cstr)] :cstr (k "world"))
+
+;; cstr-valued serial continuation, resumed directly.
+(defn sr [k (serial-cont cstr)] :cstr (k "there"))
+
+;; cstr serial continuation round-tripped through serialize/deserialize: the
+;; captured "hi " env is marshaled by value and rematerialized before resume.
+(defn srt [k (serial-cont cstr)] :cstr
+  (:: (tur_serial_cont_resume
+        (tur_serial_cont_deserialize (tur_serial_cont_serialize (:: k :int)))
+        (:: "world" :int))
+      :cstr))
+
+(defn main [] :int
+  (println (cloneable-reset (cat "hello " (cloneable-shift cl ""))))  ; hello world
+  (println (serial-reset (cat "hi " (serial-shift sr ""))))          ; hi there
+  (println (serial-reset (cat "hi " (serial-shift srt ""))))         ; hi world (round-trip)
+  0)

@@ -1,0 +1,35 @@
+;; cps-transform-plan (b): composite Serializable instances in stdlib.
+;; Carrier-level Serializable for Pair[A B] and Option[A] -- the first composite
+;; Serializable instances in the codebase, the enabling precedent for
+;; serializing a struct/container continuation env.  Correct for int-carrier
+;; elements (deserialize is called via the explicit instance method, since
+;; (deserialize b) is return-type polymorphic and cannot dispatch on a type var).
+
+(load "stdlib/serial.tur")
+(extern-c printf [^cstr fmt ^int v] :int)
+
+;; read the two int64 carrier fields of a Pair / the value of an Option
+(defn rd-pair [c :int] :int
+  ```c struct { int64_t fst; int64_t snd; } *p = (void*)(intptr_t)c;
+  return p ? p->fst * 1000 + p->snd : -1; ```)
+(defn rd-opt [c :int] :int
+  ```c struct { bool is_some; int64_t value; } *o = (void*)(intptr_t)c;
+  return (o && o->is_some) ? o->value : -1; ```)
+
+(defn main [] :int
+  ;; Pair[int int] round-trip: (7, 35) -> serialize -> deserialize -> 7*1000+35
+  (let [p  (pair 7 35)
+        b  (.serialize p)
+        c2 (__inst_Serializable_deserialize_Pair b)]
+    (printf "pair=%lld\n" (rd-pair c2)))           ; 7035
+  ;; Option[int] some round-trip
+  (let [o  (:: (some 99) (Option int))
+        b  (.serialize o)
+        c2 (__inst_Serializable_deserialize_Option b)]
+    (printf "opt-some=%lld\n" (rd-opt c2)))         ; 99
+  ;; Option[int] none round-trip
+  (let [o  (:: (none) (Option int))
+        b  (.serialize o)
+        c2 (__inst_Serializable_deserialize_Option b)]
+    (printf "opt-none=%lld\n" (rd-opt c2)))         ; -1
+  0)

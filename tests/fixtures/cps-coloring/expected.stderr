@@ -1,0 +1,5 @@
+pure-arith: uncolored
+also-pure: uncolored
+uses-shift: colored
+calls-shifter: colored
+main: uncolored
