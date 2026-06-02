@@ -79,11 +79,22 @@ Extend `HttpdConn` and the read/write paths so middleware can read any
 request header and set arbitrary response headers (including repeated
 headers such as `Set-Cookie`).
 
+<<<<<<< HEAD
 - **Storage.** Keep the raw header block already read into the worker
   buffer and, on first access, parse it into an in-place index
   (offset/length pairs) rather than copying -- the buffer outlives the
   handler call. Response headers accumulate in a small growable list of
   `{name, value}` owned by the conn and freed at end of request.
+=======
+- **Storage** (resolved, OQ1). The current read buffer is a *stack*
+  `char buf[8192]` in `httpd-handle` (`stdlib/httpd.tur:172`): it is valid
+  during the handler call but overwritten on the next keep-alive request and
+  capped at 8 KB. Rather than index into it, **parse request headers into a
+  conn-owned list** of `{name, value}` freed at end of request, and **make
+  the read buffer growable** so large header blocks no longer truncate.
+  Response headers accumulate in the same kind of conn-owned growable list,
+  also freed at end of request.
+>>>>>>> origin/main
 - **Request API**
   - `(httpd-req-header conn :ptr<void> name :cstr) :cstr` -- case-insensitive
     lookup; empty string when absent.
@@ -142,9 +153,20 @@ Both branch on `Content-Type:` and read `httpd-req-body`.
   - `(httpd-req-form conn :ptr<void> field :cstr) :cstr`
   - `(httpd-req-form-all conn :ptr<void>) :ptr<void>` (map/list of pairs).
 - **JSON** (`application/json`): delegate to the existing `json` stdlib
+<<<<<<< HEAD
   module (it exists but is not yet wired into httpd).
   - `(httpd-req-json conn :ptr<void>) :ptr<void>` -- parsed JSON value, or
     a none/err on malformed input.
+=======
+  module. `json/decode [s :cstr] :int` (`stdlib/json.tur:651`) already
+  returns a heap node tree (or `0` on parse error) with a clean recursive
+  `json/free [node :int] :void` (`stdlib/json.tur:694`).
+  - `(httpd-req-json conn :ptr<void>) :ptr<void>` -- parsed JSON value, or
+    a none/err on malformed input. **Per-request lifetime (resolved, OQ4):**
+    a thin wrapper caches the decoded tree on the conn and `json/free`s it in
+    the iteration cleanup (alongside `conn->body`), so handlers never free it
+    and the leak-checked `build` path stays clean.
+>>>>>>> origin/main
   - `mw-json-body` variant that pre-parses and 400s on malformed JSON so
     handlers can assume a valid document.
 - Guardrails: respect a configurable max body size; the worker already
@@ -179,6 +201,7 @@ Both branch on `Content-Type:` and read `httpd-req-body`.
   exceeds a threshold and the negotiated codec is supported, compresses
   `resp_body`, sets `Content-Encoding:` and `Vary: Accept-Encoding`, and
   rewrites `Content-Length`.
+<<<<<<< HEAD
 - **Codec sourcing.** Turmeric stdlib has no deflate/gzip. Options, in
   preference order:
   1. `gzip` via an optional `tur/zlib` spice in `../turmeric-spices`
@@ -186,6 +209,14 @@ Both branch on `Content-Type:` and read `httpd-req-body`.
      (mirror the `requires.spices` fixture pattern).
   2. A pure-Turmeric `deflate` fallback (slower) so the feature works with
      no external dep.
+=======
+- **Codec sourcing (resolved, OQ2).** Turmeric stdlib has no deflate/gzip
+  anywhere. Source `gzip` via an optional `tur/zlib` spice in
+  `../turmeric-spices` (link against system zlib); compile the middleware
+  only when present and gate its fixtures behind `requires.spices`. No
+  pure-Turmeric deflate fallback -- when the spice is absent the middleware
+  is simply unavailable.
+>>>>>>> origin/main
 - Runs as the **outermost** post-processing middleware so it sees the
   final body. Skip already-encoded or tiny bodies.
 
@@ -276,7 +307,14 @@ with A2 because the fiber substrate already exists.
   - `(httpd-new-async port :int handler :int) :ptr<void>`
   - Internally: the listener reactor accepts; each accepted fd spawns a
     request fiber via the F1-F8 local-fiber driver on the **same** reactor
+<<<<<<< HEAD
     thread (or a small pool of reactor threads, one fiber-group each).
+=======
+    thread. **Threading (resolved, OQ3):** start with a single reactor
+    thread and one `LocalFiberGroup` (the fiber driver's natural shape --
+    one group binds to one reactor, no work-stealing); measure before
+    sharding into a pool of reactor threads.
+>>>>>>> origin/main
 - A request fiber: read (awaiting readability as needed) -> run handler ->
   write (awaiting writability) -> keep-alive loop or close.
 - Keep the existing thread-pool path unchanged and default; async is opt-in
@@ -365,6 +403,7 @@ independent of Track M except A3, which validates they compose.
 | 9 | A2+A3 await surface + mw interop | PR 8, Track M |
 | 10 | A4 limits, guides, throughput fixtures | PR 9 |
 
+<<<<<<< HEAD
 ## Open questions
 
 1. **Header storage:** index-into-buffer (zero-copy, lifetime-bound to the
@@ -379,3 +418,27 @@ independent of Track M except A3, which validates they compose.
 4. **JSON ownership:** does the existing `json` stdlib module expose a
    parse entry point with a clean free, or does it need a wrapper for the
    per-request lifetime?
+=======
+## Open questions (resolved 2026-06-02)
+
+1. **Header storage:** ~~index-into-buffer vs. parse-into-owned-list.~~
+   **RESOLVED -- parse-into-owned for both, and lift the 8 KB cap.** The
+   read buffer is a stack `char buf[8192]` (`stdlib/httpd.tur:172`): valid
+   during the handler call but overwritten across keep-alive requests and
+   truncating at 8 KB. M0 copies request headers into a conn-owned list
+   (freed at end of request) and makes the read buffer growable. See
+   Phase M0.
+2. **Compression dep:** ~~pure-Turmeric deflate vs. `tur/zlib` spice.~~
+   **RESOLVED -- require the `tur/zlib` spice, skip the middleware when
+   absent** (gate fixtures with `requires.spices`); no pure-Turmeric
+   fallback. See Phase M6.
+3. **Async threading:** ~~single reactor thread vs. pool.~~ **RESOLVED --
+   single reactor + one `LocalFiberGroup` first, measure, then shard if
+   needed.** Matches the fiber driver's one-group-per-reactor shape. See
+   Phase A1.
+4. **JSON ownership:** ~~does `json` expose a clean parse/free?~~
+   **RESOLVED -- yes** (`json/decode`/`json/free`, `stdlib/json.tur:651`/`694`),
+   wrapped per-request: `httpd-req-json` caches the tree on the conn and
+   frees it in the iteration cleanup so handlers never free it. See
+   Phase M3.
+>>>>>>> origin/main

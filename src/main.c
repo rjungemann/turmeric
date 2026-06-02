@@ -68,6 +68,8 @@
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
 #include "lsp/lsp_docs.h"
+/* MCP server */
+#include "lsp/mcp.h"
 
 #ifndef TUR_VERSION
 #define TUR_VERSION "unknown"
@@ -7654,6 +7656,11 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "lsp") == 0) {
         diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
         lsp_server_run(STDIN_FILENO, STDOUT_FILENO);
+        return 0;
+    }
+    if (strcmp(cmd, "mcp") == 0) {
+        diag_init(false);   /* no color -- stdout is reserved for JSON-RPC */
+        mcp_server_run(STDIN_FILENO, STDOUT_FILENO);
         return 0;
     }
     if (strcmp(cmd, "build") == 0) {

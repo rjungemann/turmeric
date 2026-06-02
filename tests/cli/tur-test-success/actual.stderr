@@ -1,1 +1,4 @@
+<<<<<<< HEAD
 /tmp/workspace/rjungemann/turmeric/src/compiler/emit_fns.c:626:11: runtime error: load of value 190, which is not a valid value for type '_Bool'
+=======
+>>>>>>> origin/main
