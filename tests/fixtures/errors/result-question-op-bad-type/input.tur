@@ -1,0 +1,4 @@
+;; Phase R1: ? on a non-Result (literal int) is a hard error.
+(defn main [] :int
+  (let [x (? 5)]
+    x))

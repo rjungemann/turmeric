@@ -179,6 +179,71 @@ result-free(r)     ;; free the heap struct (does not free the contained value)
 
 ---
 
+## Query operator: `?`
+
+The `?` operator unwraps an ok `Result` in place, or returns the err `Result`
+early from the enclosing function. It is the ergonomic counterpart to manual
+`(if (err? r) (return r) (ok-val r))` threading.
+
+```turmeric
+(? expr)            ;; s-expression
+```
+```sweet-exp
+?(expr)             ;; neoteric -- composes inside other calls
+(? expr)            ;; traditional spelling also works under #lang sweet-exp
+```
+
+### Lowering
+
+`(? expr)` lowers to a single-evaluation `let` so `expr` runs exactly once:
+
+```turmeric
+(let [__q expr]
+  (if (err? __q)
+      (return __q)        ;; propagate the err Result unchanged
+      (ok-val __q)))      ;; otherwise yield the unwrapped ok value
+```
+
+The lowering routes through the `#{}`-safe stdlib helpers `__tur-q-is-err?`
+and `__tur-q-ok-val` (in `stdlib/result.tur`), so call sites need no `(unsafe
+...)` wrapper.
+
+### Scope rule
+
+`?` is only valid **inside a function body** -- using it at the top level is a
+hard error (`? operator is only allowed inside a function body`). Because it
+expands to `(return <err>)`, the enclosing function must itself return a
+`Result` so the propagated err is well-typed.
+
+Applying `?` to a non-`Result` literal is rejected up front:
+
+```turmeric
+(? 5)   ;; error [TUR-E0001]: ? operator requires a Result value, got int
+```
+
+Computed non-`Result` operands are caught by the same `TUR-E0001` check when
+the `__tur-q-is-err?` helper fails to accept them.
+
+### Worked example
+
+```turmeric
+;; parse-config threads three fallible steps; any err short-circuits.
+(defn parse-config [src :ptr<void>] :ptr<void>
+  (let [raw    (? (read-source  src))]
+    (let [toks (? (tokenize     raw))]
+      (let [ast (? (parse-forms toks))]
+        (ok ast)))))
+```
+
+If `read-source`, `tokenize`, or `parse-forms` returns an err, `parse-config`
+returns that err immediately; otherwise it returns `(ok ast)`.
+
+For the "transform the error, then propagate" use case, combine `?` with
+[`result-or-else`](#combinators) to rewrite the err payload before it bubbles
+up.
+
+---
+
 ## `Option`
 
 An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
@@ -467,7 +532,6 @@ The following features are planned but not yet implemented:
 
 | Feature | Phase | Notes |
 |---|---|---|
-| `?` operator | R1 | Short-circuit error propagation in the caller |
 | `catch-unwind` | R2 | Catch a panic at a safe boundary |
 | `--no-contracts` flag | C2 | Strip contracts from release builds |
 | `--warn-unused-result` compiler flag | R6 | Lint for dropped results |
