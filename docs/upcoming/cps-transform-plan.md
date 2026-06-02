@@ -20,8 +20,9 @@
 > now `call/cc*` (capturing the real continuation up to the nearest enclosing
 > cloneable-reset) all execute on this substrate in emitted code (`emit_cps.c`).
 > The whole delimited/undelimited operator set now runs on the CPS substrate;
-> what remains are perf/cleanup follow-ons (OQ-CPS2: keep-or-remove the fiber
-> fast path; richer serial env types; CC4 `(k v)` sugar / `cont<T>` typing). This
+> what remains are perf/cleanup follow-ons (OQ-CPS2 **resolved 2026-06-02**: keep
+> the fiber path as the selective fallback + bounded fast path; richer serial env
+> types; CC4 `(k v)` sugar / `cont<T>` typing; broaden the context subset). This
 > is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
@@ -711,8 +712,9 @@ continuations** (CPS10: `serial-reset`/`serial-shift`, marshalable via
 serialize/deserialize), and **`call/cc*`** (CPS11: captures up to an enclosing
 cloneable-reset). The full delimited/undelimited operator set now executes on
 the DK machine; the corresponding exit criteria are met. Only perf/cleanup
-follow-ons remain (OQ-CPS2 keep-or-remove the fiber fast path; richer serial env
-types via the `Serializable` typeclass; CC4 `(k v)` sugar / `cont<T>` typing).
+follow-ons remain: OQ-CPS2 (**resolved**: keep the fiber path as the selective
+fallback + bounded fast path); richer serial env types via the `Serializable`
+typeclass; CC4 `(k v)` sugar / `cont<T>` typing; broadening the context subset.
 
 ---
 
@@ -753,10 +755,35 @@ types via the `Serializable` typeclass; CC4 `(k v)` sugar / `cont<T>` typing).
   fallback (whole-program CPS) is simpler to implement but pays the trampoline
   tax everywhere. Revisit only if the coloring analysis proves too conservative
   to be useful (e.g. pervasive indirect calls force most code colored).
-- **OQ-CPS2 -- Keep the fiber fast path?** Retaining `fiber_ctx_*.S` for shallow
-  delimited capture could beat CPS on the common small-`reset` case. Decide in
-  CPS0.4 / revisit with CPS7.2 numbers: keep as a depth-bounded fast path, or
-  remove for a single substrate.
+- **OQ-CPS2 -- Keep the fiber fast path? RESOLVED 2026-06-02: KEEP (as the
+  selective fallback + bounded fast path).** Two independent reasons make "keep"
+  the correct call today, and neither is a close perf judgement:
+
+  1. **Correctness, not just speed.** The CPS-substrate lowerings (CPS8--CPS11)
+     are *selective*: each fires only for its supported shape subset and returns
+     NULL otherwise, falling back to the legacy fiber/inlined runtime. Shapes
+     still outside the subset -- e.g. a `shift` in an `if`/`match` *branch*
+     (CPS8.3), a non-arithmetic delimited context (calls, `let`-bodies that
+     aren't a single-hole `+`/`-`/`*` chain), float-typed results, or a
+     `cloneable-shift` with live `Clone` captures -- are handled *only* by the
+     legacy path. Removing it would regress those to "not compilable," so removal
+     is **blocked on the CPS subset becoming total**, not on a benchmark.
+  2. **It is genuinely a fast path for the common small case.** For a shallow
+     `reset` with a nearby `shift` the fiber snapshot copies a handful of frames
+     with no per-step heap thunk; the trampoline pays one indirect call + one
+     small allocation per bounce (CPS7.2). The fiber path therefore stays as the
+     depth-bounded fast path the original OQ-CPS2 anticipated; the CPS path is the
+     unbounded/serializable/multi-shot substrate for everything the fiber path
+     cannot express.
+
+  **Removal criteria (revisit when all hold).** (a) The CPS context grammar
+  covers the shapes above (tracked by the "broaden the context subset" follow-on
+  and CC4); (b) a CPS7.2 head-to-head shows the trampoline within an acceptable
+  factor of the fiber snapshot on the small-`reset` microbenchmark (or platform
+  TCO removes the trampoline tax, OQ-CPS3); (c) the `TUR_CONT_MAX_CAPTURED_FRAMES`
+  fiber capture is no longer reachable from any non-fallback lowering. Until then
+  the two substrates coexist exactly as ratified in CPS0.4, and
+  `TUR_CONT_MAX_CAPTURED_FRAMES` stays scoped + documented as fiber-only (CPS6).
 - **OQ-CPS3 -- Trampoline vs platform TCO.** If all supported C compilers/targets
   give reliable tail calls under our codegen, the trampoline could be dropped on
   those targets. Treat as a CPS7 perf follow-up, not a blocker.
