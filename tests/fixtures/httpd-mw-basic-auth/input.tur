@@ -1,0 +1,139 @@
+;; M5: httpd-mw-basic-auth -- 401 on missing/bad creds, 200 on good.
+;;
+;; Two requests on one keep-alive socket:
+;;   1. No Authorization header -- expect 401 + WWW-Authenticate: Basic realm="app"
+;;   2. Authorization: Basic YWRtaW46czNjcmV0  (admin:s3cret) -- expect 200, base runs.
+;;
+;; Expected output:
+;;   anon-status=401
+;;   anon-www-auth=Basic realm="app"
+;;   base
+;;   good-status=200
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+
+  /* Request 1: anonymous. */
+  {
+      const char *req =
+          "GET /secret HTTP/1.1\r\n"
+          "Host: localhost\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+          if (strstr(drain, "Unauthorized") != NULL) break;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.1 ", 9) == 0)
+          printf("anon-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+      const char *needle = "\r\nWWW-Authenticate: ";
+      const char *p = strstr(drain, needle);
+      if (p) {
+          p += strlen(needle);
+          const char *eol = strstr(p, "\r\n");
+          if (eol) printf("anon-www-auth=%.*s\n", (int)(eol - p), p);
+      }
+  }
+
+  /* Request 2: with valid Basic creds (admin:s3cret -> base64). */
+  {
+      /* base64("admin:s3cret") = "YWRtaW46czNjcmV0" */
+      const char *req =
+          "GET /secret HTTP/1.0\r\n"
+          "Authorization: Basic YWRtaW46czNjcmV0\r\n"
+          "\r\n";
+      send(fd, req, strlen(req), 0);
+      char drain[1024];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 ", 9) == 0)
+          printf("good-status=%c%c%c\n", drain[9], drain[10], drain[11]);
+  }
+
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech   (chan-new 1)
+        base     (fn [c :ptr<void>] :nil
+                   (print-tag "base")
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c "ok")
+                   (chan-send donech 1))
+        ;; Verifier must be a *fat* closure (captures at least one variable)
+        ;; because mw-basic-auth dispatches through the fat-closure ABI.
+        _tag     "secret"
+        verify   (fn [u :cstr p :cstr] :int
+                   (let [_t _tag]   ;; force fat-closure shape
+                     (if (= 1 (cstr-eq-const-time u "admin"))
+                       (cstr-eq-const-time p "s3cret")
+                       0)))
+        ;; Apply mw-basic-auth directly with all 3 args -- avoids both
+        ;; the partial-application `__pap` wrapper and the closure-call
+        ;; cast bug surfaced by the let-bound-then-composed shape.
+        composed (mw-basic-auth "app" verify base)
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))

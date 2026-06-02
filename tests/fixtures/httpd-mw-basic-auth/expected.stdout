@@ -1,0 +1,5 @@
+anon-status=401
+anon-www-auth=Basic realm="app"
+base
+good-status=200
+done

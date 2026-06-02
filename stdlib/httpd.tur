@@ -1650,6 +1650,315 @@
   return 0;
   ```)
 ;; =============================================================================
+;; M4: CORS middleware -- preflight short-circuit + response decoration
+;; =============================================================================
+;;
+;; mw-cors handles two cases:
+;;
+;;   1. Preflight (an `OPTIONS` request carrying `Access-Control-Request-
+;;      Method`): short-circuit with 204 and the appropriate
+;;      Access-Control-Allow-* headers, without calling `next`.
+;;
+;;   2. Normal request: call `next`, then decorate the response with
+;;      Access-Control-Allow-Origin (and Allow-Credentials / Expose-Headers
+;;      when configured).
+;;
+;; Caveat: `allow-origin = "*"` combined with `allow-credentials = 1` is
+;; INVALID per the CORS spec.  Browsers reject the response and the
+;; request fails.  Either echo the request's `Origin:` or list specific
+;; origins when credentials are required.
+;;; CorsOpts -- mw-cors configuration.
+;;;
+;;; Field conventions:
+;;;   allow-origin      -- single value; "*" for any (no credentials),
+;;;                        or a specific origin
+;;;   allow-methods     -- comma-separated list emitted on preflight
+;;;   allow-headers     -- comma-separated list emitted on preflight
+;;;   expose-headers    -- comma-separated list emitted on normal responses
+;;;                        (or "" to omit)
+;;;   allow-credentials -- 0 / 1; emits Allow-Credentials: true on both paths
+;;;   max-age           -- preflight cache lifetime in seconds, or -1 to omit
+;;;
+;;; Since: Phase H8 (M4)
+
+(defstruct CorsOpts
+  [allow-origin      :cstr
+   allow-methods     :cstr
+   allow-headers     :cstr
+   expose-headers    :cstr
+   allow-credentials :int
+   max-age           :int])
+;;; default-cors-opts -- permissive defaults suitable for development.
+;;;
+;;; allow-origin = "*", standard set of methods, Content-Type allowed,
+;;; no expose-headers, no credentials, no max-age.  Tighten for prod.
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn default-cors-opts [] :CorsOpts
+  (make-struct CorsOpts
+    "*"
+    "GET, POST, PUT, DELETE, OPTIONS"
+    "Content-Type"
+    ""
+    0
+    -1))
+;;; httpd-mw-cors-is-preflight -- internal: 1 iff this is a CORS preflight.
+
+(defn httpd-mw-cors-is-preflight [conn :ptr<void>] :int
+  ```c
+  if (!conn) return 0;
+  const char *m = httpd_req_method((void *)conn);
+  if (!m || strcmp(m, "OPTIONS") != 0) return 0;
+  return httpd_req_header_((void *)conn, "Access-Control-Request-Method");
+  ```)
+;;; httpd-mw-cors-emit-preflight -- internal: write the preflight response.
+;;;
+;;; Takes primitive fields rather than a CorsOpts value to side-step a
+;;; closure-capture codegen issue with by-pointer defstruct params --
+;;; mw-cors destructures opts into primitives so the inner closure env
+;;; stays scalar-only.
+
+(defn httpd-mw-cors-emit-preflight [conn :ptr<void>
+                                    allow-origin :cstr allow-methods :cstr
+                                    allow-headers :cstr allow-credentials :int
+                                    max-age :int] :nil
+  ```c
+  if (!conn) return;
+  httpd_resp_status_((void *)conn, 204);
+  httpd_resp_body_((void *)conn, "");
+  const char *ao = allow_origin  ? allow_origin  : "*";
+  const char *am = allow_methods ? allow_methods : "";
+  const char *ah = allow_headers ? allow_headers : "";
+  httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin",  ao);
+  if (*am) httpd_resp_header_((void *)conn, "Access-Control-Allow-Methods", am);
+  if (*ah) httpd_resp_header_((void *)conn, "Access-Control-Allow-Headers", ah);
+  if (allow_credentials) {
+      httpd_resp_header_((void *)conn, "Access-Control-Allow-Credentials", "true");
+  }
+  if (max_age >= 0) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%lld", (long long)max_age);
+      httpd_resp_header_((void *)conn, "Access-Control-Max-Age", buf);
+  }
+  ```)
+;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
+
+(defn httpd-mw-cors-decorate [conn :ptr<void>
+                              allow-origin :cstr expose-headers :cstr
+                              allow-credentials :int] :nil
+  ```c
+  if (!conn) return;
+  const char *ao = allow_origin   ? allow_origin   : "*";
+  const char *eh = expose_headers ? expose_headers : "";
+  httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin", ao);
+  if (*eh) httpd_resp_header_((void *)conn, "Access-Control-Expose-Headers", eh);
+  if (allow_credentials) {
+      httpd_resp_header_((void *)conn, "Access-Control-Allow-Credentials", "true");
+  }
+  ```)
+;;; mw-cors-with -- CORS middleware factory (positional args).
+;;;
+;;; (mw-cors-with ao am ah eh ac ma) is a one-arg function suitable for
+;;; compose-middleware: given a downstream handler `next`, returns a
+;;; wrapped handler that either short-circuits a preflight or decorates
+;;; the normal response.
+;;;
+;;; The 7-arg shape (incl. `next`) is the positional equivalent of the
+;;; planned `(mw-cors opts :CorsOpts next)` signature.  The defstruct
+;;; surface compiles, but the curried partial application
+;;; `(mw-cors opts)` triggers a codegen bug -- the auto-generated `__pap`
+;;; wrapper stores a `CorsOpts` value into an `int64_t` env field and
+;;; the C compile fails.  Worth filing as a sibling of the
+;;; defstruct-inline-c-byvalue plan.
+;;;
+;;; See `CorsOpts` / `default-cors-opts` for field semantics.
+;;;
+;;; Example:
+;;;   (compose-middleware base
+;;;     (mw-cors-with "https://app.example.com"
+;;;                   "GET, POST, OPTIONS"
+;;;                   "Content-Type, Authorization"
+;;;                   "" 1 60))
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn mw-cors-with [allow-origin :cstr allow-methods :cstr allow-headers :cstr
+                    expose-headers :cstr allow-credentials :int max-age :int
+                    next :int] :ptr<void>
+  (let [_ao allow-origin
+        _am allow-methods
+        _ah allow-headers
+        _eh expose-headers
+        _ac allow-credentials
+        _ma max-age
+        _n  next]
+    (fn [c :ptr<void>] :nil
+      (if (= 1 (httpd-mw-cors-is-preflight c))
+        (httpd-mw-cors-emit-preflight c _ao _am _ah _ac _ma)
+        (do
+          (httpd-call _n c)
+          (httpd-mw-cors-decorate c _ao _eh _ac))))))
+;;; mw-cors -- CORS middleware with permissive defaults.
+;;;
+;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
+;;; `*`, standard methods, Content-Type allowed, no credentials.  Use
+;;; `mw-cors-with` for customised settings.
+;;;
+;;; Example:
+;;;   (compose-middleware base mw-cors)
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn mw-cors [next :int] :ptr<void>
+  (mw-cors-with "*"
+                "GET, POST, PUT, DELETE, OPTIONS"
+                "Content-Type"
+                ""
+                0
+                -1
+                next))
+;; =============================================================================
+;; M5: HTTP Basic Auth middleware
+;; =============================================================================
+;;
+;; mw-basic-auth reads `Authorization: Basic <base64>` from the request,
+;; base64-decodes the user:pass pair, and calls a user-supplied verifier
+;; closure `(fn [user :cstr pass :cstr] :int)`.  On verifier failure the
+;; middleware emits 401 + `WWW-Authenticate: Basic realm="..."` and does
+;; NOT call `next`.
+;;
+;; Security caveats:
+;;
+;; * Basic Auth ships credentials in the clear (the base64 encoding is
+;;   reversible).  Always run behind TLS in production -- see
+;;   `httpd-new-tls` (Phase H5).
+;;
+;; * The verifier closure SHOULD use a constant-time comparison for the
+;;   password check to avoid timing-leak attacks.  `cstr-eq-const-time`
+;;   is provided as a convenience.
+;;; cstr-eq-const-time -- length-then-constant-time XOR cstring compare.
+;;;
+;;; Returns 1 when both strings have the same length AND all bytes match,
+;;; 0 otherwise.  The byte comparison runs over the full length even on
+;;; the first mismatch, hiding the position of the difference from a
+;;; timing observer.  The length check is variable-time (different
+;;; lengths => clearly different secrets), which is the standard
+;;; trade-off for cstring credential checks.
+;;;
+;;; Since: Phase H8 (M5)
+
+(defn cstr-eq-const-time [a :cstr b :cstr] :int
+  ```c
+  if (!a || !b) return 0;
+  size_t la = strlen(a);
+  size_t lb = strlen(b);
+  if (la != lb) return 0;
+  unsigned char diff = 0;
+  for (size_t i = 0; i < la; i++) diff |= (unsigned char)(a[i] ^ b[i]);
+  return diff == 0 ? 1 : 0;
+  ```)
+;;; httpd-mw-basic-auth-check -- internal: decode + dispatch the verifier.
+
+(defn httpd-mw-basic-auth-check [conn :ptr<void> verifier :int] :int
+  ```c
+  if (!conn || !verifier) return 0;
+  const char *hdr = httpd_req_header((void *)conn, "Authorization");
+  if (!hdr || !*hdr) return 0;
+  /* Must start with "Basic ", case-insensitive. */
+  if (strncasecmp(hdr, "Basic ", 6) != 0) return 0;
+  const char *b64 = hdr + 6;
+  while (*b64 == ' ') b64++;
+  size_t blen = strlen(b64);
+  if (blen == 0) return 0;
+  /* Base64-decode into a per-call heap buffer.  Output size <= input size. */
+  static const signed char b64tab[256] = {
+      /* fill with -1 except for valid base64 chars; we use a runtime init */
+      [0 ... 255] = -1
+  };
+  /* Designated initializers with ranges are a GNU extension; rebuild as
+   * a one-shot runtime table to stay portable. */
+  signed char tab[256];
+  for (int i = 0; i < 256; i++) tab[i] = -1;
+  for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
+  for (int i = 'a'; i <= 'z'; i++) tab[i] = (signed char)(i - 'a' + 26);
+  for (int i = '0'; i <= '9'; i++) tab[i] = (signed char)(i - '0' + 52);
+  tab[(int)'+'] = 62;
+  tab[(int)'/'] = 63;
+  char *raw = (char *)malloc(blen + 1);
+  if (!raw) return 0;
+  size_t   out  = 0;
+  uint32_t buf  = 0;
+  int      bits = 0;
+  for (size_t i = 0; i < blen; i++) {
+      char ch = b64[i];
+      if (ch == '=' || ch == ' ' || ch == '\r' || ch == '\n') continue;
+      signed char v = tab[(unsigned char)ch];
+      if (v < 0) { free(raw); return 0; }   /* malformed */
+      buf = (buf << 6) | (uint32_t)v;
+      bits += 6;
+      if (bits >= 8) {
+          bits -= 8;
+          raw[out++] = (char)((buf >> bits) & 0xFFu);
+      }
+  }
+  raw[out] = '\0';
+  /* Split on the first ':' -- everything before is user, after is pass. */
+  char *colon = (char *)memchr(raw, ':', out);
+  if (!colon) { free(raw); return 0; }
+  *colon = '\0';
+  const char *user = raw;
+  const char *pass = colon + 1;
+  /* Call verifier (fat closure taking two cstr args, returning int). */
+  int64_t *fat = (int64_t *)(intptr_t)verifier;
+  typedef int64_t (*fn2_t)(void *, const char *, const char *);
+  int64_t ok = ((fn2_t)(intptr_t)fat[0])((void *)fat, user, pass);
+  free(raw);
+  return (int)(ok ? 1 : 0);
+  ```)
+;;; httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate.
+
+(defn httpd-mw-basic-auth-challenge [conn :ptr<void> realm :cstr] :nil
+  ```c
+  if (!conn) return;
+  httpd_resp_status_((void *)conn, 401);
+  httpd_resp_body_((void *)conn, "Unauthorized");
+  char buf[256];
+  const char *r = (realm && *realm) ? realm : "restricted";
+  snprintf(buf, sizeof(buf), "Basic realm=\"%s\"", r);
+  httpd_resp_header_((void *)conn, "WWW-Authenticate", buf);
+  ```)
+;;; mw-basic-auth -- HTTP Basic Auth middleware factory.
+;;;
+;;; `realm` is the value placed in the `WWW-Authenticate: Basic
+;;; realm="..."` challenge.  `verifier` is a fat closure of type
+;;; `(fn [user :cstr pass :cstr] :int)` returning 1 to authorise and
+;;; 0 to reject.  Use `cstr-eq-const-time` in the verifier body for the
+;;; password check.
+;;;
+;;; ALWAYS run Basic Auth behind TLS (see `httpd-new-tls`); the encoding
+;;; is reversible and traverses the wire in clear text otherwise.
+;;;
+;;; Example:
+;;;   (let [_dummy 0
+;;;         verify (fn [u :cstr p :cstr] :int
+;;;                  (if (= 1 (cstr-eq-const-time u "admin"))
+;;;                    (cstr-eq-const-time p "s3cret")
+;;;                    0))
+;;;         composed (compose-middleware base (mw-basic-auth "app" verify))]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M5)
+
+(defn mw-basic-auth [realm :cstr verifier :int next :int] :ptr<void>
+  (let [_r realm
+        _v verifier
+        _n next]
+    (fn [c :ptr<void>] :nil
+      (if (= 1 (httpd-mw-basic-auth-check c _v))
+        (httpd-call _n c)
+        (httpd-mw-basic-auth-challenge c _r)))))
+;; =============================================================================
 ;; H6: Routing DSL
 ;; =============================================================================
 ;;
