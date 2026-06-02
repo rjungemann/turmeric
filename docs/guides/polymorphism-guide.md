@@ -107,8 +107,16 @@ happens at compile time -- neither virtual dispatch nor runtime tag lookup is in
 defclass Eq [a]
   eq? [x y] :bool
 
-definstance Eq [int]  $ eq? [x y] $ =(x y)
-definstance Eq [bool] $ eq? [x y] $ =(x y)
+definstance Eq [int]
+  eq? [x y] =(x y)
+definstance Eq [bool]
+  eq? [x y] =(x y)
+definstance Eq [cstr]
+  eq? [x y] :bool
+    ```c if (x == NULL && y == NULL) return true;
+       if (x == NULL || y == NULL) return false;
+       return strcmp((const char *)x, (const char *)y) == 0;
+  ```
 ```
 
 Instances can themselves be parametric -- "two pairs are equal when both
@@ -248,9 +256,12 @@ constraints simultaneously".
 ```sweet-exp
 defn describe [x : (int | cstr | bool)] : cstr
   match x
-    (i : int)  $ "an integer"
-    (s : cstr) $ "a string"
-    (b : bool) $ "a boolean"
+    (i : int)
+    "an integer"
+    (s : cstr)
+    "a string"
+    (b : bool)
+    "a boolean"
 ```
 
 **Reach for unions** at FFI/JSON boundaries and for gradual typing. **Reach
@@ -378,13 +389,7 @@ is, in a small sense, polymorphic over behaviour. This is the original
        (snd-cmp (.snd p1) (.snd p2))))
 ```
 ```sweet-exp
-defn pair-eq?
-  [A B]
-  [p1 : (Pair A B)
-   p2 : (Pair A B)
-   fst-cmp : (-> A A bool)
-   snd-cmp : (-> B B bool)]
-  : bool
+defn pair-eq? [A B] [p1 : (Pair A B) p2 : (Pair A B) fst-cmp : (-> A A bool) snd-cmp : (-> B B bool)] : bool
   and
     fst-cmp(.fst(p1) .fst(p2))
     snd-cmp(.snd(p1) .snd(p2))

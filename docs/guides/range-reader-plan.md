@@ -396,7 +396,7 @@ type.  In that case it defaults to the integer constructor family and emits a
 
 ## Example Usage
 
-```turmeric
+```turmeric no-check
 ;; Index bounds check with expression upper bound
 (defn safe-get [v :int i :int] :int
   (require! (range-contains? #r{0 <= i < (vec-len v)} i)

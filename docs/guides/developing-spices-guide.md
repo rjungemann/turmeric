@@ -244,7 +244,7 @@ tur add https://github.com/rjungemann/turmeric-spices \
 
 This produces:
 
-```turmeric
+```turmeric no-check
 :spices {
   "math" {:url    "https://github.com/rjungemann/turmeric-spices"
           :ref    "math-v0.1.0"
@@ -263,7 +263,7 @@ This produces:
 Mark spices that are only needed for tests `:optional true` so consumers
 are not forced to fetch them:
 
-```turmeric
+```turmeric no-check
 :spices {
   "test" {:url    "https://github.com/rjungemann/turmeric-spices"
           :ref    "test-v0.1.0"
@@ -335,7 +335,7 @@ tur add ../watch --path
 
 This writes to `build.tur`:
 
-```turmeric
+```turmeric no-check
 :spices {
   "watch" {:path "../watch"}
 }
@@ -378,7 +378,7 @@ The workspace auto-resolution and `:path` entries are local-development shortcut
 For a spice that will be published and consumed outside the workspace, add a URL
 entry alongside (or instead of) the local one:
 
-```turmeric
+```turmeric no-check
 :spices {
   "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
            :ref    "watch-v0.1.0"
@@ -409,7 +409,7 @@ compilation step. You write only Turmeric; CMake is an implementation detail.
 
 ### Declaring the dependency
 
-```turmeric
+```turmeric no-check
 :cmake-deps {
   "sqlite3" {:url     "https://github.com/sqlite/sqlite"
              :ref     "version-3.47.2"

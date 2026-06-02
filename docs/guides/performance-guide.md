@@ -167,15 +167,15 @@ defn sieve [limit] :vec
   let [flags vec/make(limit true)]
     vec/set!(flags 0 false)
     vec/set!(flags 1 false)
-    let [loop fn [i] :void
-              when <={i * i} limit
-                when vec/get(flags i)
-                  let [inner fn [j] :void
-                              when <=(j limit)
-                                vec/set!(flags j false)
-                                inner({j + i})]
-                    inner({i * i})
-                loop({i + 1})]
+    let [loop (fn [i] :void
+                (when (<= *(i i) limit)
+                  (when vec/get(flags i)
+                    (let [inner (fn [j] :void
+                                  (when <=(j limit)
+                                    vec/set!(flags j false)
+                                    inner({j + i})))]
+                      inner(*(i i))))
+                  loop({i + 1})))]
       loop(2)
     flags
 ```
@@ -206,14 +206,14 @@ import "stdlib/rand.tur"
 
 defn estimate-pi [samples] :float
   let [loop (fn [i inside] :float
-              if =(i 0)
-                * 4.0 (/ (int->float inside) (int->float samples))
-                let [x rand/float()
-                     y rand/float()]
-                  loop({i - 1}
-                       if <=(+ (* x x) (* y y)) 1.0
-                         {inside + 1}
-                         inside))]
+              (if (= i 0)
+                (* 4.0 (/ (int->float inside) (int->float samples)))
+                (let [x (rand/float)
+                      y (rand/float)]
+                  (loop (- i 1)
+                        (if (<= (+ (* x x) (* y y)) 1.0)
+                          (+ inside 1)
+                          inside)))))]
     loop(samples 0)
 ```
 
@@ -258,9 +258,11 @@ import "stdlib/ref.tur"
 
 defn freq-count [words] :hamt
   let [m ref(hamt/empty())]
-    list/for-each(words fn [w] :void
-      ref/update!(m fn [h] :hamt
-        hamt/insert(h w {1 + hamt/get-or(h w 0)})))
+    list/for-each(words
+                  (fn [w] :void
+                    ref/update!(m
+                                (fn [h] :hamt
+                                  hamt/insert(h w {1 + hamt/get-or(h w 0)})))))
     ref/get(m)
 ```
 
@@ -319,10 +321,11 @@ import "stdlib/str.tur"
 
 defn join [sep parts] :str
   let [b str/builder()]
-    list/for-each-indexed(parts fn [i s] :void
-      when {i > 0}
-        str/builder/append!(b sep)
-      str/builder/append!(b s))
+    list/for-each-indexed(parts
+                          (fn [i s] :void
+                            (when (> i 0)
+                              (str/builder/append! b sep))
+                            (str/builder/append! b s)))
     str/builder/finish(b)
 ```
 
@@ -383,8 +386,8 @@ Threads are spawned with `spawn` (from `stdlib/concurrency.tur`):
 import "stdlib/concurrency.tur"
 
 defn parallel-map [f xs] :list
-  let [handles list/map(xs fn [x] :handle spawn(fn [] :any f(x)))]
-    list/map(handles fn [h] :any await(h))
+  let [handles list/map(xs (fn [x] :handle spawn((fn [] :any f(x)))))]
+    list/map(handles (fn [h] :any await(h)))
 ```
 
 Each `spawn` creates a POSIX thread. Thread creation overhead is several
@@ -409,8 +412,8 @@ import "stdlib/chan.tur"
 
 defn pipeline [producer-fn consumer-fn n] :void
   let [c chan/make(64)]
-    spawn(fn [] :void producer-fn(c))
-    spawn(fn [] :void consumer-fn(c))
+    spawn((fn [] :void producer-fn(c)))
+    spawn((fn [] :void consumer-fn(c)))
     chan/close(c)
 ```
 
@@ -484,19 +487,19 @@ aggressively against one that reuses buffers:
 ```sweet-exp
 ; high churn -- allocates a new list each iteration
 defn churn [n] :void
-  let [loop fn [i] :void
-              when {i > 0}
-                let [_ list/range(0 1000)]
-                  loop({i - 1})]
+  let [loop (fn [i] :void
+              (when (> i 0)
+                (let [_ (list/range 0 1000)]
+                  (loop (- i 1)))))]
     loop(n)
 
 ; low churn -- reuses a vec
 defn no-churn [n] :void
   let [v vec/make(1000 0)]
-    let [loop fn [i] :void
-                when {i > 0}
-                  vec/fill!(v 0)
-                  loop({i - 1})]
+    let [loop (fn [i] :void
+                (when (> i 0)
+                  (vec/fill! v 0)
+                  (loop (- i 1))))]
       loop(n)
 ```
 
@@ -562,12 +565,12 @@ import "stdlib/trampoline.tur"
 defn even? [n] :thunk
   if ={n 0}
     done(true)
-    bounce(fn [] :thunk odd?({n - 1}))
+    bounce((fn [] :thunk odd?({n - 1})))
 
 defn odd? [n] :thunk
   if ={n 0}
     done(false)
-    bounce(fn [] :thunk even?({n - 1}))
+    bounce((fn [] :thunk even?({n - 1})))
 
 trampoline/run(even?(100000))   ; => true, O(1) stack
 ```
@@ -622,9 +625,10 @@ durability is required:
 ```sweet-exp
 defn write-lines [path lines] :void
   let [f io/open(path "wb")]
-    list/for-each(lines fn [line] :void
-      io/write(f line)
-      io/write(f "\n"))
+    list/for-each(lines
+                  (fn [line] :void
+                    io/write(f line)
+                    io/write(f "\n")))
     io/close(f)   ; flush happens here
 ```
 
@@ -667,7 +671,7 @@ loop:
 
 ```sweet-exp
 defn dot [ax ay az bx by bz] :float
-  {{ax * bx} + {ay * by} + {az * bz}}
+  {{ax * bx} + {{ay * by} + {az * bz}}}
 ```
 
 ---
@@ -707,7 +711,7 @@ defn main [] :void
        t0 time/now-ns()]
     benchmark(n)
     let [elapsed {time/now-ns() - t0}]
-      println $ str/format("elapsed_ns={}" elapsed)
+      println(str/format("elapsed_ns={}" elapsed))
 ```
 
 Pass problem size via `*args*` (never hardcode), so the runner can sweep

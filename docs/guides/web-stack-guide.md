@@ -23,7 +23,7 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 
 ### `tur-httpd` only
 
-```turmeric
+```turmeric no-check
 :spices {
   "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
            :ref    "httpd-v0.1.0"
@@ -41,7 +41,7 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 
 ### Full stack (httpd + template + tourist)
 
-```turmeric
+```turmeric no-check
 :spices {
   "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
               :ref    "httpd-v0.1.0"
@@ -236,14 +236,10 @@ The returned string is heap-allocated; the caller must free it.
 (env-free env)                      ;; release the Env
 ```
 ```sweet-exp
-env-new
-;; create an Env handle
-env-set(env "key" "value")
-;; bind a scalar string
-env-set-list(env "items" lst)
-;; bind a cons list of cstr values
-env-free(env)
-;; release the Env
+env-new()                           ;; create an Env handle
+env-set(env "key" "value")         ;; bind a scalar string
+env-set-list(env "items" lst)      ;; bind a cons list of cstr values
+env-free(env)                      ;; release the Env
 ```
 
 ### Rendering from a file

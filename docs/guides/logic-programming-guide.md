@@ -131,11 +131,13 @@ defn mplus [fs gs : (Backtrack a)] : (Backtrack a)
 
 defn bind [f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b)
   fn []
-    flat-map(fn [k] {f(k()) ()} xs())
+    flat-map
+      fn [k] ((f (k)) ())
+      (xs ())
 
 defn return [x : a] : (Backtrack a)
   fn []
-    [fn [] x]
+    [(fn [] x)]
 ```
 
 ## Example: Parsing with Backtracking
@@ -173,7 +175,7 @@ A backtracking parser tries multiple production rules:
 ;; Token parser
 defn parse-token [t input]
   if {car(input) = t}
-    return $ cdr(input)
+    return(cdr(input))
     mzero
 
 ;; Choice: try parseA, then parseB if parseA fails
@@ -182,8 +184,9 @@ defn <|> [parseA parseB input]
 
 ;; Sequence: parseA then parseB
 defn >> [parseA parseB input]
-  bind(fn [rest] parseB(rest)
-       parseA(input))
+  bind
+    fn [rest] parseB(rest)
+    parseA(input)
 
 ;; Grammar:
 ;; expr := term ('+' term)*
@@ -200,7 +203,7 @@ defn parse-expr [input]
 
 Relational queries that work in multiple directions:
 
-```turmeric
+```turmeric no-check
 ;; Unification: make two values equal
 (defn unify [x y subst]
   (cond
@@ -401,7 +404,7 @@ cloneable-reset
     defer-with-close open-file("data.txt")
       fn [f]
         let [data read(f)]
-          choice-point $ parse(data)
+          choice-point(parse(data))
 ```
 
 This is safe but can be expensive. Prefer immutable snapshots where possible.
@@ -475,7 +478,7 @@ bind(f xs)          ; flatMap: sequence computations
 do-backtrack
   def x goal1()
   def y goal2(x)
-  return $ list(x y)
+  return(list(x y))
 ```
 
 ## Performance Considerations

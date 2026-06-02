@@ -482,7 +482,8 @@ defn main [] :int
       do
         .run(em "hello")
         0
-      (Emit [s] k) do
+      (Emit [s] k)
+      do
         println(s)
         resume(k nil)
 ```
