@@ -1343,17 +1343,7 @@
   }
   return "";
   ```)
-;;; httpd-set-cookie! -- emit a Set-Cookie response header.
-;;;
-;;; The plan's M2 originally specified a `CookieOpts` defstruct argument,
-;;; but the codegen miscompiles defstruct-by-value parameters (emits
-;;; `&temp` for the actual argument while declaring the formal by value).
-;;; Until that bug is fixed (see
-;;; docs/upcoming/variadic-rest-closure-cast-plan.md for a related
-;;; codegen bug filed during this phase), the surface is the positional
-;;; equivalent: 9 args, just inside the >5 smell threshold but well
-;;; within the 16 hard cap.  `httpd-set-cookie-simple!` wraps the common
-;;; case so callers rarely need the full form.
+;;; CookieOpts -- fully-specified Set-Cookie attributes.
 ;;;
 ;;; Field conventions:
 ;;;   path       -- "" omits the Path attribute
@@ -1363,58 +1353,84 @@
 ;;;   http-only  -- 0 / 1: include the "HttpOnly" flag
 ;;;   same-site  -- "" omits; "Lax" / "Strict" / "None" otherwise
 ;;;
-;;; Parameters:
-;;;   conn      -- connection handle from the worker
-;;;   name      -- cookie name (required)
-;;;   value     -- cookie value
-;;;   path      -- Path attribute (or "")
-;;;   domain    -- Domain attribute (or "")
-;;;   max-age   -- Max-Age in seconds (or -1 to omit)
-;;;   secure    -- 1 to include the Secure flag
-;;;   http-only -- 1 to include the HttpOnly flag
-;;;   same-site -- SameSite attribute (or "")
-;;;
-;;; Example:
-;;;   ;; long-lived session cookie, host-only, secure, JS-inaccessible
-;;;   (httpd-set-cookie! c "sid" "abc123" "/" "" 86400 1 1 "Lax")
-;;;
 ;;; Since: Phase H8 (M2)
 
-(defn httpd-set-cookie! [conn :ptr<void>
-                         name :cstr value :cstr
-                         path :cstr domain :cstr
-                         max-age :int secure :int http-only :int
-                         same-site :cstr] :nil
-  ```c
-  if (!conn || !name || !*name) return;
-  const char *cval  = value     ? value     : "";
-  const char *cpath = path      ? path      : "";
-  const char *cdom  = domain    ? domain    : "";
-  const char *csame = same_site ? same_site : "";
-  char buf[2048];
-  int n = snprintf(buf, sizeof(buf), "%s=%s", name, cval);
-  if (*cpath)        n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Path=%s",   cpath);
-  if (*cdom)         n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Domain=%s", cdom);
-  if (max_age >= 0)  n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Max-Age=%lld", (long long)max_age);
-  if (secure)        n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Secure");
-  if (http_only)     n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
-  if (*csame)        n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
-  httpd_resp_header_add_((void *)conn, "Set-Cookie", buf);
-  ```)
-;;; httpd-set-cookie-simple! -- emit a Set-Cookie with sensible defaults.
+(defstruct CookieOpts
+  [name      :cstr
+   value     :cstr
+   path      :cstr
+   domain    :cstr
+   max-age   :int
+   secure    :int
+   http-only :int
+   same-site :cstr])
+;;; cookie -- construct a CookieOpts with sensible defaults.
 ;;;
-;;; Equivalent to (httpd-set-cookie! conn name value "/" "" -1 0 1 "Lax").
-;;; Defaults: Path=/, no Domain, session cookie (no Max-Age), not Secure
-;;; (callers on TLS should use the full form to opt in), HttpOnly,
+;;; Defaults: Path=/, no Domain, no Max-Age (session cookie), not Secure
+;;; (callers on TLS should opt in via `cookie-full`), HttpOnly,
 ;;; SameSite=Lax.
 ;;;
+;;; Parameters:
+;;;   name  -- cookie name
+;;;   value -- cookie value
+;;;
 ;;; Example:
-;;;   (httpd-set-cookie-simple! c "session" "abc123")
+;;;   (httpd-set-cookie! c (cookie "session" "abc123"))
 ;;;
 ;;; Since: Phase H8 (M2)
 
-(defn httpd-set-cookie-simple! [conn :ptr<void> name :cstr value :cstr] :nil
-  (httpd-set-cookie! conn name value "/" "" -1 0 1 "Lax"))
+(defn cookie [name :cstr value :cstr] :CookieOpts
+  (make-struct CookieOpts name value "/" "" -1 0 1 "Lax"))
+;;; cookie-full -- construct a CookieOpts with every attribute explicit.
+;;;
+;;; Use this when the defaults from `cookie` are wrong, e.g. cross-site
+;;; flows that need SameSite=None + Secure, or long-lived cookies that
+;;; need a Max-Age.  See `CookieOpts` for the per-field semantics.
+;;;
+;;; Example:
+;;;   (httpd-set-cookie! c (cookie-full "tracking" "t1" "/api" "example.com"
+;;;                                     3600 1 0 "None"))
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn cookie-full [name :cstr value :cstr path :cstr domain :cstr
+                   max-age :int secure :int http-only :int same-site :cstr] :CookieOpts
+  (make-struct CookieOpts name value path domain max-age secure http-only same-site))
+;;; httpd-set-cookie! -- emit a Set-Cookie response header from a CookieOpts.
+;;;
+;;; Serialises the opts into a single `Set-Cookie` value and appends it
+;;; via `httpd-resp-header-add!`.  Calling this multiple times produces
+;;; multiple Set-Cookie lines, as RFC 6265 requires.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   opts -- CookieOpts value (typically built by `cookie` or `cookie-full`)
+;;;
+;;; Example:
+;;;   (httpd-set-cookie! c (cookie "session" "abc123"))
+;;;
+;;; Since: Phase H8 (M2); requires the DS1 fix in
+;;;        docs/upcoming/defstruct-inline-c-byvalue-callsite-plan.md.
+
+(defn httpd-set-cookie! [conn :ptr<void> opts :CookieOpts] :nil
+  ```c
+  if (!conn) return;
+  const char *cname  = opts.name      ? opts.name      : "";
+  const char *cval   = opts.value     ? opts.value     : "";
+  const char *cpath  = opts.path      ? opts.path      : "";
+  const char *cdom   = opts.domain    ? opts.domain    : "";
+  const char *csame  = opts.same_site ? opts.same_site : "";
+  if (!*cname) return;
+  char buf[2048];
+  int n = snprintf(buf, sizeof(buf), "%s=%s", cname, cval);
+  if (*cpath)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Path=%s",   cpath);
+  if (*cdom)               n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Domain=%s", cdom);
+  if (opts.max_age >= 0)   n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Max-Age=%lld", (long long)opts.max_age);
+  if (opts.secure)         n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Secure");
+  if (opts.http_only)      n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
+  if (*csame)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
+  httpd_resp_header_add_((void *)conn, "Set-Cookie", buf);
+  ```)
 ;; =============================================================================
 ;; H6: Routing DSL
 ;; =============================================================================

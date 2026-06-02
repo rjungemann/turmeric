@@ -94,11 +94,11 @@
                  (print-pair "session" (httpd-req-cookie c "session"))
                  (print-pair "pref"    (httpd-req-cookie c "pref"))
                  (print-pair "missing" (httpd-req-cookie c "nope"))
-                 ;; Set two cookies: simple (defaults) and full (explicit).
-                 (httpd-set-cookie-simple! c "session" "new")
-                 (httpd-set-cookie! c "tracking" "t1"
-                                      "/api" "example.com"
-                                      3600 1 0 "None")
+                 ;; Set two cookies via the defstruct builders.
+                 (httpd-set-cookie! c (cookie "session" "new"))
+                 (httpd-set-cookie! c (cookie-full "tracking" "t1"
+                                                  "/api" "example.com"
+                                                  3600 1 0 "None"))
                  (httpd-resp-status! c 200)
                  (httpd-resp-body! c "ok")
                  (chan-send donech 1))

@@ -2064,7 +2064,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                             type_struct_pass_by_ptr(e->as.call_.args[i]->type);
                     }
                 }
+                /* DS1: An inline-C callee declares its struct params by
+                 * value even when they cross the pass-by-ptr threshold
+                 * (emit_fns.c:423 / emit_module.c:1105). The call site
+                 * must respect that and skip the `&temp` wrap, otherwise
+                 * we pass `T *` to a formal of type `T`. Mirrors the
+                 * formal-side `!body_is_inline_c` guard via the
+                 * binding-cached flag set in elab_fns.c. */
                 if (!needs_fn_cast && !fn_binding->is_extern_c &&
+                    !fn_binding->body_is_inline_c &&
                     !matched_spec &&
                     _callee_pbp &&
                     type_struct_pass_by_ptr(e->as.call_.args[i]->type) &&
