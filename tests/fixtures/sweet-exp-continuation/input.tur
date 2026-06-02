@@ -1,0 +1,26 @@
+#lang sweet-exp
+
+;; Backslash line continuation: a `\` at end of line (followed only by
+;; whitespace) joins with the next physical line into one logical line.
+;; Works at top level (token separation) and inside `[]`/`()`/`{}`
+;; (no-op since brackets already cross lines, but lets users align
+;; visually).
+
+defn add4 [a :int b :int c :int d :int] :int
+  +(a +(b +(c d)))
+
+defn from-dollar [] :int
+  $ + 1 2 \
+      4 8
+
+defn from-bracket [] :int
+  let [x 10 \
+       y 20]
+    +(x y)
+
+defn main [] :int
+  println $ add4 100 200 \
+                 300 400
+  println(from-dollar())
+  println(from-bracket())
+  0

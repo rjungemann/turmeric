@@ -1,7 +1,7 @@
 ---
 title: Sweet-Exp T-Expression Follow-Ups
 category: Planning
-description: Polish work for the sweet-exp (SRFI-110) preprocessor — `\\` group operator, `\` line continuation, and source-map-based diagnostics
+description: Remaining polish for the sweet-exp (SRFI-110) preprocessor — `\\` group operator and source-map-based diagnostics
 ---
 
 # Sweet-Exp T-Expression Follow-Ups -- Plan
@@ -9,37 +9,73 @@ description: Polish work for the sweet-exp (SRFI-110) preprocessor — `\\` grou
 ## Background
 
 The indent-sensitive sweet-expression reader (`#lang sweet-exp` / files
-with the `.tur.sweet` extension) landed as a textual preprocessor in
-`src/compiler/reader.c`.  At a high level it walks the source into
+with the `.tur.sweet` extension) is implemented as a textual
+preprocessor in `src/compiler/reader.c`.  It walks the source into
 logical lines, recursively groups deeper-indented lines under their
-parents, and emits transformed s-expression text that is then handed to
-the regular reader (with curly-infix and neoteric enabled).  The
-preprocessor implements:
+parents, and emits transformed s-expression text that is then fed
+through the regular reader (with curly-infix and neoteric enabled).
+Inline forms like `f(x)` and `{a + b}` keep working unchanged.
+
+### What is already implemented
 
 - Indentation-based implicit `(...)` grouping (the t-expression core).
 - `$` rest-of-line operator (`f $ g x` → `f (g x)`).
-- Multi-line bracket continuation (`(...)`, `[...]`, `{...}` may cross
-  newlines without triggering indent rules).
-- String literals (`"..."`), line comments (`; ...`), and block comments
-  (`#| ... |#`) respected by the line scanner and element counter.
+- Multi-line bracket continuation: `(...)`, `[...]`, `{...}` may cross
+  newlines without triggering indent rules.
+- `\` line continuation: a trailing `\` (followed only by whitespace
+  and `\n`) joins the next physical line into the same logical line.
+  Works at any bracket depth; respects strings and block comments;
+  composes with `$` rest-of-line and with neoteric.
+- Racket-style shebang support: a `#!` at byte 0 (followed by `/`,
+  whitespace, or EOL) is treated as a line comment.  Works in plain
+  `.tur`, in `.tur.sweet`, and in files where `#lang sweet-exp` is on
+  line 2 after the shebang.
+- String literals (`"..."`), line comments (`; ...`), and block
+  comments (`#| ... |#`) respected by the line scanner, element
+  counter, and emitter.
 
-The unit covered by tests includes
-`tests/fixtures/t-expression-sweet-exp/` (indented `defn` bodies, nested
-`if`, multi-line `let`, `$`, neoteric inside the body) and the
-pre-existing `data-literal-sweet-exp` / `fn-type-neoteric` fixtures that
-use traditional parens — the preprocessor leaves single-element
-bracket-continued lines alone.
+### Fixtures
 
-Three follow-ups remain.
+- `tests/fixtures/t-expression-sweet-exp/` — indented `defn` bodies,
+  nested `if`, multi-line `let`, `$` rest-of-line, neoteric inside the
+  body.
+- `tests/fixtures/sweet-exp-continuation/` — `\` continuation at top
+  level, inside `$`, and inside `[]` brackets.
+- `tests/fixtures/shebang-tur/` — shebang on a plain `.tur` file.
+- `tests/fixtures/shebang-sweet-lang/` — shebang on line 1, `#lang
+  sweet-exp` on line 2.
+- Pre-existing `data-literal-sweet-exp/` and `fn-type-neoteric/`
+  fixtures that use traditional parens — preserved unchanged; the
+  preprocessor correctly leaves single-element bracket-continued lines
+  alone.
+
+### Explicitly out of scope
+
+These were considered and *rejected* by design:
+
+- **`#suite` directive** (per-file or per-name "wrap body in `(do
+  ...)`" declaration).  Users will add explicit `do` levels when a
+  macro's single-body slot needs multiple statements.
+- **`:` as a Python-style block opener.**  SRFI-110 explicitly
+  rejected it; Racket's sweet package doesn't have it; the only
+  popular Lisp indent syntax that does (`#lang something`) is not a
+  SRFI-110 superset.  Avoiding it also sidesteps the collision with
+  Turmeric's `:int` keyword tokens.
+- **`;` as expression separator.**  Conflicts with Turmeric's line
+  comments and would force every existing file with end-of-line
+  comments to be rewritten.  Users can still write multiple
+  expressions on one line using explicit `(form1) (form2)`.
+
+Two follow-ups remain.
 
 ---
 
 ## Follow-up 1 -- `\\` group operator
 
 SRFI-110 reserves a leading `\\` token on a line to mean "**group**":
-it suppresses the implicit list-wrap that the line would otherwise get,
-making the rest of the line behave as if it were several siblings at
-the same indent level.  This is the standard escape hatch for
+it suppresses the implicit list-wrap that the line would otherwise
+get, making the rest of the line behave as if it were several siblings
+at the same indent level.  This is the standard escape hatch for
 expressing a sequence of forms whose head is *not* a function call.
 
 ### Examples
@@ -69,89 +105,35 @@ tokens with the previous line's group instead of opening a new one
 - Detect a leading `\\` token after the indent on a logical line.
 - When present, the line is parsed for its remaining tokens but the
   enclosing wrap decision treats those tokens as if each were a
-  separate sibling at the parent indent — equivalent to flattening them
-  into the parent's child list.
+  separate sibling at the parent indent — equivalent to flattening
+  them into the parent's child list.
 
 ### Files
 
-- `src/compiler/reader.c` -- extend `SweetLine` with an `is_group` flag,
-  set it in `sweet_collect_lines` when content begins with `\\`, and
-  consume the `\\` in both `sweet_count_elements` and
+- `src/compiler/reader.c` -- extend `SweetLine` with an `is_group`
+  flag, set it in `sweet_collect_lines` when content begins with
+  `\\`, and consume the `\\` in both `sweet_count_elements` and
   `sweet_emit_content` so it does not appear in the output.
   `sweet_analyze_node` skips it for wrap accounting and splices the
   line's tokens directly into the parent.
 
 ### Fixtures
 
-- `tests/fixtures/sweet-exp-group/` -- exercise both leading-`\\` (as
-  in the body example above) and split-line `\\` (continuation of a
+- `tests/fixtures/sweet-exp-group/` -- exercise leading-`\\` as in
+  the body example above, plus split-line `\\` (continuation of a
   previous group on a new line).
 
 ### Risks
 
-- The `\\` token also collides with Turmeric's escape sequence inside
-  string literals — but those are gated by `in_str`, so the bracketed
-  scanner already ignores them.
+- `\\` is also Turmeric's escape sequence inside string literals; the
+  bracketed scanner already gates on `in_str`, so this composes
+  cleanly.
 - Diagnostics that point into a `\\` line will show the literal `\\`
   marker; that is acceptable for v1.
 
 ---
 
-## Follow-up 2 -- `\` line continuation
-
-A line ending in a bare `\` should be joined with the next physical
-line into one logical line, regardless of indent.  This complements
-bracket-continuation: bracket continuation is implicit (any unbalanced
-`(`, `[`, `{` carries to the next line), whereas `\` continuation is
-explicit for lines that *would* otherwise close cleanly.
-
-### Example
-
-```
-defn long-call [a :int b :int c :int d :int] :int
-  some-very-long-function a \
-                          b \
-                          c \
-                          d
-```
-
-Without `\`, only `some-very-long-function a` (a 2-token line) would
-become the head, with `b`, `c`, `d` as four-space-indented children —
-producing `(some-very-long-function a b c d)` *by accident* in this
-specific case, but generally any indentation change would split the
-call.  With `\`, the four physical lines become one logical line whose
-content is `some-very-long-function a b c d`.
-
-### Scope
-
-- During `sweet_collect_lines`, when the last non-whitespace,
-  non-comment character of a physical line is `\`, drop the `\` and
-  splice the next physical line into the current logical line.
-- Track that the join happened so the emitter can preserve newlines
-  for diagnostic accuracy (we still want column reports to land on the
-  right physical line).
-
-### Files
-
-- `src/compiler/reader.c` -- modify `sweet_collect_lines` to handle the
-  trailing-`\` case; the rest of the pipeline (count/analyze/emit) does
-  not change.
-
-### Fixtures
-
-- `tests/fixtures/sweet-exp-continuation/` -- a multi-arg call broken
-  across lines with `\`, plus a control fixture confirming a bare `\`
-  inside a string is *not* a continuation.
-
-### Risks
-
-- `\` is also Turmeric's char-escape inside string literals.  The
-  scanner already tracks `in_str`; only continuation outside of
-  `in_str` / `in_bc` / `bd > 0` should trigger.
-
----
-
-## Follow-up 3 -- Source-map-preserving diagnostics
+## Follow-up 2 -- Source-map-preserving diagnostics
 
 Today the preprocessor inserts `(` / `)` directly into the source text
 that the reader and diagnostics see.  Newlines are preserved, so error
@@ -161,25 +143,25 @@ by the count of inserted parens to the left of the token.
 
 Example: `defn foo []` at column 0 in the user's file is shown as
 `(defn foo []` in error context, with `defn` at column 2 instead of
-column 1.  It is accurate (matches the offsets in the recorded spans),
-but visually differs from what the user wrote.
+column 1.  It is accurate (matches the offsets in the recorded
+spans), but visually differs from what the user wrote.
 
 ### Goal
 
-Diagnostics should show the **original** source verbatim — no inserted
-parens, columns matching the user's file — while internal span offsets
-continue to use the transformed text.
+Diagnostics should show the **original** source verbatim — no
+inserted parens, columns matching the user's file — while internal
+span offsets continue to use the transformed text.
 
 ### Approach
 
 1. Keep the transformed source as the reader's working buffer (no
    change to recording spans).
-2. Build a parallel offset map: `transformed_offset → original_offset`.
-   The map is sparse — populate it only at character boundaries that
-   match between the two streams (i.e. everywhere except across an
-   inserted `(` or `)`).  A run-length representation suffices: each
-   span between insertions is a single `{xform_start, orig_start,
-   length}` triple.
+2. Build a parallel offset map: `transformed_offset →
+   original_offset`.  The map is sparse — populate it only at
+   character boundaries that match between the two streams (i.e.
+   everywhere except across an inserted `(` or `)`).  A run-length
+   representation suffices: each span between insertions is a single
+   `{xform_start, orig_start, length}` triple.
 3. Carry the map on the shadow `SourceFile` (extend the struct, or
    stash it in a side table keyed by `file_id`).
 4. In `src/compiler/diag.c`, when rendering a snippet, look up the
@@ -197,35 +179,24 @@ continue to use the transformed text.
 ### Risks
 
 - Span translation must be self-consistent: every column the
-  diagnostic reports must be a real column in the original.  Inserted
-  `(` / `)` have no original counterpart — if an error points
-  *exactly* at one of them (e.g. an unmatched paren the preprocessor
-  inserted), the translator should fall back to the nearest preserved
-  column and add a note ("(inserted by sweet-exp grouping)").
-- A bug in the offset map shows up as off-by-one diagnostics — easy to
-  notice in fixtures.  Add a fixture whose `;; error:` expectation
-  pins the column.
+  diagnostic reports must be a real column in the original.
+  Inserted `(` / `)` have no original counterpart — if an error
+  points *exactly* at one of them (e.g. an unmatched paren the
+  preprocessor inserted), the translator should fall back to the
+  nearest preserved column and add a note ("(inserted by sweet-exp
+  grouping)").
+- A bug in the offset map shows up as off-by-one diagnostics — easy
+  to notice in fixtures.  Add a fixture whose `;; error:`
+  expectation pins the column.
 
 ---
 
 ## Order of work
 
-1. **`\` line continuation** -- smallest change, isolated to
-   `sweet_collect_lines`, unblocks the multi-arg call idiom.
-2. **`\\` group operator** -- moderate scope; touches the analyzer and
-   emitter but has a clean signal (token at start of line).
-3. **Source-map diagnostics** -- largest scope; nice-to-have polish
+1. **`\\` group operator** -- moderate scope; clean signal (token at
+   start of line) and well-understood semantics.
+2. **Source-map diagnostics** -- larger scope; nice-to-have polish
    that does not affect what compiles.
 
 Each follow-up can ship independently and each adds at least one
 fixture under `tests/fixtures/`.
-
-## Out of scope
-
-- Re-pretty-printing sweet-exp via `tur fmt`.  The formatter currently
-  treats `--lang sweet-exp` as "format using sweet-exp reader, emit
-  s-expression output"; round-tripping back to indented form is a
-  separate project.
-- `#!sweet-exp` shebang support.
-- Indent-sensitive macros (e.g. user-defined block forms that want
-  Python-style suite syntax).
