@@ -765,6 +765,41 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# CPS1 (cps-transform-plan): --dump-cps-coloring may-capture coloring
+# ---------------------------------------------------------------------------
+
+# dump-cps-coloring-partition: the analysis must color uses-shift (seed) and
+# calls-shifter (transitive), and leave the pure functions + main uncolored.
+# NOTE: match with bash globs, not `echo "$out" | grep -q`. The emit-c output is
+# large; under `set -o pipefail` a matching `grep -q` exits early, SIGPIPEs the
+# `echo`, and the pipeline is reported as failed even though the match succeeded.
+CPS_FIXTURE="tests/fixtures/cps-coloring/input.tur"
+out=$("$TUR" --dump-cps-coloring emit-c "$CPS_FIXTURE" 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-cps-coloring-partition" "non-zero exit ($rc)"
+elif [[ "$out" != *"cps-coloring: pure-arith uncolored"* ]]; then
+    fail "dump-cps-coloring-partition" "expected 'pure-arith uncolored'"
+elif [[ "$out" != *"cps-coloring: also-pure uncolored"* ]]; then
+    fail "dump-cps-coloring-partition" "expected 'also-pure uncolored'"
+elif [[ "$out" != *"cps-coloring: uses-shift COLORED"* ]]; then
+    fail "dump-cps-coloring-partition" "expected 'uses-shift COLORED' (seed)"
+elif [[ "$out" != *"cps-coloring: calls-shifter COLORED"* ]]; then
+    fail "dump-cps-coloring-partition" "expected 'calls-shifter COLORED' (transitive)"
+elif [[ "$out" != *"cps-coloring: main uncolored"* ]]; then
+    fail "dump-cps-coloring-partition" "expected 'main uncolored'"
+else
+    pass "dump-cps-coloring-partition"
+fi
+
+# dump-cps-coloring-no-output: without the flag, no coloring lines should appear.
+out=$("$TUR" emit-c "$CPS_FIXTURE" 2>/dev/null); rc=$?
+if [[ "$out" == *"cps-coloring:"* ]]; then
+    fail "dump-cps-coloring-no-output" "coloring dump appeared without --dump-cps-coloring flag"
+else
+    pass "dump-cps-coloring-no-output"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

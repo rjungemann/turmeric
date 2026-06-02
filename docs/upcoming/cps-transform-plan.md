@@ -1,9 +1,10 @@
 # Whole-Program CPS Transform -- Implementation Plan (CPS0--CPS7)
 
-> **Status:** In progress. **CPS0 ratified (2026-06-02)**; CPS1 (may-capture
-> coloring analysis) in progress. This is the substrate that unblocks
-> *undelimited* control (real Scheme `call/cc`, an implicit program-wide prompt)
-> and removes the bounded-capture ceiling on the existing delimited runtime.
+> **Status:** In progress. **CPS0 ratified (2026-06-02)**; **CPS1 (may-capture
+> coloring analysis) done (2026-06-02)**; CPS2 (CPS/ANF IR) next. This is the
+> substrate that unblocks *undelimited* control (real Scheme `call/cc`, an
+> implicit program-wide prompt) and removes the bounded-capture ceiling on the
+> existing delimited runtime.
 >
 > **Key insight:** Turmeric already has working **delimited** continuations --
 > `shift`/`reset`/`shift0` (one-shot, `tur_cont`) and `call/cc*` (cloneable,
@@ -203,7 +204,7 @@ prompt.
   pre-committed here. Until CPS5, both paths coexist and the fiber path remains
   authoritative.
 
-## Phase CPS1 -- "May-capture" coloring analysis
+## Phase CPS1 -- "May-capture" coloring analysis  -- **DONE 2026-06-02**
 
 A function is **colored** (must be CPS'd) iff it can dynamically reach a control
 operator: `call/cc`, `escape`, `shift`/`shift0`, `call/cc*`, `serial-shift`, or
@@ -211,17 +212,40 @@ an effect `perform`. Coloring is transitive through (possibly) called
 functions; indirect/closure calls whose target is unknown are conservatively
 colored.
 
+**Implementation.** The analysis lives in `src/passes/cps.c`
+(`cps_color_program` / `cps_dump_coloring`, declared in `src/passes/cps.h`).
+Surface `call/cc`/`escape`/`call/cc*`/effect `perform`/`handle` all desugar to
+the control-op IR nodes during elaboration, so the seed predicate
+(`cps_directly_uses_control`) keys off the post-elaboration IR nodes
+(`EX_SHIFT`/`EX_SHIFT0`/`EX_RESET`/`EX_CLONEABLE_*`/`EX_SERIAL_*`/`EX_PERFORM`/
+`EX_HANDLE`/`EX_RESUME`/`EX_DISCONTINUE`). The coloring result is stored
+additively on `FnDef.cps_colored` -- distinct from the Phase-18 `may_capture`
+field the existing delimited-CPS pass owns -- so nothing in the shipping
+pipeline is perturbed. Exposed via the dev flag `--dump-cps-coloring`.
+
 - **CPS1.1** Build the call graph (including a conservative over-approximation
-  for indirect calls / closures). *Done when:* the graph is available to the
-  elaborator/IR stage.
+  for indirect calls / closures). *Done:* `cps_collect_calls` walks each
+  top-level function's body (stopping at nested-fn boundaries) collecting
+  resolved call edges via `EX_CALL.fn_binding`; any unresolved call (indirect /
+  call-through-local-value / extern) sets `has_indirect`, the conservative
+  over-approximation. Calls to nested lambdas are unresolved and thus covered by
+  this rule, which is why the node set can be restricted to top-level functions
+  while staying sound.
 - **CPS1.2** Seed the colored set with the control-operator primitives and
   effect performs; propagate backward to all callers (least fixed point).
-  *Done when:* a function reachable to a control op is colored; a provably pure
-  leaf is not.
-- **CPS1.3** Expose the coloring as IR metadata consumed by CPS3. *Done when:* a
-  fixture dump shows `pure-arith` uncolored and `uses-shift` colored.
+  *Done:* seed = `cps_directly_uses_control(body) || has_indirect`; then a
+  worklist-free fixed-point loop colors any function with a colored resolved
+  callee until stable. A function reachable to a control op is colored; a
+  provably pure leaf is not.
+- **CPS1.3** Expose the coloring as IR metadata consumed by CPS3. *Done:*
+  written to `FnDef.cps_colored`; the `--dump-cps-coloring` fixture shows
+  `pure-arith`/`also-pure` uncolored and `uses-shift` (seed) /
+  `calls-shifter` (transitive) colored.
 - **CPS1.4** Fixture: `tests/fixtures/cps-coloring/` -- a small module asserting
   the colored/uncolored partition via a debug dump (gated behind a dev flag).
+  *Done:* `tests/fixtures/cps-coloring/input.tur` plus the
+  `dump-cps-coloring-partition` / `dump-cps-coloring-no-output` cases in
+  `tests/run-flags.sh`.
 
 ## Phase CPS2 -- CPS/ANF intermediate representation
 

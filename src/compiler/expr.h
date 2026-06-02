@@ -305,6 +305,13 @@ struct FnDef {
     /* Phase 4: Future-proofing for v3 effects (effects-plan.md §6.10) - whether this
      * function may capture continuations. Always false in v0/v1. */
     bool           may_capture;
+    /* CPS1 (cps-transform-plan): whole-program "may-capture" coloring result.
+     * True iff this function can dynamically reach a control operator (directly,
+     * transitively through a resolved call, or conservatively via an indirect
+     * call). Additive analysis metadata: written by cps_color_program, consumed
+     * by the future selective-CPS lowering (CPS3). Distinct from `may_capture`,
+     * which the existing Phase-18 delimited-CPS pass owns. */
+    bool           cps_colored;
     /* Phase 13: Lifetime annotations */
     LifetimeContext lifetime_ctx;  /* Lifetime parameters and constraints for this function */
     /* Phase 15: Typeclass constraints */
