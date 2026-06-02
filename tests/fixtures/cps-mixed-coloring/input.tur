@@ -5,4 +5,5 @@
       x)))
 
 (defn main [] :int
-  (colored 21))
+  (println (colored 21))
+  0)

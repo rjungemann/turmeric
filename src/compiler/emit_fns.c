@@ -643,16 +643,32 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             free((void*)pn);
         }
         buf_puts(real_file, ") {\n");
-        /* Call the direct function and apply the continuation with the result */
-        buf_printf(real_file, "    int64_t __result = (int64_t)%s(", wrap_name);
-        for (uint8_t i = 0; i < fd->n_params; i++) {
-            if (i > 0) buf_puts(real_file, ", ");
-            const char *pn = raw_name_for_binding(fd->params[i]);
-            buf_puts(real_file, pn);
-            free((void*)pn);
+        /* Call the direct function and apply the continuation with the result.
+         * CPS3: void-returning functions (TY_NIL result) cannot be cast to
+         * int64_t; call the function as a statement and pass 0 to the k. */
+        TypeKind _result_kind = (e->type.kind == TY_FN)
+            ? e->type.as.fn.result_kind : TY_NIL;
+        if (_result_kind == TY_NIL) {
+            buf_printf(real_file, "    %s(", wrap_name);
+            for (uint8_t i = 0; i < fd->n_params; i++) {
+                if (i > 0) buf_puts(real_file, ", ");
+                const char *pn = raw_name_for_binding(fd->params[i]);
+                buf_puts(real_file, pn);
+                free((void*)pn);
+            }
+            buf_puts(real_file, ");\n");
+            buf_puts(real_file, "    tur_cps_apply(__k, 0);\n");
+        } else {
+            buf_printf(real_file, "    int64_t __result = (int64_t)%s(", wrap_name);
+            for (uint8_t i = 0; i < fd->n_params; i++) {
+                if (i > 0) buf_puts(real_file, ", ");
+                const char *pn = raw_name_for_binding(fd->params[i]);
+                buf_puts(real_file, pn);
+                free((void*)pn);
+            }
+            buf_puts(real_file, ");\n");
+            buf_puts(real_file, "    tur_cps_apply(__k, __result);\n");
         }
-        buf_puts(real_file, ");\n");
-        buf_puts(real_file, "    tur_cps_apply(__k, __result);\n");
         buf_puts(real_file, "}\n\n");
         free(wrap_name);
     }
