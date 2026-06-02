@@ -1155,3 +1155,137 @@
 
 (defmacro defroute [router method pattern handler]
   `(router-add ~router ~method ~pattern ~handler))
+;; =============================================================================
+;; M1: mw-log -- request logging middleware (per docs/upcoming/httpd-middleware-async-plan.md)
+;; =============================================================================
+;;
+;; The reference middleware on top of the H7 convention. Logs one line per
+;; request with method, path, status, response byte count, and elapsed wall
+;; time in milliseconds (CLOCK_MONOTONIC).
+;;
+;; Example:
+;;   (let [base     (fn [c :ptr<void>] :nil (httpd-resp-body! c "ok"))
+;;         composed (mw-log base)]
+;;     (httpd-new 0 composed))
+;;
+;; Output line shape (one per request):
+;;   GET /path -> 200 2 0ms
+;;; httpd-mw-mono-ms -- monotonic clock helper (milliseconds). Internal.
+
+(defn httpd-mw-mono-ms [] :int
+  ```c
+  #include <time.h>
+  struct timespec __ts;
+  clock_gettime(CLOCK_MONOTONIC, &__ts);
+  return (int64_t)__ts.tv_sec * 1000LL + (int64_t)__ts.tv_nsec / 1000000LL;
+  ```)
+;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
+
+(defn httpd-mw-log-emit [c :ptr<void> elapsed-ms :int] :nil
+  ```c typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+  } HttpdConn;
+  HttpdConn *cn = (HttpdConn *)c;
+  int status = cn->resp_status ? cn->resp_status : 200;
+  fprintf(stdout, "%s %s -> %d %d %lldms\n",
+          cn->method, cn->path, status, cn->resp_body_len,
+          (long long)elapsed_ms);
+  fflush(stdout);
+  ```)
+;;; mw-log -- request logging middleware (stdout).
+;;;
+;;; Wraps a base handler so every request prints one line to stdout after
+;;; the handler returns. The line carries the request method, path, the
+;;; response status (defaulting to 200 if unset), the response body length
+;;; in bytes, and the elapsed wall time in milliseconds.
+;;;
+;;; Parameters:
+;;;   next -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:int) with the same calling convention as
+;;;   handlers passed to httpd-new / httpd-new-pool.
+;;;
+;;; Example:
+;;;   (let [base     (fn [c :ptr<void>] :nil
+;;;                    (httpd-resp-status! c 200)
+;;;                    (httpd-resp-body!   c "hi"))
+;;;         composed (mw-log base)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M1)
+
+(defn mw-log [next :int] :ptr<void>
+  (let [_n next]
+    (fn [c :ptr<void>] :nil
+      (let [t0 (httpd-mw-mono-ms)]
+        (httpd-call _n c)
+        (httpd-mw-log-emit c (- (httpd-mw-mono-ms) t0))))))
+;; =============================================================================
+;; M8 (core): compose-middleware -- nest multiple middlewares around a base
+;; =============================================================================
+;;
+;; Each middleware is a one-argument fat closure of the H7 shape:
+;;   (fn [next :int] :int  <wrapped-closure>)
+;;
+;; compose-middleware applies them right-to-left so the leftmost middleware
+;; in the argument list ends up as the OUTERMOST wrapper -- its pre-hook
+;; runs first and its post-hook runs last:
+;;
+;;   (compose-middleware base mw-log mw-cors mw-auth)
+;;   ;; is equivalent to (mw-log (mw-cors (mw-auth base)))
+;;
+;; Note: each middleware argument must itself be a fat closure (i.e. must
+;; capture at least one variable). A bare top-level defn cannot be passed by
+;; name; wrap it in `(fn [n :int] :int (... n))` first, or define it the way
+;; mw-log is defined here (the outer `let` over `next` forces a fat closure).
+;;; compose-middleware -- wrap a base handler with multiple middlewares.
+;;;
+;;; Parameters:
+;;;   base -- base handler closure (:int)
+;;;   mws  -- variadic middleware closures (each `(fn [next :int] :int)`),
+;;;           applied right-to-left so the leftmost ends up outermost.
+;;;
+;;; Returns:
+;;;   The fully-wrapped handler closure (:int).
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware base mw-log)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M8 core)
+
+;;; compose-middleware -- nest multiple middlewares around a base handler.
+;;;
+;;; Macro: `(compose-middleware base mw1 mw2 mw3)` expands to
+;;; `(mw1 (mw2 (mw3 base)))`, i.e. each `mw_i` is called as a one-argument
+;;; function with the wrapped downstream handler. The leftmost middleware
+;;; ends up as the OUTERMOST wrapper -- its pre-hook runs first and its
+;;; post-hook runs last.
+;;;
+;;; Each `mw_i` must be name-callable with one argument: typically a defn
+;;; like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`), or
+;;; a partially applied form like `(mw-cors opts)` that itself returns a
+;;; one-arg function. Bare closure VALUES are not directly callable in
+;;; Turmeric -- use a defn (or wrap such a value in a defn) before passing
+;;; it through compose-middleware.
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware base mw-log)]
+;;;     (httpd-new 0 composed))
+;;;
+;;;   ;; Multiple middlewares (mw-log is outermost):
+;;;   (let [composed (compose-middleware base mw-log mw-cors mw-auth)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M8 core)
+
+(defmacro compose-middleware [base & mws]
+  (if (empty? mws)
+    base
+    (list (first mws)
+      (list compose-middleware base ~@(rest mws)))))
