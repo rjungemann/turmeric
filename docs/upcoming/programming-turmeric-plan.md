@@ -29,10 +29,27 @@ reference -- but the chapters diverge wherever Turmeric's design demands it.
 ### Chapter 1 -- Getting Started
 
 - Building from source (`just build`)
+  - Prerequisites: a C compiler, CMake, and (optionally) `just`
+  - The CMake fallback for fresh containers: `cmake -S . -B build` then
+    `cmake --build build -j`
+  - Where the compiler lands: `./build/tur`
+  - Debug vs. release builds and the ASan/UBSan-instrumented debug binary
 - Running a script: `turi myscript.tur`
+  - The `tur run <file>` convenience and spice auto-discovery
+  - `tur emit-c` / `tur build` for ahead-of-time compilation to C
+  - Passing arguments through to the script via `*args*`
 - The interactive REPL (command line)
+  - Starting `tur repl` and evaluating forms at the prompt
+  - Inspecting definitions with `(doc 'name)`
+  - Multi-line input and editing conveniences
 - The web REPL (WASM, Monaco editor)
+  - Running entirely in the browser with no local install
+  - The Monaco editor and the live doc panel
+  - Sharing snippets and the limits of the sandboxed environment
 - Hello, World
+  - The minimal program: a `main` returning `:int`
+  - Printing with `println`
+  - Running it three ways: script, REPL, and web
 
 ### Chapter 2 -- Turmeric.new
 
@@ -78,10 +95,25 @@ the book.
 ### Chapter 6 -- Typeclasses and Polymorphism
 
 - What a typeclass is and why it is not a class
+  - Behavior keyed by type, not data bundled with methods
+  - Constraints on `defn` signatures vs. inheritance hierarchies
+  - The dictionary-passing model under the hood
 - `definstance` and dispatch
+  - Declaring an instance of a typeclass for a concrete type
+  - How the compiler resolves which instance to call
+  - Coherence: one instance per type, and why overlap is rejected
 - Built-in typeclasses: `Equal`, `Comparable`, `Functor`, `Monad`
+  - `Equal` and `Comparable` for `=`, ordering, and sorting
+  - `Functor` and `fmap` over containers
+  - `Monad` and `bind`/`do-m` for sequencing effects
 - Writing your own typeclass
+  - Declaring the class signature and its method set
+  - Providing instances for your own and stdlib types
+  - Higher-kinded type variables for container-like classes
 - How this differs from Ruby mixins and Java interfaces
+  - No open classes or monkey-patching
+  - Static resolution vs. runtime method lookup
+  - Constraints travel with the type, not the object
 
 ### Chapter 7 -- Error Handling and Contracts
 
