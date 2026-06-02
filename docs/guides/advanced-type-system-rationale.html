@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#advanced-type-system-design-rationale" style="">Advanced Type System -- Design Rationale</a></li>
 <li style=""><a href="#the-constraints" style="">The constraints</a></li>
@@ -100,6 +101,22 @@
 <li style=""><a href="#why-refinement-types-were-correctly-deferred-for-v100" style="">Why refinement types were correctly deferred for v1.0.0</a></li>
 <li style=""><a href="#how-the-features-form-a-coherent-whole" style="">How the features form a coherent whole</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="advanced-type-system-design-rationale">Advanced Type System -- Design Rationale</h1>
@@ -199,11 +216,12 @@ elaborator enforces this at instance declaration time.</p>
 <p>Session types describe communication protocols in the type system: which party
 sends what, in which order, and whether the channel branches. They are enabled
 by <code>-Xsessions</code>.</p>
-<pre><code class="language-turmeric">(deftype EchoProto []
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(deftype EchoProto []
   (recv int
     (send int
       EchoProto)))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">deftype(EchoProto [] recv(int send(int EchoProto)))
+</code></pre></div></div></div>
 <h3 id="why-these-features-fit_1">Why these features fit</h3>
 <p>Session types are the natural consequence of having linear types and OS threads.
 Once channels are linear (used exactly once before being passed on or closed),
@@ -228,14 +246,24 @@ abandons a live linear channel.</p>
 any function could perform any effect, and the type system did not track which
 effects a computation used. Effect types (<code>-Xeffect-types</code>) make effect rows
 first-class.</p>
-<pre><code class="language-turmeric">;; Typed: this function may perform Io and nothing else.
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Typed: this function may perform Io and nothing else.
 (defn read-file [path :cstr] :cstr @ {Io}
   ...)
 
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
 (defn ask-and-add [x :int] :int @ {Ask | e}
   (+ x (perform (Ask))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Typed: this function may perform Io and nothing else.
+defn read-file [path:cstr] :cstr
+  @
+  {Io}
+  ...
+;; Effect-polymorphic: works with any effect set e that includes Ask.
+defn ask-and-add [x:int] :int
+  @
+  {Ask|e}
+  +(x perform(Ask()))
+</code></pre></div></div></div>
 <h3 id="why-these-features-fit_2">Why these features fit</h3>
 <p>Row polymorphism is the correct model for effects because it is structural and
 compositional. An effect row <code>{Io | e}</code> can be substituted into any context that
@@ -254,7 +282,7 @@ respectively. Both were built on the same CPS infrastructure -- they are not
 separate features but modes of the existing continuation representation.</p>
 <hr />
 <h2 id="union-and-intersection-types">Union and intersection types</h2>
-<pre><code class="language-turmeric">;; Union: a value that may be int, cstr, or bool.
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Union: a value that may be int, cstr, or bool.
 (defn print-any [x :(int | cstr | bool)] :unit
   (match x
     (i :int)  (println i)
@@ -263,7 +291,13 @@ separate features but modes of the existing continuation representation.</p>
 
 ;; Intersection: a value that is both Serializable and Printable.
 (defn log-and-save [^Serializable ^Printable x :a] :unit ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Union: a value that may be int, cstr, or bool.
+defn print-any [x:(int|cstr|bool)] :unit
+  match(x i(:int) println(i) s(:cstr) println(s) b(:bool) println(if(b &quot;true&quot; &quot;false&quot;)))
+;; Intersection: a value that is both Serializable and Printable.
+defn log-and-save [^Serializable^Printablex:a] :unit
+  ...
+</code></pre></div></div></div>
 <h3 id="why-these-features-fit_3">Why these features fit</h3>
 <p>Union types (<code>-Xunion-types</code>) and intersection types (<code>-Xintersection-types</code>) are
 the right tool for gradual typing: code at system boundaries -- FFI, plugin
@@ -291,7 +325,7 @@ mismatch caught at compile time. The shipped SZ0–SZ4 layer provides the
 tracked in <a href="../sized-types-completion-plan.md">sized-types-completion-plan.md</a>
 (phases SZ6–SZ9).</p>
 </blockquote>
-<pre><code class="language-turmeric">;; Matrix multiplication: dimensions must be compatible.
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Matrix multiplication: dimensions must be compatible.
 (defn mat-mul [a :(Matrix m n float)
                b :(Matrix n p float)] :(Matrix m p float)
   ...)
@@ -299,7 +333,15 @@ tracked in <a href="../sized-types-completion-plan.md">sized-types-completion-pl
 ;; Compile-time error if you pass incompatible shapes:
 ;; (mat-mul (Matrix 3 4) (Matrix 5 6))
 ;;   =&gt; expected n = 4, got n = 5
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Matrix multiplication: dimensions must be compatible.
+defn mat-mul [a:(Matrixmnfloat)
+b:(Matrixnpfloat)] :
+  Matrix(m p float)
+  ...
+;; Compile-time error if you pass incompatible shapes:
+;; (mat-mul (Matrix 3 4) (Matrix 5 6))
+;;   =&gt; expected n = 4, got n = 5
+</code></pre></div></div></div>
 <h3 id="why-these-features-fit_4">Why these features fit</h3>
 <p>Sized types are the systems programmer's version of lightweight dependent types.
 Most code that researchers reach for dependent types to express -- length-indexed
@@ -321,12 +363,17 @@ elaborator machinery beyond what G0--G4 already built.</p>
 <h2 id="contract-types">Contract types</h2>
 <p>Contract types (<code>-Xcontracts</code>) attach runtime-checked predicates to types and
 function boundaries.</p>
-<pre><code class="language-turmeric">(defn vec-get [v :(vec a)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn vec-get [v :(vec a)
                i :{ j :int | (and (&gt;= j 0) (&lt; j (vec/len v))) }] :a
   (vec/get-unsafe v i))
 
 (defn sqrt [x :{ y :double | (&gt;= y 0) }] :double ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn vec-get [v:(veca)
+i:{j:int|(and(&gt;=j0)(&lt;j(vec/lenv)))}] :a
+  vec/get-unsafe(v i)
+defn sqrt [x:{y:double|(&gt;=y0)}] :double
+  ...
+</code></pre></div></div></div>
 <h3 id="why-these-features-fit_5">Why these features fit</h3>
 <p>The key insight is that "contract types" and "refinement types" are not the same
 thing. Refinement types require predicate entailment -- the type checker must
@@ -357,13 +404,19 @@ boundary while still allowing operations on it through typeclass constraints.
 They are the dual of higher-ranked <code>forall</code>: where <code>forall</code> lets the caller
 pick the type, <code>exists</code> lets the callee pick the type and expose only what the
 caller is allowed to do with it.</p>
-<pre><code class="language-turmeric">;; A boxed value paired with evidence that its type implements Show.
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; A boxed value paired with evidence that its type implements Show.
 (defn box-it [x :a] :(exists [a] [(Show a)] a)
   (pack x (exists [a] [(Show a)] a)))
 
 (defn print-it [e :(exists [a] [(Show a)] a)] :unit
   (open e [x] (println (show x))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; A boxed value paired with evidence that its type implements Show.
+defn box-it [x:a] :
+  exists([a] [(Showa)] a)
+  pack(x exists([a] [(Showa)] a))
+defn print-it [e:(exists[a][(Showa)]a)] :unit
+  open(e [x] println(show(x)))
+</code></pre></div></div></div>
 <h3 id="why-these-features-fit_6">Why these features fit</h3>
 <p>Existentials are the missing half of Turmeric's quantifier story. HKT (Phase
 S1--S8) gave the language <code>forall</code> and Rank-2 polymorphism; existentials
@@ -534,18 +587,17 @@ risk of dependent unification or SMT integration.</p>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="substructural-types-guide.md">substructural-types-guide.md</a> -- <code>^linear</code>, <code>^affine</code>, <code>^relevant</code></li>
-<li><a href="uniqueness-types-guide.md">uniqueness-types-guide.md</a> -- <code>^unique</code> and <code>lref&lt;T&gt;</code></li>
-<li><a href="session-types-guide.md">session-types-guide.md</a> -- Session types and protocol types</li>
-<li><a href="effects-system-guide.md">effects-system-guide.md</a> -- Algebraic effects</li>
-<li><a href="hkt-guide.md">hkt-guide.md</a> -- Higher-kinded types</li>
-<li><a href="existential-types-guide.md">existential-types-guide.md</a> -- Existential types and <code>pack</code>/<code>open</code></li>
-<li><a href="gadts-guide.md">gadts-guide.md</a> -- GADTs</li>
-<li><a href="sized-types-guide.md">sized-types-guide.md</a> -- Sized types</li>
-<li><a href="contract-types-guide.md">contract-types-guide.md</a> -- Contract types</li>
-<li><a href="union-intersection-types-guide.md">union-intersection-types-guide.md</a> -- Union and intersection types</li>
-<li><a href="effects-vs-monads.md">effects-vs-monads.md</a> -- Why effects instead of monads</li>
-<li><a href="../upcoming/typing-gap-audit.md">typing-gap-audit.md</a> -- where the implementation currently diverges from the intent described here</li>
+<li><a href="substructural-types-guide.html">substructural-types-guide.md</a> -- <code>^linear</code>, <code>^affine</code>, <code>^relevant</code></li>
+<li><a href="uniqueness-types-guide.html">uniqueness-types-guide.md</a> -- <code>^unique</code> and <code>lref&lt;T&gt;</code></li>
+<li><a href="session-types-guide.html">session-types-guide.md</a> -- Session types and protocol types</li>
+<li><a href="effects-system-guide.html">effects-system-guide.md</a> -- Algebraic effects</li>
+<li><a href="hkt-guide.html">hkt-guide.md</a> -- Higher-kinded types</li>
+<li><a href="existential-types-guide.html">existential-types-guide.md</a> -- Existential types and <code>pack</code>/<code>open</code></li>
+<li><a href="gadts-guide.html">gadts-guide.md</a> -- GADTs</li>
+<li><a href="sized-types-guide.html">sized-types-guide.md</a> -- Sized types</li>
+<li><a href="contract-types-guide.html">contract-types-guide.md</a> -- Contract types</li>
+<li><a href="union-intersection-types-guide.html">union-intersection-types-guide.md</a> -- Union and intersection types</li>
+<li><a href="effects-vs-monads.html">effects-vs-monads.md</a> -- Why effects instead of monads</li>
 </ul>
     </div>
   </div>

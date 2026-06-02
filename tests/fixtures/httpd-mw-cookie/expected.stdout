@@ -1,0 +1,6 @@
+session=abc123
+pref=dark
+missing=
+Set-Cookie: session=new; Path=/; HttpOnly; SameSite=Lax
+Set-Cookie: tracking=t1; Path=/api; Domain=example.com; Max-Age=3600; Secure; SameSite=None
+done

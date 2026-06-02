@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#tur-run-justfile-compatible-task-runner" style="">tur run -- Justfile-compatible task runner</a></li>
 <li style=""><a href="#quick-start" style="">Quick start</a></li>
@@ -94,6 +95,22 @@
 <li style="padding-left:0.75rem;"><a href="#dotenv-loading" style="color:var(--text-sec);">Dotenv loading</a></li>
 <li style=""><a href="#compatibility-table" style="">Compatibility table</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="tur-run-justfile-compatible-task-runner">tur run -- Justfile-compatible task runner</h1>
@@ -230,7 +247,7 @@ upstream <code>just</code> 1.x. For any Justfile that uses only this subset,
         remove the [unix] attribute if the recipe is portable.
 </code></pre>
 <h2 id="disambiguation-with-tur-run-filetur">Disambiguation with <code>tur run &lt;file.tur&gt;</code></h2>
-<p><code>tur run &lt;file.tur&gt;</code> (with a <code>.tur</code> or <code>.tursweet</code> extension) uses the
+<p><code>tur run &lt;file.tur&gt;</code> (with a <code>.tur</code> or <code>.tur.sweet</code> extension) uses the
 classic compile-and-run path. <code>tur run build</code> (no <code>.tur</code> extension)
 invokes the Justfile task runner.</p>
 <h2 id="writing-justfiles-for-spices">Writing Justfiles for spices</h2>
@@ -265,7 +282,6 @@ variables (variables already in the environment win).</p>
 <ul>
 <li><code>tur new --help</code> -- scaffold a new spice with the standard Justfile</li>
 <li><code>tur run --init</code> -- add the standard Justfile to an existing spice</li>
-<li><a href="../tur-run-plan.md">docs/tur-run-plan.md</a> -- design document</li>
 <li><a href="https://just.systems">https://just.systems</a> -- upstream <code>just</code> binary</li>
 </ul>
     </div>

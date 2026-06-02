@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#cli-arguments-guide" style="">CLI Arguments Guide</a></li>
 <li style=""><a href="#passing-arguments-to-a-script" style="">Passing Arguments to a Script</a></li>
@@ -93,6 +94,22 @@
 <li style="padding-left:0.75rem;"><a href="#cleanup" style="color:var(--text-sec);">Cleanup</a></li>
 <li style=""><a href="#api-reference" style="">API Reference</a></li>
 <li style=""><a href="#claudemd-rule" style="">CLAUDE.md Rule</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="cli-arguments-guide">CLI Arguments Guide</h1>
@@ -109,27 +126,42 @@ builder-pattern API.</p>
 <h2 id="raw-access-via-args">Raw Access via <code>*args*</code></h2>
 <p><code>*args*</code> is a pre-declared cons list of <code>:cstr</code> values. Each element is one
 argument string, in order.</p>
-<pre><code class="language-turmeric">;; script.tur
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; script.tur
 (defn main [] :int
   (println &quot;arg 0:&quot; (head *args*))
   (println &quot;arg 1:&quot; (head (tail *args*)))
   0)
-</code></pre>
-<pre><code class="language-turmeric">;; Walk all arguments
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; script.tur
+defn main [] :int
+  println(&quot;arg 0:&quot; head(*args*))
+  println(&quot;arg 1:&quot; head(tail(*args*)))
+  0
+</code></pre></div></div></div>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Walk all arguments
 (defn print-args [args :int] :void
   (when (some? args)
     (println (head args))
     (print-args (tail args))))
 
 (print-args *args*)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Walk all arguments
+defn print-args [args :int] :void
+  when some?(args)
+    println(head(args))
+    print-args(tail(args))
+print-args(*args*)
+</code></pre></div></div></div>
 <p>For scripts that do not import stdlib, <code>head</code> and <code>tail</code> are available as
 stdlib natives automatically:</p>
-<pre><code class="language-turmeric">(defn main [] :int
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn main [] :int
   (let [n (cstr-&gt;parse-int (head *args*))]
     (println &quot;count:&quot; n)
     0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn main [] :int
+  let [n (cstr-&gt;parse-int (head *args*))]
+    println(&quot;count:&quot; n)
+    0
+</code></pre></div></div></div>
 <blockquote>
 <p><strong>Note:</strong> <code>cstr-&gt;parse-int</code> parses a C string into <code>:int</code>. It is available
 without any import.</p>
@@ -146,11 +178,12 @@ without any import.</p>
 <li><strong>Help generation</strong> -- automatic <code>--help</code> output from the spec</li>
 </ul>
 <h3 id="import">Import</h3>
-<pre><code class="language-turmeric">(load &quot;stdlib/args.tur&quot;)
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(load &quot;stdlib/args.tur&quot;)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">load(&quot;stdlib/args.tur&quot;)
+</code></pre></div></div></div>
 <h3 id="building-a-spec">Building a Spec</h3>
 <p>Build a spec with the <code>args/spec-*</code> functions, then call <code>args/parse</code>:</p>
-<pre><code class="language-turmeric">(defn main [] :int
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn main [] :int
   (let [spec (-&gt; (args/spec-new)
                  (args/spec-prog &quot;mytool&quot;)
                  (args/spec-flag &quot;--verbose&quot;)
@@ -169,7 +202,26 @@ without any import.</p>
         (println &quot;count: &quot; (args/get-int result &quot;--count&quot;))
         (println &quot;output:&quot; (args/get-str result &quot;--output&quot;))
         0))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn main [] :int
+  let [spec (-&gt; (args/spec-new)
+                 (args/spec-prog &quot;mytool&quot;)
+                 (args/spec-flag &quot;--verbose&quot;)
+                 (args/spec-option &quot;--input&quot;  &quot;string&quot; 0)          ; required
+                 (args/spec-option &quot;--count&quot;  &quot;int&quot;    (cstr &quot;1&quot;)) ; default 1
+                 (args/spec-option &quot;--output&quot; &quot;string&quot; (cstr &quot;out.txt&quot;)))
+        result (args/parse spec *args*)]
+    if args/error?(result)
+      do
+        println(&quot;error:&quot; args/error-msg(result))
+        1
+      do
+        when args/has?(result &quot;--verbose&quot;)
+          println(&quot;verbose mode on&quot;)
+        println(&quot;input: &quot; args/get-str(result &quot;--input&quot;))
+        println(&quot;count: &quot; args/get-int(result &quot;--count&quot;))
+        println(&quot;output:&quot; args/get-str(result &quot;--output&quot;))
+        0
+</code></pre></div></div></div>
 <pre><code class="language-sh">tur run mytool.tur -- --input=data.csv --count=5
 </code></pre>
 <h3 id="option-types">Option Types</h3>
@@ -206,25 +258,33 @@ without any import.</p>
 </table>
 <h3 id="flags">Flags</h3>
 <p>Flags are boolean switches -- present means true, absent means false:</p>
-<pre><code class="language-turmeric">(args/spec-flag spec &quot;--verbose&quot;)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(args/spec-flag spec &quot;--verbose&quot;)
 (args/spec-flag spec &quot;--dry-run&quot;)
 
 ;; At runtime:
 (args/has? result &quot;--verbose&quot;)  ; =&gt; true/false
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">args/spec-flag(spec &quot;--verbose&quot;)
+args/spec-flag(spec &quot;--dry-run&quot;)
+;; At runtime:
+args/has?(result &quot;--verbose&quot;)
+; =&gt; true/false
+</code></pre></div></div></div>
 <h3 id="positional-arguments">Positional Arguments</h3>
 <p>Positional arguments are everything that is not a flag or option value.
 Access them as a cons list:</p>
-<pre><code class="language-turmeric">(let [pos (args/positional result)]
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [pos (args/positional result)]
   (println &quot;first file:&quot; (head pos))
   (println &quot;second file:&quot; (head (tail pos))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [pos (args/positional result)]
+  println(&quot;first file:&quot; head(pos))
+  println(&quot;second file:&quot; head(tail(pos)))
+</code></pre></div></div></div>
 <pre><code class="language-sh">tur run copy.tur -- src.txt dst.txt
 </code></pre>
 <h3 id="subcommands">Subcommands</h3>
 <p>Register subcommands with their own specs. Each subcommand can have its own
 flags, options, and nested subcommands:</p>
-<pre><code class="language-turmeric">(defn main [] :int
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn main [] :int
   (let [build-spec (-&gt; (args/spec-new)
                        (args/spec-flag &quot;--release&quot;)
                        (args/spec-option &quot;--output&quot; &quot;string&quot; (cstr &quot;a.out&quot;)))
@@ -254,7 +314,43 @@ flags, options, and nested subcommands:</p>
             (do
               (args/print-help spec)
               1))))))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defn main [] :int
+  let [build-spec (-&gt; (args/spec-new)
+                       (args/spec-flag &quot;--release&quot;)
+                       (args/spec-option &quot;--output&quot; &quot;string&quot; (cstr &quot;a.out&quot;)))
+        test-spec  (-&gt; (args/spec-new)
+                       (args/spec-flag &quot;--verbose&quot;)
+                       (args/spec-option &quot;--filter&quot; &quot;string&quot; 0))
+        spec       (-&gt; (args/spec-new)
+                       (args/spec-prog &quot;myapp&quot;)
+                       (args/spec-subcommand &quot;build&quot; build-spec)
+                       (args/spec-subcommand &quot;test&quot;  test-spec))
+        result     (args/parse spec *args*)]
+    if args/error?(result)
+      do
+        args/print-help(spec)
+        1
+      let [sub (args/subcommand result)]
+        cond
+          cstr=
+            sub
+            &quot;build&quot;
+          let
+            [r (args/sub-result result)]
+            println(&quot;building, release:&quot; args/has?(r &quot;--release&quot;))
+            0
+          cstr=
+            sub
+            &quot;test&quot;
+          let
+            [r (args/sub-result result)]
+            println(&quot;testing, filter:&quot; args/get-str(r &quot;--filter&quot;))
+            0
+          true
+          do
+            args/print-help(spec)
+            1
+</code></pre></div></div></div>
 <pre><code class="language-sh">tur run myapp.tur -- build --release
 tur run myapp.tur -- test --filter=core --verbose
 </code></pre>
@@ -262,22 +358,31 @@ tur run myapp.tur -- test --filter=core --verbose
 result, then <code>args/subcommand</code> on the inner to walk the chain.</p>
 <h3 id="help-output">Help Output</h3>
 <p><code>args/print-help</code> writes usage text to stdout based on the spec:</p>
-<pre><code class="language-turmeric">(when (args/has? result &quot;--help&quot;)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(when (args/has? result &quot;--help&quot;)
   (args/print-help spec)
   (exit 0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">when args/has?(result &quot;--help&quot;)
+  args/print-help(spec)
+  exit(0)
+</code></pre></div></div></div>
 <p>Or just let the parser handle missing required options and check
 <code>args/error?</code>:</p>
-<pre><code class="language-turmeric">(when (args/error? result)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(when (args/error? result)
   (println (args/error-msg result))
   (args/print-help spec)
   (exit 1))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">when args/error?(result)
+  println(args/error-msg(result))
+  args/print-help(spec)
+  exit(1)
+</code></pre></div></div></div>
 <h3 id="cleanup">Cleanup</h3>
 <p>Both spec and result are heap-allocated. Free them when done:</p>
-<pre><code class="language-turmeric">(args/spec-free   spec)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(args/spec-free   spec)
 (args/result-free result)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">args/spec-free(spec)
+args/result-free(result)
+</code></pre></div></div></div>
 <h2 id="api-reference">API Reference</h2>
 <table>
 <thead>

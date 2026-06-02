@@ -304,7 +304,7 @@ to the workspace `build.tur`, finds that `watch` is a listed member, and adds it
 `src/` to the search path automatically.
 
 ```sh
-# No tur fetch, no symlink, no lock entry required:
+# No tur fetch or symlink, and no lock entry required:
 cd spices/notebook
 tur check src/notebook/cli.tur   # resolves watch/watch via workspace
 ```
@@ -532,7 +532,7 @@ Behaviour:
   `find_package(<name> <version> QUIET)`.
 - When the system copy is found, the dep's include/link flags come from the
   imported target's `INTERFACE_INCLUDE_DIRECTORIES` and `$<TARGET_FILE_DIR:...>`
-  -- no clone, no source build. Otherwise the existing `FetchContent` block
+  -- skipping both the clone and the source build. Otherwise the existing `FetchContent` block
   runs exactly as before.
 - The generated `spice-deps-manifest.json` records `"resolved_via": "system"`
   or `"fetch"` per dep, and `tur.lock` records `:resolved-via "system"` (with
@@ -591,7 +591,7 @@ definition. The standard format (from CLAUDE.md):
   ...)
 ```
 
-Exported symbols without docstrings will be omitted from `just docs` output.
+Exported symbols without docstrings will be omitted from `tur run docs` output.
 
 ### Module docstring (optional)
 

@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#reader-forms-reference" style="">Reader Forms Reference</a></li>
 <li style=""><a href="#comments" style="">Comments</a></li>
@@ -112,6 +113,22 @@
 <li style=""><a href="#sweet-expression-extensions" style="">Sweet-Expression Extensions</a></li>
 <li style="padding-left:0.75rem;"><a href="#neoteric-application-f" style="color:var(--text-sec);">Neoteric application -- f(...)</a></li>
 <li style="padding-left:0.75rem;"><a href="#curly-infix-a-op-b" style="color:var(--text-sec);">Curly-infix -- {a op b}</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="reader-forms-reference">Reader Forms Reference</h1>
@@ -123,43 +140,69 @@ by category.</p>
 <p>Comments are consumed by the reader and produce no form.</p>
 <h3 id="line-comment-">Line comment -- <code>;</code></h3>
 <p>Ignores everything from <code>;</code> to the end of the line.</p>
-<pre><code class="language-turmeric">(println &quot;hello&quot;)  ; this is ignored
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(println &quot;hello&quot;)  ; this is ignored
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">println(&quot;hello&quot;)
+; this is ignored
+</code></pre></div></div></div>
 <h3 id="block-comment-">Block comment -- <code>#| ... |#</code></h3>
 <p>Ignores a delimited region of text. Block comments nest.</p>
-<pre><code class="language-turmeric">#|
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#|
   This whole region is ignored.
   (println &quot;never runs&quot;)
   #| nested block comments work too |#
 |#
 (println &quot;ok&quot;)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#|
+This
+whole
+region
+is
+ignored.
+println(&quot;never runs&quot;)
+#|
+nested
+block
+comments
+work
+too
+|#
+|#
+println(&quot;ok&quot;)
+</code></pre></div></div></div>
 <h3 id="datum-comment-planned">Datum comment -- <code>#;</code> <em>(planned)</em></h3>
 <p>Reads one complete datum and discards it. The surrounding code sees nothing.
 Unlike <code>#| |#</code>, <code>#;</code> understands structure -- it always discards exactly one
 form, no matter how many lines it spans.</p>
-<pre><code class="language-turmeric">(println #;99 &quot;ok&quot;)              ; =&gt; ok
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(println #;99 &quot;ok&quot;)              ; =&gt; ok
 (println #;&quot;ignored&quot; &quot;ok&quot;)       ; =&gt; ok
 (println #;(this is discarded) &quot;ok&quot;)  ; =&gt; ok
 (println (+ 1 #;999 2))          ; =&gt; 3
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">println(# ;99 &quot;ok&quot;)              ; =&gt; ok println(# ;&quot;ignored&quot; &quot;ok&quot;)       ; =&gt; ok println(# ;(this is discarded) &quot;ok&quot;)  ; =&gt; ok println(+(1 # ;999 2))          ; =&gt; 3)))))
+</code></pre></div></div></div>
 <p>Datum comments compose: <code>#;#;1 2 3</code> discards <code>2</code> (the result that inner <code>#;1</code>
 would have produced) and leaves <code>3</code>.</p>
-<pre><code class="language-turmeric">(println #;#;1 2 3)   ; =&gt; 3
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(println #;#;1 2 3)   ; =&gt; 3
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">println(# ;#;1 2 3)   ; =&gt; 3)
+</code></pre></div></div></div>
 <p><code>#;</code> at end of file, or immediately before a closing delimiter, is an error.</p>
 <hr />
 <h2 id="literals">Literals</h2>
 <h3 id="integer">Integer</h3>
 <p>Decimal, hexadecimal (<code>0x</code>/<code>0X</code>), and binary (<code>0b</code>/<code>0B</code>) are supported.
 An optional type suffix pins the width.</p>
-<pre><code class="language-turmeric">42
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">42
 -7
 0xff
 0b1010
 255u8
 1000i32
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">42
+-7
+0xff
+0b1010
+255u8
+1000i32
+</code></pre></div></div></div>
 <table>
 <thead>
 <tr>
@@ -205,125 +248,190 @@ An optional type suffix pins the width.</p>
 <h3 id="float">Float</h3>
 <p>A <code>.</code> or exponent (<code>e</code>/<code>E</code>) makes a literal a float. The suffix <code>f32</code> or <code>f64</code>
 pins the width; unsuffixed floats are <code>f64</code>.</p>
-<pre><code class="language-turmeric">3.14
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">3.14
 1.0e10
 2.5f32
 1f64
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">3.14
+1.0e10
+2.5f32
+1f64
+</code></pre></div></div></div>
 <h3 id="string-">String -- <code>"..."</code></h3>
 <p>Double-quoted UTF-8 text. Standard C escape sequences apply (<code>\n</code>, <code>\t</code>, <code>\\</code>,
 <code>\"</code>, etc.).</p>
-<pre><code class="language-turmeric">&quot;hello, world&quot;
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">&quot;hello, world&quot;
 &quot;line one\nline two&quot;
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">&quot;hello, world&quot;
+&quot;line one\nline two&quot;
+</code></pre></div></div></div>
 <h3 id="keyword-">Keyword -- <code>:</code></h3>
 <p>A colon followed immediately by a name produces a keyword (an interned
 compile-time constant).</p>
-<pre><code class="language-turmeric">:ok
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:ok
 :error
 :tur
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:ok
+:error
+:tur
+</code></pre></div></div></div>
 <h3 id="symbol-identifier">Symbol / identifier</h3>
 <p>Any name that starts with a letter or one of <code>+ - * / = &lt; &gt; ! ? _ $ &amp; . ^ |</code>
 or a UTF-8 code-point in the symbol-start set (includes <code>λ</code>, <code>∀</code>, <code>∃</code>).</p>
-<pre><code class="language-turmeric">foo
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">foo
 my-var
 +
 -&gt;
 |&gt;
 λ
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">foo
+my-var
++
+-&gt;
+|&gt;
+λ
+</code></pre></div></div></div>
 <hr />
 <h2 id="collections">Collections</h2>
 <h3 id="list-">List -- <code>(...)</code></h3>
 <p>An ordered sequence of forms. The primary syntactic unit in Turmeric.</p>
-<pre><code class="language-turmeric">(println &quot;hello&quot;)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(println &quot;hello&quot;)
 (+ 1 2 3)
 (defn square [x :int] :int (* x x))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">println(&quot;hello&quot;)
++(1 2 3)
+defn square [x :int] :int
+  *(x x)
+</code></pre></div></div></div>
 <h3 id="vector-">Vector -- <code>[...]</code></h3>
 <p>A vector literal.</p>
-<pre><code class="language-turmeric">[1 2 3]
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">[1 2 3]
 [:a :b :c]
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">[1 2 3]
+[:a :b :c]
+</code></pre></div></div></div>
 <h3 id="map-literal-">Map literal -- <code>#{...}</code></h3>
 <p>A map (hash-array-mapped trie) literal. Key-value pairs are written
 interleaved.</p>
-<pre><code class="language-turmeric">#{:name &quot;Alice&quot; :age 30}
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#{:name &quot;Alice&quot; :age 30}
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#
+{:name &quot;Alice&quot; :age 30}
+</code></pre></div></div></div>
 <h3 id="set-literal-s">Set literal -- <code>#s(...)</code></h3>
 <p>A set literal.</p>
-<pre><code class="language-turmeric">#s(1 2 3)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#s(1 2 3)
 #s(:red :green :blue)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#s
+1(2 3)
+#s
+:red(:green :blue)
+</code></pre></div></div></div>
 <h3 id="contract-type-var-t-pred">Contract type -- <code>{ var : T | pred }</code></h3>
 <p>A refinement type annotation. Introduces a binding <code>var</code> of type <code>T</code> with
 predicate <code>pred</code>.</p>
-<pre><code class="language-turmeric">{ x : :int | (&gt; x 0) }
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">{ x : :int | (&gt; x 0) }
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">{ x : :int | (&gt; x 0) }
+</code></pre></div></div></div>
 <hr />
 <h2 id="prefix-reader-macros">Prefix Reader Macros</h2>
 <p>Each of these reads one following datum and rewrites it into a longer form.</p>
 <h3 id="quote-expr">Quote -- <code>'expr</code></h3>
 <p>Expands to <code>(quote expr)</code>. Prevents evaluation.</p>
-<pre><code class="language-turmeric">'foo          ; =&gt; (quote foo)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">'foo          ; =&gt; (quote foo)
 '(1 2 3)      ; =&gt; (quote (1 2 3))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">'foo
+; =&gt; (quote foo)
+'
+1(2 3)
+; =&gt; (quote (1 2 3))
+</code></pre></div></div></div>
 <h3 id="quasiquote-expr">Quasiquote -- <code>`expr</code></h3>
 <p>Expands to <code>(quasiquote expr)</code>. Like quote, but <code>~</code> and <code>~@</code> splice in values.</p>
-<pre><code class="language-turmeric">`(1 2 3)             ; =&gt; (quasiquote (1 2 3))
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">`(1 2 3)             ; =&gt; (quasiquote (1 2 3))
 `(1 ~x 3)            ; unquotes x
 `(1 ~@xs 3)          ; splices list xs
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">1(2 3)
+; =&gt; (quasiquote (1 2 3))
+1(~x 3)
+; unquotes x
+1(~@xs 3)
+; splices list xs
+</code></pre></div></div></div>
 <h3 id="unquote-expr">Unquote -- <code>~expr</code></h3>
 <p>Valid only inside a quasiquote. Expands to <code>(unquote expr)</code>.</p>
-<pre><code class="language-turmeric">`(a ~b c)   ; b is evaluated and inserted
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">`(a ~b c)   ; b is evaluated and inserted
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">a(~b c)
+; b is evaluated and inserted
+</code></pre></div></div></div>
 <h3 id="unquote-splicing-expr">Unquote-splicing -- <code>~@expr</code></h3>
 <p>Valid only inside a quasiquote. Expands to <code>(unquote-splicing expr)</code>. The
 value must be a list; its elements are spliced into the surrounding list.</p>
-<pre><code class="language-turmeric">(let [xs '(2 3)]
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(let [xs '(2 3)]
   `(1 ~@xs 4))   ; =&gt; (1 2 3 4)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">let [xs '(2 3)]
+  1(~@xs 4)
+; =&gt; (1 2 3 4)
+</code></pre></div></div></div>
 <h3 id="deref-expr">Deref -- <code>@expr</code></h3>
 <p>Expands to <code>(deref expr)</code>.</p>
-<pre><code class="language-turmeric">@my-ref   ; =&gt; (deref my-ref)
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">@my-ref   ; =&gt; (deref my-ref)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">@my-ref
+; =&gt; (deref my-ref)
+</code></pre></div></div></div>
 <h3 id="effect-row-annotation-">Effect-row annotation -- <code>@{...}</code></h3>
 <p>A <code>@</code> immediately followed by <code>{</code> reads a brace-delimited effect-row map
 rather than a deref.</p>
-<pre><code class="language-turmeric">@{IO}
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">@{IO}
 @{IO Exn}
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">@
+{IO}
+@
+{IO Exn}
+</code></pre></div></div></div>
 <h3 id="borrow-expr">Borrow -- <code>&amp;expr</code></h3>
 <p>Expands to <code>(&amp; expr)</code>. A bare <code>&amp;</code> followed by whitespace or a close delimiter
 is left as the symbol <code>&amp;</code> (preserving the explicit <code>(&amp; x)</code> call form).</p>
-<pre><code class="language-turmeric">&amp;x       ; =&gt; (&amp; x)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">&amp;x       ; =&gt; (&amp; x)
 (&amp; x)    ; identical -- explicit form still works
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">&amp;x
+; =&gt; (&amp; x)
+&amp;(x)
+; identical -- explicit form still works
+</code></pre></div></div></div>
 <h3 id="mutable-borrow-mut-expr">Mutable borrow -- <code>&amp;mut expr</code></h3>
 <p>Expands to <code>(&amp;mut expr)</code>.</p>
-<pre><code class="language-turmeric">&amp;mut x   ; =&gt; (&amp;mut x)
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">&amp;mut x   ; =&gt; (&amp;mut x)
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">&amp;mut
+x
+; =&gt; (&amp;mut x)
+</code></pre></div></div></div>
 <hr />
 <h2 id="hash-dispatch-forms">Hash-Dispatch Forms</h2>
 <p>Forms beginning with <code>#</code> followed by a specific character.</p>
 <h3 id="attribute-">Attribute -- <code>#[...]</code></h3>
 <p>Attaches a compile-time attribute to the next definition.</p>
-<pre><code class="language-turmeric">#[no-unwind]
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">#[no-unwind]
 (defn risky [] :int ...)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">#
+[no-unwind]
+defn risky [] :int
+  ...
+</code></pre></div></div></div>
 <h3 id="reader-conditional-">Reader conditional -- <code>#?(...)</code></h3>
 <p>Selects a branch based on the current reader target. Use <code>:tur</code> for compiled
 output and <code>:turi</code> for the interpreter.</p>
-<pre><code class="language-turmeric">(println #?(:tur &quot;compiled&quot; :turi &quot;interpreted&quot;))
-</code></pre>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(println #?(:tur &quot;compiled&quot; :turi &quot;interpreted&quot;))
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">println(#? :tur(&quot;compiled&quot; :turi &quot;interpreted&quot;))
+</code></pre></div></div></div>
 <hr />
 <h2 id="inline-c-block-c">Inline C Block -- <code>```c ... ```</code></h2>
 <p>A triple-backtick block embeds raw C code inside a <code>defn</code> body. The closing
 <code>```</code> must be on the same line as its enclosing <code>)</code>.</p>
-<pre><code class="language-turmeric">(defn file-size [f] :int
-  ```c
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defn file-size [f] :int
+  ```
+```sweet-exp
+defn file-size [f] :int
+```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
   ```)
@@ -336,12 +444,19 @@ output and <code>:turi</code> for the interpreter.</p>
 <p>A symbol (or atom) followed immediately by <code>(</code> (no space) is read as a
 function call.</p>
 <pre><code class="language-turmeric">square(9)     ; =&gt; (square 9)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">square
+9
+; =&gt; (square 9)
+</code></pre></div></div></div>
 <h3 id="curly-infix-a-op-b">Curly-infix -- <code>{a op b}</code></h3>
 <p>Braces in sweet-exp mode treat the middle element as an infix operator.</p>
-<pre><code class="language-turmeric">{1 + 2}       ; =&gt; (+ 1 2)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">{1 + 2}       ; =&gt; (+ 1 2)
 {x &gt; 0}       ; =&gt; (&gt; x 0)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">{1 + 2}
+; =&gt; (+ 1 2)
+{x &gt; 0}
+; =&gt; (&gt; x 0)
+</code></pre></div></div></div>
     </div>
   </div>
   <footer class="site-footer">

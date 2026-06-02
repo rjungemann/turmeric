@@ -124,6 +124,15 @@ struct Binding {
      * before the call.  Set at the binding's declaration site (let binding or
      * function parameter emission). */
     bool          emit_byvalue_carrier_abi;
+    /* True when this binding names a defn whose body is an EX_INLINE_C block.
+     * The formal-param emitter (emit_fns.c:423) treats inline-C defns as
+     * by-value for struct params even when they would normally cross the
+     * 16-byte pass-by-pointer threshold (so inline-C can write `opts.field`).
+     * The call-site emitter (emit_expr.c, around the EX_CALL `&temp`
+     * transform) consults this flag to suppress the matching `&temp`
+     * wrap, keeping the two ABI emitters in sync. Set in elab_fns.c when
+     * the FnDef is built. */
+    bool          body_is_inline_c;
 };
 
 /* GF1: Generator definition -- one per (gen ...) expression */

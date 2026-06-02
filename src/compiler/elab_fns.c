@@ -2246,6 +2246,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         extern bool g_has_variadics;
         g_has_variadics = true;  /* AR8: tell emit_module to include __tur_cons_of */
     }
+    /* Mirror emit_fns.c:377's predicate on the binding so call sites can
+     * detect an inline-C callee without walking back to the FnDef. */
+    b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
@@ -2766,6 +2769,9 @@ Expr *elab_fn(Elab *e, const Form *call) {
         extern bool g_has_variadics;
         g_has_variadics = true;  /* AR8: tell emit_module to include __tur_cons_of */
     }
+    /* Mirror emit_fns.c:377's predicate so call sites referencing this
+     * anonymous fn binding can see the same flag a defn binding would. */
+    b->body_is_inline_c = (body && body->kind == EX_INLINE_C);
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */

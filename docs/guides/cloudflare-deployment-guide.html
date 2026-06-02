@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#deploying-turmeric-services-to-cloudflare" style="">Deploying Turmeric Services to Cloudflare</a></li>
 <li style=""><a href="#prerequisites" style="">Prerequisites</a></li>
@@ -103,6 +104,22 @@
 <li style="padding-left:0.75rem;"><a href="#step-5-wranglertoml_1" style="color:var(--text-sec);">Step 5 -- wrangler.toml</a></li>
 <li style="padding-left:0.75rem;"><a href="#tradeoffs_2" style="color:var(--text-sec);">Tradeoffs</a></li>
 <li style=""><a href="#summary" style="">Summary</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="deploying-turmeric-services-to-cloudflare">Deploying Turmeric Services to Cloudflare</h1>
@@ -180,7 +197,7 @@ approach.</p>
 spins up the container on demand and a thin Cloudflare Worker routes incoming HTTP
 requests to it.</p>
 <h3 id="step-1-write-the-turmeric-service">Step 1 -- write the Turmeric service</h3>
-<pre><code class="language-turmeric">;; service.tur -- minimal HTTP service for Approach A (Cloudflare Containers)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; service.tur -- minimal HTTP service for Approach A (Cloudflare Containers)
 ;;
 ;; Listens on $PORT (default 8080), accepts connections concurrently using the
 ;; cooperative fiber scheduler, and returns a fixed HTTP 200 response.
@@ -219,7 +236,39 @@ requests to it.</p>
     (scheduler-spawn sched accepter)
     (scheduler-run-to-completion sched))
   0)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; service.tur -- minimal HTTP service for Approach A (Cloudflare Containers)
+;;
+;; Listens on $PORT (default 8080), accepts connections concurrently using the
+;; cooperative fiber scheduler, and returns a fixed HTTP 200 response.
+import &quot;stdlib/async_socket.tur&quot;
+import &quot;stdlib/scheduler.tur&quot;
+import &quot;stdlib/fiber.tur&quot;
+import &quot;stdlib/args.tur&quot;
+import &quot;stdlib/env.tur&quot;
+defn http-ok [body:cstrlen:int] :cstr
+  str-concat(&quot;HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: &quot; str-concat(int-&gt;str(len) str-concat(&quot;\r\n\r\n&quot; body)))
+defn handle-client [fd:int] :nil
+  async-socket-recv(fd 4096)
+  let [body&quot;Hello from Turmeric!\n&quot;
+resp(http-okbody21)]
+    async-socket-send(fd resp cstr-length(resp))
+  async-socket-close(fd)
+defn accept-loop [listen-fd:intsched:ptr&lt;void&gt;] :nil
+  let [client-fd(async-socket-acceptlisten-fd)
+f(fiber-new(fn[]:nil(handle-clientclient-fd))0)]
+    scheduler-spawn(sched f)
+  accept-loop(listen-fd sched)
+defn main [] :int
+  let [port-str(getenv&quot;PORT&quot;)
+port(ifport-str(cstr-&gt;parse-intport-str)8080)
+sched(scheduler-new)
+fd(async-socket-listenport128)
+accepter(fiber-new(fn[]:nil(accept-loopfdsched))0)]
+    println(str-concat(&quot;Listening on :&quot; int-&gt;str(port)))
+    scheduler-spawn(sched accepter)
+    scheduler-run-to-completion(sched)
+  0
+</code></pre></div></div></div>
 <p>Test locally before containerizing:</p>
 <pre><code class="language-sh">just build
 tur run service.tur
@@ -331,7 +380,7 @@ the Worker. The Worker URL is printed on success.</p>
 Emscripten) is bundled inside a Cloudflare Worker. Each request calls <code>turi_wasm_eval</code>
 with a Turmeric expression and returns the result.</p>
 <p>This approach is best for programs that can express their request handling as a pure
-Turmeric expression: no long-running loops, no raw sockets, no filesystem access.</p>
+Turmeric expression -- without long-running loops, raw sockets, or filesystem access.</p>
 <h3 id="step-1-build-the-wasm-module">Step 1 -- build the WASM module</h3>
 <p>From the Turmeric repository root:</p>
 <pre><code class="language-sh">just wasm
@@ -355,7 +404,7 @@ depend on the Emscripten version; see <code>src/web/wasm_glue.c</code> for the e
 <h3 id="step-3-write-the-service-handler-in-turmeric">Step 3 -- write the service handler in Turmeric</h3>
 <p>Rather than a server loop, write a pure request handler. This runs inside the
 interpreter on each incoming request:</p>
-<pre><code class="language-turmeric">;; handler.tur -- evaluated once per Worker request via turi_wasm_eval
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; handler.tur -- evaluated once per Worker request via turi_wasm_eval
 ;;
 ;; The Worker calls:
 ;;   turi_wasm_eval(&quot;(handle-request request-body)&quot;)
@@ -363,7 +412,14 @@ interpreter on each incoming request:</p>
 
 (defn handle-request [body :cstr] :cstr
   (str-concat &quot;Hello from Turmeric! You sent: &quot; body))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; handler.tur -- evaluated once per Worker request via turi_wasm_eval
+;;
+;; The Worker calls:
+;;   turi_wasm_eval(&quot;(handle-request request-body)&quot;)
+;; after loading the stdlib definitions below.
+defn handle-request [body:cstr] :cstr
+  str-concat(&quot;Hello from Turmeric! You sent: &quot; body)
+</code></pre></div></div></div>
 <p>The Worker loads these definitions at startup (cold) and calls <code>handle-request</code> on
 each incoming request.</p>
 <h3 id="step-4-write-the-worker">Step 4 -- write the Worker</h3>
@@ -440,7 +496,7 @@ handler directly.</p>
 <p>Because POSIX sockets are not available in WASM, the handler must accept the request
 as a parameter and return the response as a string. The Worker provides the HTTP
 layer.</p>
-<pre><code class="language-turmeric">;; handler.tur -- compiled to WASM via emit-c + emcc
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; handler.tur -- compiled to WASM via emit-c + emcc
 ;;
 ;; Exports a single C function:
 ;;   char *tur_handle(const char *method, const char *path, const char *body)
@@ -455,7 +511,19 @@ layer.</p>
 
 (defn tur-handle [method :cstr path :cstr body :cstr] :cstr
   (greet (if (= (cstr-length body) 0) &quot;world&quot; body)))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; handler.tur -- compiled to WASM via emit-c + emcc
+;;
+;; Exports a single C function:
+;;   char *tur_handle(const char *method, const char *path, const char *body)
+;; which the Worker calls directly via WASM imports.
+;;
+;; All logic must be pure computation -- no sockets, threads, or filesystem.
+import &quot;stdlib/str.tur&quot;
+defn greet [name:cstr] :cstr
+  str-concat(&quot;Hello, &quot; str-concat(name &quot;!&quot;))
+defn tur-handle [method:cstrpath:cstrbody:cstr] :cstr
+  greet(if(=(cstr-length(body) 0) &quot;world&quot; body))
+</code></pre></div></div></div>
 <h3 id="step-2-compile-to-c">Step 2 -- compile to C</h3>
 <pre><code class="language-sh">tur emit-c handler.tur &gt; handler.c
 </code></pre>

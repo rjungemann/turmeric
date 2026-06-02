@@ -60,6 +60,8 @@
 ;;   httpd-req-body-len [conn :ptr<void>]                -- int
 ;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
+;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
+(load "stdlib/json.tur")
 ;;; httpd/autolink-hint -- ensure programs using httpd link against libturi + pthreads.
 ;;; Also hoists the file-scope httpd_tls_ops struct and instance used by the H5
 ;;; TLS hook registry (see httpd-register-tls-impl and httpd-new-tls).
@@ -124,6 +126,16 @@
 (extern-c tur_reactor_stop [r :ptr] :void)
 
 (extern-c tur_reactor_wake [r :ptr] :void)
+
+(extern-c tur_local_fiber_group_new [r :ptr] :ptr)
+
+(extern-c tur_local_fiber_group_free [g :ptr] :void)
+
+(extern-c tur_local_spawn [g :ptr body :int user-data :ptr] :int)
+
+(extern-c tur_local_park_fd [g :ptr fd :int events :int timeout-ms :int] :int)
+
+(extern-c tur_reactor_run_fibers [g :ptr] :int)
 ;;; httpd-handle -- internal: serve one or more HTTP requests on fd, then
 ;;; close fd. Loops while the client keeps the connection alive.
 ;;;
@@ -139,7 +151,12 @@
 ;;; Since: Phase H1 (TLS path: Phase H5)
 
 (defn httpd-handle [fd :int handler :int tls :int] :nil
-  ```c typedef struct {
+  ```c typedef struct __HttpdHeader {
+      char *name;
+      char *value;
+      struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
       int fd;
       int64_t handler;
       char method[16];
@@ -153,6 +170,11 @@
       int client_keep_alive;
       void *route_params;
       int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;     /* M3: lazily-parsed json/decode tree, freed in cleanup */
+      void *req_multipart_parts;  /* M7: lazily-parsed multipart head (HttpdPart linked list) */
+      void *fiber_group;          /* A0: bound local-fiber-group for await-* primitives */
   } HttpdConn;
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
@@ -168,28 +190,42 @@
       conn->fd = (int)fd;
       conn->handler = (int64_t)handler;
       conn->tls = (int64_t)tls;
-      /* Read until end-of-headers, then read any indicated body. */
-      char buf[8192];
+      /* M0: grow the read buffer on demand so large header blocks no
+       * longer truncate at 8 KB. Start at 8 KB; double until headers fit
+       * or a hard cap is reached (defends against runaway headers). */
+      size_t buf_cap = 8192;
+      size_t buf_max = 262144;  /* 256 KB hard cap on header block */
+      char  *buf     = (char *)malloc(buf_cap);
+      if (!buf) break;
+      buf[0] = '\0';
       int total = 0;
       ssize_t n;
       char *hdr_end = NULL;
       while (!hdr_end) {
+          if ((size_t)total + 1 >= buf_cap) {
+              if (buf_cap >= buf_max) break;
+              size_t new_cap = buf_cap * 2;
+              if (new_cap > buf_max) new_cap = buf_max;
+              char *nb = (char *)realloc(buf, new_cap);
+              if (!nb) break;
+              buf = nb;
+              buf_cap = new_cap;
+          }
           if (conn->tls && httpd_tls_ops.read_fn) {
               n = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
                       conn->tls, (int64_t)(intptr_t)(buf + total),
-                      (int64_t)(sizeof(buf) - 1 - (size_t)total));
+                      (int64_t)(buf_cap - 1 - (size_t)total));
           } else {
               n = recv(conn->fd, buf + total,
-                       (size_t)(sizeof(buf) - 1 - (size_t)total), 0);
+                       (size_t)(buf_cap - 1 - (size_t)total), 0);
           }
           if (n <= 0) break;
           total += (int)n;
           buf[total] = '\0';
           hdr_end = strstr(buf, "\r\n\r\n");
           if (!hdr_end) hdr_end = strstr(buf, "\n\n");
-          if (total >= (int)sizeof(buf) - 1) break;
       }
-      if (!hdr_end) break;  /* peer closed, timed out, or oversized headers */
+      if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
       int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
       int hdrs_total  = (int)(hdr_end - buf) + hdr_sep_len;
       /* Parse request line: METHOD SP PATH SP VERSION CRLF */
@@ -231,11 +267,14 @@
               }
           }
       }
-      /* Scan headers for Connection and Content-Length. */
+      /* Scan headers: pick out Connection / Content-Length for routing,
+       * AND capture every header into conn->req_headers so middleware can
+       * read arbitrary names via httpd-req-header. */
       int is_http_11   = (strstr(conn->version, "1.1") != NULL);
       int conn_keep    = is_http_11;   /* default by version */
       int conn_close   = 0;
       int content_len  = 0;
+      HttpdHeader *req_tail = NULL;
       char *h = strpbrk(buf, "\r\n");
       if (h) {
           while (h[0] == '\r' || h[0] == '\n') h++;
@@ -255,6 +294,27 @@
                       } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
                           content_len = (int)strtol(val, NULL, 10);
                           if (content_len < 0) content_len = 0;
+                      }
+                      /* M0: stash a copy on req_headers (always, even for
+                       * Connection / Content-Length, so a handler can read
+                       * them by name without a second special case). */
+                      if (name_len > 0) {
+                          HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+                          if (rh) {
+                              rh->name  = (char *)malloc((size_t)name_len + 1);
+                              rh->value = (char *)malloc((size_t)val_len  + 1);
+                              if (rh->name && rh->value) {
+                                  memcpy(rh->name,  h,   (size_t)name_len); rh->name[name_len]  = '\0';
+                                  if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
+                                  rh->value[val_len] = '\0';
+                                  if (req_tail) { req_tail->next = rh; req_tail = rh; }
+                                  else { conn->req_headers = rh; req_tail = rh; }
+                              } else {
+                                  if (rh->name)  free(rh->name);
+                                  if (rh->value) free(rh->value);
+                                  free(rh);
+                              }
+                          }
                       }
                   }
               }
@@ -290,6 +350,8 @@
               conn->body_len = got;
           }
       }
+      /* Read buffer is no longer needed past this point. */
+      free(buf);
       /* Dispatch to handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
       typedef void (*fn1_t)(void *, int64_t);
@@ -306,10 +368,80 @@
       int         blen  = conn->resp_body ? conn->resp_body_len : 0;
       const char *ver   = is_http_11 ? "HTTP/1.1" : "HTTP/1.0";
       const char *chdr  = conn->client_keep_alive ? "keep-alive" : "close";
-      char hbuf[512];
-      int hlen = snprintf(hbuf, sizeof(hbuf),
-          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n",
+      /* M0: emit user-set response headers between the hardcoded
+       * Content-Length / Connection lines and the blank line. Drop any
+       * user-set Content-Length (we control the actual byte count) and
+       * note whether Content-Type was provided so we can default. */
+      int has_content_type = 0;
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) {
+                  has_content_type = 1; break;
+              }
+              rh = rh->next;
+          }
+      }
+      /* Build the header block in a growable buffer (large cookie jars,
+       * many user headers easily overflow a fixed 512 B stack buffer). */
+      size_t hbuf_cap = 1024;
+      char  *hbuf     = (char *)malloc(hbuf_cap);
+      if (!hbuf) {
+          /* fall back to a minimal status-only response */
+          char tiny[128];
+          int tl = snprintf(tiny, sizeof(tiny),
+              "%s 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+              ver);
+          if (conn->tls && httpd_tls_ops.write_fn) {
+              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  conn->tls, (int64_t)(intptr_t)tiny, (int64_t)tl);
+          } else {
+              send(conn->fd, tiny, (size_t)tl, 0);
+          }
+          keep_going = 0;
+          goto __cleanup_iteration;
+      }
+      int hlen = snprintf(hbuf, hbuf_cap,
+          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
           ver, status, stxt, blen, chdr);
+      if (!has_content_type) {
+          int need = hlen + 64;
+          if ((size_t)need > hbuf_cap) {
+              size_t nc = hbuf_cap;
+              while (nc < (size_t)need) nc *= 2;
+              char *nh = (char *)realloc(hbuf, nc);
+              if (nh) { hbuf = nh; hbuf_cap = nc; }
+          }
+          hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+              "Content-Type: text/plain; charset=utf-8\r\n");
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (!rh->name || strcasecmp(rh->name, "Content-Length") == 0) {
+                  rh = rh->next; continue;  /* drop user-set Content-Length */
+              }
+              size_t nlen = strlen(rh->name);
+              size_t vlen = rh->value ? strlen(rh->value) : 0;
+              size_t need = (size_t)hlen + nlen + vlen + 8;  /* ": ", "\r\n", slack */
+              if (need > hbuf_cap) {
+                  size_t nc = hbuf_cap;
+                  while (nc < need) nc *= 2;
+                  char *nh = (char *)realloc(hbuf, nc);
+                  if (!nh) break;
+                  hbuf = nh; hbuf_cap = nc;
+              }
+              hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+                  "%s: %s\r\n", rh->name, rh->value ? rh->value : "");
+              rh = rh->next;
+          }
+      }
+      /* Terminating blank line. */
+      if ((size_t)hlen + 3 > hbuf_cap) {
+          char *nh = (char *)realloc(hbuf, (size_t)hlen + 3);
+          if (nh) { hbuf = nh; hbuf_cap = (size_t)hlen + 3; }
+      }
+      hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen, "\r\n");
       if (conn->tls && httpd_tls_ops.write_fn) {
           ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
               conn->tls, (int64_t)(intptr_t)hbuf, (int64_t)hlen);
@@ -321,9 +453,60 @@
           send(conn->fd, hbuf, (size_t)hlen, 0);
           if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
       }
+      free(hbuf);
       keep_going = conn->client_keep_alive;
+  __cleanup_iteration:
       if (conn->body)      free(conn->body);
       if (conn->resp_body) free(conn->resp_body);
+      /* Free per-request header lists. */
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->req_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+          conn->req_headers = NULL;
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+          conn->resp_headers = NULL;
+      }
+      /* M3: free any cached JSON body parsed by httpd-req-json / mw-json-body. */
+      if (conn->req_json_cache) {
+          json_free(conn->req_json_cache);
+          conn->req_json_cache = 0;
+      }
+      /* M7: free any cached multipart parts. */
+      if (conn->req_multipart_parts) {
+          /* Same shape as HttpdPart below; redeclared here so cleanup is
+           * self-contained. */
+          typedef struct __HttpdPart {
+              char *name; char *filename; char *content_type;
+              char *data; int data_len;
+              struct __HttpdPart *next;
+          } HttpdPart;
+          HttpdPart *pp = (HttpdPart *)conn->req_multipart_parts;
+          while (pp) {
+              HttpdPart *nx = pp->next;
+              if (pp->name)         free(pp->name);
+              if (pp->filename)     free(pp->filename);
+              if (pp->content_type) free(pp->content_type);
+              if (pp->data)         free(pp->data);
+              free(pp);
+              pp = nx;
+          }
+          conn->req_multipart_parts = NULL;
+      }
   }
   if (tls && httpd_tls_ops.shutdown) {
       ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
@@ -882,6 +1065,1942 @@
   c->resp_body_len = (int)len;
   ```)
 ;; =============================================================================
+;; M0: Arbitrary request / response header access
+;; =============================================================================
+;;
+;; The H1-H7 surface only exposed Method, Path, Version, Body, Status.
+;; M0 widens this so middleware can read any request header by name and
+;; set/append any response header.  All header storage is per-iteration
+;; (freed in httpd-handle's cleanup); handlers never need to free.
+;;
+;; Request reads are case-insensitive; missing headers return "".
+;; Response writes:
+;;   - `httpd-resp-header!`     replaces any existing entry with `name`.
+;;   - `httpd-resp-header-add!` always appends (for `Set-Cookie`, `Vary`).
+;;   - A user-set `Content-Length` is silently dropped by the writer
+;;     (the actual response body length is authoritative).
+;;   - If no `Content-Type` is set, the writer defaults to
+;;     `text/plain; charset=utf-8`.
+;;; httpd-req-header -- look up a request header by name (case-insensitive).
+;;;
+;;; Returns the empty string if the header is absent.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- header name to look up (case-insensitive)
+;;;
+;;; Returns:
+;;;   The header value as a cstr (pointer into per-request storage; valid
+;;;   only for the duration of the handler call). Empty string if absent.
+;;;
+;;; Example:
+;;;   (let [ua (httpd-req-header c "User-Agent")] ...)
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-req-header [conn :ptr<void> name :cstr] :cstr
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return "";
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, name) == 0) {
+          return h->value ? h->value : "";
+      }
+      h = h->next;
+  }
+  return "";
+  ```)
+;;; httpd-req-header? -- presence test for a request header.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- header name (case-insensitive)
+;;;
+;;; Returns:
+;;;   1 if present, 0 otherwise.
+;;;
+;;; Example:
+;;;   (when (= 1 (httpd-req-header? c "Authorization")) ...)
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-req-header? [conn :ptr<void> name :cstr] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return 0;
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, name) == 0) return 1;
+      h = h->next;
+  }
+  return 0;
+  ```)
+;;; httpd-resp-header! -- set (or replace) a response header.
+;;;
+;;; If `name` is already present on the response, its value is replaced.
+;;; Otherwise a new entry is appended.  Use `httpd-resp-header-add!` for
+;;; truly repeatable headers like `Set-Cookie` or `Vary`.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   name  -- header name (case-insensitive on the dedup check)
+;;;   value -- header value
+;;;
+;;; Example:
+;;;   (httpd-resp-header! c "Content-Type" "application/json")
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-resp-header! [conn :ptr<void> name :cstr value :cstr] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  /* Replace if name already present. */
+  HttpdHeader *h = (HttpdHeader *)c->resp_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, name) == 0) {
+          if (h->value) free(h->value);
+          size_t vl = value ? strlen(value) : 0;
+          h->value = (char *)malloc(vl + 1);
+          if (h->value) {
+              if (vl > 0) memcpy(h->value, value, vl);
+              h->value[vl] = '\0';
+          }
+          return;
+      }
+      h = h->next;
+  }
+  /* Append new entry. */
+  HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+  if (!nh) return;
+  size_t nl = strlen(name);
+  size_t vl = value ? strlen(value) : 0;
+  nh->name  = (char *)malloc(nl + 1);
+  nh->value = (char *)malloc(vl + 1);
+  if (!nh->name || !nh->value) {
+      if (nh->name)  free(nh->name);
+      if (nh->value) free(nh->value);
+      free(nh);
+      return;
+  }
+  memcpy(nh->name, name, nl); nh->name[nl] = '\0';
+  if (vl > 0) memcpy(nh->value, value, vl);
+  nh->value[vl] = '\0';
+  /* Append at tail. */
+  HttpdHeader *t = (HttpdHeader *)c->resp_headers;
+  if (!t) { c->resp_headers = nh; return; }
+  while (t->next) t = t->next;
+  t->next = nh;
+  ```)
+;;; httpd-resp-header-add! -- append a response header without de-duplication.
+;;;
+;;; Use for headers that legitimately repeat -- `Set-Cookie`, `Vary`,
+;;; `WWW-Authenticate` -- where each entry is independent.  For single-
+;;; valued headers, prefer `httpd-resp-header!`.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   name  -- header name
+;;;   value -- header value
+;;;
+;;; Example:
+;;;   (httpd-resp-header-add! c "Set-Cookie" "session=abc; Path=/")
+;;;   (httpd-resp-header-add! c "Set-Cookie" "csrf=xyz; Path=/")
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-resp-header-add! [conn :ptr<void> name :cstr value :cstr] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+  if (!nh) return;
+  size_t nl = strlen(name);
+  size_t vl = value ? strlen(value) : 0;
+  nh->name  = (char *)malloc(nl + 1);
+  nh->value = (char *)malloc(vl + 1);
+  if (!nh->name || !nh->value) {
+      if (nh->name)  free(nh->name);
+      if (nh->value) free(nh->value);
+      free(nh);
+      return;
+  }
+  memcpy(nh->name, name, nl); nh->name[nl] = '\0';
+  if (vl > 0) memcpy(nh->value, value, vl);
+  nh->value[vl] = '\0';
+  HttpdHeader *t = (HttpdHeader *)c->resp_headers;
+  if (!t) { c->resp_headers = nh; return; }
+  while (t->next) t = t->next;
+  t->next = nh;
+  ```)
+;; =============================================================================
+;; M2: Cookie middleware (depends on M0)
+;; =============================================================================
+;;
+;; Cookies live as request headers (`Cookie: a=1; b=2`) and response headers
+;; (`Set-Cookie: ...`, possibly repeated).  M2 layers a small read + write
+;; surface on top of M0.
+;;
+;; Read:
+;;   (httpd-req-cookie conn name)    -- parsed value, "" if absent
+;;
+;; Write:
+;;   (httpd-set-cookie! conn opts)   -- emits Set-Cookie via header-add!
+;;   (cookie name value)             -- CookieOpts with sensible defaults
+;;   (cookie-full name value path
+;;                domain max-age
+;;                secure http-only
+;;                same-site)         -- CookieOpts with everything explicit
+;;
+;; Defaults from `cookie`:
+;;   Path=/, no Domain, no Max-Age (session cookie), HttpOnly, SameSite=Lax,
+;;   not Secure (caller must opt in -- typically required on TLS).
+;;; httpd-req-cookie -- read a single cookie value from the Cookie: header.
+;;;
+;;; Parses the request's `Cookie:` header (using httpd-req-header) into
+;;; name=value pairs separated by `;` and returns the value for `name`.
+;;; Case-sensitive on the cookie name (per RFC 6265).
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- cookie name to look up (case-sensitive)
+;;;
+;;; Returns:
+;;;   The cookie's value as a heap-allocated cstr, OR the empty string ""
+;;;   if the header is absent or the cookie is not present.
+;;;
+;;;   NOTE: when the cookie IS found, the returned cstr is a fresh malloc
+;;;   that the runtime treats as per-call ownership; do not free.  When
+;;;   absent the returned pointer is a literal "" and also need not be
+;;;   freed.
+;;;
+;;; Example:
+;;;   (let [sid (httpd-req-cookie c "session")]
+;;;     (if (= (cstr-len sid) 0) ...))
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn httpd-req-cookie [conn :ptr<void> name :cstr] :cstr
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name || !*name) return "";
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  const char *cookie_hdr = NULL;
+  while (h) {
+      if (h->name && strcasecmp(h->name, "Cookie") == 0) {
+          cookie_hdr = h->value ? h->value : "";
+          break;
+      }
+      h = h->next;
+  }
+  if (!cookie_hdr) return "";
+  size_t nlen = strlen(name);
+  const char *p = cookie_hdr;
+  while (*p) {
+      /* Skip leading whitespace / separators. */
+      while (*p == ' ' || *p == '\t' || *p == ';') p++;
+      if (!*p) break;
+      const char *kstart = p;
+      while (*p && *p != '=' && *p != ';') p++;
+      size_t klen = (size_t)(p - kstart);
+      const char *vstart = NULL;
+      size_t vlen = 0;
+      if (*p == '=') {
+          p++;
+          vstart = p;
+          while (*p && *p != ';') p++;
+          vlen = (size_t)(p - vstart);
+      }
+      if (klen == nlen && strncmp(kstart, name, nlen) == 0) {
+          char *out = (char *)malloc(vlen + 1);
+          if (!out) return "";
+          if (vlen > 0) memcpy(out, vstart, vlen);
+          out[vlen] = '\0';
+          return out;
+      }
+  }
+  return "";
+  ```)
+;;; CookieOpts -- fully-specified Set-Cookie attributes.
+;;;
+;;; Field conventions:
+;;;   path       -- "" omits the Path attribute
+;;;   domain     -- "" omits the Domain attribute
+;;;   max-age    -- -1 omits the Max-Age attribute; 0 expires immediately
+;;;   secure     -- 0 / 1: include the "Secure" flag
+;;;   http-only  -- 0 / 1: include the "HttpOnly" flag
+;;;   same-site  -- "" omits; "Lax" / "Strict" / "None" otherwise
+;;;
+;;; Since: Phase H8 (M2)
+
+(defstruct CookieOpts
+  [name      :cstr
+   value     :cstr
+   path      :cstr
+   domain    :cstr
+   max-age   :int
+   secure    :int
+   http-only :int
+   same-site :cstr])
+;;; cookie -- construct a CookieOpts with sensible defaults.
+;;;
+;;; Defaults: Path=/, no Domain, no Max-Age (session cookie), not Secure
+;;; (callers on TLS should opt in via `cookie-full`), HttpOnly,
+;;; SameSite=Lax.
+;;;
+;;; Parameters:
+;;;   name  -- cookie name
+;;;   value -- cookie value
+;;;
+;;; Example:
+;;;   (httpd-set-cookie! c (cookie "session" "abc123"))
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn cookie [name :cstr value :cstr] :CookieOpts
+  (make-struct CookieOpts name value "/" "" -1 0 1 "Lax"))
+;;; cookie-full -- construct a CookieOpts with every attribute explicit.
+;;;
+;;; Use this when the defaults from `cookie` are wrong, e.g. cross-site
+;;; flows that need SameSite=None + Secure, or long-lived cookies that
+;;; need a Max-Age.  See `CookieOpts` for the per-field semantics.
+;;;
+;;; Example:
+;;;   (httpd-set-cookie! c (cookie-full "tracking" "t1" "/api" "example.com"
+;;;                                     3600 1 0 "None"))
+;;;
+;;; Since: Phase H8 (M2)
+
+(defn cookie-full [name :cstr value :cstr path :cstr domain :cstr
+                   max-age :int secure :int http-only :int same-site :cstr] :CookieOpts
+  (make-struct CookieOpts name value path domain max-age secure http-only same-site))
+;;; httpd-set-cookie! -- emit a Set-Cookie response header from a CookieOpts.
+;;;
+;;; Serialises the opts into a single `Set-Cookie` value and appends it
+;;; via `httpd-resp-header-add!`.  Calling this multiple times produces
+;;; multiple Set-Cookie lines, as RFC 6265 requires.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   opts -- CookieOpts value (typically built by `cookie` or `cookie-full`)
+;;;
+;;; Example:
+;;;   (httpd-set-cookie! c (cookie "session" "abc123"))
+;;;
+;;; Since: Phase H8 (M2); requires the DS1 fix in
+;;;        docs/upcoming/defstruct-inline-c-byvalue-callsite-plan.md.
+
+(defn httpd-set-cookie! [conn :ptr<void> opts :CookieOpts] :nil
+  ```c
+  if (!conn) return;
+  const char *cname  = opts.name      ? opts.name      : "";
+  const char *cval   = opts.value     ? opts.value     : "";
+  const char *cpath  = opts.path      ? opts.path      : "";
+  const char *cdom   = opts.domain    ? opts.domain    : "";
+  const char *csame  = opts.same_site ? opts.same_site : "";
+  if (!*cname) return;
+  char buf[2048];
+  int n = snprintf(buf, sizeof(buf), "%s=%s", cname, cval);
+  if (*cpath)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Path=%s",   cpath);
+  if (*cdom)               n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Domain=%s", cdom);
+  if (opts.max_age >= 0)   n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Max-Age=%lld", (long long)opts.max_age);
+  if (opts.secure)         n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; Secure");
+  if (opts.http_only)      n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; HttpOnly");
+  if (*csame)              n += snprintf(buf + n, sizeof(buf) - (size_t)n, "; SameSite=%s", csame);
+  httpd_resp_header_add_((void *)conn, "Set-Cookie", buf);
+  ```)
+;; =============================================================================
+;; M3: Body parsers -- URL-encoded forms + JSON
+;; =============================================================================
+;;
+;; Both parsers branch on the request's `Content-Type:` header (read via
+;; httpd-req-header) and operate over the already-buffered body.
+;;
+;; URL-encoded (application/x-www-form-urlencoded):
+;;   (httpd-req-form conn field)        -- single value, decoded; "" if absent
+;;   (See http-mw-form fixture for usage; key percent-decoding is not yet
+;;    supported -- field names should be plain ASCII.)
+;;
+;; JSON (application/json):
+;;   (httpd-req-json conn)              -- json/decode tree, cached per-iteration
+;;   (mw-json-body next)                -- pre-parse middleware; 400 on malformed
+;;
+;; Both surfaces are pure Turmeric on top of M0; only the JSON cache field
+;; on HttpdConn (req_json_cache) and its iteration-cleanup hook touch the
+;; C core (see httpd-handle).
+;;; httpd-req-form -- look up a single URL-encoded form field by name.
+;;;
+;;; Walks the request body (which must already have been received -- the
+;;; worker reads Content-Length bytes) looking for `name=value` separated
+;;; by `&`. The value is percent-decoded and `+` is converted to ` ` per
+;;; the application/x-www-form-urlencoded convention.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   field -- form field name (case-sensitive, plain ASCII)
+;;;
+;;; Returns:
+;;;   The decoded value as a heap-allocated cstr (per-call ownership;
+;;;   do not free explicitly -- the runtime drops it after the handler
+;;;   returns).  Empty string "" when the field is absent or the body
+;;;   is empty.
+;;;
+;;; Example:
+;;;   (let [user (httpd-req-form c "username")
+;;;         pw   (httpd-req-form c "password")] ...)
+;;;
+;;; Since: Phase H8 (M3)
+
+(defn httpd-req-form [conn :ptr<void> field :cstr] :cstr
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+  } HttpdConn;
+  if (!conn || !field || !*field) return "";
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->body || c->body_len <= 0) return "";
+  size_t flen = strlen(field);
+  const char *p   = c->body;
+  const char *end = c->body + c->body_len;
+  while (p < end) {
+      const char *kstart = p;
+      while (p < end && *p != '=' && *p != '&') p++;
+      size_t klen = (size_t)(p - kstart);
+      const char *vstart = NULL;
+      const char *vend   = NULL;
+      if (p < end && *p == '=') {
+          p++;
+          vstart = p;
+          while (p < end && *p != '&') p++;
+          vend = p;
+      }
+      if (klen == flen && strncmp(kstart, field, flen) == 0) {
+          size_t vlen = vend ? (size_t)(vend - vstart) : 0;
+          char *out = (char *)malloc(vlen + 1);
+          if (!out) return "";
+          size_t oi = 0;
+          for (size_t i = 0; i < vlen; i++) {
+              char ch = vstart[i];
+              if (ch == '+') {
+                  out[oi++] = ' ';
+              } else if (ch == '%' && i + 2 < vlen) {
+                  char hex[3] = { vstart[i+1], vstart[i+2], '\0' };
+                  /* strtoul rejects bad hex -> 0; that's fine here. */
+                  unsigned long uv = strtoul(hex, NULL, 16);
+                  out[oi++] = (char)uv;
+                  i += 2;
+              } else {
+                  out[oi++] = ch;
+              }
+          }
+          out[oi] = '\0';
+          return out;
+      }
+      if (p < end && *p == '&') p++;
+  }
+  return "";
+  ```)
+;;; httpd-req-json -- lazily parse the request body as JSON.
+;;;
+;;; First call invokes `json/decode` on the request body and caches the
+;;; resulting node tree on the connection (req_json_cache).  Subsequent
+;;; calls return the cached pointer.  The iteration cleanup in
+;;; httpd-handle calls `json/free` so handlers never free explicitly.
+;;;
+;;; Returns 0 (nil tree) when the body is absent or json/decode fails
+;;; on the input; use `mw-json-body` if you want a 400 short-circuit on
+;;; malformed JSON.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The parsed JSON node tree as an :int (the json stdlib carrier), or
+;;;   0 when there is no body / parse failed.
+;;;
+;;; Example:
+;;;   (let [doc (httpd-req-json c)
+;;;         nm  (json/get-string (json/get! doc "name"))]
+;;;     (httpd-resp-body! c nm))
+;;;
+;;; Since: Phase H8 (M3)
+
+(defn httpd-req-json [conn :ptr<void>] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+  } HttpdConn;
+  if (!conn) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->req_json_cache) return c->req_json_cache;
+  if (!c->body || c->body_len <= 0) return 0;
+  /* json_decode is the C name for json/decode. */
+  int64_t tree = json_decode(c->body);
+  c->req_json_cache = tree;
+  return tree;
+  ```)
+;;; mw-json-body -- pre-parse the JSON body, 400 on failure.
+;;;
+;;; Wraps a base handler so that, before `next` runs, the request body is
+;;; parsed via httpd-req-json.  On parse failure (json/decode returned 0
+;;; AND the body is non-empty) the middleware sets status 400 with a
+;;; small text body and does NOT call `next`.  On success the cached
+;;; tree is available to the inner handler via httpd-req-json, which
+;;; returns the same pointer.
+;;;
+;;; Tip: only wrap routes that genuinely require a JSON body; an empty
+;;; body or a route that does not expect JSON should not 400.  Check
+;;; `(= "application/json" (httpd-req-header c "Content-Type"))` at the
+;;; route layer if you want stricter gating.
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware base mw-json-body)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M3)
+
+(defn mw-json-body [next :int] :ptr<void>
+  (let [_n next]
+    (fn [c :ptr<void>] :nil
+      (if (= 1 (httpd-mw-json-body-precheck c))
+        (do
+          (httpd-resp-status! c 400)
+          (httpd-resp-body! c "malformed JSON body"))
+        (httpd-call _n c)))))
+;;; httpd-mw-json-body-precheck -- internal: returns 1 when the body is
+;;; non-empty but json/decode failed, 0 otherwise. Used by mw-json-body
+;;; to drive the 400 short-circuit; lives as a fixed-arity helper so the
+;;; if-form inside mw-json-body can stay in Turmeric.
+
+(defn httpd-mw-json-body-precheck [conn :ptr<void>] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+  } HttpdConn;
+  if (!conn) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->body || c->body_len <= 0) return 0;  /* empty body -> not malformed */
+  if (c->req_json_cache) return 0;             /* already parsed once -> ok */
+  int64_t tree = json_decode(c->body);
+  if (tree == 0) return 1;                     /* parse failed -> malformed */
+  c->req_json_cache = tree;
+  return 0;
+  ```)
+;; =============================================================================
+;; M4: CORS middleware -- preflight short-circuit + response decoration
+;; =============================================================================
+;;
+;; mw-cors handles two cases:
+;;
+;;   1. Preflight (an `OPTIONS` request carrying `Access-Control-Request-
+;;      Method`): short-circuit with 204 and the appropriate
+;;      Access-Control-Allow-* headers, without calling `next`.
+;;
+;;   2. Normal request: call `next`, then decorate the response with
+;;      Access-Control-Allow-Origin (and Allow-Credentials / Expose-Headers
+;;      when configured).
+;;
+;; Caveat: `allow-origin = "*"` combined with `allow-credentials = 1` is
+;; INVALID per the CORS spec.  Browsers reject the response and the
+;; request fails.  Either echo the request's `Origin:` or list specific
+;; origins when credentials are required.
+;;; CorsOpts -- mw-cors configuration.
+;;;
+;;; Field conventions:
+;;;   allow-origin      -- single value; "*" for any (no credentials),
+;;;                        or a specific origin
+;;;   allow-methods     -- comma-separated list emitted on preflight
+;;;   allow-headers     -- comma-separated list emitted on preflight
+;;;   expose-headers    -- comma-separated list emitted on normal responses
+;;;                        (or "" to omit)
+;;;   allow-credentials -- 0 / 1; emits Allow-Credentials: true on both paths
+;;;   max-age           -- preflight cache lifetime in seconds, or -1 to omit
+;;;
+;;; Since: Phase H8 (M4)
+
+(defstruct CorsOpts
+  [allow-origin      :cstr
+   allow-methods     :cstr
+   allow-headers     :cstr
+   expose-headers    :cstr
+   allow-credentials :int
+   max-age           :int])
+;;; default-cors-opts -- permissive defaults suitable for development.
+;;;
+;;; allow-origin = "*", standard set of methods, Content-Type allowed,
+;;; no expose-headers, no credentials, no max-age.  Tighten for prod.
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn default-cors-opts [] :CorsOpts
+  (make-struct CorsOpts
+    "*"
+    "GET, POST, PUT, DELETE, OPTIONS"
+    "Content-Type"
+    ""
+    0
+    -1))
+;;; httpd-mw-cors-is-preflight -- internal: 1 iff this is a CORS preflight.
+
+(defn httpd-mw-cors-is-preflight [conn :ptr<void>] :int
+  ```c
+  if (!conn) return 0;
+  const char *m = httpd_req_method((void *)conn);
+  if (!m || strcmp(m, "OPTIONS") != 0) return 0;
+  return httpd_req_header_((void *)conn, "Access-Control-Request-Method");
+  ```)
+;;; httpd-mw-cors-emit-preflight -- internal: write the preflight response.
+;;;
+;;; Takes primitive fields rather than a CorsOpts value to side-step a
+;;; closure-capture codegen issue with by-pointer defstruct params --
+;;; mw-cors destructures opts into primitives so the inner closure env
+;;; stays scalar-only.
+
+(defn httpd-mw-cors-emit-preflight [conn :ptr<void>
+                                    allow-origin :cstr allow-methods :cstr
+                                    allow-headers :cstr allow-credentials :int
+                                    max-age :int] :nil
+  ```c
+  if (!conn) return;
+  httpd_resp_status_((void *)conn, 204);
+  httpd_resp_body_((void *)conn, "");
+  const char *ao = allow_origin  ? allow_origin  : "*";
+  const char *am = allow_methods ? allow_methods : "";
+  const char *ah = allow_headers ? allow_headers : "";
+  httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin",  ao);
+  if (*am) httpd_resp_header_((void *)conn, "Access-Control-Allow-Methods", am);
+  if (*ah) httpd_resp_header_((void *)conn, "Access-Control-Allow-Headers", ah);
+  if (allow_credentials) {
+      httpd_resp_header_((void *)conn, "Access-Control-Allow-Credentials", "true");
+  }
+  if (max_age >= 0) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%lld", (long long)max_age);
+      httpd_resp_header_((void *)conn, "Access-Control-Max-Age", buf);
+  }
+  ```)
+;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
+
+(defn httpd-mw-cors-decorate [conn :ptr<void>
+                              allow-origin :cstr expose-headers :cstr
+                              allow-credentials :int] :nil
+  ```c
+  if (!conn) return;
+  const char *ao = allow_origin   ? allow_origin   : "*";
+  const char *eh = expose_headers ? expose_headers : "";
+  httpd_resp_header_((void *)conn, "Access-Control-Allow-Origin", ao);
+  if (*eh) httpd_resp_header_((void *)conn, "Access-Control-Expose-Headers", eh);
+  if (allow_credentials) {
+      httpd_resp_header_((void *)conn, "Access-Control-Allow-Credentials", "true");
+  }
+  ```)
+;;; mw-cors-with -- CORS middleware factory (positional args).
+;;;
+;;; (mw-cors-with ao am ah eh ac ma) is a one-arg function suitable for
+;;; compose-middleware: given a downstream handler `next`, returns a
+;;; wrapped handler that either short-circuits a preflight or decorates
+;;; the normal response.
+;;;
+;;; The 7-arg shape (incl. `next`) is the positional equivalent of the
+;;; planned `(mw-cors opts :CorsOpts next)` signature.  The defstruct
+;;; surface compiles, but the curried partial application
+;;; `(mw-cors opts)` triggers a codegen bug -- the auto-generated `__pap`
+;;; wrapper stores a `CorsOpts` value into an `int64_t` env field and
+;;; the C compile fails.  Worth filing as a sibling of the
+;;; defstruct-inline-c-byvalue plan.
+;;;
+;;; See `CorsOpts` / `default-cors-opts` for field semantics.
+;;;
+;;; Example:
+;;;   (compose-middleware base
+;;;     (mw-cors-with "https://app.example.com"
+;;;                   "GET, POST, OPTIONS"
+;;;                   "Content-Type, Authorization"
+;;;                   "" 1 60))
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn mw-cors-with [allow-origin :cstr allow-methods :cstr allow-headers :cstr
+                    expose-headers :cstr allow-credentials :int max-age :int
+                    next :int] :ptr<void>
+  (let [_ao allow-origin
+        _am allow-methods
+        _ah allow-headers
+        _eh expose-headers
+        _ac allow-credentials
+        _ma max-age
+        _n  next]
+    (fn [c :ptr<void>] :nil
+      (if (= 1 (httpd-mw-cors-is-preflight c))
+        (httpd-mw-cors-emit-preflight c _ao _am _ah _ac _ma)
+        (do
+          (httpd-call _n c)
+          (httpd-mw-cors-decorate c _ao _eh _ac))))))
+;;; mw-cors -- CORS middleware with permissive defaults.
+;;;
+;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
+;;; `*`, standard methods, Content-Type allowed, no credentials.  Use
+;;; `mw-cors-with` for customised settings.
+;;;
+;;; Example:
+;;;   (compose-middleware base mw-cors)
+;;;
+;;; Since: Phase H8 (M4)
+
+(defn mw-cors [next :int] :ptr<void>
+  (mw-cors-with "*"
+                "GET, POST, PUT, DELETE, OPTIONS"
+                "Content-Type"
+                ""
+                0
+                -1
+                next))
+;; =============================================================================
+;; M5: HTTP Basic Auth middleware
+;; =============================================================================
+;;
+;; mw-basic-auth reads `Authorization: Basic <base64>` from the request,
+;; base64-decodes the user:pass pair, and calls a user-supplied verifier
+;; closure `(fn [user :cstr pass :cstr] :int)`.  On verifier failure the
+;; middleware emits 401 + `WWW-Authenticate: Basic realm="..."` and does
+;; NOT call `next`.
+;;
+;; Security caveats:
+;;
+;; * Basic Auth ships credentials in the clear (the base64 encoding is
+;;   reversible).  Always run behind TLS in production -- see
+;;   `httpd-new-tls` (Phase H5).
+;;
+;; * The verifier closure SHOULD use a constant-time comparison for the
+;;   password check to avoid timing-leak attacks.  `cstr-eq-const-time`
+;;   is provided as a convenience.
+;;; cstr-eq-const-time -- length-then-constant-time XOR cstring compare.
+;;;
+;;; Returns 1 when both strings have the same length AND all bytes match,
+;;; 0 otherwise.  The byte comparison runs over the full length even on
+;;; the first mismatch, hiding the position of the difference from a
+;;; timing observer.  The length check is variable-time (different
+;;; lengths => clearly different secrets), which is the standard
+;;; trade-off for cstring credential checks.
+;;;
+;;; Since: Phase H8 (M5)
+
+(defn cstr-eq-const-time [a :cstr b :cstr] :int
+  ```c
+  if (!a || !b) return 0;
+  size_t la = strlen(a);
+  size_t lb = strlen(b);
+  if (la != lb) return 0;
+  unsigned char diff = 0;
+  for (size_t i = 0; i < la; i++) diff |= (unsigned char)(a[i] ^ b[i]);
+  return diff == 0 ? 1 : 0;
+  ```)
+;;; httpd-mw-basic-auth-check -- internal: decode + dispatch the verifier.
+
+(defn httpd-mw-basic-auth-check [conn :ptr<void> verifier :int] :int
+  ```c
+  if (!conn || !verifier) return 0;
+  const char *hdr = httpd_req_header((void *)conn, "Authorization");
+  if (!hdr || !*hdr) return 0;
+  /* Must start with "Basic ", case-insensitive. */
+  if (strncasecmp(hdr, "Basic ", 6) != 0) return 0;
+  const char *b64 = hdr + 6;
+  while (*b64 == ' ') b64++;
+  size_t blen = strlen(b64);
+  if (blen == 0) return 0;
+  /* Base64-decode into a per-call heap buffer.  Output size <= input size. */
+  static const signed char b64tab[256] = {
+      /* fill with -1 except for valid base64 chars; we use a runtime init */
+      [0 ... 255] = -1
+  };
+  /* Designated initializers with ranges are a GNU extension; rebuild as
+   * a one-shot runtime table to stay portable. */
+  signed char tab[256];
+  for (int i = 0; i < 256; i++) tab[i] = -1;
+  for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
+  for (int i = 'a'; i <= 'z'; i++) tab[i] = (signed char)(i - 'a' + 26);
+  for (int i = '0'; i <= '9'; i++) tab[i] = (signed char)(i - '0' + 52);
+  tab[(int)'+'] = 62;
+  tab[(int)'/'] = 63;
+  char *raw = (char *)malloc(blen + 1);
+  if (!raw) return 0;
+  size_t   out  = 0;
+  uint32_t buf  = 0;
+  int      bits = 0;
+  for (size_t i = 0; i < blen; i++) {
+      char ch = b64[i];
+      if (ch == '=' || ch == ' ' || ch == '\r' || ch == '\n') continue;
+      signed char v = tab[(unsigned char)ch];
+      if (v < 0) { free(raw); return 0; }   /* malformed */
+      buf = (buf << 6) | (uint32_t)v;
+      bits += 6;
+      if (bits >= 8) {
+          bits -= 8;
+          raw[out++] = (char)((buf >> bits) & 0xFFu);
+      }
+  }
+  raw[out] = '\0';
+  /* Split on the first ':' -- everything before is user, after is pass. */
+  char *colon = (char *)memchr(raw, ':', out);
+  if (!colon) { free(raw); return 0; }
+  *colon = '\0';
+  const char *user = raw;
+  const char *pass = colon + 1;
+  /* Call verifier (fat closure taking two cstr args, returning int). */
+  int64_t *fat = (int64_t *)(intptr_t)verifier;
+  typedef int64_t (*fn2_t)(void *, const char *, const char *);
+  int64_t ok = ((fn2_t)(intptr_t)fat[0])((void *)fat, user, pass);
+  free(raw);
+  return (int)(ok ? 1 : 0);
+  ```)
+;;; httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate.
+
+(defn httpd-mw-basic-auth-challenge [conn :ptr<void> realm :cstr] :nil
+  ```c
+  if (!conn) return;
+  httpd_resp_status_((void *)conn, 401);
+  httpd_resp_body_((void *)conn, "Unauthorized");
+  char buf[256];
+  const char *r = (realm && *realm) ? realm : "restricted";
+  snprintf(buf, sizeof(buf), "Basic realm=\"%s\"", r);
+  httpd_resp_header_((void *)conn, "WWW-Authenticate", buf);
+  ```)
+;;; mw-basic-auth -- HTTP Basic Auth middleware factory.
+;;;
+;;; `realm` is the value placed in the `WWW-Authenticate: Basic
+;;; realm="..."` challenge.  `verifier` is a fat closure of type
+;;; `(fn [user :cstr pass :cstr] :int)` returning 1 to authorise and
+;;; 0 to reject.  Use `cstr-eq-const-time` in the verifier body for the
+;;; password check.
+;;;
+;;; ALWAYS run Basic Auth behind TLS (see `httpd-new-tls`); the encoding
+;;; is reversible and traverses the wire in clear text otherwise.
+;;;
+;;; Example:
+;;;   (let [_dummy 0
+;;;         verify (fn [u :cstr p :cstr] :int
+;;;                  (if (= 1 (cstr-eq-const-time u "admin"))
+;;;                    (cstr-eq-const-time p "s3cret")
+;;;                    0))
+;;;         composed (compose-middleware base (mw-basic-auth "app" verify))]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M5)
+
+(defn mw-basic-auth [realm :cstr verifier :int next :int] :ptr<void>
+  (let [_r realm
+        _v verifier
+        _n next]
+    (fn [c :ptr<void>] :nil
+      (if (= 1 (httpd-mw-basic-auth-check c _v))
+        (httpd-call _n c)
+        (httpd-mw-basic-auth-challenge c _r)))))
+;; =============================================================================
+;; M7: Multipart form-data parser
+;; =============================================================================
+;;
+;; Parses `multipart/form-data` request bodies into a per-iteration linked
+;; list of HttpdPart records kept on the conn (req_multipart_parts).
+;; Parsing is lazy: the first call to httpd-req-file (or
+;; httpd-req-multipart-count) triggers the walk.
+;;
+;; Surface:
+;;   (httpd-req-file conn field)        -- handle (:ptr<void>) of part
+;;                                         with form-field name = `field`,
+;;                                         or 0 when absent
+;;   (httpd-part-name part)             -- form field name
+;;   (httpd-part-filename part)         -- file name attribute, or ""
+;;   (httpd-part-content-type part)     -- "text/plain" / "application/octet-stream" / ...
+;;   (httpd-part-data part)             -- raw bytes buffer (:ptr<void>)
+;;   (httpd-part-data-len part)         -- byte count (:int)
+;;
+;; The Part struct is defined in C only; callers see opaque pointers and
+;; go through the accessors above.  This avoids the defstruct-by-value
+;; codegen issues that bit M2 / M4 and keeps the API binary-safe (Part
+;; data is raw bytes, not a cstr -- it may contain embedded NULs).
+;;
+;; Limits:
+;;   - Body size is already bounded by Content-Length at the worker
+;;     read.  The parser additionally caps the number of parts at 64
+;;     to defend against pathological inputs.
+;;; httpd-req-multipart-parse -- internal: parse the body on first access.
+;;; Returns 1 on success (parts list populated), 0 on absent / malformed
+;;; / non-multipart content.
+
+(defn httpd-req-multipart-parse [conn :ptr<void>] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+  } HttpdConn;
+  if (!conn) return 0;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->req_multipart_parts) return 1;
+  if (!c->body || c->body_len <= 0) return 0;
+  /* Extract boundary from Content-Type. */
+  const char *ct = httpd_req_header((void *)conn, "Content-Type");
+  if (!ct || !*ct) return 0;
+  const char *bk = strstr(ct, "boundary=");
+  if (!bk) return 0;
+  bk += 9;
+  /* Boundary may be quoted; strip if so. */
+  char boundary[128];
+  size_t bi = 0;
+  if (*bk == '"') {
+      bk++;
+      while (*bk && *bk != '"' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
+  } else {
+      while (*bk && *bk != ';' && *bk != ' ' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
+  }
+  boundary[bi] = '\0';
+  if (bi == 0) return 0;
+  /* Build the full delimiter "--<boundary>". */
+  char delim[140];
+  int dlen = snprintf(delim, sizeof(delim), "--%s", boundary);
+  if (dlen <= 0) return 0;
+  HttpdPart *head = NULL;
+  HttpdPart *tail = NULL;
+  int n_parts = 0;
+  /* Find the first "--<boundary>" in the body. */
+  const char *p   = c->body;
+  const char *end = c->body + c->body_len;
+  const char *pos = strstr(p, delim);
+  if (!pos) return 0;
+  pos += dlen;
+  while (pos < end && n_parts < 64) {
+      /* Skip optional CRLF; "--" suffix means terminating delimiter. */
+      if (pos + 1 < end && pos[0] == '-' && pos[1] == '-') break;
+      while (pos < end && (*pos == '\r' || *pos == '\n')) pos++;
+      /* Parse part headers until blank line. */
+      char *p_name = NULL, *p_filename = NULL, *p_ctype = NULL;
+      while (pos < end) {
+          const char *eol = strstr(pos, "\r\n");
+          if (!eol || eol == pos) {
+              /* Blank line terminates headers. */
+              if (eol == pos) pos += 2;
+              break;
+          }
+          size_t llen = (size_t)(eol - pos);
+          if (llen >= 19 && strncasecmp(pos, "Content-Disposition", 19) == 0) {
+              /* Look for name="..." and filename="..." within this line. */
+              const char *nk = strstr(pos, "name=\"");
+              if (nk && nk < eol) {
+                  nk += 6;
+                  const char *nend = (const char *)memchr(nk, '"', (size_t)(eol - nk));
+                  if (nend) {
+                      size_t nl = (size_t)(nend - nk);
+                      p_name = (char *)malloc(nl + 1);
+                      if (p_name) { memcpy(p_name, nk, nl); p_name[nl] = '\0'; }
+                  }
+              }
+              const char *fk = strstr(pos, "filename=\"");
+              if (fk && fk < eol) {
+                  fk += 10;
+                  const char *fend = (const char *)memchr(fk, '"', (size_t)(eol - fk));
+                  if (fend) {
+                      size_t fl = (size_t)(fend - fk);
+                      p_filename = (char *)malloc(fl + 1);
+                      if (p_filename) { memcpy(p_filename, fk, fl); p_filename[fl] = '\0'; }
+                  }
+              }
+          } else if (llen >= 12 && strncasecmp(pos, "Content-Type", 12) == 0) {
+              const char *colon = (const char *)memchr(pos, ':', llen);
+              if (colon) {
+                  const char *vs = colon + 1;
+                  while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
+                  size_t vl = (size_t)(eol - vs);
+                  p_ctype = (char *)malloc(vl + 1);
+                  if (p_ctype) { memcpy(p_ctype, vs, vl); p_ctype[vl] = '\0'; }
+              }
+          }
+          pos = eol + 2;
+      }
+      /* Now `pos` points at the part body. Find the next "--<boundary>"
+       * preceded by CRLF (multipart boundaries are always on their own
+       * line within the body). */
+      char crlf_delim[144];
+      snprintf(crlf_delim, sizeof(crlf_delim), "\r\n%s", delim);
+      const char *bend = strstr(pos, crlf_delim);
+      if (!bend) {
+          if (p_name) free(p_name);
+          if (p_filename) free(p_filename);
+          if (p_ctype) free(p_ctype);
+          break;
+      }
+      size_t blen = (size_t)(bend - pos);
+      HttpdPart *part = (HttpdPart *)calloc(1, sizeof(HttpdPart));
+      if (!part) {
+          if (p_name) free(p_name);
+          if (p_filename) free(p_filename);
+          if (p_ctype) free(p_ctype);
+          break;
+      }
+      part->name         = p_name     ? p_name     : NULL;
+      part->filename     = p_filename ? p_filename : NULL;
+      part->content_type = p_ctype    ? p_ctype    : NULL;
+      part->data         = (char *)malloc(blen + 1);
+      if (part->data) {
+          if (blen > 0) memcpy(part->data, pos, blen);
+          part->data[blen] = '\0';
+          part->data_len = (int)blen;
+      }
+      if (!head) head = part;
+      if (tail)  tail->next = part;
+      tail = part;
+      n_parts++;
+      pos = bend + 2 + (size_t)dlen;  /* skip "\r\n" + "--<boundary>" */
+  }
+  c->req_multipart_parts = head;
+  return head ? 1 : 0;
+  ```)
+;;; httpd-req-file -- look up a multipart part by form field name.
+;;;
+;;; Triggers a lazy parse of the request body on first call; subsequent
+;;; calls reuse the cached part list (freed in the iteration cleanup).
+;;;
+;;; Returns an opaque part handle (`:ptr<void>`) usable with the
+;;; httpd-part-* accessors, or `0` (NULL) when the field is absent / the
+;;; body is not multipart / parsing failed.
+;;;
+;;; Example:
+;;;   (let [p (httpd-req-file c "upload")]
+;;;     (when (not= 0 p)
+;;;       (println (httpd-part-filename p))
+;;;       (println (int->cstr (httpd-part-data-len p)))))
+;;;
+;;; Since: Phase H8 (M7)
+
+(defn httpd-req-file [conn :ptr<void> field :cstr] :ptr<void>
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+  } HttpdConn;
+  if (!conn || !field || !*field) return NULL;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->req_multipart_parts) {
+      /* Trigger lazy parse via the Turmeric entry point.  C-level call
+       * works fine: the function name is `httpd_req_multipart_parse`. */
+      (void)httpd_req_multipart_parse((void *)conn);
+  }
+  HttpdPart *p = (HttpdPart *)c->req_multipart_parts;
+  while (p) {
+      if (p->name && strcmp(p->name, field) == 0) return (void *)p;
+      p = p->next;
+  }
+  return NULL;
+  ```)
+;;; httpd-part-name -- form field name of a part (or "" if missing).
+
+(defn httpd-part-name [part :ptr<void>] :cstr
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return "";
+  HttpdPart *p = (HttpdPart *)part;
+  return p->name ? p->name : "";
+  ```)
+;;; httpd-part-filename -- file name attribute (or "" for non-file parts).
+
+(defn httpd-part-filename [part :ptr<void>] :cstr
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return "";
+  HttpdPart *p = (HttpdPart *)part;
+  return p->filename ? p->filename : "";
+  ```)
+;;; httpd-part-content-type -- per-part Content-Type (or "" if absent).
+
+(defn httpd-part-content-type [part :ptr<void>] :cstr
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return "";
+  HttpdPart *p = (HttpdPart *)part;
+  return p->content_type ? p->content_type : "";
+  ```)
+;;; httpd-part-data -- raw byte buffer (binary-safe, may contain NUL).
+
+(defn httpd-part-data [part :ptr<void>] :ptr<void>
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return NULL;
+  HttpdPart *p = (HttpdPart *)part;
+  return (void *)p->data;
+  ```)
+;;; httpd-part-data-len -- byte count of the part's content.
+
+(defn httpd-part-data-len [part :ptr<void>] :int
+  ```c typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  if (!part) return 0;
+  HttpdPart *p = (HttpdPart *)part;
+  return (int64_t)p->data_len;
+  ```)
+;; =============================================================================
+;; A0 + A1: Asynchronous server (fiber-per-request on a reactor)
+;; =============================================================================
+;;
+;; The blocking server (`httpd-new`/`httpd-new-pool`) ties up a worker
+;; thread for the lifetime of each request. The async server runs one
+;; reactor thread bound to a single `local-fiber-group`; each accepted
+;; connection becomes a fiber that uses non-blocking I/O and parks on
+;; the reactor when it would block. A handler can ALSO park explicitly
+;; via the `httpd-await-*` primitives -- e.g., on a timer or another
+;; fd -- which frees the reactor thread to drive other in-flight
+;; fibers (the whole point of going async; see plan motivation).
+;;
+;; Surface:
+;;   (httpd-new-async port handler)    -- create reactor + group + listener
+;;   (httpd-run-async h)               -- drive fibers until stopped
+;;   (httpd-stop-async h)              -- request a graceful shutdown
+;;   (httpd-async-free h)              -- tear down state
+;;
+;; Inside a handler (running as a fiber):
+;;   (httpd-await-readable conn)       -- suspend until conn fd is readable
+;;   (httpd-await-writable conn)       -- suspend until conn fd is writable
+;;   (httpd-await-timer conn ms)       -- suspend for ms milliseconds
+;;
+;; The blocking thread-pool path is untouched; async is opt-in.
+;;
+;; Threading: the resolved OQ3 picks a single reactor + one fiber group.
+;; Sharding into a pool of reactor threads is a measured follow-up.
+;;; httpd-async-fiber-body -- internal: per-request fiber entry point.
+;;;
+;;; Runs the non-blocking version of httpd-handle on the accepted fd:
+;;; sets O_NONBLOCK, reads up to end-of-headers (parking on EWOULDBLOCK),
+;;; reads body, dispatches the handler, writes the response (parking on
+;;; EWOULDBLOCK), and loops on keep-alive.  Mirrors httpd-handle.
+
+(defn httpd-async-fiber-body [self :ptr<void> user-data :ptr<void>] :nil
+  ```c #include <fcntl.h>
+  #include <errno.h>
+  (void)self;
+  /* HttpdAsync layout (kept in sync with httpd-new-async below). */
+  typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  typedef struct {
+      int   fd;
+      int64_t handler;
+      void *fiber_group;
+      void *async;
+  } HttpdAsyncReqCtx;
+  /* A4: HttpdAsync layout (only the in_flight field is read here; the
+   * struct's full shape is asserted in httpd-new-async). */
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group_;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;
+      int   in_flight;
+  } HttpdAsync;
+  if (!user_data) return;
+  HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)user_data;
+  int fd = ctx->fd;
+  int64_t handler = ctx->handler;
+  void *group = ctx->fiber_group;
+  HttpdAsync *async = (HttpdAsync *)ctx->async;
+  free(ctx);
+  /* Ensure the fd is non-blocking; the listener may have inherited
+   * blocking semantics on some platforms. */
+  {
+      int cflags = fcntl(fd, F_GETFL, 0);
+      fcntl(fd, F_SETFL, cflags | O_NONBLOCK);
+  }
+  int keep_going = 1;
+  while (keep_going) {
+      HttpdConn _conn;
+      HttpdConn *conn = &_conn;
+      memset(conn, 0, sizeof(HttpdConn));
+      conn->fd = fd;
+      conn->handler = handler;
+      conn->fiber_group = group;
+      /* --- Read until end-of-headers --- */
+      size_t buf_cap = 8192;
+      size_t buf_max = 262144;
+      char  *buf     = (char *)malloc(buf_cap);
+      if (!buf) break;
+      buf[0] = '\0';
+      int total = 0;
+      char *hdr_end = NULL;
+      while (!hdr_end) {
+          if ((size_t)total + 1 >= buf_cap) {
+              if (buf_cap >= buf_max) break;
+              size_t new_cap = buf_cap * 2;
+              if (new_cap > buf_max) new_cap = buf_max;
+              char *nb = (char *)realloc(buf, new_cap);
+              if (!nb) break;
+              buf = nb;
+              buf_cap = new_cap;
+          }
+          ssize_t n = recv(fd, buf + total, buf_cap - 1 - (size_t)total, 0);
+          if (n < 0) {
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                  /* Park until readable; -1 = wait forever. */
+                  int ev = (int)tur_local_park_fd(group, fd, 1, -1);
+                  if (ev < 0) break;   /* fiber-driver error */
+                  continue;
+              }
+              break;
+          }
+          if (n == 0) break;   /* peer closed */
+          total += (int)n;
+          buf[total] = '\0';
+          hdr_end = strstr(buf, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+      }
+      if (!hdr_end) { free(buf); break; }
+      int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
+      int hdrs_total  = (int)(hdr_end - buf) + hdr_sep_len;
+      /* Request line + headers parsing -- identical to the blocking
+       * httpd-handle. Inlined here to avoid threading large state
+       * through a separate call. */
+      char *line_end = strpbrk(buf, "\r\n");
+      if (!line_end || line_end > buf + total) line_end = buf + total;
+      char *p = buf;
+      if (p < line_end) {
+          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+          if (sp) {
+              int l = (int)(sp - p);
+              if (l > 0 && l < 15) { memcpy(conn->method, p, (size_t)l); conn->method[l] = '\0'; }
+              p = sp + 1;
+          }
+      }
+      if (p < line_end) {
+          char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
+          if (sp) {
+              int l = (int)(sp - p);
+              if (l > 0 && l < 1023) { memcpy(conn->path, p, (size_t)l); conn->path[l] = '\0'; }
+              p = sp + 1;
+              char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
+              if (!vlen_end) vlen_end = line_end;
+              int vl = (int)(vlen_end - p);
+              if (vl > 0 && vl < 15) { memcpy(conn->version, p, (size_t)vl); conn->version[vl] = '\0'; }
+          } else {
+              int l = (int)(line_end - p);
+              if (l > 0 && l < 1023) { memcpy(conn->path, p, (size_t)l); conn->path[l] = '\0'; }
+          }
+      }
+      int is_http_11   = (strstr(conn->version, "1.1") != NULL);
+      int conn_keep    = is_http_11;
+      int conn_close   = 0;
+      int content_len  = 0;
+      HttpdHeader *req_tail = NULL;
+      char *h = strpbrk(buf, "\r\n");
+      if (h) {
+          while (h[0] == '\r' || h[0] == '\n') h++;
+          while (h < hdr_end) {
+              char *eol = strpbrk(h, "\r\n");
+              if (!eol || eol > hdr_end) eol = hdr_end;
+              if (eol > h) {
+                  char *colon = (char *)memchr(h, ':', (size_t)(eol - h));
+                  if (colon) {
+                      int name_len = (int)(colon - h);
+                      char *val = colon + 1;
+                      while (val < eol && (*val == ' ' || *val == '\t')) val++;
+                      int val_len = (int)(eol - val);
+                      if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
+                          if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
+                          if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
+                      } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
+                          content_len = (int)strtol(val, NULL, 10);
+                          if (content_len < 0) content_len = 0;
+                      }
+                      if (name_len > 0) {
+                          HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+                          if (rh) {
+                              rh->name  = (char *)malloc((size_t)name_len + 1);
+                              rh->value = (char *)malloc((size_t)val_len  + 1);
+                              if (rh->name && rh->value) {
+                                  memcpy(rh->name, h, (size_t)name_len); rh->name[name_len] = '\0';
+                                  if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
+                                  rh->value[val_len] = '\0';
+                                  if (req_tail) { req_tail->next = rh; req_tail = rh; }
+                                  else { conn->req_headers = rh; req_tail = rh; }
+                              } else {
+                                  if (rh->name) free(rh->name);
+                                  if (rh->value) free(rh->value);
+                                  free(rh);
+                              }
+                          }
+                      }
+                  }
+              }
+              if (eol >= hdr_end) break;
+              h = eol;
+              while (h < hdr_end && (h[0] == '\r' || h[0] == '\n')) h++;
+          }
+      }
+      conn->client_keep_alive = (conn_keep && !conn_close);
+      /* Body (await on EWOULDBLOCK). */
+      if (content_len > 0) {
+          int body_in_buf = total - hdrs_total;
+          if (body_in_buf < 0) body_in_buf = 0;
+          if (body_in_buf > content_len) body_in_buf = content_len;
+          conn->body = (char *)malloc((size_t)content_len + 1);
+          if (conn->body) {
+              if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
+              int need = content_len - body_in_buf;
+              int got  = body_in_buf;
+              while (need > 0) {
+                  ssize_t r = recv(fd, conn->body + got, (size_t)need, 0);
+                  if (r < 0) {
+                      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                          int ev = (int)tur_local_park_fd(group, fd, 1, -1);
+                          if (ev < 0) break;
+                          continue;
+                      }
+                      break;
+                  }
+                  if (r == 0) break;
+                  got  += (int)r;
+                  need -= (int)r;
+              }
+              conn->body[got] = '\0';
+              conn->body_len = got;
+          }
+      }
+      free(buf);
+      /* Dispatch handler. */
+      int64_t *fat = (int64_t *)(intptr_t)conn->handler;
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+      /* Build response header block (same as httpd-handle's writer). */
+      int status = conn->resp_status ? conn->resp_status : 200;
+      const char *stxt = (status == 200) ? "OK" :
+                         (status == 201) ? "Created" :
+                         (status == 204) ? "No Content" :
+                         (status == 400) ? "Bad Request" :
+                         (status == 401) ? "Unauthorized" :
+                         (status == 404) ? "Not Found" :
+                         (status == 500) ? "Internal Server Error" : "OK";
+      const char *body  = conn->resp_body ? conn->resp_body : "";
+      int         blen  = conn->resp_body ? conn->resp_body_len : 0;
+      const char *ver   = is_http_11 ? "HTTP/1.1" : "HTTP/1.0";
+      const char *chdr  = conn->client_keep_alive ? "keep-alive" : "close";
+      int has_content_type = 0;
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) { has_content_type = 1; break; }
+              rh = rh->next;
+          }
+      }
+      size_t hbuf_cap = 1024;
+      char  *hbuf     = (char *)malloc(hbuf_cap);
+      if (!hbuf) goto __async_cleanup;
+      int hlen = snprintf(hbuf, hbuf_cap,
+          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
+          ver, status, stxt, blen, chdr);
+      if (!has_content_type) {
+          if ((size_t)(hlen + 64) > hbuf_cap) {
+              size_t nc = hbuf_cap * 2;
+              char *nh = (char *)realloc(hbuf, nc);
+              if (nh) { hbuf = nh; hbuf_cap = nc; }
+          }
+          hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+              "Content-Type: text/plain; charset=utf-8\r\n");
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (!rh->name || strcasecmp(rh->name, "Content-Length") == 0) {
+                  rh = rh->next; continue;
+              }
+              size_t nlen = strlen(rh->name);
+              size_t vlen = rh->value ? strlen(rh->value) : 0;
+              size_t need = (size_t)hlen + nlen + vlen + 8;
+              if (need > hbuf_cap) {
+                  size_t nc = hbuf_cap;
+                  while (nc < need) nc *= 2;
+                  char *nh = (char *)realloc(hbuf, nc);
+                  if (!nh) break;
+                  hbuf = nh; hbuf_cap = nc;
+              }
+              hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+                  "%s: %s\r\n", rh->name, rh->value ? rh->value : "");
+              rh = rh->next;
+          }
+      }
+      if ((size_t)hlen + 3 > hbuf_cap) {
+          char *nh = (char *)realloc(hbuf, (size_t)hlen + 3);
+          if (nh) { hbuf = nh; hbuf_cap = (size_t)hlen + 3; }
+      }
+      hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen, "\r\n");
+      /* Non-blocking write loop -- park on EWOULDBLOCK. */
+      {
+          int sent = 0;
+          while (sent < hlen) {
+              ssize_t w = send(fd, hbuf + sent, (size_t)(hlen - sent), 0);
+              if (w < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);  /* WRITE */
+                      if (ev < 0) break;
+                      continue;
+                  }
+                  break;
+              }
+              sent += (int)w;
+          }
+      }
+      if (blen > 0) {
+          int sent = 0;
+          while (sent < blen) {
+              ssize_t w = send(fd, body + sent, (size_t)(blen - sent), 0);
+              if (w < 0) {
+                  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);
+                      if (ev < 0) break;
+                      continue;
+                  }
+                  break;
+              }
+              sent += (int)w;
+          }
+      }
+      free(hbuf);
+      keep_going = conn->client_keep_alive;
+  __async_cleanup:
+      if (conn->body)      free(conn->body);
+      if (conn->resp_body) free(conn->resp_body);
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->req_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+      }
+      if (conn->req_json_cache) { json_free(conn->req_json_cache); conn->req_json_cache = 0; }
+  }
+  close(fd);
+  /* A4: release the in-flight slot. */
+  if (async) async->in_flight--;
+  ```)
+;;; httpd-async-accept-cb -- internal: reactor READ callback on the listen fd.
+;;;
+;;; Drains accept() and spawns a fiber per accepted connection. Honors
+;;; the A4 in-flight cap: when ha->in_flight >= ha->max_in_flight,
+;;; sends a quick HTTP/1.0 503 and closes instead of spawning.
+
+(defn httpd-async-accept-cb [env :ptr<void> id :int events :int user :ptr<void>] :nil
+  ```c (void)id; (void)events; (void)user;
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;       /* fat closure handle for httpd-async-fiber-body */
+      volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
+  } HttpdAsync;
+  typedef struct {
+      int   fd;
+      int64_t handler;
+      void *fiber_group;
+      void *async;                /* HttpdAsync*, for in_flight decrement on exit */
+  } HttpdAsyncReqCtx;
+  int64_t *fat = (int64_t *)env;
+  HttpdAsync *ha = (HttpdAsync *)(intptr_t)fat[1];
+  if (!ha || ha->stop_flag) return;
+  for (;;) {
+      int cfd = accept(ha->listen_fd, NULL, NULL);
+      if (cfd < 0) break;
+      /* A4: cap check.  When at cap, send 503 + close without spawning. */
+      if (ha->max_in_flight > 0 && ha->in_flight >= ha->max_in_flight) {
+          const char *resp =
+              "HTTP/1.0 503 Service Unavailable\r\n"
+              "Content-Length: 19\r\n"
+              "Connection: close\r\n"
+              "\r\n"
+              "server at capacity\n";
+          (void)send(cfd, resp, strlen(resp), 0);
+          close(cfd);
+          continue;
+      }
+      HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)malloc(sizeof(HttpdAsyncReqCtx));
+      if (!ctx) { close(cfd); continue; }
+      ctx->fd          = cfd;
+      ctx->handler     = ha->handler;
+      ctx->fiber_group = ha->fiber_group;
+      ctx->async       = (void *)ha;
+      int rc = (int)tur_local_spawn(ha->fiber_group, ha->body_closure, (void *)ctx);
+      if (rc < 0) { free(ctx); close(cfd); continue; }
+      ha->in_flight++;
+  }
+  ```)
+;;; httpd-new-async -- create an async (fiber-per-request) httpd handle.
+;;;
+;;; Binds the listener to a single-thread reactor + LocalFiberGroup.
+;;; Each accepted connection runs as a fiber that uses non-blocking I/O
+;;; and parks on the reactor when it would block; handlers may also
+;;; park explicitly via the httpd-await-* primitives.
+;;;
+;;; Parameters:
+;;;   port    -- TCP port to listen on (0 = kernel-assigned)
+;;;   handler -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;
+;;; Returns:
+;;;   ptr<void> -- HttpdAsync handle (or NULL on error)
+;;;
+;;; Lifecycle:
+;;;   (let [h (httpd-new-async 0 handler)]
+;;;     (httpd-run-async h)         ;; blocks until httpd-stop-async fires
+;;;     (httpd-async-free h))
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-new-async-with-limit [port :int handler :int max-in-flight :int] :ptr<void>
+  ```c #include <fcntl.h>
+  typedef void (*tur_sig_fn)(int);
+  extern tur_sig_fn signal(int, tur_sig_fn);
+  signal(13, (tur_sig_fn)(intptr_t)1);  /* SIGPIPE -> SIG_IGN */
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
+  } HttpdAsync;
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port        = htons((uint16_t)port);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
+  if (!ha) { close(fd); return NULL; }
+  ha->listen_fd     = fd;
+  ha->handler       = handler;
+  ha->max_in_flight = (int)max_in_flight;
+  ha->reactor       = tur_reactor_new();
+  if (!ha->reactor) { close(fd); free(ha); return NULL; }
+  ha->fiber_group = tur_local_fiber_group_new(ha->reactor);
+  if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  /* Synthetic fat closure for the accept callback: { __fn, ha }. */
+  int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
+  if (!clos) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  clos[0] = (int64_t)(intptr_t)httpd_async_accept_cb;
+  clos[1] = (int64_t)(intptr_t)ha;
+  ha->accept_clos = (void *)clos;
+  /* Synthetic fat closure for the fiber body. */
+  int64_t *body_clos = (int64_t *)malloc(2 * sizeof(int64_t));
+  if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  body_clos[0] = (int64_t)(intptr_t)httpd_async_fiber_body;
+  body_clos[1] = 0;
+  ha->body_closure = (int64_t)(intptr_t)body_clos;
+  ha->listen_src_id = (int)tur_reactor_add_fd(ha->reactor, fd, 1,
+      (int64_t)(intptr_t)clos, NULL);
+  if (ha->listen_src_id < 0) {
+      free(body_clos); free(clos);
+      tur_reactor_free(ha->reactor);
+      close(fd); free(ha); return NULL;
+  }
+  return (void *)ha;
+  ```)
+;;; httpd-new-async -- create an async server with no in-flight cap.
+;;;
+;;; Shortcut for `(httpd-new-async-with-limit port handler 0)`.  Use
+;;; the -with-limit variant in production to cap concurrent requests.
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-new-async [port :int handler :int] :ptr<void>
+  (httpd-new-async-with-limit port handler 0))
+;;; httpd-run-async -- drive the async server until stopped.
+;;;
+;;; Blocks the calling thread, running the fiber-per-request loop.
+;;; Returns when httpd-stop-async fires (or the reactor exits for any
+;;; other reason).
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-run-async [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
+  } HttpdAsync;
+  if (!h) return;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  (void)tur_reactor_run_fibers(ha->fiber_group);
+  ```)
+;;; httpd-stop-async -- request a graceful shutdown of the async server.
+;;;
+;;; Sets the stop flag, removes the listener source from the reactor,
+;;; and wakes the reactor so httpd-run-async returns.  In-flight fibers
+;;; finish naturally when their reads/writes complete.
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-stop-async [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
+  } HttpdAsync;
+  if (!h) return;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  ha->stop_flag = 1;
+  if (ha->listen_src_id >= 0) {
+      tur_reactor_remove(ha->reactor, ha->listen_src_id);
+      ha->listen_src_id = -1;
+  }
+  tur_reactor_stop(ha->reactor);
+  tur_reactor_wake(ha->reactor);
+  ```)
+;;; httpd-async-free -- tear down an async server handle.
+;;;
+;;; Free the fiber group, reactor, and synthetic closures.  Call only
+;;; after httpd-run-async has returned.
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-async-free [h :ptr<void>] :nil
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
+  } HttpdAsync;
+  if (!h) return;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  if (ha->fiber_group) tur_local_fiber_group_free(ha->fiber_group);
+  if (ha->reactor) tur_reactor_free(ha->reactor);
+  if (ha->accept_clos) free(ha->accept_clos);
+  if (ha->body_closure) free((void *)(intptr_t)ha->body_closure);
+  if (ha->listen_fd >= 0) close(ha->listen_fd);
+  free(ha);
+  ```)
+;;; httpd-async-port -- read the bound TCP port on an async server.
+;;;
+;;; Useful when port=0 was passed to httpd-new-async (kernel-assigned).
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-async-port [h :ptr<void>] :int
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
+  } HttpdAsync;
+  if (!h) return 0;
+  HttpdAsync *ha = (HttpdAsync *)h;
+  struct sockaddr_in sa;
+  socklen_t sl = sizeof(sa);
+  if (getsockname(ha->listen_fd, (struct sockaddr *)&sa, &sl) < 0) return 0;
+  return (int64_t)ntohs(sa.sin_port);
+  ```)
+;;; httpd-await-readable -- suspend the current fiber until conn fd is readable.
+;;;
+;;; Wraps `local-park-fd` for the READ event with no timeout. Must be
+;;; called from inside a request fiber spawned by httpd-new-async; in
+;;; the blocking thread-pool path it is a no-op (the fiber group is
+;;; NULL).
+;;;
+;;; Since: Phase H8 (A0)
+
+(defn httpd-await-readable [conn :ptr<void>] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->fiber_group) return;
+  (void)tur_local_park_fd(c->fiber_group, c->fd, 1, -1);
+  ```)
+;;; httpd-await-writable -- suspend until conn fd is writable.
+
+(defn httpd-await-writable [conn :ptr<void>] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->fiber_group) return;
+  (void)tur_local_park_fd(c->fiber_group, c->fd, 2, -1);
+  ```)
+;;; httpd-await-timer -- suspend the current fiber for ms milliseconds.
+;;;
+;;; Built on local-park-fd with timeout-only: the reactor still polls
+;;; the conn fd (no events of interest); when the timeout elapses the
+;;; fiber resumes.  Suitable for per-request deadlines, exponential
+;;; back-off, etc.
+;;;
+;;; Since: Phase H8 (A0)
+
+(defn httpd-await-timer [conn :ptr<void> ms :int] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+      int64_t req_json_cache;
+      void *req_multipart_parts;
+      void *fiber_group;
+  } HttpdConn;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c->fiber_group) return;
+  /* Park on the fd with NO event mask (0): the timer alone wakes us. */
+  (void)tur_local_park_fd(c->fiber_group, c->fd, 0, (int64_t)ms);
+  ```)
+;; =============================================================================
 ;; H6: Routing DSL
 ;; =============================================================================
 ;;
@@ -1155,3 +3274,197 @@
 
 (defmacro defroute [router method pattern handler]
   `(router-add ~router ~method ~pattern ~handler))
+;; =============================================================================
+;; M1: mw-log -- request logging middleware (per docs/upcoming/httpd-middleware-async-plan.md)
+;; =============================================================================
+;;
+;; The reference middleware on top of the H7 convention. Logs one line per
+;; request with method, path, status, response byte count, and elapsed wall
+;; time in milliseconds (CLOCK_MONOTONIC).
+;;
+;; Example:
+;;   (let [base     (fn [c :ptr<void>] :nil (httpd-resp-body! c "ok"))
+;;         composed (mw-log base)]
+;;     (httpd-new 0 composed))
+;;
+;; Output line shape (one per request):
+;;   GET /path -> 200 2 0ms
+;;; httpd-mw-mono-ms -- monotonic clock helper (milliseconds). Internal.
+
+(defn httpd-mw-mono-ms [] :int
+  ```c
+  #include <time.h>
+  struct timespec __ts;
+  clock_gettime(CLOCK_MONOTONIC, &__ts);
+  return (int64_t)__ts.tv_sec * 1000LL + (int64_t)__ts.tv_nsec / 1000000LL;
+  ```)
+;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
+
+(defn httpd-mw-log-emit [c :ptr<void> elapsed-ms :int] :nil
+  ```c typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+  } HttpdConn;
+  HttpdConn *cn = (HttpdConn *)c;
+  int status = cn->resp_status ? cn->resp_status : 200;
+  fprintf(stdout, "%s %s -> %d %d %lldms\n",
+          cn->method, cn->path, status, cn->resp_body_len,
+          (long long)elapsed_ms);
+  fflush(stdout);
+  ```)
+;;; mw-log -- request logging middleware (stdout).
+;;;
+;;; Wraps a base handler so every request prints one line to stdout after
+;;; the handler returns. The line carries the request method, path, the
+;;; response status (defaulting to 200 if unset), the response body length
+;;; in bytes, and the elapsed wall time in milliseconds.
+;;;
+;;; Parameters:
+;;;   next -- downstream handler closure (fat-closure :int)
+;;;
+;;; Returns:
+;;;   A wrapped handler closure (:int) with the same calling convention as
+;;;   handlers passed to httpd-new / httpd-new-pool.
+;;;
+;;; Example:
+;;;   (let [base     (fn [c :ptr<void>] :nil
+;;;                    (httpd-resp-status! c 200)
+;;;                    (httpd-resp-body!   c "hi"))
+;;;         composed (mw-log base)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M1)
+
+(defn mw-log [next :int] :ptr<void>
+  (let [_n next]
+    (fn [c :ptr<void>] :nil
+      (let [t0 (httpd-mw-mono-ms)]
+        (httpd-call _n c)
+        (httpd-mw-log-emit c (- (httpd-mw-mono-ms) t0))))))
+;; =============================================================================
+;; M8 (core): compose-middleware -- nest multiple middlewares around a base
+;; =============================================================================
+;;
+;; Each middleware is a one-argument fat closure of the H7 shape:
+;;   (fn [next :int] :int  <wrapped-closure>)
+;;
+;; compose-middleware applies them right-to-left so the leftmost middleware
+;; in the argument list ends up as the OUTERMOST wrapper -- its pre-hook
+;; runs first and its post-hook runs last:
+;;
+;;   (compose-middleware base mw-log mw-cors mw-auth)
+;;   ;; is equivalent to (mw-log (mw-cors (mw-auth base)))
+;;
+;; Note: each middleware argument must itself be a fat closure (i.e. must
+;; capture at least one variable). A bare top-level defn cannot be passed by
+;; name; wrap it in `(fn [n :int] :int (... n))` first, or define it the way
+;; mw-log is defined here (the outer `let` over `next` forces a fat closure).
+;;; compose-middleware -- wrap a base handler with multiple middlewares.
+;;;
+;;; Parameters:
+;;;   base -- base handler closure (:int)
+;;;   mws  -- variadic middleware closures (each `(fn [next :int] :int)`),
+;;;           applied right-to-left so the leftmost ends up outermost.
+;;;
+;;; Returns:
+;;;   The fully-wrapped handler closure (:int).
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware base mw-log)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M8 core)
+
+;;; compose-middleware -- nest multiple middlewares around a base handler.
+;;;
+;;; Macro: `(compose-middleware base mw1 mw2 mw3)` expands to
+;;; `(mw1 (mw2 (mw3 base)))`, i.e. each `mw_i` is called as a one-argument
+;;; function with the wrapped downstream handler. The leftmost middleware
+;;; ends up as the OUTERMOST wrapper -- its pre-hook runs first and its
+;;; post-hook runs last.
+;;;
+;;; Each `mw_i` must be name-callable with one argument: typically a defn
+;;; like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`), or
+;;; a partially applied form like `(mw-cors opts)` that itself returns a
+;;; one-arg function. Bare closure VALUES are not directly callable in
+;;; Turmeric -- use a defn (or wrap such a value in a defn) before passing
+;;; it through compose-middleware.
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware base mw-log)]
+;;;     (httpd-new 0 composed))
+;;;
+;;;   ;; Multiple middlewares (mw-log is outermost):
+;;;   (let [composed (compose-middleware base mw-log mw-cors mw-auth)]
+;;;     (httpd-new 0 composed))
+;;;
+;;; Since: Phase H8 (M8 core)
+
+(defmacro compose-middleware [base & mws]
+  (if (empty? mws)
+    base
+    (list (first mws)
+      (list compose-middleware base ~@(rest mws)))))
+;;; httpd-mw-fold -- internal: right-fold a cons-list of fat-closure
+;;; middlewares over a base handler. Each rest cell must hold a fat
+;;; closure value of shape (fn [next :int] :ptr<void> ...).
+
+(defn httpd-mw-fold [base :int mws :int] :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t buf[64];
+  int n = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
+  while (p && n < 64) {
+      buf[n++] = p->head;
+      p = (__tur_cons_cell *)(intptr_t)p->tail;
+  }
+  int64_t cur = base;
+  typedef int64_t (*fn1_t)(void *, int64_t);
+  for (int i = n - 1; i >= 0; i--) {
+      int64_t mw = buf[i];
+      if (!mw) continue;
+      int64_t *fat = (int64_t *)(intptr_t)mw;
+      cur = ((fn1_t)(intptr_t)fat[0])((void *)fat, cur);
+  }
+  return cur;
+  ```)
+;;; compose-middleware-of -- runtime variadic form of compose-middleware.
+;;;
+;;; This is a defn, not a macro. Use when the chain is built at runtime
+;;; (e.g. dependent on config, feature flags, or a runtime-chosen subset).
+;;; Apply order matches `compose-middleware`: leftmost = outermost.
+;;;
+;;; Each rest argument must be a *fat closure value* of shape
+;;; `(fn [next :int] :ptr<void> ...)` -- i.e. a closure that captures at
+;;; least one variable. A bare top-level defn name is NOT a fat closure;
+;;; passing one will compile (thanks to the
+;;; docs/upcoming/variadic-rest-closure-cast-plan.md fix) but the fat-
+;;; closure dispatch dereferences code bytes as the fn pointer and
+;;; BUS-faults. Bridge a bare defn through a let-captured `fn` literal:
+;;;
+;;;   (let [_ 0
+;;;         mw-log-val (fn [n :int] :ptr<void> (mw-log n))
+;;;         _ 0]
+;;;     (compose-middleware-of base mw-log-val ...))
+;;;
+;;; For statically-known chains the macro form `compose-middleware`
+;;; remains the better choice -- it accepts bare defns and catches
+;;; non-callable mistakes at elaboration.
+;;;
+;;; Parameters:
+;;;   base -- base handler closure (:int)
+;;;   mws  -- variadic fat-closure middlewares; type variable A unifies
+;;;           to whatever closure type the call site uses.
+;;;
+;;; Returns:
+;;;   The fully-wrapped handler closure (:int).
+;;;
+;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
+;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
+
+(defn compose-middleware-of [A] [base :int & mws :A] :int
+  (httpd-mw-fold base mws))

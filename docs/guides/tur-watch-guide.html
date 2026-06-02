@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#tur-watch-guide" style="">tur-watch Guide</a></li>
 <li style=""><a href="#installation" style="">Installation</a></li>
@@ -93,6 +94,22 @@
 <li style=""><a href="#debounce-helper" style="">Debounce helper</a></li>
 <li style=""><a href="#notes" style="">Notes</a></li>
 <li style=""><a href="#see-also" style="">See also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="tur-watch-guide">tur-watch Guide</h1>
@@ -101,12 +118,18 @@ kqueue on Darwin) with debounce and coalescing helpers for CLI tools that
 need a "file changed, react" loop.</p>
 <hr />
 <h2 id="installation">Installation</h2>
-<pre><code class="language-turmeric">:spices {
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:spices {
   &quot;watch&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
            :ref    &quot;watch-v0.2.0&quot;
            :subdir &quot;spices/watch&quot;}
 }
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices
+{
+  &quot;watch&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+           :ref    &quot;watch-v0.2.0&quot;
+           :subdir &quot;spices/watch&quot;}
+}
+</code></pre></div></div></div>
 <hr />
 <h2 id="modules">Modules</h2>
 <table>
@@ -138,7 +161,7 @@ need a "file changed, react" loop.</p>
 <p><code>watch/backend</code> is internal and is not exported.</p>
 <hr />
 <h2 id="quick-start-single-file">Quick start -- Single file</h2>
-<pre><code class="language-turmeric">(import watch/event :refer [watch-event-kind watch-event-path watch-event-free
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import watch/event :refer [watch-event-kind watch-event-path watch-event-free
                              watch-kind-write watch-kind-rename])
 (import watch/opts  :refer [default-watch-opts])
 (import watch/watch :refer [watch-open-one watch-close watch-next])
@@ -156,10 +179,20 @@ need a "file changed, react" loop.</p>
             (recur)))))
     (watch-close w)
     0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import watch/event :refer [watch-event-kind watch-event-path watch-event-free
+                             watch-kind-write watch-kind-rename]
+import watch/opts :refer [default-watch-opts]
+import watch/watch :refer [watch-open-one watch-close watch-next]
+defn main [] :int
+  let [opts (default-watch-opts)
+        w    (watch-open-one &quot;notes.md&quot; opts)]
+    loop([] let([ev (watch-next w -1)] ;; block indefinitely if(=(ev 0) 0 do(println(str-concat(&quot;changed: &quot; watch-event-path(ev))) watch-event-free(ev) recur()))))
+    watch-close(w)
+    0
+</code></pre></div></div></div>
 <hr />
 <h2 id="quick-start-recursive-directory-tree">Quick start -- Recursive directory tree</h2>
-<pre><code class="language-turmeric">(import watch/event :refer [watch-event-path watch-event-kind
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import watch/event :refer [watch-event-path watch-event-kind
                              watch-kind-&gt;cstr watch-event-free])
 (import watch/opts  :refer [watch-opts-make watch-opts-free])
 (import watch/watch :refer [watch-open-tree watch-close watch-next])
@@ -180,11 +213,22 @@ need a "file changed, react" loop.</p>
             (recur)))))
     (watch-close w)
     0))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import watch/event :refer [watch-event-path watch-event-kind
+                             watch-kind-&gt;cstr watch-event-free]
+import watch/opts :refer [watch-opts-make watch-opts-free]
+import watch/watch :refer [watch-open-tree watch-close watch-next]
+defn main [] :int
+  let [opts (watch-opts-make 1 150 1 0 1)  ;; recursive, 150 ms debounce
+        w    (watch-open-tree &quot;src/&quot; opts)]
+    watch-opts-free(opts)
+    loop([] let([ev (watch-next w -1)] if(=(ev 0) 0 do(println(str-concat(watch-kind-&gt;cstr(watch-event-kind(ev)) &quot; &quot; watch-event-path(ev))) watch-event-free(ev) recur()))))
+    watch-close(w)
+    0
+</code></pre></div></div></div>
 <hr />
 <h2 id="api-reference">API reference</h2>
 <h3 id="opening-a-watcher">Opening a watcher</h3>
-<pre><code class="language-turmeric">;; Watch a single file or directory
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Watch a single file or directory
 (watch-open-one path opts)   ;; returns watcher handle, or 0 on failure
 
 ;; Watch a directory tree recursively
@@ -192,9 +236,17 @@ need a "file changed, react" loop.</p>
 
 ;; Release the watcher
 (watch-close w)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Watch a single file or directory
+watch-open-one(path opts)
+;; returns watcher handle, or 0 on failure
+;; Watch a directory tree recursively
+watch-open-tree(dir opts)
+;; returns watcher handle
+;; Release the watcher
+watch-close(w)
+</code></pre></div></div></div>
 <h3 id="options">Options</h3>
-<pre><code class="language-turmeric">;; Use the defaults (150 ms debounce, non-recursive)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Use the defaults (150 ms debounce, non-recursive)
 (default-watch-opts)
 
 ;; Construct custom options
@@ -202,7 +254,14 @@ need a "file changed, react" loop.</p>
 (watch-opts-make 1 200 1 0 0)
 
 (watch-opts-free opts)   ;; release options handle
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Use the defaults (150 ms debounce, non-recursive)
+default-watch-opts
+;; Construct custom options
+;; watch-opts-make recursive debounce-ms coalesce? reserved periodic?
+watch-opts-make(1 200 1 0 0)
+watch-opts-free(opts)
+;; release options handle
+</code></pre></div></div></div>
 <table>
 <thead>
 <tr>
@@ -246,31 +305,55 @@ need a "file changed, react" loop.</p>
 </tbody>
 </table>
 <h3 id="reading-events">Reading events</h3>
-<pre><code class="language-turmeric">;; Block until the next event (timeout-ms = -1 blocks forever)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">;; Block until the next event (timeout-ms = -1 blocks forever)
 (watch-next w timeout-ms)    ;; returns event handle, or 0 on timeout
 
 ;; Drain all pending events without blocking
 (watch-drain w)              ;; returns a cons list of event handles (may be 0)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">;; Block until the next event (timeout-ms = -1 blocks forever)
+watch-next(w timeout-ms)
+;; returns event handle, or 0 on timeout
+;; Drain all pending events without blocking
+watch-drain(w)
+;; returns a cons list of event handles (may be 0)
+</code></pre></div></div></div>
 <h3 id="event-accessors">Event accessors</h3>
-<pre><code class="language-turmeric">(watch-event-kind  ev)        ;; event kind constant (see below)
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(watch-event-kind  ev)        ;; event kind constant (see below)
 (watch-event-path  ev)        ;; file path that changed
 (watch-event-free  ev)        ;; release the event handle
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">watch-event-kind(ev)
+;; event kind constant (see below)
+watch-event-path(ev)
+;; file path that changed
+watch-event-free(ev)
+;; release the event handle
+</code></pre></div></div></div>
 <h3 id="event-kinds">Event kinds</h3>
-<pre><code class="language-turmeric">(watch-kind-write)    ;; file content changed
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(watch-kind-write)    ;; file content changed
 (watch-kind-create)   ;; file created
 (watch-kind-delete)   ;; file deleted
 (watch-kind-rename)   ;; file renamed / moved
 (watch-kind-none)     ;; no change (returned only on timeout/drain miss)
 
 (watch-kind-&gt;cstr kind)  ;; human-readable string for a kind constant
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">watch-kind-write
+;; file content changed
+watch-kind-create
+;; file created
+watch-kind-delete
+;; file deleted
+watch-kind-rename
+;; file renamed / moved
+watch-kind-none
+;; no change (returned only on timeout/drain miss)
+watch-kind-&gt;cstr(kind)
+;; human-readable string for a kind constant
+</code></pre></div></div></div>
 <hr />
 <h2 id="debounce-helper">Debounce helper</h2>
 <p>For tools that re-run a command on any change, <code>watch/debounce</code> coalesces
 a burst of events into one batched notification:</p>
-<pre><code class="language-turmeric">(import watch/debounce :refer [debounce-batch-new debounce-batch-add
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import watch/debounce :refer [debounce-batch-new debounce-batch-add
                                debounce-batch-ready? debounce-batch-drain
                                debounce-batch-free])
 
@@ -289,7 +372,14 @@ a burst of events into one batched notification:</p>
             (recur))
           (recur)))))
   (debounce-batch-free batch))
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import watch/debounce :refer [debounce-batch-new debounce-batch-add
+                               debounce-batch-ready? debounce-batch-drain
+                               debounce-batch-free]
+let [batch (debounce-batch-new 300)]
+  ;; 300 ms window
+  loop([] let([ev (watch-next w 50)] ;; 50 ms poll step if(not=(ev 0) do(debounce-batch-add(batch ev) recur()) ;; No event -- check if debounce window elapsed if(debounce-batch-ready?(batch) let([paths (debounce-batch-drain batch)] ;; paths is a cons list of changed cstr paths rebuild!(paths) recur()) recur()))))
+  debounce-batch-free(batch)
+</code></pre></div></div></div>
 <hr />
 <h2 id="notes">Notes</h2>
 <ul>
@@ -303,8 +393,8 @@ a burst of events into one batched notification:</p>
 <hr />
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="threading-guide.md">Threading Guide</a> -- integrating file-watching with OS threads</li>
-<li><a href="notebook-guide.md">tur-notebook Guide</a> -- <code>tur nb render --watch</code> uses tur-watch internally</li>
+<li><a href="threading-guide.html">Threading Guide</a> -- integrating file-watching with OS threads</li>
+<li><a href="notebook-guide.html">tur-notebook Guide</a> -- <code>tur nb render --watch</code> uses tur-watch internally</li>
 </ul>
     </div>
   </div>

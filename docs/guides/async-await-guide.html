@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#asyncawait-guide" style="">Async/Await Guide</a></li>
 <li style=""><a href="#overview" style="">Overview</a></li>
@@ -101,6 +102,22 @@
 <li style="padding-left:0.75rem;"><a href="#scope" style="color:var(--text-sec);">Scope</a></li>
 <li style=""><a href="#io-bindings" style="">I/O Bindings</a></li>
 <li style=""><a href="#see-also" style="">See Also</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="asyncawait-guide">Async/Await Guide</h1>
@@ -278,7 +295,7 @@ async
     process(a b)
 </code></pre></div></div></div>
 <h3 id="error-handling">Error Handling</h3>
-<p>Effects-based try/catch works within async blocks (see <a href="effects-system-guide.md">Effects System Guide</a>):</p>
+<p>Effects-based try/catch works within async blocks (see <a href="effects-system-guide.html">Effects System Guide</a>):</p>
 <div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(async
   (try-with
     (fn []
@@ -371,10 +388,9 @@ async
 </code></pre></div></div></div>
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="effects-system-guide.md">Effects System Guide</a> -- Effects foundation</li>
-<li><a href="threading-guide.md">Threading Guide</a> -- OS-level threads and primitives</li>
-<li><a href="stm-tutorial.md">STM Tutorial</a> -- Composable concurrent transactions</li>
-<li><a href="../turmeric-plan.md">turmeric-plan.md</a> §18 -- Delimited continuations (foundation)</li>
+<li><a href="effects-system-guide.html">Effects System Guide</a> -- Effects foundation</li>
+<li><a href="threading-guide.html">Threading Guide</a> -- OS-level threads and primitives</li>
+<li><a href="stm-tutorial.html">STM Tutorial</a> -- Composable concurrent transactions</li>
 </ul>
     </div>
   </div>

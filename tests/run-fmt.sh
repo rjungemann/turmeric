@@ -180,15 +180,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test: --lang tursweet accepted with --stdin
+# Test: --lang sweet-exp accepted with --stdin
 # ---------------------------------------------------------------------------
-NAME="fmt-lang-tursweet-stdin"
+NAME="fmt-lang-sweet-exp-stdin"
+printf 'defn add [x :int y :int] :int\n  +(x y)\n' | "$TUR" fmt --stdin --lang sweet-exp > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected exit 0 for --lang sweet-exp, got $RC"
+fi
+
+# ---------------------------------------------------------------------------
+# Test: --lang tursweet still accepted as deprecated alias
+# ---------------------------------------------------------------------------
+NAME="fmt-lang-tursweet-alias-stdin"
 printf 'defn add [x :int y :int] :int\n  +(x y)\n' | "$TUR" fmt --stdin --lang tursweet > /dev/null 2>&1
 RC=$?
 if [ "$RC" -eq 0 ]; then
     pass "$NAME"
 else
-    fail "$NAME" "expected exit 0 for --lang tursweet, got $RC"
+    fail "$NAME" "expected exit 0 for --lang tursweet (deprecated alias), got $RC"
 fi
 
 # ---------------------------------------------------------------------------

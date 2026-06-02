@@ -95,7 +95,7 @@ All notable changes to Turmeric are documented here.
   recipes with deps, params, `{{ interpolation }}`, `set` directives, and
   dotenv. `tur new` gains `--kind lib|bin`, `--author`, `--license`, CI
   workflow scaffolding, and a standard Justfile.
-- **`tur fmt` formatter** -- `tur fmt [paths...]` reformats `.tur`/`.tursweet`
+- **`tur fmt` formatter** -- `tur fmt [paths...]` reformats `.tur`/`.tur.sweet`
   files in-place with recursive directory walking; `--check`, `--stdout`,
   `--stdin`, and `--lang` flags; idempotent on all stdlib sources.
 - **First-class handler values (FH0-FH7)** -- `(handler E [params] k body)`
@@ -356,7 +356,7 @@ All notable changes to Turmeric are documented here.
 
 - **Datum comments** (`#;`) -- `#;expr` suppresses the next form without removing it from the source, matching standard Scheme/Racket convention
 
-- **Sweet-expression syntax** (`#lang sweet-exp`) -- opt-in indentation-sensitive syntax; `#lang sweet-exp` at the top of a file (or a `.tursweet` extension) enables full t-expression + neoteric + curly-infix mode
+- **Sweet-expression syntax** (`#lang sweet-exp`) -- opt-in indentation-sensitive syntax; `#lang sweet-exp` at the top of a file (or a `.tur.sweet` extension) enables full t-expression + neoteric + curly-infix mode
 
 - **Devcontainer** -- `.devcontainer/devcontainer.json` for one-click VS Code Remote / GitHub Codespaces setup
 

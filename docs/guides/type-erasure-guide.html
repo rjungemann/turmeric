@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#type-erasure-to-int64_t" style="">Type Erasure to int64_t</a></li>
 <li style=""><a href="#the-single-choke-point" style="">The single choke point</a></li>
@@ -87,8 +88,25 @@
 <li style="padding-left:0.75rem;"><a href="#3-tagged-pair" style="color:var(--text-sec);">3. Tagged pair</a></li>
 <li style=""><a href="#function-values" style="">Function values</a></li>
 <li style=""><a href="#what-stays-unboxed" style="">What stays unboxed</a></li>
+<li style=""><a href="#nested-aggregates-theme-d3-decision" style="">Nested aggregates (Theme D3 decision)</a></li>
 <li style=""><a href="#why-this-matters" style="">Why this matters</a></li>
 <li style=""><a href="#re-verifying-the-map" style="">Re-verifying the map</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="type-erasure-to-int64_t">Type Erasure to <code>int64_t</code></h1>
@@ -101,6 +119,15 @@ or codegen know which boundary they are crossing.</p>
 monomorphization land, several of these sites will gain non-erased
 representations. Treat the file:line citations as a starting point and
 re-verify before relying on them.</p>
+<blockquote>
+<p><strong>Status: post-Theme B/C/D (2026-05-30).</strong> The aggregate carrier bridge
+(Theme B), sized-primitive carriers (Theme C), and the by-value/by-pointer
+struct ABI plus typed function-pointer fields (Theme D1/D2) have landed.
+Sized primitives narrow the carrier (<code>int32_t</code>, <code>uint8_t</code>, ...) but a
+generic slot is still <code>int64_t</code>. The one remaining erasure that the
+unboxing roadmap <em>deliberately keeps</em> is the nested-aggregate case --
+see "Nested aggregates" below (Theme D3).</p>
+</blockquote>
 <hr />
 <h2 id="the-single-choke-point">The single choke point</h2>
 <p>Everything funnels through one function:</p>
@@ -219,6 +246,44 @@ have a stable C representation pass through unchanged:</p>
 target" matters when reading inline-C: a parameter declared <code>:int</code> may
 be carrying a real integer, or it may be carrying a cast pointer. The
 declaring <code>defn</code> is the source of truth.</p>
+<hr />
+<h2 id="nested-aggregates-theme-d3-decision">Nested aggregates (Theme D3 decision)</h2>
+<p>A struct <em>field</em> whose type is itself an aggregate -- another <code>defstruct</code>,
+a <code>TY_APP</code> like <code>Option[int]</code>, or an ADT -- is <strong>carrier-erased to
+<code>int64_t</code>, not flat-embedded</strong>. This is verifiable today:</p>
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(defstruct Vec2 [x :int y :int])
+(defstruct HasVec [p :Vec2])           ;; field p
+(defstruct HasOpt [o : (Option int)])  ;; field o
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">defstruct Vec2 [x:inty:int]
+defstruct HasVec [p:Vec2]
+;; field p
+defstruct HasOpt [o:(Optionint)]
+;; field o
+</code></pre></div></div></div>
+<p>lowers (via <code>struct_field_c_type</code>, <code>src/compiler/types.c</code>) to:</p>
+<pre><code class="language-c">typedef struct HasVec { int64_t p; } HasVec;   /* not Vec2 p */
+typedef struct HasOpt { int64_t o; } HasOpt;   /* not a flat Option */
+</code></pre>
+<p>The <code>default:</code> arm of <code>struct_field_c_type</code>'s field-kind switch returns
+<code>int64_t</code> for <code>TY_STRUCT</code> / <code>TY_APP</code> / <code>TY_ADT</code> fields; the field holds a
+cast pointer to a heap-allocated aggregate.</p>
+<p><strong>Decision: keep nested aggregates carrier-erased for now.</strong> Flat-inlining
+a concrete nested struct (so <code>HasVec</code> literally contains a <code>Vec2</code>) is a
+<em>future optimization</em>, not a correctness requirement, and it would have to:</p>
+<ol>
+<li>gate on <code>type_has_concrete_codegen_layout()</code> for the field type (the
+   same seam the HKT work uses), so generic/parametric fields stay erased;</li>
+<li>agree with the Theme D1 <code>pass_by_ptr</code> decision -- an inlined wide field
+   pushes the containing struct past the 16-byte by-pointer threshold and
+   must flip the <em>container</em> to by-pointer too;</li>
+<li>update every <code>make-struct</code>, field-read (<code>.f s</code>), and field-write site
+   to stop round-tripping through <code>(int64_t)(intptr_t)</code>.</li>
+</ol>
+<p>The function-pointer field case (Theme D2) is the one nested case that
+<em>was</em> un-erased, because a concrete <code>fn</code> type has a stable C signature and
+no allocation; see <code>struct_field_c_type</code>'s <code>TY_FN</code> branch. Aggregates do
+not share that property, so they stay on the carrier ABI until the
+optimization above is scheduled on its own merits.</p>
 <hr />
 <h2 id="why-this-matters">Why this matters</h2>
 <p>A few practical consequences of the current erasure scheme:</p>

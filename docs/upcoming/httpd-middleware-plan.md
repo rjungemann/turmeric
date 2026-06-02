@@ -1,8 +1,12 @@
 # httpd Middleware Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-01
+> **Status:** Partially shipped -- forward-looking items remain
+> **Last Updated:** 2026-06-02
 > **Type:** Networking / stdlib
+> **Supersedes (historically):** the bulk of the original v0 surface was
+> reframed and shipped under the now-archived
+> [httpd-middleware-async-plan](../archive/httpd-middleware-async-plan.md)
+> Track M (M0-M8). This document tracks the remainder.
 
 ---
 
@@ -13,10 +17,12 @@
 that takes the `next` handler and returns a new handler that wraps it.
 The `httpd-call` primitive invokes a stored handler closure.
 
-This plan formalises and expands that foundation into a small
-`stdlib/httpd-mw` module: a collection of production-ready middleware
-and a `compose-mw` helper that threads a stack of middlewares together
-without boilerplate.
+The first wave of middleware (logging, CORS, basic auth, cookies, body
+parsers, multipart) shipped as Track M of the archived
+`httpd-middleware-async-plan`. This plan now tracks the **remaining**
+middleware -- rate limiting, static files, body-size enforcement,
+timeouts, panic recovery -- plus the request-attribute storage that
+several of them depend on.
 
 The primitives (`httpd-call`, `router-mw`, handler calling convention)
 are **not changed**. Everything added here is pure Turmeric library code
@@ -24,138 +30,102 @@ on top of the existing C layer.
 
 ---
 
+## Current Progress (2026-06-02)
+
+Naming note: shipped middleware use the `mw-*` prefix convention (e.g.
+`mw-log`, `mw-cors`) rather than the `*-mw` suffix the original draft
+proposed. The composition helper landed as `compose-middleware` (with a
+typed variadic `compose-middleware-of`), not `compose-mw`.
+
+| Original draft item        | Status     | Shipped as                                                  |
+|----------------------------|------------|-------------------------------------------------------------|
+| `compose-mw`               | Shipped    | `compose-middleware` macro + `compose-middleware-of` (M8)   |
+| Logging middleware         | Shipped    | `mw-log` in `stdlib/httpd.tur` (M1)                         |
+| CORS middleware            | Shipped    | `mw-cors`, `mw-cors-with`, `default-cors-opts` (M4)         |
+| Basic-auth middleware      | Shipped    | `mw-basic-auth` with verifier closure (M5)                  |
+| Body parsers (urlencoded + JSON) | Shipped (bonus) | `httpd-req-form`, `httpd-req-json`, `mw-json-body` (M3) |
+| Cookie read/write          | Shipped (bonus) | `httpd-req-cookie`, `httpd-set-cookie!`, `CookieOpts` (M2) |
+| Multipart parser           | Shipped (bonus) | `httpd-req-multipart-parse` (M7)                       |
+| Request/response headers   | Shipped (bonus) | `httpd-req-header(?)`, `httpd-resp-header(-add)!` (M0) |
+| Async handlers + middleware compose | Shipped (bonus) | Track A (A0-A4); see `httpd-async-guide.md`      |
+| **Body-size middleware**   | **Pending**| --                                                          |
+| **Rate-limit middleware**  | **Pending**| --                                                          |
+| **Static-file middleware** | **Pending**| --                                                          |
+| **Timeout middleware**     | **Pending**| --                                                          |
+| **Panic-recovery middleware** | **Pending** | --                                                       |
+| **Request attributes** (`httpd-set-attr!` / `httpd-req-attr`) | **Pending** | -- |
+| Compression middleware     | Spun out   | See [httpd-compression-zlib-spice-plan](httpd-compression-zlib-spice-plan.md) |
+
+Fixtures landed alongside each shipped middleware under
+`tests/fixtures/httpd-mw-*` and `tests/fixtures/httpd-async-*`. A
+dedicated guide `docs/guides/httpd-middleware-guide.md` is **not yet
+written** -- see Phase MW3 below.
+
+---
+
 ## Goals / Non-Goals
 
-### Goals (v0)
+### Goals (remaining v0)
 
-- `(compose-mw mw1 mw2 ... handler)` -- compose an ordered stack of
-  middleware functions around a final handler.
-- **Logging middleware** -- structured request/response logging (method,
-  path, status, elapsed ms) to stdout or a user-supplied writer.
-- **CORS middleware** -- add `Access-Control-Allow-*` headers; configure
-  allowed origins, methods, and headers; handle preflight `OPTIONS`
-  requests.
-- **Basic-auth middleware** -- `Authorization: Basic` header check
-  against a static credential map; returns 401 + `WWW-Authenticate` on
-  failure.
+- **Body-size middleware** -- reject requests whose `Content-Length`
+  exceeds a configured limit with 413.
 - **Rate-limit middleware** -- sliding-window token bucket per IP (stored
   in a `Mutex<hamt>` of counters); returns 429 on exhaustion.
 - **Static-file middleware** -- serve files from a root directory; sets
   correct `Content-Type` from extension; returns 304 on matching
   `If-None-Match` / `ETag`.
-- **Body-size middleware** -- reject requests whose `Content-Length`
-  exceeds a configured limit with 413.
 - **Timeout middleware** -- enforce a per-request wall-clock budget;
   triggers a 503 if the downstream handler has not written a status
-  after N ms.
+  after N ms. (Likely best built on the Track A await primitives so the
+  timeout fires off the reactor rather than a sleeping worker.)
 - **Panic-recovery middleware** -- catch a downstream panic / error
   signal, log it, and return a 500 rather than crashing the worker.
 - `(httpd-req-attr conn key)` and `(httpd-set-attr! conn key val)` --
-  attach arbitrary key/value context to a request (used by auth
-  middleware to pass the authenticated user name downstream).
+  attach arbitrary key/value context to a request (e.g. for auth
+  middleware to pass the authenticated user name downstream; today
+  `mw-basic-auth` runs its verifier inline and does not propagate the
+  username).
+- Dedicated middleware guide
+  `docs/guides/httpd-middleware-guide.md` collecting all of the above.
 
-### Non-Goals (v0)
+### Non-Goals
 
 - No streaming response body; body is still buffered in the existing
-  `httpd-resp-body!` string.
-- No gzip / brotli response compression middleware (out of scope without
-  a compression spice).
-- No session / cookie store (build on top of basic-auth + request attrs).
+  `httpd-resp-body!` string. (Track A adds awaitable I/O primitives but
+  the response body remains a single buffer.)
+- No gzip / brotli response compression here -- tracked separately in
+  [httpd-compression-zlib-spice-plan](httpd-compression-zlib-spice-plan.md).
+- No session / cookie store (build on top of cookies + request attrs).
 - No JWT validation (composable in user code using inline-C + mbedtls).
 - No HTTP/2 push.
 
 ---
 
-## API Surface
+## API Surface (remaining items)
 
-### `compose-mw`
+### Body-size middleware
 
 ```turmeric
-;;; compose-mw -- thread a list of middlewares around a final handler.
-;;;
-;;; Applies middlewares right-to-left so the first argument wraps
-;;; outermost (i.e., runs first on request, last on response).
+;;; mw-body-size -- reject requests with Content-Length > max-bytes with 413.
 ;;;
 ;;; Parameters:
-;;;   & mws :int -- middleware functions followed by the final handler
-;;;                 as the last argument
+;;;   max-bytes -- maximum accepted body size
+;;;   next      -- downstream handler
 ;;;
-;;; Returns:
-;;;   A single handler closure.
-;;;
-;;; Example:
-;;;   (let [h (compose-mw log-mw cors-mw auth-mw (router-mw r))]
-;;;     (httpd-new 8080 h))
-;;;
-;;; Since: Phase MW1
-(defn compose-mw [& mws :int] :int ...)
+;;; Since: Phase MW1 (pending)
+(defn mw-body-size [max-bytes :int next :int] :int ...)
 ```
 
-### Logging middleware
+### Panic-recovery middleware
 
 ```turmeric
-;;; log-mw -- structured request/response logging.
-;;;
-;;; Logs "<method> <path> -> <status> (<ms>ms)" to stdout.
-;;; Pass a custom writer with log-mw-with-writer.
+;;; mw-recover -- catch panics from downstream; respond 500 and log.
 ;;;
 ;;; Parameters:
 ;;;   next -- downstream handler
 ;;;
-;;; Since: Phase MW1
-(defn log-mw [next :int] :int ...)
-
-;;; log-mw-with-writer -- logging middleware with a custom writer fn.
-;;;
-;;; Parameters:
-;;;   writer -- (fn [line :cstr] :void)
-;;;   next   -- downstream handler
-;;;
-;;; Since: Phase MW1
-(defn log-mw-with-writer [writer :int next :int] :int ...)
-```
-
-### CORS middleware
-
-```turmeric
-(defstruct CorsOpts
-  [origins :cstr   ;; "*" or comma-separated list
-   methods :cstr   ;; e.g. "GET,POST,OPTIONS"
-   headers :cstr   ;; allowed request headers
-   max-age :int    ;; preflight cache seconds (0 = omit header)
-  ])
-
-;;; cors-mw -- add CORS headers and handle OPTIONS preflight.
-;;;
-;;; Parameters:
-;;;   opts -- CorsOpts
-;;;   next -- downstream handler
-;;;
-;;; Since: Phase MW1
-(defn cors-mw [opts :CorsOpts next :int] :int ...)
-```
-
-### Basic-auth middleware
-
-```turmeric
-;;; basic-auth-mw -- HTTP Basic authentication check.
-;;;
-;;; On success, stores the username via (httpd-set-attr! conn "user" ...).
-;;; On failure, responds 401 and does not call next.
-;;;
-;;; Parameters:
-;;;   credentials -- hamt mapping username :cstr -> password-hash :cstr
-;;;                  (bcrypt hash; use basic-auth-hash to generate)
-;;;   realm       -- realm string for WWW-Authenticate header
-;;;   next        -- downstream handler
-;;;
-;;; Since: Phase MW2
-(defn basic-auth-mw [credentials :int realm :cstr next :int] :int ...)
-
-;;; basic-auth-hash -- hash a plaintext password for use in credentials map.
-;;;
-;;; Since: Phase MW2
-(defn basic-auth-hash [password :cstr] :cstr ...)
+;;; Since: Phase MW1 (pending)
+(defn mw-recover [next :int] :int ...)
 ```
 
 ### Rate-limit middleware
@@ -166,7 +136,7 @@ on top of the existing C layer.
    window-s :int   ;; window size in seconds
   ])
 
-;;; rate-limit-mw -- sliding-window IP-based rate limiter.
+;;; mw-rate-limit -- sliding-window IP-based rate limiter.
 ;;;
 ;;; Returns 429 with a Retry-After header when the limit is exceeded.
 ;;;
@@ -174,14 +144,14 @@ on top of the existing C layer.
 ;;;   opts -- RateLimitOpts
 ;;;   next -- downstream handler
 ;;;
-;;; Since: Phase MW2
-(defn rate-limit-mw [opts :RateLimitOpts next :int] :int ...)
+;;; Since: Phase MW2 (pending)
+(defn mw-rate-limit [opts :RateLimitOpts next :int] :int ...)
 ```
 
 ### Static-file middleware
 
 ```turmeric
-;;; static-mw -- serve files from root-dir for requests not handled by next.
+;;; mw-static -- serve files from root-dir for requests not handled by next.
 ;;;
 ;;; Checks next first; only serves a file if next returns 404.
 ;;; Sets Content-Type based on file extension. Returns 304 on ETag match.
@@ -190,33 +160,25 @@ on top of the existing C layer.
 ;;;   root-dir -- filesystem path to serve files from
 ;;;   next     -- downstream handler (usually a router)
 ;;;
-;;; Since: Phase MW2
-(defn static-mw [root-dir :cstr next :int] :int ...)
+;;; Since: Phase MW2 (pending)
+(defn mw-static [root-dir :cstr next :int] :int ...)
 ```
 
-### Body-size middleware
+### Timeout middleware
 
 ```turmeric
-;;; body-size-mw -- reject requests with Content-Length > max-bytes with 413.
+;;; mw-timeout -- enforce a per-request wall-clock budget.
+;;;
+;;; If next has not written a status after deadline-ms, the middleware
+;;; emits 503 and cancels the downstream fiber. Requires Track A async
+;;; handlers (httpd-await-timer) for non-blocking enforcement.
 ;;;
 ;;; Parameters:
-;;;   max-bytes -- maximum accepted body size
-;;;   next      -- downstream handler
+;;;   deadline-ms -- per-request budget in milliseconds
+;;;   next        -- downstream handler
 ;;;
-;;; Since: Phase MW1
-(defn body-size-mw [max-bytes :int next :int] :int ...)
-```
-
-### Panic-recovery middleware
-
-```turmeric
-;;; recover-mw -- catch panics from downstream; respond 500 and log.
-;;;
-;;; Parameters:
-;;;   next -- downstream handler
-;;;
-;;; Since: Phase MW1
-(defn recover-mw [next :int] :int ...)
+;;; Since: Phase MW2 (pending, depends on Track A)
+(defn mw-timeout [deadline-ms :int next :int] :int ...)
 ```
 
 ### Request attributes
@@ -231,50 +193,24 @@ Added to `stdlib/httpd`:
 ;;;   key  -- attribute name
 ;;;   val  -- attribute value (cstr)
 ;;;
-;;; Since: Phase MW2
+;;; Since: Phase MW2 (pending)
 (defn httpd-set-attr! [conn :ptr<void> key :cstr val :cstr] :void ...)
 
 ;;; httpd-req-attr -- retrieve a previously set request attribute.
 ;;;
-;;; Returns nil-value if the key has not been set.
+;;; Returns the empty string if the key has not been set.
 ;;;
 ;;; Parameters:
 ;;;   conn -- httpd connection pointer
 ;;;   key  -- attribute name
 ;;;
-;;; Since: Phase MW2
+;;; Since: Phase MW2 (pending)
 (defn httpd-req-attr [conn :ptr<void> key :cstr] :cstr ...)
 ```
 
----
-
-## `compose-mw` implementation
-
-`compose-mw` takes a variadic list (last element is the innermost
-handler, first is outermost) and folds right:
-
-```turmeric
-(defn compose-mw [& mws :int] :int
-  (let [lst (cons-list->vec mws)]
-    (let [inner (vec-last lst)]
-      (vec-fold-right
-        (fn [mw acc :int] :int (httpd-apply mw acc))
-        inner
-        (vec-drop-last lst)))))
-```
-
-`httpd-apply mw next` calls `(mw next)` -- it is a two-argument closure
-application. Middleware authors write:
-
-```turmeric
-(defn my-mw [next :int] :int
-  (fn [conn :ptr<void>] :nil
-    ...
-    (httpd-call next conn)))
-```
-
-This is already the established pattern; `compose-mw` just eliminates
-the nesting at the call site.
+Once shipped, update `mw-basic-auth` (already in tree) to call
+`httpd-set-attr! conn "user" <verified-username>` so handlers can read
+back the authenticated principal.
 
 ---
 
@@ -284,7 +220,7 @@ Request attributes are stored in a small singly-linked list of
 `(key . val)` pairs pinned to the `httpd_conn` struct. The conn struct
 gains one `int64_t attr_list` field (a `cons` list, or 0). Field is
 zeroed on connection accept and freed (shallow) after the handler
-returns.
+returns. This mirrors the response-header list added in M0.
 
 This avoids a heap allocation for the common case (zero or one
 attribute); deeper attribute maps are rare and the linear scan cost is
@@ -292,38 +228,33 @@ negligible for single-digit key counts.
 
 ---
 
-## Phases
+## Phases (remaining)
 
-### Phase MW0 -- Audit existing middleware examples
+### Phase MW1 -- Simple wrappers (no C changes)
 
-- Review `tests/fixtures/httpd-h*` for patterns already in use.
-- Confirm `httpd-call` signature; add `httpd-apply` helper if missing.
-
-### Phase MW1 -- Core helpers + simple middleware
-
-- `stdlib/httpd-mw.tur`: `compose-mw`, `log-mw`, `log-mw-with-writer`,
-  `body-size-mw`, `recover-mw`.
-- Fixtures: `tests/fixtures/httpd-mw-log/`,
-  `tests/fixtures/httpd-mw-body-size/`,
+- `mw-body-size`, `mw-recover` in `stdlib/httpd.tur` (or a new
+  `stdlib/httpd-mw.tur` if the file is getting long).
+- Fixtures: `tests/fixtures/httpd-mw-body-size/`,
   `tests/fixtures/httpd-mw-recover/`.
 
-### Phase MW2 -- Auth + CORS + rate-limit + static
+### Phase MW2 -- State-carrying middleware + request attrs
 
-- `basic-auth-mw` (bcrypt via `mbedtls_pkcs5_pbkdf2_hmac` or
-  `bcrypt` wrapper in inline-C).
-- `cors-mw` + preflight handling.
-- `rate-limit-mw` with `Mutex<hamt>` sliding window.
-- `static-mw` with ETag (`mtime` + size as hex string).
 - Request attrs (`httpd-set-attr!` / `httpd-req-attr`) added to
-  `stdlib/httpd`.
-- Fixtures for each.
+  `stdlib/httpd`; requires one new field on `httpd_conn` + cleanup in
+  the per-request free path (same shape as the M0 header list).
+- `mw-rate-limit` with `Mutex<hamt>` sliding window.
+- `mw-static` with ETag (`mtime` + size as hex string).
+- `mw-timeout` built on `httpd-await-timer` (Track A, already shipped).
+- Wire `mw-basic-auth` to publish `"user"` via `httpd-set-attr!`.
+- Fixtures for each, plus an integration fixture that demonstrates
+  `mw-basic-auth -> handler reads attr "user"`.
 
 ### Phase MW3 -- Documentation
 
-- `docs/guides/httpd-middleware-guide.md` -- overview, each middleware
-  with example, `compose-mw` usage, writing custom middleware.
-- Update `httpd-guide.md` §Middleware to reference the new guide and
-  `stdlib/httpd-mw`.
+- `docs/guides/httpd-middleware-guide.md` -- overview, each shipped
+  middleware (existing + pending) with an example, `compose-middleware`
+  usage, writing custom middleware, async interop.
+- Update `httpd-guide.md` §Middleware to point at the new guide.
 
 ---
 
@@ -331,18 +262,23 @@ negligible for single-digit key counts.
 
 1. **No new framework.** Everything is plain Turmeric function
    composition over the existing `httpd-call` primitive. The only new
-   C-layer addition is the `attr_list` field on `httpd_conn`.
-2. **`compose-mw` argument order.** First argument = outermost (wraps
-   last, runs first). This matches the common convention in Ring
-   (Clojure) and Rack (Ruby): `(compose-mw log-mw cors-mw handler)` logs
-   first on the way in and last on the way out.
-3. **Static-file fallback.** `static-mw` defers to `next` first and only
+   C-layer addition is the `attr_list` field on `httpd_conn` (mirroring
+   the M0 header lists).
+2. **`compose-middleware` argument order.** First argument = outermost
+   (wraps last, runs first). Already shipped; matches Ring (Clojure) /
+   Rack (Ruby): `(compose-middleware base mw-log mw-cors)` logs first
+   on the way in and last on the way out.
+3. **Static-file fallback.** `mw-static` defers to `next` first and only
    serves a file if `next` returned 404. This makes it safe to compose
    after a router without having to list every route.
 4. **Rate-limit state.** The `Mutex<hamt>` lives in the closure captured
-   by `rate-limit-mw`. Multiple server instances (or multiple calls to
-   `rate-limit-mw`) get independent counters; sharing state is left to
+   by `mw-rate-limit`. Multiple server instances (or multiple calls to
+   `mw-rate-limit`) get independent counters; sharing state is left to
    the caller.
+5. **Timeout enforcement.** Built on Track A's `httpd-await-timer`
+   rather than a worker-side sleep, so the timeout costs no thread.
+6. **Naming.** All middleware use the `mw-*` prefix to match the
+   already-shipped `mw-log` / `mw-cors` / `mw-basic-auth` / `mw-json-body`.
 
 ---
 
@@ -350,5 +286,9 @@ negligible for single-digit key counts.
 
 - [httpd-guide.md](../guides/httpd-guide.md) -- HTTP/1.1 server primitives
 - [httpd-tls-guide.md](../guides/httpd-tls-guide.md) -- TLS layer
+- [httpd-async-guide.md](../guides/httpd-async-guide.md) -- async handlers (Track A)
+- [httpd-middleware-async-plan.md](../archive/httpd-middleware-async-plan.md) -- archived plan that shipped M0-M8 + A0-A4
+- [httpd-compression-zlib-spice-plan.md](httpd-compression-zlib-spice-plan.md) -- compression middleware spun out into its own plan
+- [curried-call-cast-rough-edges-plan.md](curried-call-cast-rough-edges-plan.md) -- codegen rough edges surfaced during M4+M5
 - [websocket-server-plan.md](websocket-server-plan.md) -- WebSocket upgrade (compatible with middleware)
 - [threading-guide.md](../guides/threading-guide.md) -- `Mutex` and worker pool details

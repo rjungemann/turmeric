@@ -78,6 +78,7 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#turmeric-notebook-guide" style="">Turmeric Notebook Guide</a></li>
 <li style=""><a href="#installing" style="">Installing</a></li>
@@ -103,6 +104,22 @@
 <li style="padding-left:0.75rem;"><a href="#unsupported-macros" style="color:var(--text-sec);">Unsupported macros</a></li>
 <li style=""><a href="#tui-key-bindings" style="">TUI Key Bindings</a></li>
 <li style=""><a href="#further-reading" style="">Further Reading</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="turmeric-notebook-guide">Turmeric Notebook Guide</h1>
@@ -115,12 +132,18 @@ terminal-first TUI, standalone HTML export, and a scriptable <code>exec</code> m
 <pre><code class="language-sh">git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 </code></pre>
 <p>Declare the spice in your project's <code>build.tur</code>:</p>
-<pre><code class="language-turmeric">:spices {
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">:spices {
   &quot;notebook&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
               :ref    &quot;notebook-v0.1.0&quot;
               :subdir &quot;spices/notebook&quot;}
 }
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">:spices
+{
+  &quot;notebook&quot; {:url    &quot;https://github.com/rjungemann/turmeric-spices&quot;
+              :ref    &quot;notebook-v0.1.0&quot;
+              :subdir &quot;spices/notebook&quot;}
+}
+</code></pre></div></div></div>
 <p>Then run <code>tur add</code> or <code>tur build</code> to fetch and link it.</p>
 <hr />
 <h2 id="quick-start">Quick Start</h2>
@@ -234,11 +257,14 @@ existing file (exit code 1 if the path already exists).</p>
 <hr />
 <h2 id="image-hook-nb11">Image Hook (NB11)</h2>
 <p>Cells can advertise image files to the TUI via the image hook convention:</p>
-<pre><code class="language-turmeric">(import notebook/image :refer [image-hook-record-path])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import notebook/image :refer [image-hook-record-path])
 
 ;; After generating /tmp/plot.png:
 (image-hook-record-path &quot;/tmp/plot.png&quot;)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import notebook/image :refer [image-hook-record-path]
+;; After generating /tmp/plot.png:
+image-hook-record-path(&quot;/tmp/plot.png&quot;)
+</code></pre></div></div></div>
 <p>The TUI reads the advertised paths and displays the images inline using:</p>
 <ul>
 <li><strong>Kitty graphics protocol</strong> -- if <code>$TERM</code> is <code>xterm-kitty</code></li>
@@ -316,10 +342,13 @@ even if no prose math nodes are present.</p>
 unsupported macro (<code>\newcommand</code> chains, <code>tikzpicture</code>, etc.) the expression
 renders in red with the error message. As a fallback, generate the math as an
 image from your preferred TeX engine and embed it via the image pipeline:</p>
-<pre><code class="language-turmeric">(import notebook/image :refer [image-hook-record-path])
+<div class="code-card code-toggle"><div class="code-card-bar"><div class="code-syntax-toggle" role="tablist"><button class="seg-btn active" data-syntax="turmeric" role="tab" aria-selected="true">turmeric</button><button class="seg-btn" data-syntax="sweet-exp" role="tab" aria-selected="false">sweet-exp</button></div></div><div class="code-card-body"><div class="code-version turmeric-version" role="tabpanel"><pre><code class="language-turmeric">(import notebook/image :refer [image-hook-record-path])
 ;; generate /tmp/eq.png from LaTeX here ...
 (image-hook-record-path &quot;/tmp/eq.png&quot;)
-</code></pre>
+</code></pre></div><div class="code-version sweet-exp-version" role="tabpanel" style="display:none"><pre><code class="language-sweet-exp">import notebook/image :refer [image-hook-record-path]
+;; generate /tmp/eq.png from LaTeX here ...
+image-hook-record-path(&quot;/tmp/eq.png&quot;)
+</code></pre></div></div></div>
 <p>The full list of supported KaTeX functions is at
 <a href="https://katex.org/docs/supported.html">https://katex.org/docs/supported.html</a>.</p>
 <hr />
@@ -385,7 +414,7 @@ merged onto the built-in map.</p>
 <ul>
 <li><a href="../notebook-spice-plan.md"><code>docs/notebook-spice-plan.md</code></a> -- full milestone plan</li>
 <li><a href="https://github.com/rjungemann/turmeric-spices/blob/main/spices/notebook/README.md"><code>../turmeric-spices/spices/notebook/README.md</code></a> -- spice README</li>
-<li><a href="developing-spices-guide.md"><code>developing-spices-guide.md</code></a> -- how to develop and publish spices</li>
+<li><a href="developing-spices-guide.html"><code>developing-spices-guide.md</code></a> -- how to develop and publish spices</li>
 </ul>
     </div>
   </div>

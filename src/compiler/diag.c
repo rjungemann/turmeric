@@ -1465,7 +1465,39 @@ bool diag_explain(DiagCode code, FILE *out) {
    Phase 8: Enhanced with configurable options and multi-span support. */
 static void render_snippet_ex(const SourceFile *f, Span span, const SnippetOpts *opts) {
     if (!f || span.off_start > f->len) return;
-    
+
+    /* If the file was produced by a syntax transformer (sweet-exp), render
+     * the snippet from the user's original source and translate the span
+     * via the xform map so column positions match what the user wrote.
+     * Line numbers are preserved by the transformer, so span.line is the
+     * same on both sides. */
+    SourceFile mapped;
+    if (f->xform_map != NULL && f->orig_src != NULL) {
+        mapped = *f;
+        mapped.src = f->orig_src;
+        mapped.len = f->orig_len;
+        size_t orig_start = sweet_map_translate_offset(f->xform_map, span.off_start);
+        size_t orig_end   = sweet_map_translate_offset(f->xform_map, span.off_end);
+        /* Recompute line/col from the original offsets. */
+        uint32_t line = 1, col = 1;
+        for (size_t i = 0; i < orig_start && i < mapped.len; i++) {
+            if (mapped.src[i] == '\n') { line++; col = 1; }
+            else col++;
+        }
+        span.line = line;
+        span.col_start = col;
+        uint32_t line_e = line, col_e = col;
+        for (size_t i = orig_start; i < orig_end && i < mapped.len; i++) {
+            if (mapped.src[i] == '\n') { line_e++; col_e = 1; }
+            else col_e++;
+        }
+        (void)line_e;
+        span.col_end = col_e;
+        span.off_start = (uint32_t)orig_start;
+        span.off_end = (uint32_t)orig_end;
+        f = &mapped;
+    }
+
     const SnippetOpts default_opts = SNIPPET_OPTS_DEFAULT;
     const SnippetOpts *o = opts ? opts : &default_opts;
     

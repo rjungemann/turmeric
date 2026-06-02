@@ -8,7 +8,7 @@
 
 ## Overview
 
-`tur fmt` formats `.tur` and `.tursweet` source files in place, applying the
+`tur fmt` formats `.tur` and `.tur.sweet` source files in place, applying the
 indentation and style rules already documented in this repo's
 `CLAUDE.md`. It is built into the `tur` binary; no external dependency.
 The formatter is **idempotent** (`fmt(fmt(x)) == fmt(x)`) and **syntax-style
@@ -25,13 +25,13 @@ recipes are honest on day one.
 ## CLI
 
 ```sh
-tur fmt                              # format every .tur and .tursweet under cwd
+tur fmt                              # format every .tur and .tur.sweet under cwd
 tur fmt src/ tests/                  # format only the given paths (files or dirs)
 tur fmt --check                      # exit non-zero if any file would change; print the list
 tur fmt --check --diff               # like --check, but also print unified diffs
 tur fmt --stdout path/file.tur       # print formatted output to stdout, do not write
 tur fmt --stdin                      # read from stdin, write formatted to stdout
-tur fmt --stdin --lang tursweet      # tell the formatter which dialect stdin is
+tur fmt --stdin --lang sweet-exp      # tell the formatter which dialect stdin is
 
 # Pass-through to the existing tur permission model (no surprises here):
 tur fmt --dry-run src/               # alias for --check (matches `tur build --dry-run`)
@@ -133,7 +133,7 @@ tests/tur/fmt/
   normalization), character literals, numeric literals (no canonicalization
   of integer / float representations).
 
-- [ ] **FT5** -- `tur/fmt/detect` (`.tursweet` extension, or `#lang
+- [ ] **FT5** -- `tur/fmt/detect` (`.tur.sweet` extension, or `#lang
   sweet-exp` first-line directive); `tur/fmt/print-sweet` applies sweet-exp
   style rules (preserve neoteric / `$` / curly-infix verbatim; normalize
   indentation to the CLAUDE.md examples); output matches the sweet-exp
@@ -149,7 +149,7 @@ tests/tur/fmt/
   self-formatted, the formatter is not done. Land any whitespace-only
   cleanups to stdlib in a single commit so the diff is reviewable.
 
-- [ ] **FT8** -- **Idempotence test**: for every `.tur` and `.tursweet`
+- [ ] **FT8** -- **Idempotence test**: for every `.tur` and `.tur.sweet`
   file in stdlib and in every spice's `src/`, assert `fmt(fmt(x)) ==
   fmt(x)` byte-for-byte. Run as part of CI.
 
@@ -173,10 +173,10 @@ drift on every PR.
 
 ### Why preserve sweet-exp vs s-exp instead of canonicalizing
 
-`.tur` and `.tursweet` are different languages-of-presentation, chosen by
+`.tur` and `.tur.sweet` are different languages-of-presentation, chosen by
 the file author for readability reasons. Forcing one onto the other would
 make the formatter a refactoring tool, not a layout tool -- a much larger
-scope and a much riskier set of edits (a `.tursweet` file converted to
+scope and a much riskier set of edits (a `.tur.sweet` file converted to
 `.tur` may still parse but read worse). The formatter respects the
 author's choice of dialect and only normalizes layout within it.
 
@@ -213,7 +213,7 @@ landing, `tur fmt --check stdlib/` runs in CI on every commit.
    s-exp (indentation is significant, neoteric and `$` and curly-infix
    coexist). FT5 carries the highest implementation risk; the
    `examples/` in CLAUDE.md form the test corpus, supplemented by every
-   `.tursweet` file in the codebase.
+   `.tur.sweet` file in the codebase.
 
 2. **Inline-C block contents.** `tur fmt` must not touch the C inside a
    ` ```c ... ``` ` block (the formatter is not a C formatter). FT4's

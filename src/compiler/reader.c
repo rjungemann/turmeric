@@ -2,6 +2,7 @@
 #include "reader_macros.h"
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 #include "globals.h" /* DL0: g_data_literals_enabled */
+#include "buf.h"     /* sweet-exp preprocessor */
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -2948,16 +2949,616 @@ static int try_consume_use_directive(Reader *r,
     return 1;
 }
 
+/* ===========================================================================
+ * Sweet-expression (SRFI-110 t-expression) preprocessor.
+ *
+ * Indent-sensitive sweet-exp source is transformed into plain s-expression
+ * text by inserting implicit `(` and `)` around each indent-determined
+ * grouping; the result is then fed through the regular reader with
+ * curly-infix and neoteric enabled, so inline forms like `f(x)` and
+ * `{a + b}` keep working unchanged.
+ *
+ * Algorithm:
+ *   1. Walk the source and split it into logical lines.  A logical line
+ *      may span several physical lines when:
+ *        - bracket groups `(...)` `[...]` `{...}` cross newlines;
+ *        - inside a string literal `"..."`;
+ *        - inside a block comment `#| ... |#`.
+ *
+ *   2. For each logical line compute its indent column (leading
+ *      whitespace expanded with tab stops every 8 columns) and content
+ *      range.  Blank / comment-only lines are flagged and skipped during
+ *      structural analysis.
+ *
+ *   3. Walk the line list recursively.  Each "node" is one non-blank
+ *      logical line plus every subsequent line at strictly deeper
+ *      indent.  An "element" is either a head token (counted from the
+ *      line content honoring brackets, strings, comments and `$`) or
+ *      one immediate child sub-node.  When a node has more than one
+ *      element, a `(` is recorded for the head line and a matching `)`
+ *      for the last physical line of the node's last descendant.
+ *
+ *   4. Emit transformed text by walking the line list and inserting the
+ *      recorded `(` / `)` at the right positions.  Newlines are
+ *      preserved so diagnostic line numbers stay accurate.  Column
+ *      positions can shift by the number of inserted parens; this is
+ *      best-effort and acceptable.
+ *
+ *   5. `$` rest-of-line: a `$` token at top level (not inside
+ *      brackets/string/comment) wraps the rest of the line in `(` `)`,
+ *      i.e. `f $ g x` becomes `f (g x)`.  Counts as a single element
+ *      for wrap decisions.
+ *
+ * Unsupported (yet): `\\` group operator, explicit `\` line
+ * continuation.  Block-comment lines are treated as regular
+ * non-blank content; using them for indent grouping is undefined.
+ * =========================================================================*/
+
+/* Map builder shared by the emitter to record xform→original byte runs. */
+static void sweet_map_add_run(SweetMap *m, size_t xform_off,
+                               size_t orig_off, size_t n) {
+    if (n == 0 || !m) return;
+    if (m->n_runs > 0) {
+        SweetMapRun *last = &m->runs[m->n_runs - 1];
+        if (last->xform_offset + last->length == xform_off &&
+            last->orig_offset  + last->length == orig_off) {
+            last->length += (uint32_t)n;
+            return;
+        }
+    }
+    if (m->n_runs == m->cap_runs) {
+        size_t new_cap = m->cap_runs ? m->cap_runs * 2 : 64;
+        SweetMapRun *grown = (SweetMapRun *)realloc(m->runs,
+                                  new_cap * sizeof *grown);
+        if (!grown) return;
+        m->runs = grown;
+        m->cap_runs = new_cap;
+    }
+    m->runs[m->n_runs].xform_offset = (uint32_t)xform_off;
+    m->runs[m->n_runs].orig_offset  = (uint32_t)orig_off;
+    m->runs[m->n_runs].length       = (uint32_t)n;
+    m->n_runs++;
+}
+
+size_t sweet_map_translate_offset(const SweetMap *m, size_t xform_off) {
+    if (!m || m->n_runs == 0) return xform_off;
+    /* Binary search for the rightmost run with xform_offset <= xform_off. */
+    size_t lo = 0, hi = m->n_runs;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (m->runs[mid].xform_offset <= xform_off) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo == 0) return m->runs[0].orig_offset;
+    const SweetMapRun *r = &m->runs[lo - 1];
+    if (xform_off < (size_t)r->xform_offset + r->length) {
+        return (size_t)r->orig_offset + (xform_off - r->xform_offset);
+    }
+    return (size_t)r->orig_offset + r->length;
+}
+
+/* Emit helpers used by the preprocessor: emit_copy_ records a run in
+ * the map; emit_insert_ does not (the bytes are reader-inserted). */
+typedef struct SweetEmit {
+    Buf      *out;
+    SweetMap *map;
+} SweetEmit;
+
+static void emit_copy_(SweetEmit *e, const char *src, size_t orig_off, size_t n) {
+    if (n == 0) return;
+    sweet_map_add_run(e->map, e->out->len, orig_off, n);
+    buf_write(e->out, src + orig_off, n);
+}
+
+static void emit_copy_char_(SweetEmit *e, const char *src, size_t orig_off) {
+    sweet_map_add_run(e->map, e->out->len, orig_off, 1);
+    buf_putc(e->out, src[orig_off]);
+}
+
+static void emit_insert_char_(SweetEmit *e, char c) {
+    buf_putc(e->out, c);
+}
+
+typedef struct SweetLine {
+    size_t phys_start;     /* offset of first physical line start (col 0) */
+    size_t content_start;  /* offset of first non-indent char */
+    size_t content_end;    /* offset where logical line ends (at \n or EOF) */
+    int    indent;         /* indent column (tab-expanded) */
+    bool   blank;          /* blank or comment-only line */
+    bool   is_group;       /* leading `\\` marker — line is transparent to parent */
+    int    open_count;     /* `(` to emit before content */
+    int    close_count;    /* `)` to emit after content */
+    int    contributes_elems; /* elements this node contributes to its parent
+                               * (1 for regular wrapped lines, >=0 for group
+                               * lines where tokens + child contributions
+                               * flatten into the parent's element list) */
+} SweetLine;
+
+static size_t sweet_indent_bytes(const char *s, size_t i, size_t end) {
+    size_t start = i;
+    while (i < end && (s[i] == ' ' || s[i] == '\t')) i++;
+    return i - start;
+}
+
+static int sweet_indent_col(const char *s, size_t i, size_t end) {
+    int col = 0;
+    while (i < end) {
+        char c = s[i];
+        if (c == ' ') { col++; i++; }
+        else if (c == '\t') { col += 8 - (col % 8); i++; }
+        else break;
+    }
+    return col;
+}
+
+/* If src[i] is a `\` line-continuation marker (a `\` followed only by
+ * optional spaces/tabs and then `\n`), return the position past the
+ * newline and any leading whitespace of the next physical line.
+ * Otherwise return i unchanged.  Caller is responsible for ensuring this
+ * runs only at top level (bd == 0, !in_str, !in_bc). */
+static size_t sweet_skip_line_cont(const char *src, size_t i, size_t end) {
+    if (i >= end || src[i] != '\\') return i;
+    size_t k = i + 1;
+    while (k < end && (src[k] == ' ' || src[k] == '\t')) k++;
+    if (k >= end || src[k] != '\n') return i;
+    k++;
+    while (k < end && (src[k] == ' ' || src[k] == '\t')) k++;
+    return k;
+}
+
+/* Detect a leading GROUP marker.  Per SRFI-110, the marker is a pair of
+ * backslashes (`\\` — two characters) immediately after the line's
+ * indent, either alone on the line or followed by whitespace and more
+ * content.  Two backslashes (instead of one) distinguish the GROUP
+ * marker from the `\` line-continuation marker. */
+static bool sweet_line_is_group(const char *s, size_t i, size_t end) {
+    if (i + 1 >= end) return false;
+    if (s[i] != '\\' || s[i + 1] != '\\') return false;
+    if (i + 2 >= end) return true;
+    char n = s[i + 2];
+    return (n == ' ' || n == '\t' || n == '\n' || n == '\r');
+}
+
+/* Advance past the GROUP marker (`\\` and any trailing spaces/tabs).
+ * The caller ensures the line is a group line.  Returns the position of
+ * the first post-marker character (which may equal end). */
+static size_t sweet_skip_group_marker(const char *s, size_t i, size_t end) {
+    if (i + 1 < end && s[i] == '\\' && s[i + 1] == '\\') i += 2;
+    while (i < end && (s[i] == ' ' || s[i] == '\t')) i++;
+    return i;
+}
+
+static bool sweet_line_is_blank(const char *s, size_t i, size_t end) {
+    size_t orig = i;
+    while (i < end && (s[i] == ' ' || s[i] == '\t')) i++;
+    if (i >= end) return true;
+    char c = s[i];
+    if (c == '\n' || c == '\r' || c == ';') return true;
+    /* Shebang at file start is treated as a blank line; the preprocessor
+     * emits it verbatim, and the regular reader skips it via the
+     * `#!`-at-byte-0 check in read_all_with_registry. */
+    if (orig == 0 && c == '#' && i + 1 < end && s[i + 1] == '!') return true;
+    return false;
+}
+
+/* Count top-level whitespace-separated elements in [start, end).
+ * Bracket groups, strings, and block comments are each one element.
+ * Line comments end the count.  `$` followed by whitespace consumes
+ * the rest of the line into a single element. */
+static int sweet_count_elements(const char *src, size_t start, size_t end) {
+    int count = 0;
+    bool in_tok = false;   /* mid-token at bd == 0 */
+    int  bd = 0;
+    bool in_str = false, in_bc = false;
+    size_t i = start;
+    while (i < end) {
+        char c = src[i];
+        if (in_str) {
+            if (c == '\\' && i + 1 < end) { i += 2; continue; }
+            if (c == '"') {
+                in_str = false;
+                i++;
+                if (bd == 0) in_tok = false;
+                continue;
+            }
+            i++; continue;
+        }
+        if (in_bc) {
+            if (c == '|' && i + 1 < end && src[i + 1] == '#') {
+                in_bc = false; i += 2;
+                if (bd == 0) in_tok = false;
+                continue;
+            }
+            i++; continue;
+        }
+        if (bd > 0) {
+            /* Inside an open bracket group: track structure only. */
+            if (c == '"') { in_str = true; i++; continue; }
+            if (c == '#' && i + 1 < end && src[i + 1] == '|') {
+                in_bc = true; i += 2; continue;
+            }
+            if (c == '(' || c == '[' || c == '{') { bd++; i++; continue; }
+            if (c == ')' || c == ']' || c == '}') {
+                bd--; i++;
+                if (bd == 0) in_tok = false;
+                continue;
+            }
+            i++; continue;
+        }
+        /* bd == 0 */
+        if (c == ';') break;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            in_tok = false; i++; continue;
+        }
+        if (c == '\\') {
+            size_t k = sweet_skip_line_cont(src, i, end);
+            if (k != i) { in_tok = false; i = k; continue; }
+        }
+        if (c == '"') {
+            if (!in_tok) { count++; in_tok = true; }
+            in_str = true; i++; continue;
+        }
+        if (c == '#' && i + 1 < end && src[i + 1] == '|') {
+            if (!in_tok) { count++; in_tok = true; }
+            in_bc = true; i += 2; continue;
+        }
+        if (c == '(' || c == '[' || c == '{') {
+            if (!in_tok) { count++; in_tok = true; }
+            bd++; i++; continue;
+        }
+        if (c == ')' || c == ']' || c == '}') {
+            /* Unmatched close at top level — treat as boundary. */
+            in_tok = false; i++; continue;
+        }
+        if (c == '$' && (i + 1 >= end ||
+                         src[i + 1] == ' ' || src[i + 1] == '\t')) {
+            count++;
+            i++;
+            while (i < end && src[i] != ';' && src[i] != '\n') {
+                if (src[i] == '\\') {
+                    size_t k = sweet_skip_line_cont(src, i, end);
+                    if (k != i) { i = k; continue; }
+                }
+                i++;
+            }
+            in_tok = false;
+            continue;
+        }
+        if (!in_tok) { count++; in_tok = true; }
+        i++;
+    }
+    return count;
+}
+
+static SweetLine *sweet_collect_lines(const char *src, size_t len,
+                                       size_t *out_n) {
+    SweetLine *lines = NULL;
+    size_t cap = 0, n = 0;
+
+    size_t i = 0;
+    while (i < len) {
+        size_t phys_start = i;
+        size_t indent_bytes = sweet_indent_bytes(src, i, len);
+        int indent = sweet_indent_col(src, i, len);
+        size_t content_start = phys_start + indent_bytes;
+        bool blank = sweet_line_is_blank(src, phys_start, len);
+        bool is_group = !blank &&
+                        sweet_line_is_group(src, content_start, len);
+
+        /* Scan to end of logical line.  When the line opens with a GROUP
+         * marker (`\\`), step past it before the scanner runs so the bare
+         * `\\` is not misread as a `\\`-line-continuation. */
+        int bd = 0;
+        bool in_str = false, in_bc = false;
+        size_t j = content_start;
+        if (is_group) j = sweet_skip_group_marker(src, j, len);
+        while (j < len) {
+            char c = src[j];
+            if (in_str) {
+                if (c == '\\' && j + 1 < len) { j += 2; continue; }
+                if (c == '"') in_str = false;
+                j++; continue;
+            }
+            if (in_bc) {
+                if (c == '|' && j + 1 < len && src[j + 1] == '#') {
+                    in_bc = false; j += 2; continue;
+                }
+                j++; continue;
+            }
+            if (c == '"') { in_str = true; j++; continue; }
+            if (c == '#' && j + 1 < len && src[j + 1] == '|') {
+                in_bc = true; j += 2; continue;
+            }
+            if (c == ';') {
+                while (j < len && src[j] != '\n') j++;
+                continue;
+            }
+            if (bd == 0 && c == '\\') {
+                size_t k = sweet_skip_line_cont(src, j, len);
+                if (k != j) { j = k; continue; }
+            }
+            if (c == '(' || c == '[' || c == '{') { bd++; j++; continue; }
+            if (c == ')' || c == ']' || c == '}') {
+                if (bd > 0) bd--;
+                j++; continue;
+            }
+            if (c == '\n') {
+                if (bd == 0) break;
+                j++; continue;
+            }
+            j++;
+        }
+
+        if (n == cap) {
+            cap = cap ? cap * 2 : 32;
+            SweetLine *grown = (SweetLine *)realloc(lines, cap * sizeof *grown);
+            if (!grown) { free(lines); *out_n = 0; return NULL; }
+            lines = grown;
+        }
+        SweetLine *L = &lines[n++];
+        L->phys_start = phys_start;
+        L->content_start = content_start;
+        L->content_end = j;
+        L->indent = indent;
+        L->blank = blank;
+        L->is_group = is_group;
+        L->open_count = 0;
+        L->close_count = 0;
+        L->contributes_elems = 1;
+
+        if (j < len && src[j] == '\n') j++;
+        i = j;
+    }
+
+    *out_n = n;
+    return lines;
+}
+
+/* Recursively annotate open/close counts.  Returns index of the last
+ * line consumed by this node (so the caller can resume after it).
+ *
+ * Also sets H->contributes_elems to the number of elements this node
+ * contributes to its parent's element list.  Normal (non-group) nodes
+ * always contribute 1 (the bare-token or wrapped form).  GROUP nodes
+ * contribute their post-`\\` head tokens plus the sum of their
+ * children's contributions, flattening into the parent. */
+static size_t sweet_analyze_node(SweetLine *lines, size_t n_lines,
+                                  const char *src, size_t idx) {
+    SweetLine *H = &lines[idx];
+    int my_indent = H->indent;
+    size_t head_start = H->content_start;
+    if (H->is_group)
+        head_start = sweet_skip_group_marker(src, head_start, H->content_end);
+    int head_elems = sweet_count_elements(src, head_start, H->content_end);
+
+    size_t last = idx;
+    int child_contrib = 0;
+    size_t j = idx + 1;
+    while (j < n_lines) {
+        if (lines[j].blank) { j++; continue; }
+        if (lines[j].indent <= my_indent) break;
+        size_t child_first = j;
+        last = sweet_analyze_node(lines, n_lines, src, j);
+        child_contrib += lines[child_first].contributes_elems;
+        j = last + 1;
+    }
+
+    if (H->is_group) {
+        /* GROUP line is transparent: do not wrap; flatten own tokens and
+         * children's contributions into the parent. */
+        H->contributes_elems = head_elems + child_contrib;
+    } else {
+        if (head_elems + child_contrib > 1) {
+            H->open_count++;
+            lines[last].close_count++;
+        }
+        H->contributes_elems = 1;
+    }
+    return last;
+}
+
+static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
+                               const char *src) {
+    size_t i = 0;
+    while (i < n_lines) {
+        if (lines[i].blank) { i++; continue; }
+        size_t last = sweet_analyze_node(lines, n_lines, src, i);
+        i = last + 1;
+    }
+}
+
+/* Emit the line content with `$` rewritten to `(<rest-of-line>)`.
+ * Records xform→original byte runs in e->map (when non-NULL) so
+ * diagnostic snippets can be rendered from the user's original source. */
+static void sweet_emit_content(SweetEmit *e, const char *src,
+                                size_t start, size_t end) {
+    int bd = 0;
+    bool in_str = false, in_bc = false;
+    size_t i = start;
+    while (i < end) {
+        char c = src[i];
+        if (in_str) {
+            emit_copy_char_(e, src, i);
+            if (c == '\\' && i + 1 < end) {
+                emit_copy_char_(e, src, i + 1); i += 2; continue;
+            }
+            if (c == '"') in_str = false;
+            i++; continue;
+        }
+        if (in_bc) {
+            emit_copy_char_(e, src, i);
+            if (c == '|' && i + 1 < end && src[i + 1] == '#') {
+                emit_copy_char_(e, src, i + 1); in_bc = false; i += 2; continue;
+            }
+            i++; continue;
+        }
+        if (bd == 0 && c == ';') {
+            /* copy the comment through to EOL */
+            size_t j = i;
+            while (j < end && src[j] != '\n') j++;
+            emit_copy_(e, src, i, j - i);
+            i = j;
+            continue;
+        }
+        if (c == '"') { in_str = true; emit_copy_char_(e, src, i); i++; continue; }
+        if (c == '#' && i + 1 < end && src[i + 1] == '|') {
+            in_bc = true; emit_copy_char_(e, src, i); emit_copy_char_(e, src, i + 1);
+            i += 2; continue;
+        }
+        if (c == '(' || c == '[' || c == '{') { bd++; emit_copy_char_(e, src, i); i++; continue; }
+        if (c == ')' || c == ']' || c == '}') {
+            if (bd > 0) bd--;
+            emit_copy_char_(e, src, i); i++; continue;
+        }
+        if (c == '\\') {
+            size_t k = sweet_skip_line_cont(src, i, end);
+            if (k != i) {
+                /* Locate the `\n` (skip the optional spaces/tabs the
+                 * line-cont allows between `\` and the newline). */
+                size_t nl = i + 1;
+                while (nl < end && (src[nl] == ' ' || src[nl] == '\t')) nl++;
+                /* Emit `\n` (inserted) so transformed line count matches
+                 * the user's source, then re-emit the next physical
+                 * line's indent so token columns stay accurate.  The
+                 * trailing indent IS from the original source — record
+                 * it as a copy. */
+                emit_insert_char_(e, '\n');
+                size_t ind = (nl < end) ? nl + 1 : nl;
+                if (ind < k) emit_copy_(e, src, ind, k - ind);
+                i = k;
+                continue;
+            }
+        }
+        if (bd == 0 && c == '$' &&
+            (i + 1 >= end || src[i + 1] == ' ' || src[i + 1] == '\t')) {
+            /* Replace `$ <rest>` with `(<rest>)`. */
+            emit_insert_char_(e, '(');
+            i++;
+            /* Skip the whitespace immediately after `$`. */
+            while (i < end && (src[i] == ' ' || src[i] == '\t')) i++;
+            /* Recurse on the remaining content of the line so a second
+             * `$` further along still works (left-associative would also
+             * be valid; SRFI-105/110 says `$` is right-associative inside
+             * a line — recursing matches that). */
+            size_t rest_end = i;
+            while (rest_end < end && src[rest_end] != '\n' && src[rest_end] != ';')
+                rest_end++;
+            size_t rs = i;
+            while (rs < end && src[rs] != '\n' && src[rs] != ';') {
+                if (src[rs] == '\\') {
+                    size_t k = sweet_skip_line_cont(src, rs, end);
+                    if (k != rs) { rs = k; continue; }
+                }
+                rs++;
+            }
+            rest_end = rs;
+            sweet_emit_content(e, src, i, rest_end);
+            emit_insert_char_(e, ')');
+            i = rest_end;
+            continue;
+        }
+        emit_copy_char_(e, src, i);
+        i++;
+    }
+}
+
+static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
+                               size_t *out_len, SweetMap *out_map) {
+    size_t n_lines = 0;
+    SweetLine *lines = sweet_collect_lines(src, len, &n_lines);
+    if (!lines && n_lines == 0) {
+        char *empty = (char *)arena_alloc(arena, 1);
+        empty[0] = 0;
+        *out_len = 0;
+        return empty;
+    }
+    sweet_analyze_top(lines, n_lines, src);
+
+    Buf b; buf_init(&b);
+    SweetEmit emit = { .out = &b, .map = out_map };
+    size_t cur = 0;
+    for (size_t i = 0; i < n_lines; i++) {
+        SweetLine *L = &lines[i];
+
+        /* Copy anything between cur and phys_start verbatim (normally
+         * empty — physical lines are contiguous). */
+        if (cur < L->phys_start)
+            emit_copy_(&emit, src, cur, L->phys_start - cur);
+
+        /* Indent whitespace (verbatim copy from the original line). */
+        if (L->content_start > L->phys_start)
+            emit_copy_(&emit, src, L->phys_start,
+                       L->content_start - L->phys_start);
+
+        /* Implicit opens (inserted, no original counterpart). */
+        for (int k = 0; k < L->open_count; k++) emit_insert_char_(&emit, '(');
+
+        /* Content, with `$` rewrites.  For GROUP lines, skip the leading
+         * `\\` marker so it does not appear in the output. */
+        size_t cstart = L->content_start;
+        if (L->is_group)
+            cstart = sweet_skip_group_marker(src, cstart, L->content_end);
+        sweet_emit_content(&emit, src, cstart, L->content_end);
+
+        /* Implicit closes (inserted). */
+        for (int k = 0; k < L->close_count; k++) emit_insert_char_(&emit, ')');
+
+        /* Trailing newline (copied from original). */
+        cur = L->content_end;
+        if (cur < len && src[cur] == '\n') {
+            emit_copy_char_(&emit, src, cur);
+            cur++;
+        }
+    }
+    if (cur < len) emit_copy_(&emit, src, cur, len - cur);
+
+    char *result = (char *)arena_alloc(arena, b.len + 1);
+    memcpy(result, b.data, b.len);
+    result[b.len] = 0;
+    *out_len = b.len;
+    buf_free(&b);
+    free(lines);
+    return result;
+}
+
 Form **read_all_with_registry(Arena *arena, SymbolTable *st,
                               const SourceFile *file,
                               struct ReaderMacroRegistry *external_reg,
                               uint32_t *out_count) {
+    /* For READER_SWEET, run the t-expression preprocessor first.  The
+     * transformed source replaces the SourceFile in the diag registry so
+     * that span offsets recorded in Forms (which index into r.src) match
+     * what diagnostics print as the file's contents. */
+    const SourceFile *eff_file = file;
+    if (file->reader_type == READER_SWEET) {
+        size_t xlen = 0;
+        SweetMap *xmap = (SweetMap *)arena_alloc(arena, sizeof *xmap);
+        xmap->runs = NULL;
+        xmap->n_runs = 0;
+        xmap->cap_runs = 0;
+        char  *xsrc = sweet_preprocess(arena, file->src, file->len, &xlen, xmap);
+        /* TUR_SWEET_DUMP=1 prints the preprocessed source for debugging. */
+        if (getenv("TUR_SWEET_DUMP")) {
+            fprintf(stderr, "==== sweet-exp preprocessed (%s) ====\n%.*s====\n",
+                    file->path, (int)xlen, xsrc);
+        }
+        SourceFile *xfile = (SourceFile *)arena_alloc(arena, sizeof *xfile);
+        *xfile = *file;
+        xfile->src = xsrc;
+        xfile->len = xlen;
+        xfile->orig_src = file->src;
+        xfile->orig_len = file->len;
+        xfile->xform_map = xmap;
+        diag_register_file(xfile);
+        eff_file = xfile;
+    }
+
     Reader r;
-    r.file = file;
+    r.file = eff_file;
     r.arena = arena;
     r.st = st;
-    r.src = file->src;
-    r.len = file->len;
+    r.src = eff_file->src;
+    r.len = eff_file->len;
     r.pos = 0;
     r.line = 1;
     r.col = 1;
@@ -2993,6 +3594,17 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
             break;
         case READER_UNKNOWN:
             break;
+    }
+
+    /* Skip a Racket-style shebang line at file start (`#!/usr/bin/env tur`
+     * etc.).  The shebang is recognized only at byte 0 and must look like
+     * `#!` followed by `/`, whitespace, or EOL — leaving `#!fold-case`-style
+     * future reader directives unaffected. */
+    if (r.len >= 2 && r.src[0] == '#' && r.src[1] == '!' &&
+        (r.len < 3 || r.src[2] == '/' || r.src[2] == ' ' || r.src[2] == '\t' ||
+         r.src[2] == '\n' || r.src[2] == '\r')) {
+        while (r.pos < r.len && r.src[r.pos] != '\n') r.pos++;
+        if (r.pos < r.len) { r.pos++; r.line++; r.col = 1; }
     }
 
     Form **forms = NULL;
@@ -3058,10 +3670,21 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 /* #lang directive detection and reader type utilities */
 
 /* Parse #lang directive from the first line of source */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest, 
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
                        size_t *out_rest_len) {
     const char *p = src;
     size_t remaining = len;
+
+    /* Racket-style shebang: if the file starts with `#!` (followed by `/` or
+     * whitespace, to disambiguate from any future `#!`-dispatched form),
+     * skip the whole shebang line so `#lang ...` on the next line is still
+     * detected. */
+    if (remaining >= 2 && p[0] == '#' && p[1] == '!' &&
+        (remaining < 3 || p[2] == '/' || p[2] == ' ' || p[2] == '\t' ||
+         p[2] == '\n' || p[2] == '\r')) {
+        while (remaining > 0 && *p != '\n') { p++; remaining--; }
+        if (remaining > 0) { p++; remaining--; }  /* past the newline */
+    }
 
     /* Skip leading whitespace (but not newlines - #lang must be first line) */
     while (remaining > 0 && (p[0] == ' ' || p[0] == '\t')) {
@@ -3127,10 +3750,9 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
 
 /* Get reader type from file extension */
 ReaderType reader_type_from_extension(const char *path) {
-    const char *ext = strrchr(path, '.');
-    if (!ext) return READER_TURMERIC;
-
-    if (strcmp(ext, ".tursweet") == 0) {
+    if (!path) return READER_TURMERIC;
+    size_t n = strlen(path);
+    if (n >= 10 && strcmp(path + n - 10, ".tur.sweet") == 0) {
         return READER_SWEET;
     }
     return READER_TURMERIC;
@@ -3158,7 +3780,7 @@ bool reader_type_is_implemented(ReaderType type) {
         case READER_NEOTERIC:
             return true; /* Phase S2: neoteric is now implemented */
         case READER_SWEET:
-            return true; /* curly-infix + neoteric are implemented; full indent-sensitive sweet-exp is not */
+            return true; /* indent-sensitive t-expressions + curly-infix + neoteric */
         default:
             return false;
     }

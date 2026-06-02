@@ -130,7 +130,7 @@ several "Not started" / "Partial" entries here proved stale):
 | # | Feature | Guide phase tag | Current state |
 |---|---|---|---|
 | 1 | `?` query operator | R1 | **Mostly implemented** in compiler (`elab_question` in `src/compiler/elab_forms.c:2292`) + stdlib helpers (`__tur-q-is-err?`, `__tur-q-ok-val` in `stdlib/result.tur:194`). Passing fixtures: `tests/fixtures/result-question-op{,-chain}`. **Undocumented** in the guide. |
-| 2 | `catch-unwind` | R2 | **Partial.** Runtime has `tur_panic_payload`, `tur_panic_with`, `EX_CATCH_UNWIND` AST node, interpreter `catch_jmp` setjmp boundary in `src/turi/env.h:154`. Stub fixture `tests/fixtures/panic-catch-unwind` only verifies it compiles. No stdlib surface, no end-to-end test, no docs. |
+| 2 | `catch-unwind` | R2 | **Partial.** Runtime has `tur_panic_payload`, `tur_panic_with`, `EX_CATCH_UNWIND` AST node, interpreter `catch_jmp` setjmp boundary in `src/turi/env.h:154`. Stub fixture `tests/fixtures/panic-catch-unwind` only verifies it compiles. Missing stdlib surface, end-to-end test, and docs. |
 | 3 | `--no-contracts` flag | C2 | Not started. `stdlib/contract.tur` already calls `contract-enabled?` which is hard-coded to `true`; the flag flips a compiler constant and a stdlib function. |
 | 4 | `--warn-unused-result` | R6 | Not started. Requires `ignore!`-aware lint pass over `result`-typed call expressions in statement position. |
 | 5 | `--lint-panic` | R6 | Not started. Requires a call-site walker plus a per-source-file allow-list. |
@@ -439,7 +439,7 @@ row 4 of the **Deferred** table.
 - `tests/fixtures/lint-panic-file-allow/` -- file-level allow.
 - `tests/fixtures/lint-panic-call-allow/` -- per-call allow.
 - `tests/fixtures/lint-panic-asserts/` -- contract macros warn.
-- `tests/fixtures/lint-panic-off/` -- no flag, no warning.
+- `tests/fixtures/lint-panic-off/` -- flag absent, so the warning stays silent.
 - `tests/fixtures/lint-panic-unwrap/` -- `(result-unwrap ...)` / `(option-unwrap
   ...)` warn with the `prefer *-must` text (resolved OQ#1 soft-deprecation).
 

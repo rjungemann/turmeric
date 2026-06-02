@@ -26,31 +26,34 @@ This installs the `tur` compiler via the Homebrew formula in this repo.
 
 **Build from source:**
 
-Prerequisites: a C99 compiler, CMake 3.20+, and optionally [`just`](https://github.com/casey/just).
+Prerequisites: a C99 compiler and CMake 3.20+.
 
 ```sh
 git clone https://github.com/rjungemann/turmeric.git
 cd turmeric
-just configure   # cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug ...
-just             # debug build with AddressSanitizer + UBSan
-just release     # optimized build (no sanitizers)
-```
-
-Or with plain CMake:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5  # debug + sanitizers
 cmake --build build -j
 ```
 
-The compiler binary lands at `build/tur`.
+Release build:
+
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build-release -j
+```
+
+The compiler binary lands at `build/tur` (or `build-release/tur`).
 
 **Run the tests:**
 
 ```sh
-just test
+bash tests/run.sh
 # or: ctest --output-on-failure --test-dir build
 ```
+
+Once `tur` is on `PATH`, the project's `Justfile` recipes (build, test,
+docs, wasm, web-dev, ...) are runnable via `tur run <recipe>` -- no extra
+`just` binary required.
 
 ## Usage
 

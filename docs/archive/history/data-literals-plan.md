@@ -305,7 +305,7 @@ Option (b) parallels the existing `vec-of` shape and is preferred.
 
 ### DL2 -- Sweet-exp interaction
 
-Verify the literals work inside `.tursweet` files alongside indentation,
+Verify the literals work inside `.tur.sweet` files alongside indentation,
 neoteric, and `$` rest-of-line. The reader changes happen below the
 sweet-exp layer, so this should work transparently -- but add a fixture
 to lock in the behavior:
@@ -346,7 +346,7 @@ Add test fixtures under `tests/fixtures/`:
 - `data-literal-set-no-hash` -- `#set{(some-opaque)}` where the element
   type lacks a `Hash` instance produces the usual constraint-resolution
   error (regression guard for the auto-inserted `(hash x)` call)
-- `data-literal-sweet-exp` -- works inside `.tursweet`
+- `data-literal-sweet-exp` -- works inside `.tur.sweet`
 
 ### DL4 -- Docstrings, guide, and JSON-reader relationship
 
@@ -361,7 +361,7 @@ Add test fixtures under `tests/fixtures/`:
   mark it as superseded for the mixed-value case, or scope it down to
   "JSON-source-paste only."
 - Update `CLAUDE.md` Sweet-Expression Style section to mention the new
-  literal forms (since `.tursweet` is the most common place they will
+  literal forms (since `.tur.sweet` is the most common place they will
   appear).
 
 ### DL5 -- Constrained literal helpers for `#set{...}`

@@ -1,0 +1,6 @@
+#!/usr/bin/env tur
+#lang sweet-exp
+
+defn main [] :int
+  println("shebang plus #lang sweet-exp")
+  0

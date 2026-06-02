@@ -245,7 +245,7 @@ rather than collapsing everything to <code>:int</code> (and <code>null</code> to
 node's own representation; the typed-decode path lives in the <code>tur/schema</code>
 reader family <code>#json-str&lt;T&gt;(expr)</code>, which desugars to
 <code>(:: (decode! (json/decode expr)) T)</code> under <code>-Xschema-reader</code>. See the
-<a href="schema-guide.md">schema guide</a> for <code>HasSchema</code> and typed decoding.</p>
+<a href="schema-guide.html">schema guide</a> for <code>HasSchema</code> and typed decoding.</p>
 <h2 id="runtime-json-turjson">Runtime JSON: <code>tur/json</code></h2>
 <p>When the JSON is not known at compile time (read from a file, a socket, user
 input), use the runtime library:</p>

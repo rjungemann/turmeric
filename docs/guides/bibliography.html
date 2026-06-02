@@ -78,17 +78,35 @@
       <div style="margin-bottom:1.25rem">
         <a href="index.html" style="font-size:0.8rem;color:var(--text-sec)">← All Guides</a>
       </div>
+      <hr class="sidebar-divider">
       <h3>On this page</h3>
       <ul><li style=""><a href="#bibliography" style="">Bibliography</a></li>
 <li style=""><a href="#type-inference" style="">Type Inference</a></li>
 <li style=""><a href="#gadts-and-higher-rank-polymorphism" style="">GADTs and Higher-Rank Polymorphism</a></li>
 <li style=""><a href="#algebraic-effects-and-handlers" style="">Algebraic Effects and Handlers</a></li>
+<li style=""><a href="#delimited-continuations" style="">Delimited Continuations</a></li>
 <li style=""><a href="#contract-types" style="">Contract Types</a></li>
 <li style=""><a href="#intersection-and-union-types" style="">Intersection and Union Types</a></li>
 <li style=""><a href="#session-types" style="">Session Types</a></li>
 <li style=""><a href="#substructural-and-linear-types" style="">Substructural and Linear Types</a></li>
 <li style=""><a href="#refinement-types-and-program-verification" style="">Refinement Types and Program Verification</a></li>
 <li style=""><a href="#standards-and-specifications" style="">Standards and Specifications</a></li></ul>
+      <hr class="sidebar-divider">
+      <h3>Language</h3>
+      <ul>
+        <li><a href="/tour">Tour</a></li>
+        <li><a href="/try">Try It</a></li>
+      </ul>
+      <h3>Ecosystem</h3>
+      <ul>
+        <li><a href="/docs/html/guides/">Guides</a></li>
+        <li><a href="/docs/html/api/">API Docs</a></li>
+        <li><a href="https://spices.turmeric-lang.com">Spices</a></li>
+      </ul>
+      <h3>Community</h3>
+      <ul>
+        <li><a href="https://github.com/rjungemann/turmeric">GitHub</a></li>
+      </ul>
     </div>
     <div class="content guide-content">
       <h1 id="bibliography">Bibliography</h1>
@@ -164,6 +182,34 @@ Daniel Hillerström and Sam Lindley.
 TyDe 2016.
 <a href="https://doi.org/10.1145/3007263.3007271">https://doi.org/10.1145/3007263.3007271</a></p>
 <p>Referenced by: <code>docs/archive/effect-types-row-polymorphism-plan.md</code>.</p>
+<hr />
+<h2 id="delimited-continuations">Delimited Continuations</h2>
+<p><strong>Abstracting Control</strong>
+Olivier Danvy and Andrzej Filinski.
+<em>Abstracting Control.</em> LFP 1990.
+(Introduces the static <code>shift</code>/<code>reset</code> semantics.)
+<a href="https://doi.org/10.1145/91556.91622">https://doi.org/10.1145/91556.91622</a></p>
+<p>Referenced by: <code>docs/guides/delimited-control-operators-guide.md</code>.</p>
+<hr />
+<p><strong>The Theory and Practice of First-Class Prompts</strong>
+Matthias Felleisen.
+<em>The Theory and Practice of First-Class Prompts.</em> POPL 1988.
+(Prompts and the <code>control</code>/<code>prompt</code> family.)
+<a href="https://doi.org/10.1145/73560.73576">https://doi.org/10.1145/73560.73576</a></p>
+<p>Referenced by: <code>docs/guides/delimited-control-operators-guide.md</code>.</p>
+<hr />
+<p><strong>Subtyping Delimited Continuations</strong>
+Marek Materzok and Dariusz Biernacki.
+<em>Subtyping Delimited Continuations.</em> ICFP 2011.
+(The <code>shift0</code>/<code>reset0</code> hierarchy and its relation to <code>shift</code>/<code>reset</code>.)
+<a href="https://doi.org/10.1145/2034773.2034786">https://doi.org/10.1145/2034773.2034786</a></p>
+<p>Referenced by: <code>docs/guides/delimited-control-operators-guide.md</code>.</p>
+<hr />
+<p><strong>A Monadic Framework for Delimited Continuations</strong>
+R. Kent Dybvig, Simon Peyton Jones, and Amr Sabry.
+<em>A Monadic Framework for Delimited Continuations.</em> JFP 2007.
+<a href="https://doi.org/10.1017/S0956796807006259">https://doi.org/10.1017/S0956796807006259</a></p>
+<p>Referenced by: <code>docs/guides/delimited-control-operators-guide.md</code>.</p>
 <hr />
 <h2 id="contract-types">Contract Types</h2>
 <p><strong>Contracts for Higher-Order Functions</strong>

@@ -149,12 +149,43 @@ typedef enum ReaderType {
     READER_SWEET,          /* Full sweet-expressions */
 } ReaderType;
 
+/* Source map for syntax-transforming readers (currently sweet-exp).
+ * Each run says "starting at xform_offset in the transformed text,
+ * `length` bytes were copied verbatim from orig_offset of the original
+ * source."  The runs are kept sorted by xform_offset; bytes that fall
+ * in the gaps between runs are reader-inserted (`(`, `)`, etc.) and
+ * have no original counterpart. */
+typedef struct SweetMapRun {
+    uint32_t xform_offset;
+    uint32_t orig_offset;
+    uint32_t length;
+} SweetMapRun;
+
+typedef struct SweetMap {
+    SweetMapRun *runs;
+    size_t       n_runs;
+    size_t       cap_runs;
+} SweetMap;
+
+/* Translate a byte offset in the transformed text to the corresponding
+ * byte offset in the original source.  When the input offset falls in
+ * an inserted gap it returns the end of the preceding run (the closest
+ * real position).  Safe to call with map == NULL — returns xform_off. */
+size_t sweet_map_translate_offset(const SweetMap *map, size_t xform_off);
+
 typedef struct SourceFile {
     const char *path;
-    const char *src;     /* full source text */
+    const char *src;     /* full source text (transformed if xform_map set) */
     size_t      len;
     uint16_t    file_id;
     ReaderType  reader_type;  /* Phase S1: for enabling syntax features */
+    /* Sweet-exp transformation support: when xform_map is non-NULL, src
+     * is the preprocessed s-expression text and orig_src/orig_len point
+     * to the user's original source.  Diagnostics render snippets from
+     * orig_src and translate span offsets via xform_map. */
+    const char     *orig_src;
+    size_t          orig_len;
+    const SweetMap *xform_map;
 } SourceFile;
 
 /* Detect #lang directive from file source (Phase S0) */

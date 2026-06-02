@@ -1,0 +1,108 @@
+;; A3: middleware interop over an async (fiber-per-request) server.
+;;
+;; The plan calls this out as a sanity-check phase: the H7 middleware
+;; convention -- (fn [next] (fn [conn] ...)) -- is agnostic to whether
+;; `next` suspends, as long as httpd-call is a plain Turmeric call (it
+;; is). This fixture verifies the claim by composing mw-cors over a
+;; base handler that yields via httpd-await-timer.
+;;
+;; The handler yields ~10ms, then sets a body of "ok". After it
+;; returns, mw-cors decorates the response with Access-Control-Allow-
+;; Origin. The client checks the resulting header lines.
+;;
+;; Expected output:
+;;   body=ok
+;;   allow-origin=*
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req =
+      "GET / HTTP/1.0\r\n"
+      "Origin: https://app.example.com\r\n"
+      "\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[1024];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  /* Extract the body and the Access-Control-Allow-Origin header. */
+  const char *blank = strstr(drain, "\r\n\r\n");
+  if (blank) printf("body=%s\n", blank + 4);
+  const char *needle = "\r\nAccess-Control-Allow-Origin: ";
+  const char *p = strstr(drain, needle);
+  if (p) {
+      p += strlen(needle);
+      const char *eol = strstr(p, "\r\n");
+      if (eol) printf("allow-origin=%.*s\n", (int)(eol - p), p);
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server-async [h :ptr<void>] :ptr<void>
+  ```c httpd_run_async(h); return NULL; ```)
+
+(defn spawn-server-async [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech   (chan-new 1)
+        base     (fn [c :ptr<void>] :nil
+                   ;; Yield on the reactor for ~10 ms BEFORE writing --
+                   ;; this is the suspend that, under the blocking pool,
+                   ;; would tie up a worker. Under async it parks the
+                   ;; fiber and frees the reactor thread.
+                   (httpd-await-timer c 10)
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c "ok")
+                   (chan-send donech 1))
+        composed (compose-middleware base mw-cors)
+        h        (httpd-new-async 0 composed)
+        port     (httpd-async-port h)
+        server   (spawn-server-async h)
+        client   (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop-async h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-async-free h)
+    (chan-free donech)
+    0))

@@ -72,38 +72,42 @@ the file -- the interpreter will override them with stdlib natives automatically
 
 ## Build System
 
-The project uses Justfile recipes via `tur run` (or upstream `just` if
-installed). The recipe names are the same; only the invocation form differs.
+The main turmeric compiler is built with CMake directly. Once `tur` is on
+`PATH`, project-level recipes (build, test, docs, wasm, web-dev) are invoked
+via `tur run`, which reads the same Justfile.
+
+### Bootstrap (compile `tur` from source)
 
 ```sh
-tur run build    # debug build   (also: just build)
-tur run test     # build + run tests
-tur run release  # release build
-just docs        # generate API documentation  (tur fmt not yet installed)
-just wasm        # build WebAssembly module (runs docs first)
-just web-dev     # run web dev server
-```
-
-For the main turmeric repo's own build you still need CMake (via `just
-configure`). `tur run` is for spice development. See
-[docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
-
-### Fresh containers / web sessions -- use CMake directly
-
-In a freshly cloned container (e.g. Claude Code on the web) neither `just` nor a
-prebuilt `tur` is on `PATH`, and `build/` does not exist yet. Bootstrap the
-compiler with CMake directly -- this is the canonical fallback the Justfile
-recipes wrap:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5  # = just configure
-cmake --build build -j --config Debug                                            # = just build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j --config Debug
 bash tests/run.sh                                                                # compiled-fixture suite
 ```
 
-The built compiler lands at `./build/tur`. To get `just` itself, install it via
-`cargo install just` or your distro's package manager; the recipe names then
-match the commands above one-to-one.
+The built compiler lands at `./build/tur`.
+
+Release build:
+
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build-release -j
+```
+
+### Project tasks (`tur run`)
+
+```sh
+tur run build    # debug build
+tur run test     # build + run tests
+tur run release  # release build
+tur run docs     # generate API documentation
+tur run wasm     # build WebAssembly module (runs docs first)
+tur run web-dev  # run web dev server
+```
+
+`tur run` is built into the compiler -- no extra binary required. The
+upstream `just` binary still works against the same Justfile if you prefer it,
+but it is not required. See
+[docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
 
 ## Spice Repository Layout
 
@@ -242,7 +246,7 @@ The separator can also be any non-comment, non-blank, non-definition form
 
 ## Generated Docs
 
-Run `just docs` (or `python3 tools/gendocs.py stdlib/ --out docs/api/`) to
+Run `tur run docs` (or `python3 tools/gendocs.py stdlib/ --out docs/api/`) to
 regenerate the HTML API reference from `;;;` docstrings. Also pass
 `--emit-tur stdlib/docstrings.tur` to rebuild the runtime lookup table.
 
@@ -285,8 +289,8 @@ git clone <turmeric-spices-url> ../turmeric-spices
 ## Sweet-Expression Style
 
 Turmeric files can opt into sweet-expression syntax with a `#lang` directive or
-a `.tursweet` extension. Prefer the full sweet-exp style over plain s-expressions
-when writing new `.tursweet` files.
+a `.tur.sweet` extension. Prefer the full sweet-exp style over plain s-expressions
+when writing new `.tur.sweet` files.
 
 ```
 #lang sweet-exp

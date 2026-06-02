@@ -182,7 +182,7 @@ defn default-value [t] :int
 
 In the `IntTag` arm the type-checker knows `a = int`; in `BoolTag` it knows
 `a = bool`. These *skolem equalities* are introduced automatically per arm and
-are invisible to the programmer. No casts, no `option`, no runtime tags.
+are invisible to the programmer. No casts, no `option` wrapper, and no runtime tags.
 
 A larger example combining plain ADTs and GADTs in one program:
 
@@ -655,5 +655,5 @@ defn show-type [x : any] :int
   that enables GADT skolem propagation
 - [hkt-guide.md](hkt-guide.md) -- Higher-kinded types; used by `equal-cong`
   and polymorphic GADT indices
-- `tests/fixtures/gadt-*/` -- Working GADT examples
-- `tests/fixtures/union-types-*/` -- Union type and gradual typing examples
+- [`tests/fixtures/gadt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Working GADT examples
+- [`tests/fixtures/union-types-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing examples

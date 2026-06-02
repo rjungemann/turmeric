@@ -90,7 +90,7 @@ serialize the value, you have crossed into typeclass territory.
 Typeclasses let one name (`eq?`, `fmap`, `show`) resolve to a *different*
 implementation depending on the type of the argument. The class declares the
 interface; each `definstance` supplies a concrete implementation. Resolution
-happens at compile time -- no virtual dispatch, no runtime tag lookup.
+happens at compile time -- neither virtual dispatch nor runtime tag lookup is involved.
 
 ```turmeric
 (defclass Eq [a] (eq? [x y] :bool))

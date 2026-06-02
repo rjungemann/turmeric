@@ -1,0 +1,105 @@
+;; A0+A1: httpd-async-echo -- async server, handler yields via await-timer.
+;;
+;; A single async handler responds with "echo:<path>" but yields for
+;; ~10ms via httpd-await-timer before writing. The await proves the
+;; fiber substrate is alive (it parks on the reactor and resumes).
+;;
+;; The fixture runs ONE request through the async server and verifies
+;; the handler ran and the response body shape is correct.
+;;
+;; Expected output:
+;;   handler-ran=1
+;;   body=echo:/hi
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-tag [s :cstr v :int] :nil
+  ```c printf("%s=%d\n", s, (int)v); ```)
+
+(defn print-body [s :cstr] :nil
+  ```c printf("body=%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req = "GET /hi HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char drain[1024];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  /* Print just the body (after blank line). */
+  const char *blank = strstr(drain, "\r\n\r\n");
+  if (blank) printf("body=%s\n", blank + 4);
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server-async [h :ptr<void>] :ptr<void>
+  ```c httpd_run_async(h); return NULL; ```)
+
+(defn spawn-server-async [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server_async, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn fmt-echo [path :cstr] :cstr
+  ```c
+  static char buf[2048];
+  snprintf(buf, sizeof(buf), "echo:%s", path);
+  return buf;
+  ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        handler (fn [c :ptr<void>] :nil
+                  ;; Yield ~10 ms to prove fiber park/resume works.
+                  (httpd-await-timer c 10)
+                  (httpd-resp-status! c 200)
+                  (httpd-resp-body! c (fmt-echo (httpd-req-path c)))
+                  (chan-send donech 1))
+        h       (httpd-new-async 0 handler)
+        port    (httpd-async-port h)
+        server  (spawn-server-async h)
+        client  (spawn-client port)]
+    (let [r (chan-recv donech)]
+      (print-tag "handler-ran" r))
+    (httpd-stop-async h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-async-free h)
+    (chan-free donech)
+    0))

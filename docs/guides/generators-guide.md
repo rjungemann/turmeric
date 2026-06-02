@@ -20,8 +20,8 @@ Turmeric provides two related features for lazy, incremental computation:
 
 A generator function uses `gen` in place of a function body and `yield` to
 produce values one at a time. The compiler rewrites each generator into a C
-struct plus a `_next` dispatch function -- no continuations, no heap alloc per
-step.
+struct plus a `_next` dispatch function -- without continuations or per-step
+heap allocation.
 
 ```turmeric
 (defn integers-from [start :int] : (Generator :int)

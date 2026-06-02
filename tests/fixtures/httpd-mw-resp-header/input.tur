@@ -1,0 +1,119 @@
+;; M0: httpd-mw-resp-header -- arbitrary response header write access.
+;;
+;; The handler sets a custom Content-Type, an X-Custom header (proves
+;; httpd-resp-header! replaces on second call), and two Set-Cookie lines
+;; (proves httpd-resp-header-add! preserves duplicates). It also tries
+;; to set Content-Length, which the writer must silently drop. Finally
+;; we leave Content-Type set so the writer skips its default.
+;;
+;; The client receives the raw response, prints each header line that
+;; appears (preserving order), and exits.
+;;
+;; Expected output (header lines, then "done"):
+;;   HTTP/1.0 200 OK
+;;   Content-Length: 4
+;;   Connection: close
+;;   Content-Type: application/json
+;;   X-Custom: second
+;;   Set-Cookie: a=1
+;;   Set-Cookie: b=2
+;;   done
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-line [s :cstr] :nil
+  ```c printf("%s\n", s); ```)
+
+(defn client-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 30000000L };
+  nanosleep(&ts, NULL);
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
+  const char *req = "GET / HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  /* Read the whole response into a 4KB buffer; we only inspect headers. */
+  char drain[4096];
+  int total = 0;
+  while (total < (int)sizeof(drain) - 1) {
+      ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  drain[total] = '\0';
+  /* Print every header line up to the blank line terminating the block. */
+  char *p   = drain;
+  char *end = strstr(drain, "\r\n\r\n");
+  if (!end) end = drain + total;
+  while (p < end) {
+      char *eol = strstr(p, "\r\n");
+      if (!eol || eol > end) break;
+      if (eol == p) break;  /* blank line -- end of headers */
+      *eol = '\0';
+      printf("%s\n", p);
+      p = eol + 2;
+  }
+  close(fd);
+  return NULL;
+  ```)
+
+(defn run-server [h :ptr<void>] :ptr<void>
+  ```c httpd_run(h); return NULL; ```)
+
+(defn spawn-server [h :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_server, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_worker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t :ptr<void>] :nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] :int
+  (let [donech (chan-new 1)
+        base   (fn [c :ptr<void>] :nil
+                 (httpd-resp-status! c 200)
+                 (httpd-resp-header! c "Content-Type" "text/plain")
+                 ;; Replace must update in place.
+                 (httpd-resp-header! c "Content-Type" "application/json")
+                 (httpd-resp-header! c "X-Custom"     "first")
+                 (httpd-resp-header! c "X-Custom"     "second")
+                 ;; Add must preserve duplicates.
+                 (httpd-resp-header-add! c "Set-Cookie" "a=1")
+                 (httpd-resp-header-add! c "Set-Cookie" "b=2")
+                 ;; The writer must drop this -- actual length wins.
+                 (httpd-resp-header! c "Content-Length" "99")
+                 (httpd-resp-body! c "okay")
+                 (chan-send donech 1))
+        h      (httpd-new-pool 0 1 base)
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv donech)
+    (httpd-stop h)
+    (join-thread server)
+    (join-thread client)
+    (println "done")
+    (httpd-free h)
+    (chan-free donech)
+    0))
