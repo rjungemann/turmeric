@@ -1,8 +1,9 @@
 # Whole-Program CPS Transform -- Implementation Plan (CPS0--CPS7)
 
-> **Status:** Not started. This is the substrate that unblocks *undelimited*
-> control (real Scheme `call/cc`, an implicit program-wide prompt) and removes
-> the bounded-capture ceiling on the existing delimited runtime.
+> **Status:** In progress. **CPS0 ratified (2026-06-02)**; CPS1 (may-capture
+> coloring analysis) in progress. This is the substrate that unblocks
+> *undelimited* control (real Scheme `call/cc`, an implicit program-wide prompt)
+> and removes the bounded-capture ceiling on the existing delimited runtime.
 >
 > **Key insight:** Turmeric already has working **delimited** continuations --
 > `shift`/`reset`/`shift0` (one-shot, `tur_cont`) and `call/cc*` (cloneable,
@@ -17,7 +18,7 @@
 > heap data structure (CPS) makes capture O(1) and unbounded, and lets us
 > install a single implicit prompt around `main`.
 >
-> **Last updated:** 2026-06-01
+> **Last updated:** 2026-06-02
 >
 > **Related:**
 > - [`call-cc-completion-plan.md`](call-cc-completion-plan.md) -- the primary
@@ -120,25 +121,87 @@ prompt.
 
 ---
 
-## Phase CPS0 -- Ratify the model
+## Phase CPS0 -- Ratify the model  -- **RATIFIED 2026-06-02**
 
-- **CPS0.1** Confirm **selective** CPS (color only may-capture functions) over
-  whole-program CPS. *Done when:* this section is annotated "ratified" with a
-  date and the coloring rule (CPS1) is agreed.
-- **CPS0.2** Adopt the multi-prompt delimited-control framework as the single
-  substrate: `reset` -> fresh prompt, `shift`/`shift0` -> sub-continuation
-  capture to nearest prompt, `call/cc` -> capture to the implicit root prompt.
-  Record how `shift` (re-install prompt) vs `shift0` (do not) map onto
-  `pushSubCont` vs not. *Done when:* the mapping table is in this doc and
-  matches the existing `EX_SHIFT`/`EX_SHIFT0` semantics (CF2).
-- **CPS0.3** Choose the native-stack-bounding strategy: a **trampoline** driver
-  for CPS'd code (return-to-driver thunks) vs. relying on the C compiler's tail
-  calls. Default: trampoline, because portable TCO across our targets is not
-  guaranteed. *Done when:* the decision and its perf budget are recorded.
-- **CPS0.4** Decide coexistence with the fiber runtime during transition: the
-  fiber path (`fiber_ctx_*.S`, `tur_cont`) stays for delimited code until CPS5
-  re-expresses it, then is removed or retained only as a fast path. *Done
-  when:* a deprecation/coexistence note is recorded.
+- **CPS0.1 -- Selective CPS. RATIFIED.** We adopt **selective** CPS (color only
+  may-capture functions) over whole-program CPS. Direct-style code keeps its
+  native calling convention and pays no trampoline/allocation tax; only
+  functions that can dynamically reach a control operator are CPS-converted.
+
+  **Coloring rule (agreed; implemented by CPS1).** A function `F` is *colored*
+  (must be CPS'd) iff it can dynamically reach a control operator. Concretely:
+
+  1. **Seed.** `F` is colored if its body *directly* contains a control-op IR
+     node: `EX_SHIFT`, `EX_SHIFT0`, `EX_RESET`, `EX_CLONEABLE_SHIFT`,
+     `EX_CLONEABLE_RESET`, `EX_SERIAL_SHIFT`, `EX_SERIAL_RESET`, `EX_PERFORM`,
+     `EX_HANDLE`, `EX_RESUME`, or `EX_DISCONTINUE`. (Surface `call/cc`, `escape`,
+     `call/cc*`, and effect `perform`/`handle` all desugar to these nodes during
+     elaboration, so seeding on the post-elaboration IR captures them uniformly.)
+  2. **Transitive closure.** `F` is colored if it calls (via a resolved
+     `EX_CALL.fn_binding`) any colored function. Propagate backward to a least
+     fixed point.
+  3. **Conservative over-approximation.** An *indirect* call -- one whose callee
+     is not a statically resolved top-level binding (`fn_binding == NULL`: a
+     call through a parameter, closure value, or field) -- is treated as
+     possibly reaching a control op, so `F` is colored. This is sound (never
+     under-colors); it may over-color higher-order code, which CPS3 may refine
+     later via control-flow analysis (tracked as a CPS7 precision follow-up).
+
+  The analysis is **whole-program** (CPS1.1 builds the call graph); the
+  *rewrite* (CPS3) is selective. Coloring is stored as additive IR metadata
+  (`FnDef.cps_colored`) so it perturbs nothing until CPS3 consumes it.
+
+- **CPS0.2 -- Multi-prompt delimited-control framework. RATIFIED.** The single
+  substrate is the Dybvig--Peyton-Jones--Sabry multi-prompt model. The mapping
+  from existing operators onto prompts/sub-continuations (`pushPrompt`,
+  `withSubCont`, `pushSubCont`) is:
+
+  | Surface / IR node | Prompt action | Sub-continuation capture | Re-install prompt on resume? |
+  |---|---|---|---|
+  | `reset` / `EX_RESET` | `pushPrompt p` (fresh prompt `p`) | -- | -- |
+  | `shift` / `EX_SHIFT` | capture up to nearest prompt `p` | `withSubCont p` (composable, abortive body) | **Yes** -- resume re-pushes `p` (`pushSubCont` with the delimiter) |
+  | `shift0` / `EX_SHIFT0` | capture up to nearest prompt `p`, **and pop `p`** | `withSubCont p` | **No** -- resume does *not* re-push `p` |
+  | `call/cc*` / `EX_CLONEABLE_SHIFT` | capture to nearest cloneable prompt | `withSubCont` (multi-shot: sub-cont re-enterable N times) | Yes (cloneable resume re-pushes) |
+  | `serial-shift` / `EX_SERIAL_SHIFT` | capture to nearest serial prompt | `withSubCont` (reified chain is marshalable) | Yes |
+  | undelimited `call/cc` | capture to the **implicit root prompt** (CPS5.3) | `withSubCont root` | Yes (root is re-pushed) |
+
+  This matches the existing `EX_SHIFT`/`EX_SHIFT0` semantics (CF2): the
+  elaborator types `shift` and `shift0` identically (`shift0_` differs only in
+  *delimiter behavior at runtime*, see `src/compiler/elab_effects.c:178`) -- the
+  *only* observable difference is whether the prompt is re-installed on resume,
+  which is exactly the "re-install" column above. `shift` => re-push the
+  delimiter as part of the resumed sub-continuation; `shift0` => the delimiter
+  is consumed by the capture and not re-pushed.
+
+- **CPS0.3 -- Native-stack bounding: TRAMPOLINE. RATIFIED.** CPS'd code returns
+  *thunks* (return-to-driver continuations) to a trampoline loop rather than
+  recurring on the native C stack. Rationale: portable, guaranteed-proper tail
+  calls across all our C targets (gcc/clang at `-O0` Debug + ASan, MSVC-less but
+  varied) are **not** guaranteed -- `[[clang::musttail]]`/`__attribute__((musttail))`
+  is not universally available at the optimization levels we build under (Debug
+  is `-O0 -fsanitize=address,undefined`), and the existing snapshot path already
+  assumes a driver-style resume. A trampoline gives O(1) native stack for
+  arbitrarily deep CPS tail chains.
+
+  **Perf budget.** The trampoline tax is paid *only on colored code* (CPS0.1).
+  Budget: one indirect call + one heap-allocated thunk per CPS tail step on the
+  colored path; **zero** overhead on uncolored direct-style code (enforced by
+  the CPS7.1 gate). Platform-TCO as an opt-in fast path is deferred to OQ-CPS3 /
+  CPS7 and is explicitly *not* a blocker.
+
+- **CPS0.4 -- Fiber-runtime coexistence. RATIFIED (coexist, then re-evaluate).**
+  The fiber path (`src/async/fiber_ctx_{x64,arm64}.S`, `tur_cont`,
+  `tur_cloneable_cont`) **stays** as the shipping implementation for all
+  delimited operators until CPS5 re-expresses them on the prompt substrate.
+  Removal is **not** part of CPS1--CPS4: those phases add the CPS substrate
+  alongside the fiber path without disturbing it (coloring is additive metadata;
+  the trampoline/heap-cont machinery is only exercised by colored code once CPS3
+  lowering lands). At CPS5 the delimited operators move to prompts; at that point
+  the fiber path is either (a) removed for a single substrate, or (b) retained as
+  a depth-bounded fast path for shallow `reset`. That keep-or-remove decision is
+  deferred to OQ-CPS2 and will be made on CPS7.2 numbers -- it is **not**
+  pre-committed here. Until CPS5, both paths coexist and the fiber path remains
+  authoritative.
 
 ## Phase CPS1 -- "May-capture" coloring analysis
 
