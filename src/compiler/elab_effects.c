@@ -297,8 +297,22 @@ Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     return out;
 }
 
-/* (call/cc* f) - Sugar for (cloneable-reset (cloneable-shift k (f k)))
- * Multi-shot call/cc that produces a cloneable continuation. */
+/* (call/cc* f) - multi-shot call/cc that produces a cloneable continuation.
+ *
+ * CPS-CL8 / cps-transform-plan (CPS11): the continuation f receives is the one
+ * captured up to the nearest *enclosing* cloneable-reset:
+ *
+ *   - Inside a cloneable-reset (cloneable_reset_depth > 0): desugar to a BARE
+ *     (cloneable-shift f 0) that binds to that enclosing reset. The captured
+ *     continuation is the real delimited context between the call/cc* and its
+ *     reset -- e.g. (cloneable-reset (+ 10 (call/cc* f))) hands f a continuation
+ *     that computes (+ 10 []) and is replayable multi-shot (CPS9 lowers it onto
+ *     the DK machine).
+ *   - With no enclosing cloneable-reset: desugar to (cloneable-reset
+ *     (cloneable-shift f 0)) -- a freshly-installed delimiter whose captured
+ *     continuation is empty/trivial. This is the original sugar and keeps
+ *     call/cc* usable on its own (no reset required), matching the existing
+ *     call-cc-star semantics (k is the identity continuation). */
 Expr *elab_call_cc_star(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -308,11 +322,8 @@ Expr *elab_call_cc_star(Elab *e, const Form *call) {
     Expr *f_expr = elab_form(e, call->as.list.items[1]);
     if (!f_expr) return NULL;
 
-    /* CPS-CL8: Desugar (call/cc* f) into:
-     *   (cloneable-reset (cloneable-shift f 0))
-     *
-     * The shift emitter allocates a continuation and passes it to k_fn (= f).
-     * So f receives the continuation directly — no wrapper needed. */
+    /* The shift emitter allocates a continuation and passes it to k_fn (= f),
+     * so f receives the continuation directly -- no wrapper needed. */
 
     /* Determine f's return type */
     Type call_result_type = TYPE_INT;
@@ -334,10 +345,15 @@ Expr *elab_call_cc_star(Elab *e, const Form *call) {
     shift->as.cloneable_shift_.n_live_captures = 0;
     shift->as.cloneable_shift_.cont_body = NULL;
 
-    /* Build EX_CLONEABLE_RESET wrapping the shift */
+    /* Inside an enclosing cloneable-reset: capture up to it (real call/cc*
+     * semantics). The bare shift binds to that reset's prompt. */
+    if (e->cloneable_reset_depth > 0) {
+        return shift;
+    }
+
+    /* No enclosing reset: install a fresh delimiter (trivial continuation). */
     Expr *reset = expr_new(e->arena, EX_CLONEABLE_RESET, call_result_type, call->span);
     reset->as.cloneable_reset_.body = shift;
-
     return reset;
 }
 

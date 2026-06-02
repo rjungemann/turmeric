@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <string.h>
 #include "buf.h"
 #include "lifetimes.h"  /* Phase 13: Lifetime annotations */
 #include "forms.h"      /* Phase HKT-P1: for Span */
@@ -492,9 +493,14 @@ typedef struct Type {
         struct {
             TypeKind payload_type;  /* The type of the exception payload */
         } exn;
-        /* Phase 18: Continuation types */
+        /* Phase 18 / CC4: Continuation types. `flavor` selects the runtime that
+         * (k v) application sugar resumes against (cps-transform-plan):
+         *   CONT_CLONEABLE -- cloneable/call-cc* (tur_cloneable_cont_resume)
+         *   CONT_ESCAPE    -- call/cc / escape   (tur_escape_resume)
+         *   CONT_SERIAL    -- serial-shift       (tur_serial_cont_resume)  */
         struct {
             TypeKind returns;  /* The type T that cont<T> returns */
+            int      flavor;   /* ContFlavor; 0 = CONT_CLONEABLE (default) */
         } cont;
         /* Phase 11: Struct types */
         struct {
@@ -1074,13 +1080,34 @@ static inline Type type_exception(TypeKind payload_type) {
 
 /* Phase 18: Continuation type constructor */
 /* Create a continuation type cont<T> that returns T */
+/* CC4 continuation flavor: which runtime (k v) resumes against. */
+typedef enum { CONT_CLONEABLE = 0, CONT_ESCAPE = 1, CONT_SERIAL = 2 } ContFlavor;
+
 static inline Type type_cont(TypeKind returns) {
     Type t;
+    memset(&t, 0, sizeof(t));
     t.kind = TY_CONT;
     t.copy_kind = CK_MOVE;  /* Continuations are move-only (one-shot) */
     t.n_lifetimes = 0;
     t.as.cont.returns = returns;
+    t.as.cont.flavor = CONT_CLONEABLE;
+    t.hkt_kind = KIND_STAR;
     return t;
+}
+
+/* CC4: a continuation typed with an explicit flavor (escape/cloneable/serial). */
+static inline Type type_cont_flavored(TypeKind returns, ContFlavor flavor) {
+    Type t = type_cont(returns);
+    t.as.cont.flavor = flavor;
+    return t;
+}
+
+/* Map a surface type name to a continuation flavor, or -1 if not a cont name. */
+static inline int cont_flavor_from_name(const char *n) {
+    if (strcmp(n, "cont") == 0)        return CONT_CLONEABLE;
+    if (strcmp(n, "escape-cont") == 0) return CONT_ESCAPE;
+    if (strcmp(n, "serial-cont") == 0) return CONT_SERIAL;
+    return -1;
 }
 
 /* Phase B2: Cloneable continuation type constructor */

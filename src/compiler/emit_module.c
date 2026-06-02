@@ -1172,6 +1172,7 @@ int emit_program(Buf *out, const Expr *program) {
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs;
     ctx.indent = 4;
     ctx.tmp_n = 0;
@@ -2532,8 +2533,12 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
      * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
-     * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot). */
-    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
+     * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot), or when
+     * a cloneable-reset lowers onto the DK machine (CPS9): the DK bridge wraps the
+     * captured context in a tur_cloneable_cont. (cps_expr_contains_cloneable_shift
+     * does not look inside builtins, so a context-nested shift needs this gate.) */
+    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program) ||
+        emit_cps_program_uses_cloneable_dk(program)) {
     buf_puts(out, "/* Phase B2: Cloneable continuation runtime */\n");
     buf_puts(out, "typedef struct tur_cloneable_cont tur_cloneable_cont;\n");
     buf_puts(out, "struct tur_cloneable_cont {\n");
@@ -2596,9 +2601,21 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
      * machine) when the program uses base delimited control (reset/shift/
-     * shift0). emit_cps_reset lowers those onto dk_run/dk_shift below. */
-    if (emit_cps_program_uses_delimited(program)) {
+     * shift0), or when a cloneable-reset lowers onto the DK machine (CPS9).
+     * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
+    if (emit_cps_program_uses_delimited(program) ||
+        emit_cps_program_uses_cloneable_dk(program) ||
+        emit_cps_program_uses_serial_dk(program)) {
         emit_cps_runtime_prelude(out);
+    }
+    /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
+     * runtime (emitted above) and the DK machine (just emitted) in scope. */
+    if (emit_cps_program_uses_cloneable_dk(program)) {
+        emit_cps_cloneable_bridge_prelude(out);
+    }
+    /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. */
+    if (emit_cps_program_uses_serial_dk(program)) {
+        emit_cps_serial_runtime_prelude(out);
     }
 
     /* call-cc-completion: emit the undelimited escape-continuation runtime when
@@ -4932,6 +4949,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs2;
     ctx.indent = 4;
     ctx.tmp_n = 0;

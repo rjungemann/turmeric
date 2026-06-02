@@ -1,0 +1,14 @@
+;; cps-transform-plan (CC4, flavored cont): (k v) application sugar dispatches to
+;; the right resume runtime by the continuation's flavor -- :cont (cloneable),
+;; :serial-cont, or :escape-cont -- so escape and serial continuations get the
+;; same (k v) ergonomics cloneable already had.
+
+(defn ck [k :cont] :int (+ (k 1) (k 2)))   ; cloneable, multi-shot
+(defn sk [k :serial-cont] :int (k 5))      ; serial
+(defn ek [k :escape-cont] :int (+ 100 (k 41)))  ; escape: k aborts upward
+
+(defn main [] :int
+  (println (cloneable-reset (+ 10 (call/cc* ck))))   ; (10+1)+(10+2)        = 23
+  (println (serial-reset (+ 10 (serial-shift sk 0)))) ; serial (k 5): 10+5  = 15
+  (println (+ 1 (call/cc ek)))                        ; escape: k->41, +1   = 42
+  0)

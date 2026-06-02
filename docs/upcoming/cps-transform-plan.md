@@ -8,10 +8,33 @@
 > root prompt) done (2026-06-02, standalone machine)**; **CPS6 (retire the
 > capture ceiling on the CPS path) done (2026-06-02)**; **CPS7 (benchmarks /
 > perf gates / docs) done (2026-06-02)**; **CPS8 (codegen wiring for base
-> delimited control) done (2026-06-02)**. **CPS0--CPS8 implemented**; base
-> `reset`/`shift`/`shift0` now execute on this substrate in emitted code
-> (`emit_cps.c`), while `call/cc*`/`serial-*`/undelimited `call/cc` remain the
-> next increment (see CPS8 and the Status summary). This is the substrate that
+> delimited control + undelimited `call/cc`/`escape`) done (2026-06-02)**;
+> **CPS9 (cloneable continuations with captured context on the DK machine) done
+> (2026-06-02)**; **CPS10 (serializable continuations on the DK machine, CPS5.4)
+> done (2026-06-02)**; **CPS11 (`call/cc*` captures up to an enclosing
+> cloneable-reset) done (2026-06-02)**. **CPS0--CPS11 implemented**; base
+> `reset`/`shift`/`shift0`, undelimited `call/cc`/`escape`,
+> `cloneable-reset`/`cloneable-shift` (capturing the delimited *context* and
+> replaying it multi-shot via `dk_invoke`), `serial-reset`/`serial-shift`
+> (capturing a *marshalable* context that serialize/deserialize round-trips), and
+> now `call/cc*` (capturing the real continuation up to the nearest enclosing
+> cloneable-reset) all execute on this substrate in emitted code (`emit_cps.c`).
+> The whole delimited/undelimited operator set now runs on the CPS substrate.
+> **Follow-on increments landed 2026-06-02** (see "Follow-on increments" below):
+> OQ-CPS2 **resolved** (keep the fiber path as selective fallback + bounded fast
+> path); the captured-context subset **broadened** to integer division and to
+> arbitrary 2-arg call frames (serial frames name-keyed for marshaling); and
+> **CC4** `(k v)` application sugar + `:cont` parameter typing, extended by a
+> **flavored `cont`** (`(k v)` dispatches to the escape/cloneable/serial resume
+> runtime) and **value-typed `cont<T>`** (a non-int result `T` via `(cont T)` /
+> `(serial-cont T)` etc., threaded through the resume with bit-casts; cstr serial
+> env types marshal by value); composite **`Serializable` instances** for
+> `Pair`/`Option` in stdlib; and **struct/nominal continuation envs marshaled via
+> their `Serializable` instance** (a serial env of an opaque/boxed type
+> serialize/deserialize round-trips). Remaining: parametric containers that
+> monomorphize to a by-value struct need carrier<->concrete ABI bridging to be
+> usable as a CPS env; and broadening contexts past single-hole binops/2-arg
+> calls (lets, if-branches). This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -398,7 +421,8 @@ integration that remains (gated until the substrate is wired end-to-end).
   marshal. This makes `serial-*` a straightforward chain walk (serialize each
   frame's tag + env), strictly simpler than snapshotting a native stack. See
   [`serializable-continuations-guide.md`](../guides/serializable-continuations-guide.md);
-  recorded in CPS7 docs.
+  recorded in CPS7 docs. **Realized in emitted code by CPS10** -- the captured
+  `serial-*` continuation marshals as exactly this tag+env chain walk.
 
 ## Phase CPS6 -- Retire the capture ceiling  -- **DONE 2026-06-02**
 
@@ -514,12 +538,236 @@ compiled to a run on the multi-prompt `DK` machine (`dk_run` / `dk_prompt` /
   (CC5 ungating is a follow-up); the continuation is resumed via the
   `tur_escape_resume` builtin (the proven `call/cc*` handle pattern) -- direct
   `(k v)` application sugar and the `cont<T>` parameter typing (CC4) remain.
-- **Remaining (next increment).** `call/cc*` (cloneable/multi-shot via
-  `dk_invoke`) and `serial-*` (chain-walk marshaling, CPS5.4) still use their
-  existing lowerings. They are the natural follow-on: the multi-shot machinery
-  already exists in the substrate (`dk_invoke`); what remains is reifying a
-  resumable sub-continuation in emitted code (env capture per frame), which the
-  abortive shift and one-shot upward escape do not need.
+- **Remaining (next increment) -- addressed by CPS9/CPS10/CPS11.** Reifying a
+  *resumable* sub-continuation in emitted code (the piece the abortive shift and
+  one-shot upward escape do not need) is delivered by **CPS9** for
+  `cloneable-reset`/`cloneable-shift` (multi-shot), **CPS10** for
+  `serial-reset`/`serial-shift` (marshalable), and **CPS11** for `call/cc*`
+  (which now captures up to an *enclosing* cloneable-reset -- the real call/cc*
+  semantics -- rather than installing a fresh trivial inner reset). The whole
+  operator set is on the substrate; only perf/cleanup follow-ons remain (see the
+  Status summary and Open questions).
+
+## Phase CPS9 -- Cloneable continuations with captured context on the DK machine  -- **DONE 2026-06-02**
+
+The headline "next increment" from CPS8: re-point cloneable continuations onto
+the multi-prompt `DK` machine so a captured continuation actually reifies the
+*delimited context* -- the frames between the `cloneable-shift` and its
+`cloneable-reset` -- and replays it, **multi-shot**, via `dk_invoke`.
+
+**Why this was needed.** Before CPS9 the emitted cloneable continuation was
+trivial: the captured "rest of the computation" was a no-op `__cont_fn`
+(`return __value`). So `(cloneable-reset (+ 10 (cloneable-shift k ...)))` lost
+the `+ 10` on resume, and with the shift nested inside an operand the legacy
+path did not even compile (it referenced an undeclared `tur_current_reset_ctx`,
+because `cps_expr_contains_cloneable_shift` does not look inside builtins). The
+interpreter already captured context correctly; CPS9 brings the **compiled**
+path up to the same semantics on the unbounded DK substrate.
+
+**Implementation.** `src/compiler/emit_cps.c` (`emit_cps_cloneable_reset` and
+the `emit_cps_cloneable_bridge_prelude`), hooked from
+`emit_effects_cloneable_reset` and gated in `emit_module.c`. The key
+realization is that the *existing* emitted `tur_cloneable_cont` machinery is
+reused wholesale: the reified sub-continuation chain rides in the cont's `env`,
+with a DK-invoking `cont_fn` (`__dk_cont_fn` -> `dk_invoke`), a clone that
+copies the chain (`__dk_env_clone` -> `dk_copy_range`), and a drop that frees it
+(`__dk_env_drop` -> `dk_free`). `resume`/`clone`/`drop` are unchanged;
+**multi-shot falls out of `dk_invoke`'s internal copy** (resuming the same
+handle repeatedly is safe).
+
+- **CPS9.1 -- Context reification.** The delimited context is lambda-lifted into
+  `DK` frames: each enclosing single-hole integer binary op (`+`, `-`, `*`)
+  becomes a `DKFrame` (`static intptr_t __cc_ctx_N(intptr_t env, intptr_t v)`),
+  with the non-hole operand captured into the frame env. Operands are pure int
+  expressions evaluated **once** at capture time and reused on every resume --
+  the standard delimited-control semantics. *Done:* `cl_collect_context` walks
+  the reset body to the shift; frames are wrapped outermost-first so the
+  innermost runs first on resume (inside-out).
+- **CPS9.2 -- The captured sub as a cloneable cont.** At the reset the body runs
+  on a `dk_shift(1, __cc_body_N, fenv, <frames> -> dk_prompt(1, dk_done()))`
+  chain via `dk_run`. The shift body (`__cc_body_N`) copies the captured sub
+  (`dk_copy_range`), wraps it in a `tur_cloneable_cont` (DK env + the bridge fn
+  pointers), and hands it to the receiver `f`; `f`'s return value becomes the
+  reset's value. *Done.*
+- **CPS9.3 -- Selective + safe fallback.** A pure `cl_can_lower` feasibility
+  check gates the path: it fires only for a **non-empty** supported context
+  around exactly one `cloneable-shift` whose receiver has no live captures and
+  whose result is intptr-safe (int). Everything else (including every existing
+  empty-context fixture, e.g. `call-cc-star`, `cloneable-basic`,
+  `cloneable-multi-resume`, and the RC/clone/defer fixtures) returns NULL and
+  falls back to the legacy lowering, **byte-identical** -- no snapshot
+  regenerated, full suite green. *Done.*
+- **CPS9.4 -- Executing test.** `tests/fixtures/cloneable-context-multishot/`
+  builds and runs five captured-context cases (`+`, `*`, nested `* (+ ...)`, `-`
+  with the hole on the right, and a single handle resumed three times) and
+  asserts the values (`23 6 46 197 3111`) -- exactly the context-replaying
+  multi-shot semantics the compiled path previously lacked.
+
+## Phase CPS10 -- Serializable continuations on the DK machine (CPS5.4)  -- **DONE 2026-06-02**
+
+Re-express `serial-reset`/`serial-shift` on the DK machine so the captured
+continuation is **marshalable**, realizing the CPS5.4 insight: a heap-reified
+sub-continuation is a flat list of `(frame, env)` nodes, so it serializes by
+writing each frame's stable *tag* plus its env and rebuilds by mapping the tag
+back to a frame function -- no fiber/native-stack snapshot to walk, and portable
+(tags are stable integers, not code addresses). In the compiled path
+`serial-shift` was previously a **stub returning 0**; CPS10 gives it real
+capture + marshaling on the same substrate as CPS8/CPS9.
+
+**Implementation.** `src/compiler/emit_cps.c` (`emit_cps_serial_reset` +
+`emit_cps_serial_runtime_prelude`), hooked from `emit_effects_serial_reset`,
+gated in `emit_module.c`, with three runtime builtins registered in
+`builtins.c`. The context walk is shared with CPS9 (`collect_ctx` parameterized
+by shift kind). To keep tags stable across a serialize/deserialize boundary the
+context frames are a **fixed** set emitted once into the preamble (`__sk_add` /
+`__sk_mul` / `__sk_subr` / `__sk_subl`, keyed by `SK_TAG_*`), rather than the
+per-site lambda-lifted frames of CPS9.
+
+- **CPS10.1 -- Reify + capture.** A `(serial-reset CTX[serial-shift f v])` runs
+  on a `dk_shift(1, __sk_body_N, fenv, <tagged frames> -> dk_prompt(1,
+  dk_done()))` chain via `dk_run`; `__sk_body_N` copies the captured sub and
+  hands it to `f` as the serial-continuation handle (a `DK*`). *Done.*
+- **CPS10.2 -- Marshal.** `tur_serial_cont_serialize` walks the captured chain's
+  frames (up to the prompt) and writes `[len][n][(tag, env) x n]` into a
+  length-prefixed buffer (the stdlib `bytes` layout);
+  `tur_serial_cont_deserialize` rebuilds a runnable `[frames..., prompt, done]`
+  chain from the tags. `tur_serial_cont_resume` runs a (possibly deserialized)
+  chain via `dk_invoke`. The env is an int, marshaled inline; richer env types
+  via the `Serializable` typeclass (per-frame `.serialize`/`.deserialize`) are
+  the documented follow-on. *Done.*
+- **CPS10.3 -- Selective + safe fallback.** `sk_can_lower` gates the path
+  (supported context -- including the empty-context whole-body case -- around one
+  `serial-shift`, intptr-safe result). `serial-reset` with no shift returns NULL
+  and falls back to the legacy "just evaluate the body" lowering, so
+  `serial-reset-basic` is unchanged; no snapshot regenerated. *Done.*
+- **CPS10.4 -- Executing test.** `tests/fixtures/serial-context-marshal/`
+  round-trips captured continuations through serialize/deserialize before
+  resuming (`+`, nested `* (+ ...)` resumed directly, empty context, and `-`
+  with the hole on the right), asserting `15 10 7 95` -- the marshaling proof the
+  compiled path previously lacked.
+- **Note on the interpreter runtime.** The tree-walking interpreter has its own
+  serial-continuation runtime (`src/runtime/serial.{h,c}`: a `SerialFrame` chain
+  keyed by interned symbols). CPS10 is the **compiled-path** substrate
+  (DK chain, integer tags); the two marshal formats are independent (the
+  fixture is compiled-only, like the cloneable fixtures). Unifying them onto a
+  single substrate is a future cleanup, tracked with the OQ-CPS2 keep-or-remove
+  decision.
+
+## Phase CPS11 -- `call/cc*` captures up to an enclosing cloneable-reset  -- **DONE 2026-06-02**
+
+The last operator on the legacy path. `(call/cc* f)` used to desugar
+unconditionally to `(cloneable-reset (cloneable-shift f 0))` -- a freshly
+installed inner reset, so the captured continuation was always empty (the
+identity), discarding any surrounding context. CPS11 gives `call/cc*` the real
+delimited semantics: it captures the continuation up to the nearest *enclosing*
+cloneable-reset.
+
+**Implementation.** `src/compiler/elab_effects.c` (`elab_call_cc_star`). The
+elaborator already tracks `cloneable_reset_depth`. The desugaring is now
+context-sensitive:
+
+- **Inside a cloneable-reset (`cloneable_reset_depth > 0`):** desugar to a *bare*
+  `(cloneable-shift f 0)` that binds to the enclosing reset. The reset body is
+  then the real delimited context around the shift, which the **CPS9** lowering
+  already reifies onto the DK machine and replays multi-shot. E.g.
+  `(cloneable-reset (+ 10 (call/cc* f)))` hands `f` a continuation computing
+  `(+ 10 [])`; resuming it with 5 yields 15, and a clone + original resume
+  ((+ 10 1) + (+ 10 2)) yields 23.
+- **No enclosing cloneable-reset:** keep the original fresh-delimiter sugar
+  `(cloneable-reset (cloneable-shift f 0))`, so `call/cc*` still works on its own
+  with the identity continuation -- the existing `call-cc-star` /
+  `cloneable-multi-resume` semantics are preserved byte-identically (those
+  fixtures have no enclosing reset).
+
+This is purely additive: no existing fixture uses `call/cc*` inside a
+cloneable-reset, so every shipped snapshot and both the compiled and interpreter
+suites stay green with no regeneration.
+
+- **CPS11.1 -- Context-sensitive desugar.** *Done:* bare shift under an enclosing
+  reset; fresh-reset sugar otherwise.
+- **CPS11.2 -- Executing test.** `tests/fixtures/callcc-star-context/` proves the
+  enclosing-reset capture: single resume through `(+ 10 [])` (= 15), multi-shot
+  ((10+1)+(10+2) = 23), nested `(* 2 (+ 1 []))` (= 10), plus the no-reset
+  identity case (100, 200) to lock in the preserved sugar.
+
+## Follow-on increments -- **DONE 2026-06-02**
+
+Post-CPS11 polish, each landed additively (selective lowering + legacy fallback;
+no shipped snapshot regenerated):
+
+- **OQ-CPS2 resolved -- keep the fiber path.** Recorded in Open questions: the
+  fiber/inlined runtime stays as the selective fallback (for shapes outside the
+  CPS subset) and the bounded fast path; removal is gated on the subset becoming
+  total plus a CPS7.2 head-to-head. Doc-only.
+- **Broaden the context subset: integer division.** `/` joins `+`/`-`/`*` in the
+  shared context grammar (`collect_ctx`), aborting on a zero divisor to match
+  `BS_DIV_CHECK`. A `frame_c_expr` helper keeps the per-site cloneable frames and
+  the fixed tagged serial frames (`SK_TAG_DIVR`/`SK_TAG_DIVL`) in lock-step.
+  Fixture: `context-division`.
+- **Broaden the context subset: 2-arg call frames + name-keyed serial
+  marshaling.** Contexts may now wrap the hole in a call to a resolved 2-arg
+  top-level function (not just arithmetic). Cloneable frames are lambda-lifted
+  per-site; serial frames marshal by the target's emitted C name via a
+  self-registering (constructor-populated) `name <-> DKFrame` table -- the
+  name-keyed scheme `serial.c` uses -- with a self-describing record format
+  (`[tag][env]` for arithmetic, `[SK_TAG_CALL][name][env_kind][env]` for calls,
+  memcpy'd, variable length). Env values may be int or cstr (`env_kind_ok`); a
+  cstr env is marshaled by value (see value-typed `cont<T>` below). Fixture:
+  `context-call-frame`.
+- **CC4: `(k v)` application sugar + `:cont` parameter typing.** A continuation
+  parameter typed `:cont` is invoked directly as `(k v)`, desugaring (in
+  `elab_call`) to a continuation resume; `TY_CONT` lowers to an `int64_t` handle
+  (`type_c_name`). Initially scoped to cloneable continuations; the flavored-cont
+  increment below extends it to escape and serial. Fixture: `callcc-kv-sugar`.
+- **Flavored `cont` -- `(k v)` for escape/cloneable/serial.** The cont type gains
+  a `flavor` (`ContFlavor`: cloneable / escape / serial), set by the parameter
+  annotation `:cont` / `:escape-cont` / `:serial-cont`. The `(k v)` desugar
+  selects the resume runtime by flavor (`tur_cloneable_cont_resume` /
+  `tur_escape_resume` / `tur_serial_cont_resume`), so escape and serial
+  continuations get the same `(k v)` ergonomics cloneable already had. This is
+  the keystone for unifying `(k v)` across flavors. Fixture: `cont-flavors`
+  (cloneable multi-shot 23, serial 15, escape one-shot upward abort 42).
+- **Value-typed `cont<T>` -- non-int continuation values + cstr serial envs.** A
+  continuation now carries a non-int result type `T` via the parametric
+  annotation `(cont T)` / `(escape-cont T)` / `(serial-cont T)` (handled in
+  `fn_type_from_form`, since `cont` is not a generic arrow-kind constructor). The
+  `(k v)` desugar threads the value through the int64-carried resume builtin with
+  bit-casts (arg reinterpreted into the int carrier, result reinterpreted back to
+  `T`), so a cstr-valued `(k v)` emits clean C. The shift node's type already
+  follows its body, so `(serial-shift f "")` gives a cstr hole. On the serial
+  side, `env_kind_ok` now allows cstr and the marshaling format is fully
+  self-describing: a call-frame record carries an `env_kind` and a cstr env is
+  written length-prefixed (by value, not as a heap address), then rematerialized
+  as a fresh heap string on deserialize. Fixture: `cont-value-typed` (cstr
+  cloneable `hello world`, cstr serial resume `hi there`, cstr serial
+  serialize/deserialize round-trip `hi world`).
+- **Composite `Serializable` instances (stdlib).** The first composite
+  `Serializable` instances in the codebase -- `Pair[A B]` and `Option[A]` in
+  `serial.tur` (the typeclass's module -> non-orphan) -- the enabling precedent
+  for serializing a struct/container env. Carrier-level (element slots packed as
+  int64 carriers), matching the `Eq`/`Clone` container-instance pattern; correct
+  for int-carrier elements. `deserialize` is invoked via the explicit instance
+  method because `(deserialize b)` is return-type polymorphic and cannot dispatch
+  on a type variable. Fixture: `serial-composite-instances`.
+- **Struct/nominal continuation env via `Serializable` (CPS step a).** A
+  serial-shift whose captured context has a nominal (struct/opaque) env now
+  marshals that env through the env type's `Serializable` instance. `EmitCtx`
+  gains `program_root`; `sk_find_serializable` scans the program's instance
+  definitions (codegen has no typeclass env) and pulls the exact serialize/
+  deserialize C names from the instance's `method_impls`. The serial format gains
+  `SK_ENV_SER`: `SkReg` carries the instance fn pointers; serialize embeds the
+  bytes the instance returns, deserialize rebuilds them and calls the instance
+  deserializer. Scope: carrier-fitting nominal envs (opaque/pointer-backed).
+  Fixture: `serial-struct-env` (a boxed two-int `Rec` env round-tripped through
+  serialize/deserialize before resume = 35; resumed directly = 108).
+
+  *Remaining:* parametric containers that monomorphize to a **by-value** struct
+  (concrete `Pair[int int]`) need carrier<->concrete ABI bridging at the env
+  store + frame call to be usable as a CPS env (the carrier-fitting opaque path
+  works today). The handle<->cont bridging for the *explicit* `tur_serial_cont_*`
+  builtins still needs a `::` ascribe at the call site (the `(k v)` sugar is
+  seamless). Broadening contexts past single-hole binops / 2-arg calls (lets,
+  if-branches) remains a separate grammar extension.
 
 ---
 
@@ -539,18 +787,24 @@ pipeline and the full fixture suite green at every step:
 | CPS5 | Multi-prompt machine + implicit root prompt | standalone runtime (`cps_prompt`) | `tur_cps_prompt_unit` |
 | CPS6 | Retire ceiling on the CPS path | runtime docs/scoping | grep + CPS4.4 |
 | CPS7 | Perf gate (identical snapshots) + bench + docs | doc/bench | suite + 43 Mstep/s bench |
-| CPS8 | Codegen wiring: base reset/shift/shift0 on the DK machine | live codegen (`emit_cps`) | `continuation-substrate` fixture + regen'd base-shift snapshots |
+| CPS8 | Codegen wiring: base reset/shift/shift0 (+ undelimited call/cc/escape) on the DK machine | live codegen (`emit_cps`) | `continuation-substrate` fixture + regen'd base-shift snapshots |
+| CPS9 | Cloneable continuations with captured context, multi-shot via `dk_invoke` | live codegen (`emit_cps`) | `cloneable-context-multishot` fixture (legacy fallback keeps existing snapshots) |
+| CPS10 | Serializable continuations with captured context, marshalable (serialize/deserialize) | live codegen (`emit_cps`) | `serial-context-marshal` fixture (legacy fallback keeps `serial-reset-basic`) |
+| CPS11 | `call/cc*` captures up to an enclosing cloneable-reset (real semantics) | context-sensitive desugar (`elab_call_cc_star`) -> CPS9 lowering | `callcc-star-context` fixture (no-reset sugar preserved: `call-cc-star`) |
 
-**Codegen wiring -- CPS8, landed (base delimited control).** The remaining
-piece called out under CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited
-lowerings off the legacy runtime and onto this substrate -- is implemented for
-**base** `reset`/`shift`/`shift0` (the `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`
-nodes). See [CPS8](#phase-cps8----codegen-wiring-base-delimited-control----done-2026-06-02)
-below. `call/cc*` (cloneable, multi-shot), `serial-*`, and undelimited
-`call/cc` (root-prompt capture) remain on their existing lowerings -- the
-honest next increment, scoped in CPS8's "Remaining" note. Because base
-delimited control now executes on the DK machine, the relevant exit criteria
-are met for that operator set; the rest stay open.
+**Codegen wiring -- CPS8/CPS9/CPS10/CPS11, landed.** The remaining piece called
+out under CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited lowerings off the
+legacy runtime and onto this substrate -- is implemented for **base**
+`reset`/`shift`/`shift0` (CPS8), **undelimited `call/cc`/`escape`** (CPS8.5),
+**cloneable continuations with a captured delimited context** (CPS9:
+`cloneable-reset`/`cloneable-shift`, multi-shot via `dk_invoke`), **serializable
+continuations** (CPS10: `serial-reset`/`serial-shift`, marshalable via
+serialize/deserialize), and **`call/cc*`** (CPS11: captures up to an enclosing
+cloneable-reset). The full delimited/undelimited operator set now executes on
+the DK machine; the corresponding exit criteria are met. Only perf/cleanup
+follow-ons remain: OQ-CPS2 (**resolved**: keep the fiber path as the selective
+fallback + bounded fast path); richer serial env types via the `Serializable`
+typeclass; CC4 `(k v)` sugar / `cont<T>` typing; broadening the context subset.
 
 ---
 
@@ -559,12 +813,20 @@ are met for that operator set; the rest stay open.
 - Base `reset`/`shift`/`shift0` execute on the CPS substrate with no semantic
   change (CPS8: `continuation-basic`/`-advanced`/`shift-result-typing`/
   `shift0-result-typing` snapshots regenerated and green; `continuation-substrate`
-  asserts the runtime values). **Done.** `call/cc*` and serial-continuation
-  fixtures still run on their existing lowerings -- the next increment.
+  asserts the runtime values). **Done.** Cloneable continuations with a captured
+  context (CPS9: `cloneable-context-multishot`), serializable continuations
+  (CPS10: `serial-context-marshal`, serialize/deserialize round-trip), and
+  `call/cc*` capturing up to an enclosing cloneable-reset (CPS11:
+  `callcc-star-context`) also run on the substrate. Every delimited/undelimited
+  operator now has a CPS-substrate lowering for its supported shape subset; the
+  legacy lowering survives only as the selective fallback for shapes outside that
+  subset (the keep-or-remove decision for it is OQ-CPS2).
 - A continuation captured across a call depth far greater than 16 captures and
   resumes correctly (the fiber path's `NULL`-on-overflow no longer applies).
-  *Substrate-ready (`dk_*` is unbounded by construction); reached by emitted
-  code once a resumable sub-continuation is reified (post-CPS8 increment).*
+  **Done in emitted code (CPS8.5/CPS9):** `escape-deep-capture` captures and
+  resumes from 5000 frames deep, and CPS9 reifies a *resumable* delimited
+  sub-continuation in emitted code (a `DK` chain), replayed multi-shot via
+  `dk_invoke` -- both unbounded by construction (`dk_*` has no frame ceiling).
 - An implicit root prompt exists around `main`; an undelimited `call/cc` with no
   explicit `reset` captures to it and resumes. **Done (CPS8.5):** `(call/cc f)`/
   `(escape f)` capture a real one-shot continuation against an implicit
@@ -583,10 +845,35 @@ are met for that operator set; the rest stay open.
   fallback (whole-program CPS) is simpler to implement but pays the trampoline
   tax everywhere. Revisit only if the coloring analysis proves too conservative
   to be useful (e.g. pervasive indirect calls force most code colored).
-- **OQ-CPS2 -- Keep the fiber fast path?** Retaining `fiber_ctx_*.S` for shallow
-  delimited capture could beat CPS on the common small-`reset` case. Decide in
-  CPS0.4 / revisit with CPS7.2 numbers: keep as a depth-bounded fast path, or
-  remove for a single substrate.
+- **OQ-CPS2 -- Keep the fiber fast path? RESOLVED 2026-06-02: KEEP (as the
+  selective fallback + bounded fast path).** Two independent reasons make "keep"
+  the correct call today, and neither is a close perf judgement:
+
+  1. **Correctness, not just speed.** The CPS-substrate lowerings (CPS8--CPS11)
+     are *selective*: each fires only for its supported shape subset and returns
+     NULL otherwise, falling back to the legacy fiber/inlined runtime. Shapes
+     still outside the subset -- e.g. a `shift` in an `if`/`match` *branch*
+     (CPS8.3), a non-arithmetic delimited context (calls, `let`-bodies that
+     aren't a single-hole `+`/`-`/`*` chain), float-typed results, or a
+     `cloneable-shift` with live `Clone` captures -- are handled *only* by the
+     legacy path. Removing it would regress those to "not compilable," so removal
+     is **blocked on the CPS subset becoming total**, not on a benchmark.
+  2. **It is genuinely a fast path for the common small case.** For a shallow
+     `reset` with a nearby `shift` the fiber snapshot copies a handful of frames
+     with no per-step heap thunk; the trampoline pays one indirect call + one
+     small allocation per bounce (CPS7.2). The fiber path therefore stays as the
+     depth-bounded fast path the original OQ-CPS2 anticipated; the CPS path is the
+     unbounded/serializable/multi-shot substrate for everything the fiber path
+     cannot express.
+
+  **Removal criteria (revisit when all hold).** (a) The CPS context grammar
+  covers the shapes above (tracked by the "broaden the context subset" follow-on
+  and CC4); (b) a CPS7.2 head-to-head shows the trampoline within an acceptable
+  factor of the fiber snapshot on the small-`reset` microbenchmark (or platform
+  TCO removes the trampoline tax, OQ-CPS3); (c) the `TUR_CONT_MAX_CAPTURED_FRAMES`
+  fiber capture is no longer reachable from any non-fallback lowering. Until then
+  the two substrates coexist exactly as ratified in CPS0.4, and
+  `TUR_CONT_MAX_CAPTURED_FRAMES` stays scoped + documented as fiber-only (CPS6).
 - **OQ-CPS3 -- Trampoline vs platform TCO.** If all supported C compilers/targets
   give reliable tail calls under our codegen, the trampoline could be dropped on
   those targets. Treat as a CPS7 perf follow-up, not a blocker.
