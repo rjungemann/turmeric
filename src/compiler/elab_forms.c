@@ -2304,6 +2304,30 @@ Expr *elab_question(Elab *e, const Form *call) {
     Form *inner = call->as.list.items[1];
     Span span = call->span;
 
+    /* R1: reject a `?` applied to a literal scalar up front.  A literal can
+     * never be a Result value, and -- being a literal -- it can never be a
+     * moved-from binding, so inspecting it here is side-effect free (no risk
+     * of double-evaluating an owned operand).  Computed non-Result operands
+     * are still caught downstream by the TUR-E0001 arg-type check on
+     * __tur-q-is-err?; this branch just gives the canonical mistake a clearer,
+     * `?`-specific message. */
+    switch (inner->tag) {
+        case F_INT: case F_FLOAT: case F_BOOL:
+        case F_NIL: case F_STR: case F_KEYWORD: {
+            const char *what =
+                inner->tag == F_INT     ? "int"     :
+                inner->tag == F_FLOAT   ? "float"   :
+                inner->tag == F_BOOL    ? "bool"    :
+                inner->tag == F_STR     ? "cstr"    :
+                inner->tag == F_KEYWORD ? "keyword" : "nil";
+            diag_emit_with_code(DIAG_ERROR, inner->span, TUR_E0001_TYPE_MISMATCH,
+                                "? operator requires a Result value, got %s", what);
+            return NULL;
+        }
+        default:
+            break;
+    }
+
     /* Fresh symbol __q_N to avoid multiple evaluation of expr. */
     char q_name[32];
     snprintf(q_name, sizeof(q_name), "__q_%u", e->next_gensym_id++);

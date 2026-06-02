@@ -1,0 +1,10 @@
+;; Phase R6a: without --warn-unused-result the discard is not flagged.
+(defn mk [] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = 1; r->err_val = 0; return r;
+  ```)
+(defn main [] :int
+  (mk)
+  (println 1)
+  0)

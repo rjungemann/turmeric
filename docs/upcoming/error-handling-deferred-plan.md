@@ -1,8 +1,116 @@
 # Error Handling -- Deferred Features Plan
 
-> **Status:** Draft Plan
-> **Last Updated:** 2026-06-01
+> **Status:** In progress -- R1, C2, R6a, R6b, R6d shipped; R2 + R6c remain
+> **Last Updated:** 2026-06-02
 > **Type:** Language / Compiler / stdlib / Docs
+
+---
+
+## Implementation status (2026-06-02)
+
+Five of seven items have shipped on branch `claude/practical-volta-3dl2D`
+(suite green at 1257 fixtures). The plan's original "Current state" column was
+significantly stale -- several flags were already partly wired, and
+`catch-unwind` is *not* merely "partial" (see the R2 findings below).
+
+| # | Feature | Status | Notes |
+|---|---|---|---|
+| 1 | `?` query operator | **Shipped (R1)** | `?`-specific TUR-E0001 for literal non-Results; fixtures for typed err-carry, sweet-exp `?(...)`, bad-type, top-level; guide section added. |
+| 2 | `catch-unwind` | **Remaining (R2)** | Larger than "partial" -- two disconnected panic impls must be unified. See "R2 findings" below. |
+| 3 | `--no-contracts` | **Shipped (C2)** | Strips contract macros *and* refinement contracts at elaboration; folds `contract-enabled?`; `TUR_CONTRACTS_ENABLED` preamble define; `release-stripped` recipe. |
+| 4 | `--warn-unused-result` | **Shipped (R6a)** | Flag was already implemented; added 5 fixtures (incl. OQ#3 `?` carve-out) + guide. |
+| 5 | `--lint-panic` | **Shipped (R6b)** | Rewrote the ad-hoc lint into TUR-W0038 with `;; #lint-panic-allow` file/per-call allow-list and `*-unwrap` soft-deprecation (OQ#1); 6 fixtures + guide. |
+| 6 | Panic in effect handlers / continuations | **Remaining (R6c)** | Depends on R2. |
+| 7 | Panic in async tasks | **Shipped (R6d)** | Promoted to a body section with Today/v2 callouts + cps-transform cross-link. |
+
+**Deferred-table & HTML cleanup:** the guide's *Deferred* section now holds
+only the `catch-unwind` row (R2) and the effect-handler/continuation subsection
+(R6c). The `See Also` section was added. The HTML companion
+(`error-handling-guide.html`) regen was intentionally deferred to a single
+final sweep once R2/R6c land (the `.md` is the source of truth meanwhile).
+
+### R2 findings (why catch-unwind is more than "partial")
+
+Auditing the compiled path turned up that **panic has two disconnected
+implementations**:
+
+- `src/runtime/runtime.c` has `tur_catch_unwind` + a single global
+  `setjmp` boundary (`global_panic_jmpbuf`) and a `tur_panic_with` that
+  `longjmp`s to it. Nested boundaries are explicitly unsupported.
+- **Compiled programs do not use that path.** `emit_module.c:2400` emits a
+  *separate* `tur_panic` into each program's C preamble that fires the defer
+  chain (`tur_frame_fire_chain`) and then **always `abort()`s** -- it never
+  consults the runtime's boundary jmpbuf. The plain `(panic "msg")` form
+  lowers to this emitted `tur_panic`, so it is uncatchable in compiled code.
+
+That is why the `panic-catch-unwind` fixture is just `(defn main [] :int 0)`:
+the codegen for `EX_CATCH_UNWIND` (`emit_expr.c:1203`) is effectively dead --
+it declares a `tur_result`, calls the runtime `tur_catch_unwind` with a
+mismatched thunk ABI (`(fn [] :int)` fat closures are *not*
+`void(*)(void*, tur_result*)`), and "extracts" the value only via C comments.
+
+### Concrete R2 design for a dedicated session
+
+1. **Unify the panic path in the emitted preamble** (`emit_module.c`):
+   - Emit a boundary *stack*: `static jmp_buf tur_catch_stack[N]; static int
+     tur_catch_top; static tur_panic_payload *tur_caught_payload;` plus the
+     `tur_panic_payload` struct + accessors (or link them from `runtime.c`,
+     but keep one source of truth).
+   - Reroute the emitted `tur_panic` **and** `tur_panic_with`: when
+     `tur_catch_top > 0`, fire defers up to the boundary's frame, box the
+     message/payload, set `tur_caught_payload`, and `longjmp` to
+     `tur_catch_stack[tur_catch_top-1]`. When `tur_catch_top == 0`, behave
+     exactly as today (fire chain + abort) so every existing panic/defer test
+     is unaffected.
+   - Plain string panic boxes `{type_tag = TY_CSTR, value = strdup(msg)}` so
+     `catch-unwind` can recover the message.
+
+2. **Inline `setjmp` codegen** for `EX_CATCH_UNWIND` (`emit_expr.c`) -- the
+   `setjmp` MUST live in the generated frame, not a runtime helper:
+   ```c
+   int64_t __cu_ok; tur_panic_payload *__cu_p = NULL; int __cu_caught = 0;
+   jmp_buf *__jb = &tur_catch_stack[tur_catch_top++];
+   if (setjmp(*__jb) == 0) { __cu_ok = TUR_APPLY0(<thunk-closure>); tur_catch_top--; }
+   else { __cu_p = tur_caught_payload; tur_caught_payload = NULL; __cu_caught = 1; }
+   ```
+   Then build a **result-shaped `ptr<void>`** `{is_ok, ok_val, err_val}` (the
+   same layout `__tur-q-is-err?` reads) so the result composes with
+   `err?`/`ok-val`/`?`: ok => `{1, __cu_ok, 0}`; err =>
+   `{0, 0, (int64_t)__cu_p}` where the err slot is the opaque `Panic` handle
+   (OQ#2). Confirm `TUR_APPLY0` exists for nullary fat closures; add it if not.
+
+3. **`catch-panic-of`**: same boundary, but after catching, if
+   `tur_panic_payload_type(p) != expected`, re-raise via `tur_panic_with`
+   (now routing to the *next* outer boundary because this one was popped).
+
+4. **stdlib `stdlib/panic.tur`**: `(defopaque Panic :ptr<void>)` and the
+   `panic-payload-message/-file/-line` accessors (`:Panic -> ...`) wrapping the
+   runtime accessors. `catch-unwind`/`catch-panic-of` stay special forms.
+
+5. **`*-must` reroute (OQ#2 bonus)**: `native_result_must` /
+   `native_option_must` / `*-expect` in `src/main.c:4989+` currently
+   `_exit(1)`. Route them through `tur_panic_with` so they are catchable and
+   the guide's "standard panic message format + double-panic guard" claim
+   becomes true. (Interpreter-side; the compiled `*-must` surface is separate.)
+
+6. **Regenerate all codegen snapshots** (preamble change) per the CLAUDE.md
+   Fixture Snapshots rule, and add fixtures: `panic-catch-unwind-basic`,
+   `-caught`, `-nested`, `-defer`, `-double`, `panic-catch-panic-of`, plus the
+   interpreter equivalents under `tests/run-turi.sh` (the interpreter already
+   has `env->catch_jmp` in `src/turi/env.h:154`).
+
+7. **Risk:** the partial-defer-unwind-to-a-boundary semantics (plan rules 3-4
+   of R6c) are not in the current frame-chain model, which only supports
+   full-chain unwind to abort. Validate `panic-defer`, `panic-double-panic`,
+   `panic-trace`, `continuation-*`, `defer-*`, `effect-abort-panic`, and
+   `taskgroup-panic-propagate` after every step.
+
+### R6c note
+
+R6c (panic in effect handlers / continuations) is unblocked only once R2 lands.
+Its runtime change -- `tur_reset_enter`/`tur_reset_exit` save/restore of
+`tur_panic_in_progress` (rule 2) -- should be implemented against the unified
+boundary stack from R2 step 1, not the dead `runtime.c` path.
 
 ---
 
@@ -15,7 +123,9 @@ implemented. This plan finishes those features, sequences them by dependency,
 and folds the guide updates into the same phase that ships each piece -- so
 the guide never drifts ahead of, or behind, the runtime.
 
-The deferred surface is:
+The deferred surface is (original assessment -- see
+"Implementation status (2026-06-02)" below for the corrected, current state;
+several "Not started" / "Partial" entries here proved stale):
 
 | # | Feature | Guide phase tag | Current state |
 |---|---|---|---|
@@ -144,7 +254,22 @@ Move row 1 ("`?` operator") of the **Deferred** table into the new section.
 
 ### Stdlib
 
-Add `stdlib/panic.tur`:
+Add `stdlib/panic.tur`. Per resolved OQ#2, the payload is exposed through an
+opaque `Panic` wrapper rather than a raw `:ptr<void>`, so callers cannot
+accidentally dereference it; the accessors take `:Panic`:
+
+```turmeric
+;; Opaque wrapper around the runtime tur_panic_payload pointer (OQ#2).
+(defopaque Panic :ptr<void>)
+```
+
+Per the resolved bonus finding, this phase also reroutes the existing
+`*-must`/`*-expect` natives (`native_result_must` et al. at `src/main.c:4989`)
+through `tur_panic_with` instead of their current bare `_exit(1)`, so they are
+catchable by `catch-unwind` and the guide's "standard panic message format and
+double-panic guard" claim becomes true. Add a fixture
+`tests/fixtures/panic-catch-unwind-must/` asserting `(catch-unwind (fn []
+(result-must (err-val ...))))` returns `err`, not a process exit.
 
 ```turmeric
 ;;; catch-unwind -- run thunk; return ok(thunk-result) or err(panic-payload).
@@ -160,7 +285,7 @@ Add `stdlib/panic.tur`:
 ;;;     (if (err? r) (println "caught") (println "ok")))
 ;;;
 ;;; Since: Phase R2
-(defn catch-unwind [thunk :int] :ptr<void> ...)
+(defn catch-unwind [thunk :int] :Panic ...)  ;; err slot carries :Panic, not raw ptr
 
 ;;; catch-panic-of -- like catch-unwind, but only catches panics whose
 ;;; payload downcasts to the given type tag; re-raises other panic types.
@@ -170,18 +295,18 @@ Add `stdlib/panic.tur`:
 ;;;   thunk    -- (fn [] :int)
 ;;;
 ;;; Since: Phase R2
-(defn catch-panic-of [type-tag :int thunk :int] :ptr<void> ...)
+(defn catch-panic-of [type-tag :int thunk :int] :Panic ...)
 
 ;;; panic-payload-message -- read the message string out of a caught payload.
 ;;;
 ;;; Since: Phase R2
-(defn panic-payload-message [p :ptr<void>] :cstr ...)
+(defn panic-payload-message [p :Panic] :cstr ...)
 
 ;;; panic-payload-file -- source file of the panic call site.
-(defn panic-payload-file [p :ptr<void>] :cstr ...)
+(defn panic-payload-file [p :Panic] :cstr ...)
 
 ;;; panic-payload-line -- source line of the panic call site.
-(defn panic-payload-line [p :ptr<void>] :int ...)
+(defn panic-payload-line [p :Panic] :int ...)
 ```
 
 ### Tests
@@ -275,6 +400,11 @@ Update the "In v1, contracts are always enabled..." paragraph in
 - `tests/fixtures/lint-unused-result-bound/` -- a `let [_ ...]` binding
   does **not** warn (explicit-discard convention).
 - `tests/fixtures/lint-unused-result-off/` -- flag not passed; no warning.
+- `tests/fixtures/lint-unused-result-question/` -- a `?`-wrapped result call
+  in statement position does **not** warn (resolved OQ#3). The `?` lowering
+  binds its operand via `(let [__q_N expr] ...)` at `elab_forms.c:2307`, so the
+  call is never in statement position; this fixture pins that no warning fires.
+  No elaborator carve-out is needed -- the let-binding shields it.
 
 ### Guide updates
 
@@ -295,6 +425,13 @@ row 4 of the **Deferred** table.
 - Per-call escape: an immediately-preceding `;; #lint-panic-allow` comment
   silences a single call.
 - Off by default; `--lint-panic` opts in.
+- **`*-unwrap` soft-deprecation (resolved OQ#1):** `result-unwrap` and
+  `option-unwrap` are flagged *specifically* as panic sites here -- they are
+  already in the panic-site set above, but the diagnostic text calls out the
+  `*-must` alternative (`TUR-W0xxx: panic call site outside allow-list; prefer
+  result-must / option-must`). This is the soft-deprecation lever: no removal,
+  no breaking change, just a lint nudge consistent with the guide's existing
+  steer toward `*-must`.
 
 ### Tests
 
@@ -303,6 +440,8 @@ row 4 of the **Deferred** table.
 - `tests/fixtures/lint-panic-call-allow/` -- per-call allow.
 - `tests/fixtures/lint-panic-asserts/` -- contract macros warn.
 - `tests/fixtures/lint-panic-off/` -- flag absent, so the warning stays silent.
+- `tests/fixtures/lint-panic-unwrap/` -- `(result-unwrap ...)` / `(option-unwrap
+  ...)` warn with the `prefer *-must` text (resolved OQ#1 soft-deprecation).
 
 ### Guide updates
 
@@ -451,21 +590,39 @@ phases that depend on it.
 
 ---
 
-## Open Questions
+## Open Questions (resolved 2026-06-02)
 
-1. Should `result-unwrap` and `option-unwrap` be deprecated once
-   `result-must` / `option-must` exist with consistent panic semantics? The
-   current guide already steers callers toward `*-must`. A `--lint-panic`
-   warning on `*-unwrap` specifically could be the soft-deprecation lever.
-2. `catch-unwind` payload representation: today the runtime stores a
-   `tur_panic_payload` pointer in the `err` slot of a `result`. Should the
-   stdlib surface expose this directly, or wrap it in a `Panic` opaque type
-   to prevent accidental dereferencing? The plan above assumes opaque
-   wrapping via `panic-payload-*` accessors.
-3. `--warn-unused-result` semantics for the `?` lowering: the lowered
-   `(let [__q expr] ...)` consumes `expr`, so the warning should never fire
-   on a `?`-wrapped call. Confirm during R6a implementation; add a fixture
-   if not.
+1. **Should `result-unwrap` / `option-unwrap` be soft-deprecated in favor of
+   `*-must`?** **Resolved: lint-only soft-deprecation.** `--lint-panic` (Phase
+   R6b) flags `*-unwrap` call sites *specifically* -- on top of the general
+   panic-site warning -- so migration is nudged without any breaking change or
+   removal. The guide already steers callers toward `*-must`. See the R6b
+   addendum below.
+2. **`catch-unwind` payload representation -- raw pointer or opaque wrapper?**
+   **Resolved: opaque `Panic` wrapper.** The stdlib surface introduces
+   `(defopaque Panic :ptr<void>)`; `catch-unwind` returns `Result<int, Panic>`
+   and the `panic-payload-*` accessors take a `:Panic` (not a raw
+   `:ptr<void>`), preventing accidental dereferencing. This matches the Phase
+   R2 stdlib sketch -- the accessor signatures below are updated from
+   `:ptr<void>` to `:Panic` accordingly.
+3. **`--warn-unused-result` interaction with the `?` lowering.** **Resolved:
+   confirmed safe; pin with a fixture.** The lowering already binds the
+   operand via `(let [__q_N expr] ...)` (`elab_forms.c:2307`, comment: "avoid
+   multiple evaluation"), so a `?`-wrapped call is never in statement position
+   and the warning cannot fire. No elaborator change is needed; R6a adds
+   `tests/fixtures/lint-unused-result-question/` to lock this in.
+
+### Bonus finding (resolved 2026-06-02): `*-must` bypass `tur_panic`
+
+Audit turned up that `result-must` / `result-must-msg` / `option-must` /
+`option-expect` are natives in `src/main.c` (e.g. `native_result_must` at
+`src/main.c:4989`) that call `_exit(1)` **directly**, not via `tur_panic`.
+This contradicts the guide's claim (error-handling-guide.md:86-87, 219-220)
+that the `*-must` family yields "the standard panic message format and
+double-panic guard" -- and, more importantly, it makes them **uncatchable by
+`catch-unwind`**. **Resolved: fold the fix into Phase R2.** Reroute the four
+`*-must`/`*-expect` natives through `tur_panic_with` so they are catchable and
+the guide text becomes accurate. See the R2 addendum below.
 
 ---
 

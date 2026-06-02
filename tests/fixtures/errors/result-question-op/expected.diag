@@ -1,1 +1,2 @@
-expected ptr<void>, got int
+TUR-E0001
+? operator requires a Result value, got int

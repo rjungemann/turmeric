@@ -1,0 +1,7 @@
+;; Phase C2: the same program WITHOUT --no-contracts still panics on the
+;; failing assert! (the default; contracts are on). Companion to
+;; contracts-stripped (which passes --no-contracts).
+(defn main [] :int
+  (assert! (= 1 2))
+  (println "reached-end")
+  0)

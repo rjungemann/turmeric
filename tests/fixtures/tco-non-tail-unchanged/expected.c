@@ -124,6 +124,7 @@ static void tur_handler_table_free(tur_handler_table_t *t) {
     for (int i = 0; i < t->n_entries; i++) free(t->entries[i].env);
     free(t->entries); free(t);
 }
+#define TUR_CONTRACTS_ENABLED 1
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})

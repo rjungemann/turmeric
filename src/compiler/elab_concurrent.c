@@ -300,23 +300,8 @@ Expr *elab_select(Elab *e, const Form *call) {
  * msg must be of type :cstr (or a string literal).
  * Return type is TYPE_NEVER (diverging; caller never observes a value). */
 Expr *elab_panic(Elab *e, const Form *call) {
-    /* Phase R6: Lint panic usage */
-    if (g_lint_panic && e->fn_body_depth > 0) {
-        /* We're inside a function body - check if it's main or a test function */
-        bool in_test_or_main = false;
-        if (e->current_fn_name) {
-            if (strcmp(e->current_fn_name->name, "main") == 0) {
-                in_test_or_main = true;
-            } else if (strncmp(e->current_fn_name->name, "test-", 5) == 0) {
-                in_test_or_main = true;
-            }
-        }
-        if (!in_test_or_main) {
-            diag_emit(DIAG_WARNING, call->span,
-                      "panic called outside of main or test function; consider using Result instead");
-        }
-    }
-    
+    /* Phase R6b: panic-site linting is handled centrally in elab_call
+     * (TUR-W0038, allow-list aware); no per-form lint here. */
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(panic msg) requires exactly one argument");
@@ -349,12 +334,8 @@ Expr *elab_panic_with(Elab *e, const Form *call) {
  * thunk is a nullary function; returns result<T, panic-payload>.
  * In v1, result is ptr<void> and lowering uses tur_catch_unwind from runtime. */
 Expr *elab_catch_unwind(Elab *e, const Form *call) {
-    /* Phase R6: Lint catch_unwind usage */
-    if (g_lint_panic) {
-        diag_emit(DIAG_WARNING, call->span,
-                  "catch_unwind should only be used at effect boundaries, not for normal error handling; consider using Result instead");
-    }
-    
+    /* Phase R6b: catch-unwind is not a panic site under --lint-panic (it is
+     * the recovery boundary); no lint here. */
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(catch-unwind thunk) requires exactly one argument");

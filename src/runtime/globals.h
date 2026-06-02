@@ -21,6 +21,9 @@ extern bool g_panic_trace;
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 
+/* Phase C2: --no-contracts (strip contract checks at elaboration) */
+extern bool g_no_contracts;
+
 /* Phase B5: backtrack depth + clone plan dump */
 extern int64_t g_backtrack_depth;
 extern bool g_dump_clone_plan;

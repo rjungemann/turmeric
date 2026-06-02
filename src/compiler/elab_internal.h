@@ -33,6 +33,8 @@ extern bool g_warn_unused_result;
  * warnings to errors so a clean build can gate against new uses. */
 extern bool g_werror_deprecated;
 extern bool g_lint_panic;
+/* Phase C2: --no-contracts -- strip contract checks during elaboration */
+extern bool g_no_contracts;
 /* Phase G1: GADT feature flag */
 extern bool g_gadt_enabled;
 /* LT0: Linear types feature flag */

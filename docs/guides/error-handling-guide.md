@@ -179,6 +179,71 @@ result-free(r)     ;; free the heap struct (does not free the contained value)
 
 ---
 
+## Query operator: `?`
+
+The `?` operator unwraps an ok `Result` in place, or returns the err `Result`
+early from the enclosing function. It is the ergonomic counterpart to manual
+`(if (err? r) (return r) (ok-val r))` threading.
+
+```turmeric
+(? expr)            ;; s-expression
+```
+```sweet-exp
+?(expr)             ;; neoteric -- composes inside other calls
+(? expr)            ;; traditional spelling also works under #lang sweet-exp
+```
+
+### Lowering
+
+`(? expr)` lowers to a single-evaluation `let` so `expr` runs exactly once:
+
+```turmeric
+(let [__q expr]
+  (if (err? __q)
+      (return __q)        ;; propagate the err Result unchanged
+      (ok-val __q)))      ;; otherwise yield the unwrapped ok value
+```
+
+The lowering routes through the `#{}`-safe stdlib helpers `__tur-q-is-err?`
+and `__tur-q-ok-val` (in `stdlib/result.tur`), so call sites need no `(unsafe
+...)` wrapper.
+
+### Scope rule
+
+`?` is only valid **inside a function body** -- using it at the top level is a
+hard error (`? operator is only allowed inside a function body`). Because it
+expands to `(return <err>)`, the enclosing function must itself return a
+`Result` so the propagated err is well-typed.
+
+Applying `?` to a non-`Result` literal is rejected up front:
+
+```turmeric
+(? 5)   ;; error [TUR-E0001]: ? operator requires a Result value, got int
+```
+
+Computed non-`Result` operands are caught by the same `TUR-E0001` check when
+the `__tur-q-is-err?` helper fails to accept them.
+
+### Worked example
+
+```turmeric
+;; parse-config threads three fallible steps; any err short-circuits.
+(defn parse-config [src :ptr<void>] :ptr<void>
+  (let [raw    (? (read-source  src))]
+    (let [toks (? (tokenize     raw))]
+      (let [ast (? (parse-forms toks))]
+        (ok ast)))))
+```
+
+If `read-source`, `tokenize`, or `parse-forms` returns an err, `parse-config`
+returns that err immediately; otherwise it returns `(ok ast)`.
+
+For the "transform the error, then propagate" use case, combine `?` with
+[`result-or-else`](#combinators) to rewrite the err payload before it bubbles
+up.
+
+---
+
 ## `Option`
 
 An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
@@ -286,6 +351,33 @@ chain), it prints `double panic: aborting` and calls `abort()` immediately.
 Defer thunks registered before the panic are fired in reverse order during
 unwinding. If a defer thunk itself panics, the double-panic guard triggers `abort()`.
 
+### Auditing panic call sites
+
+Pass `--lint-panic` to have the compiler emit `TUR-W0038` at every panic call
+site so a codebase can audit (or gate CI on) where panics can originate. The
+flagged sites are:
+
+- `panic` / `tur_panic`
+- the contract macros `assert!` / `require!` / `ensure!` / `invariant!`
+  (and their `-msg!` variants)
+- `result-unwrap` / `option-unwrap` -- these additionally carry a
+  soft-deprecation hint to prefer `result-must` / `option-must`, which have
+  consistent panic semantics (`*-unwrap` go straight to `abort()`/`exit(1)`).
+
+The lint is **off by default**. Silence intentional sites with a
+`;; #lint-panic-allow` comment:
+
+- as a **top-of-file** comment (in the leading comment block) it silences the
+  whole file;
+- on the line **immediately preceding** a call it silences just that call.
+
+```turmeric
+(defn supervisor [] :int
+  ;; #lint-panic-allow
+  (panic "unrecoverable")   ;; not flagged
+  0)
+```
+
 ---
 
 ## Unwrap helpers: `must!` and `must-msg!`
@@ -347,6 +439,30 @@ ignore!(some-fn-returning-result())
 `ignore!` expands to `(do expr nil)` -- the expression is evaluated for its side
 effects and the value is dropped.
 
+### Linting unused results
+
+Pass `--warn-unused-result` to have the compiler warn when a `result`-shaped
+value (a `ptr<void>`) is computed in statement position and its value is thrown
+away:
+
+```turmeric
+(defn main [] :int
+  (write-record r)   ;; warning: discarded result value of type ptr<void>;
+                     ;;          use ignore! to suppress this warning
+  0)
+```
+
+The warning is **off by default** and is silenced three ways:
+
+- **`ignore!`** -- `(ignore! (write-record r))` expands to `(do expr nil)`, so
+  the discarded value is `nil`, not a result. Use this when discarding is
+  intentional.
+- **Binding it** -- `(let [_ (write-record r)] ...)`. A `let` binding (even to
+  `_`) is an explicit discard and never warns.
+- **Using the value** -- e.g. propagating it with the [`?` operator](#query-operator-).
+  Because `(? expr)` binds its operand in a `let`, a `?`-wrapped call is never
+  in statement position and never triggers the warning.
+
 ---
 
 ## Contract macros
@@ -355,8 +471,21 @@ Contract macros live in `stdlib/macros.tur` (module `tur/macros`) and are
 auto-imported. They all expand to `tur-contract-check` or `tur-contract-check-inv`
 from `stdlib/contract.tur`, which call `tur_panic` on failure.
 
-In v1, contracts are always enabled (`contract-enabled?` returns `true`).
-A `--no-contracts` flag is planned for Phase C2.
+By default contracts are enabled (`contract-enabled?` returns `true`). Pass
+`--no-contracts` to strip them from a release build: every `assert!` /
+`require!` / `ensure!` / `invariant!` is dropped **at elaboration time**, so the
+contract's predicate expression is never evaluated, and `contract-enabled?`
+folds to `false`.
+
+> **Side-effect warning.** Because the predicate is removed entirely, any side
+> effect inside a contract condition disappears under `--no-contracts` -- this
+> matches the C / Rust `assert` convention. Keep contract predicates pure;
+> never rely on a side effect that lives inside `(assert! ...)`.
+
+The codegen preamble also defines `TUR_CONTRACTS_ENABLED` (`1` normally, `0`
+under `--no-contracts`) so inline-C blocks can branch on the build mode. See
+the [compiler flags guide](compiler-flags-guide.md) for the release-build
+recipe.
 
 ### `assert!` and `assert-msg!`
 
@@ -461,17 +590,39 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 
 ---
 
+## Panic inside async tasks
+
+> **Today (synchronous async).** `(async fn)` inlines the function call; the
+> body runs synchronously with no fiber scheduler and no task boundary. A panic
+> inside an async body simply propagates through the caller's stack exactly as a
+> normal panic would -- there is nothing async-specific about it, and
+> `catch-unwind` at the call site catches it like any other panic.
+
+> **v2 (fiber-based async).** When the fiber scheduler lands, panics gain a task
+> boundary:
+>
+> 1. A panic inside an async task is caught at the task boundary; the task's
+>    future resolves to a rejected state carrying the panic payload. Use
+>    `catch-unwind` at the join point to recover.
+> 2. If a task is cancelled while a panic is in progress, the panic takes
+>    precedence.
+> 3. An uncaught panic in async main terminates the process with a nonzero exit
+>    code after all defer thunks have fired.
+> 4. On the WASM target, panics lower to the WebAssembly `unreachable`
+>    instruction.
+
+> See [docs/upcoming/cps-transform-plan.md](../upcoming/cps-transform-plan.md)
+> for the fiber-based async runtime these v2 semantics depend on.
+
+---
+
 ## Deferred
 
 The following features are planned but not yet implemented:
 
 | Feature | Phase | Notes |
 |---|---|---|
-| `?` operator | R1 | Short-circuit error propagation in the caller |
 | `catch-unwind` | R2 | Catch a panic at a safe boundary |
-| `--no-contracts` flag | C2 | Strip contracts from release builds |
-| `--warn-unused-result` compiler flag | R6 | Lint for dropped results |
-| `--lint-panic` compiler flag | R6 | Audit panic call sites |
 
 ### Panic inside effect handlers and continuations (Phase R6)
 
@@ -485,18 +636,15 @@ When a panic occurs inside an effect handler or continuation:
 3. **Defer**: Defer thunks fire during panic unwinding. A defer thunk that itself
    panics triggers the double-panic guard and calls `abort()`.
 
-### Panic inside async tasks (Phase R6)
+---
 
-In v1, `(async fn)` calls the function synchronously with no fiber scheduler. A
-panic inside an async body propagates through the call stack and is not caught at
-any task boundary.
+## See Also
 
-The v2 target behavior (when true fiber-based async lands):
-
-1. A panic inside an async task is caught at the task boundary. The task's future
-   resolves to a rejected state carrying the panic payload; use `catch-unwind` at
-   the join point to recover.
-2. If a task is cancelled while a panic is in progress, the panic takes precedence.
-3. An uncaught panic in async main terminates the process with a nonzero exit code
-   after all defer thunks have fired.
-4. WASM target: panics lower to the WebAssembly `unreachable` instruction.
+- [error-handling-rationale.md](../design/error-handling-rationale.md) --
+  exceptions vs. panic design rationale
+- [effects-system-guide.md](effects-system-guide.md) -- effect handler
+  semantics referenced above
+- [compiler-flags-guide.md](compiler-flags-guide.md) -- `--no-contracts`,
+  `--warn-unused-result`, and `--lint-panic`
+- [cps-transform-plan.md](../upcoming/cps-transform-plan.md) -- the fiber-based
+  async runtime behind the v2 async-panic semantics

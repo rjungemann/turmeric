@@ -1,0 +1,16 @@
+;; Phase R6b / OQ#1: result-unwrap / option-unwrap are flagged with a
+;; soft-deprecation hint toward *-must. (result-unwrap defined locally so the
+;; fixture compiles in the codegen path; the lint fires on the call by name.)
+(defn mk [] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = 7; r->err_val = 0; return r;
+  ```)
+(defn result-unwrap [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r2 = (void*)r;
+  return r2->ok_val;
+  ```)
+(defn main [] :int
+  (println (result-unwrap (mk)))
+  0)
