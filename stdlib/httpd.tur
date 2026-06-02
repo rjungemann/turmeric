@@ -139,7 +139,12 @@
 ;;; Since: Phase H1 (TLS path: Phase H5)
 
 (defn httpd-handle [fd :int handler :int tls :int] :nil
-  ```c typedef struct {
+  ```c typedef struct __HttpdHeader {
+      char *name;
+      char *value;
+      struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
       int fd;
       int64_t handler;
       char method[16];
@@ -153,6 +158,8 @@
       int client_keep_alive;
       void *route_params;
       int64_t tls;
+      void *req_headers;
+      void *resp_headers;
   } HttpdConn;
   typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
   typedef void    (*httpd_tls_void_fn)(int64_t);
@@ -168,28 +175,42 @@
       conn->fd = (int)fd;
       conn->handler = (int64_t)handler;
       conn->tls = (int64_t)tls;
-      /* Read until end-of-headers, then read any indicated body. */
-      char buf[8192];
+      /* M0: grow the read buffer on demand so large header blocks no
+       * longer truncate at 8 KB. Start at 8 KB; double until headers fit
+       * or a hard cap is reached (defends against runaway headers). */
+      size_t buf_cap = 8192;
+      size_t buf_max = 262144;  /* 256 KB hard cap on header block */
+      char  *buf     = (char *)malloc(buf_cap);
+      if (!buf) break;
+      buf[0] = '\0';
       int total = 0;
       ssize_t n;
       char *hdr_end = NULL;
       while (!hdr_end) {
+          if ((size_t)total + 1 >= buf_cap) {
+              if (buf_cap >= buf_max) break;
+              size_t new_cap = buf_cap * 2;
+              if (new_cap > buf_max) new_cap = buf_max;
+              char *nb = (char *)realloc(buf, new_cap);
+              if (!nb) break;
+              buf = nb;
+              buf_cap = new_cap;
+          }
           if (conn->tls && httpd_tls_ops.read_fn) {
               n = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
                       conn->tls, (int64_t)(intptr_t)(buf + total),
-                      (int64_t)(sizeof(buf) - 1 - (size_t)total));
+                      (int64_t)(buf_cap - 1 - (size_t)total));
           } else {
               n = recv(conn->fd, buf + total,
-                       (size_t)(sizeof(buf) - 1 - (size_t)total), 0);
+                       (size_t)(buf_cap - 1 - (size_t)total), 0);
           }
           if (n <= 0) break;
           total += (int)n;
           buf[total] = '\0';
           hdr_end = strstr(buf, "\r\n\r\n");
           if (!hdr_end) hdr_end = strstr(buf, "\n\n");
-          if (total >= (int)sizeof(buf) - 1) break;
       }
-      if (!hdr_end) break;  /* peer closed, timed out, or oversized headers */
+      if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
       int hdr_sep_len = (hdr_end[0] == '\r') ? 4 : 2;
       int hdrs_total  = (int)(hdr_end - buf) + hdr_sep_len;
       /* Parse request line: METHOD SP PATH SP VERSION CRLF */
@@ -231,11 +252,14 @@
               }
           }
       }
-      /* Scan headers for Connection and Content-Length. */
+      /* Scan headers: pick out Connection / Content-Length for routing,
+       * AND capture every header into conn->req_headers so middleware can
+       * read arbitrary names via httpd-req-header. */
       int is_http_11   = (strstr(conn->version, "1.1") != NULL);
       int conn_keep    = is_http_11;   /* default by version */
       int conn_close   = 0;
       int content_len  = 0;
+      HttpdHeader *req_tail = NULL;
       char *h = strpbrk(buf, "\r\n");
       if (h) {
           while (h[0] == '\r' || h[0] == '\n') h++;
@@ -255,6 +279,27 @@
                       } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
                           content_len = (int)strtol(val, NULL, 10);
                           if (content_len < 0) content_len = 0;
+                      }
+                      /* M0: stash a copy on req_headers (always, even for
+                       * Connection / Content-Length, so a handler can read
+                       * them by name without a second special case). */
+                      if (name_len > 0) {
+                          HttpdHeader *rh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+                          if (rh) {
+                              rh->name  = (char *)malloc((size_t)name_len + 1);
+                              rh->value = (char *)malloc((size_t)val_len  + 1);
+                              if (rh->name && rh->value) {
+                                  memcpy(rh->name,  h,   (size_t)name_len); rh->name[name_len]  = '\0';
+                                  if (val_len > 0) memcpy(rh->value, val, (size_t)val_len);
+                                  rh->value[val_len] = '\0';
+                                  if (req_tail) { req_tail->next = rh; req_tail = rh; }
+                                  else { conn->req_headers = rh; req_tail = rh; }
+                              } else {
+                                  if (rh->name)  free(rh->name);
+                                  if (rh->value) free(rh->value);
+                                  free(rh);
+                              }
+                          }
                       }
                   }
               }
@@ -290,6 +335,8 @@
               conn->body_len = got;
           }
       }
+      /* Read buffer is no longer needed past this point. */
+      free(buf);
       /* Dispatch to handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
       typedef void (*fn1_t)(void *, int64_t);
@@ -306,10 +353,80 @@
       int         blen  = conn->resp_body ? conn->resp_body_len : 0;
       const char *ver   = is_http_11 ? "HTTP/1.1" : "HTTP/1.0";
       const char *chdr  = conn->client_keep_alive ? "keep-alive" : "close";
-      char hbuf[512];
-      int hlen = snprintf(hbuf, sizeof(hbuf),
-          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n",
+      /* M0: emit user-set response headers between the hardcoded
+       * Content-Length / Connection lines and the blank line. Drop any
+       * user-set Content-Length (we control the actual byte count) and
+       * note whether Content-Type was provided so we can default. */
+      int has_content_type = 0;
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) {
+                  has_content_type = 1; break;
+              }
+              rh = rh->next;
+          }
+      }
+      /* Build the header block in a growable buffer (large cookie jars,
+       * many user headers easily overflow a fixed 512 B stack buffer). */
+      size_t hbuf_cap = 1024;
+      char  *hbuf     = (char *)malloc(hbuf_cap);
+      if (!hbuf) {
+          /* fall back to a minimal status-only response */
+          char tiny[128];
+          int tl = snprintf(tiny, sizeof(tiny),
+              "%s 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+              ver);
+          if (conn->tls && httpd_tls_ops.write_fn) {
+              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  conn->tls, (int64_t)(intptr_t)tiny, (int64_t)tl);
+          } else {
+              send(conn->fd, tiny, (size_t)tl, 0);
+          }
+          keep_going = 0;
+          goto __cleanup_iteration;
+      }
+      int hlen = snprintf(hbuf, hbuf_cap,
+          "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
           ver, status, stxt, blen, chdr);
+      if (!has_content_type) {
+          int need = hlen + 64;
+          if ((size_t)need > hbuf_cap) {
+              size_t nc = hbuf_cap;
+              while (nc < (size_t)need) nc *= 2;
+              char *nh = (char *)realloc(hbuf, nc);
+              if (nh) { hbuf = nh; hbuf_cap = nc; }
+          }
+          hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+              "Content-Type: text/plain; charset=utf-8\r\n");
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              if (!rh->name || strcasecmp(rh->name, "Content-Length") == 0) {
+                  rh = rh->next; continue;  /* drop user-set Content-Length */
+              }
+              size_t nlen = strlen(rh->name);
+              size_t vlen = rh->value ? strlen(rh->value) : 0;
+              size_t need = (size_t)hlen + nlen + vlen + 8;  /* ": ", "\r\n", slack */
+              if (need > hbuf_cap) {
+                  size_t nc = hbuf_cap;
+                  while (nc < need) nc *= 2;
+                  char *nh = (char *)realloc(hbuf, nc);
+                  if (!nh) break;
+                  hbuf = nh; hbuf_cap = nc;
+              }
+              hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen,
+                  "%s: %s\r\n", rh->name, rh->value ? rh->value : "");
+              rh = rh->next;
+          }
+      }
+      /* Terminating blank line. */
+      if ((size_t)hlen + 3 > hbuf_cap) {
+          char *nh = (char *)realloc(hbuf, (size_t)hlen + 3);
+          if (nh) { hbuf = nh; hbuf_cap = (size_t)hlen + 3; }
+      }
+      hlen += snprintf(hbuf + hlen, hbuf_cap - (size_t)hlen, "\r\n");
       if (conn->tls && httpd_tls_ops.write_fn) {
           ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
               conn->tls, (int64_t)(intptr_t)hbuf, (int64_t)hlen);
@@ -321,9 +438,34 @@
           send(conn->fd, hbuf, (size_t)hlen, 0);
           if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
       }
+      free(hbuf);
       keep_going = conn->client_keep_alive;
+  __cleanup_iteration:
       if (conn->body)      free(conn->body);
       if (conn->resp_body) free(conn->resp_body);
+      /* Free per-request header lists. */
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->req_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+          conn->req_headers = NULL;
+      }
+      {
+          HttpdHeader *rh = (HttpdHeader *)conn->resp_headers;
+          while (rh) {
+              HttpdHeader *nx = rh->next;
+              if (rh->name)  free(rh->name);
+              if (rh->value) free(rh->value);
+              free(rh);
+              rh = nx;
+          }
+          conn->resp_headers = NULL;
+      }
   }
   if (tls && httpd_tls_ops.shutdown) {
       ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
@@ -880,6 +1022,226 @@
   if (!c->resp_body) return;
   memcpy(c->resp_body, body, len + 1);
   c->resp_body_len = (int)len;
+  ```)
+;; =============================================================================
+;; M0: Arbitrary request / response header access
+;; =============================================================================
+;;
+;; The H1-H7 surface only exposed Method, Path, Version, Body, Status.
+;; M0 widens this so middleware can read any request header by name and
+;; set/append any response header.  All header storage is per-iteration
+;; (freed in httpd-handle's cleanup); handlers never need to free.
+;;
+;; Request reads are case-insensitive; missing headers return "".
+;; Response writes:
+;;   - `httpd-resp-header!`     replaces any existing entry with `name`.
+;;   - `httpd-resp-header-add!` always appends (for `Set-Cookie`, `Vary`).
+;;   - A user-set `Content-Length` is silently dropped by the writer
+;;     (the actual response body length is authoritative).
+;;   - If no `Content-Type` is set, the writer defaults to
+;;     `text/plain; charset=utf-8`.
+;;; httpd-req-header -- look up a request header by name (case-insensitive).
+;;;
+;;; Returns the empty string if the header is absent.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- header name to look up (case-insensitive)
+;;;
+;;; Returns:
+;;;   The header value as a cstr (pointer into per-request storage; valid
+;;;   only for the duration of the handler call). Empty string if absent.
+;;;
+;;; Example:
+;;;   (let [ua (httpd-req-header c "User-Agent")] ...)
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-req-header [conn :ptr<void> name :cstr] :cstr
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return "";
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, name) == 0) {
+          return h->value ? h->value : "";
+      }
+      h = h->next;
+  }
+  return "";
+  ```)
+;;; httpd-req-header? -- presence test for a request header.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- header name (case-insensitive)
+;;;
+;;; Returns:
+;;;   1 if present, 0 otherwise.
+;;;
+;;; Example:
+;;;   (when (= 1 (httpd-req-header? c "Authorization")) ...)
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-req-header? [conn :ptr<void> name :cstr] :int
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return 0;
+  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, name) == 0) return 1;
+      h = h->next;
+  }
+  return 0;
+  ```)
+;;; httpd-resp-header! -- set (or replace) a response header.
+;;;
+;;; If `name` is already present on the response, its value is replaced.
+;;; Otherwise a new entry is appended.  Use `httpd-resp-header-add!` for
+;;; truly repeatable headers like `Set-Cookie` or `Vary`.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   name  -- header name (case-insensitive on the dedup check)
+;;;   value -- header value
+;;;
+;;; Example:
+;;;   (httpd-resp-header! c "Content-Type" "application/json")
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-resp-header! [conn :ptr<void> name :cstr value :cstr] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  /* Replace if name already present. */
+  HttpdHeader *h = (HttpdHeader *)c->resp_headers;
+  while (h) {
+      if (h->name && strcasecmp(h->name, name) == 0) {
+          if (h->value) free(h->value);
+          size_t vl = value ? strlen(value) : 0;
+          h->value = (char *)malloc(vl + 1);
+          if (h->value) {
+              if (vl > 0) memcpy(h->value, value, vl);
+              h->value[vl] = '\0';
+          }
+          return;
+      }
+      h = h->next;
+  }
+  /* Append new entry. */
+  HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+  if (!nh) return;
+  size_t nl = strlen(name);
+  size_t vl = value ? strlen(value) : 0;
+  nh->name  = (char *)malloc(nl + 1);
+  nh->value = (char *)malloc(vl + 1);
+  if (!nh->name || !nh->value) {
+      if (nh->name)  free(nh->name);
+      if (nh->value) free(nh->value);
+      free(nh);
+      return;
+  }
+  memcpy(nh->name, name, nl); nh->name[nl] = '\0';
+  if (vl > 0) memcpy(nh->value, value, vl);
+  nh->value[vl] = '\0';
+  /* Append at tail. */
+  HttpdHeader *t = (HttpdHeader *)c->resp_headers;
+  if (!t) { c->resp_headers = nh; return; }
+  while (t->next) t = t->next;
+  t->next = nh;
+  ```)
+;;; httpd-resp-header-add! -- append a response header without de-duplication.
+;;;
+;;; Use for headers that legitimately repeat -- `Set-Cookie`, `Vary`,
+;;; `WWW-Authenticate` -- where each entry is independent.  For single-
+;;; valued headers, prefer `httpd-resp-header!`.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   name  -- header name
+;;;   value -- header value
+;;;
+;;; Example:
+;;;   (httpd-resp-header-add! c "Set-Cookie" "session=abc; Path=/")
+;;;   (httpd-resp-header-add! c "Set-Cookie" "csrf=xyz; Path=/")
+;;;
+;;; Since: Phase H8 (M0)
+
+(defn httpd-resp-header-add! [conn :ptr<void> name :cstr value :cstr] :nil
+  ```c typedef struct __HttpdHeader {
+      char *name; char *value; struct __HttpdHeader *next;
+  } HttpdHeader;
+  typedef struct {
+      int fd; int64_t handler;
+      char method[16]; char path[1024]; char version[16];
+      char *body; int body_len;
+      int resp_status; char *resp_body; int resp_body_len;
+      int client_keep_alive;
+      void *route_params;
+      int64_t tls;
+      void *req_headers;
+      void *resp_headers;
+  } HttpdConn;
+  if (!conn || !name) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  HttpdHeader *nh = (HttpdHeader *)calloc(1, sizeof(HttpdHeader));
+  if (!nh) return;
+  size_t nl = strlen(name);
+  size_t vl = value ? strlen(value) : 0;
+  nh->name  = (char *)malloc(nl + 1);
+  nh->value = (char *)malloc(vl + 1);
+  if (!nh->name || !nh->value) {
+      if (nh->name)  free(nh->name);
+      if (nh->value) free(nh->value);
+      free(nh);
+      return;
+  }
+  memcpy(nh->name, name, nl); nh->name[nl] = '\0';
+  if (vl > 0) memcpy(nh->value, value, vl);
+  nh->value[vl] = '\0';
+  HttpdHeader *t = (HttpdHeader *)c->resp_headers;
+  if (!t) { c->resp_headers = nh; return; }
+  while (t->next) t = t->next;
+  t->next = nh;
   ```)
 ;; =============================================================================
 ;; H6: Routing DSL

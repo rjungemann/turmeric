@@ -1,0 +1,8 @@
+HTTP/1.0 200 OK
+Content-Length: 4
+Connection: close
+Content-Type: application/json
+X-Custom: second
+Set-Cookie: a=1
+Set-Cookie: b=2
+done
