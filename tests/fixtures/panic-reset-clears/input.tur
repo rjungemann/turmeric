@@ -1,0 +1,10 @@
+;;; Phase R6c: after a panic is caught at a boundary, the panic-in-progress
+;;; state is cleared, so a subsequent panic is still catchable (not a spurious
+;;; double-panic abort).
+(defn main [] :int
+  (let [r1 (catch-unwind (fn [] :int (panic "first")))]
+    (if (err? r1) (println "first caught") (println "first ok")))
+  (let [r2 (catch-unwind (fn [] :int (panic "second")))]
+    (if (err? r2) (println "second caught") (println "second ok")))
+  (println "done")
+  0)

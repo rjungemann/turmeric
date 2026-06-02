@@ -378,6 +378,72 @@ The lint is **off by default**. Silence intentional sites with a
   0)
 ```
 
+### Catching a panic at a boundary: `catch-unwind`
+
+`catch-unwind` runs a nullary thunk behind a panic boundary. If the thunk
+returns normally, the result is `(ok value)`; if the thunk panics, the panic is
+intercepted and the result is `(err panic)`, where the err slot carries an
+opaque `Panic` handle. Execution then continues after the boundary instead of
+aborting.
+
+```turmeric
+(let [r (catch-unwind (fn [] :int (risky)))]
+  (if (err? r)
+    (recover)
+    (use (ok-val r))))
+```
+```sweet-exp
+let [r catch-unwind(fn([] :int risky()))]
+  if err?(r)
+    recover()
+    use(ok-val(r))
+```
+
+The value is an ordinary `Result` (carried as the `:int` result box), so it
+composes with `ok?` / `err?` / `ok-val` and the `?` operator.
+
+**Use it for:** FFI boundaries (a panic must not unwind into C), test harnesses,
+and supervisor loops that keep running after a failed unit of work. It is **not**
+a substitute for `result` -- model expected, recoverable failures with `result`
+and reserve `catch-unwind` for turning a genuine panic into a value at a
+controlled boundary.
+
+**Inspecting the panic.** Load `stdlib/panic.tur` to read the payload through the
+opaque `Panic` wrapper:
+
+```turmeric
+(load "stdlib/panic.tur")
+
+(let [r (catch-unwind (fn [] :int (panic "boom")))]
+  (when (err? r)
+    (println (panic-message (result-panic r)))))  ; => boom
+```
+
+`stdlib/panic` exposes `result-panic` (extract the `Panic` from an err result),
+`panic-message`, `panic-file`, `panic-line`, and `panic-type`.
+
+**Interaction with `defer`.** Defer thunks registered inside the thunk fire
+during unwinding, *before* `catch-unwind` produces its `err` result -- a defer
+can observe that a panic is in progress. Because the thunk runs in its own call
+frame, only its defers fire; defers above the boundary are untouched (partial
+unwind).
+
+**Double panic.** If a defer thunk that fires during unwinding itself panics,
+the double-panic guard triggers `abort()` -- the inner panic is fatal and is not
+caught (matching Rust's `catch_unwind` + `Drop`-panic semantics).
+
+**Typed catches: `catch-panic-of`.** `(catch-panic-of Type thunk)` is like
+`catch-unwind` but only catches panics whose payload type matches `Type`; panics
+of any other type are re-raised to the next outer boundary.
+
+```turmeric
+(catch-panic-of :cstr (fn [] :int (panic "string panic")))  ;; caught
+(catch-panic-of :int  (fn [] :int (panic "string panic")))  ;; re-raised
+```
+
+> See [docs/design/error-handling-rationale.md](../design/error-handling-rationale.md)
+> for the exception-vs-panic boundary `catch-unwind` is meant to sit on.
+
 ---
 
 ## Unwrap helpers: `must!` and `must-msg!`
@@ -613,25 +679,31 @@ invariant-msg!(my-list non-empty? "list must not be empty")
 
 ---
 
+## Panic inside effect handlers and continuations
+
+A panic interacts with the effect/continuation machinery as follows:
+
+1. **Effect handlers**: a panic inside a `(perform ...)` or inside a handler body
+   propagates normally through the handler chain; it is only intercepted by a
+   `catch-unwind` boundary.
+2. **Continuations**: a panic unwinds to the enclosing `reset` boundary. Once a
+   panic has been recovered at a `catch-unwind`, the panic-in-progress state is
+   cleared, so a later panic is again catchable (recovering one panic never
+   leaves a sticky state that turns the next panic into a spurious double-panic
+   abort). Resuming a captured continuation after a recovered panic does not
+   re-panic.
+3. **Defer**: defer thunks fire in reverse registration order during unwinding. A
+   defer thunk that itself panics triggers the double-panic guard and calls
+   `abort()`.
+4. **Cleanup ordering**: defer thunks fire *before* `catch-unwind` populates its
+   `err` result, so a defer can observe that a panic is in progress.
+
+---
+
 ## Deferred
 
-The following features are planned but not yet implemented:
-
-| Feature | Phase | Notes |
-|---|---|---|
-| `catch-unwind` | R2 | Catch a panic at a safe boundary |
-
-### Panic inside effect handlers and continuations (Phase R6)
-
-When a panic occurs inside an effect handler or continuation:
-
-1. **Effect handlers**: Panics propagate normally through the handler chain unless
-   a `catch-unwind` boundary (Phase R2) is present.
-2. **Continuations**: A panic unwinds the stack to the `reset` boundary. Resuming
-   a continuation (`shift`/`reset`) after a panic clears the panic state; it does
-   not re-panic automatically.
-3. **Defer**: Defer thunks fire during panic unwinding. A defer thunk that itself
-   panics triggers the double-panic guard and calls `abort()`.
+All previously-deferred features have shipped; see the table of contents above
+for the current error-handling surface.
 
 ---
 

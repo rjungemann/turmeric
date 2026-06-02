@@ -1,0 +1,13 @@
+;;; Phase R2: catch-panic-of catches only panics whose payload type matches;
+;;; a mismatch re-raises to the next outer boundary.
+(defn main [] :int
+  ;; :cstr matches a plain string panic
+  (let [r (catch-panic-of :cstr (fn [] :int (panic "typed")))]
+    (if (err? r) (println "cstr caught") (println "cstr ok")))
+  ;; :int does NOT match a string panic -> re-raises to the outer catch-unwind
+  (let [outer (catch-unwind (fn [] :int
+                (let [r (catch-panic-of :int (fn [] :int (panic "mismatch")))]
+                  (println "should-not-reach")
+                  0)))]
+    (if (err? outer) (println "outer caught reraise") (println "outer ok")))
+  0)

@@ -1,8 +1,90 @@
 # Error Handling -- Deferred Features Plan
 
-> **Status:** In progress -- R1, C2, R6a, R6b, R6d shipped; R2 + R6c remain
+> **Status:** Complete -- all phases shipped (R1, C2, R6a, R6b, R6d earlier; R2 + R6c landed 2026-06-02)
 > **Last Updated:** 2026-06-02
 > **Type:** Language / Compiler / stdlib / Docs
+
+---
+
+## R2 + R6c -- shipped (2026-06-02)
+
+`catch-unwind` / `catch-panic-of` now work end-to-end on the **compiled path**,
+and the R6c effect-handler/continuation panic semantics are validated and made
+normative in the guide. What landed:
+
+- **Catchable plain panic.** The emitted `tur_panic` (`emit_module.c`) gained a
+  branch: when a catch boundary is active (`global_panic_jmpbuf_valid`), it boxes
+  the message as a `:cstr` payload, fires the panicking frame's defer chain, and
+  `longjmp`s to the boundary. With no boundary it aborts exactly as before, so
+  every existing panic/defer fixture is unchanged.
+- **Result-box helpers.** New `tur_catch_unwind_box(int64 thunk)` /
+  `tur_catch_panic_of_box(int type, int64 thunk)` invoke the thunk via a new
+  `TUR_APPLY0` (nullary fat-closure apply), save/restore the single global
+  `jmp_buf` for nesting, and return a `tur_result_box_t` (`tur_ok`/`tur_err`).
+  The caught payload becomes the err value (opaque `Panic` handle). The legacy
+  `tur_catch_unwind(tur_thunk_fn,...)` used by `try/catch` is untouched.
+- **Partial unwind for free.** The catch thunk is a separate C function, so
+  `tur_frame_fire_chain(global_panic_frame)` fires only the thunk's own defers
+  and stops at the call boundary -- the plan's Risk #7 dissolves without a
+  dedicated boundary-frame stack.
+- **Codegen** (`emit_expr.c`): `EX_CATCH_UNWIND` / `EX_CATCH_PANIC_OF` now emit
+  `int64_t v = tur_catch_unwind_box(...)` and return the box.
+- **Elaboration** (`elab_concurrent.c`): the value is typed `:int` (the result
+  box carrier, so stdlib `ok?`/`err?` and `?` consume it directly); a bare
+  non-capturing thunk is auto-shimmed to a fat closure via `EX_FN_TO_FAT`;
+  `catch-panic-of`'s type arg now accepts both `cstr` and `:cstr` spellings.
+- **stdlib/panic.tur**: `(defopaque Panic :ptr<void>)` plus `result-panic`,
+  `panic-message`, `panic-file`, `panic-line`, `panic-type` (OQ#2 opaque wrapper).
+- **Fixtures**: `panic-catch-unwind-basic`, `-caught`, `-defer`, `-nested`,
+  `-double`, `panic-catch-panic-of`, `panic-in-handler`, `panic-reset-clears`
+  (all behavioral / stdout-based; the catching ones carry `requires.no-leak-check`
+  since the recovered `Panic` handle is owned by the result in v1).
+- **Guide**: new `### Catching a panic at a boundary: catch-unwind` section; the
+  effect-handler/continuation rules promoted out of *Deferred* into the body; the
+  Deferred table emptied.
+- All codegen snapshots regenerated for the preamble change.
+
+**R6c note:** the planned `tur_reset_enter`/`tur_reset_exit` save/restore of
+`tur_panic_in_progress` proved **unnecessary** -- the catch boundary itself
+clears the flag on recovery, so a panic propagating through `reset`/`shift` and
+caught by an outer `catch-unwind` leaves clean state (verified by
+`panic-reset-clears` and manual reset/shift tests).
+
+**Interpreter parity (follow-up fix).** The tree-walking interpreter
+(`tur --interpret` / `tur eval --file`) now composes `catch-unwind` with
+`ok?`/`err?` too:
+
+- The `--interpret`/eval startup path never preloaded `result.tur`, so the
+  `ok?`/`err?`/`some?`/`none?` natives had no declared type and the elaborator
+  defaulted their result to `:int` -- which then failed the strict
+  "if condition must be bool" check even for a plain `(ok 5)`. Fixed by
+  injecting `:bool` typed stubs alongside the other native signature stubs in
+  `src/main.c` (the natives still provide the runtime behaviour).
+- The interpreter's `EX_CATCH_UNWIND` returned a `make_struct_val("ok"/"panic")`
+  struct that the box-reading `ok?`/`err?` natives could not inspect. It now
+  returns the native 3-int Result-box layout `{ is_ok, ok_val, err_val }` (ok =
+  thunk value, err = the caught message), so it composes like any other Result.
+- Regression guard: `eval-catch-unwind` in `tests/run-flags.sh` (the genuine
+  interpreter harness) exercises ok + caught-panic through `tur eval --file`.
+
+**`*-must` reroute (OQ#2 bonus -- shipped).** The interpreter natives
+`native_result_must` / `native_result_must_msg` / `native_option_must` /
+`native_option_expect` in `src/main.c` previously called `_exit(1)` directly,
+bypassing both `catch-unwind` and the defer chain. They now raise a *catchable*
+panic via a shared `turi_runtime_panic(env, msg)` helper (extracted in
+`src/turi/eval.c` from the `EX_PANIC` case and exposed in `eval.h`), so:
+
+- a `*-must` failure inside `catch-unwind` is recovered as an `(err ...)` result;
+- an uncaught `*-must` fires defers and exits nonzero with the standard
+  `panic at` / `panic: <msg>` message + double-panic guard -- making the guide's
+  "standard panic message format and double-panic guard" claim true.
+
+(`result-must`/`option-must` remain interpreter-only -- they are not defined for
+the compiled path -- so this surface is interpreter-side, as the plan noted.)
+Regression guards: `eval-must-catchable` / `eval-must-uncaught` in
+`tests/run-flags.sh`.
+
+---
 
 ---
 

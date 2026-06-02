@@ -1225,71 +1225,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         case EX_CATCH_UNWIND: {
-            /* (catch-unwind thunk) - setjmp boundary, call thunk, handle panic */
+            /* (catch-unwind thunk) - run thunk behind a panic boundary; yields a
+             * result box (ok = thunk value, err = opaque Panic handle). */
             const Expr *thunk = e->as.catch_unwind_.thunk;
-            indent_buf(body, ctx->indent);
-            /* Generate a unique result variable name */
+            char *thunk_val = emit_value(ctx, body, thunk);
             char result_var[64];
             snprintf(result_var, sizeof(result_var), "__catch_result_%d", ctx->tmp_n++);
-            /* Declare result variable */
-            buf_printf(body, "tur_result %s;\n", result_var);
             indent_buf(body, ctx->indent);
-            /* Call tur_catch_unwind with the thunk */
-            char *thunk_val = emit_value(ctx, body, thunk);
-            /* The thunk is a function that takes (void* env, tur_result* out) */
-            /* For simplicity in v1, we use NULL as env and pass result_var as out */
-            buf_printf(body, "if (tur_catch_unwind((tur_thunk_fn)%s, NULL, &%s)) {\n", thunk_val, result_var);
+            buf_printf(body, "int64_t %s = tur_catch_unwind_box((int64_t)(intptr_t)%s);\n",
+                       result_var, thunk_val);
             free(thunk_val);
-            ctx->indent++;
-            indent_buf(body, ctx->indent);
-            /* Panic was caught - return the err payload as a result */
-            /* For v1, we return the payload pointer wrapped in err */
-            buf_printf(body, "/* panic caught */\n");
-            ctx->indent--;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "} else {\n");
-            ctx->indent++;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "/* normal completion - extract ok value */\n");
-            ctx->indent--;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "}\n");
-            indent_buf(body, ctx->indent);
-            /* Return the result - for v1, just return the ok value or panic payload */
-            buf_printf(body, "/* v1: simplified - return result struct directly */\n");
-            /* Return the result variable as a pointer - cast to int64_t for ptr<void> */
             return strdup(result_var);
         }
         case EX_CATCH_PANIC_OF: {
-            /* (catch-panic-of Type thunk) - typed catch boundary */
+            /* (catch-panic-of Type thunk) - typed catch boundary; re-raises panics
+             * whose payload type does not match Type. */
             const Expr *thunk = e->as.catch_panic_of_.thunk;
             TypeKind type_kind = e->as.catch_panic_of_.type_kind;
-            indent_buf(body, ctx->indent);
-            /* Generate a unique result variable name */
+            char *thunk_val = emit_value(ctx, body, thunk);
             char result_var[64];
             snprintf(result_var, sizeof(result_var), "__catch_panic_of_result_%d", ctx->tmp_n++);
-            /* Declare result variable */
-            buf_printf(body, "tur_result %s;\n", result_var);
             indent_buf(body, ctx->indent);
-            /* Call tur_catch_panic_of with type and thunk */
-            char *thunk_val = emit_value(ctx, body, thunk);
-            buf_printf(body, "if (tur_catch_panic_of(%d, (tur_thunk_fn)%s, NULL, &%s)) {\n",
-                   (int)type_kind, thunk_val, result_var);
+            buf_printf(body, "int64_t %s = tur_catch_panic_of_box(%d, (int64_t)(intptr_t)%s);\n",
+                       result_var, (int)type_kind, thunk_val);
             free(thunk_val);
-            ctx->indent++;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "/* panic of matching type caught */\n");
-            ctx->indent--;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "} else {\n");
-            ctx->indent++;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "/* normal completion or type mismatch (re-panicked) */\n");
-            ctx->indent--;
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "}\n");
-            indent_buf(body, ctx->indent);
-            /* Return the result variable as a pointer */
             return strdup(result_var);
         }
         /* Phase S4: throw / try-catch */

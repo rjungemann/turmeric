@@ -1,0 +1,107 @@
+;;; stdlib/panic -- inspect panics recovered by catch-unwind.
+;;;
+;;; (catch-unwind thunk) returns a Result whose err slot carries an opaque
+;;; Panic handle (a boxed tur_panic_payload). This module wraps that handle in
+;;; a (defopaque Panic) newtype and exposes accessors for the panic message,
+;;; source file, source line, and payload TypeKind tag, so callers never have
+;;; to dereference the raw pointer themselves.
+;;;
+;;; Typical use:
+;;;   (let [r (catch-unwind (fn [] :int (risky)))]
+;;;     (if (err? r)
+;;;       (println (panic-message (result-panic r)))
+;;;       (use (ok-val r))))
+;;;
+;;; The accessors are compiled-path features: they call the tur_panic_payload_*
+;;; helpers emitted into every program's C preamble (Phase R2). A program that
+;;; never catches a panic still links cleanly -- the helpers are always emitted.
+;;;
+;;; Since: Phase R2
+;; Panic-inspection surface for catch-unwind.
+
+;; Opaque wrapper around the runtime tur_panic_payload pointer (OQ#2). Keeping
+;; it opaque prevents callers from accidentally dereferencing the raw pointer.
+(defopaque Panic :ptr<void>)
+
+;;; result-panic -- extract the Panic handle from a caught (err ...) result.
+;;;
+;;; Parameters:
+;;;   r -- the :int result box returned by catch-unwind / catch-panic-of
+;;;
+;;; Returns:
+;;;   The opaque Panic handle from the err slot (0 when r is ok).
+;;;
+;;; Example:
+;;;   (let [r (catch-unwind (fn [] :int (panic "boom")))]
+;;;     (panic-message (result-panic r)))  ; => "boom"
+;;;
+;;; Since: Phase R2
+(defn result-panic [r :int] :Panic
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (void *)(intptr_t)r;
+  return (res && !res->is_ok) ? (int64_t)res->err_val : 0;
+  ```)
+
+;;; panic-message -- the message string carried by a caught Panic.
+;;;
+;;; Parameters:
+;;;   p -- a Panic handle (see result-panic)
+;;;
+;;; Returns:
+;;;   The panic message for a string panic, or "" when none is available.
+;;;
+;;; Since: Phase R2
+(defn panic-message [p :Panic] :cstr
+  ```c
+  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  const char *m = pp ? (const char *)tur_panic_payload_value(pp) : 0;
+  return m ? m : "";
+  ```)
+
+;;; panic-file -- source file of the panic call site.
+;;;
+;;; Parameters:
+;;;   p -- a Panic handle
+;;;
+;;; Returns:
+;;;   The source file path, or "" when unknown.
+;;;
+;;; Since: Phase R2
+(defn panic-file [p :Panic] :cstr
+  ```c
+  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  const char *f = pp ? tur_panic_payload_file(pp) : 0;
+  return f ? f : "";
+  ```)
+
+;;; panic-line -- source line of the panic call site.
+;;;
+;;; Parameters:
+;;;   p -- a Panic handle
+;;;
+;;; Returns:
+;;;   The source line, or 0 when unknown.
+;;;
+;;; Since: Phase R2
+(defn panic-line [p :Panic] :int
+  ```c
+  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  return pp ? tur_panic_payload_line(pp) : 0;
+  ```)
+
+;;; panic-type -- the TypeKind tag of the panic payload.
+;;;
+;;; Parameters:
+;;;   p -- a Panic handle
+;;;
+;;; Returns:
+;;;   The integer TypeKind of the boxed payload (e.g. the tag for :cstr for a
+;;;   plain string panic), or 0 when unknown.
+;;;
+;;; Since: Phase R2
+(defn panic-type [p :Panic] :int
+  ```c
+  tur_panic_payload *pp = (tur_panic_payload *)(intptr_t)p;
+  return pp ? tur_panic_payload_type(pp) : 0;
+  ```)

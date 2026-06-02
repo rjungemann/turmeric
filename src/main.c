@@ -4359,6 +4359,17 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn run-ring [n :int m :int] :nil nil)\n"
             "(defn run-nbody [n :int steps :int] :nil nil)\n"
             "(defn run-raytracer [w :int h :int] :int 0)\n"
+            /* Result / Option predicate signatures.  The --interpret path does
+             * not preload result.tur/option.tur, so without these stubs the
+             * elaborator has no declared type for the ok?/err?/some?/none?
+             * natives and defaults their result to :int -- which then fails the
+             * strict "if condition must be bool" check.  The native shims
+             * (registered below) provide the real runtime behaviour; these
+             * stubs exist only so the elaborator sees the :bool return type. */
+            "(defn ok? [r :int] :bool false)\n"
+            "(defn err? [r :int] :bool false)\n"
+            "(defn some? [r :int] :bool false)\n"
+            "(defn none? [r :int] :bool false)\n"
         );
         (void)sv;
     }
@@ -4832,20 +4843,17 @@ static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void
     if (!opt || opt[0] == 0) goto panic_none;
     { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v; }
 panic_none:
-    fprintf(stderr, "panic at\npanic: option-must: called on none\n");
-    fflush(stderr);
-    (void)env;
-    _exit(1);
+    /* Catchable panic (recoverable by catch-unwind) instead of _exit(1). */
+    turi_runtime_panic(env, "option-must: called on none");
+    return turi_nil(); /* unreachable */
 }
 static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     int64_t *opt = (n > 0) ? (int64_t *)(intptr_t)a[0].as_int : NULL;
     const char *msg = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "option-expect: called on none";
     if (!opt || opt[0] == 0) {
-        fprintf(stderr, "panic at\npanic: %s\n", msg);
-        fflush(stderr);
-        (void)env;
-        _exit(1);
+        turi_runtime_panic(env, msg);
+        return turi_nil(); /* unreachable */
     }
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
 }
@@ -5097,20 +5105,17 @@ static TuriValue native_result_must(TuriEnv *env, TuriValue *a, uint32_t n, void
     if (!r || r[0] == 0) goto panic_err;
     { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v; }
 panic_err:
-    fprintf(stderr, "panic at\npanic: result-must: called on err\n");
-    fflush(stderr);
-    (void)env;
-    _exit(1);
+    /* Catchable panic (recoverable by catch-unwind) instead of _exit(1). */
+    turi_runtime_panic(env, "result-must: called on err");
+    return turi_nil(); /* unreachable */
 }
 static TuriValue native_result_must_msg(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     int64_t *r = (n > 0) ? (int64_t *)(intptr_t)a[0].as_int : NULL;
     const char *msg = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "result-must-msg: called on err";
     if (!r || r[0] == 0) {
-        fprintf(stderr, "panic at\npanic: %s\n", msg);
-        fflush(stderr);
-        (void)env;
-        _exit(1);
+        turi_runtime_panic(env, msg);
+        return turi_nil(); /* unreachable */
     }
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v;
 }

@@ -469,6 +469,42 @@ static void fire_defers_to_mark_reversed(TuriEnv *env, DeferItem *mark,
     env->return_value = saved_rv;
 }
 
+/* Phase R2: shared interpreter panic entry point.  Mirrors the EX_PANIC eval
+ * case so native functions (result-must, option-must, option-expect, ...) raise
+ * a *catchable* panic -- recoverable by catch-unwind and carrying the standard
+ * panic message format and double-panic guard -- instead of calling _exit(1)
+ * directly (which bypassed both catch-unwind and the defer chain).  Never
+ * returns: it either longjmps to a catch boundary, or fires defers and exits. */
+void turi_runtime_panic(TuriEnv *env, const char *msg) {
+    const char *s = msg ? msg : "(no message)";
+    if (env->panicking) {
+        /* Double panic: a defer (or a panic during unwinding) panicked again. */
+        fprintf(stderr, "double panic: aborting\n");
+        fflush(stderr);
+        fflush(stdout);
+        abort();
+    }
+    /* If a catch-unwind boundary is active, longjmp to it. */
+    if (env->catch_jmp && !env->in_no_unwind) {
+        strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
+        env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
+        env->panicking = true;
+        longjmp(*env->catch_jmp, 1);
+    }
+    env->panicking = true;
+    if (env->in_no_unwind) {
+        fprintf(stderr, "panic (no unwind): %s\n", s);
+    } else {
+        fprintf(stderr, "panic at\npanic: %s\n", s);
+    }
+    fflush(stderr);
+    /* Fire all pending defers before exiting (outer-first order). */
+    if (!env->in_no_unwind)
+        fire_defers_to_mark_reversed(env, NULL, NULL);
+    fflush(stdout);
+    exit(1);
+}
+
 /* -------------------------------------------------------------------------
  * Phase S3: Algebraic effects — TuriEffectCont and TuriHandlerFrame
  *
@@ -3435,32 +3471,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_PANIC: {
         TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
         const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
-        if (env->panicking) {
-            /* Double panic: a defer itself panicked. */
-            fprintf(stderr, "double panic: aborting\n");
-            fflush(stderr);
-            fflush(stdout);
-            abort();
-        }
-        /* If a catch-unwind boundary is active, longjmp to it. */
-        if (env->catch_jmp && !env->in_no_unwind) {
-            strncpy(env->catch_panic_msg, s, sizeof(env->catch_panic_msg) - 1);
-            env->catch_panic_msg[sizeof(env->catch_panic_msg) - 1] = '\0';
-            env->panicking = true;
-            longjmp(*env->catch_jmp, 1);
-        }
-        env->panicking = true;
-        if (env->in_no_unwind) {
-            fprintf(stderr, "panic (no unwind): %s\n", s);
-        } else {
-            fprintf(stderr, "panic at\npanic: %s\n", s);
-        }
-        fflush(stderr);
-        /* Fire all pending defers before exiting (outer-first order). */
-        if (!env->in_no_unwind)
-            fire_defers_to_mark_reversed(env, NULL, NULL);
-        fflush(stdout);
-        exit(1);
+        turi_runtime_panic(env, s);
+        return turi_nil(); /* unreachable: turi_runtime_panic never returns */
     }
 
     case EX_PANIC_WITH: {
@@ -3510,10 +3522,18 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->catch_jmp = prev_jmp;
             if (turi_is_error(result) || env->returning || env->throwing)
                 return result;
-            /* Wrap successful result in (ok value). */
-            return make_struct_val("ok", 1, &result);
+            /* Wrap the successful result in (ok value).  Use the same 3-int
+             * Result-box layout { is_ok, ok_val, err_val } that the native
+             * ok/err/ok?/err? helpers produce and read, so the value composes
+             * with ok?/err?/ok-val just like any other Result (Phase R2). */
+            int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
+            if (!box) return turi_error("eval: catch-unwind: oom");
+            box[0] = 1; box[1] = result.as_int; box[2] = 0;
+            { TuriValue v = {0}; v.tag = TURI_INT;
+              v.as_int = (int64_t)(intptr_t)box; return v; }
         } else {
-            /* A panic was caught — restore env and return (panic). */
+            /* A panic was caught — restore env and return (err msg), again in
+             * the Result-box layout so err?/err-val recover the caught message. */
             env->catch_jmp    = prev_jmp;
             env->panicking    = false;
             env->returning    = prev_returning;
@@ -3521,7 +3541,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             env->throw_value  = prev_throw;
             env->return_value = prev_ret;
             (void)prev_panicking;
-            return make_struct_val("panic", 0, NULL);
+            char *msg = env->catch_panic_msg[0] ? strdup(env->catch_panic_msg) : NULL;
+            int64_t *box = (int64_t *)malloc(3 * sizeof(int64_t));
+            if (!box) return turi_error("eval: catch-unwind: oom");
+            box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)msg;
+            { TuriValue v = {0}; v.tag = TURI_INT;
+              v.as_int = (int64_t)(intptr_t)box; return v; }
         }
     }
 

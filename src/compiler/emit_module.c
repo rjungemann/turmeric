@@ -1986,6 +1986,11 @@ int emit_program(Buf *out, const Expr *program) {
      * The closure handle f and the arguments are taken as int64_t (the polymorphic
      * carrier type used throughout the runtime). */
     buf_puts(out, "#define TUR_CLOSURE_FN(f)  ((int64_t *)(intptr_t)(f))[0]\n");
+    /* Phase R2: nullary fat-closure apply -- a (fn [] :int) thunk is invoked
+     * through the standard closure protocol (thunk = slot 0, env = the box). */
+    buf_puts(out, "#define TUR_APPLY0(f) \\\n");
+    buf_puts(out, "    (((int64_t (*)(void *))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
+    buf_puts(out, "        ((void *)(intptr_t)(f)))\n");
     buf_puts(out, "#define TUR_APPLY1(f, a) \\\n");
     buf_puts(out, "    (((int64_t (*)(void *, int64_t))(intptr_t)TUR_CLOSURE_FN(f)) \\\n");
     buf_puts(out, "        ((void *)(intptr_t)(f), (int64_t)(a)))\n");
@@ -2397,12 +2402,28 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    /* Phase R2: forward decls so plain tur_panic can unwind to a catch-unwind
+     * boundary (the payload machinery itself is emitted further below). */
+    buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
+    buf_puts(out, "static jmp_buf global_panic_jmpbuf;\n");
+    buf_puts(out, "static int global_panic_jmpbuf_valid;\n");
+    buf_puts(out, "static tur_panic_payload *global_panic_payload;\n");
+    buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
+    /* Phase R2: if a catch-unwind boundary is active, box the message as a
+     * :cstr payload, fire the panicking frame's defers, and longjmp to it.
+     * The defer chain stops at this function's frame tree (the catch boundary
+     * lives in a different call frame), giving partial unwind for free. */
+    buf_printf(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__);\n", (int)TY_CSTR);
+    buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
+    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    tur_panic_print_scope_chain();\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
@@ -2435,7 +2456,6 @@ int emit_program(Buf *out, const Expr *program) {
      * FiberBlock in Phase T21 so it can dereference tur_current_fiber. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line);\n\n");
     buf_puts(out, "/* Phase R2: tur_panic_with types */\n");
-    buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
     buf_puts(out, "struct tur_panic_payload {\n");
     buf_puts(out, "    int type_tag;\n");
     buf_puts(out, "    void *value;\n");
@@ -2533,6 +2553,57 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        }\n");
     buf_puts(out, "        return false;\n");
     buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase R2: catch-unwind/catch-panic-of for the (catch-unwind thunk) special
+     * form.  Unlike the try/catch helpers above (purpose-built tur_thunk_fn ABI),
+     * these take a fat-closure thunk (int64_t handle) invoked via TUR_APPLY0 and
+     * return a result box (tur_ok / tur_err) so the value composes with
+     * err?/ok?/ok-val/err-val and the ? operator.  The single global jmp_buf is
+     * saved/restored on entry/exit so nested boundaries work.  The caught panic
+     * payload becomes the err value (an opaque Panic handle); it is intentionally
+     * not freed here -- ownership passes to the returned result. */
+    buf_puts(out, "/* Phase R2: catch-unwind special-form helpers (result-box ABI) */\n");
+    buf_puts(out, "static int64_t tur_catch_unwind_box(int64_t thunk) {\n");
+    buf_puts(out, "    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;\n");
+    buf_puts(out, "    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));\n");
+    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
+    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
+    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        return tur_ok(__v);\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
+    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        tur_panic_in_progress = 0;\n");
+    buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+    buf_puts(out, "        global_panic_payload = NULL;\n");
+    buf_puts(out, "        return tur_err((int64_t)(intptr_t)__p);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {\n");
+    buf_puts(out, "    jmp_buf __prev_buf; int __prev_valid = global_panic_jmpbuf_valid;\n");
+    buf_puts(out, "    if (__prev_valid) memcpy(&__prev_buf, &global_panic_jmpbuf, sizeof(jmp_buf));\n");
+    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
+    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "        int64_t __v = TUR_APPLY0(thunk);\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
+    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        return tur_ok(__v);\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = __prev_valid;\n");
+    buf_puts(out, "        if (__prev_valid) memcpy(&global_panic_jmpbuf, &__prev_buf, sizeof(jmp_buf));\n");
+    buf_puts(out, "        tur_panic_in_progress = 0;\n");
+    buf_puts(out, "        tur_panic_payload *__p = global_panic_payload;\n");
+    buf_puts(out, "        global_panic_payload = NULL;\n");
+    buf_puts(out, "        if (__p && __p->type_tag == expected_type) {\n");
+    buf_puts(out, "            return tur_err((int64_t)(intptr_t)__p);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        /* type mismatch: re-raise to the next outer boundary (restored above) */\n");
+    buf_puts(out, "        if (__p) tur_panic_with(__p->type_tag, __p->value, __p->file, __p->line);\n");
+    buf_puts(out, "        return tur_err(0);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 
