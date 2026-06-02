@@ -1,0 +1,40 @@
+;; cps-transform-plan (a): struct/nominal continuation env marshaled via its
+;; Serializable instance.  A serial-shift captures a context whose env is a Rec
+;; (a boxed two-int record, carrier-fitting via defopaque); the serial env codec
+;; routes that env through Rec's Serializable instance (serialize -> bytes,
+;; deserialize -> value), so the continuation survives a serialize/deserialize
+;; round-trip and resumes with the env's contents intact.
+
+(load "stdlib/serial.tur")
+
+(defopaque Rec :ptr<void>)
+(defn mk-rec [a :int b :int] :Rec
+  ```c int64_t *r = (int64_t*)malloc(16); r[0]=a; r[1]=b; return (int64_t)(intptr_t)r; ```)
+
+(definstance Serializable [Rec]
+  (serialize [x]
+    ```c int64_t *r=(int64_t*)(intptr_t)x; int64_t *buf=(int64_t*)malloc(24);
+    buf[0]=16; buf[1]=r?r[0]:0; buf[2]=r?r[1]:0; return buf; ```)
+  (deserialize [b]
+    ```c int64_t *d=(int64_t*)b+1; int64_t *r=(int64_t*)malloc(16);
+    r[0]=d[0]; r[1]=d[1]; return (int64_t)(intptr_t)r; ```))
+
+;; context op: rec.a + rec.b + hole
+(defn rec-plus [r :Rec n :int] :int
+  ```c int64_t *p=(int64_t*)(intptr_t)r; return (p?p[0]+p[1]:0)+n; ```)
+
+;; round-trip the captured continuation (Rec env marshaled via Serializable),
+;; then resume with 5.
+(defn rt [k (serial-cont int)] :int
+  (:: (tur_serial_cont_resume
+        (tur_serial_cont_deserialize (tur_serial_cont_serialize (:: k :int)))
+        (:: 5 :int))
+      :int))
+
+;; resume directly, without marshaling (Rec env stays in-memory).
+(defn direct [k (serial-cont int)] :int (k 7))
+
+(defn main [] :int
+  (println (serial-reset (rec-plus (mk-rec 10 20) (serial-shift rt 0))))      ; (10+20)+5 = 35
+  (println (serial-reset (rec-plus (mk-rec 100 1) (serial-shift direct 0))))  ; (100+1)+7 = 108
+  0)

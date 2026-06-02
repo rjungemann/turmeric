@@ -1,0 +1,29 @@
+;; cps-transform-plan (CPS11): (call/cc* f) captures the continuation up to the
+;; nearest ENCLOSING cloneable-reset (real call/cc* semantics), reified on the
+;; DK machine and replayable multi-shot.  Previously call/cc* always installed a
+;; fresh inner reset, so the captured continuation was trivial (identity); the
+;; surrounding context was lost.
+
+;; resume once through the captured (+ 10 []) context.
+(defn use1 [k] :int (tur_cloneable_cont_resume k 5))
+
+;; multi-shot: resume a clone and the original handle.
+(defn use2 [k] :int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
+     (tur_cloneable_cont_resume k 2)))
+
+;; nested context (* 2 (+ 1 [])).
+(defn use3 [k] :int (tur_cloneable_cont_resume k 4))
+
+;; no enclosing reset: the captured continuation is the identity (fresh-delimiter
+;; sugar -- the original call/cc* behavior, preserved).
+(defn grab [k] :int k)
+
+(defn main [] :int
+  (println (cloneable-reset (+ 10 (call/cc* use1))))        ; 10+5          = 15
+  (println (cloneable-reset (+ 10 (call/cc* use2))))        ; (10+1)+(10+2) = 23
+  (println (cloneable-reset (* 2 (+ 1 (call/cc* use3)))))   ; 2*(1+4)       = 10
+  (let [k (call/cc* grab)]                                  ; no reset -> identity
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 100))
+    (println (tur_cloneable_cont_resume k 200)))            ; 100, 200
+  0)

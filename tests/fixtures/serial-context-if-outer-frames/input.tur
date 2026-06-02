@@ -1,0 +1,22 @@
+;; cps-transform-plan (last grammar shape): the serial lowering handles the same
+;; `if` reached *through* outer context frames as the cloneable path, e.g.
+;; (serial-reset (+ 7 (if cond THEN[shift] ELSE))).  On the shift path the
+;; captured continuation still marshals (serialize -> deserialize -> resume
+;; reproduces a direct resume) with the outer frames included in the chain; the
+;; pure path yields its arm's value through the outer frames with no capture.
+
+;; round-trip the captured continuation through bytes, then resume it.
+(defn rt5 [k] :int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+
+(defn main [] :int
+  ;; outer (+ 7 ...) frame, shift in THEN, cond true, round-tripped.
+  ;;   context (+ 7 (+ 10 [])): 7+10+5                                = 22
+  (println (serial-reset (+ 7 (if (< 0 1) (+ 10 (serial-shift rt5 0)) 42))))
+  ;; cond false -> pure arm 42 through the outer (+ 7 42)             = 49
+  (println (serial-reset (+ 7 (if (< 1 0) (+ 10 (serial-shift rt5 0)) 42))))
+  ;; two outer frames (* 2 (+ 7 (if ... ELSE[shift]))), cond false.
+  ;;   context (* 2 (+ 7 [])): 2*(7+5)                                = 24
+  (println (serial-reset (* 2 (+ 7 (if (< 1 0) 8 (serial-shift rt5 0))))))
+  0)

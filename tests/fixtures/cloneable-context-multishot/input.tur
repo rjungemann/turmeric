@@ -1,0 +1,31 @@
+;; cps-transform-plan (CPS9): cloneable continuations capture and replay the
+;; delimited CONTEXT (the frames between the shift and its reset) on the DK
+;; multi-prompt machine, multi-shot via dk_invoke.  Before CPS9 the captured
+;; continuation was trivial (identity) -- the surrounding context was lost on
+;; resume, and a shift nested inside an operand did not even compile.
+
+;; sum-two: resume the captured continuation twice.  Clone the handle for the
+;; first use so the original is still live for the second.
+(defn sum-two [k] :int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
+     (tur_cloneable_cont_resume k 2)))
+
+;; thrice: resume the SAME handle three times -- dk_invoke copies internally,
+;; so a single handle is repeatable without explicit cloning.
+(defn thrice [k] :int
+  (+ (+ (tur_cloneable_cont_resume k 1)
+        (tur_cloneable_cont_resume k 10))
+     (tur_cloneable_cont_resume k 100)))
+
+(defn main [] :int
+  ;; context (+ 10 []):     (10+1) + (10+2)       = 23
+  (println (cloneable-reset (+ 10 (cloneable-shift sum-two 0))))
+  ;; context (* 2 []):      (2*1) + (2*2)         = 6
+  (println (cloneable-reset (* 2 (cloneable-shift sum-two 0))))
+  ;; nested (* 2 (+ 10 [])): 2*(10+1) + 2*(10+2)  = 46
+  (println (cloneable-reset (* 2 (+ 10 (cloneable-shift sum-two 0)))))
+  ;; hole on the right of -: (100-1) + (100-2)    = 197
+  (println (cloneable-reset (- 100 (cloneable-shift sum-two 0))))
+  ;; repeat the same handle 3x, context (+ 1000 []): 1001+1010+1100 = 3111
+  (println (cloneable-reset (+ 1000 (cloneable-shift thrice 0))))
+  0)

@@ -248,6 +248,18 @@ add_test(
 set_tests_properties(tur_lifetime_unit PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# CPS4 (cps-transform-plan): heap-reified continuation + trampoline runtime unit
+add_test(
+  NAME tur_cps_rt_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_cps_rt_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# CPS5 (cps-transform-plan): multi-prompt delimited-control machine unit
+add_test(
+  NAME tur_cps_prompt_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_cps_prompt_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # LSP docstring scanner unit test
 add_test(
   NAME tur_docscanner_unit

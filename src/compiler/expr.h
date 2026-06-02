@@ -200,6 +200,9 @@ typedef enum ExprKind {
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
     EX_SHIFT0,         /* (shift0 k body) - one-shot shift */
+    EX_CALLCC,         /* (call/cc f) / (escape f) - undelimited capture vs the
+                        * implicit root prompt; f receives a real cont<T> (CPS8/
+                        * call-cc-completion). is_escape selects the abort flavor. */
     /* Phase B2: Cloneable continuations */
     EX_CLONEABLE_RESET, /* (cloneable-reset body) - continuation boundary with cloneable captures */
     EX_CLONEABLE_SHIFT, /* (cloneable-shift k body) - capture cloneable continuation */
@@ -286,6 +289,9 @@ typedef enum ExprKind {
      * `:foo` in expression position elaborates to this; codegen lowers it to a
      * reference to a static `struct __tur_sym` record (SYM1). */
     EX_SYM_LIT,          /* :foo -- interned symbol literal; type TY_SYM */
+    /* CPS2: explicit continuation application in CPS-lowered code.
+     * Represents `k(v)` -- applying a continuation to a result value. */
+    EX_CPS_CONT_APP,     /* (cps-apply k v) -- continuation application; type is k's result type */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -305,6 +311,17 @@ struct FnDef {
     /* Phase 4: Future-proofing for v3 effects (effects-plan.md §6.10) - whether this
      * function may capture continuations. Always false in v0/v1. */
     bool           may_capture;
+    /* CPS1 (cps-transform-plan): whole-program "may-capture" coloring result.
+     * True iff this function can dynamically reach a control operator (directly,
+     * transitively through a resolved call, or conservatively via an indirect
+     * call). Additive analysis metadata: written by cps_color_program, consumed
+     * by the future selective-CPS lowering (CPS3). Distinct from `may_capture`,
+     * which the existing Phase-18 delimited-CPS pass owns. */
+    bool           cps_colored;
+    /* CPS2: true when this function has been selected for the CPS emission path
+     * (set by cps_propagate_coloring; mirrors may_capture but is a separate field
+     * so the CPS emitter path can be toggled independently). */
+    bool           is_cps;
     /* Phase 13: Lifetime annotations */
     LifetimeContext lifetime_ctx;  /* Lifetime parameters and constraints for this function */
     /* Phase 15: Typeclass constraints */
@@ -601,10 +618,15 @@ struct Expr {
             Expr *k_fn;             /* (shift k body) - k is a function (fn [v] ...) that receives the continuation */
             Expr *body;             /* body to run with captured continuation */
         } shift_;
-        struct { 
+        struct {
             Expr *k_fn;             /* (shift0 k body) - k is a function that cannot resume */
             Expr *body;             /* body to run */
         } shift0_;
+        struct {
+            Expr *fn;               /* (call/cc f) / (escape f) - f : cont<T> -> T */
+            bool  is_escape;        /* true for (escape f): abort flavor (no re-install) */
+        } callcc_;
+
         /* Phase B2: Cloneable continuations */
         struct { Expr *body; }         cloneable_reset_; /* (cloneable-reset body) */
         struct {
@@ -814,6 +836,14 @@ struct Expr {
         struct {
             const Symbol *sym;     /* interned name (e.g. "foo" for :foo) */
         } sym_lit_;
+        /* CPS2: explicit continuation application — used in CPS-lowered functions.
+         * Represents applying continuation `k` to a result value: `k(v)`.
+         * `cont` is the continuation expression (type TY_CONT); `value` is the
+         * argument passed to it. */
+        struct {
+            struct Expr *cont;     /* the continuation to apply */
+            struct Expr *value;    /* the value to pass to the continuation */
+        } cps_cont_app_;
     } as;
 };
 

@@ -25,6 +25,12 @@ extern bool g_lint_panic;
 extern int64_t g_backtrack_depth;
 extern bool g_dump_clone_plan;
 
+/* CPS1: --dump-cps-coloring flag — print colored/uncolored partition after CPS1 */
+extern bool g_dump_cps_coloring;
+
+/* CPS3: --cps-path flag — emit CPS wrappers for colored functions */
+extern bool g_cps_path;
+
 /* Phase U5: unsafe linting statistics */
 extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;
@@ -64,6 +70,10 @@ extern bool g_strict_effects;
 /* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
 extern bool g_dump_effects;
 
+/* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
+ * colored user-level top-level defn */
+extern bool g_dump_cps;
+
 /* Phase I: --emit-abi-trace flag — print the resolved ABI path (concrete-clone,
  * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
 extern bool g_emit_abi_trace;
@@ -99,10 +109,10 @@ extern bool g_sessions_enabled;
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 extern bool g_dynvar_enabled;
 
-/* CF4 (control-flow-completeness-plan): -Xcallcc flag — unlock the experimental
- * (unsound, no real capture) call/cc / escape desugar.  Default off; ungated
- * call/cc / escape raise TUR-E0700 / TUR-E0701.  Real capture needs the
- * post-1.0 CPS pass. */
+/* CF4 / call-cc-completion CC5: vestigial.  -Xcallcc once gated the unsound
+ * call/cc / escape stub; call/cc / escape are now real, sound, and enabled by
+ * default on the CPS substrate, and the flag is a deprecated no-op.  No longer
+ * read by the elaborator; kept for one release to avoid churn. */
 extern bool g_callcc_enabled;
 
 /* SYM0 (runtime-symbols-plan): -Xsymbols flag — enable first-class runtime

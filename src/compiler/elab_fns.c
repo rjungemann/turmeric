@@ -34,6 +34,19 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
             t->hkt_kind = type_param_kinds ? type_param_kinds[idx] : KIND_STAR;
             return t;
         }
+        /* CC4: a bare flavored continuation annotation -- :cont (cloneable),
+         * :escape-cont (call/cc / escape), or :serial-cont.  type_expr_from_form
+         * only knows the bare name "cont" (cloneable); the escape/serial flavors
+         * must be preserved here so (k v) sugar dispatches to the right resume
+         * runtime (tur_escape_resume for an undelimited call/cc landing). */
+        {
+            int cflav = cont_flavor_from_name(sym->name);
+            if (cflav >= 0) {
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_cont_flavored(TY_INT, (ContFlavor)cflav);
+                return t;
+            }
+        }
         Type *t = type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         if (t && t->kind == TY_STRUCT && t->as.struct_.def == NULL) {
             Type *tv = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -78,6 +91,19 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
         }
         if (has_pipe || has_amp) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
+        }
+        /* CC4 / value-typed cont: (cont T) / (escape-cont T) / (serial-cont T)
+         * -- a flavored continuation whose result type is T. `cont` is not a
+         * generic arrow-kind constructor, so handle the application here. */
+        {
+            int cflav = cont_flavor_from_name(head->name);
+            if (cflav >= 0 && form->as.list.len == 2) {
+                Type *arg = fn_type_from_form(e, form->as.list.items[1],
+                                              type_params, type_param_kinds, n_type_params);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_cont_flavored(arg ? arg->kind : TY_INT, (ContFlavor)cflav);
+                return t;
+            }
         }
         Type *cur = fn_type_from_form(e, form->as.list.items[0],
                                       type_params, type_param_kinds, n_type_params);
@@ -993,6 +1019,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 param_poly_types[n_params - 1] = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *param_poly_types[n_params - 1] = params[n_params - 1]->type;
                 continue;
+            }
+            /* CC4 (cps-transform-plan): a flavored continuation parameter --
+             * :cont (cloneable), :escape-cont, or :serial-cont. The flavor
+             * selects which runtime (k v) application sugar resumes against. */
+            {
+                int _cflav = cont_flavor_from_name(kw->name);
+                if (_cflav >= 0) {
+                    param_kinds[n_params - 1] = TY_CONT;
+                    params[n_params - 1]->type =
+                        type_cont_flavored(TY_INT, (ContFlavor)_cflav);
+                    continue;
+                }
             }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
@@ -2195,6 +2233,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
     fd->params = params;
     fd->n_params = n_params;
@@ -2359,6 +2398,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
     bool fn_is_variadic = false;
     TypeKind fn_rest_kind = TY_INT;
     Type *fn_rest_full_type = NULL;  /* typed-variadic: full Type for user-defined rest */
+    /* LT0 (call-cc-completion CC4.4): ^linear marks the next lambda param linear
+     * (exactly-once).  Consumption is tracked by the shared var-use path; the
+     * LT1 drop check below mirrors elab_defn.  This lets (call/cc (fn [^linear k]
+     * ...)) opt into one-shot-by-contract continuations (OQ3). */
+    bool next_param_linear = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -2433,6 +2477,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
             }
             continue;
         }
+        /* LT0 (CC4.4): ^linear marks the next param linear (exactly-once). */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_linear) {
+            next_param_linear = true;
+            continue;
+        }
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
                       "fn: parameter name must be a symbol or type annotation");
@@ -2449,6 +2498,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
         b->is_param = true;
+        if (g_linear_enabled && next_param_linear) {
+            b->is_linear = true;
+            next_param_linear = false;
+        }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
         }
@@ -2622,6 +2675,21 @@ Expr *elab_fn(Elab *e, const Form *call) {
     e->n_sig_tyvars = saved_n_sig_tyvars;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
+    /* LT1 (call-cc-completion CC4.4): at lambda scope exit, verify every ^linear
+     * param was consumed.  A ^linear continuation handed to (call/cc (fn [^linear
+     * k] ...)) that is never invoked is a dropped linear value (TUR-E0100). */
+    if (g_linear_enabled && body) {
+        for (uint8_t _li = 0; _li < n_params; _li++) {
+            if (params[_li]->is_linear && !params[_li]->is_linear_consumed
+                    && !params[_li]->is_moved) {
+                diag_emit_with_code(DIAG_ERROR, params[_li]->span,
+                                    TUR_E0100_LINEAR_DROPPED,
+                                    "linear parameter '%s' dropped without being consumed",
+                                    params[_li]->name->name);
+            }
+        }
+    }
+
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */
     uint32_t n_captures = 0;
@@ -2685,6 +2753,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
     fd->params = params;
     fd->n_params = n_params;

@@ -66,6 +66,24 @@ transform.
    the captured `k` gets nonsense. Either implement real capture (needs the
    CPS pass) or gate `call/cc`/`escape` off until it exists.
 
+   > **RESOLVED (2026-06-02) by CPS0--CPS6 + CC1--CC6.** `(call/cc f)` /
+   > `(escape f)` build an `EX_CALLCC` node lowered against the implicit
+   > program-wide prompt (setjmp landing at the call/cc site); `f` receives a
+   > real `cont<T>` continuation and invoking it performs a one-shot,
+   > **undelimited**, upward escape -- unbounded depth, no enclosing `reset`.
+   > Both are now **enabled by default**: the `-Xcallcc` gate is a deprecated
+   > no-op and `TUR-E0700`/`TUR-E0701` are retired (codes reserved). An
+   > unannotated continuation parameter defaults to the escape flavor, so the
+   > `(k v)` application sugar works directly (`f : cont<T> -> T`); `k` is
+   > one-shot `^unique` by default with `^linear` opt-in. CF4's "gate-only"
+   > disposition is superseded. Fixtures: `callcc-real-capture`,
+   > `escape-real`, `escape-deep-capture`, `escape-nested-reset`,
+   > `callcc-linear-k`, `errors/callcc-linear-k-dropped`, and the rewritten
+   > `continuation-callcc` / `continuation-escape` / `continuation-escape-fn`
+   > (now resuming `(k v)` with no `-Xcallcc` and no `reset`). See
+   > [`call-cc-completion-plan.md`](../../upcoming/call-cc-completion-plan.md)
+   > and [`cps-transform-plan.md`](../../upcoming/cps-transform-plan.md).
+
 2. **`compose-handlers` is a stub.** `elab_effects.c:982` -- elaborates to a
    nil-typed placeholder with "runtime semantics TBD." Handler composition is
    a natural ask once you have effects; today it silently produces nil.
@@ -113,6 +131,22 @@ transform.
   real `call/cc`, `yield` in arbitrary positions, recursive generators, and
   precise liveness for cloneable continuations. Large, separable piece of
   work; correctly deferred.
+
+  > **CF4 update (2026-06-02): the "whole-program CPS pass" substrate is
+  > addressed by [`cps-transform-plan.md`](../../upcoming/cps-transform-plan.md),
+  > phases CPS0--CPS6.** That plan delivers the selective may-capture coloring
+  > (CPS1), the ANF/CPS IR + selective lowering with direct<->CPS boundary
+  > bridging (CPS2--CPS3), a heap-reified unbounded-capture continuation runtime
+  > + trampoline (CPS4, validated at 500k frames), a multi-prompt
+  > delimited-control machine with an implicit root prompt (CPS5), and retires
+  > the 16-frame ceiling on the CPS path (CPS6). **CPS8 (2026-06-02) wires the
+  > base `reset`/`shift`/`shift0` codegen lowerings onto that substrate**
+  > (`emit_cps.c`): a delimited reset now compiles to a run on the multi-prompt
+  > `DK` machine emitted into the program, validated end-to-end by the executing
+  > `continuation-substrate` fixture. `call/cc*` (cloneable/multi-shot),
+  > `serial-*`, and undelimited `call/cc` (root-prompt capture) remain on their
+  > existing lowerings -- the next increment tracked in the plan; the substrate
+  > pieces they need (`dk_invoke`, `dk_run_root`) already exist.
 
 - **Multi-threaded scheduler integration.** `scheduler.c:542,550` (SCH-003):
   `tur_scheduler_mt_from_threadpool` / `..._set_for_threadpool` print

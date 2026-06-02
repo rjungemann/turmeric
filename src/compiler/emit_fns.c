@@ -621,5 +621,53 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_write(real_file, fn_tmp.data, fn_tmp.len);
     buf_free(&fn_tmp);
     ctx->file = real_file;
-}
 
+    /* CPS3: emit __cps wrapper for colored non-closure functions when --cps-path */
+    if (fd->is_cps && g_cps_path && !is_main && !fd->closure) {
+        char *wrap_name = raw_name_for_binding(fd->binding);
+        buf_printf(real_file, "static void %s__cps(tur_cps_cont_t *__k", wrap_name);
+        for (uint8_t i = 0; i < fd->n_params; i++) {
+            buf_puts(real_file, ", ");
+            if (fd->params[i]->is_poly_fn) {
+                buf_puts(real_file, "tur_poly_fn_t");
+            } else if (fd->param_types[i].kind == TY_FN) {
+                buf_puts(real_file, "int64_t");
+            } else {
+                Type param_ty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[i])
+                    ? *e->type.as.fn.arg_full_types[i]
+                    : fd->param_types[i];
+                buf_puts(real_file, emit_type_c_name(ctx, param_ty));
+            }
+            const char *pn = raw_name_for_binding(fd->params[i]);
+            buf_printf(real_file, " %s", pn);
+            free((void*)pn);
+        }
+        buf_puts(real_file, ") {\n");
+        /* Call the direct function and apply the continuation with the result.
+         * nil-returning functions lower to `void` in C, so pass 0 to the
+         * continuation instead of casting a void expression. */
+        if (result_kind == TY_NIL) {
+            buf_printf(real_file, "    %s(", wrap_name);
+            for (uint8_t i = 0; i < fd->n_params; i++) {
+                if (i > 0) buf_puts(real_file, ", ");
+                const char *pn = raw_name_for_binding(fd->params[i]);
+                buf_puts(real_file, pn);
+                free((void*)pn);
+            }
+            buf_puts(real_file, ");\n");
+            buf_puts(real_file, "    tur_cps_apply(__k, 0);\n");
+        } else {
+            buf_printf(real_file, "    int64_t __result = (int64_t)%s(", wrap_name);
+            for (uint8_t i = 0; i < fd->n_params; i++) {
+                if (i > 0) buf_puts(real_file, ", ");
+                const char *pn = raw_name_for_binding(fd->params[i]);
+                buf_puts(real_file, pn);
+                free((void*)pn);
+            }
+            buf_puts(real_file, ");\n");
+            buf_puts(real_file, "    tur_cps_apply(__k, __result);\n");
+        }
+        buf_puts(real_file, "}\n\n");
+        free(wrap_name);
+    }
+}

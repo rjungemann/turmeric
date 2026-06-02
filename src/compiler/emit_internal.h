@@ -26,6 +26,8 @@ extern bool g_panic_abort;
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 extern bool g_panic_trace;
+/* CPS3: selective CPS lowering path */
+extern bool g_cps_path;
 /* Phase P3: HAMT lowering - track if HAMT is needed */
 extern bool g_needs_hamt;
 /* stdlib/re.tur: track if any inline-C body references <regex.h>. */
@@ -163,6 +165,9 @@ typedef struct EmitCtx {
      * malloc (process-lifetime), preserving the old behavior for any context
      * that does not own an arena. */
     Arena       *type_arena;
+    /* cps-transform-plan (a): the whole program, so the serial env codec can
+     * scan for Serializable instances when marshaling a struct/nominal env. */
+    const Expr  *program_root;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */

@@ -1,0 +1,14 @@
+;; call-cc-completion (CC3.3): escape is undelimited -- an intervening explicit
+;; (reset ...) does NOT delimit it.  k is invoked from inside the reset, yet
+;; control unwinds past both the (+ 100 ...) and the (+ 1000 (reset ...)) to the
+;; escape site itself.  A delimited shift0 in the same spot would yield 1107
+;; (k 7 -> (+ 100 7) -> reset 107 -> (+ 1000 107)); escape yields 7.
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn t-undelimited [] :int
+  (escape (fn [k]
+    (+ 1000 (reset (+ 100 (k 7)))))))
+
+(defn main [] :int
+  (printf "undelimited=%lld\n" (t-undelimited))
+  0)

@@ -1,0 +1,29 @@
+;; CPS1 (cps-transform-plan) fixture: the whole-program "may-capture" coloring.
+;;
+;; Compiled with --dump-cps-coloring, the analysis must partition these
+;; top-level defns as follows (asserted in tests/run-flags.sh):
+;;
+;;   pure-arith    -- provably control-op-free            -> uncolored
+;;   also-pure     -- only calls a control-op-free fn     -> uncolored
+;;   uses-shift    -- body directly contains shift/reset  -> COLORED (seed)
+;;   calls-shifter -- transitively reaches shift          -> COLORED (propagated)
+;;   main          -- reaches no control op               -> uncolored
+;;
+;; main does not invoke the shift functions: coloring is a static analysis, so
+;; the colored partition holds regardless of dynamic reachability, and the
+;; program runs trivially (exit 0) under the fixture harness.
+
+(defn pure-arith [x :int y :int] :int
+  (+ (* x x) (* y y)))
+
+(defn also-pure [n :int] :int
+  (pure-arith n (+ n 1)))
+
+(defn uses-shift [x :int] :int
+  (reset
+    (shift (fn [v] (+ v 1)) x)))
+
+(defn calls-shifter [x :int] :int
+  (+ 1 (uses-shift x)))
+
+(defn main [] :int 0)
