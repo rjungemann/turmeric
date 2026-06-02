@@ -800,6 +800,41 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# CPS2 (cps-transform-plan): --dump-cps ANF/CPS IR
+# ---------------------------------------------------------------------------
+# (bash globs, not `grep -q` -- see the SIGPIPE/pipefail note above.)
+
+# dump-cps-anf: the CPS IR for the colored functions must show ANF naming, the
+# typed continuation parameter, a join continuation, a threaded tail call, and
+# the reset/shift control forms.
+out=$("$TUR" --dump-cps emit-c "$CPS_FIXTURE" 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-cps-anf" "non-zero exit ($rc)"
+elif [[ "$out" != *"cps-fn uses-shift"* ]]; then
+    fail "dump-cps-anf" "expected a 'cps-fn uses-shift' block"
+elif [[ "$out" != *"k:cont<int>"* ]]; then
+    fail "dump-cps-anf" "expected typed continuation 'k:cont<int>'"
+elif [[ "$out" != *"tailcall uses-shift("* ]]; then
+    fail "dump-cps-anf" "expected a threaded 'tailcall uses-shift(...)'"
+elif [[ "$out" != *"letcont j"* ]]; then
+    fail "dump-cps-anf" "expected a join continuation 'letcont j...'"
+elif [[ "$out" != *"reset t"* ]]; then
+    fail "dump-cps-anf" "expected a 'reset' control form"
+elif [[ "$out" != *"shift k'"* ]]; then
+    fail "dump-cps-anf" "expected a 'shift' control form"
+else
+    pass "dump-cps-anf"
+fi
+
+# dump-cps-no-output: without the flag, no CPS IR should appear.
+out=$("$TUR" emit-c "$CPS_FIXTURE" 2>/dev/null); rc=$?
+if [[ "$out" == *"cps-fn "* ]]; then
+    fail "dump-cps-no-output" "CPS IR dump appeared without --dump-cps flag"
+else
+    pass "dump-cps-no-output"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

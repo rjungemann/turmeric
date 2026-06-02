@@ -100,6 +100,7 @@ set(TUR_CORE_SOURCES
     # passes/ -- analysis and transformation passes
     passes/borrow_check.c
     passes/cps.c
+    passes/cps_ir.c
     passes/effect.c
     passes/effect_check.c
     passes/effect_lower.c

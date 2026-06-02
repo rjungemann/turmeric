@@ -68,6 +68,10 @@ extern bool g_dump_effects;
  * may-capture coloring (COLORED/uncolored) for each user-level top-level defn */
 extern bool g_dump_cps_coloring;
 
+/* CPS2 (cps-transform-plan): --dump-cps flag — print the ANF/CPS IR for each
+ * colored user-level top-level defn */
+extern bool g_dump_cps;
+
 /* Phase I: --emit-abi-trace flag — print the resolved ABI path (concrete-clone,
  * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
 extern bool g_emit_abi_trace;

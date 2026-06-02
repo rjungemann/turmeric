@@ -74,6 +74,9 @@ bool g_dump_effects = false;
 /* CPS1: --dump-cps-coloring flag */
 bool g_dump_cps_coloring = false;
 
+/* CPS2: --dump-cps flag */
+bool g_dump_cps = false;
+
 /* Phase I: --emit-abi-trace flag */
 bool g_emit_abi_trace = false;
 

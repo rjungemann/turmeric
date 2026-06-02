@@ -1,0 +1,494 @@
+#include "cps_ir.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cps.h"
+#include "builtins.h"
+
+/* =========================================================================
+ * CPS2 (cps-transform-plan): ANF/CPS translation for colored functions.
+ *
+ * The translation is the textbook two-function scheme:
+ *   - cps_tail(e, k)      : emit a term that delivers e's value to continuation k.
+ *   - cps_bind(e, x, rest): emit a term that binds e's value to x, then runs rest.
+ * Non-trivial arguments are first "atomized" (named by a fresh binder), which is
+ * what establishes the ANF invariant. Colored callees are tail-called with the
+ * continuation threaded through (CT_TAILCALL); in non-tail position a join
+ * continuation (CT_LETCONT) names the call's result. See cps_ir.h.
+ * ========================================================================= */
+
+typedef struct CpsB {
+    Arena *a;
+    Expr  *program;     /* for colored-callee lookup */
+    uint32_t counter;   /* fresh-id source */
+    CKont  retk;        /* the function's return continuation (KK_RET) */
+} CpsB;
+
+/* ---- small allocation helpers ----------------------------------------- */
+
+static CTerm *new_term(CpsB *b, CTermKind k) {
+    CTerm *t = arena_alloc(b->a, sizeof(CTerm));
+    memset(t, 0, sizeof(CTerm));
+    t->kind = k;
+    return t;
+}
+
+static CVar fresh_cvar(CpsB *b, TypeKind ty) {
+    CVar v;
+    v.id = b->counter++;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "t%u", v.id);
+    v.name = arena_strdup(b->a, buf, strlen(buf));
+    v.ty = ty;
+    return v;
+}
+
+static CVar cvar_of_binding(const Binding *bd) {
+    CVar v;
+    v.id = bd->id;
+    v.name = (bd->name ? bd->name->name : "_");
+    v.ty = bd->type.kind;
+    return v;
+}
+
+static CKont kont_var(CVar j) {
+    CKont k; k.kind = KK_VAR; k.id = j.id; k.ty = j.ty; return k;
+}
+
+static CKont kont_prompt(TypeKind ty) {
+    CKont k; k.kind = KK_PROMPT; k.id = 0; k.ty = ty; return k;
+}
+
+/* ---- atoms ------------------------------------------------------------ */
+
+static bool is_atomic(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_INT_LIT:
+        case EX_BOOL_LIT:
+        case EX_NIL_LIT:
+        case EX_FLOAT_LIT:
+        case EX_VAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static CAtom atom_of(const Expr *e) {
+    CAtom a; memset(&a, 0, sizeof(a));
+    a.ty = e ? e->type.kind : TY_UNKNOWN;
+    if (!e) { a.kind = CA_UNIT; return a; }
+    switch (e->kind) {
+        case EX_INT_LIT:   a.kind = CA_INT;  a.i = e->as.i; break;
+        case EX_BOOL_LIT:  a.kind = CA_BOOL; a.b = e->as.b; break;
+        case EX_NIL_LIT:   a.kind = CA_UNIT; break;
+        case EX_FLOAT_LIT: a.kind = CA_OTHER; break;
+        case EX_VAR:       a.kind = CA_VAR;  a.var = e->as.var.binding; break;
+        default:           a.kind = CA_OTHER; break;
+    }
+    return a;
+}
+
+static CAtom atom_cvar(CVar v) {
+    CAtom a; memset(&a, 0, sizeof(a));
+    a.kind = CA_CVAR; a.ty = v.ty; a.cvar_id = v.id; a.cvar_name = v.name;
+    return a;
+}
+
+/* ---- colored-callee lookup -------------------------------------------- */
+
+/* True if `fn` resolves to a colored top-level function. */
+static bool callee_colored(CpsB *b, const Binding *fn) {
+    if (!fn || !b->program || b->program->kind != EX_PROGRAM) return false;
+    for (uint32_t i = 0; i < b->program->as.program.n; i++) {
+        Expr *it = b->program->as.program.items[i];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
+            it->as.fn_def_.fn->binding == fn)
+            return it->as.fn_def_.fn->cps_colored;
+    }
+    return false;
+}
+
+/* ---- pending bindings (drives atomization order) ---------------------- */
+
+typedef struct { Expr *expr; CVar x; } PendItem;
+typedef struct { PendItem items[32]; uint32_t n; } Pending;
+
+/* forward decls */
+static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
+static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
+
+static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
+    if (is_atomic(e)) return atom_of(e);
+    CVar x = fresh_cvar(b, e ? e->type.kind : TY_UNKNOWN);
+    if (p->n < 32) { p->items[p->n].expr = e; p->items[p->n].x = x; p->n++; }
+    return atom_cvar(x);
+}
+
+/* Wrap `core` with the pending bindings, leftmost outermost. */
+static CTerm *fold_pending(CpsB *b, Pending *p, CTerm *core) {
+    for (int i = (int)p->n - 1; i >= 0; i--)
+        core = cps_bind(b, p->items[i].expr, p->items[i].x, core);
+    return core;
+}
+
+static const char *builtin_name(const Expr *e) {
+    if (e->kind == EX_BUILTIN && e->as.builtin.spec && e->as.builtin.spec->name)
+        return e->as.builtin.spec->name;
+    return "?";
+}
+
+/* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
+
+static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
+    if (!e) {
+        CTerm *t = new_term(b, CT_UNSUPPORTED);
+        t->as.unsupported.why = "null";
+        return t;
+    }
+    if (is_atomic(e)) {
+        CTerm *t = new_term(b, CT_APPCONT);
+        t->as.appcont.kont = kont;
+        t->as.appcont.v = atom_of(e);
+        return t;
+    }
+    switch (e->kind) {
+        case EX_BUILTIN: {
+            Pending p = {0};
+            CAtom *args = arena_alloc(b->a, (e->as.builtin.n ? e->as.builtin.n : 1) * sizeof(CAtom));
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                args[i] = atomize(b, e->as.builtin.args[i], &p);
+            CVar x = fresh_cvar(b, e->type.kind);
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            CTerm *t = new_term(b, CT_LETPRIM);
+            t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
+            t->as.letprim.args = args; t->as.letprim.n = e->as.builtin.n;
+            t->as.letprim.body = ac;
+            return fold_pending(b, &p, t);
+        }
+        case EX_CALL: {
+            const Binding *fn = e->as.call_.fn_binding;
+            if (!fn) {
+                CTerm *t = new_term(b, CT_UNSUPPORTED);
+                t->as.unsupported.why = "indirect call";
+                return t;
+            }
+            Pending p = {0};
+            uint32_t n = e->as.call_.n_args;
+            CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+            for (uint32_t i = 0; i < n; i++)
+                args[i] = atomize(b, e->as.call_.args[i], &p);
+            if (callee_colored(b, fn)) {
+                CTerm *t = new_term(b, CT_TAILCALL);
+                t->as.tailcall.fn = fn; t->as.tailcall.args = args;
+                t->as.tailcall.n = n; t->as.tailcall.kont = kont;
+                return fold_pending(b, &p, t);
+            } else {
+                CVar x = fresh_cvar(b, e->type.kind);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                CTerm *t = new_term(b, CT_LETCALL);
+                t->as.letcall.x = x; t->as.letcall.fn = fn;
+                t->as.letcall.args = args; t->as.letcall.n = n; t->as.letcall.body = ac;
+                return fold_pending(b, &p, t);
+            }
+        }
+        case EX_IF: {
+            Pending p = {0};
+            CAtom c = atomize(b, e->as.if_.cond, &p);
+            CTerm *t = new_term(b, CT_IF);
+            t->as.if_.cond = c;
+            t->as.if_.then_ = cps_tail(b, e->as.if_.then_, kont);
+            t->as.if_.else_ = e->as.if_.else_or_null
+                ? cps_tail(b, e->as.if_.else_or_null, kont)
+                : cps_tail(b, NULL, kont);
+            return fold_pending(b, &p, t);
+        }
+        case EX_LET: {
+            CTerm *rest = cps_tail(b, e->as.let_.body, kont);
+            for (int i = (int)e->as.let_.n - 1; i >= 0; i--)
+                rest = cps_bind(b, e->as.let_.bindings[i].init,
+                                cvar_of_binding(e->as.let_.bindings[i].binding), rest);
+            return rest;
+        }
+        case EX_DO: {
+            uint32_t n = e->as.do_.n;
+            if (n == 0) return cps_tail(b, NULL, kont);
+            CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
+            for (int i = (int)n - 2; i >= 0; i--) {
+                CVar discard = fresh_cvar(b, e->as.do_.items[i]->type.kind);
+                rest = cps_bind(b, e->as.do_.items[i], discard, rest);
+            }
+            return rest;
+        }
+        case EX_RETURN:
+            return cps_tail(b, e->as.return_.value, b->retk);
+        case EX_RESET: {
+            CVar x = fresh_cvar(b, e->type.kind);
+            CTerm *t = new_term(b, CT_RESET);
+            t->as.reset.x = x;
+            t->as.reset.delim = cps_tail(b, e->as.reset_.body, kont_prompt(e->type.kind));
+            CTerm *ac = new_term(b, CT_APPCONT);
+            ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            t->as.reset.body = ac;
+            return t;
+        }
+        case EX_SHIFT: {
+            CVar k = fresh_cvar(b, e->type.kind);
+            k.name = "k'";
+            CTerm *t = new_term(b, CT_SHIFT);
+            t->as.shift.k = k;
+            t->as.shift.body = cps_tail(b, e->as.shift_.body, kont_prompt(e->type.kind));
+            return t;
+        }
+        default: {
+            CTerm *t = new_term(b, CT_UNSUPPORTED);
+            t->as.unsupported.why = "form not in CPS2 subset";
+            return t;
+        }
+    }
+}
+
+/* ---- cps_bind: bind e's value to x, then run rest --------------------- */
+
+static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    if (!e) return rest;
+    if (is_atomic(e)) {
+        CTerm *t = new_term(b, CT_LETVAL);
+        t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
+        return t;
+    }
+    switch (e->kind) {
+        case EX_BUILTIN: {
+            Pending p = {0};
+            CAtom *args = arena_alloc(b->a, (e->as.builtin.n ? e->as.builtin.n : 1) * sizeof(CAtom));
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                args[i] = atomize(b, e->as.builtin.args[i], &p);
+            CTerm *t = new_term(b, CT_LETPRIM);
+            t->as.letprim.x = x; t->as.letprim.op = builtin_name(e);
+            t->as.letprim.args = args; t->as.letprim.n = e->as.builtin.n;
+            t->as.letprim.body = rest;
+            return fold_pending(b, &p, t);
+        }
+        case EX_CALL: {
+            const Binding *fn = e->as.call_.fn_binding;
+            if (!fn) {
+                CTerm *t = new_term(b, CT_UNSUPPORTED);
+                t->as.unsupported.why = "indirect call";
+                return t;
+            }
+            Pending p = {0};
+            uint32_t n = e->as.call_.n_args;
+            CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+            for (uint32_t i = 0; i < n; i++)
+                args[i] = atomize(b, e->as.call_.args[i], &p);
+            if (callee_colored(b, fn)) {
+                CVar j = fresh_cvar(b, x.ty);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *call = new_term(b, CT_TAILCALL);
+                call->as.tailcall.fn = fn; call->as.tailcall.args = args;
+                call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = call;
+                return fold_pending(b, &p, t);
+            } else {
+                CTerm *t = new_term(b, CT_LETCALL);
+                t->as.letcall.x = x; t->as.letcall.fn = fn;
+                t->as.letcall.args = args; t->as.letcall.n = n; t->as.letcall.body = rest;
+                return fold_pending(b, &p, t);
+            }
+        }
+        case EX_IF: {
+            Pending p = {0};
+            CAtom c = atomize(b, e->as.if_.cond, &p);
+            CVar j = fresh_cvar(b, x.ty);
+            j.name = arena_strdup(b->a, "j", 1);
+            CTerm *body = new_term(b, CT_IF);
+            body->as.if_.cond = c;
+            body->as.if_.then_ = cps_tail(b, e->as.if_.then_, kont_var(j));
+            body->as.if_.else_ = e->as.if_.else_or_null
+                ? cps_tail(b, e->as.if_.else_or_null, kont_var(j))
+                : cps_tail(b, NULL, kont_var(j));
+            CTerm *t = new_term(b, CT_LETCONT);
+            t->as.letcont.j = j; t->as.letcont.param = x;
+            t->as.letcont.jbody = rest; t->as.letcont.body = body;
+            return fold_pending(b, &p, t);
+        }
+        case EX_LET: {
+            CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
+            for (int i = (int)e->as.let_.n - 1; i >= 0; i--)
+                r = cps_bind(b, e->as.let_.bindings[i].init,
+                             cvar_of_binding(e->as.let_.bindings[i].binding), r);
+            return r;
+        }
+        case EX_DO: {
+            uint32_t n = e->as.do_.n;
+            if (n == 0) { return cps_bind(b, NULL, x, rest); }
+            CTerm *r = cps_bind(b, e->as.do_.items[n - 1], x, rest);
+            for (int i = (int)n - 2; i >= 0; i--) {
+                CVar discard = fresh_cvar(b, e->as.do_.items[i]->type.kind);
+                r = cps_bind(b, e->as.do_.items[i], discard, r);
+            }
+            return r;
+        }
+        case EX_RETURN:
+            return cps_tail(b, e->as.return_.value, b->retk);
+        case EX_RESET: {
+            CTerm *t = new_term(b, CT_RESET);
+            t->as.reset.x = x;
+            t->as.reset.delim = cps_tail(b, e->as.reset_.body, kont_prompt(e->type.kind));
+            t->as.reset.body = rest;
+            return t;
+        }
+        case EX_SHIFT: {
+            CVar k = fresh_cvar(b, e->type.kind);
+            k.name = "k'";
+            CTerm *t = new_term(b, CT_SHIFT);
+            t->as.shift.k = k;
+            t->as.shift.body = cps_tail(b, e->as.shift_.body, kont_prompt(e->type.kind));
+            return t;
+        }
+        default: {
+            CTerm *t = new_term(b, CT_UNSUPPORTED);
+            t->as.unsupported.why = "form not in CPS2 subset";
+            return t;
+        }
+    }
+}
+
+/* ---- public: translate a function ------------------------------------ */
+
+CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
+    if (!fd || !fd->body) return NULL;
+    CpsB b;
+    b.a = a; b.program = program; b.counter = 0;
+    b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
+    return cps_tail(&b, fd->body, b.retk);
+}
+
+/* ---- printing --------------------------------------------------------- */
+
+static void print_indent(FILE *out, int n) { for (int i = 0; i < n; i++) fputs("  ", out); }
+
+static const char *kind_name(TypeKind k) {
+    switch (k) {
+        case TY_INT:   return "int";
+        case TY_BOOL:  return "bool";
+        case TY_FLOAT: return "float";
+        case TY_NIL:   return "nil";
+        case TY_CSTR:  return "cstr";
+        default:       return "_";
+    }
+}
+
+static void print_atom(const CAtom *a, FILE *out) {
+    switch (a->kind) {
+        case CA_VAR:  fprintf(out, "%s", a->var && a->var->name ? a->var->name->name : "_"); break;
+        case CA_CVAR: fprintf(out, "%s", a->cvar_name ? a->cvar_name : "_"); break;
+        case CA_INT:  fprintf(out, "%lld", (long long)a->i); break;
+        case CA_BOOL: fprintf(out, "%s", a->b ? "true" : "false"); break;
+        case CA_UNIT: fprintf(out, "()"); break;
+        default:      fprintf(out, "<val>"); break;
+    }
+}
+
+static void print_kont(const CKont *k, FILE *out) {
+    switch (k->kind) {
+        case KK_RET:    fprintf(out, "k"); break;
+        case KK_VAR:    fprintf(out, "j%u", k->id); break;
+        case KK_PROMPT: fprintf(out, "<prompt>"); break;
+    }
+}
+
+static void print_atoms(const CAtom *args, uint32_t n, FILE *out) {
+    for (uint32_t i = 0; i < n; i++) { if (i) fputc(' ', out); print_atom(&args[i], out); }
+}
+
+void cps_ir_print(const CTerm *t, FILE *out, int indent) {
+    if (!t) { print_indent(out, indent); fputs("<null>\n", out); return; }
+    print_indent(out, indent);
+    switch (t->kind) {
+        case CT_APPCONT:
+            fputc('(', out); print_kont(&t->as.appcont.kont, out); fputc(' ', out);
+            print_atom(&t->as.appcont.v, out); fputs(")\n", out);
+            break;
+        case CT_LETVAL:
+            fprintf(out, "let %s = ", t->as.letval.x.name);
+            print_atom(&t->as.letval.v, out); fputs("\n", out);
+            cps_ir_print(t->as.letval.body, out, indent);
+            break;
+        case CT_LETPRIM:
+            fprintf(out, "let %s = (%s ", t->as.letprim.x.name, t->as.letprim.op);
+            print_atoms(t->as.letprim.args, t->as.letprim.n, out); fputs(")\n", out);
+            cps_ir_print(t->as.letprim.body, out, indent);
+            break;
+        case CT_LETCALL:
+            fprintf(out, "let %s = call %s(", t->as.letcall.x.name,
+                    t->as.letcall.fn && t->as.letcall.fn->name ? t->as.letcall.fn->name->name : "?");
+            print_atoms(t->as.letcall.args, t->as.letcall.n, out); fputs(")\n", out);
+            cps_ir_print(t->as.letcall.body, out, indent);
+            break;
+        case CT_TAILCALL:
+            fprintf(out, "tailcall %s(",
+                    t->as.tailcall.fn && t->as.tailcall.fn->name ? t->as.tailcall.fn->name->name : "?");
+            print_atoms(t->as.tailcall.args, t->as.tailcall.n, out);
+            if (t->as.tailcall.n) fputc(' ', out);
+            print_kont(&t->as.tailcall.kont, out); fputs(")\n", out);
+            break;
+        case CT_LETCONT:
+            fprintf(out, "letcont j%u(%s) =\n", t->as.letcont.j.id, t->as.letcont.param.name);
+            cps_ir_print(t->as.letcont.jbody, out, indent + 1);
+            print_indent(out, indent); fputs("in\n", out);
+            cps_ir_print(t->as.letcont.body, out, indent);
+            break;
+        case CT_IF:
+            fputs("if ", out); print_atom(&t->as.if_.cond, out); fputs("\n", out);
+            print_indent(out, indent); fputs("then\n", out);
+            cps_ir_print(t->as.if_.then_, out, indent + 1);
+            print_indent(out, indent); fputs("else\n", out);
+            cps_ir_print(t->as.if_.else_, out, indent + 1);
+            break;
+        case CT_RESET:
+            fprintf(out, "reset %s {\n", t->as.reset.x.name);
+            cps_ir_print(t->as.reset.delim, out, indent + 1);
+            print_indent(out, indent); fputs("}\n", out);
+            cps_ir_print(t->as.reset.body, out, indent);
+            break;
+        case CT_SHIFT:
+            fprintf(out, "shift %s.\n", t->as.shift.k.name);
+            cps_ir_print(t->as.shift.body, out, indent + 1);
+            break;
+        case CT_UNSUPPORTED:
+            fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");
+            break;
+    }
+}
+
+/* ---- public: dump all colored functions ------------------------------ */
+
+void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
+    if (!program || program->kind != EX_PROGRAM || !out) return;
+    cps_color_program(a, program);
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+        FnDef *fd = it->as.fn_def_.fn;
+        if (!fd->cps_colored) continue;
+        if (!fd->binding || !fd->binding->name) continue;
+        if (fd->binding->defining_module_name) continue;
+        fprintf(out, "cps-fn %s [", fd->binding->name->name);
+        for (uint8_t pi = 0; pi < fd->n_params; pi++) {
+            if (pi) fputc(' ', out);
+            fprintf(out, "%s", fd->params[pi]->name ? fd->params[pi]->name->name : "_");
+        }
+        fprintf(out, "] k:cont<%s>\n", kind_name(fd->return_type.kind));
+        CTerm *t = cps_ir_translate_fn(a, program, fd);
+        cps_ir_print(t, out, 1);
+        fputs("cps-end\n", out);
+    }
+}

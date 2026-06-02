@@ -1,10 +1,20 @@
 # Whole-Program CPS Transform -- Implementation Plan (CPS0--CPS7)
 
 > **Status:** In progress. **CPS0 ratified (2026-06-02)**; **CPS1 (may-capture
-> coloring analysis) done (2026-06-02)**; CPS2 (CPS/ANF IR) next. This is the
-> substrate that unblocks *undelimited* control (real Scheme `call/cc`, an
-> implicit program-wide prompt) and removes the bounded-capture ceiling on the
-> existing delimited runtime.
+> coloring) done (2026-06-02)**; **CPS2 (CPS/ANF IR) done (2026-06-02, dump-only)**;
+> CPS3 (selective lowering + boundary bridging) next. This is the substrate that
+> unblocks *undelimited* control (real Scheme `call/cc`, an implicit
+> program-wide prompt) and removes the bounded-capture ceiling on the existing
+> delimited runtime.
+>
+> **Implementation note on incrementality.** CPS2--CPS6 are landed
+> *additively*: the new IR, runtime, and substrate are built and exercised
+> behind dev flags and the colored-only path, so the default compile pipeline
+> and the full fixture suite stay green at every commit (CLAUDE.md forbids
+> committing a failing suite). Each phase notes explicitly what is "built +
+> inspectable (dump-only)" versus "wired into live codegen". The final wiring
+> into the shipping `tur build`/`emit-c` path is gated until the substrate is
+> complete end-to-end.
 >
 > **Key insight:** Turmeric already has working **delimited** continuations --
 > `shift`/`reset`/`shift0` (one-shot, `tur_cont`) and `call/cc*` (cloneable,
@@ -247,19 +257,36 @@ pipeline is perturbed. Exposed via the dev flag `--dump-cps-coloring`.
   `dump-cps-coloring-partition` / `dump-cps-coloring-no-output` cases in
   `tests/run-flags.sh`.
 
-## Phase CPS2 -- CPS/ANF intermediate representation
+## Phase CPS2 -- CPS/ANF intermediate representation  -- **DONE 2026-06-02 (dump-only)**
 
-- **CPS2.1** Add an A-normal-form normalization pass for colored functions so
-  every non-trivial subexpression is named -- the precondition for a clean CPS
-  translation. *Done when:* colored function bodies are in ANF; uncolored
-  bodies are untouched.
-- **CPS2.2** Add the CPS IR node(s): an explicit continuation parameter, `k`,
-  threaded through colored functions; tail positions become `k` applications.
-  Reuse `TY_CONT` (`src/compiler/types.h:92`) as the continuation type. *Done
-  when:* the IR can represent `(f x k)` and `(k v)`.
-- **CPS2.3** Type the continuation parameter as `cont<T>` end-to-end so CPS3's
-  output type-checks with the same rule `shift` already uses (CF2). *Done
-  when:* a CPS'd identity function round-trips through the type checker.
+**Implementation.** A compact ANF/CPS IR lives in `src/passes/cps_ir.{h,c}`
+(atoms `CAtom`, continuations `CKont`, terms `CTerm`). The translation is the
+textbook two-function scheme -- `cps_tail(e, k)` delivers `e`'s value to
+continuation `k`; `cps_bind(e, x, rest)` names `e`'s value and continues -- with
+non-trivial arguments atomized (named by a fresh binder), which is what
+establishes ANF. Exposed via `--dump-cps`. **Dump-only: not yet wired into
+codegen** (that is CPS3). It runs only for colored functions; uncolored bodies
+are never touched.
+
+- **CPS2.1** ANF normalization for colored functions. *Done:* every non-trivial
+  subexpression is named by a `let`-style binder (`CT_LETPRIM`/`CT_LETCALL`/
+  `CT_LETVAL`). E.g. `(+ 1 (leaf-shift x))` lowers to a named call result plus a
+  named `(+ 1 t)` prim. Uncolored bodies keep their direct-style Expr tree.
+- **CPS2.2** CPS IR nodes + continuation threading. *Done:* the IR represents
+  `(k v)` as `CT_APPCONT` and a colored tail call `f(args, k)` as `CT_TAILCALL`
+  (the continuation is threaded through); non-tail colored calls introduce a
+  join continuation `CT_LETCONT`. Tail positions become continuation
+  applications. Reuses `TY_CONT` as the continuation type kind.
+- **CPS2.3** Type the continuation parameter as `cont<T>`. *Done (represented):*
+  `KK_RET` carries the function's result type kind, printed as `k:cont<T>`; join
+  continuations carry their parameter's type. The IR is internally consistent
+  with the `shift` typing rule (CF2). *Deferred to CPS3:* re-running the host
+  type checker over the emitted CPS output ("round-trips through the type
+  checker") happens when the IR is wired into the elaborator/codegen, since the
+  IR is currently a standalone dump artifact.
+- **Tests:** `dump-cps-anf` / `dump-cps-no-output` in `tests/run-flags.sh`
+  assert the ANF naming, the `k:cont<int>` typing, the threaded
+  `tailcall ...(... j)`, the `letcont` join, and the `reset`/`shift` forms.
 
 ## Phase CPS3 -- Selective CPS lowering + boundary bridging
 
