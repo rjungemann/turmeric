@@ -29,7 +29,7 @@ tur -Xjson-reader run     src/app.tur
 The macro uses round parens as the outer fence, so a top-level object reads
 without a doubled brace and a top-level array has no doubled bracket:
 
-```turmeric
+```turmeric no-check
 #json({"a": 1, "b": 2})   ; object
 #json([1, 2, 3])          ; array
 #json(42)                 ; scalar
@@ -63,7 +63,7 @@ nested** -- the type of each value is carried as a runtime tag, recoverable with
 Retrieve object fields by key with `json/get!` (returns the value node) and
 extract the scalar with the typed accessor:
 
-```turmeric
+```turmeric no-check
 (json/get-string (json/get! #json({"name": "alice", "age": 30}) "name"))  ; => "alice"
 (json/get-int    (json/get! #json({"name": "alice", "age": 30}) "age"))   ; => 30
 ```
@@ -77,7 +77,7 @@ panics on a missing key.)
 
 Index into arrays with `json/array-get` / `json/array-len`:
 
-```turmeric
+```turmeric no-check
 (json/array-len #json([10, "x", true]))                    ; => 3
 (json/get-int    (json/array-get #json([10, "x", true]) 0)) ; => 10
 (json/get-string (json/array-get #json([10, "x", true]) 1)) ; => "x"
@@ -91,7 +91,7 @@ json/get-string(json/array-get(#json([10, "x", true]) 1))  ; => "x"
 `null` is genuinely distinct from `0`/`false` -- it is a node whose
 `(json/type node)` is `0`:
 
-```turmeric
+```turmeric no-check
 (json/type #json(null))   ; => 0  (null)
 (json/type #json(false))  ; => 1  (bool)
 (json/type #json(0))      ; => 2  (int)

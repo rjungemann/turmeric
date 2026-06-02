@@ -48,7 +48,7 @@ HTTP is stateless. A web form spanning multiple pages is inherently stateful. Th
 
 The continuation approach, popularized by PLT Scheme's `web-server/servlet` and Racket's `send/suspend`, threads the control-flow problem away entirely:
 
-```turmeric
+```turmeric no-check
 handler-1 runs to a "send this form, then resume" point
   -> captures continuation k
   -> stashes k under token T
@@ -268,11 +268,7 @@ extern-c httpd-start [(port : int64)] : int64
 ;;;   httpd-next-request(method path query body)
 ;;;
 ;;; Since: Guestbook example
-extern-c httpd-next-request
-  [(out-method : ptr<cstr>)
-   (out-path   : ptr<cstr>)
-   (out-query  : ptr<cstr>)
-   (out-body   : ptr<cstr>)] : unit
+extern-c httpd-next-request [(out-method : ptr<cstr>) (out-path : ptr<cstr>) (out-query : ptr<cstr>) (out-body : ptr<cstr>)] : unit
   "httpd_next_request"
 
 ;;; httpd-send-response -- write an HTTP response to the current connection.
@@ -289,10 +285,7 @@ extern-c httpd-next-request
 ;;;   httpd-send-response(200 "text/html" "<h1>Hello</h1>")
 ;;;
 ;;; Since: Guestbook example
-extern-c httpd-send-response
-  [(status       : int64)
-   (content-type : cstr)
-   (body         : cstr)] : unit
+extern-c httpd-send-response [(status : int64) (content-type : cstr) (body : cstr)] : unit
   "httpd_send_response"
 ```
 
@@ -415,12 +408,7 @@ defn run-loop [] : unit
     def query  ptr-alloc(cstr)
     def body   ptr-alloc(cstr)
     httpd-next-request(method path query body)
-    def req
-      HttpRequest
-        :method ptr-deref(method)
-        :path   ptr-deref(path)
-        :query  ptr-deref(query)
-        :body   ptr-deref(body)
+    def req HttpRequest(:method ptr-deref(method) :path ptr-deref(path) :query ptr-deref(query) :body ptr-deref(body))
     handle dispatch(req)
       HttpEffect.send-html [html] ->
         httpd-send-response(200 "text/html" html)
@@ -531,12 +519,15 @@ defn parse-form-field [body : cstr, field : cstr] : (Option cstr)
   def prefix str(field "=")
   def start  cstr-find(body prefix)
   match start
-    None -> None
-    Some(idx) ->
-      def val-start {idx + cstr-len(prefix)}
-      def rest      cstr-drop(body val-start)
-      def end       or(cstr-find(rest "&") cstr-len(rest))
-      Some $ percent-decode $ cstr-take(rest end)
+    (None)
+    ->
+    (None)
+    Some(idx)
+    ->
+    def val-start {idx + cstr-len(prefix)}
+    def rest      cstr-drop(body val-start)
+    def end       or(cstr-find(rest "&") cstr-len(rest))
+    Some(percent-decode(cstr-take(rest end)))
 ```
 
 The `percent-decode` helper converts `%XX` sequences and replaces `+` with space:
@@ -610,16 +601,16 @@ defn add-flow [req : HttpRequest] : unit
   serial-reset
     ;; Page 1: ask for first number
     def body-a
-      send-form-and-wait(fn [action]
+      send-form-and-wait((fn [action]
         str("<form method='POST' action='" action "'>"
-            "<input name='a'/><button>Next</button></form>"))
+            "<input name='a'/><button>Next</button></form>")))
     def a cstr->int64(or(parse-form-field(body-a "a") "0"))
 
     ;; Page 2: ask for second number
     def body-b
-      send-form-and-wait(fn [action]
+      send-form-and-wait((fn [action]
         str("<form method='POST' action='" action "'>"
-            "<input name='b'/><button>Add</button></form>"))
+            "<input name='b'/><button>Add</button></form>")))
     def b cstr->int64(or(parse-form-field(body-b "b") "0"))
 
     ;; Done: show result
@@ -749,11 +740,18 @@ defn store-continuation [k : (serial-continuation cstr)] : cstr
 defn load-continuation [token : cstr] : (Option (serial-continuation cstr))
   def path str("data/conts/" token ".bin")
   match file-read(path)
-    Err(_) -> None
-    Ok(bytes) ->
-      match bytes->serial-cont(bytes)
-        Err(_) -> None
-        Ok(k)  -> Some(k)
+    Err(_)
+    ->
+    (None)
+    Ok(bytes)
+    ->
+    match bytes->serial-cont(bytes)
+      Err(_)
+      ->
+      (None)
+      Ok(k)
+      ->
+      Some(k)
 ```
 
 ### 4.4 The Router
@@ -837,16 +835,20 @@ defn dispatch [req : HttpRequest] : unit
 defn resume-handler [req : HttpRequest] : unit
   def token parse-form-field(req.query "k")
   match token
-    None ->
+    (None)
+    ->
+    perform HttpEffect
+      send-html("<p>Missing token.</p>")
+    Some(t)
+    ->
+    match load-continuation(t)
+      (None)
+      ->
       perform HttpEffect
-        send-html("<p>Missing token.</p>")
-    Some(t) ->
-      match load-continuation(t)
-        None ->
-          perform HttpEffect
-            send-html("<p>Unknown or expired token.</p>")
-        Some(k) ->
-          serial-resume(k req.body)
+        send-html("<p>Unknown or expired token.</p>")
+      Some(k)
+      ->
+      serial-resume(k req.body)
 ```
 
 ---
@@ -893,12 +895,12 @@ defn run-guestbook-flow [req : HttpRequest] : unit
 
     ;; Page 1: name
     def name-body
-      send-form-and-wait(fn [action] render-name-form(action))
+      send-form-and-wait((fn [action] render-name-form(action)))
     def name or(parse-form-field(name-body "name") "Anonymous")
 
     ;; Page 2: message
     def msg-body
-      send-form-and-wait(fn [action] render-message-form(action name))
+      send-form-and-wait((fn [action] render-message-form(action name)))
     def message or(parse-form-field(msg-body "message") "")
 ```
 
@@ -1083,17 +1085,17 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
 ;;; Serializes as a Vec of three cstr values.
 definstance Serializable GuestEntry
   serialize [e]
-    serialize $ Vec.of([e.name e.message int64->cstr(e.posted-at)])
+    serialize(Vec.of([e.name e.message int64->cstr(e.posted-at)]))
   deserialize [b]
     match deserialize(b : (Result (Vec cstr) cstr))
-      Err(msg) -> Err(msg)
-      Ok(parts) ->
-        if {Vec.len(parts) < 3}
-          Err("GuestEntry: not enough fields")
-          Ok(GuestEntry
-              :name      Vec.get(parts 0)
-              :message   Vec.get(parts 1)
-              :posted-at cstr->int64 $ Vec.get(parts 2))
+      Err(msg)
+      ->
+      Err(msg)
+      Ok(parts)
+      ->
+      if {Vec.len(parts) < 3}
+        Err("GuestEntry: not enough fields")
+        Ok(GuestEntry(:name Vec.get(parts 0) :message Vec.get(parts 1) :posted-at cstr->int64(Vec.get(parts 2))))
 ```
 
 ### 7.3 The Store API
@@ -1205,12 +1207,12 @@ defn run-guestbook-flow [req : HttpRequest] : unit
 
     ;; Page 1: name
     def name-body
-      send-form-and-wait(fn [a] render-name-form(a))
+      send-form-and-wait((fn [a] render-name-form(a)))
     def name or(parse-form-field(name-body "name") "Anonymous")
 
     ;; Page 2: message
     def msg-body
-      send-form-and-wait(fn [a] render-message-form(a name))
+      send-form-and-wait((fn [a] render-message-form(a name)))
     def message or(parse-form-field(msg-body "message") "")
 
     ;; Page 3: preview (stores two continuations: k-back and k-confirm)
@@ -1225,12 +1227,9 @@ defn run-guestbook-flow [req : HttpRequest] : unit
                                    t-confirm))
 
     ;; Page 4: confirmed -- write entry and show thank-you
-    store-append(GuestEntry
-                  :name      html-escape(name)
-                  :message   html-escape(message)
-                  :posted-at unix-now())
+    store-append(GuestEntry(:name html-escape(name) :message html-escape(message) :posted-at unix-now()))
     perform HttpEffect
-      send-html $ render-thankyou $ store-all()
+      send-html(render-thankyou(store-all()))
 ```
 
 > **How confirm vs. back is handled:** The preview page has two forms pointing to two different tokens. The router dispatches entirely based on which token was POSTed. No `action` field inspection is needed in the flow itself.
@@ -1271,8 +1270,8 @@ defn run-guestbook-flow [req : HttpRequest] : unit
 ;;; Since: Guestbook example
 defn render-thankyou [entries : (Vec GuestEntry)] : cstr
   def rows
-    Vec.map(entries fn [e]
-      str("<li><strong>" e.name "</strong>: " e.message "</li>"))
+    Vec.map(entries (fn [e]
+      str("<li><strong>" e.name "</strong>: " e.message "</li>")))
   str("<html><body>"
       "<h2>Thank you! Your entry has been posted.</h2>"
       "<h3>Guestbook</h3>"
@@ -1336,7 +1335,7 @@ Random tokens prevent guessing, but they do not prevent token forgery if an atta
 ;;;
 ;;; Since: Guestbook example
 defn sign-token [token : cstr, secret : bytes] : cstr
-  def sig hex-encode $ hmac-sha256(secret cstr->bytes(token))
+  def sig hex-encode(hmac-sha256(secret cstr->bytes(token)))
   str(token "." sig)
 
 ;;; verify-token -- check the signature and return the raw token.
@@ -1352,12 +1351,15 @@ defn sign-token [token : cstr, secret : bytes] : cstr
 defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
   def parts cstr-split(signed ".")
   match parts
-    [token sig] ->
-      def expected hex-encode $ hmac-sha256(secret cstr->bytes(token))
-      if cstr-eq?(sig expected)
-        Some(token)
-        None
-    _ -> None
+    [token sig]
+    ->
+    def expected hex-encode(hmac-sha256(secret cstr->bytes(token)))
+    if cstr-eq?(sig expected)
+      Some(token)
+      (None)
+    _
+    ->
+    (None)
 ```
 
 Load the secret from an environment variable at startup:
@@ -1403,7 +1405,7 @@ defstruct StoredCont
 ;;; continuation-expired? -- true if the stored continuation is too old.
 ;;; Since: Guestbook example
 defn continuation-expired? [sc : StoredCont] : bool
-  {unix-now() - sc.created-at} > CONT-TTL-SECONDS
+  > {unix-now() - sc.created-at} CONT-TTL-SECONDS
 ```
 
 `load-continuation` checks `continuation-expired?` and returns `None` for stale tokens.

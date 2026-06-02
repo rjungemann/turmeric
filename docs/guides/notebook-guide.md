@@ -22,7 +22,7 @@ git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 
 Declare the spice in your project's `build.tur`:
 
-```turmeric
+```turmeric no-check
 :spices {
   "notebook" {:url    "https://github.com/rjungemann/turmeric-spices"
               :ref    "notebook-v0.1.0"

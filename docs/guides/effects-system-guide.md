@@ -226,11 +226,13 @@ defeffect ReadFile [path :cstr] :str
 
 ;; Production
 handle code
-  (ReadFile [path] k) resume(k read-file-real(path))
+  ReadFile [path] k
+  resume(k read-file-real(path))
 
 ;; Tests
 handle code
-  (ReadFile [path] k) resume(k "mock data")
+  ReadFile [path] k
+  resume(k "mock data")
 ```
 
 ### Transactional Retry
@@ -255,7 +257,8 @@ handle
     when {read-tvar(x) < 10}
       perform(Retry())
   ;; Re-run transaction on conflict
-  (Retry [] k) resume(k nil)
+  (Retry [] k)
+  resume(k nil)
 ```
 
 ## Effect Rows (Typed Effects)

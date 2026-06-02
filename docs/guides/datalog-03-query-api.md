@@ -186,13 +186,13 @@ transaction number ascending:
 
 ```sweet-exp
 defn history [db :int entity :int attr :cstr] :ptr<void>
-  let [raw db-q(db fn([d]
-                       and({datum-entity(d) = entity}
-                           cstr-eq?(datum-attr(d) cstr->int(attr)))))]
+  let [raw db-q(db (fn [d]
+                     and({datum-entity(d) = entity}
+                         cstr-eq?(datum-attr(d) cstr->int(attr)))))]
     ; Insertion sort by tx
     let [n rvec-len(raw)]
       ...
-    raw
+      raw
 ```
 
 The sort is insertion sort -- O(n^2) but adequate for the tutorial scale
@@ -268,9 +268,11 @@ defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
                    cstr-eq?(datum-attr(d) cstr->int(":db/retract"))
                    {datum-tx(d) <= as-of-tx})
             match datum-value(d)
-              (StrVal s) when cstr-eq?(s cstr->int(attr))
-                           set! found true
-              _ nil
+              (StrVal s)
+              when cstr-eq?(s cstr->int(attr))
+                set! found true
+              _
+              nil
         set! i {i + 1}
     found
 ```
@@ -285,7 +287,7 @@ Usage -- retract Bob's email and verify:
 
 ```sweet-exp
 db-retract!(db 2 ":user/email")
-println $ retracted?(db 2 ":user/email" db-count(db))
+println(retracted?(db 2 ":user/email" db-count(db)))
 ; => true
 ```
 
