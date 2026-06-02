@@ -3156,14 +3156,28 @@ static bool sweet_line_is_blank(const char *s, size_t i, size_t end) {
  * Bracket groups, strings, and block comments are each one element.
  * Line comments end the count.  `$` followed by whitespace consumes
  * the rest of the line into a single element. */
+/* True if a triple-backtick (```) inline-C fence opens/closes at offset i. */
+static inline bool sweet_at_fence(const char *src, size_t i, size_t end) {
+    return i + 2 < end && src[i] == '`' && src[i + 1] == '`' && src[i + 2] == '`';
+}
+
 static int sweet_count_elements(const char *src, size_t start, size_t end) {
     int count = 0;
     bool in_tok = false;   /* mid-token at bd == 0 */
     int  bd = 0;
-    bool in_str = false, in_bc = false;
+    bool in_str = false, in_bc = false, in_cb = false;
     size_t i = start;
     while (i < end) {
         char c = src[i];
+        if (in_cb) {
+            /* Inside a ```c ... ``` block: opaque, part of the current token. */
+            if (sweet_at_fence(src, i, end)) { in_cb = false; i += 3; continue; }
+            i++; continue;
+        }
+        if (!in_str && !in_bc && sweet_at_fence(src, i, end)) {
+            if (bd == 0 && !in_tok) { count++; in_tok = true; }
+            in_cb = true; i += 3; continue;
+        }
         if (in_str) {
             if (c == '\\' && i + 1 < end) { i += 2; continue; }
             if (c == '"') {
@@ -3266,11 +3280,20 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
          * marker (`\\`), step past it before the scanner runs so the bare
          * `\\` is not misread as a `\\`-line-continuation. */
         int bd = 0;
-        bool in_str = false, in_bc = false;
+        bool in_str = false, in_bc = false, in_cb = false;
         size_t j = content_start;
         if (is_group) j = sweet_skip_group_marker(src, j, len);
         while (j < len) {
             char c = src[j];
+            if (in_cb) {
+                /* Inside a ```c ... ``` block: opaque, and newlines do not
+                 * end the logical line (the fence spans physical lines). */
+                if (sweet_at_fence(src, j, len)) { in_cb = false; j += 3; continue; }
+                j++; continue;
+            }
+            if (!in_str && !in_bc && sweet_at_fence(src, j, len)) {
+                in_cb = true; j += 3; continue;
+            }
             if (in_str) {
                 if (c == '\\' && j + 1 < len) { j += 2; continue; }
                 if (c == '"') in_str = false;
@@ -3390,10 +3413,26 @@ static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
 static void sweet_emit_content(SweetEmit *e, const char *src,
                                 size_t start, size_t end) {
     int bd = 0;
-    bool in_str = false, in_bc = false;
+    bool in_str = false, in_bc = false, in_cb = false;
     size_t i = start;
     while (i < end) {
         char c = src[i];
+        if (in_cb) {
+            /* Inside a ```c ... ``` block: copy verbatim, no `$`/paren logic. */
+            if (sweet_at_fence(src, i, end)) {
+                emit_copy_char_(e, src, i);
+                emit_copy_char_(e, src, i + 1);
+                emit_copy_char_(e, src, i + 2);
+                in_cb = false; i += 3; continue;
+            }
+            emit_copy_char_(e, src, i); i++; continue;
+        }
+        if (!in_str && !in_bc && sweet_at_fence(src, i, end)) {
+            emit_copy_char_(e, src, i);
+            emit_copy_char_(e, src, i + 1);
+            emit_copy_char_(e, src, i + 2);
+            in_cb = true; i += 3; continue;
+        }
         if (in_str) {
             emit_copy_char_(e, src, i);
             if (c == '\\' && i + 1 < end) {
@@ -3488,10 +3527,18 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
  * are trimmed. */
 static size_t sweet_code_end(const char *src, size_t start, size_t end) {
     size_t code_end = start;
-    bool in_str = false, in_bc = false;
+    bool in_str = false, in_bc = false, in_cb = false;
     size_t i = start;
     while (i < end) {
         char c = src[i];
+        if (in_cb) {
+            /* ```c ... ``` block: opaque code (the fence self-terminates). */
+            if (sweet_at_fence(src, i, end)) { code_end = i + 3; in_cb = false; i += 3; continue; }
+            code_end = i + 1; i++; continue;
+        }
+        if (!in_str && !in_bc && sweet_at_fence(src, i, end)) {
+            in_cb = true; code_end = i + 3; i += 3; continue;
+        }
         if (in_str) {
             if (c == '\\' && i + 1 < end) { code_end = i + 2; i += 2; continue; }
             if (c == '"') in_str = false;

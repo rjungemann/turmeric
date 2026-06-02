@@ -84,6 +84,17 @@ RC=$?
 if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
 
 # ---------------------------------------------------------------------------
+# Test: a ```c inline-C block is passed through verbatim by the sweet
+# preprocessor (the body "stays as-is"); indentation closes the enclosing defn.
+# ---------------------------------------------------------------------------
+NAME="parse-check-inline-c"
+printf '(defn fsize [f]\n  ```c\n  return 42;\n  ```)\n' > "$TMPDIR_PC/ic.tur"
+printf 'defn fsize [f]\n  ```c\n  return 42;\n  ```\n' > "$TMPDIR_PC/ic.sweet"
+"$TUR" parse-check "$TMPDIR_PC/ic.tur" "$TMPDIR_PC/ic.sweet" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then pass "$NAME"; else fail "$NAME" "expected exit 0, got $RC"; fi
+
+# ---------------------------------------------------------------------------
 # Test: genuinely different ASTs exit 1
 # ---------------------------------------------------------------------------
 NAME="parse-check-mismatch"
