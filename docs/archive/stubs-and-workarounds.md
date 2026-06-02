@@ -84,34 +84,20 @@ tag.
 
 ---
 
-### 1.4 [ ] Phase 18: Continuation Capture (`call/cc`)
+### 1.4 [x] RESOLVED -- Phase 18: Continuation Capture (`call/cc`)
 
-- `src/compiler/elab_effects.c` ~1185: compiled continuation capture receives an
-  identity function instead of a real reified continuation.
-
-**Impact:** `call/cc` silently returns the value of the body rather than capturing the
-continuation.
-
-**Plan:** Requires CPS transform or `setjmp`/stack-copying. Tracked separately in
-`docs/upcoming/multishot-continuations-plan.md`. Mark with a prominent `STUB` comment
-and add a `requires.compiled` guard to any test that exercises `call/cc`.
-
-**Prerequisites:**
-
-1. **§1.1 (closures)** -- the captured continuation must be returned as a callable
-   fat-pointer so user code can invoke it like a normal function.
-2. **Approach decision** (choose one before writing code):
-   - **CPS transform** -- a whole-program pass rewrites every call into
-     continuation-passing style before codegen. Enables multi-shot continuations.
-     New compiler pass required; significant scope.
-   - **Stack-copying** -- snapshot the C stack at the `call/cc` site via
-     `getcontext`/`makecontext` (or the existing `fiber_ctx_x64.S` machinery), copy
-     it to a heap buffer, and restore on invocation. Single-shot without explicit
-     copy-on-invoke; platform-specific.
-   - **Fiber-per-continuation** -- suspend the current fiber at the `call/cc` site
-     and represent the continuation as a parked fiber handle. Requires the MT
-     scheduler to be integrated (§3.3 done at the loud-fail level; real integration
-     still needed).
+**Resolved (2026-06-02)** by the whole-program CPS substrate
+([`cps-transform-plan.md`](../upcoming/cps-transform-plan.md), CPS0--CPS6) plus
+the [`call-cc-completion-plan.md`](../upcoming/call-cc-completion-plan.md)
+(CC1--CC6). `(call/cc f)` / `(escape f)` now build a real `EX_CALLCC` node that
+captures an **undelimited** continuation against the implicit program-wide
+prompt (heap-reified, unbounded depth, no enclosing `reset`). `f` receives a
+real `cont<T>` -- not the old identity/`0` stand-in -- and the `(k v)`
+application sugar resumes it. Both are enabled by default; the `-Xcallcc` gate
+is a deprecated no-op and `TUR-E0700`/`TUR-E0701` are retired. `call/cc` is
+one-shot (`^unique` default, `^linear` opt-in); `call/cc*` covers the
+multi-shot/cloneable case. The approach taken was the **CPS transform** option
+below (selective coloring keeps direct-style hot code trampoline-free).
 
 ---
 

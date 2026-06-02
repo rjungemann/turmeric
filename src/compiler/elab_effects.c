@@ -1550,11 +1550,49 @@ Expr *elab_cont_pred(Elab *e, const Form *call) {
     return out;
 }
 
+/* CC4.2: default an unannotated continuation parameter to the escape flavor.
+ * (call/cc f) / (escape f) hand `f` an undelimited continuation captured against
+ * the implicit root prompt; resuming it lowers to tur_escape_resume.  When `f`
+ * is written inline as (fn [k] ...) with a single *unannotated* trailing param,
+ * rewrite the param list to [k :escape-cont] so the (k v) application sugar
+ * dispatches to the escape resume runtime instead of defaulting `k` to :int.
+ * (This is the local exception to the :int-by-default lambda-param rule, scoped
+ * to the call/cc / escape receiver.)  Caret markers (^linear, ^unique, ...) are
+ * '^'-prefixed and always precede their param, so an unannotated trailing param
+ * is simply a non-'^' F_SYM in the last vec slot -- ^linear k still gets the
+ * annotation appended (preserving OQ3's opt-in linearity). */
+static Form *callcc_default_cont_param(Elab *e, Form *f_form) {
+    if (!f_form || f_form->tag != F_LIST || f_form->as.list.len < 2) return f_form;
+    const Form *head = f_form->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_fn) return f_form;
+    Form *params = f_form->as.list.items[1];
+    if (params->tag != F_VEC || params->as.list.len == 0) return f_form;
+    const Form *last = params->as.list.items[params->as.list.len - 1];
+    /* Already annotated (keyword / `: T` / type-list) -- leave it alone. */
+    if (last->tag != F_SYM || last->as.sym->name[0] == '^') return f_form;
+
+    /* Rebuild the param vec with :escape-cont appended. */
+    uint32_t pn = params->as.list.len;
+    Form **new_params = (Form **)arena_alloc(e->arena, sizeof(Form *) * (pn + 1));
+    for (uint32_t i = 0; i < pn; i++) new_params[i] = params->as.list.items[i];
+    new_params[pn] = form_keyword(e->arena, last->span,
+                                  intern_cstr(e->st, "escape-cont"));
+    Form *new_vec = form_vec(e->arena, params->span, new_params, pn + 1);
+
+    /* Rebuild the fn form with the rewritten param vec. */
+    uint32_t fn_n = f_form->as.list.len;
+    Form **new_fn = (Form **)arena_alloc(e->arena, sizeof(Form *) * fn_n);
+    for (uint32_t i = 0; i < fn_n; i++) new_fn[i] = f_form->as.list.items[i];
+    new_fn[1] = new_vec;
+    return form_list(e->arena, f_form->span, new_fn, fn_n);
+}
+
 /* call-cc-completion: build the shared EX_CALLCC node for (call/cc f) and
  * (escape f).  The result type is f's codomain (CF2 typing): calling f with the
  * captured continuation yields a value of f's return type. */
 static Expr *callcc_node(Elab *e, const Form *call, bool is_escape) {
-    Expr *f_expr = elab_form(e, call->as.list.items[1]);
+    Form *f_form = callcc_default_cont_param(e, call->as.list.items[1]);
+    Expr *f_expr = elab_form(e, f_form);
     if (!f_expr) return NULL;
 
     /* f's codomain becomes the call/cc result type; fall back to int. */
@@ -1585,17 +1623,10 @@ Expr *elab_call_cc(Elab *e, const Form *call) {
                   "(call/cc f) requires exactly one argument");
         return NULL;
     }
-    /* CF4 (control-flow-completeness-plan): the v1 desugar below hands `f` the
-     * integer 0 as a fake continuation -- it has no real capture and is unsound.
-     * Gate it behind -Xcallcc so it cannot ship silently; real capture needs the
-     * post-1.0 CPS pass.  (call/cc* -- cloneable, real -- is not gated.) */
-    if (!g_callcc_enabled) {
-        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0700_CALLCC_GATED,
-            "'call/cc' has no real continuation capture yet (unsound) and is "
-            "gated; pass -Xcallcc to experiment. Real capture requires the "
-            "post-1.0 CPS pass.");
-        return NULL;
-    }
+    /* call-cc-completion (CC5): the -Xcallcc gate (and TUR-E0700) are retired.
+     * The CPS substrate (cps-transform-plan CPS5.3/CPS6) supplies the implicit
+     * program-wide prompt and unbounded capture, so call/cc is now sound and
+     * ungated.  -Xcallcc is accepted as a deprecated no-op for one release. */
     /* call-cc-completion (CC1): real undelimited capture against the implicit
      * program-wide prompt.  Build an EX_CALLCC node; codegen establishes a
      * setjmp landing at the call/cc site and hands f the landing as the
@@ -1606,26 +1637,19 @@ Expr *elab_call_cc(Elab *e, const Form *call) {
     return callcc_node(e, call, /*is_escape=*/false);
 }
 
-/* Phase 18: (escape f) - one-shot escape continuation.
- * v1 sugar: (escape f) => (let [__esc_f f] (__esc_f 0))
- *
- * `f` receives 0 as the escape procedure.  Full early-exit semantics require
- * CPS and are deferred to a future phase. */
+/* call-cc-completion (CC3): (escape f) - one-shot undelimited early-exit.
+ * `f` receives a real continuation captured against the implicit root prompt;
+ * invoking it (tur_escape_resume) unwinds to this site without re-installing a
+ * prompt (the shift0-style abort flavor). */
 Expr *elab_escape(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(escape f) requires exactly one argument");
         return NULL;
     }
-    /* CF4: like call/cc, the v1 desugar hands `f` the integer 0 as a fake escape
-     * procedure -- no real early-exit, unsound.  Gate behind -Xcallcc. */
-    if (!g_callcc_enabled) {
-        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0701_ESCAPE_GATED,
-            "'escape' has no real early-exit semantics yet (unsound) and is "
-            "gated; pass -Xcallcc to experiment. Real capture requires the "
-            "post-1.0 CPS pass.");
-        return NULL;
-    }
+    /* call-cc-completion (CC5): the -Xcallcc gate (and TUR-E0701) are retired --
+     * see elab_call_cc.  escape now has real early-exit semantics on the CPS
+     * substrate; -Xcallcc is a deprecated no-op for one release. */
     /* call-cc-completion (CC3): escape is the one-shot abort flavor.  Same
      * undelimited capture as call/cc; invoking the continuation unwinds to this
      * site without re-installing a prompt.  For the one-shot upward use both

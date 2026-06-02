@@ -66,15 +66,23 @@ transform.
    the captured `k` gets nonsense. Either implement real capture (needs the
    CPS pass) or gate `call/cc`/`escape` off until it exists.
 
-   > **Update (2026-06-02): real capture landed** (cps-transform-plan CPS8.5 /
-   > call-cc-completion CC1+CC3). `(call/cc f)`/`(escape f)` now build an
-   > `EX_CALLCC` node lowered to a setjmp landing at the call/cc site; `f`
-   > receives a real continuation handle and invoking it (`tur_escape_resume`)
-   > performs a one-shot, undelimited, upward escape -- unbounded depth, no
-   > enclosing `reset`. Fixtures `callcc-real-capture` and `escape-deep-capture`
-   > exercise a *resumed* continuation (the gap above). Still behind `-Xcallcc`
-   > pending the CC4--CC6 typing/ungating cleanup; the `cont<T>` parameter type
-   > and direct `(k v)` application sugar are the remaining follow-up.
+   > **RESOLVED (2026-06-02) by CPS0--CPS6 + CC1--CC6.** `(call/cc f)` /
+   > `(escape f)` build an `EX_CALLCC` node lowered against the implicit
+   > program-wide prompt (setjmp landing at the call/cc site); `f` receives a
+   > real `cont<T>` continuation and invoking it performs a one-shot,
+   > **undelimited**, upward escape -- unbounded depth, no enclosing `reset`.
+   > Both are now **enabled by default**: the `-Xcallcc` gate is a deprecated
+   > no-op and `TUR-E0700`/`TUR-E0701` are retired (codes reserved). An
+   > unannotated continuation parameter defaults to the escape flavor, so the
+   > `(k v)` application sugar works directly (`f : cont<T> -> T`); `k` is
+   > one-shot `^unique` by default with `^linear` opt-in. CF4's "gate-only"
+   > disposition is superseded. Fixtures: `callcc-real-capture`,
+   > `escape-real`, `escape-deep-capture`, `escape-nested-reset`,
+   > `callcc-linear-k`, `errors/callcc-linear-k-dropped`, and the rewritten
+   > `continuation-callcc` / `continuation-escape` / `continuation-escape-fn`
+   > (now resuming `(k v)` with no `-Xcallcc` and no `reset`). See
+   > [`call-cc-completion-plan.md`](../../upcoming/call-cc-completion-plan.md)
+   > and [`cps-transform-plan.md`](../../upcoming/cps-transform-plan.md).
 
 2. **`compose-handlers` is a stub.** `elab_effects.c:982` -- elaborates to a
    nil-typed placeholder with "runtime semantics TBD." Handler composition is

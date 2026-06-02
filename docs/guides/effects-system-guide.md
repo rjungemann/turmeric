@@ -343,6 +343,70 @@ reach a control operator (`shift`/`perform`/`call/cc`/...) are CPS-converted
 code keeps its native calling convention and pays no trampoline or allocation
 cost. See the plan for the full model.
 
+## Continuations (`call/cc`, `escape`)
+
+`call/cc` and `escape` capture an **undelimited** continuation against the
+implicit program-wide prompt. They are enabled by default -- no flag and no
+enclosing `reset` is required. (The old `-Xcallcc` gate, with its `TUR-E0700` /
+`TUR-E0701` "unsound stub" diagnostics, is retired; `-Xcallcc` is now a
+deprecated no-op.)
+
+```turmeric
+;; k aborts the pending (+ 100 ...) and returns 41 at the call/cc site; the
+;; outer (+ 1 ...) makes 42 -- with no enclosing reset.
+(defn answer [] :int
+  (+ 1 (call/cc (fn [k] (+ 100 (k 41))))))   ; => 42
+
+;; f that ignores k just returns its body value.
+(defn plain [] :int
+  (+ 1 (call/cc (fn [k] 10))))                ; => 11
+```
+
+**Undelimited vs. delimited.** This is the one thing `call/cc` adds over
+`shift`/`reset`: capture reaches the implicit root prompt, not the nearest
+`reset`. A nearer explicit `reset` does **not** shorten `call/cc`/`escape`'s
+reach -- use `shift`/`shift0` or `call/cc*` when you want delimited capture.
+
+| Operator | Capture extent | Re-install prompt on `(k v)`? |
+|---|---|---|
+| `shift` | nearest `reset` | yes |
+| `shift0` | nearest `reset` | no |
+| `escape` | implicit root prompt (undelimited) | no (abort flavor) |
+| `call/cc` | implicit root prompt (undelimited) | n/a (one-shot upward) |
+| `call/cc*` | nearest `cloneable-reset` | n/a (multi-shot) |
+
+**`escape` is the abort flavor.** `(escape f)` hands `f` a continuation whose
+`(k v)` unwinds to the escape site with `v` *without* re-installing a prompt
+(the `shift0`-style behavior). It is the idiomatic early-exit:
+
+```turmeric
+(defn first-positive [] :int
+  (escape (fn [k]
+    (when (> -3 0) (k -3))
+    (when (>  7 0) (k 7))     ; first positive: aborts here with 7
+    -1)))                     ; default if nothing matched
+```
+
+**Typing.** `f` has type `cont<T> -> T`, where `T` is the prompt's answer type;
+the `(call/cc f)` / `(escape f)` expression itself has type `T`. An unannotated
+continuation parameter (`(fn [k] ...)`) defaults to the escape continuation
+flavor, so the `(k v)` application sugar lowers to the right resume runtime --
+you do not have to spell `:escape-cont` or call `tur_escape_resume` by hand.
+Annotate explicitly (`:cont`, `:escape-cont`, `:serial-cont`) only when you want
+a non-default flavor.
+
+**One-shot.** The captured `k` is `^unique` by default (calling it more than once
+is `TUR-E0100` / `TUR-E0101`). Opt into exactly-once accounting with `^linear`:
+
+```turmeric
+(defn use-once [] :int
+  (call/cc (fn [^linear k] (k 42))))   ; k must be invoked exactly once
+```
+
+For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead
+(captured against an enclosing `cloneable-reset`); see the
+[Logic Programming Guide](logic-programming-guide.md).
+
 ## See Also
 
 - [Whole-Program CPS Transform Plan](../upcoming/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
