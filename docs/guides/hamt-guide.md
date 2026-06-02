@@ -218,7 +218,7 @@ defn my-map-fn [] :ptr
       return (void*)((intptr_t)val * 2);
   }
   return (void*)double_val;
-  ```)
+  ```
 ```
 
 ## Transient Mode

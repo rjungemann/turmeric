@@ -109,10 +109,10 @@ let [ch choose-left(ch)]  ; picks the Left branch
 ;; Receiver side: Branch<Recv int Close, Close>
 match offer(ch)
   (Left ch)
-    let [[n ch] recv(ch)]
-      close(ch)
-  (Right ch)
+  let [[n ch] recv(ch)]
     close(ch)
+  (Right ch)
+  close(ch)
 ```
 
 ### Recursive protocols: Rec
@@ -137,11 +137,11 @@ loop iteration:
 defn echo-server [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
   match offer(ch)
     (Left ch)
-      let [[n ch] recv(ch)]
-        let [ch send(ch n)]
-          echo-server(ch)
+    let [[n ch] recv(ch)]
+      let [ch send(ch n)]
+        echo-server(ch)
     (Right ch)
-      close(ch)
+    close(ch)
 ```
 
 See `stdlib/session.tur` for the `echo-server-loop` and `echo-client-call`
@@ -159,12 +159,14 @@ helpers that wrap this pattern.
 
 ```sweet-exp
 match recv-timeout(ch 500)  ; 500 ms deadline
-  (Left [v ch]) do
-                  println(v)
-                  close(ch)
-  (Right ch)    do
-                  println("timed out")
-                  close(ch)
+  (Left [v ch])
+  do
+    println(v)
+    close(ch)
+  (Right ch)
+  do
+    println("timed out")
+    close(ch)
 ```
 
 ### Duality
@@ -333,7 +335,7 @@ defn role-b [^linear ch :(Role Ping B)] :nil
 
 defn main [] :int
   let [[ra rb] make-protocol(Ping)]
-    let [t spawn(fn [] role-b(rb))]
+    let [t spawn(fn([] role-b(rb)))]
       role-a(ra)
       join(t)
   0
@@ -366,8 +368,8 @@ defprotocol Pipeline [A B C]
 
 defn main [] :int
   let [[ra rb rc] make-protocol(Pipeline)]
-    let [ta spawn(fn [] role-a(ra))]
-      let [tb spawn(fn [] role-b(rb))]
+    let [ta spawn(fn([] role-a(ra)))]
+      let [tb spawn(fn([] role-b(rb)))]
         role-c(rc)
         join(ta)
         join(tb)

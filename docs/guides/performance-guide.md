@@ -45,7 +45,7 @@ There is no boxing overhead for scalars declared with concrete types:
 defn square [x] :int
   {x * x}
 defn hyp [a b] :float
-  sqrt({a * a} + {b * b})
+  sqrt((+ (* a a) (* b b)))
 ```
 
 Avoid leaving numeric expressions untyped in hot loops -- the elaborator may
@@ -105,7 +105,7 @@ with tail position computed through `if`, `cond`/`when` (which macro-expand to
 `if`), `do`, and `let`/`letrec`.  For example, both of these are lowered to a
 loop:
 
-```turmeric
+```turmeric no-check
 ; self-recursive defn -- tail call in the `if` else-branch
 (defn count-down [n :int acc :int] :int
   (if (= n 0)
@@ -205,15 +205,15 @@ inline-C so the compiler can see through calls and optimise the loop:
 import "stdlib/rand.tur"
 
 defn estimate-pi [samples] :float
-  let [loop fn [i inside] :float
-              if ={i 0}
-                {4.0 * int->float(inside) / int->float(samples)}
+  let [loop (fn [i inside] :float
+              if =(i 0)
+                * 4.0 (/ (int->float inside) (int->float samples))
                 let [x rand/float()
                      y rand/float()]
                   loop({i - 1}
-                       if <={{x * x} + {y * y}} 1.0
+                       if <=(+ (* x x) (* y y)) 1.0
                          {inside + 1}
-                         inside)]
+                         inside))]
     loop(samples 0)
 ```
 

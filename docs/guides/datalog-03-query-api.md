@@ -40,15 +40,24 @@ no way to compare Values. `query.tur` adds `value-eq?`:
 ```sweet-exp
 defn value-eq? [a :int b :int] :bool
   match a
-    (LongVal x)   match b
-                    (LongVal y)   {x = y}
-                    _ false
-    (StrVal x)    match b
-                    (StrVal y)    cstr-eq?(x y)
-                    _ false
-    (EntityVal x) match b
-                    (EntityVal y) {x = y}
-                    _ false
+    (LongVal x)
+    match b
+      (LongVal y)
+      = x y
+      _
+      false
+    (StrVal x)
+    match b
+      (StrVal y)
+      cstr-eq?(x y)
+      _
+      false
+    (EntityVal x)
+    match b
+      (EntityVal y)
+      = x y
+      _
+      false
 ```
 
 The outer `match` dispatches on `a`'s constructor; the inner `match` checks that

@@ -65,24 +65,27 @@ Reads one complete datum and discards it. The surrounding code sees nothing.
 Unlike `#| |#`, `#;` understands structure -- it always discards exactly one
 form, no matter how many lines it spans.
 
-```turmeric
+```turmeric no-check
 (println #;99 "ok")              ; => ok
 (println #;"ignored" "ok")       ; => ok
 (println #;(this is discarded) "ok")  ; => ok
 (println (+ 1 #;999 2))          ; => 3
 ```
 ```sweet-exp
-println(# ;99 "ok")              ; => ok println(# ;"ignored" "ok")       ; => ok println(# ;(this is discarded) "ok")  ; => ok println(+(1 # ;999 2))          ; => 3)))))
+println(#;99 "ok")              ; => ok
+println(#;"ignored" "ok")       ; => ok
+println(#;(this is discarded) "ok")  ; => ok
+println(+(1 #;999 2))          ; => 3
 ```
 
 Datum comments compose: `#;#;1 2 3` discards `2` (the result that inner `#;1`
 would have produced) and leaves `3`.
 
-```turmeric
+```turmeric no-check
 (println #;#;1 2 3)   ; => 3
 ```
 ```sweet-exp
-println(# ;#;1 2 3)   ; => 3)
+println(#;#;1 2 3)   ; => 3
 ```
 
 `#;` at end of file, or immediately before a closing delimiter, is an error.
@@ -232,27 +235,24 @@ A vector literal.
 A map (hash-array-mapped trie) literal. Key-value pairs are written
 interleaved.
 
-```turmeric
+```turmeric no-check
 #{:name "Alice" :age 30}
 ```
 ```sweet-exp
-#
-{:name "Alice" :age 30}
+#{:name "Alice" :age 30}
 ```
 
 ### Set literal -- `#s(...)`
 
 A set literal.
 
-```turmeric
+```turmeric no-check
 #s(1 2 3)
 #s(:red :green :blue)
 ```
 ```sweet-exp
-#s
-1(2 3)
-#s
-:red(:green :blue)
+#s(1 2 3)
+#s(:red :green :blue)
 ```
 
 ### Contract type -- `{ var : T | pred }`
@@ -260,7 +260,7 @@ A set literal.
 A refinement type annotation. Introduces a binding `var` of type `T` with
 predicate `pred`.
 
-```turmeric
+```turmeric no-check
 { x : :int | (> x 0) }
 ```
 ```sweet-exp
@@ -299,11 +299,11 @@ Expands to `(quasiquote expr)`. Like quote, but `~` and `~@` splice in values.
 `(1 ~@xs 3)          ; splices list xs
 ```
 ```sweet-exp
-1(2 3)
+`(1 2 3)
 ; => (quasiquote (1 2 3))
-1(~x 3)
+`(1 ~x 3)
 ; unquotes x
-1(~@xs 3)
+`(1 ~@xs 3)
 ; splices list xs
 ```
 
@@ -315,7 +315,7 @@ Valid only inside a quasiquote. Expands to `(unquote expr)`.
 `(a ~b c)   ; b is evaluated and inserted
 ```
 ```sweet-exp
-a(~b c)
+`(a ~b c)
 ; b is evaluated and inserted
 ```
 
@@ -330,7 +330,7 @@ value must be a list; its elements are spliced into the surrounding list.
 ```
 ```sweet-exp
 let [xs '(2 3)]
-  1(~@xs 4)
+  `(1 ~@xs 4)
 ; => (1 2 3 4)
 ```
 
@@ -374,7 +374,7 @@ is left as the symbol `&` (preserving the explicit `(& x)` call form).
 ```sweet-exp
 &x
 ; => (& x)
-&(x)
+(& x)
 ; identical -- explicit form still works
 ```
 
@@ -401,13 +401,12 @@ Forms beginning with `#` followed by a specific character.
 
 Attaches a compile-time attribute to the next definition.
 
-```turmeric
+```turmeric no-check
 #[no-unwind]
 (defn risky [] :int ...)
 ```
 ```sweet-exp
-#
-[no-unwind]
+#[no-unwind]
 defn risky [] :int
   ...
 ```
@@ -417,11 +416,11 @@ defn risky [] :int
 Selects a branch based on the current reader target. Use `:tur` for compiled
 output and `:turi` for the interpreter.
 
-```turmeric
+```turmeric no-check
 (println #?(:tur "compiled" :turi "interpreted"))
 ```
 ```sweet-exp
-println(#? :tur("compiled" :turi "interpreted"))
+println(#?(:tur "compiled" :turi "interpreted"))
 ```
 
 ---
@@ -431,15 +430,19 @@ println(#? :tur("compiled" :turi "interpreted"))
 A triple-backtick block embeds raw C code inside a `defn` body. The closing
 ` ``` ` must be on the same line as its enclosing `)`.
 
-```turmeric
+```turmeric no-check
 (defn file-size [f] :int
-  ```
-```sweet-exp
-defn file-size [f] :int
-```c
+  ```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
   ```)
+```
+```sweet-exp
+defn file-size [f] :int
+  ```c
+  FILE* file = (FILE*)f;
+  return (int)ftell(file);
+  ```
 ```
 
 ---
@@ -455,11 +458,10 @@ A symbol (or atom) followed immediately by `(` (no space) is read as a
 function call.
 
 ```turmeric
-square(9)     ; => (square 9)
+(square 9)     ; => (square 9)
 ```
 ```sweet-exp
-square
-9
+square(9)
 ; => (square 9)
 ```
 
@@ -467,7 +469,7 @@ square
 
 Braces in sweet-exp mode treat the middle element as an infix operator.
 
-```turmeric
+```turmeric no-check
 {1 + 2}       ; => (+ 1 2)
 {x > 0}       ; => (> x 0)
 ```

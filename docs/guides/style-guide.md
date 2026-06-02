@@ -117,13 +117,7 @@ of `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0`
 
 ```turmeric
 (defn cons-list-sum [lst :int] #{Unsafe} :int
-  ```
-```sweet-exp
-defn cons-list-sum [lst :int]
-  #
-  {Unsafe}
-  :int
-```c
+  ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   int64_t acc = 0;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
@@ -131,18 +125,22 @@ defn cons-list-sum [lst :int]
   return acc;
   ```)
 ```
+```sweet-exp
+defn cons-list-sum [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  int64_t acc = 0;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  while (p) { acc += p->head; p = (__tur_cons_cell *)(intptr_t)p->tail; }
+  return acc;
+  ```
+```
 
 Or use a pure tail-recursive helper:
 
 ```turmeric
 (defn cons-head [lst :int] #{Unsafe} :int
-  ```
-```sweet-exp
-defn cons-head [lst :int]
-  #
-  {Unsafe}
-  :int
-```c
+  ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
   __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
   return p ? p->head : 0;
@@ -159,6 +157,26 @@ defn cons-head [lst :int]
   (if (= lst 0)
     acc
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))
+```
+```sweet-exp
+defn cons-head [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  return p ? p->head : 0;
+  ```
+
+defn cons-tail [lst :int] #{Unsafe} :int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)lst;
+  return p ? p->tail : 0;
+  ```
+
+defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
+  if {lst = 0}
+    acc
+    list-sum-acc(cons-tail(lst) {acc + cons-head(lst)})
 ```
 
 #### Performance note

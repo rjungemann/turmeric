@@ -83,8 +83,8 @@ Arithmetic on `StaticInt` values:
 ```sweet-exp
 let [a static-int(3)
      b static-int(4)]
-  println(static-int-val $ static-int-add(a b))   ; => 7
-  println(static-int-val $ static-int-mul(a b))   ; => 12
+  println(static-int-val(static-int-add(a b)))   ; => 7
+  println(static-int-val(static-int-mul(a b)))   ; => 12
 ```
 
 ### Size expressions
@@ -152,7 +152,7 @@ that).
 ```sweet-exp
 let [v sized-vec-of-3(10 20 30)]
   println(sized-vec-len(v))       ; => 3
-  println $ sized-vec-get(v 1)    ; => 20
+  println(sized-vec-get(v 1))    ; => 20
 ```
 
 `sized-vec-push` prepends an element and returns a new `SizedVec` whose size
@@ -244,6 +244,14 @@ constants -- the `Size` expression is folded at elaboration and compared:
 (size-assert-eq! (size-static 4) (size-add (size-static 2) (size-static 2)))
 ```
 
+```sweet-exp
+; COMPILE-TIME error TUR-E0260 (no runtime check is emitted):
+size-assert-eq!(size-static(4) size-static(5))
+
+; accepted at compile time -- both sides fold to 4:
+size-assert-eq!(size-static(4) size-add(size-static(2) size-static(2)))
+```
+
 Run `tur explain TUR-E0260` for the full diagnostic.
 
 **Runtime fallback (the boundary).** When at least one size is *not*
@@ -256,6 +264,12 @@ accepts a possibly-wrong size:
 (let [n (read-length)]              ; n is a runtime value
   ; not statically known -> runtime assertion (panics if n != 4)
   (size-assert-eq! (size-static n) (size-static 4)))
+```
+
+```sweet-exp
+let [n read-length()]              ; n is a runtime value
+  ; not statically known -> runtime assertion (panics if n != 4)
+  size-assert-eq!(size-static(n) size-static(4))
 ```
 
 Folding currently covers `Static`/`Add`/`Mul` (and the `size-static`/`size-add`/
@@ -317,6 +331,14 @@ constructors -- no annotation is needed:
 ; (SVCons _ (SVCons _ (SVNil))) infers (SizedVec 2)
 ```
 
+```sweet-exp
+defgadt SizedVec [n]
+  SVNil : (SizedVec (Static 0))
+  SVCons int (SizedVec n) : (SizedVec (Add (Static 1) n))
+
+; (SVCons _ (SVCons _ (SVNil))) infers (SizedVec 2)
+```
+
 Pass `--dump-sizes` (with `-Xsized-types`) to print the inferred index for each
 constructor application:
 
@@ -372,11 +394,11 @@ All `SizedBuf` operations require `#{Unsafe}` at the call site.
 import stdlib/sized-buf
 
 let [b unsafe(sized-buf-new-zeroed(4))]
-  unsafe $ sized-buf-set!(b 0 10)
-  unsafe $ sized-buf-set!(b 1 20)
-  unsafe $ sized-buf-set!(b 2 30)
-  unsafe $ sized-buf-set!(b 3 40)
-  println(unsafe $ sized-buf-get(b 2))    ; => 30
+  unsafe(sized-buf-set!(b 0 10))
+  unsafe(sized-buf-set!(b 1 20))
+  unsafe(sized-buf-set!(b 2 30))
+  unsafe(sized-buf-set!(b 3 40))
+  println(unsafe(sized-buf-get(b 2)))    ; => 30
   println(unsafe(sized-buf-sum(b)))       ; => 100
   println(unsafe(sized-buf-min(b)))       ; => 10
   println(unsafe(sized-buf-max(b)))       ; => 40
@@ -394,7 +416,7 @@ let [b unsafe(sized-buf-new-zeroed(4))]
 
 ```sweet-exp
 let [b unsafe(sized-buf-new(8))]
-  unsafe $ sized-buf-fill!(b 7)
+  unsafe(sized-buf-fill!(b 7))
   println(unsafe(sized-buf-sum(b)))   ; => 56
   unsafe(sized-buf-free(b))
 ```
@@ -417,11 +439,11 @@ have the same length):
 ```sweet-exp
 let [src unsafe(sized-buf-new-zeroed(3))
      dst unsafe(sized-buf-new-zeroed(3))]
-  unsafe $ sized-buf-set!(src 0 1)
-  unsafe $ sized-buf-set!(src 1 2)
-  unsafe $ sized-buf-set!(src 2 3)
-  unsafe $ sized-buf-copy!(src dst)
-  println(unsafe $ sized-buf-get(dst 1))   ; => 2
+  unsafe(sized-buf-set!(src 0 1))
+  unsafe(sized-buf-set!(src 1 2))
+  unsafe(sized-buf-set!(src 2 3))
+  unsafe(sized-buf-copy!(src dst))
+  println(unsafe(sized-buf-get(dst 1)))   ; => 2
   unsafe(sized-buf-free(src))
   unsafe(sized-buf-free(dst))
 ```
@@ -444,12 +466,12 @@ the buffer is reclaimed automatically when the enclosing function returns.
 
 ```sweet-exp
 defn fill-and-sum [b] :int
-  unsafe $ sized-buf-set!(b 0 10)
-  unsafe $ sized-buf-set!(b 1 20)
-  unsafe $ sized-buf-set!(b 2 30)
+  unsafe(sized-buf-set!(b 0 10))
+  unsafe(sized-buf-set!(b 1 20))
+  unsafe(sized-buf-set!(b 2 30))
   unsafe(sized-buf-sum(b))
 
-println(unsafe $ sized-buf-with-stack(3 fill-and-sum))   ; => 60
+println(unsafe(sized-buf-with-stack(3 fill-and-sum)))   ; => 60
 ```
 
 The callback must be a named function (not an anonymous lambda) because `alloca`
@@ -558,18 +580,18 @@ let [m unsafe(sized-matrix-new-zeroed(3 4))]
   println(size-eval(unsafe(sized-matrix-size(m))))   ; => 12
 
   ; Element access
-  unsafe $ sized-matrix-set!(m 0 0 1)
-  unsafe $ sized-matrix-set!(m 0 1 2)
-  unsafe $ sized-matrix-set!(m 1 0 5)
-  println(unsafe $ sized-matrix-get(m 0 1))   ; => 2
+  unsafe(sized-matrix-set!(m 0 0 1))
+  unsafe(sized-matrix-set!(m 0 1 2))
+  unsafe(sized-matrix-set!(m 1 0 5))
+  println(unsafe(sized-matrix-get(m 0 1)))   ; => 2
 
   ; Bulk operations
-  println(unsafe $ sized-matrix-row-sum(m 0))    ; => 3  (1+2+0+0)
-  println(unsafe $ sized-matrix-col-sum(m 0))    ; => 6  (1+5+0)
+  println(unsafe(sized-matrix-row-sum(m 0)))    ; => 3  (1+2+0+0)
+  println(unsafe(sized-matrix-col-sum(m 0)))    ; => 6  (1+5+0)
   println(unsafe(sized-matrix-total-sum(m)))      ; => 8
 
   ; Shape assertion (panics if shape does not match)
-  unsafe $ sized-matrix-assert-shape!(m (Static 3) (Static 4))
+  unsafe(sized-matrix-assert-shape!(m (Static 3) (Static 4)))
 
   unsafe(sized-matrix-free(m))
 ```
@@ -585,7 +607,7 @@ let [m unsafe(sized-matrix-new-zeroed(3 4))]
 
 ```sweet-exp
 let [m unsafe(sized-matrix-new(2 2))]
-  unsafe $ sized-matrix-fill!(m 9)
+  unsafe(sized-matrix-fill!(m 9))
   println(unsafe(sized-matrix-total-sum(m)))   ; => 36
   unsafe(sized-matrix-free(m))
 ```
@@ -660,24 +682,24 @@ import stdlib/sized-bits
 
 let [bv unsafe(sized-bitvec-new(16))]
   ; Set some bits
-  unsafe $ sized-bitvec-set!(bv 0)
-  unsafe $ sized-bitvec-set!(bv 3)
-  unsafe $ sized-bitvec-set!(bv 7)
+  unsafe(sized-bitvec-set!(bv 0))
+  unsafe(sized-bitvec-set!(bv 3))
+  unsafe(sized-bitvec-set!(bv 7))
 
   ; Read bits
-  println(unsafe $ sized-bitvec-get(bv 0))   ; => 1
-  println(unsafe $ sized-bitvec-get(bv 1))   ; => 0
+  println(unsafe(sized-bitvec-get(bv 0)))   ; => 1
+  println(unsafe(sized-bitvec-get(bv 1)))   ; => 0
 
   ; Popcount
   println(unsafe(sized-bitvec-count(bv)))   ; => 3
 
   ; Clear and toggle
-  unsafe $ sized-bitvec-clear!(bv 0)
-  unsafe $ sized-bitvec-toggle!(bv 1)
+  unsafe(sized-bitvec-clear!(bv 0))
+  unsafe(sized-bitvec-toggle!(bv 1))
   println(unsafe(sized-bitvec-count(bv)))   ; => 2
 
   ; Fill all bits
-  unsafe $ sized-bitvec-fill!(bv 1)
+  unsafe(sized-bitvec-fill!(bv 1))
   println(unsafe(sized-bitvec-count(bv)))   ; => 16
 
   ; Length and size
@@ -685,7 +707,7 @@ let [bv unsafe(sized-bitvec-new(16))]
   println(size-eval(unsafe(sized-bitvec-size(bv))))          ; => 16
 
   ; Length assertion (panics if length does not match)
-  unsafe $ sized-bitvec-assert-len!(bv (Static 16))
+  unsafe(sized-bitvec-assert-len!(bv (Static 16)))
 
   unsafe(sized-bitvec-free(bv))
 ```
@@ -726,19 +748,19 @@ pointers, providing type-safe size information without any runtime cost.
 defn ffi-point-size [] #{Unsafe} :Size
   ```c
   return ctor_Static(sizeof(struct { int64_t x; int64_t y; }));
-  ```)
+  ```
 
 ; Wrapper that reports the element count for a fixed-size C array.
 defn ffi-array-size [] #{Unsafe} :Size
   ```c
   return ctor_Static(16);
-  ```)
+  ```
 
 ; Wrapper that reports the field count of a struct.
 defn ffi-struct-field-count [] #{Unsafe} :Size
   ```c
   return ctor_Static(3);
-  ```)
+  ```
 
 println(size-eval(unsafe(ffi-point-size())))         ; => 16
 println(size-eval(unsafe(ffi-array-size())))         ; => 16
@@ -779,10 +801,10 @@ Shape or length assertions produce descriptive runtime messages:
 
 ```sweet-exp
 ; Panics: "row mismatch" (or "col mismatch")
-unsafe $ sized-matrix-assert-shape!(m (Static 2) (Static 2))
+unsafe(sized-matrix-assert-shape!(m (Static 2) (Static 2)))
 
 ; Panics: "sized type mismatch"
-unsafe $ sized-bitvec-assert-len!(bv (Static 8))
+unsafe(sized-bitvec-assert-len!(bv (Static 8)))
 
 ; Panics: "sized type mismatch"
 size-assert-eq!(size-static(4) size-static(5))

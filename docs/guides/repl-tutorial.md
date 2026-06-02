@@ -227,9 +227,12 @@ Now try a multi-branch form:
 ```sweet-exp
 defn sign [n :int] :int
   cond
-    {n > 0}  1
-    {n < 0}  -1
-    :else    0
+    >(n 0)
+    1
+    <(n 0)
+    -1
+    :else
+    0
 ```
 
 ```turmeric
@@ -564,9 +567,12 @@ Type this:
 ```sweet-exp
 defn describe-result [r]
   cond
-    ok?(r)  println("ok!")
-    err?(r) println("err!")
-    :else   println("unknown")
+    ok?(r)
+    println("ok!")
+    err?(r)
+    println("err!")
+    :else
+    println("unknown")
 ```
 
 ```turmeric
@@ -594,9 +600,12 @@ Then:
 ```sweet-exp
 defn describe-option [o]
   cond
-    option-some?(o) println("some!")
-    option-none?(o) println("none!")
-    :else           println("unknown")
+    option-some?(o)
+    println("some!")
+    option-none?(o)
+    println("none!")
+    :else
+    println("unknown")
 ```
 
 ```turmeric
@@ -643,8 +652,8 @@ let [v vec-new()]
   vec-push!(v 10)
   vec-push!(v 20)
   vec-push!(v 30)
-  println $ vec-len(v)
-  println $ vec-get(v 1)
+  println(vec-len(v))
+  println(vec-get(v 1))
 ```
 
 Expected output:
@@ -817,8 +826,8 @@ Then construct an instance and read its fields:
 ```
 ```sweet-exp
 let [p Point(3 4)]
-  println $ Point-x(p)
-  println $ Point-y(p)
+  println(Point-x(p))
+  println(Point-y(p))
 ```
 
 Expected output:
@@ -912,9 +921,9 @@ Type this:
 ```sweet-exp
 handle do-work()
   (Log [msg] k)
-    do
-      println(msg)
-      resume(k nil-value())
+  do
+    println(msg)
+    resume(k nil-value())
 ```
 
 Expected output:
@@ -953,9 +962,9 @@ Type this:
 ```sweet-exp
 handle do-work()
   (Log [msg] k)
-    do
-      println $ str-concat("[LOG] " msg)
-      resume(k nil-value())
+  do
+    println(str-concat("[LOG] " msg))
+    resume(k nil-value())
 ```
 
 Expected output:
@@ -1004,7 +1013,8 @@ defn use-ask [] :int
 ```
 ```sweet-exp
 handle use-ask()
-  (Ask [] k) resume(k 41)
+  (Ask [] k)
+  resume(k 41)
 ```
 
 Expected output:
@@ -1039,7 +1049,7 @@ directory:
 ```
 ```sweet-exp
 defn greet [name :cstr] :void
-  println $ str-concat("Hello, " str-concat(name "!"))
+  println(str-concat("Hello, " str-concat(name "!")))
 ```
 
 Then in the REPL:

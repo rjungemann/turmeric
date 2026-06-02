@@ -171,7 +171,7 @@ defn file-size [f]
   long size = ftell(file);
   fseek(file, pos, SEEK_SET);
   return (int)size;
-  ```)
+  ```
 ```
 
 The block is pasted verbatim into the generated function body. Turmeric
@@ -263,10 +263,10 @@ defn Real-Random []
   rng->next_int  = random_next_int;
   rng->next_float = random_next_float;
   return (void*)rng;
-  ```)
+  ```
 
 defn Real-Random-free [rng]
-  ```c free(rng); ```)
+  ```c free(rng); ```
 ```
 
 The struct is returned as `:ptr` (opaque `void *`) and freed explicitly. This
@@ -647,14 +647,14 @@ defn vec2-add [a b]
   Vec2 *result = (Vec2 *)malloc(sizeof(Vec2));
   *result = vec2_add(*pa, *pb);
   return (void *)result;
-  ```)
+  ```
 
 defn vec2-len [v]
   ```c
   #include "libmath.h"
   Vec2 *pv = (Vec2 *)v;
   return vec2_len(*pv);
-  ```)
+  ```
 
 defn demo []
   let [a vec2_alloc(3.0 4.0)]

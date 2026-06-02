@@ -52,23 +52,21 @@ defgadt Expr [a]
 ; The interpreter returns int -- the type parameter 'a' is refined per arm.
 defn eval-expr [e] :int
   match e
-    (IntLit  n)   n
+    (IntLit  n)
+    n
     (BoolLit b)
-      if b
-        1
-        0
-    (Add     l r) {eval-expr(l) + eval-expr(r)}
+    if(b 1 0)
+    (Add     l r)
+    +(eval-expr(l) eval-expr(r))
     (IsZero  n)
-      if {eval-expr(n) = 0}
-        1
-        0
+    if(=(eval-expr(n) 0) 1 0)
 
 defn main [] :int
   ; (2 + (IsZero 0)) -- only valid at type (Expr ???) mismatch, caught statically
-  println $ eval-expr((IntLit 42))
-  println $ eval-expr(Add((IntLit 3) (IntLit 4)))
-  println $ eval-expr(IsZero((IntLit 0)))
-  println $ eval-expr(IsZero(Add((IntLit 1) (IntLit 0))))
+  println(eval-expr((IntLit 42)))
+  println(eval-expr(Add((IntLit 3) (IntLit 4))))
+  println(eval-expr(IsZero((IntLit 0))))
+  println(eval-expr(IsZero(Add((IntLit 1) (IntLit 0)))))
   0
 ```
 
@@ -144,28 +142,33 @@ defgadt Vec [n]
 ; Length is computable at compile time -- no bounds check needed.
 defn vec-len [v] :int
   match v
-    (VNil)       0
-    (VCons _ tl) {1 + vec-len(tl)}
+    (VNil)
+    0
+    (VCons _ tl)
+    +(1 vec-len(tl))
 
 ; Head is only callable on non-empty vectors.
 ; The return type is int, not (option int).
 defn vec-head [v] :int
   match v
-    (VCons x _) x
+    (VCons x _)
+    x
 
 ; Only vectors of the same length can be zipped -- the type guarantees it.
 defn vzip-add [xs ys] :int
   match xs
-    (VNil)        0
+    (VNil)
+    0
     (VCons x xtl)
-      match ys
-        (VCons y ytl) {{x * y} + vzip-add(xtl ytl)}
+    match ys
+      (VCons y ytl)
+      +(*(x y) vzip-add(xtl ytl))
 
 defn main [] :int
   let [v VCons(1 VCons(2 VCons(3 (VNil))))]
-    println $ vec-len(v)
-    println $ vec-head(v)
-    println $ vzip-add(v v)
+    println(vec-len(v))
+    println(vec-head(v))
+    println(vzip-add(v v))
   0
 ```
 
@@ -216,16 +219,16 @@ defgadt Fmt2 [a b]
 ; A printf that is safe for exactly the arguments the format specifies.
 defn sprintf2 [fmt a b] :int
   match fmt
-    (FIntInt)   do
-                  println(a)
-                  println(b)
-                  0
-    (FIntBool)  do
-                  println(a)
-                  if b
-                    println(1)
-                    println(0)
-                  0
+    (FIntInt)
+    do
+      println(a)
+      println(b)
+      0
+    (FIntBool)
+    do
+      println(a)
+      if(b println(1) println(0))
+      0
 
 defn main [] :int
   ; Both arguments are correct -- compiles fine.
@@ -291,30 +294,32 @@ function boundaries. Use `coerce` to convert values across proven equalities.
 ; In the Refl arm a = b, so Refl also has type (Equal b a).
 defn sym [eq] :(Equal b a)
   match eq
-    (Refl) (Refl)
+    (Refl)
+    (Refl)
 
 ; Transitivity: (Equal a b) -> (Equal b c) -> (Equal a c)
 ; Both Refl arms unify a=b and b=c, giving a=c.
 defn trans [ab bc] :(Equal a c)
   match ab
     (Refl)
-      match bc
-        (Refl) (Refl)
+    match bc
+      (Refl)
+      (Refl)
 
 ; coerce uses an equality proof to safely reinterpret a value.
 ; No cast instruction is emitted -- it is zero-overhead.
 defn use-eq [eq x] :int
   match eq
     (Refl)
-      ; In this arm a = int (from the Refl refinement)
-      ; so x : a is the same as x : int
-      {x + 1}
+    ; In this arm a = int (from the Refl refinement)
+    ; so x : a is the same as x : int
+    +(x 1)
 
 defn main [] :int
   ; Construct a proof that int = int
   let [proof (Refl)]
-    println $ use-eq(proof 41)
-    println $ coerce(proof 100)
+    println(use-eq(proof 41))
+    println(coerce(proof 100))
   0
 ```
 
@@ -351,14 +356,16 @@ defgadt TypeBox [a]
 defn open-int-box [box eq] :int
   match box
     (MkBox n)
-      match eq
-        ; In this arm a = int, so coerce is safe
-        (Refl) coerce(eq n)
-    (MkBoolBox _) -1
+    match eq
+      ; In this arm a = int, so coerce is safe
+      (Refl)
+      coerce(eq n)
+    (MkBoolBox _)
+    -1
 
 defn main [] :int
   let [b MkBox(99)]
-    println $ open-int-box(b (Refl))
+    println(open-int-box(b (Refl)))
   0
 ```
 
@@ -402,18 +409,22 @@ defgadt Tag [a]
 ; default-value uses the tag to produce a zero value.
 defn default-value [t] :int
   match t
-    (IntTag)  0
-    (BoolTag) 0
+    (IntTag)
+    0
+    (BoolTag)
+    0
 
 ; A function accepting either an Int tag or a plain int through a union.
 defn accept-either [x : ((Tag int) | int)] :int
   match x
-    (v : (Tag int)) default-value(v)
-    (n : int)       n
+    (v : (Tag int))
+    default-value(v)
+    (n : int)
+    n
 
 defn main [] :int
-  println $ accept-either((IntTag))
-  println $ accept-either(42)
+  println(accept-either((IntTag)))
+  println(accept-either(42))
   0
 ```
 

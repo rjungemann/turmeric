@@ -400,16 +400,16 @@ def KEY_DOWN  264
 
 defn update-state [^state/GameState s] : state/GameState
   let [speed 5
-       new-x if is-key-down(KEY_RIGHT)
-               {s.snake-x + speed}
-               if is-key-down(KEY_LEFT)
-                 {s.snake-x - speed}
-                 s.snake-x
-       new-y if is-key-down(KEY_DOWN)
-               {s.snake-y + speed}
-               if is-key-down(KEY_UP)
-                 {s.snake-y - speed}
-                 s.snake-y]
+       new-x if(is-key-down(KEY_RIGHT)
+               +(s.snake-x speed)
+               if(is-key-down(KEY_LEFT)
+                 -(s.snake-x speed)
+                 s.snake-x))
+       new-y if(is-key-down(KEY_DOWN)
+               +(s.snake-y speed)
+               if(is-key-down(KEY_UP)
+                 -(s.snake-y speed)
+                 s.snake-y))]
     state/GameState(new-x new-y s.snake-w s.snake-h)
 
 defn -main []

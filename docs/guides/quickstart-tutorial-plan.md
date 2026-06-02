@@ -448,7 +448,7 @@ Instruction: save the following to `hello.tur`:
 ```
 ```sweet-exp
 defn greet [name :cstr] :void
-  println $ str-concat("Hello, " str-concat(name "!"))
+  println(str-concat("Hello, " str-concat(name "!")))
 ```
 
 Then in the REPL:
@@ -531,7 +531,7 @@ Type this:
 (expression)
 ```
 ```sweet-exp
-expression
+expression()
 ```
 
 Expected output:

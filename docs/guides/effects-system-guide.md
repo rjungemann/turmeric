@@ -45,8 +45,9 @@ def name perform(Read())
 ;; Handle the effect
 handle
   let [name perform(Read())]
-    println $ str("Hello " name)
-  (Read [] k) resume(k "World")
+    println(str("Hello " name))
+  (Read [] k)
+  resume(k "World")
 ```
 
 ### One-Shot Continuations
@@ -76,6 +77,23 @@ handler that declares it:
   (Log [msg] k) (do (println msg) (resume k nil)))
 ;; prints "tick", evaluates to 42
 ```
+```sweet-exp
+defeffect Log [msg :cstr] :nil
+defeffect Counter [] :int
+
+handle
+  handle
+    do
+      perform(Log("tick"))
+      +(perform(Counter()) 1)
+    (Counter [] k)
+    resume(k 41)
+  (Log [msg] k)
+  do
+    println(msg)
+    resume(k nil)
+;; prints "tick", evaluates to 42
+```
 
 ### First-Class Handler Values
 
@@ -102,6 +120,25 @@ and compose two of them.
     (handler (Counter [] k)   (resume k 41))
     (handler (Log [msg] k)    (do (println msg) (resume k nil))))
   (do (perform (Log "tick")) (+ (perform (Counter)) 1)))
+;; prints "tick", evaluates to 42
+```
+```sweet-exp
+defeffect Log [msg :cstr] :nil
+defeffect Counter [] :int
+
+;; compose-handlers builds one handler value over both effects (h1 = Counter is
+;; the outer handler).  Applying it is identical to the nested handle above.
+with-handler
+  compose-handlers
+    handler (Counter [] k)
+      resume(k 41)
+    handler (Log [msg] k)
+      do
+        println(msg)
+        resume(k nil)
+  do
+    perform(Log("tick"))
+    +(perform(Counter()) 1)
 ;; prints "tick", evaluates to 42
 ```
 
@@ -137,7 +174,7 @@ Effects enable ergonomic async/await (see [Async/Await Guide](async-await-guide.
 ```
 ```sweet-exp
 async
-  await $ read-file("data.txt")
+  await(read-file("data.txt"))
   println("done")
 ```
 
@@ -164,9 +201,9 @@ handle
     perform(Yield(1))
     perform(Yield(2))
   (Yield [v] k)
-    do
-      println(v)
-      resume(k nil)
+  do
+    println(v)
+    resume(k nil)
 ```
 
 ### Dependency Injection

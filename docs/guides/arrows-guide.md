@@ -62,10 +62,10 @@ the identity, and `>>>` is left-to-right composition.
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1   arr(fn [x] {x + 1})
-     double arr(fn [x] {x * 2})]
+let [add1   arr(fn([x] +(x 1)))
+     double arr(fn([x] *(x 2)))]
 
-  let [pipeline >>> add1 double]
+  let [pipeline >>>(add1 double)]
     println pipeline(5)        ; => 12
 ```
 
@@ -104,7 +104,7 @@ passing the other branch unchanged.
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1       arr(fn [x] {x + 1})
+let [add1       arr(fn([x] +(x 1)))
      first-add1 arrow-first(add1)
      p          Pair(5 10)]
   println first-add1(p)                ; => Pair(6, 10)

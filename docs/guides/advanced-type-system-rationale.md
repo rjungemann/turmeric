@@ -140,14 +140,10 @@ first-class.
 ```
 ```sweet-exp
 ;; Typed: this function may perform Io and nothing else.
-defn read-file [path:cstr] :cstr
-  @
-  {Io}
+defn read-file [path :cstr] :cstr @ {Io}
   ...
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
-defn ask-and-add [x:int] :int
-  @
-  {Ask|e}
+defn ask-and-add [x :int] :int @ {Ask | e}
   +(x perform(Ask()))
 ```
 

@@ -64,15 +64,15 @@ text) or the `#json(...)` reader macro (compile-time literal).
 (schema/literal-int 42)        ; matches only the exact integer 42
 ```
 ```sweet-exp
-schema/str
+schema/str()
 ; matches JSON strings, decodes to the :cstr
-schema/int
+schema/int()
 ; matches JSON integers
-schema/float
+schema/float()
 ; matches JSON floats
-schema/bool
+schema/bool()
 ; matches JSON booleans
-schema/nil
+schema/nil()
 ; matches JSON null
 schema/literal-str("active")
 ; matches only the exact string "active"
@@ -301,14 +301,13 @@ Under `-Xschema-reader` (which implies `-Xjson-reader` and auto-loads
 `(:: (decode! (json/decode expr)) T)` -- a one-liner from a runtime JSON
 `:cstr` to a typed value:
 
-```turmeric
+```turmeric no-check
 (defn parse-user [body :cstr] :User
   #json-str<User>(body))
 ```
 ```sweet-exp
 defn parse-user [body :cstr] :User
-  #json-str<User>
-  body()
+  #json-str<User>(body)
 ```
 
 Unlike `#json(...)`, the inner is an ordinary Turmeric expression (read with the

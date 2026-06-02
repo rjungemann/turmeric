@@ -69,11 +69,14 @@ defeffect Fail [] : a
 defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
   let [s perform(Read-Config(cfg-key))]
     cond
-      empty?(s)  perform(Fail())
-      :else      parse-int(s)
+      empty?(s)
+      perform(Fail())
+      :else
+      parse-int(s)
 
 handle lookup-port("http.port")
-  (Fail [] _)  8080   ;; default if anything in the chain fails
+  (Fail [] _)
+  8080   ;; default if anything in the chain fails
 ```
 
 No `>>=`, nested `Just`, or chains of `match`. Direct-style code that fails
@@ -108,10 +111,11 @@ defn read-config [path :cstr] :Config @ {Throw Io}
 
 handle read-config("/etc/foo.toml")
   (Throw [e]  _)
-    do
-      eprintln $ str-concat("config error: " .what(e))
-      default-config()
-  (Io    [op] k)  resume(k do-io(op))
+  do
+    eprintln $ str-concat "config error: " .what(e)
+    default-config()
+  (Io    [op] k)
+  resume(k do-io(op))
 ```
 
 Chains of `bind` threading `Result<T, Error>` become linear, direct-style
@@ -150,11 +154,12 @@ defn run-with-state [init :int body] :(pair int a)
   let [s init
        r nil]
     handle set!(r body())
-      (Get []  k)  resume(k s)
+      (Get []  k)
+      resume(k s)
       (Set [v] k)
-        do
-          set!(s v)
-          resume(k nil)
+      do
+        set!(s v)
+        resume(k nil)
     pair(s r)
 
 run-with-state(0 counter-step)  ; => (pair 1 nil)
@@ -186,9 +191,12 @@ defeffect Parse-Fail [] :a
 defn digit [] :char @ {Parse-Peek Parse-Take Parse-Fail}
   let [c perform(Parse-Peek())]
     cond
-      none?(c)      perform(Parse-Fail())
-      is-digit?(c)  perform(Parse-Take())
-      :else         perform(Parse-Fail())
+      none?(c)
+      perform(Parse-Fail())
+      is-digit?(c)
+      perform(Parse-Take())
+      :else
+      perform(Parse-Fail())
 ```
 
 Classical Haskell parser-combinator code looks like `digit >>= \d -> ...`.
@@ -230,16 +238,20 @@ For these, write a per-type `bind` and use a `do-monadic` macro:
 ;; Per-type bind functions -- no Monad typeclass needed.
 defn opt-bind [m :(option a) f :(-> a (option b))] :(option b)
   cond
-    some?(m)  f $ unwrap(m)
-    :else     none
+    some?(m)
+    f(unwrap(m))
+    :else
+    none
 
 defn opt-pure [x] :(option a)
   some(x)
 
 defn res-bind [m :(result a e) f :(-> a (result b e))] :(result b e)
   cond
-    ok?(m)  f $ unwrap-ok(m)
-    :else   m
+    ok?(m)
+    f(unwrap-ok(m))
+    :else
+    m
 
 defn res-pure [x] :(result a e)
   ok(x)

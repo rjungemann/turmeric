@@ -134,9 +134,12 @@ abs(5)     ; => 5
 ```sweet-exp
 defn sign [n :int] :int
   cond
-    {n > 0}  1
-    {n < 0}  -1
-    :else    0
+    {n > 0}
+    1
+    {n < 0}
+    -1
+    :else
+    0
 
 sign(3)     ; => 1
 sign(-3)    ; => -1
@@ -194,9 +197,9 @@ factorial(10)    ; => 3628800
 (option-some? (option-none))       ; => false
 ```
 ```sweet-exp
-option-some? $ option-some(42)    ; => true
-option-none? $ option-none()      ; => true
-option-some? $ option-none()      ; => false
+option-some?(option-some(42))    ; => true
+option-none?(option-none())      ; => true
+option-some?(option-none())      ; => false
 ```
 
 Extract the value with `option-unwrap` (panics on none) or provide a fallback
@@ -207,7 +210,7 @@ with `option-unwrap-or`:
 (option-unwrap-or  (option-none) -1)    ; => -1
 ```
 ```sweet-exp
-option-unwrap $ option-some(99)       ; => 99
+option-unwrap(option-some(99))        ; => 99
 option-unwrap-or(option-none() -1)    ; => -1
 ```
 
@@ -227,7 +230,7 @@ defn safe-div [a :int b :int]
     option-none()
     option-some({a / b})
 
-option-unwrap $ safe-div(10 2)           ; => 5
+option-unwrap(safe-div(10 2))            ; => 5
 option-unwrap-or(safe-div(10 0) -1)     ; => -1
 ```
 
@@ -241,8 +244,8 @@ option-unwrap-or(safe-div(10 0) -1)     ; => -1
 (result-unwrap-or (err 0) -1)    ; => -1
 ```
 ```sweet-exp
-ok? $ ok(100)                   ; => true
-err? $ ok(100)                  ; => false
+ok?(ok(100))                    ; => true
+err?(ok(100))                   ; => false
 result-unwrap-or(err(0) -1)     ; => -1
 ```
 
@@ -267,15 +270,21 @@ Combine predicates inside `cond` to dispatch on either type:
 ```sweet-exp
 defn describe-result [r]
   cond
-    ok?(r)  println("ok!")
-    err?(r) println("err!")
-    :else   println("unknown")
+    ok?(r)
+    println("ok!")
+    err?(r)
+    println("err!")
+    :else
+    println("unknown")
 
 defn describe-option [o]
   cond
-    option-some?(o) println("some!")
-    option-none?(o) println("none!")
-    :else           println("unknown")
+    option-some?(o)
+    println("some!")
+    option-none?(o)
+    println("none!")
+    :else
+    println("unknown")
 ```
 
 See `docs/guides/error-handling-guide.md` for the full story: `panic`,
@@ -303,8 +312,8 @@ let [v vec-new()]
   vec-push!(v 10)
   vec-push!(v 20)
   vec-push!(v 30)
-  println $ vec-len(v)      ; 3
-  println $ vec-get(v 1)    ; 20
+  println(vec-len(v))       ; 3
+  println(vec-get(v 1))     ; 20
 ```
 
 The `!` suffix on `vec-push!` signals mutation -- the function modifies the
@@ -339,7 +348,7 @@ let [squares vec-new()]
   for i 1 6
     vec-push!(squares {i * i})
   for i 0 5
-    println $ vec-get(squares i)
+    println(vec-get(squares i))
 ; prints 1 4 9 16 25
 ```
 
@@ -377,8 +386,8 @@ defn make-adder [n :int]
 
 let [add3 make-adder(3)
      add7 make-adder(7)]
-  println $ add3(10)    ; 13
-  println $ add7(10)    ; 17
+  println(add3(10))    ; 13
+  println(add7(10))    ; 17
 ```
 
 ### Functions as arguments
@@ -418,8 +427,8 @@ name; field accessors are generated as `StructName-fieldname`:
 defstruct Point [x :int y :int]
 
 let [p Point(3 4)]
-  println $ Point-x(p)    ; 3
-  println $ Point-y(p)    ; 4
+  println(Point-x(p))    ; 3
+  println(Point-y(p))    ; 4
 ```
 
 Struct values are heap-allocated. `:type (Point 1 2)` in the REPL confirms
@@ -441,7 +450,7 @@ defstruct Rect [width :int height :int]
 defn area [r] :int
   {Rect-width(r) * Rect-height(r)}
 
-area $ Rect(6 7)    ; => 42
+area(Rect(6 7))    ; => 42
 ```
 
 ---
@@ -472,8 +481,8 @@ defeffect Log [msg :cstr] :void
 ```
 ```sweet-exp
 defn do-work [] :void
-  perform $ Log("starting")
-  perform $ Log("done")
+  perform(Log("starting"))
+  perform(Log("done"))
 ```
 
 Without a handler, the runtime raises an unhandled-effect error.
@@ -493,11 +502,9 @@ expression and continues the computation:
 ; done
 ```
 ```sweet-exp
-handle do-work()
+handle(do-work()
   (Log [msg] k)
-    do
-      println(msg)
-      resume(k nil-value())
+    do(println(msg) resume(k nil-value())))
 ; prints:
 ; starting
 ; done
@@ -517,11 +524,9 @@ The same computation runs under different handlers without any changes to
 ; [LOG] done
 ```
 ```sweet-exp
-handle do-work()
+handle(do-work()
   (Log [msg] k)
-    do
-      println $ str-concat("[LOG] " msg)
-      resume(k nil-value())
+    do(println(str-concat("[LOG] " msg)) resume(k nil-value())))
 ; prints:
 ; [LOG] starting
 ; [LOG] done
@@ -535,8 +540,8 @@ A silent handler discards all messages:
 ; prints nothing; do-work still completes
 ```
 ```sweet-exp
-handle do-work()
-  (Log [msg] k) resume(k nil-value())
+handle(do-work()
+  (Log [msg] k) resume(k nil-value()))
 ; prints nothing; do-work still completes
 ```
 
@@ -561,8 +566,8 @@ defeffect Ask [] :int
 defn use-ask [] :int
   {1 + perform(Ask())}
 
-handle use-ask()
-  (Ask [] k) resume(k 41)
+handle(use-ask()
+  (Ask [] k) resume(k 41))
 ; => 42
 ```
 
@@ -584,7 +589,7 @@ Write Turmeric code to a `.tur` file and load it into any REPL session with
 ```sweet-exp
 ; hello.tur
 defn greet [name :cstr] :void
-  println $ str-concat("Hello, " str-concat(name "!"))
+  println(str-concat("Hello, " str-concat(name "!")))
 ```
 
 ```

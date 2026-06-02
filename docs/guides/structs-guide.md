@@ -158,8 +158,8 @@ Use `.fieldname` to read a field from a struct value:
 defstruct Point :copy [x :int y :int]
 
 let [p make-struct(Point 3 4)]
-  println $ .x(p)    ; 3
-  println $ .y(p)    ; 4
+  println(.x(p))    ; 3
+  println(.y(p))    ; 4
 ```
 
 The `.fieldname` form is also valid for arithmetic:
@@ -227,14 +227,14 @@ defstruct PtrBox :move [ptr :lref<int>]
 
 ;; OK: single extraction
 let [b make-struct(PtrBox lref/new(42))]
-  println $ deref(.ptr(b))
+  println(deref(.ptr(b)))
 
 ;; ERROR TUR-E0005: second extraction of a moved struct
 defstruct Box :move [val :lref<int>]
 let [b make-struct(Box lref/new(42))]
   let [x .val(b)]
     let [y .val(b)]   ; use-after-move
-      println $ deref(x)
+      println(deref(x))
 ```
 
 ---
@@ -256,8 +256,8 @@ wrapper manages drop glue automatically when the count reaches zero.
 defstruct Wrapper :move [val :rc<int>]
 
 let [inner rc/of(10)]
-  let [w rc/of $ make-struct(Wrapper inner)]
-    println $ rc/strong-count(w)
+  let [w rc/of(make-struct(Wrapper inner))]
+    println(rc/strong-count(w))
 ```
 
 If the struct itself contains `:rc<T>` fields, the compiler generates nested
@@ -275,8 +275,8 @@ drop glue to decrement those inner counts:
 defstruct Node :move [val :rc<int>]
 
 let [inner rc/of(42)
-     outer rc/of $ make-struct(Node inner)]
-  println $ rc/strong-count(outer)
+     outer rc/of(make-struct(Node inner))]
+  println(rc/strong-count(outer))
 ```
 
 ---
@@ -364,7 +364,7 @@ definstance Show [Point]
     ```
 
 let [p make-struct(Point 3 4)]
-  println $ .show(p)   ; Point { x = 3, y = 4 }
+  println(.show(p))   ; Point { x = 3, y = 4 }
 ```
 
 ### Deriving `Show`, `Debug`, `Display`
@@ -396,9 +396,9 @@ derive-debug   Point x y
 derive-display Point x y
 
 let [p make-struct(Point 3 4)]
-  println $ .show(p)     ; Point { x = 3, y = 4 }
-  println $ .debug(p)    ; (Point (x 3) (y 4))
-  println $ .display(p)  ; Point { x = 3, y = 4 }
+  println(.show(p))     ; Point { x = 3, y = 4 }
+  println(.debug(p))    ; (Point (x 3) (y 4))
+  println(.display(p))  ; Point { x = 3, y = 4 }
 ```
 
 `derive-show` produces `"TypeName { k = v, ... }"`. `derive-debug` produces

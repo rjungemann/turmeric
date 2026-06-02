@@ -102,13 +102,14 @@ A **fiber** is a user-space thread (lightweight thread) that:
 
 ```sweet-exp
 ;; Surface syntax
-async {1 + await(fetch(2))}
+async((+ 1 (await (fetch 2))))
 
 ;; Desugars to (conceptually)
 reset
   fn []
-    {1 + shift k
-      fiber-suspend(fetch(2) k)}
+    + 1
+      shift k
+        fiber-suspend(fetch(2) k)
 
 ;; The scheduler later resumes k with the result of fetch(2)
 ```
@@ -184,7 +185,9 @@ async
       await(fetch-file("missing.txt"))
     fn [e k]
       match e
-        (FileNotFound _) -> continue(k "default")
+        (FileNotFound _)
+        ->
+        continue(k "default")
 ```
 
 ## Send Requirements for Async Bodies
@@ -206,7 +209,7 @@ The compiler enforces this conservatively: **any binding in scope at the
 await. This is a 1.0 limitation tracked in Phase CF6 of
 [control-flow-completeness-plan.md](../control-flow-completeness-plan.md).
 
-```turmeric
+```turmeric no-check
 ;; ERROR TUR-E0022: rc<int> is not Send
 (async (fn []
   (let [x (rc/of 42)]
@@ -224,7 +227,7 @@ await. This is a 1.0 limitation tracked in Phase CF6 of
 
 Consume or drop non-Send values before the `await`:
 
-```turmeric
+```turmeric no-check
 (async (fn []
   (let [x (rc/of 42)
         v (rc/deref x)]   ;; extract the value first

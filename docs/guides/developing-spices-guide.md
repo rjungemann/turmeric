@@ -59,7 +59,7 @@ prefix as the import alias: `tur-geom` becomes `geom`, `tur-math` becomes
 
 A complete library manifest:
 
-```turmeric
+```turmeric no-check
 (defpackage tur-mylib
   :name        "tur-mylib"
   :version     "0.1.0"
@@ -111,7 +111,7 @@ defpackage tur-mylib
 The `:exports` map controls what is visible to consumers. Only listed
 symbols are part of the public API; everything else is private.
 
-```turmeric
+```turmeric no-check
 :exports {
   "mylib/types" ["Coord" "Rect" "Color"]
   "mylib/draw"  ["draw-rect" "draw-circle" "draw-line"]

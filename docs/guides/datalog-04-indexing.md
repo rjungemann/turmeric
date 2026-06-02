@@ -109,7 +109,7 @@ defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
   e->entity = entity; e->attr = attr; e->datum = datum;
   e->next = i->buckets[h];
   i->buckets[h] = e;
-  ```)
+  ```
 ```
 
 Prepending is O(1) and maintains insertion order within each chain.
@@ -150,7 +150,7 @@ defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
     e = e->next;
   }
   return result;
-  ```)
+  ```
 ```
 
 With 64 buckets and well-distributed data, each chain has on average
@@ -266,7 +266,7 @@ let [results idb-q-ea(idb 1 ":user/name")]
 
 ; Entity 3 has no email -- should return empty result
 let [results idb-q-ea(idb 3 ":user/email")]
-  println $ rvec-len(results)  ; => 0
+  println(rvec-len(results))  ; => 0
 ```
 
 Expected output:

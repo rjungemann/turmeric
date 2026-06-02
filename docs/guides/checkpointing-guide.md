@@ -25,7 +25,7 @@ Phase 18's delimited continuations reify the call stack as a heap-allocated clos
 
 ```turmeric
 ;; Capture a continuation
-(def saved #f)
+(def saved false)
 (def result
   (+ 1 (cloneable-shift [k]
          (set! saved k)
@@ -44,7 +44,7 @@ Phase 18's delimited continuations reify the call stack as a heap-allocated clos
 
 ```sweet-exp
 ;; Capture a continuation
-def saved #f
+def saved false
 def result
   {1 + cloneable-shift([k]
     set!(saved k)
@@ -271,7 +271,7 @@ Send a half-finished computation to another node:
 (send-to-node-b bytes)
 
 ;; Node B: resume
-(def job (deserialize (receive-bytes))
+(def job (deserialize (receive-bytes)))
 (def result (resume job))
 ```
 
@@ -318,11 +318,11 @@ Serialize "what to do when form is submitted" as a URL token:
 ```sweet-exp
 ;; Initial page
 defn get-checkout [req]
-  cloneable-shift([k]
+  cloneable-shift [k]
     ;; Save continuation to disk, return URL token
     def token save-continuation-to-db(k)
     render-page
-      form(:action str("/checkout-submit?token=" token)))
+      form(:action str("/checkout-submit?token=" token))
 
 ;; Form submission handler
 defn post-checkout-submit [token req]
@@ -357,15 +357,15 @@ Periodic snapshots for crash recovery:
 defn analyze-large-dataset [data]
   defn checkpoint-every-n [n items]
     let [processed []]
-      for-each-with-index(items
+      for-each-with-index items
         fn [i item]
           set!(processed conj(processed process(item)))
           when {mod({i + 1} n) = 0}
             ;; Checkpoint every n items
-            cloneable-shift([k]
+            cloneable-shift [k]
               write-file(str("checkpoint-" i ".bin")
                          serialize(k))
-              continue(k)))
+              continue(k)
 
   checkpoint-every-n(1000 data)
 ```
@@ -409,9 +409,9 @@ try-with
     deserialize(read-file("checkpoint.bin"))
   fn [e k]
     match e
-      (schema-mismatch _ old-version) ->
-        throw $ error $ str("Cannot resume: checkpoint uses version " old-version
-                            " but current code is version " current-version())
+      (schema-mismatch _ old-version)
+      ->
+      throw(error(str("Cannot resume: checkpoint uses version " old-version " but current code is version " current-version())))
 ```
 
 ### Partial Reconstruction
@@ -451,7 +451,7 @@ def opt-value
 
 ## API Summary
 
-```turmeric
+```turmeric no-check
 ;; Serialize a continuation
 (serialize cont : (cloneable-shift [k] k)) : bytes
 
@@ -471,20 +471,25 @@ def opt-value
 
 ```sweet-exp
 ;; Serialize a continuation
-serialize(cont : (cloneable-shift [k] k)) : bytes
+serialize cont : (cloneable-shift [k] k)
+: bytes
 
 ;; Deserialize a continuation
-deserialize(bytes : bytes) : (cloneable-shift [k] k)
+deserialize bytes : bytes
+: (cloneable-shift [k] k)
 
 ;; Resume a continuation with a value
-resume(k : (cloneable-shift [k] k) v : a) : a
+resume k : (cloneable-shift [k] k) v : a
+: a
 
 ;; Checkpoint macro (example)
-checkpoint(name value)
+checkpoint name value
 
 ;; Resource marshalling
-marshal(resource : a) : resource-token
-unmarshal(token : resource-token) : a
+marshal resource : a
+: resource-token
+unmarshal token : resource-token
+: a
 ```
 
 ## See Also

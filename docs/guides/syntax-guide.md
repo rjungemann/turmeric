@@ -54,7 +54,7 @@ escapes, keyword rules), see the
 
 ### Comments
 
-```turmeric
+```turmeric no-check
 (println "hi")  ; line comment -- to end of line
 
 #|
@@ -157,9 +157,12 @@ defn abs [n :int] :int
 ```sweet-exp
 defn sign [n :int] :int
   cond
-    {n > 0}  1
-    {n < 0}  -1
-    :else    0
+    >(n 0)
+    1
+    <(n 0)
+    -1
+    :else
+    0
 ```
 
 `when` -- one-armed conditional for side effects:
@@ -226,7 +229,7 @@ Turmeric source follows Clojure-style indentation.
 
 **Regular calls** align arguments under the first argument:
 
-```turmeric
+```turmeric no-check
 (some-long-fn arg1
               arg2
               arg3)
@@ -235,7 +238,7 @@ Turmeric source follows Clojure-style indentation.
 **Special forms and macros** (`defn`, `fn`, `let`, `if`, `when`, `do`, `cond`,
 `for`, `while`) use a fixed 2-space body indent regardless of column:
 
-```turmeric
+```turmeric no-check
 (defn greet [name :cstr] :void
   (println name))
 ```
@@ -243,7 +246,7 @@ Turmeric source follows Clojure-style indentation.
 **Binding vectors** align pairs under one another, one pair per line. Never
 split a name from its value across lines:
 
-```turmeric
+```turmeric no-check
 (let [x   1
       y   2
       foo (+ x y)]
@@ -260,7 +263,7 @@ The closing triple-backtick **must share its line with the enclosing `)`** --
 written ` ```) ` -- so that Markdown renderers do not mistake it for the end of
 a surrounding documentation code fence:
 
-```turmeric
+```turmeric no-check
 (defn file-size [f] :int
   ```c
   FILE* file = (FILE*)f;
@@ -343,7 +346,7 @@ call takes exactly one argument:
 (println (vec-get squares i))
 ```
 ```sweet-exp
-println $ vec-get(squares i)
+println(vec-get(squares i))
 ```
 
 ### Curly-infix `{a op b}`
@@ -405,8 +408,8 @@ defn make-adder [n :int]
 
 let [add3 make-adder(3)
      add7 make-adder(7)]
-  println $ add3(10)    ; 13
-  println $ add7(10)    ; 17
+  println(add3(10))    ; 13
+  println(add7(10))    ; 17
 ```
 
 ---
