@@ -498,13 +498,28 @@ compiled to a run on the multi-prompt `DK` machine (`dk_run` / `dk_prompt` /
   asserts the values -- the executing gate the substrate previously lacked (the
   prior `continuation-basic`/`-advanced` fixtures have no `main`, so only their
   snapshots were checked).
+- **CPS8.5 -- Undelimited `call/cc` / `escape` (landed).** `(call/cc f)` and
+  `(escape f)` now capture a real, undelimited, one-shot continuation against an
+  implicit program-wide prompt -- no enclosing `reset` required, and unbounded
+  depth (the 16-frame fiber ceiling does not apply). The lowering (`EX_CALLCC`,
+  `emit_cps_callcc`) establishes a setjmp landing at the call/cc site and hands
+  `f` the landing as the continuation handle; invoking it via
+  `tur_escape_resume` is an upward escape that returns the value at the call/cc
+  site, abandoning `f`'s pending work. This is exactly the spec's one-shot
+  upward semantics (call-cc-completion CC1/CC3, OQ2/OQ3): invoking the
+  continuation *after* its prompt has returned is a runtime error, so no
+  downward re-entry is required. Validated by `callcc-real-capture` (CC1.4: no
+  reset, `k` aborts, result 42) and `escape-deep-capture` (escape from 5000
+  frames deep -- the unbounded-capture proof). Still gated behind `-Xcallcc`
+  (CC5 ungating is a follow-up); the continuation is resumed via the
+  `tur_escape_resume` builtin (the proven `call/cc*` handle pattern) -- direct
+  `(k v)` application sugar and the `cont<T>` parameter typing (CC4) remain.
 - **Remaining (next increment).** `call/cc*` (cloneable/multi-shot via
-  `dk_invoke`), `serial-*` (chain-walk marshaling, CPS5.4), and undelimited
-  `call/cc` (capture to the implicit root prompt via `dk_run_root`) still use
-  their existing lowerings. They are the natural follow-on: the multi-shot and
-  root-prompt machinery already exist in the substrate (`dk_invoke`,
-  `dk_run_root`); what remains is reifying a resumable sub-continuation in
-  emitted code (env capture per frame), which base abortive shift does not need.
+  `dk_invoke`) and `serial-*` (chain-walk marshaling, CPS5.4) still use their
+  existing lowerings. They are the natural follow-on: the multi-shot machinery
+  already exists in the substrate (`dk_invoke`); what remains is reifying a
+  resumable sub-continuation in emitted code (env capture per frame), which the
+  abortive shift and one-shot upward escape do not need.
 
 ---
 
@@ -551,8 +566,11 @@ are met for that operator set; the rest stay open.
   *Substrate-ready (`dk_*` is unbounded by construction); reached by emitted
   code once a resumable sub-continuation is reified (post-CPS8 increment).*
 - An implicit root prompt exists around `main`; an undelimited `call/cc` with no
-  explicit `reset` captures to it and resumes. *`dk_run_root` exists; wiring is
-  the post-CPS8 increment.*
+  explicit `reset` captures to it and resumes. **Done (CPS8.5):** `(call/cc f)`/
+  `(escape f)` capture a real one-shot continuation against an implicit
+  program-wide prompt with no enclosing `reset`; `callcc-real-capture` resumes
+  it (result 42) and `escape-deep-capture` escapes from 5000 frames deep
+  (unbounded). Multi-shot/downward re-entry stays with `call/cc*`.
 - Uncolored direct-style benchmarks show no regression beyond the CPS7.1
   threshold.
 - `control-flow-completeness-audit.md` CF4 is marked resolved.

@@ -258,6 +258,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return true;
         case EX_CAST:
             return borrow_check_expr_recursive(ctx, e->as.cast_.expr);
+        case EX_CALLCC:   /* call-cc-completion: check f (the receiver) */
+            return borrow_check_expr_recursive(ctx, e->as.callcc_.fn);
         case EX_REINTERPRET:
             return borrow_check_expr_recursive(ctx, e->as.reinterpret_.expr);
             

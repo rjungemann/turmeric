@@ -37,6 +37,21 @@ bool emit_cps_program_uses_delimited(const Expr *program);
  * gated on emit_cps_program_uses_delimited(). */
 void emit_cps_runtime_prelude(Buf *out);
 
+/* call-cc-completion: true iff `program` uses (call/cc f) or (escape f)
+ * (EX_CALLCC) -- the gate for emitting the escape-continuation runtime. */
+bool emit_cps_program_uses_callcc(const Expr *program);
+
+/* Emit the undelimited escape-continuation runtime (tur_escape_cont +
+ * tur_escape_resume) into the generated preamble. Call once, gated on
+ * emit_cps_program_uses_callcc(). */
+void emit_cps_callcc_prelude(Buf *out);
+
+/* Lower (call/cc f) / (escape f) (EX_CALLCC): establish a setjmp landing at
+ * this site (the implicit-prompt capture point), hand f the landing handle,
+ * and return the C expression holding the call/cc value -- either f's normal
+ * return, or the value delivered by an upward (tur_escape_resume k v). */
+char *emit_cps_callcc(EmitCtx *ctx, Buf *body, const Expr *e);
+
 /* Lower (reset BODY). When BODY can reach a base shift bound to this reset,
  * emits a dk_run-driven evaluation on the substrate and returns the C
  * expression holding the result. Otherwise returns NULL, signalling the

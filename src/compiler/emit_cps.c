@@ -83,6 +83,61 @@ bool emit_cps_program_uses_delimited(const Expr *program) {
     return uses_base_delimited(program);
 }
 
+/* ---- program scan: does it use (call/cc f) / (escape f)? --------------- */
+
+static bool uses_callcc(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALLCC:
+            return true;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (uses_callcc(e->as.program.items[i])) return true;
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && uses_callcc(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && uses_callcc(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   uses_callcc(e->as.closure_.closure->fn->body);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (uses_callcc(e->as.let_.bindings[i].init)) return true;
+            return uses_callcc(e->as.let_.body);
+        case EX_IF:
+            return uses_callcc(e->as.if_.cond) ||
+                   uses_callcc(e->as.if_.then_) ||
+                   uses_callcc(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (uses_callcc(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return uses_callcc(e->as.while_.cond) || uses_callcc(e->as.while_.body);
+        case EX_SET:    return uses_callcc(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && uses_callcc(e->as.def_.init);
+        case EX_RETURN: return e->as.return_.value && uses_callcc(e->as.return_.value);
+        case EX_DEFER:  return uses_callcc(e->as.defer_.body);
+        case EX_RESET:  return uses_callcc(e->as.reset_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (uses_callcc(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (uses_callcc(e->as.call_.args[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+bool emit_cps_program_uses_callcc(const Expr *program) {
+    return uses_callcc(program);
+}
+
 /* ---- the abort value: f(v) must round-trip through intptr_t -------------
  * The DK node carries the precomputed abort value in its intptr_t body_env, so
  * the value must survive an intptr_t round trip. Integers, booleans, nil and
@@ -298,6 +353,96 @@ char *emit_cps_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
         shift_ctor, fv);
     free(fv);
     return result;
+}
+
+/* ---- (call/cc f) / (escape f): undelimited upward escape -------------- */
+
+char *emit_cps_callcc(EmitCtx *ctx, Buf *body, const Expr *e) {
+    const Expr *f = e->as.callcc_.fn;
+    const char *rty = emit_type_c_name(ctx, e->type);
+
+    char *cc  = fresh_tmp(ctx);   /* the escape-continuation landing record */
+    char *res = fresh_tmp(ctx);   /* the call/cc result */
+
+    /* Landing: capture is O(1) and depth-unbounded (no 16-frame ceiling) --
+     * f may invoke the continuation from arbitrarily deep, longjmp returns
+     * straight here. The setjmp pattern mirrors the cloneable-reset boundary. */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_escape_cont %s;\n", cc);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.valid = 1;\n", cc);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", rty, res);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (setjmp(%s.buf) == 0) {\n", cc);
+    ctx->indent++;
+
+    /* Normal path: run f with the landing handle as its continuation. */
+    char *fval = emit_value(ctx, body, f);
+    char *fr   = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    if (f->kind == EX_CLOSURE) {
+        struct Closure *closure = f->as.closure_.closure;
+        char *thunk_name;
+        if (closure->fn->binding) {
+            thunk_name = raw_name_for_binding(closure->fn->binding);
+        } else {
+            thunk_name = malloc(64);
+            snprintf(thunk_name, 64, "__fn_anon_%d",
+                     closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
+        }
+        buf_printf(body, "%s %s = %s(%s, (int64_t)(intptr_t)&%s);\n",
+                   rty, fr, thunk_name, fval, cc);
+        free(thunk_name);
+    } else {
+        buf_printf(body, "%s %s = %s((int64_t)(intptr_t)&%s);\n",
+                   rty, fr, fval, cc);
+    }
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = %s;\n", res, fr);
+    /* f returned normally: the captured continuation is now dead. */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.valid = 0;\n", cc);
+    free(fr);
+    free(fval);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "} else {\n");
+    ctx->indent++;
+    /* Resumed path: an upward (tur_escape_resume %s v) delivered v here. */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s = (%s)%s.result;\n", res, rty, cc);
+    ctx->indent--;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+
+    free(cc);
+    return res;
+}
+
+void emit_cps_callcc_prelude(Buf *out) {
+    buf_puts(out,
+"/* call-cc-completion: undelimited escape-continuation runtime.\n"
+" * (call/cc f)/(escape f) set up a landing here; the continuation handle f\n"
+" * receives is &tur_escape_cont. Invoking it (tur_escape_resume) is a one-shot\n"
+" * upward escape: it longjmps back to the call/cc site delivering the value.\n"
+" * Capture is O(1) and unbounded -- no TUR_CONT_MAX_CAPTURED_FRAMES ceiling. */\n"
+"typedef struct tur_escape_cont {\n"
+"    jmp_buf buf;\n"
+"    int64_t result;  /* value delivered by tur_escape_resume */\n"
+"    bool    valid;   /* false once the call/cc prompt has returned */\n"
+"} tur_escape_cont;\n"
+"static int64_t tur_escape_resume(int64_t k, int64_t v) {\n"
+"    tur_escape_cont *cc = (tur_escape_cont *)(intptr_t)k;\n"
+"    if (!cc || !cc->valid) {\n"
+"        fprintf(stderr, \"tur: continuation invoked after its call/cc prompt returned\\n\");\n"
+"        abort();\n"
+"    }\n"
+"    cc->result = v;\n"
+"    longjmp(cc->buf, 1);\n"
+"    return 0; /* unreachable */\n"
+"}\n"
+"\n");
 }
 
 /* ---- runtime prelude: a faithful C port of src/runtime/cps_prompt.c ----- */

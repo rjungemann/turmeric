@@ -148,7 +148,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase S4: throw / try-catch */
         case EX_THROW:
-        case EX_TRY_CATCH: {
+        case EX_TRY_CATCH:
+        case EX_CALLCC: {   /* call-cc-completion: run for effect, discard value */
             char *v = emit_value(ctx, body, e);
             free(v);
             return;

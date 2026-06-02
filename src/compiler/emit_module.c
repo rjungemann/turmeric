@@ -2561,6 +2561,12 @@ int emit_program(Buf *out, const Expr *program) {
         emit_cps_runtime_prelude(out);
     }
 
+    /* call-cc-completion: emit the undelimited escape-continuation runtime when
+     * the program uses (call/cc f) / (escape f). */
+    if (emit_cps_program_uses_callcc(program)) {
+        emit_cps_callcc_prelude(out);
+    }
+
     /* Phase 19: Effect handler chain */
     buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
     /* Phase P19-5: TurContK — a lightweight per-invocation continuation token.
