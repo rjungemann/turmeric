@@ -19,11 +19,16 @@
 > (capturing a *marshalable* context that serialize/deserialize round-trips), and
 > now `call/cc*` (capturing the real continuation up to the nearest enclosing
 > cloneable-reset) all execute on this substrate in emitted code (`emit_cps.c`).
-> The whole delimited/undelimited operator set now runs on the CPS substrate;
-> what remains are perf/cleanup follow-ons (OQ-CPS2 **resolved 2026-06-02**: keep
-> the fiber path as the selective fallback + bounded fast path; richer serial env
-> types; CC4 `(k v)` sugar / `cont<T>` typing; broaden the context subset). This
-> is the substrate that
+> The whole delimited/undelimited operator set now runs on the CPS substrate.
+> **Follow-on increments landed 2026-06-02** (see "Follow-on increments" below):
+> OQ-CPS2 **resolved** (keep the fiber path as selective fallback + bounded fast
+> path); the captured-context subset **broadened** to integer division and to
+> arbitrary 2-arg call frames (serial frames name-keyed for marshaling); and
+> **CC4** `(k v)` application sugar + `:cont` parameter typing. Remaining: cstr/
+> struct serial env types (gated on a flavored cont type), the parametric
+> `(cont T)` annotation (needs an arrow-kind `cont`), and broadening contexts
+> past single-hole binops/2-arg calls (lets, if-branches). This is the substrate
+> that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -678,6 +683,47 @@ suites stay green with no regeneration.
   enclosing-reset capture: single resume through `(+ 10 [])` (= 15), multi-shot
   ((10+1)+(10+2) = 23), nested `(* 2 (+ 1 []))` (= 10), plus the no-reset
   identity case (100, 200) to lock in the preserved sugar.
+
+## Follow-on increments -- **DONE 2026-06-02**
+
+Post-CPS11 polish, each landed additively (selective lowering + legacy fallback;
+no shipped snapshot regenerated):
+
+- **OQ-CPS2 resolved -- keep the fiber path.** Recorded in Open questions: the
+  fiber/inlined runtime stays as the selective fallback (for shapes outside the
+  CPS subset) and the bounded fast path; removal is gated on the subset becoming
+  total plus a CPS7.2 head-to-head. Doc-only.
+- **Broaden the context subset: integer division.** `/` joins `+`/`-`/`*` in the
+  shared context grammar (`collect_ctx`), aborting on a zero divisor to match
+  `BS_DIV_CHECK`. A `frame_c_expr` helper keeps the per-site cloneable frames and
+  the fixed tagged serial frames (`SK_TAG_DIVR`/`SK_TAG_DIVL`) in lock-step.
+  Fixture: `context-division`.
+- **Broaden the context subset: 2-arg call frames + name-keyed serial
+  marshaling.** Contexts may now wrap the hole in a call to a resolved 2-arg
+  top-level function (not just arithmetic). Cloneable frames are lambda-lifted
+  per-site; serial frames marshal by the target's emitted C name via a
+  self-registering (constructor-populated) `name <-> DKFrame` table -- the
+  name-keyed scheme `serial.c` uses -- with a self-describing record format
+  (`[tag][env]` for arithmetic, `[SK_TAG_CALL][name][env]` for calls, memcpy'd,
+  variable length). Env values are int for now (`env_kind_ok`); cstr/struct envs
+  await a flavored cont type (see below). Fixture: `context-call-frame`.
+- **CC4: `(k v)` application sugar + `:cont` parameter typing.** A continuation
+  parameter typed `:cont` is invoked directly as `(k v)`, desugaring (in
+  `elab_call`) to a cloneable continuation resume; `TY_CONT` lowers to an
+  `int64_t` handle (`type_c_name`). Scope: cloneable continuations (`call/cc*` /
+  `cloneable-shift`); escape/serial keep their explicit resume builtins. Fixture:
+  `callcc-kv-sugar`.
+
+  *Remaining for CC4/richer env types (coupled):* the resume builtins and the
+  shift node are int-typed, so a non-int continuation value (cstr/struct) can't
+  be expressed at the surface yet -- which also blocks richer **serial** env
+  types. Both want a value-typed (flavored) `cont<T>`: a continuation type that
+  carries its result type *and* its flavor (escape/cloneable/serial), so `(k v)`
+  picks the right resume and the serial marshaler can encode non-int envs via the
+  `Serializable` typeclass. The parametric `(cont T)` annotation additionally
+  needs `cont` registered as an arrow-kind (`* -> *`) constructor. Broadening
+  contexts past single-hole binops / 2-arg calls (lets, if-branches) is a
+  separate grammar extension.
 
 ---
 
