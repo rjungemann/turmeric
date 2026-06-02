@@ -1,0 +1,24 @@
+;; cps-transform-plan: broaden captured contexts beyond arithmetic to arbitrary
+;; 2-arg top-level function calls (call frames), across cloneable (CPS9) and
+;; serial (CPS10).  Serial call frames marshal by the target's stable name via a
+;; self-registering table (the name-keyed scheme serial.c uses), so they
+;; serialize/deserialize round-trip.  Env values are int for now; cstr/struct
+;; envs are gated on continuation value-typing (CC4).
+
+(defn scale-add [a :int b :int] :int (+ (* a 3) b))   ; a*3 + b
+
+(defn use5 [k] :int (tur_cloneable_cont_resume k 5))
+(defn use2 [k] :int
+  (+ (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 1)
+     (tur_cloneable_cont_resume k 2)))
+(defn srt5 [k] :int
+  (tur_serial_cont_resume
+    (tur_serial_cont_deserialize (tur_serial_cont_serialize k)) 5))
+
+(defn main [] :int
+  (println (cloneable-reset (scale-add 10 (cloneable-shift use5 0))))  ; hole=b: 10*3+5  = 35
+  (println (cloneable-reset (scale-add (cloneable-shift use5 0) 10)))  ; hole=a: 5*3+10  = 25
+  (println (cloneable-reset (scale-add 10 (cloneable-shift use2 0))))  ; multishot: 31+32 = 63
+  (println (serial-reset (scale-add 10 (serial-shift srt5 0))))        ; round-trip     = 35
+  (println (cloneable-reset (scale-add 10 (call/cc* use5))))           ; call/cc*: 10*3+5 = 35
+  0)

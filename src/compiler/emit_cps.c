@@ -476,10 +476,19 @@ void emit_cps_callcc_prelude(Buf *out) {
 #define CL_MAX_CTX_FRAMES 32
 
 typedef struct {
-    const char *c_op;     /* "+", "-", "*" */
-    bool        hole_left;/* true iff args[0] is the hole (reaches the shift) */
-    const Expr *other;    /* the non-hole operand (captured into the frame env) */
+    const char    *c_op;     /* builtin frame: "+","-","*","/"; NULL for a call frame */
+    const Binding *call_fn;  /* call frame: target top-level fn binding; else NULL */
+    bool           hole_left;/* true iff the hole is the left operand/arg */
+    const Expr    *other;    /* the non-hole operand (captured into the frame env) */
+    TypeKind       env_kind; /* type kind of `other` -- for typed serial marshaling */
 } ClFrame;
+
+/* The C cast applied to an intptr-carried env/value when handed to a frame's
+ * call target. Only int- and cstr-kinded operands are supported (both fit in an
+ * intptr_t and are the kinds the serial marshaler can encode). */
+static const char *c_cast_for_kind(TypeKind k) {
+    return (k == TY_CSTR) ? "(const char *)" : "(int64_t)";
+}
 
 /* Boundary-aware: can `e` dynamically reach a shift of kind `target` bound to
  * the enclosing reset? Stops at nested resets/shifts of any other flavor and at
@@ -559,31 +568,71 @@ static const char *frame_c_expr(const char *op, bool hole_left) {
  * Returns the shift expr and *n_out frames (>= 0), or NULL if the body is not a
  * supported context chain. Shared by the cloneable (CPS9) and serial (CPS10)
  * lowerings. */
+/* Env/result kinds a context frame can carry today. Restricted to int: a
+ * non-int continuation value (e.g. cstr) cannot be expressed at the surface yet
+ * -- the resume builtins and the shift node are int-typed -- so cstr/struct
+ * envs are gated on continuation value-typing (CC4). The marshaler and casts are
+ * written to widen cleanly once that lands. */
+static bool env_kind_ok(TypeKind k) { return k == TY_INT; }
+
 static const Expr *collect_ctx(const Expr *rb, ExprKind target,
                                ClFrame *frames, uint32_t *n_out) {
     uint32_t n = 0;
     const Expr *cur = rb;
-    while (cur && cur->kind == EX_BUILTIN) {
-        const BuiltinSpec *spec = cur->as.builtin.spec;
-        if (!spec || cur->as.builtin.n != 2) return NULL;
-        if (!cl_op_supported(spec->c_op)) return NULL;
-        if (cur->type.kind != TY_INT) return NULL;
-        const Expr *a0 = cur->as.builtin.args[0];
-        const Expr *a1 = cur->as.builtin.args[1];
-        bool h0 = reaches_shift_kind(a0, target);
-        bool h1 = reaches_shift_kind(a1, target);
-        if (h0 == h1) return NULL;                 /* need exactly one hole */
-        const Expr *hole  = h0 ? a0 : a1;
-        const Expr *other = h0 ? a1 : a0;
-        if (other->type.kind != TY_INT) return NULL;
-        if (reaches_shift_kind(other, target)) return NULL;
-        if (expr_contains_return_or_throw(other)) return NULL;
+    for (;;) {
         if (n >= CL_MAX_CTX_FRAMES) return NULL;
-        frames[n].c_op = spec->c_op;
-        frames[n].hole_left = h0;
-        frames[n].other = other;
-        n++;
-        cur = hole;
+        if (cur && cur->kind == EX_BUILTIN) {
+            /* Arithmetic frame: a single-hole int binop (+, -, *, /). */
+            const BuiltinSpec *spec = cur->as.builtin.spec;
+            if (!spec || cur->as.builtin.n != 2) return NULL;
+            if (!cl_op_supported(spec->c_op)) return NULL;
+            if (cur->type.kind != TY_INT) return NULL;
+            const Expr *a0 = cur->as.builtin.args[0];
+            const Expr *a1 = cur->as.builtin.args[1];
+            bool h0 = reaches_shift_kind(a0, target);
+            bool h1 = reaches_shift_kind(a1, target);
+            if (h0 == h1) return NULL;             /* need exactly one hole */
+            const Expr *other = h0 ? a1 : a0;
+            if (other->type.kind != TY_INT) return NULL;
+            if (reaches_shift_kind(other, target)) return NULL;
+            if (expr_contains_return_or_throw(other)) return NULL;
+            frames[n].c_op = spec->c_op;
+            frames[n].call_fn = NULL;
+            frames[n].hole_left = h0;
+            frames[n].other = other;
+            frames[n].env_kind = TY_INT;
+            n++;
+            cur = h0 ? a0 : a1;
+        } else if (cur && cur->kind == EX_CALL && cur->as.call_.n_args == 2 &&
+                   cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            /* Call frame: a 2-arg call to a resolved top-level function with one
+             * hole arg and one pure int-or-cstr env arg. Enables non-arithmetic
+             * (e.g. cstr) contexts and -- crucially -- non-int env types. */
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
+            if (fb->closure_fn_binding) return NULL;   /* needs hidden env arg */
+            if (!env_kind_ok(fb->type.as.fn.arg_kinds[0]) ||
+                !env_kind_ok(fb->type.as.fn.arg_kinds[1])) return NULL;
+            if (!env_kind_ok(cur->type.kind)) return NULL;
+            const Expr *a0 = cur->as.call_.args[0];
+            const Expr *a1 = cur->as.call_.args[1];
+            bool h0 = reaches_shift_kind(a0, target);
+            bool h1 = reaches_shift_kind(a1, target);
+            if (h0 == h1) return NULL;
+            const Expr *other = h0 ? a1 : a0;
+            if (!env_kind_ok(other->type.kind)) return NULL;
+            if (reaches_shift_kind(other, target)) return NULL;
+            if (expr_contains_return_or_throw(other)) return NULL;
+            frames[n].c_op = NULL;
+            frames[n].call_fn = fb;
+            frames[n].hole_left = h0;
+            frames[n].other = other;
+            frames[n].env_kind = other->type.kind;
+            n++;
+            cur = h0 ? a0 : a1;
+        } else {
+            break;
+        }
     }
     if (cur && cur->kind == target) {
         *n_out = n;
@@ -607,12 +656,31 @@ static bool cl_can_lower(const Expr *e) {
     return true;
 }
 
-/* Emit a context frame fn for op/hole-side. The frame receives the captured
- * non-hole operand as `env` and the resumed value as `value`. */
-static void cl_emit_frame_fn(Buf *hb, const char *name, const ClFrame *f) {
+/* Emit the body expression of a context frame: either a builtin arithmetic op
+ * or a 2-arg call to the frame's top-level target. The frame receives the
+ * captured non-hole operand as `env` and the resumed value as `value`. */
+static void cl_emit_frame_body(Buf *hb, const char *name, const ClFrame *f) {
+    if (!f->call_fn) {
+        buf_printf(hb,
+            "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
+            name, frame_c_expr(f->c_op, f->hole_left));
+        return;
+    }
+    /* Call frame: invoke target(arg0, arg1), casting env/value to the param
+     * types. The hole flows in as `value`; `env` is the captured other arg. */
+    char *rn = raw_name_for_binding(f->call_fn);
+    TypeKind k0 = f->call_fn->type.as.fn.arg_kinds[0];
+    TypeKind k1 = f->call_fn->type.as.fn.arg_kinds[1];
+    const char *a0 = f->hole_left ? "value" : "env";   /* arg0 */
+    const char *a1 = f->hole_left ? "env" : "value";   /* arg1 */
     buf_printf(hb,
-        "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
-        name, frame_c_expr(f->c_op, f->hole_left));
+        "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
+        name, rn, c_cast_for_kind(k0), a0, c_cast_for_kind(k1), a1);
+    free(rn);
+}
+
+static void cl_emit_frame_fn(Buf *hb, const char *name, const ClFrame *f) {
+    cl_emit_frame_body(hb, name, f);
 }
 
 char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -819,6 +887,7 @@ static bool sk_can_lower(const Expr *e) {
 /* The stable tag for a context frame (op + hole side), shared by the emitted
  * frame table. Mirrors the SK_TAG_* enum emitted in the prelude. */
 static int sk_tag_for_frame(const ClFrame *f) {
+    if (!f->c_op) return 0;                         /* call frame: not arithmetic */
     if (strcmp(f->c_op, "+") == 0) return 1;       /* SK_TAG_ADD:  env + v */
     if (strcmp(f->c_op, "*") == 0) return 2;       /* SK_TAG_MUL:  env * v */
     if (strcmp(f->c_op, "-") == 0)
@@ -869,13 +938,30 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
             "((int64_t)(intptr_t)__cap);\n}\n");
     }
 
-    /* At the reset site: evaluate the non-hole operands and the receiver env,
-     * build the DK chain from the fixed tagged frames, and run it. */
+    /* Per-frame: an arithmetic frame uses a fixed tagged fn; a call frame gets a
+     * per-site wrapper that self-registers (name -> fn) so the marshaler can map
+     * the frame to a stable name and back. frame_fn[i] is the C expression naming
+     * the DKFrame to install. */
     char *op_vals[CL_MAX_CTX_FRAMES];
-    int   op_tags[CL_MAX_CTX_FRAMES];
+    char  frame_fn[CL_MAX_CTX_FRAMES][48];
     for (uint32_t i = 0; i < nf; i++) {
         op_vals[i] = emit_value(ctx, body, frames[i].other);
-        op_tags[i] = sk_tag_for_frame(&frames[i]);
+        if (!frames[i].call_fn) {
+            snprintf(frame_fn[i], sizeof frame_fn[i],
+                     "__sk_frame_for_tag(%d)", sk_tag_for_frame(&frames[i]));
+        } else {
+            /* Emit the wrapper fn + a registry entry keyed by target name + side. */
+            snprintf(frame_fn[i], sizeof frame_fn[i], "__sk_call_%d_%u", id, i);
+            cl_emit_frame_body(hb, frame_fn[i], &frames[i]);
+            char *rn = raw_name_for_binding(frames[i].call_fn);
+            buf_printf(hb,
+                "static SkReg __sk_reg_%d_%u = { \"%s%s\", %s, 0 };\n"
+                "__attribute__((constructor)) static void __sk_reginit_%d_%u(void) "
+                "{ __sk_register(&__sk_reg_%d_%u); }\n",
+                id, i, rn, frames[i].hole_left ? "$L" : "$R", frame_fn[i],
+                id, i, id, i);
+            free(rn);
+        }
     }
     char *k_fn_val = emit_value(ctx, body, k_fn);
 
@@ -884,8 +970,8 @@ char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "DK *%s = dk_prompt(1, dk_done());\n", chain);
     for (uint32_t i = 0; i < nf; i++) {       /* outermost-first -> innermost at front */
         indent_buf(body, ctx->indent);
-        buf_printf(body, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);\n",
-                   chain, op_tags[i], op_vals[i], chain);
+        buf_printf(body, "%s = dk_frame(%s, (intptr_t)(%s), %s);\n",
+                   chain, frame_fn[i], op_vals[i], chain);
         free(op_vals[i]);
     }
     indent_buf(body, ctx->indent);
@@ -1003,40 +1089,96 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "    if (f == __sk_subl) return SK_TAG_SUBL;\n"
 "    if (f == __sk_divr) return SK_TAG_DIVR;\n"
 "    if (f == __sk_divl) return SK_TAG_DIVL;\n"
-"    return 0;\n"
+"    return 0;  /* not an arithmetic frame -- a call frame (see the registry) */\n"
 "}\n"
+"/* Call-frame registry: each per-site call frame self-registers (via a C\n"
+" * constructor) a stable name <-> DKFrame mapping, so a call frame marshals as\n"
+" * its name rather than a code address -- the same name-keyed scheme the\n"
+" * interpreter's serial.c uses, here with the emitted C function name. */\n"
+"typedef struct SkReg { const char *name; DKFrame fn; struct SkReg *next; } SkReg;\n"
+"static SkReg *__sk_registry = NULL;\n"
+"static void __sk_register(SkReg *r) { r->next = __sk_registry; __sk_registry = r; }\n"
+"static DKFrame __sk_call_for_name(const char *name) {\n"
+"    for (SkReg *r = __sk_registry; r; r = r->next)\n"
+"        if (strcmp(r->name, name) == 0) return r->fn;\n"
+"    return NULL;\n"
+"}\n"
+"static const char *__sk_name_for_frame(DKFrame f) {\n"
+"    for (SkReg *r = __sk_registry; r; r = r->next)\n"
+"        if (r->fn == f) return r->name;\n"
+"    return NULL;\n"
+"}\n"
+"#define SK_TAG_CALL 100\n");
+    buf_puts(out,
 "/* Resume a (possibly deserialized) serial continuation on a value. */\n"
 "static int64_t tur_serial_cont_resume(int64_t k, int64_t v) {\n"
 "    return (int64_t)dk_invoke((DK *)(intptr_t)k, (intptr_t)v);\n"
 "}\n"
-"/* Marshal: [int64 payload_len][int64 n][ (int64 tag, int64 env) * n ]. The\n"
-" * captured frames run front-to-back, so they are written in chain order. */\n"
+"/* Marshal to a length-prefixed buffer ([int64 payload_len][int64 n][records]).\n"
+" * Each record is self-describing: an arithmetic frame is [tag(1..6)][env]; a\n"
+" * call frame is [SK_TAG_CALL][name_len][name bytes][env]. All scalars are\n"
+" * memcpy'd, so no alignment assumptions. Frames are written front-to-back. */\n"
 "static int64_t tur_serial_cont_serialize(int64_t k) {\n"
 "    DK *p = (DK *)(intptr_t)k;\n"
-"    int64_t n = 0;\n"
-"    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) n++;\n"
-"    int64_t payload = (int64_t)sizeof(int64_t) * (1 + 2 * n);\n"
-"    int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + (size_t)payload);\n"
-"    if (!buf) abort();\n"
-"    buf[0] = payload; buf[1] = n;\n"
-"    int64_t i = 2;\n"
+"    int64_t n = 0, sz = 8;  /* 8 bytes for the frame count */\n"
 "    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) {\n"
-"        buf[i++] = (int64_t)__sk_tag_for_frame(q->fn);\n"
-"        buf[i++] = (int64_t)q->env;\n"
+"        n++;\n"
+"        if (__sk_tag_for_frame(q->fn)) { sz += 16; }\n"
+"        else {\n"
+"            const char *nm = __sk_name_for_frame(q->fn);\n"
+"            int64_t L = nm ? (int64_t)strlen(nm) : 0;\n"
+"            sz += 8 + 8 + L + 8;  /* tag + name_len + name + env */\n"
+"        }\n"
+"    }\n"
+"    uint8_t *buf = (uint8_t *)malloc((size_t)(8 + sz));\n"
+"    if (!buf) abort();\n"
+"    memcpy(buf, &sz, 8);\n"
+"    uint8_t *c = buf + 8;\n"
+"    memcpy(c, &n, 8); c += 8;\n"
+"    for (DK *q = p; q && q->kind == DKK_FRAME; q = q->next) {\n"
+"        int t = __sk_tag_for_frame(q->fn);\n"
+"        if (t) {\n"
+"            int64_t tag = t, env = (int64_t)q->env;\n"
+"            memcpy(c, &tag, 8); c += 8; memcpy(c, &env, 8); c += 8;\n"
+"        } else {\n"
+"            int64_t tag = SK_TAG_CALL, env = (int64_t)q->env;\n"
+"            const char *nm = __sk_name_for_frame(q->fn);\n"
+"            int64_t L = nm ? (int64_t)strlen(nm) : 0;\n"
+"            memcpy(c, &tag, 8); c += 8;\n"
+"            memcpy(c, &L, 8); c += 8;\n"
+"            if (L) { memcpy(c, nm, (size_t)L); c += L; }\n"
+"            memcpy(c, &env, 8); c += 8;\n"
+"        }\n"
 "    }\n"
 "    return (int64_t)(intptr_t)buf;\n"
 "}\n"
 "/* Rebuild a runnable chain [frames..., prompt, done] from a marshaled buffer.\n"
-" * Frames are prepended in reverse so the first-written frame stays at front. */\n"
+" * Records are parsed forward, then prepended in reverse so the first-written\n"
+" * frame stays at the front of the chain. */\n"
 "static int64_t tur_serial_cont_deserialize(int64_t bytes) {\n"
-"    int64_t *buf = (int64_t *)(intptr_t)bytes;\n"
-"    int64_t n = buf[1];\n"
-"    DK *chain = dk_prompt(1, dk_done());\n"
-"    for (int64_t i = n - 1; i >= 0; i--) {\n"
-"        int64_t tag = buf[2 + 2 * i];\n"
-"        int64_t env = buf[2 + 2 * i + 1];\n"
-"        chain = dk_frame(__sk_frame_for_tag((int)tag), (intptr_t)env, chain);\n"
+"    uint8_t *c = (uint8_t *)(intptr_t)bytes + 8;  /* skip the length prefix */\n"
+"    int64_t n; memcpy(&n, c, 8); c += 8;\n"
+"    DKFrame *fns = (DKFrame *)malloc(sizeof(DKFrame) * (size_t)(n > 0 ? n : 1));\n"
+"    intptr_t *envs = (intptr_t *)malloc(sizeof(intptr_t) * (size_t)(n > 0 ? n : 1));\n"
+"    if (!fns || !envs) abort();\n"
+"    for (int64_t i = 0; i < n; i++) {\n"
+"        int64_t tag; memcpy(&tag, c, 8); c += 8;\n"
+"        if (tag == SK_TAG_CALL) {\n"
+"            int64_t L; memcpy(&L, c, 8); c += 8;\n"
+"            char *nm = (char *)malloc((size_t)L + 1);\n"
+"            if (!nm) abort();\n"
+"            if (L) memcpy(nm, c, (size_t)L);\n"
+"            nm[L] = 0; c += L;\n"
+"            fns[i] = __sk_call_for_name(nm); free(nm);\n"
+"        } else {\n"
+"            fns[i] = __sk_frame_for_tag((int)tag);\n"
+"        }\n"
+"        int64_t env; memcpy(&env, c, 8); c += 8;\n"
+"        envs[i] = (intptr_t)env;\n"
 "    }\n"
+"    DK *chain = dk_prompt(1, dk_done());\n"
+"    for (int64_t i = n - 1; i >= 0; i--) chain = dk_frame(fns[i], envs[i], chain);\n"
+"    free(fns); free(envs);\n"
 "    return (int64_t)(intptr_t)chain;\n"
 "}\n"
 "\n");
