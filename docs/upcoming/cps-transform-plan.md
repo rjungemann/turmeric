@@ -11,14 +11,18 @@
 > delimited control + undelimited `call/cc`/`escape`) done (2026-06-02)**;
 > **CPS9 (cloneable continuations with captured context on the DK machine) done
 > (2026-06-02)**; **CPS10 (serializable continuations on the DK machine, CPS5.4)
-> done (2026-06-02)**. **CPS0--CPS10 implemented**; base `reset`/`shift`/`shift0`,
-> undelimited `call/cc`/`escape`, `cloneable-reset`/`cloneable-shift` (capturing
-> the delimited *context* and replaying it multi-shot via `dk_invoke`), and now
-> `serial-reset`/`serial-shift` (capturing a *marshalable* context that
-> serialize/deserialize round-trips) execute on this substrate in emitted code
-> (`emit_cps.c`), while the `call/cc*` fresh-reset sugar (whose captured
-> continuation is trivial/empty-context) remains the next increment (see
-> CPS8/CPS9/CPS10 and the Status summary). This is the substrate that
+> done (2026-06-02)**; **CPS11 (`call/cc*` captures up to an enclosing
+> cloneable-reset) done (2026-06-02)**. **CPS0--CPS11 implemented**; base
+> `reset`/`shift`/`shift0`, undelimited `call/cc`/`escape`,
+> `cloneable-reset`/`cloneable-shift` (capturing the delimited *context* and
+> replaying it multi-shot via `dk_invoke`), `serial-reset`/`serial-shift`
+> (capturing a *marshalable* context that serialize/deserialize round-trips), and
+> now `call/cc*` (capturing the real continuation up to the nearest enclosing
+> cloneable-reset) all execute on this substrate in emitted code (`emit_cps.c`).
+> The whole delimited/undelimited operator set now runs on the CPS substrate;
+> what remains are perf/cleanup follow-ons (OQ-CPS2: keep-or-remove the fiber
+> fast path; richer serial env types; CC4 `(k v)` sugar / `cont<T>` typing). This
+> is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -522,16 +526,15 @@ compiled to a run on the multi-prompt `DK` machine (`dk_run` / `dk_prompt` /
   (CC5 ungating is a follow-up); the continuation is resumed via the
   `tur_escape_resume` builtin (the proven `call/cc*` handle pattern) -- direct
   `(k v)` application sugar and the `cont<T>` parameter typing (CC4) remain.
-- **Remaining (next increment) -- addressed by CPS9/CPS10.** Reifying a
+- **Remaining (next increment) -- addressed by CPS9/CPS10/CPS11.** Reifying a
   *resumable* sub-continuation in emitted code (the piece the abortive shift and
   one-shot upward escape do not need) is delivered by **CPS9** for
-  `cloneable-reset`/`cloneable-shift` (multi-shot) and by **CPS10** for
-  `serial-reset`/`serial-shift` (marshalable). What still uses the legacy
-  lowering: the `call/cc*` *sugar* -- which desugars to `(cloneable-reset
-  (cloneable-shift f 0))`, a freshly-installed inner reset whose captured
-  continuation is empty (trivial), so it stays on the legacy path. Capturing up
-  to an *enclosing* cloneable-reset (the real call/cc* semantics) is the natural
-  follow-on now that the resumable-sub machinery exists (CPS9/CPS10).
+  `cloneable-reset`/`cloneable-shift` (multi-shot), **CPS10** for
+  `serial-reset`/`serial-shift` (marshalable), and **CPS11** for `call/cc*`
+  (which now captures up to an *enclosing* cloneable-reset -- the real call/cc*
+  semantics -- rather than installing a fresh trivial inner reset). The whole
+  operator set is on the substrate; only perf/cleanup follow-ons remain (see the
+  Status summary and Open questions).
 
 ## Phase CPS9 -- Cloneable continuations with captured context on the DK machine  -- **DONE 2026-06-02**
 
@@ -638,6 +641,43 @@ per-site lambda-lifted frames of CPS9.
   single substrate is a future cleanup, tracked with the OQ-CPS2 keep-or-remove
   decision.
 
+## Phase CPS11 -- `call/cc*` captures up to an enclosing cloneable-reset  -- **DONE 2026-06-02**
+
+The last operator on the legacy path. `(call/cc* f)` used to desugar
+unconditionally to `(cloneable-reset (cloneable-shift f 0))` -- a freshly
+installed inner reset, so the captured continuation was always empty (the
+identity), discarding any surrounding context. CPS11 gives `call/cc*` the real
+delimited semantics: it captures the continuation up to the nearest *enclosing*
+cloneable-reset.
+
+**Implementation.** `src/compiler/elab_effects.c` (`elab_call_cc_star`). The
+elaborator already tracks `cloneable_reset_depth`. The desugaring is now
+context-sensitive:
+
+- **Inside a cloneable-reset (`cloneable_reset_depth > 0`):** desugar to a *bare*
+  `(cloneable-shift f 0)` that binds to the enclosing reset. The reset body is
+  then the real delimited context around the shift, which the **CPS9** lowering
+  already reifies onto the DK machine and replays multi-shot. E.g.
+  `(cloneable-reset (+ 10 (call/cc* f)))` hands `f` a continuation computing
+  `(+ 10 [])`; resuming it with 5 yields 15, and a clone + original resume
+  ((+ 10 1) + (+ 10 2)) yields 23.
+- **No enclosing cloneable-reset:** keep the original fresh-delimiter sugar
+  `(cloneable-reset (cloneable-shift f 0))`, so `call/cc*` still works on its own
+  with the identity continuation -- the existing `call-cc-star` /
+  `cloneable-multi-resume` semantics are preserved byte-identically (those
+  fixtures have no enclosing reset).
+
+This is purely additive: no existing fixture uses `call/cc*` inside a
+cloneable-reset, so every shipped snapshot and both the compiled and interpreter
+suites stay green with no regeneration.
+
+- **CPS11.1 -- Context-sensitive desugar.** *Done:* bare shift under an enclosing
+  reset; fresh-reset sugar otherwise.
+- **CPS11.2 -- Executing test.** `tests/fixtures/callcc-star-context/` proves the
+  enclosing-reset capture: single resume through `(+ 10 [])` (= 15), multi-shot
+  ((10+1)+(10+2) = 23), nested `(* 2 (+ 1 []))` (= 10), plus the no-reset
+  identity case (100, 200) to lock in the preserved sugar.
+
 ---
 
 ## Status summary (2026-06-02)
@@ -659,19 +699,20 @@ pipeline and the full fixture suite green at every step:
 | CPS8 | Codegen wiring: base reset/shift/shift0 (+ undelimited call/cc/escape) on the DK machine | live codegen (`emit_cps`) | `continuation-substrate` fixture + regen'd base-shift snapshots |
 | CPS9 | Cloneable continuations with captured context, multi-shot via `dk_invoke` | live codegen (`emit_cps`) | `cloneable-context-multishot` fixture (legacy fallback keeps existing snapshots) |
 | CPS10 | Serializable continuations with captured context, marshalable (serialize/deserialize) | live codegen (`emit_cps`) | `serial-context-marshal` fixture (legacy fallback keeps `serial-reset-basic`) |
+| CPS11 | `call/cc*` captures up to an enclosing cloneable-reset (real semantics) | context-sensitive desugar (`elab_call_cc_star`) -> CPS9 lowering | `callcc-star-context` fixture (no-reset sugar preserved: `call-cc-star`) |
 
-**Codegen wiring -- CPS8/CPS9/CPS10, landed.** The remaining piece called out
-under CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited lowerings off the
+**Codegen wiring -- CPS8/CPS9/CPS10/CPS11, landed.** The remaining piece called
+out under CPS3.1/CPS5.1/5.2/CPS6 -- re-pointing the delimited lowerings off the
 legacy runtime and onto this substrate -- is implemented for **base**
 `reset`/`shift`/`shift0` (CPS8), **undelimited `call/cc`/`escape`** (CPS8.5),
 **cloneable continuations with a captured delimited context** (CPS9:
-`cloneable-reset`/`cloneable-shift`, multi-shot via `dk_invoke`), and
-**serializable continuations** (CPS10: `serial-reset`/`serial-shift`, marshalable
-via serialize/deserialize). What remains on the legacy lowering: the `call/cc*`
-*sugar* (a fresh inner reset -> empty/trivial captured continuation). Because
-base delimited control, undelimited capture, context-capturing multi-shot, and
-marshalable capture all execute on the DK machine, the relevant exit criteria
-are met for those operator sets; `call/cc*`-up-to-an-enclosing-reset stays open.
+`cloneable-reset`/`cloneable-shift`, multi-shot via `dk_invoke`), **serializable
+continuations** (CPS10: `serial-reset`/`serial-shift`, marshalable via
+serialize/deserialize), and **`call/cc*`** (CPS11: captures up to an enclosing
+cloneable-reset). The full delimited/undelimited operator set now executes on
+the DK machine; the corresponding exit criteria are met. Only perf/cleanup
+follow-ons remain (OQ-CPS2 keep-or-remove the fiber fast path; richer serial env
+types via the `Serializable` typeclass; CC4 `(k v)` sugar / `cont<T>` typing).
 
 ---
 
@@ -681,10 +722,13 @@ are met for those operator sets; `call/cc*`-up-to-an-enclosing-reset stays open.
   change (CPS8: `continuation-basic`/`-advanced`/`shift-result-typing`/
   `shift0-result-typing` snapshots regenerated and green; `continuation-substrate`
   asserts the runtime values). **Done.** Cloneable continuations with a captured
-  context (CPS9: `cloneable-context-multishot`) and serializable continuations
-  (CPS10: `serial-context-marshal`, serialize/deserialize round-trip) also run
-  on the substrate. The `call/cc*` fresh-reset sugar still runs on its existing
-  lowering -- the next increment.
+  context (CPS9: `cloneable-context-multishot`), serializable continuations
+  (CPS10: `serial-context-marshal`, serialize/deserialize round-trip), and
+  `call/cc*` capturing up to an enclosing cloneable-reset (CPS11:
+  `callcc-star-context`) also run on the substrate. Every delimited/undelimited
+  operator now has a CPS-substrate lowering for its supported shape subset; the
+  legacy lowering survives only as the selective fallback for shapes outside that
+  subset (the keep-or-remove decision for it is OQ-CPS2).
 - A continuation captured across a call depth far greater than 16 captures and
   resumes correctly (the fiber path's `NULL`-on-overflow no longer applies).
   **Done in emitted code (CPS8.5/CPS9):** `escape-deep-capture` captures and
