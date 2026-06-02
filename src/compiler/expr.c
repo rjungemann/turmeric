@@ -22,7 +22,19 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_FLOAT_LIT: buf_printf(b, "%g", e->as.f); break;
         case EX_CSTR_LIT: buf_putc(b, '"'); buf_write(b, e->as.s.p, e->as.s.len); buf_putc(b, '"'); break;
         case EX_SYM_LIT:  buf_putc(b, ':'); if (e->as.sym_lit_.sym) buf_write(b, e->as.sym_lit_.sym->name, e->as.sym_lit_.sym->len); break;
+        case EX_CPS_CONT_APP:
+            buf_puts(b, "(cps-apply ");
+            expr_print(b, e->as.cps_cont_app_.cont);
+            buf_putc(b, ' ');
+            expr_print(b, e->as.cps_cont_app_.value);
+            buf_putc(b, ')');
+            break;
         case EX_VAR:      buf_write(b, e->as.var.binding->name->name, e->as.var.binding->name->len); break;
+        case EX_CALLCC:
+            buf_puts(b, e->as.callcc_.is_escape ? "(escape " : "(call/cc ");
+            expr_print(b, e->as.callcc_.fn);
+            buf_putc(b, ')');
+            break;
         case EX_LETREC:
         case EX_LET:
             buf_puts(b, "(let [");

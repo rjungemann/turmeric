@@ -183,6 +183,17 @@ static BuiltinSpec table_[] = {
     { "tur_cloneable_cont_drop",   NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_NIL}, BS_FUNC_CALL, "tur_cloneable_cont_drop" },
     /* MS0: Snapshot a cloneable continuation for independent resumption */
     { "tur_continuation_snapshot", NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_continuation_snapshot" },
+    /* call-cc-completion: resume an undelimited escape continuation captured by
+     * (call/cc f)/(escape f).  k is the int64_t landing handle f received;
+     * invoking it returns v at the call/cc site (one-shot, upward escape). */
+    { "tur_escape_resume", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_escape_resume" },
+    /* cps-transform-plan (CPS10 / CPS5.4): serializable continuations captured
+     * by (serial-shift f v) on the DK machine.  The handle f receives is a DK
+     * chain (int64); resume runs it, serialize marshals it to a length-prefixed
+     * buffer (tag + env per frame), deserialize rebuilds a runnable chain. */
+    { "tur_serial_cont_resume",      NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_serial_cont_resume" },
+    { "tur_serial_cont_serialize",   NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_serial_cont_serialize" },
+    { "tur_serial_cont_deserialize", NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_serial_cont_deserialize" },
 };
 
 #define TABLE_LEN (sizeof(table_) / sizeof(table_[0]))

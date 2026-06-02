@@ -1,5 +1,6 @@
 /* emit_module.c -- program/module assembly (emit_program, emit_header, emit_implementation). */
 #include "emit_internal.h"
+#include "emit_cps.h"   /* cps-transform-plan: DK substrate prelude + wiring */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 
 /* ------------ program-level emit ------------ */
@@ -1112,6 +1113,37 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         buf_puts(out, ");\n");
         free((void*)fn_name);
     }
+    /* CPS3: forward declarations for __cps wrappers */
+    if (g_cps_path) {
+        for (uint32_t i = 0; i < n_items; i++) {
+            const Expr *e = items[i];
+            if (e->kind != EX_FN_DEF) continue;
+            FnDef *fd = e->as.fn_def_.fn;
+            if (!fd->is_cps) continue;
+            if (fd->closure) continue;
+            if (strcmp(fd->binding->name->name, "main") == 0) continue;
+            const char *fn_name = raw_name_for_binding(fd->binding);
+            buf_printf(out, "static void %s__cps(tur_cps_cont_t *__k", fn_name);
+            for (uint8_t j = 0; j < fd->n_params; j++) {
+                buf_puts(out, ", ");
+                if (fd->params[j]->is_poly_fn) {
+                    buf_puts(out, "tur_poly_fn_t");
+                } else if (fd->param_types[j].kind == TY_FN) {
+                    buf_puts(out, "int64_t");
+                } else {
+                    Type _pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
+                        ? *e->type.as.fn.arg_full_types[j]
+                        : fd->param_types[j];
+                    buf_puts(out, type_c_name(_pty));
+                }
+                const char *pn = raw_name_for_binding(fd->params[j]);
+                buf_printf(out, " %s", pn);
+                free((void*)pn);
+            }
+            buf_puts(out, ");\n");
+            free((void*)fn_name);
+        }
+    }
 }
 
 int emit_program(Buf *out, const Expr *program) {
@@ -1140,6 +1172,7 @@ int emit_program(Buf *out, const Expr *program) {
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs;
     ctx.indent = 4;
     ctx.tmp_n = 0;
@@ -2383,6 +2416,15 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
 
+    /* CPS3: emit tur_cps_cont_t + tur_cps_apply when --cps-path is active */
+    if (g_cps_path) {
+        buf_puts(out, "/* CPS3: tur_cps_cont_t -- v1 identity-CPS continuation handle */\n");
+        buf_puts(out, "typedef struct tur_cps_cont {\n");
+        buf_puts(out, "    void (*fn)(struct tur_cps_cont *k, int64_t value);\n");
+        buf_puts(out, "} tur_cps_cont_t;\n");
+        buf_puts(out, "static inline void tur_cps_apply(tur_cps_cont_t *k, int64_t v) { if (k) k->fn(k, v); }\n\n");
+    }
+
     /* Phase R2: Panic with typed payload */
     /* tur_panic_with is forward-declared here; its body is emitted after
      * FiberBlock in Phase T21 so it can dereference tur_current_fiber. */
@@ -2491,8 +2533,12 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
      * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
-     * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot). */
-    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
+     * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot), or when
+     * a cloneable-reset lowers onto the DK machine (CPS9): the DK bridge wraps the
+     * captured context in a tur_cloneable_cont. (cps_expr_contains_cloneable_shift
+     * does not look inside builtins, so a context-nested shift needs this gate.) */
+    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program) ||
+        emit_cps_program_uses_cloneable_dk(program)) {
     buf_puts(out, "/* Phase B2: Cloneable continuation runtime */\n");
     buf_puts(out, "typedef struct tur_cloneable_cont tur_cloneable_cont;\n");
     buf_puts(out, "struct tur_cloneable_cont {\n");
@@ -2552,6 +2598,31 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static __thread tur_cloneable_reset_ctx *tur_current_reset_ctx = NULL;\n\n");
 
     } /* end if (cps_expr_contains_cloneable_shift(program)) */
+
+    /* cps-transform-plan: emit the heap-reified CPS substrate (DK multi-prompt
+     * machine) when the program uses base delimited control (reset/shift/
+     * shift0), or when a cloneable-reset lowers onto the DK machine (CPS9).
+     * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
+    if (emit_cps_program_uses_delimited(program) ||
+        emit_cps_program_uses_cloneable_dk(program) ||
+        emit_cps_program_uses_serial_dk(program)) {
+        emit_cps_runtime_prelude(out);
+    }
+    /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
+     * runtime (emitted above) and the DK machine (just emitted) in scope. */
+    if (emit_cps_program_uses_cloneable_dk(program)) {
+        emit_cps_cloneable_bridge_prelude(out);
+    }
+    /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. */
+    if (emit_cps_program_uses_serial_dk(program)) {
+        emit_cps_serial_runtime_prelude(out);
+    }
+
+    /* call-cc-completion: emit the undelimited escape-continuation runtime when
+     * the program uses (call/cc f) / (escape f). */
+    if (emit_cps_program_uses_callcc(program)) {
+        emit_cps_callcc_prelude(out);
+    }
 
     /* Phase 19: Effect handler chain */
     buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
@@ -4878,6 +4949,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     EmitCtx ctx;
     ctx.file = &file;
     ctx.main_ = &body;
+    ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs2;
     ctx.indent = 4;
     ctx.tmp_n = 0;

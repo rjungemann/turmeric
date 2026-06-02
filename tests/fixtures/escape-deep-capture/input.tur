@@ -1,0 +1,24 @@
+;; call-cc-completion (CC3): (escape f) -- one-shot abort, undelimited.
+;; The continuation is invoked from 5000 frames deep; capture is O(1) and
+;; unbounded -- the old fiber path (TUR_CONT_MAX_CAPTURED_FRAMES=16) returned
+;; NULL past 16 frames.  escape's landing sits at the escape site regardless of
+;; depth, so the deep (tur_escape_resume k 7) unwinds straight back to it.
+
+(extern-c printf [^cstr fmt ^int v] :int)
+
+(defn descend [k :int n :int] :int
+  (if (= n 0)
+    (tur_escape_resume k 7)
+    (+ 1 (descend k (- n 1)))))   ; (+ 1 ...) frames the escape would abort
+
+(defn find-deep [] :int
+  (escape (fn [k] (descend k 5000))))
+
+;; escape whose f never invokes k -- normal return flows out.
+(defn no-escape [] :int
+  (escape (fn [k] 123)))
+
+(defn main [] :int
+  (printf "deep=%lld\n" (find-deep))
+  (printf "normal=%lld\n" (no-escape))
+  0)

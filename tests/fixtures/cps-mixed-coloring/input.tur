@@ -1,0 +1,23 @@
+;; CPS3 (cps-transform-plan): selective lowering + direct<->CPS boundary bridging.
+;;
+;; twice             -- uncolored, pure: called FROM colored code => cps->direct bridge
+;; shift-then-twice  -- colored (reset/shift); its call to `twice` is a cps->direct bridge
+;; run               -- colored (transitive); tail-calls shift-then-twice => cps->cps
+;; main              -- colored; a direct->CPS *entry* root (the runtime supplies the
+;;                      initial continuation / implicit root prompt)
+;;
+;; Runtime result (via the existing fiber path): twice(reset(shift id 20)) = 40,
+;; run adds 1 => 41.
+
+(defn twice [x :int] :int
+  (* 2 x))
+
+(defn shift-then-twice [x :int] :int
+  (twice (reset (shift (fn [v] v) x))))
+
+(defn run [n :int] :int
+  (+ 1 (shift-then-twice n)))
+
+(defn main [] :int
+  (println (run 20))
+  0)

@@ -79,6 +79,19 @@ static Type *fn_type_from_form(Elab *e, const Form *form,
         if (has_pipe || has_amp) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* CC4 / value-typed cont: (cont T) / (escape-cont T) / (serial-cont T)
+         * -- a flavored continuation whose result type is T. `cont` is not a
+         * generic arrow-kind constructor, so handle the application here. */
+        {
+            int cflav = cont_flavor_from_name(head->name);
+            if (cflav >= 0 && form->as.list.len == 2) {
+                Type *arg = fn_type_from_form(e, form->as.list.items[1],
+                                              type_params, type_param_kinds, n_type_params);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_cont_flavored(arg ? arg->kind : TY_INT, (ContFlavor)cflav);
+                return t;
+            }
+        }
         Type *cur = fn_type_from_form(e, form->as.list.items[0],
                                       type_params, type_param_kinds, n_type_params);
         if (!cur) return NULL;
@@ -993,6 +1006,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 param_poly_types[n_params - 1] = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *param_poly_types[n_params - 1] = params[n_params - 1]->type;
                 continue;
+            }
+            /* CC4 (cps-transform-plan): a flavored continuation parameter --
+             * :cont (cloneable), :escape-cont, or :serial-cont. The flavor
+             * selects which runtime (k v) application sugar resumes against. */
+            {
+                int _cflav = cont_flavor_from_name(kw->name);
+                if (_cflav >= 0) {
+                    param_kinds[n_params - 1] = TY_CONT;
+                    params[n_params - 1]->type =
+                        type_cont_flavored(TY_INT, (ContFlavor)_cflav);
+                    continue;
+                }
             }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
@@ -2195,6 +2220,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
     fd->params = params;
     fd->n_params = n_params;
@@ -2685,6 +2711,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(fd, 0, sizeof(FnDef));
     fd->binding = b;
     fd->params = params;
     fd->n_params = n_params;

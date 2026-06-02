@@ -1588,6 +1588,58 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return NULL;
     }
 
+    /* CC4 (cps-transform-plan): (k v) application sugar for a cloneable
+     * continuation. A call through a cont-typed binding desugars to a resume of
+     * the cloneable continuation handle -- what the surface previously had to
+     * spell as (tur_cloneable_cont_resume k v). The handle is carried as an
+     * int64_t (see type_c_name TY_CONT), so the resume builtin consumes it
+     * directly. */
+    if (fn_type.kind == TY_CONT) {
+        if (n_args != 1) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "continuation '%s' takes exactly one argument (the resume value)",
+                      fn_binding->name->name);
+            return NULL;
+        }
+        Expr *karg = elab_form(e, call->as.list.items[1]);
+        if (!karg) return NULL;
+        /* The handle, viewed as its int64 carrier so the resume builtin types. */
+        Expr *kvar = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
+        kvar->as.var.binding = fn_binding;
+        /* CC4: dispatch to the resume runtime selected by the cont flavor. */
+        const char *resume_name;
+        switch ((ContFlavor)fn_type.as.cont.flavor) {
+            case CONT_ESCAPE: resume_name = "tur_escape_resume"; break;
+            case CONT_SERIAL: resume_name = "tur_serial_cont_resume"; break;
+            case CONT_CLONEABLE:
+            default:          resume_name = "tur_cloneable_cont_resume"; break;
+        }
+        const BuiltinSpec *rspec =
+            builtin_first_with_name(intern_cstr(e->st, resume_name));
+        if (!rspec) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "internal: continuation resume builtin missing");
+            return NULL;
+        }
+        TypeKind res_kind = (fn_type.as.cont.returns != TY_UNKNOWN)
+                            ? fn_type.as.cont.returns : TY_INT;
+        /* The resume builtins are int64-carried. For a value-typed cont<T> with
+         * T != int (e.g. cstr), bit-cast the resume value into the int carrier on
+         * the way in and bit-cast the int result back to T on the way out, so the
+         * emitted C is clean (no -Wint-conversion). */
+        Expr *karg_c = call_wrap_reinterpret(e, karg, TY_INT, call->span);
+        Expr **bargs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        bargs[0] = kvar;
+        bargs[1] = karg_c;
+        Expr *out = expr_new(e->arena, EX_BUILTIN, TYPE_INT, call->span);
+        out->as.builtin.spec = rspec;
+        out->as.builtin.args = bargs;
+        out->as.builtin.n = 2;
+        if (res_kind != TY_INT)
+            out = call_wrap_reinterpret(e, out, res_kind, call->span);
+        return out;
+    }
+
     if (fn_type.kind == TY_FN &&
         e->unsafe_depth == 0 &&
         effect_row_contains_symbol(fn_type.as.fn.effect_row, e->sym_effect_unsafe)) {

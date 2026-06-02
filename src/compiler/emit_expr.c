@@ -1,5 +1,6 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
+#include "emit_cps.h"   /* cps-transform-plan: EX_CALLCC lowering */
 
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
@@ -952,6 +953,13 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
+        case EX_CPS_CONT_APP:
+            /* CPS2 stub: EX_CPS_CONT_APP is generated only by the CPS3 lowering pass;
+             * reaching emit_value here means a CPS-lowered node leaked into a
+             * context that has not yet been updated to handle it. */
+            fprintf(stderr, "tur: internal error: EX_CPS_CONT_APP reached emit_value "
+                    "(CPS3 lowering not yet active for this path)\n");
+            abort();
         case EX_VAR:      return atom_var(ctx, e->as.var.binding);
         case EX_CAST: {
             /* (as TargetType expr) — emit as C cast: (target_c_type)(inner) */
@@ -1490,6 +1498,7 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CLONEABLE_RESET:  return emit_effects_cloneable_reset(ctx, body, e);
         case EX_SHIFT:            return emit_effects_shift(ctx, body, e);
         case EX_SHIFT0:           return emit_effects_shift0(ctx, body, e);
+        case EX_CALLCC:           return emit_cps_callcc(ctx, body, e);
         case EX_CLONEABLE_SHIFT:  return emit_effects_cloneable_shift(ctx, body, e);
         /* Phase 21: Serializable continuations */
         case EX_SERIAL_RESET:     return emit_effects_serial_reset(ctx, body, e);
