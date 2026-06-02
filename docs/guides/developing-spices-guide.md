@@ -591,7 +591,7 @@ definition. The standard format (from CLAUDE.md):
   ...)
 ```
 
-Exported symbols without docstrings will be omitted from `just docs` output.
+Exported symbols without docstrings will be omitted from `tur run docs` output.
 
 ### Module docstring (optional)
 

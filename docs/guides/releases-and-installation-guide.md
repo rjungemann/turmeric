@@ -88,8 +88,11 @@ release line is established.
 ```sh
 git clone https://github.com/rjungemann/turmeric.git
 cd turmeric
-just build       # debug build
-just release     # optimized build, drops `tur` in build/
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j                    # debug build, lands at build/tur
+
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build-release -j            # optimized build, drops `tur` in build-release/
 ```
 
 You'll need CMake 3.20+, a C99 compiler, and `libedit` (for the REPL).

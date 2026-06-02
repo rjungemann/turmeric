@@ -59,10 +59,39 @@ below).
 
 ## GitHub Copilot CLI
 
-The GitHub Copilot CLI (this tool) does not yet support MCP tool invocations
-directly. However, it works alongside the LSP for editor integrations (see
-[VS Code Copilot](#vs-code-copilot) and [Neovim](#neovim) below) and can
-reason about Turmeric code using the context you provide.
+The GitHub Copilot CLI reads MCP server configuration from
+`~/.copilot/mcp-config.json` (user-level, persistent across projects). Add a
+`turmeric` entry under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "turmeric": {
+      "command": "tur",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+To enable it for a single session without touching the global file, pass
+`--additional-mcp-config` pointing at a project-local JSON file with the same
+shape:
+
+```sh
+copilot --additional-mcp-config ./.copilot/mcp-config.json
+```
+
+Inside Copilot CLI, run `/mcp` to list registered servers or use the
+`/lsp` slash command to manage `tur lsp` alongside the MCP integration.
+See the [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
+for the full migration notes away from the older `.vscode/mcp.json` layout.
+
+### Disabling for a session
+
+```sh
+TUR_NO_MCP=1 copilot
+```
 
 ---
 

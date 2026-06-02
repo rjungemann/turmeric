@@ -1,5 +1,9 @@
 # Build & Test UX Improvements Plan
 
+> **Superseded:** any `just <recipe>` references below have been replaced by
+> CMake bootstrap (for compiler builds) and `tur run <recipe>` (for project
+> tasks). See `docs/upcoming/drop-just-dependency-plan.md`.
+
 Two independent quality-of-life issues that slow down the inner development loop.
 
 ---

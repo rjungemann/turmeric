@@ -2994,14 +2994,84 @@ static int try_consume_use_directive(Reader *r,
  * non-blank content; using them for indent grouping is undefined.
  * =========================================================================*/
 
+/* Map builder shared by the emitter to record xform→original byte runs. */
+static void sweet_map_add_run(SweetMap *m, size_t xform_off,
+                               size_t orig_off, size_t n) {
+    if (n == 0 || !m) return;
+    if (m->n_runs > 0) {
+        SweetMapRun *last = &m->runs[m->n_runs - 1];
+        if (last->xform_offset + last->length == xform_off &&
+            last->orig_offset  + last->length == orig_off) {
+            last->length += (uint32_t)n;
+            return;
+        }
+    }
+    if (m->n_runs == m->cap_runs) {
+        size_t new_cap = m->cap_runs ? m->cap_runs * 2 : 64;
+        SweetMapRun *grown = (SweetMapRun *)realloc(m->runs,
+                                  new_cap * sizeof *grown);
+        if (!grown) return;
+        m->runs = grown;
+        m->cap_runs = new_cap;
+    }
+    m->runs[m->n_runs].xform_offset = (uint32_t)xform_off;
+    m->runs[m->n_runs].orig_offset  = (uint32_t)orig_off;
+    m->runs[m->n_runs].length       = (uint32_t)n;
+    m->n_runs++;
+}
+
+size_t sweet_map_translate_offset(const SweetMap *m, size_t xform_off) {
+    if (!m || m->n_runs == 0) return xform_off;
+    /* Binary search for the rightmost run with xform_offset <= xform_off. */
+    size_t lo = 0, hi = m->n_runs;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (m->runs[mid].xform_offset <= xform_off) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo == 0) return m->runs[0].orig_offset;
+    const SweetMapRun *r = &m->runs[lo - 1];
+    if (xform_off < (size_t)r->xform_offset + r->length) {
+        return (size_t)r->orig_offset + (xform_off - r->xform_offset);
+    }
+    return (size_t)r->orig_offset + r->length;
+}
+
+/* Emit helpers used by the preprocessor: emit_copy_ records a run in
+ * the map; emit_insert_ does not (the bytes are reader-inserted). */
+typedef struct SweetEmit {
+    Buf      *out;
+    SweetMap *map;
+} SweetEmit;
+
+static void emit_copy_(SweetEmit *e, const char *src, size_t orig_off, size_t n) {
+    if (n == 0) return;
+    sweet_map_add_run(e->map, e->out->len, orig_off, n);
+    buf_write(e->out, src + orig_off, n);
+}
+
+static void emit_copy_char_(SweetEmit *e, const char *src, size_t orig_off) {
+    sweet_map_add_run(e->map, e->out->len, orig_off, 1);
+    buf_putc(e->out, src[orig_off]);
+}
+
+static void emit_insert_char_(SweetEmit *e, char c) {
+    buf_putc(e->out, c);
+}
+
 typedef struct SweetLine {
     size_t phys_start;     /* offset of first physical line start (col 0) */
     size_t content_start;  /* offset of first non-indent char */
     size_t content_end;    /* offset where logical line ends (at \n or EOF) */
     int    indent;         /* indent column (tab-expanded) */
     bool   blank;          /* blank or comment-only line */
+    bool   is_group;       /* leading `\\` marker — line is transparent to parent */
     int    open_count;     /* `(` to emit before content */
     int    close_count;    /* `)` to emit after content */
+    int    contributes_elems; /* elements this node contributes to its parent
+                               * (1 for regular wrapped lines, >=0 for group
+                               * lines where tokens + child contributions
+                               * flatten into the parent's element list) */
 } SweetLine;
 
 static size_t sweet_indent_bytes(const char *s, size_t i, size_t end) {
@@ -3034,6 +3104,28 @@ static size_t sweet_skip_line_cont(const char *src, size_t i, size_t end) {
     k++;
     while (k < end && (src[k] == ' ' || src[k] == '\t')) k++;
     return k;
+}
+
+/* Detect a leading GROUP marker.  Per SRFI-110, the marker is a pair of
+ * backslashes (`\\` — two characters) immediately after the line's
+ * indent, either alone on the line or followed by whitespace and more
+ * content.  Two backslashes (instead of one) distinguish the GROUP
+ * marker from the `\` line-continuation marker. */
+static bool sweet_line_is_group(const char *s, size_t i, size_t end) {
+    if (i + 1 >= end) return false;
+    if (s[i] != '\\' || s[i + 1] != '\\') return false;
+    if (i + 2 >= end) return true;
+    char n = s[i + 2];
+    return (n == ' ' || n == '\t' || n == '\n' || n == '\r');
+}
+
+/* Advance past the GROUP marker (`\\` and any trailing spaces/tabs).
+ * The caller ensures the line is a group line.  Returns the position of
+ * the first post-marker character (which may equal end). */
+static size_t sweet_skip_group_marker(const char *s, size_t i, size_t end) {
+    if (i + 1 < end && s[i] == '\\' && s[i + 1] == '\\') i += 2;
+    while (i < end && (s[i] == ' ' || s[i] == '\t')) i++;
+    return i;
 }
 
 static bool sweet_line_is_blank(const char *s, size_t i, size_t end) {
@@ -3150,11 +3242,16 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
         int indent = sweet_indent_col(src, i, len);
         size_t content_start = phys_start + indent_bytes;
         bool blank = sweet_line_is_blank(src, phys_start, len);
+        bool is_group = !blank &&
+                        sweet_line_is_group(src, content_start, len);
 
-        /* Scan to end of logical line. */
+        /* Scan to end of logical line.  When the line opens with a GROUP
+         * marker (`\\`), step past it before the scanner runs so the bare
+         * `\\` is not misread as a `\\`-line-continuation. */
         int bd = 0;
         bool in_str = false, in_bc = false;
         size_t j = content_start;
+        if (is_group) j = sweet_skip_group_marker(src, j, len);
         while (j < len) {
             char c = src[j];
             if (in_str) {
@@ -3204,8 +3301,10 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
         L->content_end = j;
         L->indent = indent;
         L->blank = blank;
+        L->is_group = is_group;
         L->open_count = 0;
         L->close_count = 0;
+        L->contributes_elems = 1;
 
         if (j < len && src[j] == '\n') j++;
         i = j;
@@ -3216,27 +3315,44 @@ static SweetLine *sweet_collect_lines(const char *src, size_t len,
 }
 
 /* Recursively annotate open/close counts.  Returns index of the last
- * line consumed by this node (so the caller can resume after it). */
+ * line consumed by this node (so the caller can resume after it).
+ *
+ * Also sets H->contributes_elems to the number of elements this node
+ * contributes to its parent's element list.  Normal (non-group) nodes
+ * always contribute 1 (the bare-token or wrapped form).  GROUP nodes
+ * contribute their post-`\\` head tokens plus the sum of their
+ * children's contributions, flattening into the parent. */
 static size_t sweet_analyze_node(SweetLine *lines, size_t n_lines,
                                   const char *src, size_t idx) {
     SweetLine *H = &lines[idx];
     int my_indent = H->indent;
-    int head_elems = sweet_count_elements(src, H->content_start, H->content_end);
+    size_t head_start = H->content_start;
+    if (H->is_group)
+        head_start = sweet_skip_group_marker(src, head_start, H->content_end);
+    int head_elems = sweet_count_elements(src, head_start, H->content_end);
 
     size_t last = idx;
-    int child_count = 0;
+    int child_contrib = 0;
     size_t j = idx + 1;
     while (j < n_lines) {
         if (lines[j].blank) { j++; continue; }
         if (lines[j].indent <= my_indent) break;
-        child_count++;
+        size_t child_first = j;
         last = sweet_analyze_node(lines, n_lines, src, j);
+        child_contrib += lines[child_first].contributes_elems;
         j = last + 1;
     }
 
-    if (head_elems + child_count > 1) {
-        H->open_count++;
-        lines[last].close_count++;
+    if (H->is_group) {
+        /* GROUP line is transparent: do not wrap; flatten own tokens and
+         * children's contributions into the parent. */
+        H->contributes_elems = head_elems + child_contrib;
+    } else {
+        if (head_elems + child_contrib > 1) {
+            H->open_count++;
+            lines[last].close_count++;
+        }
+        H->contributes_elems = 1;
     }
     return last;
 }
@@ -3251,8 +3367,10 @@ static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
     }
 }
 
-/* Emit the line content with `$` rewritten to `(<rest-of-line>)`. */
-static void sweet_emit_content(Buf *out, const char *src,
+/* Emit the line content with `$` rewritten to `(<rest-of-line>)`.
+ * Records xform→original byte runs in e->map (when non-NULL) so
+ * diagnostic snippets can be rendered from the user's original source. */
+static void sweet_emit_content(SweetEmit *e, const char *src,
                                 size_t start, size_t end) {
     int bd = 0;
     bool in_str = false, in_bc = false;
@@ -3260,33 +3378,37 @@ static void sweet_emit_content(Buf *out, const char *src,
     while (i < end) {
         char c = src[i];
         if (in_str) {
-            buf_putc(out, c);
+            emit_copy_char_(e, src, i);
             if (c == '\\' && i + 1 < end) {
-                buf_putc(out, src[i + 1]); i += 2; continue;
+                emit_copy_char_(e, src, i + 1); i += 2; continue;
             }
             if (c == '"') in_str = false;
             i++; continue;
         }
         if (in_bc) {
-            buf_putc(out, c);
+            emit_copy_char_(e, src, i);
             if (c == '|' && i + 1 < end && src[i + 1] == '#') {
-                buf_putc(out, '#'); in_bc = false; i += 2; continue;
+                emit_copy_char_(e, src, i + 1); in_bc = false; i += 2; continue;
             }
             i++; continue;
         }
         if (bd == 0 && c == ';') {
             /* copy the comment through to EOL */
-            while (i < end && src[i] != '\n') { buf_putc(out, src[i]); i++; }
+            size_t j = i;
+            while (j < end && src[j] != '\n') j++;
+            emit_copy_(e, src, i, j - i);
+            i = j;
             continue;
         }
-        if (c == '"') { in_str = true; buf_putc(out, c); i++; continue; }
+        if (c == '"') { in_str = true; emit_copy_char_(e, src, i); i++; continue; }
         if (c == '#' && i + 1 < end && src[i + 1] == '|') {
-            in_bc = true; buf_putc(out, '#'); buf_putc(out, '|'); i += 2; continue;
+            in_bc = true; emit_copy_char_(e, src, i); emit_copy_char_(e, src, i + 1);
+            i += 2; continue;
         }
-        if (c == '(' || c == '[' || c == '{') { bd++; buf_putc(out, c); i++; continue; }
+        if (c == '(' || c == '[' || c == '{') { bd++; emit_copy_char_(e, src, i); i++; continue; }
         if (c == ')' || c == ']' || c == '}') {
             if (bd > 0) bd--;
-            buf_putc(out, c); i++; continue;
+            emit_copy_char_(e, src, i); i++; continue;
         }
         if (c == '\\') {
             size_t k = sweet_skip_line_cont(src, i, end);
@@ -3295,12 +3417,14 @@ static void sweet_emit_content(Buf *out, const char *src,
                  * line-cont allows between `\` and the newline). */
                 size_t nl = i + 1;
                 while (nl < end && (src[nl] == ' ' || src[nl] == '\t')) nl++;
-                /* Emit `\n` so transformed line count matches the user's
-                 * source, then re-emit the next physical line's indent so
-                 * token columns on that line stay accurate. */
-                buf_putc(out, '\n');
+                /* Emit `\n` (inserted) so transformed line count matches
+                 * the user's source, then re-emit the next physical
+                 * line's indent so token columns stay accurate.  The
+                 * trailing indent IS from the original source — record
+                 * it as a copy. */
+                emit_insert_char_(e, '\n');
                 size_t ind = (nl < end) ? nl + 1 : nl;
-                while (ind < k) { buf_putc(out, src[ind]); ind++; }
+                if (ind < k) emit_copy_(e, src, ind, k - ind);
                 i = k;
                 continue;
             }
@@ -3308,7 +3432,7 @@ static void sweet_emit_content(Buf *out, const char *src,
         if (bd == 0 && c == '$' &&
             (i + 1 >= end || src[i + 1] == ' ' || src[i + 1] == '\t')) {
             /* Replace `$ <rest>` with `(<rest>)`. */
-            buf_putc(out, '(');
+            emit_insert_char_(e, '(');
             i++;
             /* Skip the whitespace immediately after `$`. */
             while (i < end && (src[i] == ' ' || src[i] == '\t')) i++;
@@ -3328,22 +3452,21 @@ static void sweet_emit_content(Buf *out, const char *src,
                 rs++;
             }
             rest_end = rs;
-            sweet_emit_content(out, src, i, rest_end);
-            buf_putc(out, ')');
+            sweet_emit_content(e, src, i, rest_end);
+            emit_insert_char_(e, ')');
             i = rest_end;
             continue;
         }
-        buf_putc(out, c);
+        emit_copy_char_(e, src, i);
         i++;
     }
 }
 
 static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
-                               size_t *out_len) {
+                               size_t *out_len, SweetMap *out_map) {
     size_t n_lines = 0;
     SweetLine *lines = sweet_collect_lines(src, len, &n_lines);
     if (!lines && n_lines == 0) {
-        /* Empty input. */
         char *empty = (char *)arena_alloc(arena, 1);
         empty[0] = 0;
         *out_len = 0;
@@ -3352,6 +3475,7 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
     sweet_analyze_top(lines, n_lines, src);
 
     Buf b; buf_init(&b);
+    SweetEmit emit = { .out = &b, .map = out_map };
     size_t cur = 0;
     for (size_t i = 0; i < n_lines; i++) {
         SweetLine *L = &lines[i];
@@ -3359,28 +3483,34 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
         /* Copy anything between cur and phys_start verbatim (normally
          * empty — physical lines are contiguous). */
         if (cur < L->phys_start)
-            buf_write(&b, src + cur, L->phys_start - cur);
+            emit_copy_(&emit, src, cur, L->phys_start - cur);
 
-        /* Indent whitespace. */
-        buf_write(&b, src + L->phys_start, L->content_start - L->phys_start);
+        /* Indent whitespace (verbatim copy from the original line). */
+        if (L->content_start > L->phys_start)
+            emit_copy_(&emit, src, L->phys_start,
+                       L->content_start - L->phys_start);
 
-        /* Implicit opens. */
-        for (int k = 0; k < L->open_count; k++) buf_putc(&b, '(');
+        /* Implicit opens (inserted, no original counterpart). */
+        for (int k = 0; k < L->open_count; k++) emit_insert_char_(&emit, '(');
 
-        /* Content, with `$` rewrites. */
-        sweet_emit_content(&b, src, L->content_start, L->content_end);
+        /* Content, with `$` rewrites.  For GROUP lines, skip the leading
+         * `\\` marker so it does not appear in the output. */
+        size_t cstart = L->content_start;
+        if (L->is_group)
+            cstart = sweet_skip_group_marker(src, cstart, L->content_end);
+        sweet_emit_content(&emit, src, cstart, L->content_end);
 
-        /* Implicit closes. */
-        for (int k = 0; k < L->close_count; k++) buf_putc(&b, ')');
+        /* Implicit closes (inserted). */
+        for (int k = 0; k < L->close_count; k++) emit_insert_char_(&emit, ')');
 
-        /* Trailing newline if any. */
+        /* Trailing newline (copied from original). */
         cur = L->content_end;
         if (cur < len && src[cur] == '\n') {
-            buf_putc(&b, '\n');
+            emit_copy_char_(&emit, src, cur);
             cur++;
         }
     }
-    if (cur < len) buf_write(&b, src + cur, len - cur);
+    if (cur < len) emit_copy_(&emit, src, cur, len - cur);
 
     char *result = (char *)arena_alloc(arena, b.len + 1);
     memcpy(result, b.data, b.len);
@@ -3402,7 +3532,11 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
     const SourceFile *eff_file = file;
     if (file->reader_type == READER_SWEET) {
         size_t xlen = 0;
-        char  *xsrc = sweet_preprocess(arena, file->src, file->len, &xlen);
+        SweetMap *xmap = (SweetMap *)arena_alloc(arena, sizeof *xmap);
+        xmap->runs = NULL;
+        xmap->n_runs = 0;
+        xmap->cap_runs = 0;
+        char  *xsrc = sweet_preprocess(arena, file->src, file->len, &xlen, xmap);
         /* TUR_SWEET_DUMP=1 prints the preprocessed source for debugging. */
         if (getenv("TUR_SWEET_DUMP")) {
             fprintf(stderr, "==== sweet-exp preprocessed (%s) ====\n%.*s====\n",
@@ -3412,6 +3546,9 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
         *xfile = *file;
         xfile->src = xsrc;
         xfile->len = xlen;
+        xfile->orig_src = file->src;
+        xfile->orig_len = file->len;
+        xfile->xform_map = xmap;
         diag_register_file(xfile);
         eff_file = xfile;
     }

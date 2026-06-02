@@ -11,7 +11,6 @@ development environment based on Ubuntu 22.04. It includes everything needed
 to build Turmeric, run tests, and develop the language itself:
 
 - GCC / Clang, CMake 3.22+, and `gdb`
-- `just` (the project's build tool)
 - `libedit` (REPL line editing)
 - Python 3 (doc generation and doctests)
 - Node.js 20 LTS (web REPL / Vite dev server)
@@ -50,14 +49,14 @@ Docker must be running.
 4. Once attached, open a terminal (`Ctrl+`` ` ``) -- the project is at
    `/workspaces/turmeric` and `tur` is already on `PATH`.
 
-### Run just tasks
+### Run project tasks
 
 ```sh
-just          # debug build
-just test     # build + test suite
-just repl     # interactive REPL
-just docs     # regenerate HTML docs from docstrings
-just web-dev  # Vite dev server for the web REPL
+tur run build    # debug build
+tur run test     # build + test suite
+tur run repl     # interactive REPL
+tur run docs     # regenerate HTML docs from docstrings
+tur run web-dev  # Vite dev server for the web REPL
 ```
 
 ### Rebuild the container
@@ -105,15 +104,15 @@ Inside the shell, the workspace is at `/workspaces/turmeric` and `build/` is
 on `PATH`:
 
 ```sh
-just test     # run the test suite
-tur repl      # start the Turmeric REPL
+tur run test   # run the test suite
+tur repl       # start the Turmeric REPL
 tur run examples/cellular-automata.tur
 ```
 
 ### Run a single command non-interactively
 
 ```sh
-devcontainer exec --workspace-folder . just test
+devcontainer exec --workspace-folder . tur run test
 devcontainer exec --workspace-folder . tur run examples/cellular-automata.tur
 ```
 
@@ -132,7 +131,6 @@ docker stop <container-name>
 |---|---|---|
 | GCC / Clang | system (Ubuntu 22.04) | C11 compiler |
 | CMake | 3.22+ | Build system |
-| `just` | latest | Project task runner |
 | `libedit` | system | REPL line editing |
 | Python 3 | system | `gendocs.py`, `doctest.py`, guide tools |
 | Node.js | 20 LTS | Web REPL (Vite), web build |
