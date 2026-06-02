@@ -605,6 +605,37 @@ else
     fail "eval-catch-unwind" "expected ok+caught, got rc=$rc output: $out"
 fi
 
+# Phase R2 (OQ#2): result-must / option-must raise a *catchable* panic instead
+# of calling _exit(1), so catch-unwind recovers them and an uncaught one fires
+# defers + exits nonzero with the standard panic message.
+TMP_MUST=$(mktemp /tmp/tur_must_XXXXXX.tur)
+cat > "$TMP_MUST" <<'MUSTEOF'
+(defn main [] :int
+  (let [r (catch-unwind (fn [] :int (result-must (err 7))))]
+    (if (err? r) (println "must-caught") (println "must-not-caught")))
+  (let [v (result-must (ok 5))]
+    (if (= v 5) (println "must-passthrough") (println "must-wrong")))
+  0)
+MUSTEOF
+out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" eval --file "$TMP_MUST" 2>&1); rc=$?
+rm -f "$TMP_MUST"
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "must-caught" && printf '%s' "$out" | grep -q "must-passthrough"; then
+    pass "eval-must-catchable"
+else
+    fail "eval-must-catchable" "expected must-caught+must-passthrough, got rc=$rc output: $out"
+fi
+
+# An uncaught result-must panic exits nonzero (does not silently _exit(0)).
+TMP_MUST2=$(mktemp /tmp/tur_must2_XXXXXX.tur)
+echo '(defn main [] :int (result-must (err 1)))' > "$TMP_MUST2"
+out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" eval --file "$TMP_MUST2" 2>&1); rc=$?
+rm -f "$TMP_MUST2"
+if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "result-must: called on err"; then
+    pass "eval-must-uncaught"
+else
+    fail "eval-must-uncaught" "expected nonzero + panic msg, got rc=$rc output: $out"
+fi
+
 # ---------------------------------------------------------------------------
 # E4: Nonzero exit codes on errors (Tier 1 verification)
 # ---------------------------------------------------------------------------

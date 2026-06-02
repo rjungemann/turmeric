@@ -67,9 +67,22 @@ caught by an outer `catch-unwind` leaves clean state (verified by
 - Regression guard: `eval-catch-unwind` in `tests/run-flags.sh` (the genuine
   interpreter harness) exercises ok + caught-panic through `tur eval --file`.
 
-**Still deferred:** the `*-must`/`*-expect` natives in `src/main.c` continue to
-`_exit(1)` (OQ#2 bonus) rather than routing through a catchable panic. The
-compiled path remains the primary `catch-unwind` coverage.
+**`*-must` reroute (OQ#2 bonus -- shipped).** The interpreter natives
+`native_result_must` / `native_result_must_msg` / `native_option_must` /
+`native_option_expect` in `src/main.c` previously called `_exit(1)` directly,
+bypassing both `catch-unwind` and the defer chain. They now raise a *catchable*
+panic via a shared `turi_runtime_panic(env, msg)` helper (extracted in
+`src/turi/eval.c` from the `EX_PANIC` case and exposed in `eval.h`), so:
+
+- a `*-must` failure inside `catch-unwind` is recovered as an `(err ...)` result;
+- an uncaught `*-must` fires defers and exits nonzero with the standard
+  `panic at` / `panic: <msg>` message + double-panic guard -- making the guide's
+  "standard panic message format and double-panic guard" claim true.
+
+(`result-must`/`option-must` remain interpreter-only -- they are not defined for
+the compiled path -- so this surface is interpreter-side, as the plan noted.)
+Regression guards: `eval-must-catchable` / `eval-must-uncaught` in
+`tests/run-flags.sh`.
 
 ---
 

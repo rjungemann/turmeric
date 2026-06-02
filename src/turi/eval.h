@@ -100,6 +100,11 @@ void turi_env_register_native(TuriEnv *env, const char *name,
 /* Register eval-layer native builtins (struct-aware predicates, etc.). */
 void turi_eval_register_builtins(TuriEnv *env);
 
+/* Phase R2: raise a catchable interpreter panic (recoverable by catch-unwind,
+ * with the standard message + double-panic guard).  Used by native functions
+ * such as result-must / option-must instead of _exit(1).  Does not return. */
+void turi_runtime_panic(TuriEnv *env, const char *msg);
+
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
 
