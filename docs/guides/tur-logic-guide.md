@@ -160,9 +160,9 @@ The built-in goal constructors:
 ```
 ```sweet-exp
 ;; Primitives
-succeed
+succeed()
 ; always succeeds
-fail
+fail()
 ; always fails
 lequal(t1 t2)
 ; unify t1 and t2
@@ -445,8 +445,9 @@ The classic miniKanren `conde` is syntactic sugar over nested `disjoined` /
 ;; each clause is a conjunction; clauses are disjoined
 defmacro conde [& clauses]
   if =(tail(clauses) 0)
-    conjoin-all(~ head(clauses))
-    disjoined(conjoin-all(~ head(clauses)) conde(~@ tail(clauses)))
+    `(conjoin-all ~(head clauses))
+    `(disjoined (conjoin-all ~(head clauses))
+                (conde ~@(tail clauses)))
 ```
 
 ### Interleaving search

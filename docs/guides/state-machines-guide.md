@@ -49,16 +49,23 @@ defdata Event (Start) (Tick :int) (Stop)
 defn transition [state :State event :Event] :State
   match state
     (Idle)
-      match event
-        (Start)   Running(0)
-        (Tick _)  Idle()
-        (Stop)    Idle()
+    match event
+      (Start)
+      Running(0)
+      (Tick _)
+      Idle()
+      (Stop)
+      Idle()
     (Running n)
-      match event
-        (Tick x)  Running({n + x})
-        (Stop)    Done()
-        (Start)   Running(n)
-    (Done)  Done()
+    match event
+      (Tick x)
+      Running({n + x})
+      (Stop)
+      Done()
+      (Start)
+      Running(n)
+    (Done)
+    Done()
 ```
 
 ---
@@ -91,13 +98,13 @@ defeffect Store [key :cstr val :int] :nil ^extends IO
 defn step [state :State event :Event] :State
   match state
     (Running n)
-      match event
-        (Tick x)
-          do
-            perform(Emit("tick"))
-            perform(Store("count" {n + x}))
-            Running({n + x})
-        ...
+    match event
+      (Tick x)
+      do
+        perform(Emit("tick"))
+        perform(Store("count" {n + x}))
+        Running({n + x})
+      ...
     ...
 ```
 

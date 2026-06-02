@@ -99,25 +99,25 @@ import "stdlib/scheduler.tur"
 import "stdlib/fiber.tur"
 import "stdlib/args.tur"
 import "stdlib/env.tur"
-defn http-ok [body:cstrlen:int] :cstr
+defn http-ok [body :cstr len :int] :cstr
   str-concat("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: " str-concat(int->str(len) str-concat("\r\n\r\n" body)))
-defn handle-client [fd:int] :nil
+defn handle-client [fd :int] :nil
   async-socket-recv(fd 4096)
-  let [body"Hello from Turmeric!\n"
-resp(http-okbody21)]
+  let [body "Hello from Turmeric!\n"
+       resp (http-ok body 21)]
     async-socket-send(fd resp cstr-length(resp))
   async-socket-close(fd)
-defn accept-loop [listen-fd:intsched:ptr<void>] :nil
-  let [client-fd(async-socket-acceptlisten-fd)
-f(fiber-new(fn[]:nil(handle-clientclient-fd))0)]
+defn accept-loop [listen-fd :int sched :ptr<void>] :nil
+  let [client-fd (async-socket-accept listen-fd)
+       f         (fiber-new (fn [] :nil (handle-client client-fd)) 0)]
     scheduler-spawn(sched f)
   accept-loop(listen-fd sched)
 defn main [] :int
-  let [port-str(getenv"PORT")
-port(ifport-str(cstr->parse-intport-str)8080)
-sched(scheduler-new)
-fd(async-socket-listenport128)
-accepter(fiber-new(fn[]:nil(accept-loopfdsched))0)]
+  let [port-str (getenv "PORT")
+       port     (if port-str (cstr->parse-int port-str) 8080)
+       sched    (scheduler-new)
+       fd       (async-socket-listen port 128)
+       accepter (fiber-new (fn [] :nil (accept-loop fd sched)) 0)]
     println(str-concat("Listening on :" int->str(port)))
     scheduler-spawn(sched accepter)
     scheduler-run-to-completion(sched)
@@ -442,9 +442,9 @@ layer.
 ;;
 ;; All logic must be pure computation -- no sockets, threads, or filesystem.
 import "stdlib/str.tur"
-defn greet [name:cstr] :cstr
+defn greet [name :cstr] :cstr
   str-concat("Hello, " str-concat(name "!"))
-defn tur-handle [method:cstrpath:cstrbody:cstr] :cstr
+defn tur-handle [method :cstr path :cstr body :cstr] :cstr
   greet(if(=(cstr-length(body) 0) "world" body))
 ```
 
