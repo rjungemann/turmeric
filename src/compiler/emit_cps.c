@@ -533,7 +533,25 @@ static bool reaches_shift_kind(const Expr *e, ExprKind target) {
 
 static bool cl_op_supported(const char *op) {
     return op && (strcmp(op, "+") == 0 || strcmp(op, "-") == 0 ||
-                  strcmp(op, "*") == 0);
+                  strcmp(op, "*") == 0 || strcmp(op, "/") == 0);
+}
+
+/* The C expression a context frame computes, in terms of `env` (the captured
+ * non-hole operand) and `value` (the resumed value). Shared by the cloneable
+ * (per-site, CPS9) and serial (fixed tagged, CPS10) frame emitters so the two
+ * paths stay in lock-step. Division aborts on a zero divisor, matching the
+ * BS_DIV_CHECK lowering (emit_core.c). */
+static const char *frame_c_expr(const char *op, bool hole_left) {
+    if (strcmp(op, "+") == 0) return "env + value";
+    if (strcmp(op, "*") == 0) return "env * value";
+    if (strcmp(op, "-") == 0) return hole_left ? "value - env" : "env - value";
+    /* "/" : the hole is the dividend when hole_left, else the divisor. */
+    if (hole_left)  /* value / env  -- divisor is the captured env */
+        return "(env) ? (value / env) "
+               ": (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
+    /* env / value  -- divisor is the resumed value */
+    return "(value) ? (env / value) "
+           ": (fprintf(stderr, \"division by zero\\n\"), abort(), 0)";
 }
 
 /* Walk the reset body down to its single shift of kind `target`, recording each
@@ -592,14 +610,9 @@ static bool cl_can_lower(const Expr *e) {
 /* Emit a context frame fn for op/hole-side. The frame receives the captured
  * non-hole operand as `env` and the resumed value as `value`. */
 static void cl_emit_frame_fn(Buf *hb, const char *name, const ClFrame *f) {
-    const char *expr;
-    if (strcmp(f->c_op, "+") == 0)      expr = "env + value";
-    else if (strcmp(f->c_op, "*") == 0) expr = "env * value";
-    else /* "-" */                      expr = f->hole_left ? "value - env"
-                                                            : "env - value";
     buf_printf(hb,
         "static intptr_t %s(intptr_t env, intptr_t value) { return %s; }\n",
-        name, expr);
+        name, frame_c_expr(f->c_op, f->hole_left));
 }
 
 char *emit_cps_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -808,8 +821,11 @@ static bool sk_can_lower(const Expr *e) {
 static int sk_tag_for_frame(const ClFrame *f) {
     if (strcmp(f->c_op, "+") == 0) return 1;       /* SK_TAG_ADD:  env + v */
     if (strcmp(f->c_op, "*") == 0) return 2;       /* SK_TAG_MUL:  env * v */
-    /* "-" */ return f->hole_left ? 4              /* SK_TAG_SUBL: v - env */
-                                  : 3;             /* SK_TAG_SUBR: env - v */
+    if (strcmp(f->c_op, "-") == 0)
+        return f->hole_left ? 4                    /* SK_TAG_SUBL: v - env */
+                            : 3;                   /* SK_TAG_SUBR: env - v */
+    /* "/" */ return f->hole_left ? 6              /* SK_TAG_DIVL: v / env */
+                                  : 5;             /* SK_TAG_DIVR: env / v */
 }
 
 char *emit_cps_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -957,17 +973,26 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 " * marshaled by writing each frame's stable tag + env (no code addresses), and\n"
 " * rebuilt by mapping the tag back to a frame fn. Buffer layout matches stdlib\n"
 " * `bytes` (int64 length prefix, then payload). */\n"
-"enum { SK_TAG_ADD = 1, SK_TAG_MUL = 2, SK_TAG_SUBR = 3, SK_TAG_SUBL = 4 };\n"
+"enum { SK_TAG_ADD = 1, SK_TAG_MUL = 2, SK_TAG_SUBR = 3, SK_TAG_SUBL = 4,\n"
+"       SK_TAG_DIVR = 5, SK_TAG_DIVL = 6 };\n"
 "static intptr_t __sk_add (intptr_t env, intptr_t v) { return env + v; }\n"
 "static intptr_t __sk_mul (intptr_t env, intptr_t v) { return env * v; }\n"
 "static intptr_t __sk_subr(intptr_t env, intptr_t v) { return env - v; } /* other - hole */\n"
 "static intptr_t __sk_subl(intptr_t env, intptr_t v) { return v - env; } /* hole - other */\n"
+"static intptr_t __sk_divr(intptr_t env, intptr_t v) {  /* other / hole */\n"
+"    return (v) ? (env / v) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0);\n"
+"}\n"
+"static intptr_t __sk_divl(intptr_t env, intptr_t v) {  /* hole / other */\n"
+"    return (env) ? (v / env) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0);\n"
+"}\n"
 "static DKFrame __sk_frame_for_tag(int tag) {\n"
 "    switch (tag) {\n"
 "        case SK_TAG_ADD:  return __sk_add;\n"
 "        case SK_TAG_MUL:  return __sk_mul;\n"
 "        case SK_TAG_SUBR: return __sk_subr;\n"
 "        case SK_TAG_SUBL: return __sk_subl;\n"
+"        case SK_TAG_DIVR: return __sk_divr;\n"
+"        case SK_TAG_DIVL: return __sk_divl;\n"
 "        default: return NULL;\n"
 "    }\n"
 "}\n"
@@ -976,6 +1001,8 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 "    if (f == __sk_mul)  return SK_TAG_MUL;\n"
 "    if (f == __sk_subr) return SK_TAG_SUBR;\n"
 "    if (f == __sk_subl) return SK_TAG_SUBL;\n"
+"    if (f == __sk_divr) return SK_TAG_DIVR;\n"
+"    if (f == __sk_divl) return SK_TAG_DIVL;\n"
 "    return 0;\n"
 "}\n"
 "/* Resume a (possibly deserialized) serial continuation on a value. */\n"
