@@ -4259,6 +4259,17 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn run-ring [n :int m :int] :nil nil)\n"
             "(defn run-nbody [n :int steps :int] :nil nil)\n"
             "(defn run-raytracer [w :int h :int] :int 0)\n"
+            /* Result / Option predicate signatures.  The --interpret path does
+             * not preload result.tur/option.tur, so without these stubs the
+             * elaborator has no declared type for the ok?/err?/some?/none?
+             * natives and defaults their result to :int -- which then fails the
+             * strict "if condition must be bool" check.  The native shims
+             * (registered below) provide the real runtime behaviour; these
+             * stubs exist only so the elaborator sees the :bool return type. */
+            "(defn ok? [r :int] :bool false)\n"
+            "(defn err? [r :int] :bool false)\n"
+            "(defn some? [r :int] :bool false)\n"
+            "(defn none? [r :int] :bool false)\n"
         );
         (void)sv;
     }

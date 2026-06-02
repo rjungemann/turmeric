@@ -50,11 +50,26 @@ clears the flag on recovery, so a panic propagating through `reset`/`shift` and
 caught by an outer `catch-unwind` leaves clean state (verified by
 `panic-reset-clears` and manual reset/shift tests).
 
-**Deferred (not in scope here):** the `*-must`/`*-expect` natives in `src/main.c`
-still `_exit(1)` (OQ#2 bonus); rerouting them is interpreter-side and of limited
-value because the interpreter cannot currently evaluate `ok?`/`err?` to a bool
-even for normal `(ok 5)` (a pre-existing interpreter limitation), so interpreter
-`catch-unwind` fixtures are not viable yet. The compiled path is the coverage.
+**Interpreter parity (follow-up fix).** The tree-walking interpreter
+(`tur --interpret` / `tur eval --file`) now composes `catch-unwind` with
+`ok?`/`err?` too:
+
+- The `--interpret`/eval startup path never preloaded `result.tur`, so the
+  `ok?`/`err?`/`some?`/`none?` natives had no declared type and the elaborator
+  defaulted their result to `:int` -- which then failed the strict
+  "if condition must be bool" check even for a plain `(ok 5)`. Fixed by
+  injecting `:bool` typed stubs alongside the other native signature stubs in
+  `src/main.c` (the natives still provide the runtime behaviour).
+- The interpreter's `EX_CATCH_UNWIND` returned a `make_struct_val("ok"/"panic")`
+  struct that the box-reading `ok?`/`err?` natives could not inspect. It now
+  returns the native 3-int Result-box layout `{ is_ok, ok_val, err_val }` (ok =
+  thunk value, err = the caught message), so it composes like any other Result.
+- Regression guard: `eval-catch-unwind` in `tests/run-flags.sh` (the genuine
+  interpreter harness) exercises ok + caught-panic through `tur eval --file`.
+
+**Still deferred:** the `*-must`/`*-expect` natives in `src/main.c` continue to
+`_exit(1)` (OQ#2 bonus) rather than routing through a catchable panic. The
+compiled path remains the primary `catch-unwind` coverage.
 
 ---
 

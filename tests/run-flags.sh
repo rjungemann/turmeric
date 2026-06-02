@@ -583,6 +583,28 @@ else
     pass "eval-file"
 fi
 
+# Phase R2: catch-unwind composes with ok?/err? through the interpreter.
+# Regression guard for the fix that (a) types ok?/err?/some?/none? as :bool in
+# the --interpret/eval path and (b) returns catch-unwind results in the native
+# Result-box layout so the predicates recover ok vs caught-panic.
+TMP_CU=$(mktemp /tmp/tur_catch_unwind_XXXXXX.tur)
+cat > "$TMP_CU" <<'CUEOF'
+(defn boom [] :int (panic "boom"))
+(defn main [] :int
+  (let [r1 (catch-unwind (fn [] :int 42))]
+    (if (ok? r1) (println "ok") (println "not-ok")))
+  (let [r2 (catch-unwind (fn [] :int (boom)))]
+    (if (err? r2) (println "caught") (println "not-caught")))
+  0)
+CUEOF
+out=$(ASAN_OPTIONS=detect_leaks=0 "$TUR" eval --file "$TMP_CU" 2>&1); rc=$?
+rm -f "$TMP_CU"
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q "ok" && printf '%s' "$out" | grep -q "caught"; then
+    pass "eval-catch-unwind"
+else
+    fail "eval-catch-unwind" "expected ok+caught, got rc=$rc output: $out"
+fi
+
 # ---------------------------------------------------------------------------
 # E4: Nonzero exit codes on errors (Tier 1 verification)
 # ---------------------------------------------------------------------------
