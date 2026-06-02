@@ -25,13 +25,13 @@
 > path); the captured-context subset **broadened** to integer division and to
 > arbitrary 2-arg call frames (serial frames name-keyed for marshaling); and
 > **CC4** `(k v)` application sugar + `:cont` parameter typing, extended by a
-> **flavored `cont`** so `(k v)` dispatches to the escape/cloneable/serial resume
-> runtime. Remaining: the *value* half of `cont<T>` -- a non-int result `T`
-> threaded through the shift node + resume + (for serial) a `Serializable` env
-> codec, which still gates cstr/struct serial env types; the parametric
-> `(cont T)` annotation (needs an arrow-kind `cont`); and broadening contexts
-> past single-hole binops/2-arg calls (lets, if-branches). This is the substrate
-> that
+> **flavored `cont`** (`(k v)` dispatches to the escape/cloneable/serial resume
+> runtime) and **value-typed `cont<T>`** (a non-int result `T` via `(cont T)` /
+> `(serial-cont T)` etc., threaded through the resume with bit-casts; cstr serial
+> env types marshal by value). Remaining: struct/ADT continuation values + their
+> `Serializable` env codec (cstr is the first non-int kind); and broadening
+> contexts past single-hole binops/2-arg calls (lets, if-branches). This is the
+> substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -707,9 +707,10 @@ no shipped snapshot regenerated):
   per-site; serial frames marshal by the target's emitted C name via a
   self-registering (constructor-populated) `name <-> DKFrame` table -- the
   name-keyed scheme `serial.c` uses -- with a self-describing record format
-  (`[tag][env]` for arithmetic, `[SK_TAG_CALL][name][env]` for calls, memcpy'd,
-  variable length). Env values are int for now (`env_kind_ok`); cstr/struct envs
-  await the value-typed half of `cont<T>` (see below). Fixture: `context-call-frame`.
+  (`[tag][env]` for arithmetic, `[SK_TAG_CALL][name][env_kind][env]` for calls,
+  memcpy'd, variable length). Env values may be int or cstr (`env_kind_ok`); a
+  cstr env is marshaled by value (see value-typed `cont<T>` below). Fixture:
+  `context-call-frame`.
 - **CC4: `(k v)` application sugar + `:cont` parameter typing.** A continuation
   parameter typed `:cont` is invoked directly as `(k v)`, desugaring (in
   `elab_call`) to a continuation resume; `TY_CONT` lowers to an `int64_t` handle
@@ -723,16 +724,28 @@ no shipped snapshot regenerated):
   continuations get the same `(k v)` ergonomics cloneable already had. This is
   the keystone for unifying `(k v)` across flavors. Fixture: `cont-flavors`
   (cloneable multi-shot 23, serial 15, escape one-shot upward abort 42).
+- **Value-typed `cont<T>` -- non-int continuation values + cstr serial envs.** A
+  continuation now carries a non-int result type `T` via the parametric
+  annotation `(cont T)` / `(escape-cont T)` / `(serial-cont T)` (handled in
+  `fn_type_from_form`, since `cont` is not a generic arrow-kind constructor). The
+  `(k v)` desugar threads the value through the int64-carried resume builtin with
+  bit-casts (arg reinterpreted into the int carrier, result reinterpreted back to
+  `T`), so a cstr-valued `(k v)` emits clean C. The shift node's type already
+  follows its body, so `(serial-shift f "")` gives a cstr hole. On the serial
+  side, `env_kind_ok` now allows cstr and the marshaling format is fully
+  self-describing: a call-frame record carries an `env_kind` and a cstr env is
+  written length-prefixed (by value, not as a heap address), then rematerialized
+  as a fresh heap string on deserialize. Fixture: `cont-value-typed` (cstr
+  cloneable `hello world`, cstr serial resume `hi there`, cstr serial
+  serialize/deserialize round-trip `hi world`).
 
-  *Remaining (value-typed `cont<T>`):* the resume builtins and the shift node are
-  still int-typed, so a non-int continuation value (cstr/struct) can't be
-  expressed at the surface yet -- which is what still blocks richer **serial**
-  env types. The flavor half of "flavored `cont<T>`" is done; the *value* half
-  (a non-int result `T` threaded through the shift node, the resume result, and
-  -- for serial -- a `Serializable`-typeclass env codec) layers on top. The
-  parametric `(cont T)` annotation additionally needs `cont` registered as an
-  arrow-kind (`* -> *`) constructor. Broadening contexts past single-hole binops
-  / 2-arg calls (lets, if-branches) is a separate grammar extension.
+  *Remaining:* struct/ADT continuation values + their `Serializable` env codec
+  (cstr is the first non-int kind; the format and casts generalize, but a struct
+  env needs a per-type `Serializable` (de)serialize rather than the inline
+  length-prefixed bytes used for cstr). The handle<->cont bridging for the
+  *explicit* `tur_serial_cont_*` builtins still needs a `::` ascribe at the call
+  site (the `(k v)` sugar is seamless). Broadening contexts past single-hole
+  binops / 2-arg calls (lets, if-branches) remains a separate grammar extension.
 
 ---
 
