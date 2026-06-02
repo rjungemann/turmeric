@@ -84,6 +84,11 @@ run file:
 build-file file:
     ./build/tur build {{file}}
 
+# Phase C2: build a user program with contracts stripped (release builds).
+# Contract predicates are dropped at elaboration; see docs/guides/compiler-flags-guide.md.
+release-stripped file:
+    ./build/tur --no-contracts build {{file}} -O2
+
 emit-c file:
     ./build/tur emit-c {{file}}
 

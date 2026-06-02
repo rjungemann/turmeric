@@ -1968,6 +1968,11 @@ int emit_program(Buf *out, const Expr *program) {
     /* IT4: Tagged union runtime representation.
      * tur_tagged_t carries a discriminant tag and a 64-bit payload.
      * Used for (A | B) union types and the 'any' top type. */
+    /* Phase C2: expose whether contracts are compiled in. When --no-contracts
+     * is set the contract checks are already stripped at elaboration time;
+     * this constant lets inline-C also branch on the build mode. */
+    buf_printf(out, "#define TUR_CONTRACTS_ENABLED %d\n", g_no_contracts ? 0 : 1);
+
     buf_puts(out, "/* IT4: tagged union runtime representation */\n");
     buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
     buf_puts(out, "#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");

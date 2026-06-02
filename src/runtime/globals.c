@@ -21,6 +21,11 @@ bool g_panic_trace = false;
 bool g_warn_unused_result = false;
 bool g_lint_panic = false;
 
+/* Phase C2: --no-contracts strips contract checks (assert!/require!/ensure!/
+ * invariant!) at elaboration time -- the predicate is never evaluated -- and
+ * makes contract-enabled? fold to false. */
+bool g_no_contracts = false;
+
 /* Phase B5: --backtrack-depth N global flag (0 = unlimited) */
 int64_t g_backtrack_depth = 0;
 

@@ -628,6 +628,27 @@ Expr *elab_call(Elab *e, Form *call) {
     }
     const Symbol *name = head->as.sym;
 
+    /* Phase C2: --no-contracts strips contract checks before their arguments
+     * are elaborated, so the predicate expression (and any side effects it
+     * carries) never run -- matching the Rust/C `assert` convention. The
+     * `assert!`/`require!`/`ensure!`/`invariant!` macros expand to calls to
+     * `tur-contract-check` / `tur-contract-check-inv`; we drop those calls
+     * here and fold `contract-enabled?` to `false`. */
+    if (g_no_contracts) {
+        const Symbol *cc  = symtab_intern(e->st, strslice("tur-contract-check", 18));
+        const Symbol *cci = symtab_intern(e->st, strslice("tur-contract-check-inv", 22));
+        const Symbol *ce  = symtab_intern(e->st, strslice("contract-enabled?", 17));
+        if (name == cc || name == cci) {
+            /* Void no-op: contract checks are `:void`, which lowers to TY_NIL. */
+            return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
+        }
+        if (name == ce && call->as.list.len == 1) {
+            Expr *f = expr_new(e->arena, EX_BOOL_LIT, TYPE_BOOL, call->span);
+            f->as.b = false;
+            return f;
+        }
+    }
+
     /* SZ7: static size checking -- reject statically-known size mismatches at
      * compile time before normal call dispatch. */
     if (sz7_static_size_violation(e, call, name)) return NULL;

@@ -6570,6 +6570,7 @@ static int usage(void) {
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
+        "  --no-contracts                   strip contract checks; predicates not evaluated (Phase C2)\n"
         "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
         "  -Xgadt                           enable defgadt syntax and GADT type checking (G1-G4)\n"
         "  -Xsized-types                    enable sized types: type-level size indices (SZ4+; implies -Xgadt)\n"
@@ -6925,6 +6926,16 @@ static bool parse_lint_panic(int argc, char **argv) {
     return false;
 }
 
+/* Phase C2: Handle --no-contracts flag */
+static bool parse_no_contracts(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-contracts") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Phase 8: Handle --explain flag - compile code snippet and show detailed error */
 
 /* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
@@ -7066,6 +7077,8 @@ int main(int argc, char **argv) {
     g_panic_trace = parse_panic_trace(argc, argv);
     g_warn_unused_result = parse_warn_unused_result(argc, argv);
     g_lint_panic = parse_lint_panic(argc, argv);
+    /* Phase C2: --no-contracts strips contract checks (release builds). */
+    g_no_contracts = parse_no_contracts(argc, argv);
     /* F4: --Werror=deprecated promotes ^deprecated warnings to errors */
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
     /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param warnings */
@@ -7125,6 +7138,13 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "--lint-panic") == 0) {
             /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--no-contracts") == 0) {
+            /* Phase C2: already parsed into g_no_contracts; remove from argv. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

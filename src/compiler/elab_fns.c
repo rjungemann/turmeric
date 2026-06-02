@@ -1789,6 +1789,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
 #ifdef NDEBUG
         if (!g_keep_contracts_in_release) should_check = false;
 #endif
+        /* Phase C2: --no-contracts strips refinement-type ({ x : T | pred })
+         * contract injection too, so the flag removes *all* contract checks. */
+        if (g_no_contracts) should_check = false;
         if (should_check && body) {
             /* Look up tur-contract-check binding */
             Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);

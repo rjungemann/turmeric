@@ -1,0 +1,10 @@
+;; Phase C2: --no-contracts strips the predicate expression itself, so any
+;; side effect inside the contract condition never runs (Rust/C assert
+;; convention). 'side-effect-ran' must NOT appear in the output.
+(defn noisy-false [] :bool
+  (println "side-effect-ran")
+  false)
+(defn main [] :int
+  (assert! (noisy-false))
+  (println "after")
+  0)

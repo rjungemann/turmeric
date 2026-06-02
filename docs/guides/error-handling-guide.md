@@ -420,8 +420,21 @@ Contract macros live in `stdlib/macros.tur` (module `tur/macros`) and are
 auto-imported. They all expand to `tur-contract-check` or `tur-contract-check-inv`
 from `stdlib/contract.tur`, which call `tur_panic` on failure.
 
-In v1, contracts are always enabled (`contract-enabled?` returns `true`).
-A `--no-contracts` flag is planned for Phase C2.
+By default contracts are enabled (`contract-enabled?` returns `true`). Pass
+`--no-contracts` to strip them from a release build: every `assert!` /
+`require!` / `ensure!` / `invariant!` is dropped **at elaboration time**, so the
+contract's predicate expression is never evaluated, and `contract-enabled?`
+folds to `false`.
+
+> **Side-effect warning.** Because the predicate is removed entirely, any side
+> effect inside a contract condition disappears under `--no-contracts` -- this
+> matches the C / Rust `assert` convention. Keep contract predicates pure;
+> never rely on a side effect that lives inside `(assert! ...)`.
+
+The codegen preamble also defines `TUR_CONTRACTS_ENABLED` (`1` normally, `0`
+under `--no-contracts`) so inline-C blocks can branch on the build mode. See
+the [compiler flags guide](compiler-flags-guide.md) for the release-build
+recipe.
 
 ### `assert!` and `assert-msg!`
 
@@ -533,7 +546,6 @@ The following features are planned but not yet implemented:
 | Feature | Phase | Notes |
 |---|---|---|
 | `catch-unwind` | R2 | Catch a panic at a safe boundary |
-| `--no-contracts` flag | C2 | Strip contracts from release builds |
 | `--warn-unused-result` compiler flag | R6 | Lint for dropped results |
 | `--lint-panic` compiler flag | R6 | Audit panic call sites |
 
