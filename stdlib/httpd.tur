@@ -2339,12 +2339,28 @@
       int   fd;
       int64_t handler;
       void *fiber_group;
+      void *async;
   } HttpdAsyncReqCtx;
+  /* A4: HttpdAsync layout (only the in_flight field is read here; the
+   * struct's full shape is asserted in httpd-new-async). */
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group_;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;
+      int   in_flight;
+  } HttpdAsync;
   if (!user_data) return;
   HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)user_data;
   int fd = ctx->fd;
   int64_t handler = ctx->handler;
   void *group = ctx->fiber_group;
+  HttpdAsync *async = (HttpdAsync *)ctx->async;
   free(ctx);
   /* Ensure the fd is non-blocking; the listener may have inherited
    * blocking semantics on some platforms. */
@@ -2631,12 +2647,14 @@
       if (conn->req_json_cache) { json_free(conn->req_json_cache); conn->req_json_cache = 0; }
   }
   close(fd);
+  /* A4: release the in-flight slot. */
+  if (async) async->in_flight--;
   ```)
 ;;; httpd-async-accept-cb -- internal: reactor READ callback on the listen fd.
 ;;;
-;;; Drains accept() and spawns a fiber per accepted connection.  The
-;;; fiber body is the pre-built closure stored on HttpdAsync, called
-;;; via local_spawn.
+;;; Drains accept() and spawns a fiber per accepted connection. Honors
+;;; the A4 in-flight cap: when ha->in_flight >= ha->max_in_flight,
+;;; sends a quick HTTP/1.0 503 and closes instead of spawning.
 
 (defn httpd-async-accept-cb [env :ptr<void> id :int events :int user :ptr<void>] :nil
   ```c (void)id; (void)events; (void)user;
@@ -2649,11 +2667,14 @@
       void *accept_clos;
       int64_t body_closure;       /* fat closure handle for httpd-async-fiber-body */
       volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   typedef struct {
       int   fd;
       int64_t handler;
       void *fiber_group;
+      void *async;                /* HttpdAsync*, for in_flight decrement on exit */
   } HttpdAsyncReqCtx;
   int64_t *fat = (int64_t *)env;
   HttpdAsync *ha = (HttpdAsync *)(intptr_t)fat[1];
@@ -2661,13 +2682,27 @@
   for (;;) {
       int cfd = accept(ha->listen_fd, NULL, NULL);
       if (cfd < 0) break;
+      /* A4: cap check.  When at cap, send 503 + close without spawning. */
+      if (ha->max_in_flight > 0 && ha->in_flight >= ha->max_in_flight) {
+          const char *resp =
+              "HTTP/1.0 503 Service Unavailable\r\n"
+              "Content-Length: 19\r\n"
+              "Connection: close\r\n"
+              "\r\n"
+              "server at capacity\n";
+          (void)send(cfd, resp, strlen(resp), 0);
+          close(cfd);
+          continue;
+      }
       HttpdAsyncReqCtx *ctx = (HttpdAsyncReqCtx *)malloc(sizeof(HttpdAsyncReqCtx));
       if (!ctx) { close(cfd); continue; }
       ctx->fd          = cfd;
       ctx->handler     = ha->handler;
       ctx->fiber_group = ha->fiber_group;
+      ctx->async       = (void *)ha;
       int rc = (int)tur_local_spawn(ha->fiber_group, ha->body_closure, (void *)ctx);
-      if (rc < 0) { free(ctx); close(cfd); }
+      if (rc < 0) { free(ctx); close(cfd); continue; }
+      ha->in_flight++;
   }
   ```)
 ;;; httpd-new-async -- create an async (fiber-per-request) httpd handle.
@@ -2691,7 +2726,7 @@
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
-(defn httpd-new-async [port :int handler :int] :ptr<void>
+(defn httpd-new-async-with-limit [port :int handler :int max-in-flight :int] :ptr<void>
   ```c #include <fcntl.h>
   typedef void (*tur_sig_fn)(int);
   extern tur_sig_fn signal(int, tur_sig_fn);
@@ -2705,6 +2740,8 @@
       void *accept_clos;
       int64_t body_closure;
       volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return NULL;
@@ -2721,9 +2758,10 @@
   if (listen(fd, 128) < 0) { close(fd); return NULL; }
   HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
   if (!ha) { close(fd); return NULL; }
-  ha->listen_fd = fd;
-  ha->handler   = handler;
-  ha->reactor   = tur_reactor_new();
+  ha->listen_fd     = fd;
+  ha->handler       = handler;
+  ha->max_in_flight = (int)max_in_flight;
+  ha->reactor       = tur_reactor_new();
   if (!ha->reactor) { close(fd); free(ha); return NULL; }
   ha->fiber_group = tur_local_fiber_group_new(ha->reactor);
   if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
@@ -2748,6 +2786,15 @@
   }
   return (void *)ha;
   ```)
+;;; httpd-new-async -- create an async server with no in-flight cap.
+;;;
+;;; Shortcut for `(httpd-new-async-with-limit port handler 0)`.  Use
+;;; the -with-limit variant in production to cap concurrent requests.
+;;;
+;;; Since: Phase H8 (A0+A1)
+
+(defn httpd-new-async [port :int handler :int] :ptr<void>
+  (httpd-new-async-with-limit port handler 0))
 ;;; httpd-run-async -- drive the async server until stopped.
 ;;;
 ;;; Blocks the calling thread, running the fiber-per-request loop.
@@ -2767,6 +2814,8 @@
       void *accept_clos;
       int64_t body_closure;
       volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   if (!h) return;
   HttpdAsync *ha = (HttpdAsync *)h;
@@ -2791,6 +2840,8 @@
       void *accept_clos;
       int64_t body_closure;
       volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   if (!h) return;
   HttpdAsync *ha = (HttpdAsync *)h;
@@ -2820,6 +2871,8 @@
       void *accept_clos;
       int64_t body_closure;
       volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   if (!h) return;
   HttpdAsync *ha = (HttpdAsync *)h;
@@ -2847,6 +2900,8 @@
       void *accept_clos;
       int64_t body_closure;
       volatile int stop_flag;
+      int   max_in_flight;        /* A4: cap; 0 = unlimited */
+      int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   if (!h) return 0;
   HttpdAsync *ha = (HttpdAsync *)h;
