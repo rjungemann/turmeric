@@ -3,7 +3,9 @@
 > **Status:** In progress. **CPS0 ratified (2026-06-02)**; **CPS1 (may-capture
 > coloring) done (2026-06-02)**; **CPS2 (CPS/ANF IR) done (2026-06-02, dump-only)**;
 > **CPS3 (selective lowering + boundary bridging) done (2026-06-02, dump-only)**;
-> CPS4 (heap-reified continuations + trampoline) next. This is the substrate that
+> **CPS4 (heap-reified continuations + trampoline runtime) done (2026-06-02,
+> standalone runtime)**; CPS5 (multi-prompt substrate) next. This is the
+> substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -327,23 +329,33 @@ so the fixture below runs correctly today via that path.
   classification. *Deferred to CPS7:* the "no allocation on the uncolored path"
   perf assertion (needs the CPS7 perf harness).
 
-## Phase CPS4 -- Heap-reified continuations + trampoline
+## Phase CPS4 -- Heap-reified continuations + trampoline  -- **DONE 2026-06-02 (standalone runtime)**
 
-- **CPS4.1** Represent a captured continuation as a heap closure chain (not a
-  `tur_frame[16]` snapshot). Capture = take the current `k`; resume = call it.
-  *Done when:* a continuation captured below depth 16 resumes correctly
-  (the old ceiling no longer participates on the CPS path).
-- **CPS4.2** Implement the trampoline driver per CPS0.3 so CPS'd tail calls
-  return thunks to the driver, bounding native stack. *Done when:* a
-  deep (>>16) mutually-recursive colored loop runs in constant native stack.
-- **CPS4.3** Preserve `defer`/frame-teardown semantics: the existing
-  `tur_frame_fire_lifo*` defer firing on drop/resume must have an equivalent in
-  the reified-continuation model (defers attached to continuation segments).
-  *Done when:* a fixture proves `defer` fires exactly once on normal return,
-  on abort, and is not double-fired on resume.
-- **CPS4.4** Fixture: `tests/fixtures/cps-deep-capture/` -- capture/resume a
-  continuation across a call depth well beyond 16; must succeed where the
-  fiber path returned `NULL`.
+**Implementation.** A self-contained heap-continuation + trampoline runtime in
+`src/runtime/cps_rt.{h,c}`. A continuation is a heap closure chain (`TurKont`:
+`fn`, `next`, `env`, per-frame `defer`); a trampoline (`tur_trampoline`) drives
+it via return-to-driver steps (`TurStep`). **Standalone: linked into `tur_core`
+but not yet driven by emitted code** (codegen wiring is CPS5). Validated by the
+`tur_cps_rt_unit` ctest target (`tests/cps_rt_unit.c`), run under ASan with leak
+detection ON (the runtime frees everything it allocates).
+
+- **CPS4.1** Continuation as a heap closure chain, not a `tur_frame[16]`
+  snapshot. *Done:* capture = take the current `TurKont*` (O(1), unbounded);
+  resume = `tur_kont_resume` / `tur_trampoline`. The old 16-frame ceiling does
+  not participate.
+- **CPS4.2** Trampoline driver bounding native stack. *Done:* a frame that would
+  tail-call `next` instead returns a `TurStep` thunk to `tur_trampoline`, which
+  loops. The `cps4-deep-resume` check resumes a **500,000-frame** chain in O(1)
+  native stack (a recursive resume of that depth would overflow).
+- **CPS4.3** `defer`/frame-teardown semantics. *Done:* per-frame `defer` fires
+  exactly once -- on normal resume (`cps4-deep-defer-once`), on abort/free
+  (`cps4-abort-defer-once`), never twice (`cps4-defer-idempotent`,
+  `cps4-free-no-refire`). `tur_kont_fire_defer` is idempotent.
+- **CPS4.4** Capture/resume across depth well beyond 16. *Done:* the 500k-frame
+  `cps4-deep-resume` check succeeds where the fiber path returned `NULL`. (This
+  is exercised as a C unit test rather than a `.tur` fixture because the runtime
+  is not yet wired into emitted code; the end-to-end `.tur` deep-capture fixture
+  lands with the CPS5 codegen wiring.)
 
 ## Phase CPS5 -- Multi-prompt delimited substrate + implicit root prompt
 
