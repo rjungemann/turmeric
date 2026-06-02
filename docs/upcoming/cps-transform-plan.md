@@ -5,8 +5,9 @@
 > **CPS3 (selective lowering + boundary bridging) done (2026-06-02, dump-only)**;
 > **CPS4 (heap-reified continuations + trampoline runtime) done (2026-06-02,
 > standalone runtime)**; **CPS5 (multi-prompt delimited substrate + implicit
-> root prompt) done (2026-06-02, standalone machine)**; CPS6 (retire the capture
-> ceiling) next. This is the substrate that
+> root prompt) done (2026-06-02, standalone machine)**; **CPS6 (retire the
+> capture ceiling on the CPS path) done (2026-06-02)**; CPS7 (benchmarks / perf
+> gates / docs) next. This is the substrate that
 > unblocks *undelimited* control (real Scheme `call/cc`, an implicit
 > program-wide prompt) and removes the bounded-capture ceiling on the existing
 > delimited runtime.
@@ -394,16 +395,36 @@ integration that remains (gated until the substrate is wired end-to-end).
   [`serializable-continuations-guide.md`](../guides/serializable-continuations-guide.md);
   recorded in CPS7 docs.
 
-## Phase CPS6 -- Retire the capture ceiling
+## Phase CPS6 -- Retire the capture ceiling  -- **DONE 2026-06-02**
 
-- **CPS6.1** Remove the `n_frames > TUR_CONT_MAX_CAPTURED_FRAMES -> NULL`
-  early-outs (`src/runtime/runtime.c:103`, `:180`) for the CPS path; capture is
-  unbounded. Keep the constant only if the fiber fast path is retained per
-  CPS0.4. *Done when:* `grep` shows no live `NULL`-on-overflow on the CPS path
-  and the deep-capture fixture (CPS4.4) passes.
-- **CPS6.2** Update `runtime.h` doc comments that describe continuations as
-  bounded 16-frame snapshots. *Done when:* the struct comments match the
-  reified model.
+The CPS path has **no** capture ceiling by construction (CPS4): capture is an
+O(1) pointer take into an unbounded heap chain. The
+`TUR_CONT_MAX_CAPTURED_FRAMES` constant remains only in the retained fiber fast
+path (CPS0.4 / OQ-CPS2), where it is intrinsic (a fixed `captured[]` array) --
+removing the guard there would overflow the array, not enable unbounded
+capture. So "retiring the ceiling" means: it does not apply on the CPS path, and
+the constant is scoped + documented as fiber-only.
+
+- **CPS6.1** No live `NULL`-on-overflow on the CPS path. *Done:* `grep` shows
+  `TUR_CONT_MAX_CAPTURED_FRAMES` only in the fiber path (`runtime.c:~106`,
+  `:~187`) and as a doc reference in `cps_rt.h`; the CPS substrate
+  (`cps_rt.c` / `cps_prompt.c`) has no such guard. The CPS4.4 deep-capture check
+  (`cps4-deep-resume`, 500k frames) passes. The fiber-path guards now carry a
+  comment marking them as the retained bounded fast path and pointing to the
+  unbounded CPS substrate.
+- **CPS6.2** `runtime.h` doc comments. *Done:* the continuation section now
+  documents the two coexisting models (bounded fiber snapshot vs unbounded
+  heap-reified CPS substrate), and `#define TUR_CONT_MAX_CAPTURED_FRAMES` is
+  annotated "FIBER FAST PATH ONLY".
+
+> **Remaining integration (post-CPS6).** Fully *removing* the fiber path (so the
+> CPS substrate is the single implementation) depends on re-pointing the
+> `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`/`call/cc*`/`serial-*` codegen lowerings at
+> the CPS substrate (the CPS5.1/CPS5.2 "deferred" items) and running the
+> `continuation-*` suite on that path. Until then both coexist and the fiber
+> path stays authoritative for shipping delimited ops -- exactly the CPS0.4
+> coexistence contract. The keep-vs-remove decision is OQ-CPS2, to be settled on
+> CPS7.2 numbers.
 
 ## Phase CPS7 -- Benchmarks, perf gates, docs
 
