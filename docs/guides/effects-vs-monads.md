@@ -311,3 +311,4 @@ genuinely want monad-as-value get a per-type fallback.
 - [effects-system-guide.md](effects-system-guide.md) -- Algebraic effects API
 - [custom-effects-tutorial.md](custom-effects-tutorial.md) -- Writing custom effects
 - [error-handling-guide.md](error-handling-guide.md) -- Error handling patterns
+- [parser-combinators-tutorial.md](parser-combinators-tutorial.md) -- Per-type bind in practice: building parser combinators from scratch on the list monad

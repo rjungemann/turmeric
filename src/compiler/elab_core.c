@@ -500,6 +500,51 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 }
                 break;
             case EX_CALL:
+                /* CC3-EV (curried-call-cast-rough-edges-plan): the callee in
+                 * an EX_CALL is stored as fn_binding (a Binding *) rather
+                 * than an EX_VAR child, so a call to a let-bound closure
+                 * value from inside an inner closure body would not be seen
+                 * here as a free variable -- the inner closure would compile
+                 * without capturing it, and the generated C would reference
+                 * an undeclared local.  Treat fn_binding as if it were an
+                 * EX_VAR for free-var purposes: if it's not a param, not a
+                 * global, and not a let-local, count it as captured. */
+                if (cur->as.call_.fn_binding &&
+                    cur->as.call_.fn_binding->closure_fn_binding) {
+                    /* Restrict to bindings that hold a closure VALUE (fat
+                     * closure pointer).  A let-bound non-capturing fn binding
+                     * is lifted as a global and does not need to be captured;
+                     * checking closure_fn_binding avoids regressing
+                     * letrec/named-let self-recursion, where the binding is
+                     * still in scope but not (yet) a closure value. */
+                    Binding *fb = cur->as.call_.fn_binding;
+                    bool fb_is_param = false;
+                    for (uint8_t i = 0; i < n_params; i++) {
+                        if (params[i] == fb) { fb_is_param = true; break; }
+                    }
+                    if (!fb_is_param && !fb->is_global) {
+                        bool fb_is_local = false;
+                        for (uint32_t i = 0; i < n_local; i++) {
+                            if (local_defs[i] == fb) { fb_is_local = true; break; }
+                        }
+                        if (!fb_is_local) {
+                            bool found = false;
+                            for (uint32_t i = 0; i < n; i++) {
+                                if (result[i] == fb) { found = true; break; }
+                            }
+                            if (!found) {
+                                if (n >= cap) {
+                                    cap = cap ? cap * 2 : 8;
+                                    result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                                }
+                                result[n++] = fb;
+                            }
+                        }
+                    }
+                }
+                if (cur->as.call_.fn_expr) {
+                    stack[sp++] = cur->as.call_.fn_expr;
+                }
                 for (uint32_t i = cur->as.call_.n_args; i > 0; i--) {
                     stack[sp++] = cur->as.call_.args[i-1];
                 }

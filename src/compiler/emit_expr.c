@@ -330,7 +330,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
                     type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
                     strcmp(bind_c, "int64_t") != 0;
-            buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+            /* CC1 (curried-call-cast-rough-edges-plan): when the binding is
+             * declared as an int64_t carrier but the init expression yields a
+             * function pointer or void * (e.g. a PAP wrapper capturing a bare
+             * top-level defn into its env), wrap the init with the standard
+             * (int64_t)(intptr_t) coercion -- otherwise clang rejects the
+             * implicit pointer-to-int conversion under -Wint-conversion. */
+            TypeKind init_kind = e->as.let_.bindings[i].init->type.kind;
+            if (strcmp(bind_c, "int64_t") == 0 &&
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID)) {
+                buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
+            } else {
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+            }
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
@@ -451,7 +463,19 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
                     type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
                     strcmp(bind_c, "int64_t") != 0;
-            buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+            /* CC1 (curried-call-cast-rough-edges-plan): when the binding is
+             * declared as an int64_t carrier but the init expression yields a
+             * function pointer or void * (e.g. a PAP wrapper capturing a bare
+             * top-level defn into its env), wrap the init with the standard
+             * (int64_t)(intptr_t) coercion -- otherwise clang rejects the
+             * implicit pointer-to-int conversion under -Wint-conversion. */
+            TypeKind init_kind = e->as.let_.bindings[i].init->type.kind;
+            if (strcmp(bind_c, "int64_t") == 0 &&
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID)) {
+                buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
+            } else {
+                buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+            }
         }
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)%s;\n", bn);
@@ -1721,7 +1745,30 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 
                 /* Rest of the args */
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    arg_strs[i + 1] = emit_value(ctx, body, e->as.call_.args[i]);
+                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    /* CC2 (curried-call-cast-rough-edges-plan): a let-bound
+                     * closure thunk has C parameter slots typed by the thunk's
+                     * declared kinds.  When the formal is int64_t (TY_INT or
+                     * any other int64_t-carrier kind) and the actual is a
+                     * pointer (TY_PTR_VOID closure value or TY_FN), wrap with
+                     * the standard (int64_t)(intptr_t) coercion -- otherwise
+                     * clang rejects the implicit pointer-to-int conversion. */
+                    TypeKind formal = TY_INT;
+                    if (thunk_binding->type.kind == TY_FN &&
+                        (uint8_t)(i + 1) < thunk_binding->type.as.fn.arity) {
+                        formal = thunk_binding->type.as.fn.arg_kinds[i + 1];
+                    }
+                    TypeKind actual = e->as.call_.args[i]->type.kind;
+                    if (formal == TY_INT &&
+                        (actual == TY_PTR_VOID || actual == TY_FN)) {
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                    }
+                    arg_strs[i + 1] = raw;
                 }
                 
                 Buf out; buf_init(&out);

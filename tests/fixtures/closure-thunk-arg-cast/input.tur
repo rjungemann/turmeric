@@ -1,0 +1,10 @@
+(defn main [] :int
+  (let [_tag 42
+        wrap (fn [n :int] :int
+               (let [_t _tag] n))
+        base (fn [c :ptr<void>] :nil
+               (let [_t _tag]
+                 ```c (void)c; ```))
+        _r   (wrap base)]
+    (println "ok")
+    0))

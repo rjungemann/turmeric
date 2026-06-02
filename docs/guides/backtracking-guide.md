@@ -259,5 +259,6 @@ Full liveness precision is gated on the post-1.0 CPS pass (tracked in
 ## See Also
 
 - [tur/backtrack API](../api/tur-backtrack.html) -- standard library implementation
+- [parser-combinators-tutorial.md](parser-combinators-tutorial.md) -- worked example: parser combinators built directly on the list monad described here
 - [`tests/fixtures/backtrack-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- test fixtures for all backtracking features
 - [`benchmarks/bench-backtrack-*.tur`](https://github.com/rjungemann/turmeric/tree/main/benchmarks/) -- performance benchmarks
