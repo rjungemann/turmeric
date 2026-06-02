@@ -6,13 +6,53 @@ description: Track fat-vs-bare closure ABI in the type system so a captureless `
 
 # Captureless-Lambda ABI Soundness -- Plan
 
-> **Status:** Draft Plan
+> **Status:** Implemented (cleanup complete) -- archived
 > **Last Updated:** 2026-06-02
 > **Type:** Compiler / Codegen / Type system
 > **Related:**
-> - [docs/archive/history/direct-anonymous-lambda-application-plan.md](../archive/history/direct-anonymous-lambda-application-plan.md) -- adjacent: callable expressions in head position
-> - [docs/guides/parser-combinators-tutorial.md](../guides/parser-combinators-tutorial.md) -- consumer that currently documents the workaround
+> - [direct-anonymous-lambda-application-plan.md](direct-anonymous-lambda-application-plan.md) -- adjacent: callable expressions in head position
+> - [docs/guides/parser-combinators-tutorial.md](../../guides/parser-combinators-tutorial.md) -- consumer that previously documented the workaround
 > - `stdlib/parsec.tur` header comment -- the original "params must be bound to locals before inner lambda capture" warning
+
+---
+
+## Final Status (2026-06-02)
+
+The type-system tracking described in **Phase CLA1** had already landed in the
+compiler independently, under the internal label **"A#1"**:
+
+- `Type.as.fn.arg_fat[]` and `Type.as.fn.result_fat` flags on `TY_FN`
+  (`src/compiler/types.h`) carry the fat-vs-bare representation refinement
+  this plan proposed as `is_fat`.
+- A surface annotation `^fat` marks a fat-expecting sink in **both**
+  parameter position (`[p ^fat f]`) and **return** position
+  (`^fat :ptr<void>`). The parameter form auto-shims a bare `fn` argument at
+  the call site (`EX_FN_TO_FAT`, `elab_call.c`); the return form boxes a
+  captureless tail lambda into a one-cell fat closure (`emit_fns.c`).
+- Runtime `__tur_fatshim<arity>` thunks (`emit_module.c`) implement the
+  one-cell box, exactly the wrapper this plan sketched.
+
+This differs from the plan's design in one respect: the fat-expecting sink is
+named **explicitly** with `^fat` rather than inferred purely from flow. That is
+a deliberate, honest annotation (not the "source-level lie" the sentinel trick
+was), so the remaining work was the **cleanup** the plan called for:
+
+- **CLA2** -- `stdlib/parsec.tur`: `pfail`/`item` rewritten to
+  `^fat :ptr<void>` returns; the obsolete "params must be bound to locals"
+  header rule replaced (params *are* captured by inner lambdas now; verified).
+- **CLA3** -- `tests/fixtures/parsec-tutorial/input.tur`: sentinel wrappers
+  removed from `number`, `term-tail-pair`, `term`, `expr-tail-pair`, `expr`;
+  `bind-parser`'s continuation marked `^fat`; `expected.c` regenerated (also
+  repairing pre-existing `TUR_CONTRACTS_ENABLED` snapshot drift); still
+  prints `15`. The tutorial guide's sections 4/5/7/8 updated to teach `^fat`
+  instead of the sentinel idiom.
+- **CLA0 / validation** -- `tests/fixtures/captureless-autobox/` added: an
+  end-user captureless `fn` flowed into `^fat` sinks in both positions,
+  asserting correct fat-ABI dispatch (`42` / `100`).
+
+Not done, with rationale: the plan's **negative demotion fixture** (reject
+`is_fat = true -> is_fat = false`) was dropped -- the implementation has no
+"bare-only" sink to demote *into*, so no such diagnostic exists to test.
 
 ---
 
@@ -336,9 +376,10 @@ After this lands:
 
 ## See Also
 
-- [docs/guides/parser-combinators-tutorial.md](../guides/parser-combinators-tutorial.md) -- consumer guide (sections 4, 6, 7, 8)
-- [docs/guides/c-integration-guide.md](../guides/c-integration-guide.md) -- inline-C ABI and fat-closure conventions
-- [docs/guides/backtracking-guide.md](../guides/backtracking-guide.md) -- list-monad primer, peer consumer of `apply-fat`-style callers
-- [stdlib/parsec.tur](../../stdlib/parsec.tur) -- header rule + `pfail`/`item` sentinel sites
-- [tests/fixtures/parsec-tutorial/input.tur](../../tests/fixtures/parsec-tutorial/input.tur) -- tutorial fixture mirroring the workaround
-- [docs/archive/history/direct-anonymous-lambda-application-plan.md](../archive/history/direct-anonymous-lambda-application-plan.md) -- adjacent gap: callable expressions in head position
+- [docs/guides/parser-combinators-tutorial.md](../../guides/parser-combinators-tutorial.md) -- consumer guide (sections 4, 5, 7, 8)
+- [docs/guides/c-integration-guide.md](../../guides/c-integration-guide.md) -- inline-C ABI and fat-closure conventions
+- [docs/guides/backtracking-guide.md](../../guides/backtracking-guide.md) -- list-monad primer, peer consumer of `apply-fat`-style callers
+- [stdlib/parsec.tur](../../../stdlib/parsec.tur) -- `pfail`/`item` (now `^fat` returns)
+- [tests/fixtures/parsec-tutorial/input.tur](../../../tests/fixtures/parsec-tutorial/input.tur) -- tutorial fixture (sentinel wrappers removed)
+- [tests/fixtures/captureless-autobox/input.tur](../../../tests/fixtures/captureless-autobox/input.tur) -- positive end-to-end auto-box fixture
+- [direct-anonymous-lambda-application-plan.md](direct-anonymous-lambda-application-plan.md) -- adjacent gap: callable expressions in head position

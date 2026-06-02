@@ -1,0 +1,44 @@
+;; captureless-autobox -- end-to-end proof that a captureless `(fn ...)` is
+;; auto-boxed into a fat closure at a fat-expecting sink, so it dispatches
+;; correctly through the standard fat-closure ABI (TUR_APPLY1 / fat[0] thunk).
+;;
+;; Background: codegen emits two incompatible representations for `(fn ...)`:
+;;   * a heap `int64_t[]` fat closure when the body captures free variables, and
+;;   * a bare `int64_t (*)(int64_t)` function pointer when it captures nothing.
+;; A bare pointer fed to a fat caller (which reads fat[0] as the thunk address)
+;; jumps to garbage and segfaults. Annotating the sink `^fat` makes the compiler
+;; box the bare function into a one-cell fat closure (EX_FN_TO_FAT), so the same
+;; `(fn ...)` source dispatches correctly without the historical dead-`sentinel`
+;; capture workaround.
+;;
+;; This fixture exercises both fat-expecting sinks:
+;;   1. ^fat in *return* position  -- `make-dbl` returns a captureless lambda.
+;;   2. ^fat in *parameter* position -- `run-with` receives a captureless lambda.
+
+;; Standard fat-closure caller: load the thunk from slot 0 and invoke it with the
+;; closure pointer as the environment argument.
+(defn apply-fat [f arg] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)f;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, arg);
+  ```)
+
+(defn dbl-impl [x] :int (* x 2))
+
+;; (1) Return-position ^fat: the captureless `(fn [x] (dbl-impl x))` is boxed
+;; into a fat closure at the tail, so `apply-fat` can fat-call the result.
+(defn make-dbl [] ^fat :ptr<void>
+  (fn [x] (dbl-impl x)))
+
+;; (2) Parameter-position ^fat: a captureless lambda passed directly as an
+;; argument is shimmed into a fat closure at the call site.
+(defn run-with [^fat g arg] :int
+  (apply-fat g arg))
+
+(defn main []
+  (let [p       (make-dbl)
+        via-ret (apply-fat p 21)          ;; -> 42
+        via-arg (run-with (fn [x] (dbl-impl x)) 50)]  ;; -> 100
+    (println via-ret)
+    (println via-arg)))

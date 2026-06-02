@@ -205,7 +205,11 @@
     (mbind (apply-parser lp inp)
       (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
 
-(defn bind-parser [p f] :ptr<void>
+;; The continuation `f` is a parser-returning lambda. Marking it ^fat lets the
+;; compiler auto-box a captureless `(fn ...)` into a fat closure at the call
+;; site, so callers no longer need a dead `sentinel` capture to force the fat
+;; ABI by hand.
+(defn bind-parser [p ^fat f] :ptr<void>
   (let [lp p
         lf f]
     (fn [inp] (bind-parser-impl lp lf inp))))
@@ -388,11 +392,9 @@
   ```)
 
 (defn number [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (many1 (digit))
-      (fn [digs]
-        (let [_ sentinel]
-          (pure (mk-enum (digits->int digs))))))))
+  (bind-parser (many1 (digit))
+    (fn [digs]
+      (pure (mk-enum (digits->int digs))))))
 
 
 ;; --- Forward-declared expr ---------------------------------------------------
@@ -429,44 +431,32 @@
 
 (defn term-tail-pair [] :ptr<void>
   ;; (op factor) producing pair-new(op, factor-result)
-  (let [sentinel 0]
-    (bind-parser (term-op)
-      (fn [op]
-        (let [_ sentinel
-              _op op]
-          (bind-parser (factor)
-            (fn [rhs] (let [_ _op] (pure (pair-new _op rhs))))))))))
+  (bind-parser (term-op)
+    (fn [op]
+      (bind-parser (factor)
+        (fn [rhs] (pure (pair-new op rhs)))))))
 
 (defn term [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (factor)
-      (fn [lhs]
-        (let [_ sentinel
-              _lhs lhs]
-          (bind-parser (many (term-tail-pair))
-            (fn [tails] (let [_ _lhs] (pure (fold-bin-tail _lhs tails))))))))))
+  (bind-parser (factor)
+    (fn [lhs]
+      (bind-parser (many (term-tail-pair))
+        (fn [tails] (pure (fold-bin-tail lhs tails)))))))
 
 ;; expr := term (('+' | '-') term)*
 (defn expr-op [] :ptr<void>
   (or-parser (pchar 43) (pchar 45)))
 
 (defn expr-tail-pair [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (expr-op)
-      (fn [op]
-        (let [_ sentinel
-              _op op]
-          (bind-parser (term)
-            (fn [rhs] (let [_ _op] (pure (pair-new _op rhs))))))))))
+  (bind-parser (expr-op)
+    (fn [op]
+      (bind-parser (term)
+        (fn [rhs] (pure (pair-new op rhs)))))))
 
 (defn expr [] :ptr<void>
-  (let [sentinel 0]
-    (bind-parser (term)
-      (fn [lhs]
-        (let [_ sentinel
-              _lhs lhs]
-          (bind-parser (many (expr-tail-pair))
-            (fn [tails] (let [_ _lhs] (pure (fold-bin-tail _lhs tails))))))))))
+  (bind-parser (term)
+    (fn [lhs]
+      (bind-parser (many (expr-tail-pair))
+        (fn [tails] (pure (fold-bin-tail lhs tails)))))))
 
 ;; --- Runners -----------------------------------------------------------------
 
